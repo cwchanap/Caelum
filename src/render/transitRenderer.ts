@@ -9,25 +9,31 @@ function center(point: Point): Point {
   };
 }
 
-function drawPolyline(ctx: CanvasRenderingContext2D, positions: Point[], color: string, lineWidth: number): void {
-  if (positions.length === 0) {
-    return;
-  }
-
-  const firstPoint = center(positions[0]);
+function drawPolyline(ctx: CanvasRenderingContext2D, positions: Array<Point | null>, color: string, lineWidth: number): void {
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(firstPoint.x, firstPoint.y);
 
-  for (const position of positions.slice(1)) {
-    const point = center(position);
-    ctx.lineTo(point.x, point.y);
+  let previousPoint: Point | null = null;
+
+  for (const position of positions) {
+    if (position === null) {
+      previousPoint = null;
+      continue;
+    }
+
+    if (previousPoint !== null) {
+      const from = center(previousPoint);
+      const to = center(position);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    }
+
+    previousPoint = position;
   }
-
-  ctx.stroke();
 }
 
 function interpolate(from: Point, to: Point, progress: number): Point {
@@ -41,20 +47,14 @@ function interpolate(from: Point, to: Point, progress: number): Point {
   };
 }
 
-function routePositions(state: GameState, stopIds: string[]): Point[] {
+function routePositions(state: GameState, stopIds: string[]): Array<Point | null> {
   const stopById = new Map(state.transit.stops.map((stop) => [stop.id, stop.position]));
-  return stopIds.flatMap((stopId) => {
-    const position = stopById.get(stopId);
-    return position === undefined ? [] : [position];
-  });
+  return stopIds.map((stopId) => stopById.get(stopId) ?? null);
 }
 
-function stationPositions(state: GameState, stationIds: string[]): Point[] {
+function stationPositions(state: GameState, stationIds: string[]): Array<Point | null> {
   const stationById = new Map(state.transit.stations.map((station) => [station.id, station.position]));
-  return stationIds.flatMap((stationId) => {
-    const position = stationById.get(stationId);
-    return position === undefined ? [] : [position];
-  });
+  return stationIds.map((stationId) => stationById.get(stationId) ?? null);
 }
 
 function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
@@ -63,17 +63,17 @@ function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
       ? routePositions(state, state.transit.routes.find((route) => route.id === vehicle.lineId)?.stopIds ?? [])
       : stationPositions(state, state.transit.metroLines.find((line) => line.id === vehicle.lineId)?.stationIds ?? []);
 
-  if (positions.length === 0) {
+  if (positions.length < 2) {
     return null;
-  }
-
-  if (positions.length === 1) {
-    return center(positions[0]);
   }
 
   const segmentIndex = ((vehicle.segmentIndex % positions.length) + positions.length) % positions.length;
   const from = positions[segmentIndex];
   const to = positions[(segmentIndex + 1) % positions.length];
+
+  if (from === null || to === null) {
+    return null;
+  }
 
   return interpolate(from, to, vehicle.progress);
 }
