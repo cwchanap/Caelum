@@ -27,8 +27,9 @@ function formatTime(seconds: number): string {
   return `${Math.floor(seconds)}s`;
 }
 
-function button(attributes: string, label: string, active = false): string {
-  return `<button type="button" ${attributes} class="${active ? "active" : ""}">${label}</button>`;
+function button(attributes: string, label: string, active = false, pressed?: boolean): string {
+  const ariaPressed = pressed === undefined ? "" : ` aria-pressed="${pressed}"`;
+  return `<button type="button" ${attributes}${ariaPressed} class="${active ? "active" : ""}">${label}</button>`;
 }
 
 export function renderPanels(root: HTMLElement, state: GameState, ui: UiState): void {
@@ -47,18 +48,20 @@ export function renderPanels(root: HTMLElement, state: GameState, ui: UiState): 
     <span>Late ${state.metrics.lateTrips}</span>
     <span>Unserved ${state.metrics.unservedTrips}</span>
     <span>Avg Wait ${Math.floor(state.metrics.averageWaitSeconds)}s</span>
-    ${button('data-action="pause"', state.paused ? "Resume" : "Pause")}
-    ${button('data-speed="1"', "1x", state.speed === 1 && !state.paused)}
-    ${button('data-speed="2"', "2x", state.speed === 2 && !state.paused)}
-    ${button('data-speed="4"', "4x", state.speed === 4 && !state.paused)}
+    ${button('data-action="pause"', state.paused ? "Resume" : "Pause", false, state.paused)}
+    ${button('data-speed="1"', "1x", state.speed === 1 && !state.paused, state.speed === 1)}
+    ${button('data-speed="2"', "2x", state.speed === 2 && !state.paused, state.speed === 2)}
+    ${button('data-speed="4"', "4x", state.speed === 4 && !state.paused, state.speed === 4)}
   `;
 
   sidePanel.innerHTML = `
     <section class="toolbar" aria-label="Tools">
-      ${tools.map((tool) => button(`data-tool="${tool.id}"`, tool.label, ui.activeTool === tool.id)).join("")}
+      ${tools.map((tool) => button(`data-tool="${tool.id}"`, tool.label, ui.activeTool === tool.id, ui.activeTool === tool.id)).join("")}
     </section>
     <section class="overlays" aria-label="Overlays">
-      ${overlays.map((overlay) => button(`data-overlay="${overlay.id}"`, overlay.label, ui.activeOverlay === overlay.id)).join("")}
+      ${overlays
+        .map((overlay) => button(`data-overlay="${overlay.id}"`, overlay.label, ui.activeOverlay === overlay.id, ui.activeOverlay === overlay.id))
+        .join("")}
     </section>
     <section class="details">
       <h2>Growing Suburb</h2>
