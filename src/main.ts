@@ -35,44 +35,13 @@ const gameContext = ctx;
 let state = createInitialGameState();
 let ui = createUiState();
 let lastFrame = performance.now();
-let lastPanelRenderKey: string | null = null;
-
-function panelRenderKey(): string {
-  const nextWave = state.scenario.growthWaves.find((wave) => !wave.applied);
-
-  return JSON.stringify({
-    budget: state.budget,
-    timeBucket: Math.floor(state.time),
-    population: state.citizens.length,
-    late: state.metrics.lateTrips,
-    unserved: state.metrics.unservedTrips,
-    avgWait: Math.floor(state.metrics.averageWaitSeconds),
-    paused: state.paused,
-    speed: state.speed,
-    metricsState: state.metrics.state,
-    lossReason: state.metrics.lossReason,
-    nextWaveId: nextWave?.id ?? null,
-    nextWaveMessage: nextWave?.message ?? null,
-    activeTool: ui.activeTool,
-    activeOverlay: ui.activeOverlay,
-    draftStopCount: ui.draftStopIds.length,
-    draftStationCount: ui.draftStationIds.length,
-    selectedId: ui.selectedId
-  });
-}
 
 function frame(now: number): void {
   const deltaSeconds = Math.min(0.25, (now - lastFrame) / 1000);
   lastFrame = now;
   state = tickSimulation(state, deltaSeconds);
   renderGame(gameContext, state, ui);
-
-  const nextPanelRenderKey = panelRenderKey();
-  if (nextPanelRenderKey !== lastPanelRenderKey) {
-    renderPanels(root, state, ui);
-    lastPanelRenderKey = nextPanelRenderKey;
-  }
-
+  renderPanels(root, state, ui);
   requestAnimationFrame(frame);
 }
 
