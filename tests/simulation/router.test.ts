@@ -18,17 +18,18 @@ describe("route planning", () => {
   it("creates a bus route when stops connect the origin and destination", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
 
-    const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 16, y: 8 });
+    const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
+    expect(plan?.estimatedSeconds).toBe(310);
     expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "bus", "walk"]);
     expect(plan?.legs[1]).toMatchObject({ mode: "bus", lineId: "route-001" });
     expect(plan?.legs).toEqual([
       { mode: "walk", from: { x: 6, y: 8 }, to: { x: 7, y: 8 } },
-      { mode: "bus", from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" },
-      { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } }
+      { mode: "bus", from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" },
+      { mode: "walk", from: { x: 22, y: 8 }, to: { x: 23, y: 8 } }
     ]);
   });
 
@@ -40,6 +41,7 @@ describe("route planning", () => {
 
     const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
+    expect(plan?.estimatedSeconds).toBe(265);
     expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "metro", "walk"]);
     expect(plan?.legs[1]).toMatchObject({ mode: "metro", lineId: "metro-001" });
     expect(plan?.legs).toEqual([

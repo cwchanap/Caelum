@@ -16,6 +16,18 @@ function transitLeg(mode: "bus" | "metro", from: Point, to: Point, lineId: strin
   return { mode, from: clonePoint(from), to: clonePoint(to), lineId };
 }
 
+function walkSeconds(from: Point, to: Point): number {
+  return manhattanDistance(from, to) * 20;
+}
+
+function busSeconds(from: Point, to: Point): number {
+  return 90 + manhattanDistance(from, to) * 12;
+}
+
+function metroSeconds(from: Point, to: Point): number {
+  return 120 + manhattanDistance(from, to) * 7;
+}
+
 function nearestByPosition<T extends Stop | Station>(points: T[], target: Point): T | null {
   let nearest: T | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
@@ -48,7 +60,7 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
   const candidates: RoutePlan[] = [
     {
       legs: [walkLeg(origin, destination)],
-      estimatedSeconds: manhattanDistance(origin, destination) * 20
+      estimatedSeconds: walkSeconds(origin, destination)
     }
   ];
 
@@ -73,7 +85,10 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
         transitLeg("bus", originStop.position, destinationStop.position, route.id),
         walkLeg(destinationStop.position, destination)
       ],
-      estimatedSeconds: 90 + manhattanDistance(originStop.position, destinationStop.position) * 12
+      estimatedSeconds:
+        walkSeconds(origin, originStop.position) +
+        busSeconds(originStop.position, destinationStop.position) +
+        walkSeconds(destinationStop.position, destination)
     });
   }
 
@@ -98,7 +113,10 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
         transitLeg("metro", originStation.position, destinationStation.position, line.id),
         walkLeg(destinationStation.position, destination)
       ],
-      estimatedSeconds: 120 + manhattanDistance(originStation.position, destinationStation.position) * 7
+      estimatedSeconds:
+        walkSeconds(origin, originStation.position) +
+        metroSeconds(originStation.position, destinationStation.position) +
+        walkSeconds(destinationStation.position, destination)
     });
   }
 
