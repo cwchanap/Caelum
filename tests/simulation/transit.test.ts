@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle } from "../../src/simulation/transit";
+import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle, tickVehicles } from "../../src/simulation/transit";
+
+function createBusState(): GameState {
+  let state = createInitialGameState();
+  state = addBusStop(state, { x: 7, y: 8 });
+  state = addBusStop(state, { x: 15, y: 8 });
+  state = addBusRoute(state, ["stop-001", "stop-002"]);
+  return assignVehicle(state, "bus", "route-001");
+}
 
 describe("transit network actions", () => {
   it("adds a bus stop on a valid road tile and charges the budget", () => {
@@ -120,5 +129,116 @@ describe("transit network actions", () => {
     state = addMetroLine(state, ["station-001"]);
 
     expect(assignVehicle(state, "metro", "metro-001")).toBe(state);
+  });
+
+  it("moves vehicles along their assigned line", () => {
+    const state = createBusState();
+
+    const nextState = tickVehicles(state, 30);
+
+    expect(nextState.transit.vehicles[0]?.progress).toBeGreaterThan(0);
+  });
+
+  it("boards waiting citizens up to vehicle capacity", () => {
+    const state = {
+      ...createBusState(),
+      citizens: Array.from({ length: 20 }, (_, index) => ({
+        ...createInitialGameState().citizens[0]!,
+        id: `citizen-${String(index + 1).padStart(3, "0")}`,
+        status: "waiting" as const,
+        routePlan: {
+          estimatedSeconds: 60,
+          legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+        },
+        currentLegIndex: 0
+      }))
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.passengerIds).toHaveLength(18);
+    expect(nextState.citizens.filter((citizen) => citizen.status === "riding")).toHaveLength(18);
+  });
+
+  it("disembarks passengers and advances their current leg when reaching the next segment", () => {
+    const busState = createBusState();
+    const state = {
+      ...busState,
+      transit: {
+        ...busState.transit,
+        vehicles: [
+          {
+            ...busState.transit.vehicles[0]!,
+            passengerIds: ["citizen-001", "citizen-002"],
+            progress: 0.99
+          }
+        ]
+      },
+      citizens: createInitialGameState().citizens.slice(0, 2).map((citizen) => ({
+        ...citizen,
+        status: "riding" as const,
+        routePlan: {
+          estimatedSeconds: 60,
+          legs: [
+            { mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" },
+            { mode: "walk" as const, from: { x: 15, y: 8 }, to: { x: 16, y: 8 } }
+          ]
+        },
+        currentLegIndex: 0
+      }))
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.segmentIndex).toBe(1);
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([]);
+    expect(nextState.citizens).toEqual([
+      expect.objectContaining({ id: "citizen-001", status: "walking", currentLegIndex: 1 }),
+      expect.objectContaining({ id: "citizen-002", status: "walking", currentLegIndex: 1 })
+    ]);
+  });
+
+  it("leaves inactive and missing line vehicles unchanged", () => {
+    const baseState = createInitialGameState();
+    const state = {
+      ...baseState,
+      transit: {
+        ...baseState.transit,
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: ["vehicle-001"],
+            active: false
+          }
+        ],
+        vehicles: [
+          {
+            id: "vehicle-001",
+            mode: "bus" as const,
+            lineId: "route-001",
+            capacity: 18,
+            passengerIds: [],
+            segmentIndex: 0,
+            progress: 0.25
+          },
+          {
+            id: "vehicle-002",
+            mode: "metro" as const,
+            lineId: "metro-999",
+            capacity: 90,
+            passengerIds: [],
+            segmentIndex: 0,
+            progress: 0.5
+          }
+        ]
+      }
+    };
+
+    const nextState = tickVehicles(state, 30);
+
+    expect(nextState.transit.vehicles).toEqual(state.transit.vehicles);
   });
 });

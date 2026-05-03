@@ -91,6 +91,22 @@ function tickCitizen(
     };
   }
 
+  if (citizen.status === "riding") {
+    return {
+      citizen: {
+        ...citizen,
+        home: clonePoint(citizen.home),
+        destination: clonePoint(citizen.destination),
+        position: clonePoint(citizen.position),
+        routePlan: citizen.routePlan === null ? null : cloneRoutePlan(citizen.routePlan)
+      },
+      completedTrips: 0,
+      lateTrips: 0,
+      unservedTrips: 0,
+      waitSeconds: 0
+    };
+  }
+
   let routePlan = citizen.routePlan;
   let nextCitizen: Citizen = {
     ...citizen,

@@ -61,6 +61,23 @@ describe("citizen lifecycle", () => {
     expect(nextState.metrics.unservedTrips).toBe(state.metrics.unservedTrips);
   });
 
+  it("leaves riding citizens on their current transit leg", () => {
+    const state = withFirstCitizen(createInitialGameState(), {
+      status: "riding",
+      patienceRemaining: 123,
+      routePlan: {
+        estimatedSeconds: 60,
+        legs: [{ mode: "bus", from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+      },
+      currentLegIndex: 0
+    });
+
+    const nextState = tickCitizens(state, 10);
+
+    expect(nextState.citizens[0]).toEqual(state.citizens[0]);
+    expect(nextState.metrics.totalWaitSeconds).toBe(state.metrics.totalWaitSeconds);
+  });
+
   it("marks long overdue walking-only trips unserved when no transit exists", () => {
     const state = withFirstCitizen(
       {
