@@ -13,6 +13,16 @@ function withFirstCitizen(state: GameState, citizen: Partial<GameState["citizens
   };
 }
 
+function advanceCitizens(state: GameState, tickCount: number, deltaSeconds = 1): GameState {
+  let nextState = state;
+
+  for (let tick = 0; tick < tickCount; tick += 1) {
+    nextState = tickCitizens(nextState, deltaSeconds);
+  }
+
+  return nextState;
+}
+
 describe("citizen lifecycle", () => {
   it("plans a route for the first citizen and starts walking", () => {
     const state = createInitialGameState();
@@ -76,8 +86,7 @@ describe("citizen lifecycle", () => {
     });
     const originalHome = state.citizens[0]?.home;
 
-    let nextState = tickCitizens(state, 1);
-    nextState = tickCitizens({ ...nextState, time: nextState.time + 1 }, 1);
+    const nextState = tickCitizens(state, 1);
 
     const citizen = nextState.citizens[0];
 
@@ -123,27 +132,51 @@ describe("citizen lifecycle", () => {
       home: { x: 6, y: 8 },
       position: { x: 6, y: 8 },
       destination: { x: 23, y: 8 },
-      patienceRemaining: 2
+      patienceRemaining: 240
     });
 
-    let nextState = tickCitizens(state, 1);
-    nextState = tickCitizens({ ...nextState, time: nextState.time + 1 }, 1);
+    let nextState = advanceCitizens(state, 2);
 
     expect(nextState.citizens[0]?.status).toBe("waiting");
-    expect(nextState.citizens[0]?.patienceRemaining).toBe(1);
+    expect(nextState.citizens[0]?.patienceRemaining).toBe(239);
     expect(nextState.metrics.totalWaitSeconds).toBe(1);
     expect(nextState.metrics.waitingCitizenCount).toBe(1);
     expect(nextState.metrics.averageWaitSeconds).toBe(1);
 
-    nextState = tickCitizens({ ...nextState, time: nextState.time + 1 }, 1);
+    nextState = tickCitizens(nextState, 239);
 
     const citizen = nextState.citizens[0];
 
     expect(citizen?.status).toBe("unserved");
     expect(citizen?.patienceRemaining).toBe(0);
     expect(nextState.metrics.unservedTrips).toBe(1);
-    expect(nextState.metrics.totalWaitSeconds).toBe(2);
+    expect(nextState.metrics.totalWaitSeconds).toBe(240);
     expect(nextState.metrics.waitingCitizenCount).toBe(0);
     expect(nextState.metrics.averageWaitSeconds).toBe(0);
+  });
+
+  it("averages wait time across citizens currently waiting", () => {
+    const baseState = createInitialGameState();
+    const waitingRoutePlan = {
+      estimatedSeconds: 90,
+      legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" }]
+    };
+    const state = {
+      ...baseState,
+      metrics: {
+        ...baseState.metrics,
+        totalWaitSeconds: 100
+      },
+      citizens: [
+        { ...baseState.citizens[0]!, status: "waiting" as const, patienceRemaining: 235, routePlan: waitingRoutePlan },
+        { ...baseState.citizens[1]!, status: "waiting" as const, patienceRemaining: 230, routePlan: waitingRoutePlan }
+      ]
+    };
+
+    const nextState = tickCitizens(state, 0);
+
+    expect(nextState.metrics.totalWaitSeconds).toBe(100);
+    expect(nextState.metrics.waitingCitizenCount).toBe(2);
+    expect(nextState.metrics.averageWaitSeconds).toBe(7.5);
   });
 });

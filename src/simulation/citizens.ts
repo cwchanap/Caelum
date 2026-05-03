@@ -158,7 +158,12 @@ function tickCitizen(
 
 function updateMetrics(metrics: Metrics, citizens: Citizen[], completedTrips: number, lateTrips: number, unservedTrips: number, waitSeconds: number): Metrics {
   const totalWaitSeconds = metrics.totalWaitSeconds + waitSeconds;
-  const waitingCitizenCount = citizens.filter((citizen) => citizen.status === "waiting").length;
+  const waitingCitizens = citizens.filter((citizen) => citizen.status === "waiting");
+  const waitingCitizenCount = waitingCitizens.length;
+  const currentWaitSeconds = waitingCitizens.reduce(
+    (total, citizen) => total + Math.max(0, 240 - citizen.patienceRemaining),
+    0
+  );
 
   return {
     ...metrics,
@@ -167,7 +172,7 @@ function updateMetrics(metrics: Metrics, citizens: Citizen[], completedTrips: nu
     unservedTrips: metrics.unservedTrips + unservedTrips,
     totalWaitSeconds,
     waitingCitizenCount,
-    averageWaitSeconds: waitingCitizenCount > 0 ? totalWaitSeconds / waitingCitizenCount : 0
+    averageWaitSeconds: waitingCitizenCount > 0 ? currentWaitSeconds / waitingCitizenCount : 0
   };
 }
 

@@ -57,6 +57,10 @@ function bestCandidate(candidates: RoutePlan[]): RoutePlan | null {
 }
 
 function isInsideMap(state: GameState, point: Point): boolean {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isInteger(point.x) || !Number.isInteger(point.y)) {
+    return false;
+  }
+
   return point.x >= 0 && point.x < state.map.width && point.y >= 0 && point.y < state.map.height;
 }
 

@@ -22,6 +22,14 @@ describe("route planning", () => {
     expect(findRoutePlan(state, { x: 2, y: 3 }, { x: 28, y: 17 })).toBeNull();
   });
 
+  it("returns null when the origin or destination is not an integer finite tile coordinate", () => {
+    const state = createInitialGameState();
+
+    expect(findRoutePlan(state, { x: 2.5, y: 3 }, { x: 4, y: 3 })).toBeNull();
+    expect(findRoutePlan(state, { x: 2, y: 3 }, { x: Number.POSITIVE_INFINITY, y: 17 })).toBeNull();
+    expect(findRoutePlan(state, { x: 2, y: Number.NaN }, { x: 4, y: 3 })).toBeNull();
+  });
+
   it("creates a bus route when stops connect the origin and destination", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
