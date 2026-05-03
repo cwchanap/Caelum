@@ -19,17 +19,19 @@ const overlays: Array<{ id: Overlay; label: string }> = [
   { id: "growth", label: "Growth" }
 ];
 
+function pad2(n: number): string {
+  return n.toString().padStart(2, "0");
+}
+
 function formatBudget(budget: number): string {
   return `$${budget.toLocaleString()}`;
 }
 
 function formatTime(seconds: number): string {
-  return `${Math.floor(seconds)}s`;
-}
-
-function button(attributes: string, label: string, active = false, pressed?: boolean): string {
-  const ariaPressed = pressed === undefined ? "" : ` aria-pressed="${pressed}"`;
-  return `<button type="button" ${attributes}${ariaPressed} class="${active ? "active" : ""}">${label}</button>`;
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `T+${pad2(mins)}:${pad2(secs)}`;
 }
 
 function setText(root: HTMLElement, selector: string, value: string): void {
@@ -37,6 +39,14 @@ function setText(root: HTMLElement, selector: string, value: string): void {
 
   if (element !== null && element.textContent !== value) {
     element.textContent = value;
+  }
+}
+
+function setClass(root: HTMLElement, selector: string, className: string, on: boolean): void {
+  const element = root.querySelector<HTMLElement>(selector);
+
+  if (element !== null) {
+    element.classList.toggle(className, on);
   }
 }
 
@@ -48,35 +58,78 @@ function setButtonState(buttonElement: HTMLButtonElement | null, active: boolean
   buttonElement.classList.toggle("active", active);
   buttonElement.setAttribute("aria-pressed", String(pressed));
 
-  if (label !== undefined && buttonElement.textContent !== label) {
-    buttonElement.textContent = label;
+  if (label !== undefined) {
+    const labelTarget = buttonElement.querySelector<HTMLElement>("[data-button-label]") ?? buttonElement;
+
+    if (labelTarget.textContent !== label) {
+      labelTarget.textContent = label;
+    }
   }
 }
 
+function readout(field: string, label: string, modifier = ""): string {
+  return `
+    <div class="readout${modifier}">
+      <span class="readout-label">${label}</span>
+      <span class="readout-value" data-panel-field="${field}">—</span>
+    </div>
+  `;
+}
+
 function ensureTopbarMarkup(topbar: HTMLElement): void {
-  if (topbar.dataset.structureKey === "topbar-v2") {
+  if (topbar.dataset.structureKey === "topbar-ops-v1") {
     return;
   }
 
   topbar.innerHTML = `
-    <strong>Caelum</strong>
-    <span data-panel-field="budget"></span>
-    <span data-panel-field="time"></span>
-    <span data-panel-field="population"></span>
-    <span data-panel-field="late"></span>
-    <span data-panel-field="unserved"></span>
-    <span data-panel-field="avgWait"></span>
-    ${button('data-action="pause"', "Resume", false, true)}
-    ${button('data-speed="1"', "1x", false, false)}
-    ${button('data-speed="2"', "2x", false, false)}
-    ${button('data-speed="4"', "4x", false, false)}
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">CAELUM</span>
+      <span class="brand-tag">Transit Ops</span>
+    </div>
+    <div class="signal" aria-live="polite">
+      <span class="signal-dot" aria-hidden="true"></span>
+      <span class="signal-label" data-panel-field="signalState">Live</span>
+    </div>
+    <div class="readouts">
+      ${readout("budget", "Budget")}
+      ${readout("time", "Clock")}
+      ${readout("population", "Population")}
+      ${readout("late", "Late", " readout--warn")}
+      ${readout("unserved", "Unserved", " readout--alert")}
+      ${readout("avgWait", "Avg Wait")}
+    </div>
+    <div class="controls">
+      <button type="button" class="ctrl-pause" data-action="pause" aria-pressed="true"><span data-button-label>Resume</span></button>
+      <div class="speed-group" role="group" aria-label="Simulation speed">
+        <button type="button" data-speed="1" aria-pressed="false">1x</button>
+        <button type="button" data-speed="2" aria-pressed="false">2x</button>
+        <button type="button" data-speed="4" aria-pressed="false">4x</button>
+      </div>
+    </div>
   `;
-  topbar.dataset.structureKey = "topbar-v2";
+  topbar.dataset.structureKey = "topbar-ops-v1";
+}
+
+function toolButton(tool: { id: Tool; label: string }, index: number): string {
+  const num = pad2(index + 1);
+  return `
+    <button type="button" data-tool="${tool.id}" aria-pressed="false" aria-label="${tool.label}">
+      <span class="tool-num" aria-hidden="true">${num}</span>
+      <span class="tool-label" aria-hidden="true">${tool.label}</span>
+    </button>
+  `;
+}
+
+function overlayButton(overlay: { id: Overlay; label: string }): string {
+  return `
+    <button type="button" data-overlay="${overlay.id}" aria-pressed="false">${overlay.label}</button>
+  `;
 }
 
 function ensureSidePanelMarkup(sidePanel: HTMLElement): void {
-  const structureKey = `side-panel-v2:${tools.map((tool) => `${tool.id}:${tool.label}`).join("|")}:${overlays
-    .map((overlay) => `${overlay.id}:${overlay.label}`)
+  const structureKey = `side-panel-ops-v1:${tools.map((t) => `${t.id}:${t.label}`).join("|")}:${overlays
+    .map((o) => `${o.id}:${o.label}`)
     .join("|")}`;
 
   if (sidePanel.dataset.structureKey === structureKey) {
@@ -84,33 +137,79 @@ function ensureSidePanelMarkup(sidePanel: HTMLElement): void {
   }
 
   sidePanel.innerHTML = `
-    <section class="toolbar" aria-label="Tools">
-      ${tools.map((tool) => button(`data-tool="${tool.id}"`, tool.label, false, false)).join("")}
+    <header class="panel-head">
+      <span class="panel-head-mark" aria-hidden="true">⌬</span>
+      <span class="panel-head-title">Dispatch</span>
+      <span class="panel-head-id">CTRL · 07</span>
+    </header>
+
+    <section class="panel-section">
+      <h3 class="section-head"><span class="num">01</span> Build</h3>
+      <div class="toolbar" aria-label="Tools">
+        ${tools.map((tool, index) => toolButton(tool, index)).join("")}
+      </div>
     </section>
-    <section class="overlays" aria-label="Overlays">
-      ${overlays.map((overlay) => button(`data-overlay="${overlay.id}"`, overlay.label, false, false)).join("")}
+
+    <section class="panel-section">
+      <h3 class="section-head"><span class="num">02</span> Overlay</h3>
+      <div class="overlays" aria-label="Overlays">
+        ${overlays.map(overlayButton).join("")}
+      </div>
     </section>
-    <section class="details">
-      <h2 data-panel-field="scenarioName"></h2>
-      <p data-panel-field="status"></p>
-      <p data-panel-field="objective"></p>
-      <p data-panel-field="loss"></p>
-      <p data-panel-field="nextGrowth"></p>
-      <p data-panel-field="tool"></p>
-      <p data-panel-field="selected"></p>
+
+    <section class="panel-section details">
+      <h3 class="section-head"><span class="num">03</span> Brief</h3>
+      <h2 data-panel-field="scenarioName">—</h2>
+      <p class="brief-id" data-panel-field="briefId">Scenario · 001</p>
+
+      <div class="dispatch-row">
+        <span class="dispatch-key">Status</span>
+        <span class="dispatch-val dispatch-val--mono" data-panel-field="status">—</span>
+      </div>
+      <div class="dispatch-row">
+        <span class="dispatch-key">Goal</span>
+        <span class="dispatch-val" data-panel-field="objective">—</span>
+      </div>
+      <div class="dispatch-row">
+        <span class="dispatch-key">Note</span>
+        <span class="dispatch-val dispatch-val--mono" data-panel-field="loss">—</span>
+      </div>
+      <div class="dispatch-row">
+        <span class="dispatch-key">Wave</span>
+        <span class="dispatch-val" data-panel-field="nextGrowth">—</span>
+      </div>
+
+      <div class="dispatch-divider" aria-hidden="true"></div>
+
+      <div class="dispatch-row">
+        <span class="dispatch-key">Tool</span>
+        <span class="dispatch-val dispatch-val--ok" data-panel-field="tool">—</span>
+      </div>
+      <div class="dispatch-row">
+        <span class="dispatch-key">Target</span>
+        <span class="dispatch-val dispatch-val--mono" data-panel-field="selected">—</span>
+      </div>
     </section>
   `;
   sidePanel.dataset.structureKey = structureKey;
 }
 
 function updateTopbar(topbar: HTMLElement, state: GameState): void {
-  setText(topbar, "[data-panel-field='budget']", `Budget ${formatBudget(state.budget)}`);
-  setText(topbar, "[data-panel-field='time']", `Time ${formatTime(state.time)}`);
-  setText(topbar, "[data-panel-field='population']", `Population ${state.citizens.length}`);
-  setText(topbar, "[data-panel-field='late']", `Late ${state.metrics.lateTrips}`);
-  setText(topbar, "[data-panel-field='unserved']", `Unserved ${state.metrics.unservedTrips}`);
-  setText(topbar, "[data-panel-field='avgWait']", `Avg Wait ${Math.floor(state.metrics.averageWaitSeconds)}s`);
-  setButtonState(topbar.querySelector<HTMLButtonElement>("[data-action='pause']"), false, state.paused, state.paused ? "Resume" : "Pause");
+  setText(topbar, "[data-panel-field='budget']", formatBudget(state.budget));
+  setText(topbar, "[data-panel-field='time']", formatTime(state.time));
+  setText(topbar, "[data-panel-field='population']", `${state.citizens.length}`);
+  setText(topbar, "[data-panel-field='late']", `${state.metrics.lateTrips}`);
+  setText(topbar, "[data-panel-field='unserved']", `${state.metrics.unservedTrips}`);
+  setText(topbar, "[data-panel-field='avgWait']", `${Math.floor(state.metrics.averageWaitSeconds)}s`);
+  setText(topbar, "[data-panel-field='signalState']", state.paused ? "Hold" : "Live");
+  setClass(topbar, ".signal", "signal--paused", state.paused);
+
+  setButtonState(
+    topbar.querySelector<HTMLButtonElement>("[data-action='pause']"),
+    false,
+    state.paused,
+    state.paused ? "Resume" : "Pause"
+  );
 
   for (const speed of [1, 2, 4] as const) {
     setButtonState(
@@ -139,18 +238,26 @@ function updateSidePanel(sidePanel: HTMLElement, state: GameState, ui: UiState):
   }
 
   setText(sidePanel, "[data-panel-field='scenarioName']", state.scenario.name);
-  setText(sidePanel, "[data-panel-field='status']", `Status: ${state.metrics.state}`);
+  setText(sidePanel, "[data-panel-field='status']", state.metrics.state.toUpperCase());
   setText(
     sidePanel,
     "[data-panel-field='objective']",
-    `Objective: Keep late trips under ${Math.round(state.scenario.objectives.maxLateRatio * 100)}%, unserved under ${Math.round(
+    `Hold late trips below ${Math.round(state.scenario.objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
       state.scenario.objectives.maxUnservedRatio * 100
-    )}%, and average wait below ${state.scenario.objectives.maxAverageWait}s.`
+    )}%, average wait under ${state.scenario.objectives.maxAverageWait}s.`
   );
-  setText(sidePanel, "[data-panel-field='loss']", state.metrics.lossReason ?? "Keep late and unserved trips below limits.");
-  setText(sidePanel, "[data-panel-field='nextGrowth']", `Next growth: ${state.scenario.growthWaves.find((wave) => !wave.applied)?.message ?? "No more waves"}`);
-  setText(sidePanel, "[data-panel-field='tool']", `Tool: ${ui.activeTool}`);
-  setText(sidePanel, "[data-panel-field='selected']", `Selected: ${ui.selectedId ?? "None"}`);
+  setText(
+    sidePanel,
+    "[data-panel-field='loss']",
+    state.metrics.lossReason ?? "Within tolerances. Hold the line."
+  );
+  setText(
+    sidePanel,
+    "[data-panel-field='nextGrowth']",
+    state.scenario.growthWaves.find((wave) => !wave.applied)?.message ?? "All growth waves resolved."
+  );
+  setText(sidePanel, "[data-panel-field='tool']", ui.activeTool.toUpperCase());
+  setText(sidePanel, "[data-panel-field='selected']", ui.selectedId ?? "—");
 }
 
 export function renderPanels(root: HTMLElement, state: GameState, ui: UiState): void {
