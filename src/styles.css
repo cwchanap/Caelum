@@ -49,3 +49,48 @@ body {
   padding: 14px;
   overflow: auto;
 }
+
+button {
+  border: 1px solid #aeb9c2;
+  background: #ffffff;
+  color: #17202a;
+  min-height: 32px;
+  border-radius: 6px;
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #7f8d99;
+  background: #f2f6f9;
+}
+
+button.active {
+  border-color: #2867b2;
+  background: #dce9f7;
+}
+
+.toolbar,
+.overlays {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.details {
+  border-top: 1px solid #cad2db;
+  padding-top: 14px;
+}
+
+.details h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+
+.details p {
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
