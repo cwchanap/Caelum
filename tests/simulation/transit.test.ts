@@ -11,6 +11,15 @@ function createBusState(): GameState {
   return assignVehicle(state, "bus", "route-001");
 }
 
+function createThreeStopBusState(): GameState {
+  let state = createInitialGameState();
+  state = addBusStop(state, { x: 7, y: 8 });
+  state = addBusStop(state, { x: 15, y: 8 });
+  state = addBusStop(state, { x: 22, y: 8 });
+  state = addBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
+  return assignVehicle(state, "bus", "route-001");
+}
+
 describe("transit network actions", () => {
   it("adds a bus stop on a valid road tile and charges the budget", () => {
     const state = createInitialGameState();
@@ -145,6 +154,7 @@ describe("transit network actions", () => {
       citizens: Array.from({ length: 20 }, (_, index) => ({
         ...createInitialGameState().citizens[0]!,
         id: `citizen-${String(index + 1).padStart(3, "0")}`,
+        position: { x: 7, y: 8 },
         status: "waiting" as const,
         routePlan: {
           estimatedSeconds: 60,
@@ -158,6 +168,88 @@ describe("transit network actions", () => {
 
     expect(nextState.transit.vehicles[0]?.passengerIds).toHaveLength(18);
     expect(nextState.citizens.filter((citizen) => citizen.status === "riding")).toHaveLength(18);
+  });
+
+  it("does not board a citizen waiting at a later stop on the same line", () => {
+    const state = {
+      ...createBusState(),
+      citizens: [
+        {
+          ...createInitialGameState().citizens[0]!,
+          position: { x: 15, y: 8 },
+          status: "waiting" as const,
+          routePlan: {
+            estimatedSeconds: 60,
+            legs: [{ mode: "bus" as const, from: { x: 15, y: 8 }, to: { x: 7, y: 8 }, lineId: "route-001" }]
+          },
+          currentLegIndex: 0
+        }
+      ]
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([]);
+    expect(nextState.citizens[0]?.status).toBe("waiting");
+  });
+
+  it("does not board waiting citizens while a vehicle is mid-segment", () => {
+    const busState = createBusState();
+    const state = {
+      ...busState,
+      transit: {
+        ...busState.transit,
+        vehicles: [{ ...busState.transit.vehicles[0]!, progress: 0.5 }]
+      },
+      citizens: [
+        {
+          ...createInitialGameState().citizens[0]!,
+          position: { x: 7, y: 8 },
+          status: "waiting" as const,
+          routePlan: {
+            estimatedSeconds: 60,
+            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+          },
+          currentLegIndex: 0
+        }
+      ]
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([]);
+    expect(nextState.citizens[0]?.status).toBe("waiting");
+  });
+
+  it("does not board a citizen already riding in another vehicle", () => {
+    const busState = createBusState();
+    const state = {
+      ...busState,
+      transit: {
+        ...busState.transit,
+        vehicles: [
+          { ...busState.transit.vehicles[0]!, id: "vehicle-001", passengerIds: ["citizen-001"], progress: 0.5 },
+          { ...busState.transit.vehicles[0]!, id: "vehicle-002", passengerIds: [], progress: 0 }
+        ]
+      },
+      citizens: [
+        {
+          ...createInitialGameState().citizens[0]!,
+          position: { x: 7, y: 8 },
+          status: "waiting" as const,
+          routePlan: {
+            estimatedSeconds: 60,
+            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+          },
+          currentLegIndex: 0
+        }
+      ]
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual(["citizen-001"]);
+    expect(nextState.transit.vehicles[1]?.passengerIds).toEqual([]);
   });
 
   it("disembarks passengers and advances their current leg when reaching the next segment", () => {
@@ -193,9 +285,43 @@ describe("transit network actions", () => {
     expect(nextState.transit.vehicles[0]?.segmentIndex).toBe(1);
     expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([]);
     expect(nextState.citizens).toEqual([
-      expect.objectContaining({ id: "citizen-001", status: "walking", currentLegIndex: 1 }),
-      expect.objectContaining({ id: "citizen-002", status: "walking", currentLegIndex: 1 })
+      expect.objectContaining({ id: "citizen-001", position: { x: 15, y: 8 }, status: "walking", currentLegIndex: 1 }),
+      expect.objectContaining({ id: "citizen-002", position: { x: 15, y: 8 }, status: "walking", currentLegIndex: 1 })
     ]);
+  });
+
+  it("keeps passengers riding through an intermediate stop before their destination stop", () => {
+    const busState = createThreeStopBusState();
+    const state = {
+      ...busState,
+      transit: {
+        ...busState.transit,
+        vehicles: [
+          {
+            ...busState.transit.vehicles[0]!,
+            passengerIds: ["citizen-001"],
+            progress: 0.99
+          }
+        ]
+      },
+      citizens: [
+        {
+          ...createInitialGameState().citizens[0]!,
+          status: "riding" as const,
+          routePlan: {
+            estimatedSeconds: 120,
+            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" }]
+          },
+          currentLegIndex: 0
+        }
+      ]
+    };
+
+    const nextState = tickVehicles(state, 1);
+
+    expect(nextState.transit.vehicles[0]?.segmentIndex).toBe(1);
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual(["citizen-001"]);
+    expect(nextState.citizens[0]).toEqual(expect.objectContaining({ status: "riding", currentLegIndex: 0 }));
   });
 
   it("leaves inactive and missing line vehicles unchanged", () => {

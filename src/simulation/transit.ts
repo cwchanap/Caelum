@@ -29,30 +29,49 @@ function distinctValidStationCount(state: GameState, stationIds: string[]): numb
   return new Set(stationIds.filter((stationId) => existingStationIds.has(stationId))).size;
 }
 
-function assignedStopCount(state: GameState, vehicle: Vehicle): number | null {
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function assignedLinePositions(state: GameState, vehicle: Vehicle): Point[] | null {
   if (vehicle.mode === "bus") {
     const route: Route | undefined = state.transit.routes.find((candidate) => candidate.id === vehicle.lineId);
-    return route !== undefined && route.active ? route.stopIds.length : null;
+    const stopById = new Map(state.transit.stops.map((stop) => [stop.id, stop.position]));
+    const positions = route?.stopIds.map((stopId) => stopById.get(stopId));
+
+    return route !== undefined && route.active && positions !== undefined && positions.every((position) => position !== undefined)
+      ? positions.map((position) => clonePoint(position))
+      : null;
   }
 
   const metroLine: MetroLine | undefined = state.transit.metroLines.find((candidate) => candidate.id === vehicle.lineId);
-  return metroLine !== undefined && metroLine.active ? metroLine.stationIds.length : null;
+  const stationById = new Map(state.transit.stations.map((station) => [station.id, station.position]));
+  const positions = metroLine?.stationIds.map((stationId) => stationById.get(stationId));
+
+  return metroLine !== undefined && metroLine.active && positions !== undefined && positions.every((position) => position !== undefined)
+    ? positions.map((position) => clonePoint(position))
+    : null;
 }
 
 function uniquePassengerIds(passengerIds: string[]): string[] {
   return Array.from(new Set(passengerIds));
 }
 
-function citizenCanBoard(citizen: Citizen, vehicle: Vehicle, occupiedPassengerIds: Set<string>): boolean {
+function citizenCanBoard(citizen: Citizen, vehicle: Vehicle, currentPosition: Point, occupiedPassengerIds: Set<string>): boolean {
   if (citizen.status !== "waiting" || occupiedPassengerIds.has(citizen.id)) {
     return false;
   }
 
   const leg = citizen.routePlan?.legs[citizen.currentLegIndex];
-  return leg !== undefined && leg.mode === vehicle.mode && leg.lineId === vehicle.lineId;
+  return leg !== undefined && leg.mode === vehicle.mode && leg.lineId === vehicle.lineId && samePoint(citizen.position, currentPosition);
 }
 
-function boardVehicle(citizens: Citizen[], vehicle: Vehicle, occupiedPassengerIds: Set<string>): { citizens: Citizen[]; vehicle: Vehicle } {
+function boardVehicle(
+  citizens: Citizen[],
+  vehicle: Vehicle,
+  currentPosition: Point,
+  occupiedPassengerIds: Set<string>
+): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const availableSeats = Math.max(0, vehicle.capacity - passengerIds.length);
 
@@ -67,7 +86,7 @@ function boardVehicle(citizens: Citizen[], vehicle: Vehicle, occupiedPassengerId
       break;
     }
 
-    if (citizenCanBoard(citizen, vehicle, occupiedPassengerIds)) {
+    if (citizenCanBoard(citizen, vehicle, currentPosition, occupiedPassengerIds)) {
       boardingCitizenIds.push(citizen.id);
       occupiedPassengerIds.add(citizen.id);
     }
@@ -90,19 +109,30 @@ function boardVehicle(citizens: Citizen[], vehicle: Vehicle, occupiedPassengerId
   };
 }
 
-function disembarkVehicle(citizens: Citizen[], vehicle: Vehicle, stopCount: number): { citizens: Citizen[]; vehicle: Vehicle } {
+function disembarkVehicle(citizens: Citizen[], vehicle: Vehicle, reachedPosition: Point, stopCount: number): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
-  const passengerIdSet = new Set(passengerIds);
+  const disembarkingPassengerIds = new Set(
+    citizens
+      .filter((citizen) => {
+        if (!passengerIds.includes(citizen.id)) {
+          return false;
+        }
+
+        const leg = citizen.routePlan?.legs[citizen.currentLegIndex];
+        return leg !== undefined && leg.mode === vehicle.mode && leg.lineId === vehicle.lineId && samePoint(leg.to, reachedPosition);
+      })
+      .map((citizen) => citizen.id)
+  );
 
   return {
     citizens: citizens.map((citizen) =>
-      passengerIdSet.has(citizen.id)
-        ? { ...citizen, status: "walking", currentLegIndex: citizen.currentLegIndex + 1 }
+      disembarkingPassengerIds.has(citizen.id)
+        ? { ...citizen, position: clonePoint(reachedPosition), status: "walking", currentLegIndex: citizen.currentLegIndex + 1 }
         : citizen
     ),
     vehicle: {
       ...vehicle,
-      passengerIds: [],
+      passengerIds: passengerIds.filter((passengerId) => !disembarkingPassengerIds.has(passengerId)),
       segmentIndex: (vehicle.segmentIndex + 1) % stopCount,
       progress: vehicle.progress % 1
     }
@@ -259,13 +289,14 @@ export function tickVehicles(state: GameState, deltaSeconds: number): GameState 
   let changed = false;
 
   const vehicles = state.transit.vehicles.map((vehicle) => {
-    const stopCount = assignedStopCount(state, vehicle);
+    const linePositions = assignedLinePositions(state, vehicle);
 
-    if (stopCount === null || stopCount < 2) {
+    if (linePositions === null || linePositions.length < 2) {
       return vehicle;
     }
 
-    const boarded = boardVehicle(citizens, vehicle, occupiedPassengerIds);
+    const currentPosition = linePositions[vehicle.segmentIndex % linePositions.length];
+    const boarded = vehicle.progress === 0 ? boardVehicle(citizens, vehicle, currentPosition, occupiedPassengerIds) : { citizens, vehicle };
     citizens = boarded.citizens;
 
     const speed = vehicle.mode === "bus" ? 0.08 : 0.14;
@@ -277,7 +308,8 @@ export function tickVehicles(state: GameState, deltaSeconds: number): GameState 
       return nextVehicle;
     }
 
-    const disembarked = disembarkVehicle(citizens, { ...boarded.vehicle, progress }, stopCount);
+    const reachedPosition = linePositions[(vehicle.segmentIndex + 1) % linePositions.length];
+    const disembarked = disembarkVehicle(citizens, { ...boarded.vehicle, progress }, reachedPosition, linePositions.length);
     citizens = disembarked.citizens;
     changed = true;
     return disembarked.vehicle;
