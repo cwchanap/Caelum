@@ -1,0 +1,23 @@
+export const colors = {
+  empty: "#d7e2df",
+  road: "#5f6d75",
+  residential: "#8bcf8b",
+  jobs: "#d8b45f",
+  civic: "#82a7d8",
+  park: "#4f9a61",
+  grid: "#b6c2c8",
+  bus: "#e04f39",
+  metro: "#2867b2",
+  citizen: "#1e2a32",
+  walking: "#1e2a32",
+  waiting: "#f0a33a",
+  riding: "#2867b2",
+  late: "#b92e35",
+  unserved: "#6f2c8f",
+  coverage: "rgba(40, 103, 178, 0.18)",
+  crowding: "rgba(224, 79, 57, 0.2)",
+  demand: "rgba(216, 180, 95, 0.24)",
+  lateness: "rgba(185, 46, 53, 0.24)",
+  growth: "rgba(79, 154, 97, 0.25)",
+  hover: "#111820"
+} as const;

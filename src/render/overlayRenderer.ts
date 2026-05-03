@@ -1,0 +1,80 @@
+import type { GameState, Point } from "../domain/types";
+import type { UiState } from "../ui/uiState";
+import { tileSize } from "./canvas";
+import { colors } from "./colors";
+
+function fillTile(ctx: CanvasRenderingContext2D, point: Point): void {
+  ctx.fillRect(point.x * tileSize, point.y * tileSize, tileSize, tileSize);
+}
+
+function fillCoverageArea(ctx: CanvasRenderingContext2D, point: Point, radius: number): void {
+  ctx.fillRect((point.x - radius) * tileSize, (point.y - radius) * tileSize, tileSize * (radius * 2 + 1), tileSize * (radius * 2 + 1));
+}
+
+export function renderOverlays(ctx: CanvasRenderingContext2D, state: GameState, ui: UiState): void {
+  if (ui.activeOverlay === "coverage") {
+    ctx.fillStyle = colors.coverage;
+
+    for (const stop of state.transit.stops) {
+      fillCoverageArea(ctx, stop.position, 2);
+    }
+
+    for (const station of state.transit.stations) {
+      fillCoverageArea(ctx, station.position, 4);
+    }
+  }
+
+  if (ui.activeOverlay === "lateness") {
+    ctx.fillStyle = colors.lateness;
+
+    for (const citizen of state.citizens) {
+      if (citizen.status === "late" || citizen.status === "unserved") {
+        fillTile(ctx, citizen.position);
+      }
+    }
+  }
+
+  if (ui.activeOverlay === "demand") {
+    ctx.fillStyle = colors.demand;
+
+    for (const citizen of state.citizens) {
+      if (citizen.status !== "arrived") {
+        fillTile(ctx, citizen.destination);
+      }
+    }
+  }
+
+  if (ui.activeOverlay === "crowding") {
+    ctx.fillStyle = colors.crowding;
+
+    for (const stop of state.transit.stops) {
+      if (stop.queueCitizenIds.length > 0) {
+        fillTile(ctx, stop.position);
+      }
+    }
+
+    for (const station of state.transit.stations) {
+      if (station.queueCitizenIds.length > 0) {
+        fillTile(ctx, station.position);
+      }
+    }
+  }
+
+  if (ui.activeOverlay === "growth") {
+    ctx.fillStyle = colors.growth;
+
+    for (const wave of state.scenario.growthWaves) {
+      if (!wave.applied) {
+        for (const tile of wave.tiles) {
+          fillTile(ctx, tile);
+        }
+      }
+    }
+  }
+
+  if (ui.hoverTile !== null) {
+    ctx.strokeStyle = colors.hover;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ui.hoverTile.x * tileSize + 2, ui.hoverTile.y * tileSize + 2, tileSize - 4, tileSize - 4);
+  }
+}
