@@ -151,7 +151,7 @@ function tickCitizen(
     };
 
     if (nextCitizen.status === "arrived") {
-      const arrival = scoreArrival(nextCitizen, state.time + deltaSeconds);
+      const arrival = scoreArrival(nextCitizen, state.time);
       return { ...arrival, unservedTrips: 0, waitSeconds: 0 };
     }
 

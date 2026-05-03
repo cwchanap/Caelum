@@ -114,9 +114,13 @@ describe("citizen lifecycle", () => {
   });
 
   it("marks a trip late when it arrives after the deadline", () => {
-    const state = withFirstCitizen(createInitialGameState(), {
-      destination: { x: 3, y: 3 },
-      deadline: 0
+    const state = withFirstCitizen({ ...createInitialGameState(), time: 1 }, {
+      deadline: 0,
+      routePlan: {
+        estimatedSeconds: 90,
+        legs: [{ mode: "bus", from: { x: 7, y: 8 }, to: { x: 23, y: 8 }, lineId: "route-001" }]
+      },
+      currentLegIndex: 1
     });
 
     const nextState = tickCitizens(state, 1);

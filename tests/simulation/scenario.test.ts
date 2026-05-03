@@ -108,4 +108,26 @@ describe("Growing Suburb scenario", () => {
     expect(nextState.citizens[0]?.status).toBe("unserved");
     expect(nextState.metrics.unservedTrips).toBe(1);
   });
+
+  it("scores one-step walking arrivals against the advanced simulation time", () => {
+    const baseState = createInitialGameState();
+    const state = {
+      ...baseState,
+      paused: false,
+      citizens: [
+        {
+          ...baseState.citizens[0]!,
+          destination: { x: 3, y: 3 },
+          deadline: 1
+        }
+      ]
+    };
+
+    const nextState = tickSimulation(state, 1);
+
+    expect(nextState.time).toBe(1);
+    expect(nextState.citizens[0]?.status).toBe("arrived");
+    expect(nextState.metrics.completedTrips).toBe(1);
+    expect(nextState.metrics.lateTrips).toBe(0);
+  });
 });

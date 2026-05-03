@@ -16,14 +16,14 @@ export function evaluateObjectives(state: GameState): GameState {
     return state;
   }
 
-  const totalTrips = state.metrics.completedTrips + state.metrics.lateTrips + state.metrics.unservedTrips;
+  const totalTrips = state.metrics.completedTrips + state.metrics.unservedTrips;
   const { maxAverageWait, maxLateRatio, maxUnservedRatio, survivalTime } = state.scenario.objectives;
 
   if (totalTrips >= 10 && state.metrics.unservedTrips / totalTrips > maxUnservedRatio) {
     return lose(state, "Too many unserved citizens");
   }
 
-  if (totalTrips >= 10 && state.metrics.lateTrips / totalTrips > maxLateRatio) {
+  if (state.metrics.completedTrips >= 10 && state.metrics.lateTrips / state.metrics.completedTrips > maxLateRatio) {
     return lose(state, "Too many late arrivals");
   }
 

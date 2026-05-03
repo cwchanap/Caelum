@@ -34,8 +34,21 @@ describe("objectives", () => {
 
   it("loses when late ratio is too high after enough trips", () => {
     const state = withMetrics(createInitialGameState(), {
-      completedTrips: 8,
+      completedTrips: 10,
       lateTrips: 3
+    });
+
+    const evaluated = evaluateObjectives(state);
+
+    expect(evaluated.metrics.state).toBe("lost");
+    expect(evaluated.metrics.lossReason).toBe("Too many late arrivals");
+  });
+
+  it("counts late trips within completed trips for late ratio losses", () => {
+    const state = withMetrics(createInitialGameState(), {
+      completedTrips: 10,
+      lateTrips: 3,
+      unservedTrips: 0
     });
 
     const evaluated = evaluateObjectives(state);
