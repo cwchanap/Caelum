@@ -47,6 +47,17 @@ describe("transit network actions", () => {
     });
   });
 
+  it("keeps bus routes inactive when stop IDs do not include two distinct valid stops", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-001"]);
+
+    expect(state.transit.routes[0]).toMatchObject({
+      stopIds: ["stop-001", "stop-001"],
+      active: false
+    });
+  });
+
   it("creates an active metro line and assigns a metro vehicle to it", () => {
     let state = createInitialGameState();
     state = addMetroStation(state, { x: 7, y: 8 });
@@ -74,6 +85,17 @@ describe("transit network actions", () => {
     });
   });
 
+  it("keeps metro lines inactive when station IDs do not include two distinct valid stations", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-001"]);
+
+    expect(state.transit.metroLines[0]).toMatchObject({
+      stationIds: ["station-001", "station-001"],
+      active: false
+    });
+  });
+
   it("returns the original state when assigning vehicles to missing or mismatched lines", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
@@ -82,5 +104,21 @@ describe("transit network actions", () => {
 
     expect(assignVehicle(state, "bus", "route-999")).toBe(state);
     expect(assignVehicle(state, "metro", "route-001")).toBe(state);
+  });
+
+  it("returns the original state when assigning a bus vehicle to an inactive route", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusRoute(state, ["stop-001"]);
+
+    expect(assignVehicle(state, "bus", "route-001")).toBe(state);
+  });
+
+  it("returns the original state when assigning a metro vehicle to an inactive line", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroLine(state, ["station-001"]);
+
+    expect(assignVehicle(state, "metro", "metro-001")).toBe(state);
   });
 });

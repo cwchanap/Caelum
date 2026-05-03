@@ -17,16 +17,16 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function validStopCount(state: GameState, stopIds: string[]): number {
+function distinctValidStopCount(state: GameState, stopIds: string[]): number {
   const existingStopIds = new Set(state.transit.stops.map((stop) => stop.id));
 
-  return stopIds.filter((stopId) => existingStopIds.has(stopId)).length;
+  return new Set(stopIds.filter((stopId) => existingStopIds.has(stopId))).size;
 }
 
-function validStationCount(state: GameState, stationIds: string[]): number {
+function distinctValidStationCount(state: GameState, stationIds: string[]): number {
   const existingStationIds = new Set(state.transit.stations.map((station) => station.id));
 
-  return stationIds.filter((stationId) => existingStationIds.has(stationId)).length;
+  return new Set(stationIds.filter((stationId) => existingStationIds.has(stationId))).size;
 }
 
 export function addBusStop(state: GameState, point: Point): GameState {
@@ -88,7 +88,7 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
           color: "#e04f39",
           stopIds: [...stopIds],
           vehicleIds: [],
-          active: validStopCount(state, stopIds) >= 2
+          active: distinctValidStopCount(state, stopIds) >= 2
         }
       ]
     }
@@ -110,7 +110,7 @@ export function addMetroLine(state: GameState, stationIds: string[]): GameState 
           color: "#2867b2",
           stationIds: [...stationIds],
           vehicleIds: [],
-          active: validStationCount(state, stationIds) >= 2
+          active: distinctValidStationCount(state, stationIds) >= 2
         }
       ]
     }
@@ -137,7 +137,7 @@ export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: s
   if (mode === "bus") {
     const route = state.transit.routes.find((candidate) => candidate.id === lineId);
 
-    if (route === undefined) {
+    if (route === undefined || !route.active) {
       return state;
     }
 
@@ -156,7 +156,7 @@ export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: s
 
   const metroLine = state.transit.metroLines.find((candidate) => candidate.id === lineId);
 
-  if (metroLine === undefined) {
+  if (metroLine === undefined || !metroLine.active) {
     return state;
   }
 
