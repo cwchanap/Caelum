@@ -81,4 +81,31 @@ describe("Growing Suburb scenario", () => {
 
     expect(nextState.time).toBe(200);
   });
+
+  it("evaluates waiting citizen deadlines against the advanced simulation time", () => {
+    const baseState = createInitialGameState();
+    const state = {
+      ...baseState,
+      paused: false,
+      citizens: [
+        {
+          ...baseState.citizens[0]!,
+          destination: { x: 23, y: 8 },
+          deadline: 0,
+          patienceRemaining: 1_000,
+          routePlan: {
+            estimatedSeconds: 90,
+            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 23, y: 8 }, lineId: "route-001" }]
+          },
+          currentLegIndex: 0
+        }
+      ]
+    };
+
+    const nextState = tickSimulation(state, 301);
+
+    expect(nextState.time).toBe(301);
+    expect(nextState.citizens[0]?.status).toBe("unserved");
+    expect(nextState.metrics.unservedTrips).toBe(1);
+  });
 });

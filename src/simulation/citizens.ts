@@ -202,7 +202,6 @@ export function tickCitizens(state: GameState, deltaSeconds: number): GameState 
 
   return {
     ...state,
-    time: state.time + deltaSeconds,
     citizens,
     metrics: updateMetrics(state.metrics, citizens, completedTrips, lateTrips, unservedTrips, waitSeconds)
   };

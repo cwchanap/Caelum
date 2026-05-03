@@ -16,7 +16,7 @@ export function tickSimulation(state: GameState, deltaSeconds: number): GameStat
   };
   const grownState = applyDueGrowthWaves(advancedState);
   const vehicleState = tickVehicles(grownState, scaledDelta);
-  const citizenState = tickCitizens({ ...vehicleState, time: state.time }, scaledDelta);
+  const citizenState = tickCitizens(vehicleState, scaledDelta);
 
   return evaluateObjectives(citizenState);
 }
