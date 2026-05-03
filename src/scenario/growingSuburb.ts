@@ -53,13 +53,13 @@ export function createStartingCitizens(): Citizen[] {
   ];
 
   return Array.from({ length: 36 }, (_, index) => {
-    const home = homes[index % homes.length];
-    const destination = destinations[index % destinations.length];
+    const home = { ...homes[index % homes.length] };
+    const destination = { ...destinations[index % destinations.length] };
     return {
       id: entityId("citizen", index + 1),
       home,
       destination,
-      position: home,
+      position: { ...home },
       status: "idle",
       patienceRemaining: 240,
       deadline: 900,
