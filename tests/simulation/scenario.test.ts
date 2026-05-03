@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { tileId } from "../../src/domain/ids";
 import { createInitialGameState } from "../../src/simulation/gameState";
+import { tickSimulation } from "../../src/simulation/simulation";
 
 describe("Growing Suburb scenario", () => {
   it("creates a deterministic starting city", () => {
@@ -55,5 +56,29 @@ describe("Growing Suburb scenario", () => {
         expect(tile.id).toBe(tileId(tile.x, tile.y));
       }
     }
+  });
+
+  it("ticks the running simulation and applies the first growth wave", () => {
+    const state = { ...createInitialGameState(), paused: false };
+
+    const nextState = tickSimulation(state, 250);
+
+    expect(nextState.time).toBe(250);
+    expect(nextState.citizens).toHaveLength(60);
+    expect(nextState.scenario.growthWaves[0]?.applied).toBe(true);
+  });
+
+  it("does not advance while paused", () => {
+    const state = createInitialGameState();
+
+    expect(tickSimulation(state, 250)).toBe(state);
+  });
+
+  it("scales delta by simulation speed", () => {
+    const state = { ...createInitialGameState(), paused: false, speed: 2 as const };
+
+    const nextState = tickSimulation(state, 100);
+
+    expect(nextState.time).toBe(200);
   });
 });
