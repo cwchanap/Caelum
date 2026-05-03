@@ -7,6 +7,7 @@ export interface UiState {
   hoverTile: Point | null;
   draftStopIds: string[];
   draftStationIds: string[];
+  controlTowerOpen: boolean;
 }
 
 export function createUiState(): UiState {
@@ -16,6 +17,7 @@ export function createUiState(): UiState {
     selectedId: null,
     hoverTile: null,
     draftStopIds: [],
-    draftStationIds: []
+    draftStationIds: [],
+    controlTowerOpen: true
   };
 }

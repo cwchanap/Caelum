@@ -7,6 +7,55 @@ import { renderTransit } from "./transitRenderer";
 
 export const tileSize = 32;
 
+export interface BoardTransform {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+}
+
+interface BoardSize {
+  width: number;
+  height: number;
+}
+
+interface CanvasSizeTarget {
+  width: number;
+  height: number;
+  getBoundingClientRect: () => Pick<DOMRectReadOnly, "width" | "height">;
+}
+
+export function getBoardTransform(board: BoardSize, map: GameMap): BoardTransform {
+  const mapWidth = map.width * tileSize;
+  const mapHeight = map.height * tileSize;
+  const scale = Math.min(board.width / mapWidth, board.height / mapHeight);
+  const width = mapWidth * scale;
+  const height = mapHeight * scale;
+
+  return {
+    scale,
+    offsetX: (board.width - width) / 2,
+    offsetY: (board.height - height) / 2,
+    width,
+    height
+  };
+}
+
+export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
+
+  if (canvas.width === width && canvas.height === height) {
+    return false;
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  return true;
+}
+
 export function canvasToTile(canvas: HTMLCanvasElement, clientX: number, clientY: number, map: GameMap): Point | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) {
@@ -15,9 +64,12 @@ export function canvasToTile(canvas: HTMLCanvasElement, clientX: number, clientY
 
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
+  const transform = getBoardTransform(canvas, map);
+  const canvasX = (clientX - rect.left) * scaleX;
+  const canvasY = (clientY - rect.top) * scaleY;
   const point = {
-    x: Math.floor(((clientX - rect.left) * scaleX) / tileSize),
-    y: Math.floor(((clientY - rect.top) * scaleY) / tileSize)
+    x: Math.floor((canvasX - transform.offsetX) / transform.scale / tileSize),
+    y: Math.floor((canvasY - transform.offsetY) / transform.scale / tileSize)
   };
 
   return point.x >= 0 && point.x < map.width && point.y >= 0 && point.y < map.height ? point : null;
@@ -25,8 +77,14 @@ export function canvasToTile(canvas: HTMLCanvasElement, clientX: number, clientY
 
 export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, ui: UiState): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  const transform = getBoardTransform(ctx.canvas, state.map);
+
+  ctx.save();
+  ctx.translate(transform.offsetX, transform.offsetY);
+  ctx.scale(transform.scale, transform.scale);
   renderMap(ctx, state);
   renderOverlays(ctx, state, ui);
   renderTransit(ctx, state);
   renderCitizens(ctx, state);
+  ctx.restore();
 }

@@ -1,6 +1,6 @@
 import "./styles.css";
 import type { Overlay, Tool } from "./domain/types";
-import { canvasToTile, renderGame } from "./render/canvas";
+import { canvasToTile, renderGame, syncCanvasSize } from "./render/canvas";
 import { createInitialGameState } from "./simulation/gameState";
 import { tickSimulation } from "./simulation/simulation";
 import { handleTileClick } from "./ui/actions";
@@ -17,7 +17,7 @@ app.innerHTML = `
   <main class="shell" data-testid="game-shell">
     <section class="topbar" data-testid="topbar"></section>
     <canvas class="board" data-testid="game-canvas" width="1280" height="800"></canvas>
-    <aside class="panel" data-testid="side-panel"></aside>
+    <aside class="panel control-tower" data-testid="control-tower"></aside>
   </main>
 `;
 
@@ -39,6 +39,7 @@ let lastFrame = performance.now();
 function frame(now: number): void {
   const deltaSeconds = Math.min(0.25, (now - lastFrame) / 1000);
   lastFrame = now;
+  syncCanvasSize(gameCanvas);
   state = tickSimulation(state, deltaSeconds);
   renderGame(gameContext, state, ui);
   renderPanels(root, state, ui);
@@ -46,10 +47,12 @@ function frame(now: number): void {
 }
 
 gameCanvas.addEventListener("mousemove", (event) => {
+  syncCanvasSize(gameCanvas);
   ui = { ...ui, hoverTile: canvasToTile(gameCanvas, event.clientX, event.clientY, state.map) };
 });
 
 gameCanvas.addEventListener("click", (event) => {
+  syncCanvasSize(gameCanvas);
   const point = canvasToTile(gameCanvas, event.clientX, event.clientY, state.map);
 
   if (point === null) {
@@ -68,9 +71,14 @@ root.addEventListener("click", (event) => {
     return;
   }
 
-  const tool = target.dataset.tool as Tool | undefined;
-  const overlay = target.dataset.overlay as Overlay | undefined;
-  const speed = target.dataset.speed;
+  const toolElement = target.closest<HTMLElement>("[data-tool]");
+  const overlayElement = target.closest<HTMLElement>("[data-overlay]");
+  const speedElement = target.closest<HTMLElement>("[data-speed]");
+  const actionElement = target.closest<HTMLElement>("[data-action]");
+  const tool = toolElement?.dataset.tool as Tool | undefined;
+  const overlay = overlayElement?.dataset.overlay as Overlay | undefined;
+  const speed = speedElement?.dataset.speed;
+  const action = actionElement?.dataset.action;
 
   if (tool !== undefined) {
     ui = { ...ui, activeTool: tool, draftStopIds: [], draftStationIds: [] };
@@ -80,8 +88,16 @@ root.addEventListener("click", (event) => {
     ui = { ...ui, activeOverlay: ui.activeOverlay === overlay ? null : overlay };
   }
 
-  if (target.dataset.action === "pause") {
+  if (action === "pause") {
     state = { ...state, paused: !state.paused };
+  }
+
+  if (action === "toggle-tower") {
+    ui = { ...ui, controlTowerOpen: !ui.controlTowerOpen };
+  }
+
+  if (action === "close-tower") {
+    ui = { ...ui, controlTowerOpen: false };
   }
 
   if (speed !== undefined) {

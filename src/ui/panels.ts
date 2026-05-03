@@ -100,6 +100,7 @@ function ensureTopbarMarkup(topbar: HTMLElement): void {
       ${readout("avgWait", "Avg Wait")}
     </div>
     <div class="controls">
+      <button type="button" class="ctrl-tower" data-action="toggle-tower" aria-pressed="true"><span data-button-label>Control Tower</span></button>
       <button type="button" class="ctrl-pause" data-action="pause" aria-pressed="true"><span data-button-label>Resume</span></button>
       <div class="speed-group" role="group" aria-label="Simulation speed">
         <button type="button" data-speed="1" aria-pressed="false">1x</button>
@@ -128,7 +129,7 @@ function overlayButton(overlay: { id: Overlay; label: string }): string {
 }
 
 function ensureSidePanelMarkup(sidePanel: HTMLElement): void {
-  const structureKey = `side-panel-ops-v1:${tools.map((t) => `${t.id}:${t.label}`).join("|")}:${overlays
+  const structureKey = `control-tower-bottom-v1:${tools.map((t) => `${t.id}:${t.label}`).join("|")}:${overlays
     .map((o) => `${o.id}:${o.label}`)
     .join("|")}`;
 
@@ -138,8 +139,9 @@ function ensureSidePanelMarkup(sidePanel: HTMLElement): void {
 
   sidePanel.innerHTML = `
     <header class="panel-head">
+      <button type="button" class="panel-close" data-action="close-tower" aria-label="Close Control Tower">×</button>
       <span class="panel-head-mark" aria-hidden="true">⌬</span>
-      <span class="panel-head-title">Dispatch</span>
+      <span class="panel-head-title">Control Tower</span>
       <span class="panel-head-id">CTRL · 07</span>
     </header>
 
@@ -194,7 +196,7 @@ function ensureSidePanelMarkup(sidePanel: HTMLElement): void {
   sidePanel.dataset.structureKey = structureKey;
 }
 
-function updateTopbar(topbar: HTMLElement, state: GameState): void {
+function updateTopbar(topbar: HTMLElement, state: GameState, ui: UiState): void {
   setText(topbar, "[data-panel-field='budget']", formatBudget(state.budget));
   setText(topbar, "[data-panel-field='time']", formatTime(state.time));
   setText(topbar, "[data-panel-field='population']", `${state.citizens.length}`);
@@ -203,6 +205,12 @@ function updateTopbar(topbar: HTMLElement, state: GameState): void {
   setText(topbar, "[data-panel-field='avgWait']", `${Math.floor(state.metrics.averageWaitSeconds)}s`);
   setText(topbar, "[data-panel-field='signalState']", state.paused ? "Hold" : "Live");
   setClass(topbar, ".signal", "signal--paused", state.paused);
+
+  setButtonState(
+    topbar.querySelector<HTMLButtonElement>("[data-action='toggle-tower']"),
+    ui.controlTowerOpen,
+    ui.controlTowerOpen
+  );
 
   setButtonState(
     topbar.querySelector<HTMLButtonElement>("[data-action='pause']"),
@@ -221,6 +229,9 @@ function updateTopbar(topbar: HTMLElement, state: GameState): void {
 }
 
 function updateSidePanel(sidePanel: HTMLElement, state: GameState, ui: UiState): void {
+  sidePanel.classList.toggle("control-tower--closed", !ui.controlTowerOpen);
+  sidePanel.setAttribute("aria-hidden", String(!ui.controlTowerOpen));
+
   for (const tool of tools) {
     setButtonState(
       sidePanel.querySelector<HTMLButtonElement>(`[data-tool='${tool.id}']`),
@@ -262,14 +273,17 @@ function updateSidePanel(sidePanel: HTMLElement, state: GameState, ui: UiState):
 
 export function renderPanels(root: HTMLElement, state: GameState, ui: UiState): void {
   const topbar = root.querySelector<HTMLElement>("[data-testid='topbar']");
-  const sidePanel = root.querySelector<HTMLElement>("[data-testid='side-panel']");
+  const sidePanel = root.querySelector<HTMLElement>("[data-testid='control-tower']");
 
   if (topbar === null || sidePanel === null) {
     return;
   }
 
+  root
+    .querySelector<HTMLElement>("[data-testid='game-shell']")
+    ?.setAttribute("data-tower-open", String(ui.controlTowerOpen));
   ensureTopbarMarkup(topbar);
   ensureSidePanelMarkup(sidePanel);
-  updateTopbar(topbar, state);
+  updateTopbar(topbar, state, ui);
   updateSidePanel(sidePanel, state, ui);
 }

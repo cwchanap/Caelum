@@ -75,7 +75,7 @@ body {
 .shell {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 72px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
@@ -250,6 +250,22 @@ body {
   margin-left: auto;
 }
 
+.ctrl-tower,
+.ctrl-pause {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
 .speed-group {
   display: flex;
   border: 1px solid var(--line-strong);
@@ -286,23 +302,17 @@ body {
   box-shadow: inset 0 0 0 1px var(--amber-soft), 0 0 12px rgba(255, 182, 39, 0.45);
 }
 
-.ctrl-pause {
-  border: 1px solid var(--line-strong);
-  background: var(--surface-sunk);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  min-height: 30px;
-  padding: 0 14px;
-  border-radius: 2px;
-}
-
+.ctrl-tower:hover,
 .ctrl-pause:hover {
   border-color: var(--cyan);
   color: var(--cyan);
+}
+
+.ctrl-tower[aria-pressed="true"] {
+  background: var(--cyan);
+  border-color: var(--cyan);
+  color: var(--bg-deep);
+  box-shadow: 0 0 14px rgba(63, 224, 197, 0.42);
 }
 
 .ctrl-pause[aria-pressed="true"] {
@@ -317,6 +327,8 @@ body {
    ────────────────────────────────────────────────────────────────────────── */
 
 .board {
+  grid-column: 1;
+  grid-row: 2;
   width: 100%;
   height: 100%;
   background: var(--surface-sunk);
@@ -331,7 +343,7 @@ body {
   position: absolute;
   top: 88px;
   left: 16px;
-  right: 376px;
+  right: 16px;
   bottom: 16px;
   pointer-events: none;
   background:
@@ -348,38 +360,85 @@ body {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   SIDE PANEL — DISPATCH CONSOLE
+   CONTROL TOWER — bottom operations overlay
    ────────────────────────────────────────────────────────────────────────── */
 
 .panel {
-  border-left: 1px solid var(--line-strong);
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  grid-template-columns: 170px minmax(430px, 1.1fr) minmax(250px, 0.75fr) minmax(330px, 1fr);
+  height: min(34vh, 320px);
+  border: 1px solid var(--line-strong);
   background:
     linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
   padding: 0;
-  overflow: auto;
-  position: relative;
-  z-index: 3;
+  overflow: hidden;
+  z-index: 8;
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.control-tower--closed {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(100% + 24px));
 }
 
 .panel::before {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: 0;
   background-image:
     repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, 0.012) 2px 3px);
   pointer-events: none;
 }
 
+.panel > * {
+  position: relative;
+  z-index: 1;
+}
+
 .panel-head {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--line);
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 100%;
+  padding: 18px 16px;
+  border-right: 1px solid var(--line);
   background: var(--surface-raised);
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 2;
+  text-align: center;
+}
+
+.panel-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.panel-close:hover {
+  border-color: var(--magenta);
+  color: var(--magenta);
+  background: rgba(255, 77, 138, 0.08);
 }
 
 .panel-head-mark {
@@ -392,13 +451,13 @@ body {
 .panel-head-title {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 15px;
-  letter-spacing: -0.01em;
+  font-size: 18px;
+  letter-spacing: 0;
   color: var(--ink);
+  line-height: 1.05;
 }
 
 .panel-head-id {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.22em;
@@ -407,12 +466,14 @@ body {
 }
 
 .panel-section {
-  padding: 14px 18px 18px;
-  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
   position: relative;
+  overflow: auto;
 }
 
-.panel-section:last-child { border-bottom: 0; }
+.panel-section:last-child { border-right: 0; }
 
 .section-head {
   display: flex;
@@ -448,7 +509,7 @@ body {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(124px, 1fr));
   gap: 6px;
 }
 
@@ -459,15 +520,15 @@ body {
   grid-template-rows: auto auto;
   align-items: center;
   gap: 0 10px;
-  min-height: 46px;
-  padding: 8px 12px 8px 14px;
+  min-height: 42px;
+  padding: 7px 10px 7px 12px;
   border: 1px solid var(--line);
   border-left: 2px solid var(--ink-faint);
   border-radius: 0;
   background: var(--surface-sunk);
   color: var(--ink-mid);
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   text-align: left;
   letter-spacing: -0.005em;
@@ -520,7 +581,7 @@ body {
 
 .overlays {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(104px, 1fr));
   gap: 6px;
 }
 
@@ -576,13 +637,13 @@ body {
 
 .details {
   position: relative;
-  padding-top: 0;
+  padding-top: 14px;
 }
 
 .details h2 {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 22px;
+  font-size: 20px;
   letter-spacing: -0.025em;
   margin: 0 0 4px;
   color: var(--ink);
@@ -595,7 +656,7 @@ body {
   letter-spacing: 0.24em;
   color: var(--ink-faint);
   text-transform: uppercase;
-  margin: 0 0 14px;
+  margin: 0 0 10px;
 }
 
 .details p {
@@ -607,9 +668,9 @@ body {
 
 .dispatch-row {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 58px 1fr;
   gap: 10px;
-  padding: 10px 0;
+  padding: 7px 0;
   border-top: 1px dashed var(--line);
   align-items: start;
 }
@@ -648,7 +709,7 @@ body {
 .dispatch-divider {
   height: 1px;
   background: linear-gradient(90deg, var(--cyan) 0, transparent 60%);
-  margin: 14px 0;
+  margin: 10px 0;
   opacity: 0.4;
 }
 
