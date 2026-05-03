@@ -23,6 +23,32 @@ describe("citizen lifecycle", () => {
     expect(citizen?.routePlan).not.toBeNull();
     expect(citizen?.status).toBe("walking");
     expect(citizen?.currentLegIndex).toBe(0);
+    expect(citizen?.position).toEqual({ x: 3, y: 3 });
+    expect(
+      Math.abs((citizen?.position.x ?? 0) - state.citizens[0]!.position.x) +
+        Math.abs((citizen?.position.y ?? 0) - state.citizens[0]!.position.y)
+    ).toBe(1);
+  });
+
+  it.each(["arrived", "late", "unserved"] as const)("leaves %s citizens unchanged", (status) => {
+    const state = withFirstCitizen(createInitialGameState(), {
+      status,
+      position: { x: 4, y: 4 },
+      routePlan: {
+        estimatedSeconds: 20,
+        legs: [{ mode: "walk", from: { x: 4, y: 4 }, to: { x: 5, y: 4 } }]
+      },
+      currentLegIndex: 0,
+      patienceRemaining: 123
+    });
+    const originalCitizen = state.citizens[0];
+
+    const nextState = tickCitizens(state, 1);
+
+    expect(nextState.citizens[0]).toEqual(originalCitizen);
+    expect(nextState.metrics.completedTrips).toBe(state.metrics.completedTrips);
+    expect(nextState.metrics.lateTrips).toBe(state.metrics.lateTrips);
+    expect(nextState.metrics.unservedTrips).toBe(state.metrics.unservedTrips);
   });
 
   it("marks long overdue walking-only trips unserved when no transit exists", () => {
@@ -61,6 +87,33 @@ describe("citizen lifecycle", () => {
     expect(citizen?.home).not.toBe(originalHome);
   });
 
+  it("marks a trip late when it arrives after the deadline", () => {
+    const state = withFirstCitizen(createInitialGameState(), {
+      destination: { x: 3, y: 3 },
+      deadline: 0
+    });
+
+    const nextState = tickCitizens(state, 1);
+    const citizen = nextState.citizens[0];
+
+    expect(citizen?.status).toBe("late");
+    expect(nextState.metrics.completedTrips).toBe(1);
+    expect(nextState.metrics.lateTrips).toBe(1);
+  });
+
+  it("marks citizens unserved when route planning returns null", () => {
+    const state = withFirstCitizen(createInitialGameState(), {
+      destination: { x: 28, y: 17 }
+    });
+
+    const nextState = tickCitizens(state, 1);
+    const citizen = nextState.citizens[0];
+
+    expect(citizen?.status).toBe("unserved");
+    expect(citizen?.routePlan).toBeNull();
+    expect(nextState.metrics.unservedTrips).toBe(1);
+  });
+
   it("marks waiting citizens unserved when patience reaches zero", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
@@ -70,10 +123,18 @@ describe("citizen lifecycle", () => {
       home: { x: 6, y: 8 },
       position: { x: 6, y: 8 },
       destination: { x: 23, y: 8 },
-      patienceRemaining: 1
+      patienceRemaining: 2
     });
 
     let nextState = tickCitizens(state, 1);
+    nextState = tickCitizens({ ...nextState, time: nextState.time + 1 }, 1);
+
+    expect(nextState.citizens[0]?.status).toBe("waiting");
+    expect(nextState.citizens[0]?.patienceRemaining).toBe(1);
+    expect(nextState.metrics.totalWaitSeconds).toBe(1);
+    expect(nextState.metrics.waitingCitizenCount).toBe(1);
+    expect(nextState.metrics.averageWaitSeconds).toBe(1);
+
     nextState = tickCitizens({ ...nextState, time: nextState.time + 1 }, 1);
 
     const citizen = nextState.citizens[0];
@@ -81,6 +142,8 @@ describe("citizen lifecycle", () => {
     expect(citizen?.status).toBe("unserved");
     expect(citizen?.patienceRemaining).toBe(0);
     expect(nextState.metrics.unservedTrips).toBe(1);
-    expect(nextState.metrics.totalWaitSeconds).toBe(1);
+    expect(nextState.metrics.totalWaitSeconds).toBe(2);
+    expect(nextState.metrics.waitingCitizenCount).toBe(0);
+    expect(nextState.metrics.averageWaitSeconds).toBe(0);
   });
 });

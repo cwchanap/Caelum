@@ -15,6 +15,13 @@ describe("route planning", () => {
     });
   });
 
+  it("returns null when the origin or destination is outside the map", () => {
+    const state = createInitialGameState();
+
+    expect(findRoutePlan(state, { x: -1, y: 3 }, { x: 4, y: 3 })).toBeNull();
+    expect(findRoutePlan(state, { x: 2, y: 3 }, { x: 28, y: 17 })).toBeNull();
+  });
+
   it("creates a bus route when stops connect the origin and destination", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });

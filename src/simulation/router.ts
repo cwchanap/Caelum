@@ -56,7 +56,15 @@ function bestCandidate(candidates: RoutePlan[]): RoutePlan | null {
   return best;
 }
 
+function isInsideMap(state: GameState, point: Point): boolean {
+  return point.x >= 0 && point.x < state.map.width && point.y >= 0 && point.y < state.map.height;
+}
+
 export function findRoutePlan(state: GameState, origin: Point, destination: Point): RoutePlan | null {
+  if (!isInsideMap(state, origin) || !isInsideMap(state, destination)) {
+    return null;
+  }
+
   const candidates: RoutePlan[] = [
     {
       legs: [walkLeg(origin, destination)],
