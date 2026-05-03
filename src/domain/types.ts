@@ -1,0 +1,137 @@
+export type TileKind = "empty" | "road" | "residential" | "jobs" | "civic" | "park";
+export type TransitMode = "walk" | "bus" | "metro";
+export type CitizenStatus = "idle" | "walking" | "waiting" | "riding" | "arrived" | "late" | "unserved";
+export type Tool = "inspect" | "busStop" | "busRoute" | "metroStation" | "metroLine" | "civicAnchor" | "remove";
+export type Overlay = "coverage" | "crowding" | "demand" | "lateness" | "growth";
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Tile extends Point {
+  id: string;
+  kind: TileKind;
+  districtId?: string;
+}
+
+export interface GameMap {
+  width: number;
+  height: number;
+  tiles: Tile[];
+}
+
+export interface Stop {
+  id: string;
+  position: Point;
+  queueCitizenIds: string[];
+}
+
+export interface Station {
+  id: string;
+  position: Point;
+  queueCitizenIds: string[];
+}
+
+export interface Route {
+  id: string;
+  name: string;
+  color: string;
+  stopIds: string[];
+  vehicleIds: string[];
+  active: boolean;
+}
+
+export interface MetroLine {
+  id: string;
+  name: string;
+  color: string;
+  stationIds: string[];
+  vehicleIds: string[];
+  active: boolean;
+}
+
+export interface Vehicle {
+  id: string;
+  mode: "bus" | "metro";
+  lineId: string;
+  capacity: number;
+  passengerIds: string[];
+  segmentIndex: number;
+  progress: number;
+}
+
+export interface Citizen {
+  id: string;
+  home: Point;
+  destination: Point;
+  position: Point;
+  status: CitizenStatus;
+  patienceRemaining: number;
+  deadline: number;
+  routePlan: RoutePlan | null;
+  currentLegIndex: number;
+}
+
+export interface RouteLeg {
+  mode: TransitMode;
+  from: Point;
+  to: Point;
+  lineId?: string;
+}
+
+export interface RoutePlan {
+  legs: RouteLeg[];
+  estimatedSeconds: number;
+}
+
+export interface GrowthWave {
+  id: string;
+  triggerTime: number;
+  tiles: Array<Tile & { createsCitizens: number }>;
+  message: string;
+  applied: boolean;
+}
+
+export interface Scenario {
+  name: string;
+  growthWaves: GrowthWave[];
+  objectives: {
+    maxLateRatio: number;
+    maxUnservedRatio: number;
+    maxAverageWait: number;
+    rollingWindowSeconds: number;
+    survivalTime: number;
+  };
+}
+
+export interface Metrics {
+  lateTrips: number;
+  completedTrips: number;
+  unservedTrips: number;
+  totalWaitSeconds: number;
+  waitingCitizenCount: number;
+  averageWaitSeconds: number;
+  state: "running" | "won" | "lost";
+  lossReason: string | null;
+}
+
+export interface TransitNetwork {
+  stops: Stop[];
+  stations: Station[];
+  routes: Route[];
+  metroLines: MetroLine[];
+  vehicles: Vehicle[];
+}
+
+export interface GameState {
+  time: number;
+  speed: 0 | 1 | 2 | 4;
+  paused: boolean;
+  budget: number;
+  map: GameMap;
+  scenario: Scenario;
+  transit: TransitNetwork;
+  citizens: Citizen[];
+  metrics: Metrics;
+}
