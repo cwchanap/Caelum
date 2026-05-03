@@ -1,4 +1,4 @@
-import type { Citizen, CitizenStatus, GameState, Metrics, Point, RoutePlan } from "../domain/types";
+import type { Citizen, CitizenStatus, GameState, Metrics, Point, RoutePlan, TripOutcome } from "../domain/types";
 import { findRoutePlan } from "./router";
 
 const terminalStatuses = new Set<CitizenStatus>(["arrived", "late", "unserved"]);
@@ -22,16 +22,27 @@ function isWalkingOnly(routePlan: RoutePlan): boolean {
   return routePlan.legs.every((leg) => leg.mode === "walk");
 }
 
-function moveToward(from: Point, to: Point): Point {
-  if (from.x < to.x) return { x: from.x + 1, y: from.y };
-  if (from.x > to.x) return { x: from.x - 1, y: from.y };
-  if (from.y < to.y) return { x: from.x, y: from.y + 1 };
-  if (from.y > to.y) return { x: from.x, y: from.y - 1 };
+const WALK_SECONDS_PER_TILE = 20;
+
+function moveToward(from: Point, to: Point, maxDistance: number): Point {
+  const xDistance = to.x - from.x;
+  const yDistance = to.y - from.y;
+
+  if (xDistance !== 0) {
+    const step = Math.sign(xDistance) * Math.min(Math.abs(xDistance), maxDistance);
+    return { x: from.x + step, y: from.y };
+  }
+
+  if (yDistance !== 0) {
+    const step = Math.sign(yDistance) * Math.min(Math.abs(yDistance), maxDistance);
+    return { x: from.x, y: from.y + step };
+  }
+
   return clonePoint(from);
 }
 
 function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
+  return Math.abs(left.x - right.x) < 0.000_001 && Math.abs(left.y - right.y) < 0.000_001;
 }
 
 function statusAfterLeg(routePlan: RoutePlan, nextLegIndex: number): CitizenStatus {
@@ -75,7 +86,14 @@ function tickCitizen(
   state: GameState,
   citizen: Citizen,
   deltaSeconds: number
-): { citizen: Citizen; completedTrips: number; lateTrips: number; unservedTrips: number; waitSeconds: number } {
+): {
+  citizen: Citizen;
+  completedTrips: number;
+  lateTrips: number;
+  unservedTrips: number;
+  waitSeconds: number;
+  outcomes: TripOutcome[];
+} {
   if (terminalStatuses.has(citizen.status)) {
     return {
       citizen: {
@@ -87,11 +105,14 @@ function tickCitizen(
       completedTrips: 0,
       lateTrips: 0,
       unservedTrips: 0,
-      waitSeconds: 0
+      waitSeconds: 0,
+      outcomes: []
     };
   }
 
-  if (citizen.status === "riding") {
+  const isOnVehicle = state.transit.vehicles.some((vehicle) => vehicle.passengerIds.includes(citizen.id));
+
+  if (citizen.status === "riding" && isOnVehicle) {
     return {
       citizen: {
         ...citizen,
@@ -103,7 +124,8 @@ function tickCitizen(
       completedTrips: 0,
       lateTrips: 0,
       unservedTrips: 0,
-      waitSeconds: 0
+      waitSeconds: 0,
+      outcomes: []
     };
   }
 
@@ -115,11 +137,23 @@ function tickCitizen(
     position: clonePoint(citizen.position)
   };
 
+  if (citizen.status === "riding" && !isOnVehicle) {
+    routePlan = null;
+    nextCitizen = { ...nextCitizen, status: "idle", routePlan: null, currentLegIndex: 0 };
+  }
+
   if (routePlan === null) {
     const plannedRoute = findRoutePlan(state, nextCitizen.home, nextCitizen.destination);
 
     if (plannedRoute === null) {
-      return { citizen: markUnserved(nextCitizen), completedTrips: 0, lateTrips: 0, unservedTrips: 1, waitSeconds: 0 };
+      return {
+        citizen: markUnserved(nextCitizen),
+        completedTrips: 0,
+        lateTrips: 0,
+        unservedTrips: 1,
+        waitSeconds: 0,
+        outcomes: [{ time: state.time, outcome: "unserved" }]
+      };
     }
 
     routePlan = cloneRoutePlan(plannedRoute);
@@ -130,18 +164,30 @@ function tickCitizen(
   }
 
   if (isWalkingOnly(routePlan) && state.time > nextCitizen.deadline && state.time + routePlan.estimatedSeconds > nextCitizen.deadline) {
-    return { citizen: markUnserved(nextCitizen), completedTrips: 0, lateTrips: 0, unservedTrips: 1, waitSeconds: 0 };
+    return {
+      citizen: markUnserved(nextCitizen),
+      completedTrips: 0,
+      lateTrips: 0,
+      unservedTrips: 1,
+      waitSeconds: 0,
+      outcomes: [{ time: state.time, outcome: "unserved" }]
+    };
   }
 
   const leg = routePlan.legs[nextCitizen.currentLegIndex];
 
   if (leg === undefined) {
     const arrival = scoreArrival(nextCitizen, state.time);
-    return { ...arrival, unservedTrips: 0, waitSeconds: 0 };
+    return {
+      ...arrival,
+      unservedTrips: 0,
+      waitSeconds: 0,
+      outcomes: [{ time: state.time, outcome: arrival.lateTrips > 0 ? "late" : "arrived" }]
+    };
   }
 
   if (leg.mode === "walk") {
-    const position = moveToward(nextCitizen.position, leg.to);
+    const position = moveToward(nextCitizen.position, leg.to, Math.max(0, deltaSeconds / WALK_SECONDS_PER_TILE));
     const currentLegIndex = samePoint(position, leg.to) ? nextCitizen.currentLegIndex + 1 : nextCitizen.currentLegIndex;
     nextCitizen = {
       ...nextCitizen,
@@ -152,10 +198,15 @@ function tickCitizen(
 
     if (nextCitizen.status === "arrived") {
       const arrival = scoreArrival(nextCitizen, state.time);
-      return { ...arrival, unservedTrips: 0, waitSeconds: 0 };
+      return {
+        ...arrival,
+        unservedTrips: 0,
+        waitSeconds: 0,
+        outcomes: [{ time: state.time, outcome: arrival.lateTrips > 0 ? "late" : "arrived" }]
+      };
     }
 
-    return { citizen: nextCitizen, completedTrips: 0, lateTrips: 0, unservedTrips: 0, waitSeconds: 0 };
+    return { citizen: nextCitizen, completedTrips: 0, lateTrips: 0, unservedTrips: 0, waitSeconds: 0, outcomes: [] };
   }
 
   const patienceRemaining = Math.max(0, nextCitizen.patienceRemaining - deltaSeconds);
@@ -166,13 +217,28 @@ function tickCitizen(
   };
 
   if (patienceRemaining <= 0 || state.time > nextCitizen.deadline + 300) {
-    return { citizen: markUnserved(nextCitizen), completedTrips: 0, lateTrips: 0, unservedTrips: 1, waitSeconds: deltaSeconds };
+    return {
+      citizen: markUnserved(nextCitizen),
+      completedTrips: 0,
+      lateTrips: 0,
+      unservedTrips: 1,
+      waitSeconds: deltaSeconds,
+      outcomes: [{ time: state.time, outcome: "unserved" }]
+    };
   }
 
-  return { citizen: nextCitizen, completedTrips: 0, lateTrips: 0, unservedTrips: 0, waitSeconds: deltaSeconds };
+  return { citizen: nextCitizen, completedTrips: 0, lateTrips: 0, unservedTrips: 0, waitSeconds: deltaSeconds, outcomes: [] };
 }
 
-function updateMetrics(metrics: Metrics, citizens: Citizen[], completedTrips: number, lateTrips: number, unservedTrips: number, waitSeconds: number): Metrics {
+function updateMetrics(
+  metrics: Metrics,
+  citizens: Citizen[],
+  completedTrips: number,
+  lateTrips: number,
+  unservedTrips: number,
+  waitSeconds: number,
+  outcomes: TripOutcome[]
+): Metrics {
   const totalWaitSeconds = metrics.totalWaitSeconds + waitSeconds;
   const waitingCitizens = citizens.filter((citizen) => citizen.status === "waiting");
   const waitingCitizenCount = waitingCitizens.length;
@@ -188,7 +254,8 @@ function updateMetrics(metrics: Metrics, citizens: Citizen[], completedTrips: nu
     unservedTrips: metrics.unservedTrips + unservedTrips,
     totalWaitSeconds,
     waitingCitizenCount,
-    averageWaitSeconds: waitingCitizenCount > 0 ? currentWaitSeconds / waitingCitizenCount : 0
+    averageWaitSeconds: waitingCitizenCount > 0 ? currentWaitSeconds / waitingCitizenCount : 0,
+    tripOutcomes: [...metrics.tripOutcomes, ...outcomes]
   };
 }
 
@@ -199,10 +266,11 @@ export function tickCitizens(state: GameState, deltaSeconds: number): GameState 
   const lateTrips = results.reduce((total, result) => total + result.lateTrips, 0);
   const unservedTrips = results.reduce((total, result) => total + result.unservedTrips, 0);
   const waitSeconds = results.reduce((total, result) => total + result.waitSeconds, 0);
+  const outcomes = results.flatMap((result) => result.outcomes);
 
   return {
     ...state,
     citizens,
-    metrics: updateMetrics(state.metrics, citizens, completedTrips, lateTrips, unservedTrips, waitSeconds)
+    metrics: updateMetrics(state.metrics, citizens, completedTrips, lateTrips, unservedTrips, waitSeconds, outcomes)
   };
 }

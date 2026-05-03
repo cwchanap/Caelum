@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getTile } from "../../src/simulation/map";
+import { applyDueGrowthWaves } from "../../src/simulation/map";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { addBusStop, addMetroStation } from "../../src/simulation/transit";
 import { handleTileClick } from "../../src/ui/actions";
@@ -66,5 +67,21 @@ describe("UI tile actions", () => {
     const removed = handleTileClick(added.state, { ...createUiState(), activeTool: "remove" as const }, { x: 0, y: 0 });
 
     expect(getTile(removed.state.map, { x: 0, y: 0 })?.kind).toBe("empty");
+  });
+
+  it("limits civic anchors and marks them as growth destinations", () => {
+    let state = createInitialGameState();
+    state = handleTileClick(state, { ...createUiState(), activeTool: "civicAnchor" as const }, { x: 0, y: 0 }).state;
+    state = handleTileClick(state, { ...createUiState(), activeTool: "civicAnchor" as const }, { x: 1, y: 0 }).state;
+    state = handleTileClick(state, { ...createUiState(), activeTool: "civicAnchor" as const }, { x: 2, y: 0 }).state;
+    const overLimit = handleTileClick(state, { ...createUiState(), activeTool: "civicAnchor" as const }, { x: 3, y: 0 }).state;
+
+    expect(getTile(state.map, { x: 0, y: 0 })?.districtId).toBe("anchor");
+    expect(overLimit).toBe(state);
+
+    const grown = applyDueGrowthWaves({ ...state, time: 250 });
+    const newCitizens = grown.citizens.slice(createInitialGameState().citizens.length);
+
+    expect(newCitizens.some((citizen) => citizen.destination.x === 0 && citizen.destination.y === 0)).toBe(true);
   });
 });

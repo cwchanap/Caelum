@@ -4,6 +4,7 @@ import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle }
 import type { UiState } from "./uiState";
 
 const CIVIC_ANCHOR_COST = 12_000;
+const CIVIC_ANCHOR_LIMIT = 3;
 const BUS_VEHICLE_COST = 8_000;
 const METRO_VEHICLE_COST = 50_000;
 
@@ -12,7 +13,9 @@ function samePoint(left: Point, right: Point): boolean {
 }
 
 function addCivicAnchor(state: GameState, point: Point): GameState {
-  if (state.budget < CIVIC_ANCHOR_COST || !isValidCivicAnchorPlacement(state, point)) {
+  const placedAnchorCount = state.map.tiles.filter((tile) => tile.kind === "civic" && tile.districtId === "anchor").length;
+
+  if (placedAnchorCount >= CIVIC_ANCHOR_LIMIT || state.budget < CIVIC_ANCHOR_COST || !isValidCivicAnchorPlacement(state, point)) {
     return state;
   }
 
@@ -21,7 +24,7 @@ function addCivicAnchor(state: GameState, point: Point): GameState {
     budget: state.budget - CIVIC_ANCHOR_COST,
     map: {
       ...state.map,
-      tiles: state.map.tiles.map((tile) => (samePoint(tile, point) ? { ...tile, kind: "civic" } : tile))
+      tiles: state.map.tiles.map((tile) => (samePoint(tile, point) ? { ...tile, kind: "civic", districtId: "anchor" } : tile))
     }
   };
 }
@@ -39,7 +42,9 @@ function removeAtTile(state: GameState, point: Point): GameState {
       .filter((metroLine) => metroLine.stationIds.some((stationId) => removedStationIds.has(stationId)))
       .map((metroLine) => metroLine.id)
   );
-  const removesCivicAnchor = state.map.tiles.some((tile) => samePoint(tile, point) && tile.kind === "civic");
+  const removesCivicAnchor = state.map.tiles.some(
+    (tile) => samePoint(tile, point) && tile.kind === "civic" && tile.districtId === "anchor"
+  );
 
   if (removedStopIds.size === 0 && removedStationIds.size === 0 && !removesCivicAnchor) {
     return state;
@@ -50,7 +55,11 @@ function removeAtTile(state: GameState, point: Point): GameState {
     map: removesCivicAnchor
       ? {
           ...state.map,
-          tiles: state.map.tiles.map((tile) => (samePoint(tile, point) && tile.kind === "civic" ? { ...tile, kind: "empty" } : tile))
+          tiles: state.map.tiles.map((tile) =>
+            samePoint(tile, point) && tile.kind === "civic" && tile.districtId === "anchor"
+              ? { ...tile, kind: "empty", districtId: undefined }
+              : tile
+          )
         }
       : state.map,
     transit: {

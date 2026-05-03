@@ -19,6 +19,7 @@ function createInitialMetrics(): Metrics {
     totalWaitSeconds: 0,
     waitingCitizenCount: 0,
     averageWaitSeconds: 0,
+    tripOutcomes: [],
     state: "running",
     lossReason: null
   };

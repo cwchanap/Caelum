@@ -1,5 +1,11 @@
 import type { GameState, Point, RouteLeg, RoutePlan, Station, Stop } from "../domain/types";
 
+interface TransitService {
+  mode: "bus" | "metro";
+  lineId: string;
+  anchors: Point[];
+}
+
 function manhattanDistance(from: Point, to: Point): number {
   return Math.abs(from.x - to.x) + Math.abs(from.y - to.y);
 }
@@ -26,6 +32,10 @@ function busSeconds(from: Point, to: Point): number {
 
 function metroSeconds(from: Point, to: Point): number {
   return 120 + manhattanDistance(from, to) * 7;
+}
+
+function transitSeconds(mode: "bus" | "metro", from: Point, to: Point): number {
+  return mode === "bus" ? busSeconds(from, to) : metroSeconds(from, to);
 }
 
 function nearestByPosition<T extends Stop | Station>(points: T[], target: Point): T | null {
@@ -62,6 +72,68 @@ function isInsideMap(state: GameState, point: Point): boolean {
   }
 
   return point.x >= 0 && point.x < state.map.width && point.y >= 0 && point.y < state.map.height;
+}
+
+function activeServices(state: GameState): TransitService[] {
+  const services: TransitService[] = [];
+
+  for (const route of state.transit.routes) {
+    if (!route.active) continue;
+    const anchors = route.stopIds
+      .map((stopId) => state.transit.stops.find((stop) => stop.id === stopId)?.position)
+      .filter((point): point is Point => point !== undefined)
+      .map(clonePoint);
+
+    if (anchors.length >= 2) {
+      services.push({ mode: "bus", lineId: route.id, anchors });
+    }
+  }
+
+  for (const line of state.transit.metroLines) {
+    if (!line.active) continue;
+    const anchors = line.stationIds
+      .map((stationId) => state.transit.stations.find((station) => station.id === stationId)?.position)
+      .filter((point): point is Point => point !== undefined)
+      .map(clonePoint);
+
+    if (anchors.length >= 2) {
+      services.push({ mode: "metro", lineId: line.id, anchors });
+    }
+  }
+
+  return services;
+}
+
+function nearestAnchor(anchors: Point[], target: Point): Point | null {
+  let nearest: Point | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const anchor of anchors) {
+    const distance = manhattanDistance(anchor, target);
+
+    if (distance < nearestDistance) {
+      nearest = anchor;
+      nearestDistance = distance;
+    }
+  }
+
+  return nearest === null ? null : clonePoint(nearest);
+}
+
+function bestTransferPair(first: TransitService, second: TransitService): { first: Point; second: Point } | null {
+  let best: { first: Point; second: Point; distance: number } | null = null;
+
+  for (const firstAnchor of first.anchors) {
+    for (const secondAnchor of second.anchors) {
+      const distance = manhattanDistance(firstAnchor, secondAnchor);
+
+      if (best === null || distance < best.distance) {
+        best = { first: firstAnchor, second: secondAnchor, distance };
+      }
+    }
+  }
+
+  return best === null ? null : { first: clonePoint(best.first), second: clonePoint(best.second) };
 }
 
 export function findRoutePlan(state: GameState, origin: Point, destination: Point): RoutePlan | null {
@@ -130,6 +202,40 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
         metroSeconds(originStation.position, destinationStation.position) +
         walkSeconds(destinationStation.position, destination)
     });
+  }
+
+  const services = activeServices(state);
+
+  for (const first of services) {
+    for (const second of services) {
+      if (first.lineId === second.lineId) {
+        continue;
+      }
+
+      const firstStart = nearestAnchor(first.anchors, origin);
+      const secondEnd = nearestAnchor(second.anchors, destination);
+      const transfer = bestTransferPair(first, second);
+
+      if (firstStart === null || secondEnd === null || transfer === null) {
+        continue;
+      }
+
+      candidates.push({
+        legs: [
+          walkLeg(origin, firstStart),
+          transitLeg(first.mode, firstStart, transfer.first, first.lineId),
+          walkLeg(transfer.first, transfer.second),
+          transitLeg(second.mode, transfer.second, secondEnd, second.lineId),
+          walkLeg(secondEnd, destination)
+        ],
+        estimatedSeconds:
+          walkSeconds(origin, firstStart) +
+          transitSeconds(first.mode, firstStart, transfer.first) +
+          walkSeconds(transfer.first, transfer.second) +
+          transitSeconds(second.mode, transfer.second, secondEnd) +
+          walkSeconds(secondEnd, destination)
+      });
+    }
   }
 
   return bestCandidate(candidates);

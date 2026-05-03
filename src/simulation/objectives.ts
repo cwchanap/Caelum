@@ -16,14 +16,24 @@ export function evaluateObjectives(state: GameState): GameState {
     return state;
   }
 
-  const totalTrips = state.metrics.completedTrips + state.metrics.unservedTrips;
-  const { maxAverageWait, maxLateRatio, maxUnservedRatio, survivalTime } = state.scenario.objectives;
+  const { maxAverageWait, maxLateRatio, maxUnservedRatio, rollingWindowSeconds, survivalTime } = state.scenario.objectives;
+  const windowStart = state.time - rollingWindowSeconds;
+  const windowOutcomes = state.metrics.tripOutcomes.filter((outcome) => outcome.time >= windowStart);
+  const hasOutcomeHistory = state.metrics.tripOutcomes.length > 0;
+  const completedTrips = hasOutcomeHistory
+    ? windowOutcomes.filter((outcome) => outcome.outcome === "arrived" || outcome.outcome === "late").length
+    : state.metrics.completedTrips;
+  const lateTrips = hasOutcomeHistory ? windowOutcomes.filter((outcome) => outcome.outcome === "late").length : state.metrics.lateTrips;
+  const unservedTrips = hasOutcomeHistory
+    ? windowOutcomes.filter((outcome) => outcome.outcome === "unserved").length
+    : state.metrics.unservedTrips;
+  const totalTrips = completedTrips + unservedTrips;
 
-  if (totalTrips >= 10 && state.metrics.unservedTrips / totalTrips > maxUnservedRatio) {
+  if (totalTrips >= 10 && unservedTrips / totalTrips > maxUnservedRatio) {
     return lose(state, "Too many unserved citizens");
   }
 
-  if (state.metrics.completedTrips >= 10 && state.metrics.lateTrips / state.metrics.completedTrips > maxLateRatio) {
+  if (completedTrips >= 10 && lateTrips / completedTrips > maxLateRatio) {
     return lose(state, "Too many late arrivals");
   }
 

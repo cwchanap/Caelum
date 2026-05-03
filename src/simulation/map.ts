@@ -10,7 +10,13 @@ function clonePoint(point: Point): Point {
 }
 
 function destinationTiles(map: GameMap): Tile[] {
-  return map.tiles.filter((tile) => tile.kind === "jobs" || tile.kind === "civic");
+  return map.tiles
+    .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
+    .sort((left, right) => {
+      if (left.districtId === "anchor" && right.districtId !== "anchor") return -1;
+      if (right.districtId === "anchor" && left.districtId !== "anchor") return 1;
+      return 0;
+    });
 }
 
 export function getTile(map: GameMap, point: Point): Tile | null {

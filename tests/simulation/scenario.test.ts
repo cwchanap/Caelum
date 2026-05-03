@@ -118,14 +118,14 @@ describe("Growing Suburb scenario", () => {
         {
           ...baseState.citizens[0]!,
           destination: { x: 3, y: 3 },
-          deadline: 1
+          deadline: 20
         }
       ]
     };
 
-    const nextState = tickSimulation(state, 1);
+    const nextState = tickSimulation(state, 20);
 
-    expect(nextState.time).toBe(1);
+    expect(nextState.time).toBe(20);
     expect(nextState.citizens[0]?.status).toBe("arrived");
     expect(nextState.metrics.completedTrips).toBe(1);
     expect(nextState.metrics.lateTrips).toBe(0);

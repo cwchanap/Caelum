@@ -66,6 +66,54 @@ describe("route planning", () => {
     ]);
   });
 
+  it("creates a transfer route across bus and metro lines", () => {
+    const state = {
+      ...createInitialGameState(),
+      transit: {
+        stops: [
+          { id: "stop-001", position: { x: 0, y: 0 }, queueCitizenIds: [] },
+          { id: "stop-002", position: { x: 13, y: 8 }, queueCitizenIds: [] }
+        ],
+        stations: [
+          { id: "station-001", position: { x: 13, y: 8 }, queueCitizenIds: [] },
+          { id: "station-002", position: { x: 27, y: 17 }, queueCitizenIds: [] }
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: [],
+            active: true
+          }
+        ],
+        metroLines: [
+          {
+            id: "metro-001",
+            name: "Metro 1",
+            color: "#2867b2",
+            stationIds: ["station-001", "station-002"],
+            vehicleIds: [],
+            active: true
+          }
+        ],
+        vehicles: []
+      }
+    };
+
+    const plan = findRoutePlan(state, { x: 0, y: 0 }, { x: 27, y: 17 });
+
+    expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "bus", "walk", "metro", "walk"]);
+    expect(plan?.legs).toEqual([
+      { mode: "walk", from: { x: 0, y: 0 }, to: { x: 0, y: 0 } },
+      { mode: "bus", from: { x: 0, y: 0 }, to: { x: 13, y: 8 }, lineId: "route-001" },
+      { mode: "walk", from: { x: 13, y: 8 }, to: { x: 13, y: 8 } },
+      { mode: "metro", from: { x: 13, y: 8 }, to: { x: 27, y: 17 }, lineId: "metro-001" },
+      { mode: "walk", from: { x: 27, y: 17 }, to: { x: 27, y: 17 } }
+    ]);
+  });
+
   it("ignores inactive routes and lines deterministically", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });

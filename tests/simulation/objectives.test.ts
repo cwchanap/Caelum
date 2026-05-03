@@ -69,6 +69,48 @@ describe("objectives", () => {
     expect(evaluated.metrics.lossReason).toBe("Average wait time is too high");
   });
 
+  it("evaluates trip ratios over the rolling objective window", () => {
+    const state = withMetrics(
+      {
+        ...createInitialGameState(),
+        time: 1_000
+      },
+      {
+        completedTrips: 20,
+        lateTrips: 8,
+        unservedTrips: 0,
+        tripOutcomes: [
+          ...Array.from({ length: 6 }, (_, index) => ({ time: 100 + index, outcome: "late" as const })),
+          ...Array.from({ length: 2 }, (_, index) => ({ time: 990 + index, outcome: "late" as const })),
+          ...Array.from({ length: 12 }, (_, index) => ({ time: 980 + index, outcome: "arrived" as const }))
+        ]
+      }
+    );
+
+    const evaluated = evaluateObjectives(state);
+
+    expect(evaluated.metrics.state).toBe("running");
+  });
+
+  it("ignores stale failures when the rolling objective window is empty", () => {
+    const state = withMetrics(
+      {
+        ...createInitialGameState(),
+        time: 1_000
+      },
+      {
+        completedTrips: 10,
+        lateTrips: 10,
+        unservedTrips: 0,
+        tripOutcomes: Array.from({ length: 10 }, (_, index) => ({ time: 100 + index, outcome: "late" as const }))
+      }
+    );
+
+    const evaluated = evaluateObjectives(state);
+
+    expect(evaluated.metrics.state).toBe("running");
+  });
+
   it("leaves already finished states unchanged", () => {
     const wonState = withMetrics(createInitialGameState(), { state: "won" });
     const lostState = withMetrics(createInitialGameState(), {

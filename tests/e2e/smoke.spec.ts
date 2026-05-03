@@ -1,7 +1,27 @@
 import { expect, test } from "@playwright/test";
+import { createServer, type ViteDevServer } from "vite";
+
+let server: ViteDevServer;
+let appUrl: string;
+
+test.beforeAll(async () => {
+  server = await createServer({
+    configFile: "vite.config.ts",
+    server: {
+      host: "127.0.0.1",
+      port: 0
+    }
+  });
+  await server.listen();
+  appUrl = server.resolvedUrls?.local[0] ?? "";
+});
+
+test.afterAll(async () => {
+  await server.close();
+});
 
 test("loads board and supports basic controls", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(appUrl);
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   await expect(page.getByTestId("game-canvas")).toBeVisible();

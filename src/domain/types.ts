@@ -105,6 +105,13 @@ export interface Scenario {
   };
 }
 
+export type TripOutcomeKind = "arrived" | "late" | "unserved";
+
+export interface TripOutcome {
+  time: number;
+  outcome: TripOutcomeKind;
+}
+
 export interface Metrics {
   lateTrips: number;
   completedTrips: number;
@@ -112,6 +119,7 @@ export interface Metrics {
   totalWaitSeconds: number;
   waitingCitizenCount: number;
   averageWaitSeconds: number;
+  tripOutcomes: TripOutcome[];
   state: "running" | "won" | "lost";
   lossReason: string | null;
 }
