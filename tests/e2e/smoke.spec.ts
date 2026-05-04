@@ -13,7 +13,9 @@ test.beforeAll(async () => {
     }
   });
   await server.listen();
-  appUrl = server.resolvedUrls?.local[0] ?? "";
+  const resolved = server.resolvedUrls?.local[0];
+  if (!resolved) throw new Error("Vite dev server did not expose a local URL");
+  appUrl = resolved;
 });
 
 test.afterAll(async () => {
