@@ -25,6 +25,14 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: "runtime",
+          include: ["tests/runtime/**/*.test.ts"],
+          environment: "node"
+        }
+      },
+      {
+        extends: true,
+        test: {
           name: "simulation",
           include: ["tests/simulation/**/*.test.ts"],
           environment: "node"

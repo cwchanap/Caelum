@@ -8,7 +8,7 @@ if (!app) {
   throw new Error("Missing #app root");
 }
 
-function createRuntimeStub() {
+function createBootstrapRuntime() {
   return {
     getSnapshot: () => ({
       shell: {
@@ -23,7 +23,7 @@ function createRuntimeStub() {
 }
 
 try {
-  const runtime = createRuntimeStub();
+  const runtime = createBootstrapRuntime();
   runtime.getSnapshot();
   
   mount(App, {
@@ -38,7 +38,7 @@ try {
   mount(App, {
     target: app,
     props: {
-      runtime: createRuntimeStub(),
+      runtime: createBootstrapRuntime(),
       error: errorMessage
     }
   });

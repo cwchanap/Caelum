@@ -8,7 +8,7 @@ interface ShellState {
 
 interface RuntimeController {
   getSnapshot: () => ShellState;
-  subscribe: (listener: () => void) => () => void;
+  subscribe: (listener: (snapshot: ShellState) => void) => () => void;
   start: () => void;
   stop: () => void;
 }
@@ -21,25 +21,27 @@ interface Props {
 let { runtime, error = null }: Props = $props();
 </script>
 
-<main class="shell" data-testid="game-shell">
-  {#if error}
+{#if error}
+  <main class="shell" data-testid="game-shell">
     <div class="shell-error" role="alert">
       <strong>Shell Error:</strong> {error}
     </div>
-  {/if}
-  
-  <section class="topbar" data-testid="topbar">
-    <div class="topbar-placeholder">Topbar Placeholder</div>
-  </section>
-  
-  <div class="board" data-testid="game-canvas-host">
-    <div class="canvas-placeholder">Canvas Host Placeholder</div>
-  </div>
-  
-  <aside class="panel control-tower" data-testid="control-tower">
-    <div class="panel-placeholder">Panel Placeholder</div>
-  </aside>
-</main>
+  </main>
+{:else}
+  <main class="shell" data-testid="game-shell">
+    <section class="topbar" data-testid="topbar">
+      <div class="topbar-placeholder">Topbar Placeholder</div>
+    </section>
+    
+    <div class="board" data-testid="game-canvas-host">
+      <div class="canvas-placeholder">Canvas Host Placeholder</div>
+    </div>
+    
+    <aside class="panel control-tower" data-testid="control-tower">
+      <div class="panel-placeholder">Panel Placeholder</div>
+    </aside>
+  </main>
+{/if}
 
 <style>
   .shell {
