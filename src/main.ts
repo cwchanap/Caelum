@@ -33,13 +33,20 @@ try {
     }
   });
 } catch (err) {
-  app.innerHTML = "";
-  const errorMessage = err instanceof Error ? err.message : "Bootstrap failed";
-  mount(App, {
-    target: app,
-    props: {
-      runtime: createBootstrapRuntime(),
-      error: errorMessage
-    }
-  });
+  try {
+    app.innerHTML = "";
+    const errorMessage = err instanceof Error ? err.message : "Bootstrap failed";
+    mount(App, {
+      target: app,
+      props: {
+        runtime: createBootstrapRuntime(),
+        error: errorMessage
+      }
+    });
+  } catch (finalErr) {
+    app.innerHTML = `<div style="padding:2rem;color:#ef4444;font-family:system-ui">
+      <h1>Critical Error</h1>
+      <p>${err instanceof Error ? err.message : "Bootstrap failed"}</p>
+    </div>`;
+  }
 }
