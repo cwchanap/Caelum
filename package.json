@@ -8,7 +8,7 @@
     "build": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit && vite build",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:unit": "vitest run tests/simulation",
+    "test:unit": "vitest run --project ui --project runtime --project simulation",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
