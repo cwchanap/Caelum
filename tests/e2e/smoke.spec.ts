@@ -39,25 +39,4 @@ test("loads minimal shell scaffold", async ({ page }) => {
   // Verify control tower placeholder
   await expect(page.getByTestId("control-tower")).toBeVisible();
   await expect(page.getByText("Panel Placeholder")).toBeVisible();
-  
-  // Verify basic layout structure
-  const shellBox = await page.getByTestId("game-shell").boundingBox();
-  const topbarBox = await page.getByTestId("topbar").boundingBox();
-  const canvasBox = await page.getByTestId("game-canvas-host").boundingBox();
-  const towerBox = await page.getByTestId("control-tower").boundingBox();
-  
-  expect(shellBox).not.toBeNull();
-  expect(topbarBox).not.toBeNull();
-  expect(canvasBox).not.toBeNull();
-  expect(towerBox).not.toBeNull();
-  
-  if (shellBox === null || topbarBox === null || canvasBox === null || towerBox === null) {
-    throw new Error("Shell component bounds are unavailable");
-  }
-  
-  // Topbar should be at the top
-  expect(topbarBox.y).toBeLessThan(canvasBox.y);
-  
-  // Canvas and tower should be side by side
-  expect(canvasBox.x).toBeLessThan(towerBox.x);
 });

@@ -14,7 +14,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src", "tests", "vite.config.ts", "playwright.config.ts", "**/*.svelte"]
+  "include": ["src", "tests", "vite.config.ts", "playwright.config.ts", "src/**/*.svelte"]
 }

@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onMount } from "svelte";
+
 interface ShellState {
   shell: {
     topbar: { budget: string; signalState: string };
@@ -19,6 +21,13 @@ interface Props {
 }
 
 let { runtime, error = null }: Props = $props();
+
+onMount(() => {
+  runtime.start();
+  return () => {
+    runtime.stop();
+  };
+});
 </script>
 
 {#if error}

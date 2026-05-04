@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
-import "@testing-library/jest-dom/vitest";
 import App from "../../src/App.svelte";
 
 function createRuntimeStub() {

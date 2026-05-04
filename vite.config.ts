@@ -21,7 +21,8 @@ export default defineConfig({
         test: {
           name: "ui",
           include: ["tests/ui/**/*.test.ts"],
-          environment: "jsdom"
+          environment: "jsdom",
+          setupFiles: ["@testing-library/jest-dom/vitest"]
         }
       },
       {
