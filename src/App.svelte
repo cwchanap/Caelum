@@ -15,17 +15,23 @@ interface RuntimeController {
 
 interface Props {
   runtime: RuntimeController;
+  error?: string | null;
 }
 
-let { runtime }: Props = $props();
+let { runtime, error = null }: Props = $props();
 
 let shellError = $state<string | null>(null);
 
+// Initialize from error prop
+$effect(() => {
+  if (error) {
+    shellError = error;
+  }
+});
+
 $effect(() => {
   try {
-    const snapshot = runtime.getSnapshot();
-    const { budget, signalState } = snapshot.shell.topbar;
-    const { title, controlTowerOpen } = snapshot.shell.controlTower;
+    runtime.getSnapshot();
   } catch (error) {
     shellError = error instanceof Error ? error.message : "Shell bootstrap failed";
   }

@@ -22,9 +22,20 @@ function createRuntimeStub() {
   };
 }
 
-mount(App, {
-  target: app,
-  props: {
-    runtime: createRuntimeStub()
-  }
-});
+try {
+  mount(App, {
+    target: app,
+    props: {
+      runtime: createRuntimeStub()
+    }
+  });
+} catch (error) {
+  const errorMessage = error instanceof Error ? error.message : "Bootstrap failed";
+  mount(App, {
+    target: app,
+    props: {
+      runtime: createRuntimeStub(),
+      error: errorMessage
+    }
+  });
+}
