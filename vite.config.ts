@@ -8,6 +8,8 @@ export default defineConfig({
     port: 5173
   },
   resolve: {
+    // Ensure Svelte uses browser exports (index-client.js) instead of server exports (index-server.js)
+    // This is required for @testing-library/svelte to work correctly in jsdom environment
     conditions: ["browser"]
   },
   test: {

@@ -25,4 +25,16 @@ describe("App shell bootstrap", () => {
     expect(screen.getByTestId("game-shell")).toBeVisible();
     expect(screen.getByTestId("game-canvas-host")).toBeVisible();
   });
+
+  it("renders error state when bootstrap fails", () => {
+    render(App, { props: { runtime: createRuntimeStub(), error: "Bootstrap failed" } });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toBeVisible();
+    expect(alert).toHaveTextContent("Bootstrap failed");
+
+    expect(screen.queryByTestId("topbar")).toBeNull();
+    expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+    expect(screen.queryByTestId("control-tower")).toBeNull();
+  });
 });
