@@ -1,0 +1,98 @@
+<script lang="ts">
+interface ShellState {
+  shell: {
+    topbar: { budget: string; signalState: string };
+    controlTower: { title: string; controlTowerOpen: boolean };
+  };
+}
+
+interface RuntimeController {
+  getSnapshot: () => ShellState;
+  subscribe: (listener: () => void) => () => void;
+  start: () => void;
+  stop: () => void;
+}
+
+interface Props {
+  runtime: RuntimeController;
+}
+
+let { runtime }: Props = $props();
+
+let shellError = $state<string | null>(null);
+
+$effect(() => {
+  try {
+    const snapshot = runtime.getSnapshot();
+    const { budget, signalState } = snapshot.shell.topbar;
+    const { title, controlTowerOpen } = snapshot.shell.controlTower;
+  } catch (error) {
+    shellError = error instanceof Error ? error.message : "Shell bootstrap failed";
+  }
+});
+</script>
+
+<main class="shell" data-testid="game-shell">
+  {#if shellError}
+    <div class="shell-error" role="alert">
+      <strong>Shell Error:</strong> {shellError}
+    </div>
+  {/if}
+  
+  <section class="topbar" data-testid="topbar">
+    <div class="topbar-placeholder">Topbar Placeholder</div>
+  </section>
+  
+  <div class="board" data-testid="game-canvas-host">
+    <div class="canvas-placeholder">Canvas Host Placeholder</div>
+  </div>
+  
+  <aside class="panel control-tower" data-testid="control-tower">
+    <div class="panel-placeholder">Panel Placeholder</div>
+  </aside>
+</main>
+
+<style>
+  .shell {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 1fr auto;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .topbar {
+    grid-column: 1 / -1;
+    background: #1a1a1a;
+    padding: 0.5rem;
+  }
+
+  .board {
+    grid-row: 2;
+    grid-column: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .panel {
+    grid-row: 2;
+    grid-column: 2;
+    background: #2a2a2a;
+    min-width: 300px;
+  }
+
+  .shell-error {
+    grid-column: 1 / -1;
+    background: #ff4444;
+    color: white;
+    padding: 1rem;
+    font-weight: bold;
+  }
+
+  .topbar-placeholder,
+  .canvas-placeholder,
+  .panel-placeholder {
+    padding: 1rem;
+    color: #888;
+  }
+</style>
