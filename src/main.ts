@@ -23,14 +23,18 @@ function createRuntimeStub() {
 }
 
 try {
+  const runtime = createRuntimeStub();
+  runtime.getSnapshot();
+  
   mount(App, {
     target: app,
     props: {
-      runtime: createRuntimeStub()
+      runtime
     }
   });
-} catch (error) {
-  const errorMessage = error instanceof Error ? error.message : "Bootstrap failed";
+} catch (err) {
+  app.innerHTML = "";
+  const errorMessage = err instanceof Error ? err.message : "Bootstrap failed";
   mount(App, {
     target: app,
     props: {

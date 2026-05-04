@@ -11,11 +11,25 @@ export default defineConfig({
     conditions: ["browser"]
   },
   test: {
-    environment: "node",
     globals: true,
     exclude: ["tests/e2e/**", "node_modules/**", "dist/**"],
-    environmentMatchGlobs: [
-      ["tests/ui/**", "jsdom"]
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "ui",
+          include: ["tests/ui/**/*.test.ts"],
+          environment: "jsdom"
+        }
+      },
+      {
+        extends: true,
+        test: {
+          name: "simulation",
+          include: ["tests/simulation/**/*.test.ts"],
+          environment: "node"
+        }
+      }
     ]
   }
 });

@@ -19,29 +19,12 @@ interface Props {
 }
 
 let { runtime, error = null }: Props = $props();
-
-let shellError = $state<string | null>(null);
-
-// Initialize from error prop
-$effect(() => {
-  if (error) {
-    shellError = error;
-  }
-});
-
-$effect(() => {
-  try {
-    runtime.getSnapshot();
-  } catch (error) {
-    shellError = error instanceof Error ? error.message : "Shell bootstrap failed";
-  }
-});
 </script>
 
 <main class="shell" data-testid="game-shell">
-  {#if shellError}
+  {#if error}
     <div class="shell-error" role="alert">
-      <strong>Shell Error:</strong> {shellError}
+      <strong>Shell Error:</strong> {error}
     </div>
   {/if}
   
