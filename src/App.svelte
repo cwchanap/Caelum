@@ -25,10 +25,12 @@ interface Props {
 let { runtime, error = null }: Props = $props();
 
 onMount(() => {
-  runtime.start();
-  return () => {
-    runtime.stop();
-  };
+  if (!error) {
+    runtime.start();
+    return () => {
+      runtime.stop();
+    };
+  }
 });
 </script>
 
