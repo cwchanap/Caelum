@@ -24,6 +24,8 @@ function createBootstrapRuntime() {
 
 try {
   const runtime = createBootstrapRuntime();
+  // Placeholder validation: Pre-mount call ensures getSnapshot is callable.
+  // TODO(Task 2): Replace with real runtime factory/bootstrap path.
   runtime.getSnapshot();
   
   mount(App, {

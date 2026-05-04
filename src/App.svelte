@@ -9,6 +9,8 @@ interface ShellState {
 }
 
 interface RuntimeController {
+  // TODO(Task 2): getSnapshot and subscribe are declared but not yet wired.
+  // Reactive shell wiring (syncing ShellState to UI) is deferred to Task 2 (shell/runtime).
   getSnapshot: () => ShellState;
   subscribe: (listener: (snapshot: ShellState) => void) => () => void;
   start: () => void;
