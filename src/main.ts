@@ -43,7 +43,7 @@ try {
         error: errorMessage
       }
     });
-  } catch (finalErr) {
+  } catch (_) {
     app.innerHTML = "";
     const container = document.createElement("div");
     container.style.cssText = "padding:2rem;color:#ef4444;font-family:system-ui";
