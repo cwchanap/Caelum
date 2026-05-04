@@ -31,6 +31,7 @@ describe("App shell bootstrap", () => {
     expect(alert).toBeVisible();
     expect(alert).toHaveTextContent("Bootstrap failed");
 
+    expect(screen.getByTestId("game-shell")).toBeVisible();
     expect(screen.queryByTestId("topbar")).toBeNull();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
     expect(screen.queryByTestId("control-tower")).toBeNull();
