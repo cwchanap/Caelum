@@ -66,13 +66,13 @@
       <span data-button-label>{paused ? "Resume" : "Pause"}</span>
     </button>
 
-    <div class="speed-group" role="group" aria-label="Simulation speed">
+    <div class:speed-group--paused={paused} class="speed-group" role="group" aria-label="Simulation speed">
       {#each [1, 2, 4] as speedOption}
         <button
           type="button"
           data-speed={speedOption}
           aria-pressed={speed === speedOption}
-          class:active={speed === speedOption && !paused}
+          class:active={speed === speedOption}
           onclick={() => onSetSpeed(speedOption as 1 | 2 | 4)}
         >
           {speedOption}x

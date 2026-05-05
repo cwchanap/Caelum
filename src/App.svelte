@@ -38,6 +38,14 @@
     setSnapshot(props.runtime.setOverlay(overlay));
   }
 
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (props.error || event.key !== "Escape") {
+      return;
+    }
+
+    setSnapshot(props.runtime.resetUi());
+  }
+
   $effect(() => {
     snapshot = props.runtime.getSnapshot();
   });
@@ -65,6 +73,8 @@
     }
   });
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 {#if props.error}
   <main class="shell" data-testid="game-shell">

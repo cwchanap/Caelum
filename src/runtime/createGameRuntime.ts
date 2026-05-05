@@ -227,6 +227,9 @@ export function createGameRuntime(): RuntimeController {
       ui = createUiState();
       return publish();
     },
+    resetUi() {
+      return commit(state, createUiState());
+    },
     setTool(tool) {
       return commit(state, nextToolUiState(tool, ui));
     },

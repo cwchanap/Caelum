@@ -24,7 +24,12 @@ function createRuntimeHarness(options: { state?: GameState; ui?: UiState } = {})
     return snapshot;
   };
 
-  const runtime: RuntimeController = {
+  const resetUi = vi.fn(() => {
+    ui = createUiState();
+    return publish();
+  });
+
+  const runtime: RuntimeController & { resetUi: typeof resetUi } = {
     getSnapshot,
     subscribe: vi.fn((listener: RuntimeListener) => {
       listeners.add(listener);
@@ -64,6 +69,7 @@ function createRuntimeHarness(options: { state?: GameState; ui?: UiState } = {})
       ui = { ...ui, controlTowerOpen: !ui.controlTowerOpen };
       return publish();
     }),
+    resetUi,
     handleTileClick: vi.fn((_point: Point) => publish()),
     setHoverTile: vi.fn((point: Point | null) => {
       ui = { ...ui, hoverTile: point };
@@ -148,6 +154,18 @@ describe("App shell bootstrap", () => {
     expect(screen.getByTestId("control-tower")).toHaveAttribute("aria-hidden", "false");
   });
 
+  it("keeps the selected speed visually active while paused", () => {
+    const { runtime } = createRuntimeHarness({
+      state: { ...createInitialGameState(), paused: true, speed: 2 }
+    });
+
+    render(App, { props: { runtime } });
+
+    const selectedSpeed = screen.getByRole("button", { name: "2x" });
+    expect(selectedSpeed).toHaveAttribute("aria-pressed", "true");
+    expect(selectedSpeed).toHaveClass("active");
+  });
+
   it("wires tool, overlay, and close interactions with exact runtime ids", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
@@ -170,6 +188,29 @@ describe("App shell bootstrap", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Close Control Tower" }));
     expect(runtime.toggleControlTower).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("control-tower")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("resets transient ui state when Escape is pressed", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        activeOverlay: "growth",
+        selectedId: "route-001",
+        draftStopIds: ["stop-001"],
+        controlTowerOpen: false
+      }
+    });
+
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("game-shell")).toHaveAttribute("data-tower-open", "true");
+    expect(screen.getByRole("button", { name: "Inspect" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Growth" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("—")).toBeVisible();
   });
 
   it("renders error state when bootstrap fails", () => {

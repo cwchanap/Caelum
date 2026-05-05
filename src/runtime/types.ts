@@ -43,6 +43,7 @@ export interface RuntimeController {
   isRunning: () => boolean;
   tick: (deltaSeconds: number) => RuntimeSnapshot;
   reset: () => RuntimeSnapshot;
+  resetUi: () => RuntimeSnapshot;
   setTool: (tool: Tool) => RuntimeSnapshot;
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeSnapshot;

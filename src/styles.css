@@ -283,6 +283,10 @@ body {
   background: var(--surface-sunk);
 }
 
+.speed-group--paused {
+  border-color: var(--amber-soft);
+}
+
 .speed-group button {
   border: 0;
   border-radius: 0;
