@@ -23,6 +23,7 @@ interface BoardSize {
 interface CanvasSizeTarget {
   width: number;
   height: number;
+  style?: { width: string; height: string };
   getBoundingClientRect: () => Pick<DOMRectReadOnly, "width" | "height">;
 }
 
@@ -44,8 +45,16 @@ export function getBoardTransform(board: BoardSize, map: GameMap): BoardTransfor
 
 export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
   const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width));
-  const height = Math.max(1, Math.round(rect.height));
+  const cssWidth = Math.max(1, Math.round(rect.width));
+  const cssHeight = Math.max(1, Math.round(rect.height));
+  const devicePixelRatio = globalThis.devicePixelRatio ?? 1;
+  const width = Math.max(1, Math.round(rect.width * devicePixelRatio));
+  const height = Math.max(1, Math.round(rect.height * devicePixelRatio));
+
+  if (canvas.style !== undefined) {
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+  }
 
   if (canvas.width === width && canvas.height === height) {
     return false;

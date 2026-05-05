@@ -22,21 +22,18 @@ test.afterAll(async () => {
   await server.close();
 });
 
-test("loads minimal shell scaffold", async ({ page }) => {
+test("loads runtime-backed shell scaffold", async ({ page }) => {
   await page.goto(appUrl);
 
-  // Verify the shell structure exists
   await expect(page.getByTestId("game-shell")).toBeVisible();
-  
-  // Verify topbar placeholder
-  await expect(page.getByTestId("topbar")).toBeVisible();
-  await expect(page.getByText("Topbar Placeholder")).toBeVisible();
-  
-  // Verify canvas host placeholder
+  const topbar = page.getByTestId("topbar");
+  await expect(topbar).toBeVisible();
+  await expect(topbar.getByText("$120,000")).toBeVisible();
+  await expect(topbar.getByText("Hold")).toBeVisible();
+
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
-  await expect(page.getByText("Canvas Host Placeholder")).toBeVisible();
-  
-  // Verify control tower placeholder
+  await expect(page.locator("canvas[data-runtime-canvas='true']")).toBeVisible();
+
   await expect(page.getByTestId("control-tower")).toBeVisible();
-  await expect(page.getByText("Panel Placeholder")).toBeVisible();
+  await expect(page.getByText("Growing Suburb")).toBeVisible();
 });

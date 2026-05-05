@@ -20,7 +20,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: "ui",
-          include: ["tests/ui/**/*.test.ts"],
+          include: ["tests/ui/**/*.test.ts", "tests/render/**/*.test.ts"],
           environment: "jsdom",
           setupFiles: ["@testing-library/jest-dom/vitest"]
         }

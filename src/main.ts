@@ -1,6 +1,7 @@
 import "./styles.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { createGameRuntime } from "./runtime/createGameRuntime";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -8,24 +9,9 @@ if (!app) {
   throw new Error("Missing #app root");
 }
 
-function createBootstrapRuntime() {
-  return {
-    getSnapshot: () => ({
-      shell: {
-        topbar: { budget: "$0", signalState: "Initializing" },
-        controlTower: { title: "City", controlTowerOpen: false }
-      }
-    }),
-    subscribe: () => () => {},
-    start: () => {},
-    stop: () => {}
-  };
-}
-
 try {
-  const runtime = createBootstrapRuntime();
-  // TODO(Task 2): Replace createBootstrapRuntime() with real runtime factory/bootstrap path.
-  
+  const runtime = createGameRuntime();
+
   mount(App, {
     target: app,
     props: {
@@ -36,10 +22,11 @@ try {
   try {
     app.innerHTML = "";
     const errorMessage = err instanceof Error ? err.message : "Bootstrap failed";
+
     mount(App, {
       target: app,
       props: {
-        runtime: createBootstrapRuntime(),
+        runtime: createGameRuntime(),
         error: errorMessage
       }
     });
