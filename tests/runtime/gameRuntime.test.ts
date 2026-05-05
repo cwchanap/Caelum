@@ -53,6 +53,44 @@ describe("Game Runtime", () => {
     expect(snapshot.state.speed).toBe(1);
   });
 
+  it("resets transient UI state without changing simulation state", () => {
+    const runtime = createGameRuntime();
+
+    runtime.togglePause();
+    runtime.setSpeed(4);
+    runtime.tick(1);
+    runtime.setOverlay("growth");
+    runtime.handleTileClick({ x: 5, y: 5 });
+    runtime.toggleControlTower();
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 7, y: 8 });
+
+    const beforeReset = runtime.getSnapshot();
+    expect(beforeReset.state.paused).toBe(false);
+    expect(beforeReset.state.speed).toBe(4);
+    expect(beforeReset.state.time).toBeGreaterThan(0);
+    expect(beforeReset.ui.activeTool).toBe("busRoute");
+    expect(beforeReset.ui.activeOverlay).toBe("growth");
+    expect(beforeReset.ui.selectedId).toBe("5,5");
+    expect(beforeReset.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(beforeReset.ui.controlTowerOpen).toBe(false);
+
+    runtime.resetUi();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.state.paused).toBe(false);
+    expect(snapshot.state.speed).toBe(4);
+    expect(snapshot.state.time).toBe(beforeReset.state.time);
+    expect(snapshot.ui.activeTool).toBe("inspect");
+    expect(snapshot.ui.activeOverlay).toBe(null);
+    expect(snapshot.ui.selectedId).toBe(null);
+    expect(snapshot.ui.draftStopIds).toEqual([]);
+    expect(snapshot.ui.draftStationIds).toEqual([]);
+    expect(snapshot.ui.controlTowerOpen).toBe(true);
+  });
+
   it("manages simulation lifecycle", () => {
     const runtime = createGameRuntime();
     
