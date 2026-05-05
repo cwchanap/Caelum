@@ -189,6 +189,15 @@ body {
   animation: signal-pulse 1.6s ease-in-out infinite;
 }
 
+.signal--paused {
+  color: var(--amber);
+}
+
+.signal--paused .signal-dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 182, 39, 0.18), 0 0 12px var(--amber);
+}
+
 .readouts {
   display: flex;
   align-items: stretch;
@@ -711,6 +720,20 @@ body {
   background: linear-gradient(90deg, var(--cyan) 0, transparent 60%);
   margin: 10px 0;
   opacity: 0.4;
+}
+
+.shell-error {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  background: linear-gradient(180deg, rgba(255, 91, 91, 0.2), rgba(255, 91, 91, 0.08));
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
