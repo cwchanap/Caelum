@@ -213,6 +213,22 @@ describe("App shell bootstrap", () => {
     expect(screen.getByText("—")).toBeVisible();
   });
 
+  it("renders a shell error when the canvas host fails to attach", () => {
+    const { runtime } = createRuntimeHarness();
+    runtime.mountCanvas = vi.fn(() => {
+      throw new Error("Canvas 2D context unavailable");
+    });
+
+    render(App, { props: { runtime } });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toBeVisible();
+    expect(alert).toHaveTextContent("Canvas 2D context unavailable");
+    expect(screen.queryByTestId("topbar")).toBeNull();
+    expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+    expect(screen.queryByTestId("control-tower")).toBeNull();
+  });
+
   it("renders error state when bootstrap fails", () => {
     render(App, { props: { runtime: createRuntimeHarness().runtime, error: "Bootstrap failed" } });
 
