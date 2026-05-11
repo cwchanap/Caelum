@@ -7,6 +7,7 @@ Caelum is an MVP 2D city and public transport simulation where players build roa
 ```sh
 bun install
 bun run dev
+bun run tauri:dev
 ```
 
 Open http://127.0.0.1:5173.
@@ -17,6 +18,7 @@ Open http://127.0.0.1:5173.
 bun run check
 bun run test
 bun run test:e2e
+bun run build
 ```
 
 ## Architecture

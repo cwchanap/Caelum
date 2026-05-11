@@ -9,40 +9,21 @@ if (!app) {
   throw new Error("Missing #app root");
 }
 
-try {
-  const runtime = createGameRuntime();
+const target = app;
 
+function mountApp(error?: string): void {
   mount(App, {
-    target: app,
+    target,
     props: {
-      runtime
+      runtime: createGameRuntime(),
+      error
     }
   });
-} catch (err) {
-  try {
-    app.innerHTML = "";
-    const errorMessage = err instanceof Error ? err.message : "Bootstrap failed";
+}
 
-    mount(App, {
-      target: app,
-      props: {
-        runtime: createGameRuntime(),
-        error: errorMessage
-      }
-    });
-  } catch (_) {
-    app.innerHTML = "";
-    const container = document.createElement("div");
-    container.style.cssText = "padding:2rem;color:#ef4444;font-family:system-ui";
-    
-    const heading = document.createElement("h1");
-    heading.textContent = "Critical Error";
-    
-    const paragraph = document.createElement("p");
-    paragraph.textContent = err instanceof Error ? err.message : "Bootstrap failed";
-    
-    container.appendChild(heading);
-    container.appendChild(paragraph);
-    app.appendChild(container);
-  }
+try {
+  mountApp();
+} catch (err) {
+  target.innerHTML = "";
+  mountApp(err instanceof Error ? err.message : "Bootstrap failed");
 }

@@ -22,18 +22,21 @@ test.afterAll(async () => {
   await server.close();
 });
 
-test("loads runtime-backed shell scaffold", async ({ page }) => {
+test("loads the svelte shell and supports a basic bus-stop placement", async ({ page }) => {
   await page.goto(appUrl);
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
   await expect(topbar).toBeVisible();
   await expect(topbar.getByText("$120,000")).toBeVisible();
-  await expect(topbar.getByText("Hold")).toBeVisible();
+  await expect(page.getByText("Growing Suburb")).toBeVisible();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
-  await expect(page.locator("canvas[data-runtime-canvas='true']")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
 
-  await expect(page.getByTestId("control-tower")).toBeVisible();
-  await expect(page.getByText("Growing Suburb")).toBeVisible();
+  await page.getByRole("button", { name: "Bus Stop" }).click();
+  await canvas.click({ position: { x: 320, y: 320 } });
+
+  await expect(topbar.getByText("$118,000")).toBeVisible();
 });
