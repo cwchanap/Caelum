@@ -6,3 +6,4 @@ playwright-report/
 .worktrees/
 .env
 .env.*
+.claude/settings.local.json
