@@ -10,6 +10,7 @@ import svelteConfig from "./svelte.config.js";
 export default defineConfig(
   {
     ignores: [
+      "coverage/**",
       "dist/**",
       "node_modules/**",
       "playwright-report/**",
