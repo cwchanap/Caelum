@@ -1,0 +1,8 @@
+dist
+docs/superpowers
+.devin
+node_modules
+playwright-report
+src-tauri/gen
+src-tauri/target
+test-results

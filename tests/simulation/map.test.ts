@@ -6,7 +6,7 @@ import {
   getTile,
   isValidBusStopPlacement,
   isValidCivicAnchorPlacement,
-  isValidMetroStationPlacement
+  isValidMetroStationPlacement,
 } from "../../src/simulation/map";
 
 function withTime(state: GameState, time: number): GameState {
@@ -34,11 +34,13 @@ describe("map helpers", () => {
           ...state,
           transit: {
             ...state.transit,
-            stops: [{ id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] }]
-          }
+            stops: [
+              { id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] },
+            ],
+          },
         },
-        { x: 7, y: 8 }
-      )
+        { x: 7, y: 8 },
+      ),
     ).toBe(false);
   });
 
@@ -54,11 +56,17 @@ describe("map helpers", () => {
           ...state,
           transit: {
             ...state.transit,
-            stations: [{ id: "station-001", position: { x: 0, y: 0 }, queueCitizenIds: [] }]
-          }
+            stations: [
+              {
+                id: "station-001",
+                position: { x: 0, y: 0 },
+                queueCitizenIds: [],
+              },
+            ],
+          },
         },
-        { x: 0, y: 0 }
-      )
+        { x: 0, y: 0 },
+      ),
     ).toBe(false);
   });
 
@@ -83,7 +91,9 @@ describe("map helpers", () => {
     expect(getTile(grownState.map, { x: 8, y: 2 })?.kind).toBe("residential");
     expect(grownState.citizens).toHaveLength(60);
 
-    const citizenIds = new Set(grownState.citizens.map((citizen) => citizen.id));
+    const citizenIds = new Set(
+      grownState.citizens.map((citizen) => citizen.id),
+    );
     expect(citizenIds.size).toBe(grownState.citizens.length);
 
     const newCitizen = grownState.citizens[36];

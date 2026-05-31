@@ -9,8 +9,8 @@ test.beforeAll(async () => {
     configFile: "vite.config.ts",
     server: {
       host: "127.0.0.1",
-      port: 0
-    }
+      port: 0,
+    },
   });
   await server.listen();
   const resolved = server.resolvedUrls?.local[0];
@@ -22,7 +22,9 @@ test.afterAll(async () => {
   await server.close();
 });
 
-test("loads the svelte shell and supports a basic bus-stop placement", async ({ page }) => {
+test("loads the svelte shell and supports a basic bus-stop placement", async ({
+  page,
+}) => {
   await page.goto(appUrl);
 
   await expect(page.getByTestId("game-shell")).toBeVisible();

@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle, tickVehicles } from "../../src/simulation/transit";
+import {
+  addBusRoute,
+  addBusStop,
+  addMetroLine,
+  addMetroStation,
+  assignVehicle,
+  tickVehicles,
+} from "../../src/simulation/transit";
 
 function createBusState(): GameState {
   let state = createInitialGameState();
@@ -26,7 +33,9 @@ describe("transit network actions", () => {
 
     const nextState = addBusStop(state, { x: 7, y: 8 });
 
-    expect(nextState.transit.stops).toEqual([{ id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] }]);
+    expect(nextState.transit.stops).toEqual([
+      { id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] },
+    ]);
     expect(nextState.budget).toBe(118_000);
   });
 
@@ -52,7 +61,7 @@ describe("transit network actions", () => {
       color: "#e04f39",
       stopIds: ["stop-001", "stop-002"],
       vehicleIds: ["vehicle-001"],
-      active: true
+      active: true,
     });
     expect(nextState.transit.vehicles[0]).toEqual({
       id: "vehicle-001",
@@ -61,7 +70,7 @@ describe("transit network actions", () => {
       capacity: 18,
       passengerIds: [],
       segmentIndex: 0,
-      progress: 0
+      progress: 0,
     });
   });
 
@@ -72,7 +81,7 @@ describe("transit network actions", () => {
 
     expect(state.transit.routes[0]).toMatchObject({
       stopIds: ["stop-001", "stop-001"],
-      active: false
+      active: false,
     });
   });
 
@@ -90,7 +99,7 @@ describe("transit network actions", () => {
       color: "#2867b2",
       stationIds: ["station-001", "station-002"],
       vehicleIds: ["vehicle-001"],
-      active: true
+      active: true,
     });
     expect(nextState.transit.vehicles[0]).toEqual({
       id: "vehicle-001",
@@ -99,7 +108,7 @@ describe("transit network actions", () => {
       capacity: 90,
       passengerIds: [],
       segmentIndex: 0,
-      progress: 0
+      progress: 0,
     });
   });
 
@@ -110,7 +119,7 @@ describe("transit network actions", () => {
 
     expect(state.transit.metroLines[0]).toMatchObject({
       stationIds: ["station-001", "station-001"],
-      active: false
+      active: false,
     });
   });
 
@@ -158,16 +167,25 @@ describe("transit network actions", () => {
         status: "waiting" as const,
         routePlan: {
           estimatedSeconds: 60,
-          legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+          legs: [
+            {
+              mode: "bus" as const,
+              from: { x: 7, y: 8 },
+              to: { x: 15, y: 8 },
+              lineId: "route-001",
+            },
+          ],
         },
-        currentLegIndex: 0
-      }))
+        currentLegIndex: 0,
+      })),
     };
 
     const nextState = tickVehicles(state, 1);
 
     expect(nextState.transit.vehicles[0]?.passengerIds).toHaveLength(18);
-    expect(nextState.citizens.filter((citizen) => citizen.status === "riding")).toHaveLength(18);
+    expect(
+      nextState.citizens.filter((citizen) => citizen.status === "riding"),
+    ).toHaveLength(18);
   });
 
   it("does not board a citizen waiting at a later stop on the same line", () => {
@@ -180,11 +198,18 @@ describe("transit network actions", () => {
           status: "waiting" as const,
           routePlan: {
             estimatedSeconds: 60,
-            legs: [{ mode: "bus" as const, from: { x: 15, y: 8 }, to: { x: 7, y: 8 }, lineId: "route-001" }]
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 15, y: 8 },
+                to: { x: 7, y: 8 },
+                lineId: "route-001",
+              },
+            ],
           },
-          currentLegIndex: 0
-        }
-      ]
+          currentLegIndex: 0,
+        },
+      ],
     };
 
     const nextState = tickVehicles(state, 1);
@@ -199,7 +224,7 @@ describe("transit network actions", () => {
       ...busState,
       transit: {
         ...busState.transit,
-        vehicles: [{ ...busState.transit.vehicles[0]!, progress: 0.5 }]
+        vehicles: [{ ...busState.transit.vehicles[0]!, progress: 0.5 }],
       },
       citizens: [
         {
@@ -208,11 +233,18 @@ describe("transit network actions", () => {
           status: "waiting" as const,
           routePlan: {
             estimatedSeconds: 60,
-            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 7, y: 8 },
+                to: { x: 15, y: 8 },
+                lineId: "route-001",
+              },
+            ],
           },
-          currentLegIndex: 0
-        }
-      ]
+          currentLegIndex: 0,
+        },
+      ],
     };
 
     const nextState = tickVehicles(state, 1);
@@ -228,9 +260,19 @@ describe("transit network actions", () => {
       transit: {
         ...busState.transit,
         vehicles: [
-          { ...busState.transit.vehicles[0]!, id: "vehicle-001", passengerIds: ["citizen-001"], progress: 0.5 },
-          { ...busState.transit.vehicles[0]!, id: "vehicle-002", passengerIds: [], progress: 0 }
-        ]
+          {
+            ...busState.transit.vehicles[0]!,
+            id: "vehicle-001",
+            passengerIds: ["citizen-001"],
+            progress: 0.5,
+          },
+          {
+            ...busState.transit.vehicles[0]!,
+            id: "vehicle-002",
+            passengerIds: [],
+            progress: 0,
+          },
+        ],
       },
       citizens: [
         {
@@ -239,16 +281,25 @@ describe("transit network actions", () => {
           status: "waiting" as const,
           routePlan: {
             estimatedSeconds: 60,
-            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 7, y: 8 },
+                to: { x: 15, y: 8 },
+                lineId: "route-001",
+              },
+            ],
           },
-          currentLegIndex: 0
-        }
-      ]
+          currentLegIndex: 0,
+        },
+      ],
     };
 
     const nextState = tickVehicles(state, 1);
 
-    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual(["citizen-001"]);
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([
+      "citizen-001",
+    ]);
     expect(nextState.transit.vehicles[1]?.passengerIds).toEqual([]);
   });
 
@@ -262,22 +313,33 @@ describe("transit network actions", () => {
           {
             ...busState.transit.vehicles[0]!,
             passengerIds: ["citizen-001", "citizen-002"],
-            progress: 0.99
-          }
-        ]
+            progress: 0.99,
+          },
+        ],
       },
-      citizens: createInitialGameState().citizens.slice(0, 2).map((citizen) => ({
-        ...citizen,
-        status: "riding" as const,
-        routePlan: {
-          estimatedSeconds: 60,
-          legs: [
-            { mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" },
-            { mode: "walk" as const, from: { x: 15, y: 8 }, to: { x: 16, y: 8 } }
-          ]
-        },
-        currentLegIndex: 0
-      }))
+      citizens: createInitialGameState()
+        .citizens.slice(0, 2)
+        .map((citizen) => ({
+          ...citizen,
+          status: "riding" as const,
+          routePlan: {
+            estimatedSeconds: 60,
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 7, y: 8 },
+                to: { x: 15, y: 8 },
+                lineId: "route-001",
+              },
+              {
+                mode: "walk" as const,
+                from: { x: 15, y: 8 },
+                to: { x: 16, y: 8 },
+              },
+            ],
+          },
+          currentLegIndex: 0,
+        })),
     };
 
     const nextState = tickVehicles(state, 1);
@@ -285,8 +347,18 @@ describe("transit network actions", () => {
     expect(nextState.transit.vehicles[0]?.segmentIndex).toBe(1);
     expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([]);
     expect(nextState.citizens).toEqual([
-      expect.objectContaining({ id: "citizen-001", position: { x: 15, y: 8 }, status: "walking", currentLegIndex: 1 }),
-      expect.objectContaining({ id: "citizen-002", position: { x: 15, y: 8 }, status: "walking", currentLegIndex: 1 })
+      expect.objectContaining({
+        id: "citizen-001",
+        position: { x: 15, y: 8 },
+        status: "walking",
+        currentLegIndex: 1,
+      }),
+      expect.objectContaining({
+        id: "citizen-002",
+        position: { x: 15, y: 8 },
+        status: "walking",
+        currentLegIndex: 1,
+      }),
     ]);
   });
 
@@ -300,9 +372,9 @@ describe("transit network actions", () => {
           {
             ...busState.transit.vehicles[0]!,
             passengerIds: ["citizen-001"],
-            progress: 0.99
-          }
-        ]
+            progress: 0.99,
+          },
+        ],
       },
       citizens: [
         {
@@ -310,18 +382,29 @@ describe("transit network actions", () => {
           status: "riding" as const,
           routePlan: {
             estimatedSeconds: 120,
-            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" }]
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 7, y: 8 },
+                to: { x: 22, y: 8 },
+                lineId: "route-001",
+              },
+            ],
           },
-          currentLegIndex: 0
-        }
-      ]
+          currentLegIndex: 0,
+        },
+      ],
     };
 
     const nextState = tickVehicles(state, 1);
 
     expect(nextState.transit.vehicles[0]?.segmentIndex).toBe(1);
-    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual(["citizen-001"]);
-    expect(nextState.citizens[0]).toEqual(expect.objectContaining({ status: "riding", currentLegIndex: 0 }));
+    expect(nextState.transit.vehicles[0]?.passengerIds).toEqual([
+      "citizen-001",
+    ]);
+    expect(nextState.citizens[0]).toEqual(
+      expect.objectContaining({ status: "riding", currentLegIndex: 0 }),
+    );
   });
 
   it("leaves inactive and missing line vehicles unchanged", () => {
@@ -337,8 +420,8 @@ describe("transit network actions", () => {
             color: "#e04f39",
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
-            active: false
-          }
+            active: false,
+          },
         ],
         vehicles: [
           {
@@ -348,7 +431,7 @@ describe("transit network actions", () => {
             capacity: 18,
             passengerIds: [],
             segmentIndex: 0,
-            progress: 0.25
+            progress: 0.25,
           },
           {
             id: "vehicle-002",
@@ -357,10 +440,10 @@ describe("transit network actions", () => {
             capacity: 90,
             passengerIds: [],
             segmentIndex: 0,
-            progress: 0.5
-          }
-        ]
-      }
+            progress: 0.5,
+          },
+        ],
+      },
     };
 
     const nextState = tickVehicles(state, 30);

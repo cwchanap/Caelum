@@ -19,5 +19,5 @@ export const colors = {
   demand: "rgba(216, 180, 95, 0.24)",
   lateness: "rgba(185, 46, 53, 0.24)",
   growth: "rgba(79, 154, 97, 0.25)",
-  hover: "#111820"
+  hover: "#111820",
 } as const;

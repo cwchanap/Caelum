@@ -5,11 +5,16 @@ import { colors } from "./colors";
 function center(point: Point): Point {
   return {
     x: point.x * tileSize + tileSize / 2,
-    y: point.y * tileSize + tileSize / 2
+    y: point.y * tileSize + tileSize / 2,
   };
 }
 
-function drawPolyline(ctx: CanvasRenderingContext2D, positions: Array<Point | null>, color: string, lineWidth: number): void {
+function drawPolyline(
+  ctx: CanvasRenderingContext2D,
+  positions: Array<Point | null>,
+  color: string,
+  lineWidth: number,
+): void {
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
   ctx.lineCap = "round";
@@ -43,31 +48,51 @@ function interpolate(from: Point, to: Point, progress: number): Point {
 
   return {
     x: start.x + (end.x - start.x) * boundedProgress,
-    y: start.y + (end.y - start.y) * boundedProgress
+    y: start.y + (end.y - start.y) * boundedProgress,
   };
 }
 
-function routePositions(state: GameState, stopIds: string[]): Array<Point | null> {
-  const stopById = new Map(state.transit.stops.map((stop) => [stop.id, stop.position]));
+function routePositions(
+  state: GameState,
+  stopIds: string[],
+): Array<Point | null> {
+  const stopById = new Map(
+    state.transit.stops.map((stop) => [stop.id, stop.position]),
+  );
   return stopIds.map((stopId) => stopById.get(stopId) ?? null);
 }
 
-function stationPositions(state: GameState, stationIds: string[]): Array<Point | null> {
-  const stationById = new Map(state.transit.stations.map((station) => [station.id, station.position]));
+function stationPositions(
+  state: GameState,
+  stationIds: string[],
+): Array<Point | null> {
+  const stationById = new Map(
+    state.transit.stations.map((station) => [station.id, station.position]),
+  );
   return stationIds.map((stationId) => stationById.get(stationId) ?? null);
 }
 
 function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
   const positions =
     vehicle.mode === "bus"
-      ? routePositions(state, state.transit.routes.find((route) => route.id === vehicle.lineId)?.stopIds ?? [])
-      : stationPositions(state, state.transit.metroLines.find((line) => line.id === vehicle.lineId)?.stationIds ?? []);
+      ? routePositions(
+          state,
+          state.transit.routes.find((route) => route.id === vehicle.lineId)
+            ?.stopIds ?? [],
+        )
+      : stationPositions(
+          state,
+          state.transit.metroLines.find((line) => line.id === vehicle.lineId)
+            ?.stationIds ?? [],
+        );
 
   if (positions.length < 2) {
     return null;
   }
 
-  const segmentIndex = ((vehicle.segmentIndex % positions.length) + positions.length) % positions.length;
+  const segmentIndex =
+    ((vehicle.segmentIndex % positions.length) + positions.length) %
+    positions.length;
   const from = positions[segmentIndex];
   const to = positions[(segmentIndex + 1) % positions.length];
 
@@ -78,7 +103,10 @@ function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
   return interpolate(from, to, vehicle.progress);
 }
 
-export function renderTransit(ctx: CanvasRenderingContext2D, state: GameState): void {
+export function renderTransit(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+): void {
   for (const route of state.transit.routes) {
     drawPolyline(ctx, routePositions(state, route.stopIds), route.color, 5);
   }

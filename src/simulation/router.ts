@@ -1,4 +1,11 @@
-import type { GameState, Point, RouteLeg, RoutePlan, Station, Stop } from "../domain/types";
+import type {
+  GameState,
+  Point,
+  RouteLeg,
+  RoutePlan,
+  Station,
+  Stop,
+} from "../domain/types";
 
 interface TransitService {
   mode: "bus" | "metro";
@@ -18,7 +25,12 @@ function walkLeg(from: Point, to: Point): RouteLeg {
   return { mode: "walk", from: clonePoint(from), to: clonePoint(to) };
 }
 
-function transitLeg(mode: "bus" | "metro", from: Point, to: Point, lineId: string): RouteLeg {
+function transitLeg(
+  mode: "bus" | "metro",
+  from: Point,
+  to: Point,
+  lineId: string,
+): RouteLeg {
   return { mode, from: clonePoint(from), to: clonePoint(to), lineId };
 }
 
@@ -38,7 +50,10 @@ function transitSeconds(mode: "bus" | "metro", from: Point, to: Point): number {
   return mode === "bus" ? busSeconds(from, to) : metroSeconds(from, to);
 }
 
-function nearestByPosition<T extends Stop | Station>(points: T[], target: Point): T | null {
+function nearestByPosition<T extends Stop | Station>(
+  points: T[],
+  target: Point,
+): T | null {
   let nearest: T | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
@@ -67,11 +82,21 @@ function bestCandidate(candidates: RoutePlan[]): RoutePlan | null {
 }
 
 function isInsideMap(state: GameState, point: Point): boolean {
-  if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isInteger(point.x) || !Number.isInteger(point.y)) {
+  if (
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    !Number.isInteger(point.x) ||
+    !Number.isInteger(point.y)
+  ) {
     return false;
   }
 
-  return point.x >= 0 && point.x < state.map.width && point.y >= 0 && point.y < state.map.height;
+  return (
+    point.x >= 0 &&
+    point.x < state.map.width &&
+    point.y >= 0 &&
+    point.y < state.map.height
+  );
 }
 
 function activeServices(state: GameState): TransitService[] {
@@ -80,7 +105,10 @@ function activeServices(state: GameState): TransitService[] {
   for (const route of state.transit.routes) {
     if (!route.active) continue;
     const anchors = route.stopIds
-      .map((stopId) => state.transit.stops.find((stop) => stop.id === stopId)?.position)
+      .map(
+        (stopId) =>
+          state.transit.stops.find((stop) => stop.id === stopId)?.position,
+      )
       .filter((point): point is Point => point !== undefined)
       .map(clonePoint);
 
@@ -92,7 +120,11 @@ function activeServices(state: GameState): TransitService[] {
   for (const line of state.transit.metroLines) {
     if (!line.active) continue;
     const anchors = line.stationIds
-      .map((stationId) => state.transit.stations.find((station) => station.id === stationId)?.position)
+      .map(
+        (stationId) =>
+          state.transit.stations.find((station) => station.id === stationId)
+            ?.position,
+      )
       .filter((point): point is Point => point !== undefined)
       .map(clonePoint);
 
@@ -120,7 +152,10 @@ function nearestAnchor(anchors: Point[], target: Point): Point | null {
   return nearest === null ? null : clonePoint(nearest);
 }
 
-function bestTransferPair(first: TransitService, second: TransitService): { first: Point; second: Point } | null {
+function bestTransferPair(
+  first: TransitService,
+  second: TransitService,
+): { first: Point; second: Point } | null {
   let best: { first: Point; second: Point; distance: number } | null = null;
 
   for (const firstAnchor of first.anchors) {
@@ -133,10 +168,16 @@ function bestTransferPair(first: TransitService, second: TransitService): { firs
     }
   }
 
-  return best === null ? null : { first: clonePoint(best.first), second: clonePoint(best.second) };
+  return best === null
+    ? null
+    : { first: clonePoint(best.first), second: clonePoint(best.second) };
 }
 
-export function findRoutePlan(state: GameState, origin: Point, destination: Point): RoutePlan | null {
+export function findRoutePlan(
+  state: GameState,
+  origin: Point,
+  destination: Point,
+): RoutePlan | null {
   if (!isInsideMap(state, origin) || !isInsideMap(state, destination)) {
     return null;
   }
@@ -144,8 +185,8 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
   const candidates: RoutePlan[] = [
     {
       legs: [walkLeg(origin, destination)],
-      estimatedSeconds: walkSeconds(origin, destination)
-    }
+      estimatedSeconds: walkSeconds(origin, destination),
+    },
   ];
 
   for (const route of state.transit.routes) {
@@ -159,20 +200,29 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
     const originStop = nearestByPosition(routeStops, origin);
     const destinationStop = nearestByPosition(routeStops, destination);
 
-    if (originStop === null || destinationStop === null || originStop.id === destinationStop.id) {
+    if (
+      originStop === null ||
+      destinationStop === null ||
+      originStop.id === destinationStop.id
+    ) {
       continue;
     }
 
     candidates.push({
       legs: [
         walkLeg(origin, originStop.position),
-        transitLeg("bus", originStop.position, destinationStop.position, route.id),
-        walkLeg(destinationStop.position, destination)
+        transitLeg(
+          "bus",
+          originStop.position,
+          destinationStop.position,
+          route.id,
+        ),
+        walkLeg(destinationStop.position, destination),
       ],
       estimatedSeconds:
         walkSeconds(origin, originStop.position) +
         busSeconds(originStop.position, destinationStop.position) +
-        walkSeconds(destinationStop.position, destination)
+        walkSeconds(destinationStop.position, destination),
     });
   }
 
@@ -182,25 +232,36 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
     }
 
     const lineStations = line.stationIds
-      .map((stationId) => state.transit.stations.find((station) => station.id === stationId))
+      .map((stationId) =>
+        state.transit.stations.find((station) => station.id === stationId),
+      )
       .filter((station): station is Station => station !== undefined);
     const originStation = nearestByPosition(lineStations, origin);
     const destinationStation = nearestByPosition(lineStations, destination);
 
-    if (originStation === null || destinationStation === null || originStation.id === destinationStation.id) {
+    if (
+      originStation === null ||
+      destinationStation === null ||
+      originStation.id === destinationStation.id
+    ) {
       continue;
     }
 
     candidates.push({
       legs: [
         walkLeg(origin, originStation.position),
-        transitLeg("metro", originStation.position, destinationStation.position, line.id),
-        walkLeg(destinationStation.position, destination)
+        transitLeg(
+          "metro",
+          originStation.position,
+          destinationStation.position,
+          line.id,
+        ),
+        walkLeg(destinationStation.position, destination),
       ],
       estimatedSeconds:
         walkSeconds(origin, originStation.position) +
         metroSeconds(originStation.position, destinationStation.position) +
-        walkSeconds(destinationStation.position, destination)
+        walkSeconds(destinationStation.position, destination),
     });
   }
 
@@ -226,14 +287,14 @@ export function findRoutePlan(state: GameState, origin: Point, destination: Poin
           transitLeg(first.mode, firstStart, transfer.first, first.lineId),
           walkLeg(transfer.first, transfer.second),
           transitLeg(second.mode, transfer.second, secondEnd, second.lineId),
-          walkLeg(secondEnd, destination)
+          walkLeg(secondEnd, destination),
         ],
         estimatedSeconds:
           walkSeconds(origin, firstStart) +
           transitSeconds(first.mode, firstStart, transfer.first) +
           walkSeconds(transfer.first, transfer.second) +
           transitSeconds(second.mode, transfer.second, secondEnd) +
-          walkSeconds(secondEnd, destination)
+          walkSeconds(secondEnd, destination),
       });
     }
   }

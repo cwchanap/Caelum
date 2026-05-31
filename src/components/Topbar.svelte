@@ -12,16 +12,28 @@
     onSetSpeed: (speed: 1 | 2 | 4) => void;
   }
 
-  const readouts: Array<{ key: keyof ShellTopbarState; label: string; modifier?: string }> = [
+  const readouts: Array<{
+    key: keyof ShellTopbarState;
+    label: string;
+    modifier?: string;
+  }> = [
     { key: "budget", label: "Budget" },
     { key: "time", label: "Clock" },
     { key: "population", label: "Population" },
     { key: "late", label: "Late", modifier: "readout--warn" },
     { key: "unserved", label: "Unserved", modifier: "readout--alert" },
-    { key: "avgWait", label: "Avg Wait" }
+    { key: "avgWait", label: "Avg Wait" },
   ];
 
-  let { shell, paused, speed, controlTowerOpen, onToggleControlTower, onTogglePause, onSetSpeed }: Props = $props();
+  let {
+    shell,
+    paused,
+    speed,
+    controlTowerOpen,
+    onToggleControlTower,
+    onTogglePause,
+    onSetSpeed,
+  }: Props = $props();
 </script>
 
 <section class="topbar" data-testid="topbar">
@@ -37,8 +49,12 @@
   </div>
 
   <div class="readouts">
-    {#each readouts as readout}
-      <div class:readout--warn={readout.modifier === "readout--warn"} class:readout--alert={readout.modifier === "readout--alert"} class="readout">
+    {#each readouts as readout (readout.key)}
+      <div
+        class:readout--warn={readout.modifier === "readout--warn"}
+        class:readout--alert={readout.modifier === "readout--alert"}
+        class="readout"
+      >
         <span class="readout-label">{readout.label}</span>
         <span class="readout-value">{shell[readout.key]}</span>
       </div>
@@ -66,8 +82,13 @@
       <span data-button-label>{paused ? "Resume" : "Pause"}</span>
     </button>
 
-    <div class:speed-group--paused={paused} class="speed-group" role="group" aria-label="Simulation speed">
-      {#each [1, 2, 4] as speedOption}
+    <div
+      class:speed-group--paused={paused}
+      class="speed-group"
+      role="group"
+      aria-label="Simulation speed"
+    >
+      {#each [1, 2, 4] as speedOption (speedOption)}
         <button
           type="button"
           data-speed={speedOption}

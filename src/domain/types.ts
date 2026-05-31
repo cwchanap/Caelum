@@ -1,8 +1,33 @@
-export type TileKind = "empty" | "road" | "residential" | "jobs" | "civic" | "park";
+export type TileKind =
+  | "empty"
+  | "road"
+  | "residential"
+  | "jobs"
+  | "civic"
+  | "park";
 export type TransitMode = "walk" | "bus" | "metro";
-export type CitizenStatus = "idle" | "walking" | "waiting" | "riding" | "arrived" | "late" | "unserved";
-export type Tool = "inspect" | "busStop" | "busRoute" | "metroStation" | "metroLine" | "civicAnchor" | "remove";
-export type Overlay = "coverage" | "crowding" | "demand" | "lateness" | "growth";
+export type CitizenStatus =
+  | "idle"
+  | "walking"
+  | "waiting"
+  | "riding"
+  | "arrived"
+  | "late"
+  | "unserved";
+export type Tool =
+  | "inspect"
+  | "busStop"
+  | "busRoute"
+  | "metroStation"
+  | "metroLine"
+  | "civicAnchor"
+  | "remove";
+export type Overlay =
+  | "coverage"
+  | "crowding"
+  | "demand"
+  | "lateness"
+  | "growth";
 
 export interface Point {
   x: number;

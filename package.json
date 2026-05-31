@@ -7,6 +7,12 @@
     "dev": "vite --host 127.0.0.1",
     "build": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit && vite build",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
+    "lint": "bun run lint:svelte && bun run lint:rust",
+    "lint:svelte": "eslint .",
+    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "lint:staged": "lint-staged",
+    "format": "prettier --write . --ignore-unknown && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:check": "prettier --check . --ignore-unknown && cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "test": "vitest run",
     "test:unit": "vitest run --project ui --project runtime --project simulation",
     "test:e2e": "playwright test",
@@ -20,14 +26,23 @@
     "vite": "^7.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.52.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.4",
     "@tauri-apps/cli": "^2.5.0",
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/svelte": "^5.3.1",
+    "eslint": "^10.4.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.19.0",
+    "globals": "^17.6.0",
     "jsdom": "^26.0.0",
+    "lint-staged": "^17.0.7",
+    "prettier": "^3.8.3",
+    "prettier-plugin-svelte": "^4.0.1",
     "svelte-check": "^4.4.7",
     "typescript": "^5.8.0",
+    "typescript-eslint": "^8.60.0",
     "vitest": "^3.2.0"
   }
 }

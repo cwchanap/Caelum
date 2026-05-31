@@ -16,8 +16,8 @@ function mountApp(error?: string): void {
     target,
     props: {
       runtime: createGameRuntime(),
-      error
-    }
+      error,
+    },
   });
 }
 

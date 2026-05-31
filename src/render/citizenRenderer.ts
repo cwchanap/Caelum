@@ -22,7 +22,10 @@ function statusColor(status: CitizenStatus): string {
   return colors.citizen;
 }
 
-export function renderCitizens(ctx: CanvasRenderingContext2D, state: GameState): void {
+export function renderCitizens(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+): void {
   for (const citizen of state.citizens) {
     if (citizen.status === "arrived") {
       continue;
@@ -30,7 +33,13 @@ export function renderCitizens(ctx: CanvasRenderingContext2D, state: GameState):
 
     ctx.fillStyle = statusColor(citizen.status);
     ctx.beginPath();
-    ctx.arc(citizen.position.x * tileSize + 10, citizen.position.y * tileSize + 10, 3, 0, Math.PI * 2);
+    ctx.arc(
+      citizen.position.x * tileSize + 10,
+      citizen.position.y * tileSize + 10,
+      3,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
   }
 }

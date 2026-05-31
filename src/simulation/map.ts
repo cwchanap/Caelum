@@ -13,52 +13,80 @@ function destinationTiles(map: GameMap): Tile[] {
   return map.tiles
     .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
     .sort((left, right) => {
-      if (left.districtId === "anchor" && right.districtId !== "anchor") return -1;
-      if (right.districtId === "anchor" && left.districtId !== "anchor") return 1;
+      if (left.districtId === "anchor" && right.districtId !== "anchor")
+        return -1;
+      if (right.districtId === "anchor" && left.districtId !== "anchor")
+        return 1;
       return 0;
     });
 }
 
 export function getTile(map: GameMap, point: Point): Tile | null {
-  if (point.x < 0 || point.x >= map.width || point.y < 0 || point.y >= map.height) {
+  if (
+    point.x < 0 ||
+    point.x >= map.width ||
+    point.y < 0 ||
+    point.y >= map.height
+  ) {
     return null;
   }
 
   return map.tiles.find((tile) => samePoint(tile, point)) ?? null;
 }
 
-export function isValidBusStopPlacement(state: GameState, point: Point): boolean {
+export function isValidBusStopPlacement(
+  state: GameState,
+  point: Point,
+): boolean {
   const tile = getTile(state.map, point);
-  const occupied = state.transit.stops.some((stop) => samePoint(stop.position, point));
+  const occupied = state.transit.stops.some((stop) =>
+    samePoint(stop.position, point),
+  );
 
   return tile?.kind === "road" && !occupied;
 }
 
-export function isValidMetroStationPlacement(state: GameState, point: Point): boolean {
+export function isValidMetroStationPlacement(
+  state: GameState,
+  point: Point,
+): boolean {
   const tile = getTile(state.map, point);
-  const occupied = state.transit.stations.some((station) => samePoint(station.position, point));
+  const occupied = state.transit.stations.some((station) =>
+    samePoint(station.position, point),
+  );
 
   return (tile?.kind === "road" || tile?.kind === "empty") && !occupied;
 }
 
-export function isValidCivicAnchorPlacement(state: GameState, point: Point): boolean {
+export function isValidCivicAnchorPlacement(
+  state: GameState,
+  point: Point,
+): boolean {
   return getTile(state.map, point)?.kind === "empty";
 }
 
 export function applyDueGrowthWaves(state: GameState): GameState {
-  const dueWaves = state.scenario.growthWaves.filter((wave) => !wave.applied && wave.triggerTime <= state.time);
+  const dueWaves = state.scenario.growthWaves.filter(
+    (wave) => !wave.applied && wave.triggerTime <= state.time,
+  );
 
   if (dueWaves.length === 0) {
     return state;
   }
 
-  const waveTilesById = new Map(dueWaves.flatMap((wave) => wave.tiles.map((tile) => [tile.id, tile] as const)));
+  const waveTilesById = new Map(
+    dueWaves.flatMap((wave) =>
+      wave.tiles.map((tile) => [tile.id, tile] as const),
+    ),
+  );
   const nextMap: GameMap = {
     ...state.map,
     tiles: state.map.tiles.map((tile) => {
       const waveTile = waveTilesById.get(tile.id);
-      return waveTile === undefined ? { ...tile } : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
-    })
+      return waveTile === undefined
+        ? { ...tile }
+        : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
+    }),
   };
   const destinations = destinationTiles(nextMap);
   const newCitizens: Citizen[] = [];
@@ -67,10 +95,14 @@ export function applyDueGrowthWaves(state: GameState): GameState {
     for (const tile of wave.tiles) {
       for (let index = 0; index < tile.createsCitizens; index += 1) {
         const home = { x: tile.x, y: tile.y };
-        const destination = destinations[newCitizens.length % destinations.length] ?? home;
+        const destination =
+          destinations[newCitizens.length % destinations.length] ?? home;
 
         newCitizens.push({
-          id: entityId("citizen", state.citizens.length + newCitizens.length + 1),
+          id: entityId(
+            "citizen",
+            state.citizens.length + newCitizens.length + 1,
+          ),
           home: clonePoint(home),
           destination: clonePoint(destination),
           position: clonePoint(home),
@@ -78,7 +110,7 @@ export function applyDueGrowthWaves(state: GameState): GameState {
           patienceRemaining: 240,
           deadline: state.time + 900,
           routePlan: null,
-          currentLegIndex: 0
+          currentLegIndex: 0,
         });
       }
     }
@@ -90,9 +122,11 @@ export function applyDueGrowthWaves(state: GameState): GameState {
     scenario: {
       ...state.scenario,
       growthWaves: state.scenario.growthWaves.map((wave) =>
-        dueWaves.some((dueWave) => dueWave.id === wave.id) ? { ...wave, applied: true } : wave
-      )
+        dueWaves.some((dueWave) => dueWave.id === wave.id)
+          ? { ...wave, applied: true }
+          : wave,
+      ),
     },
-    citizens: [...state.citizens, ...newCitizens]
+    citizens: [...state.citizens, ...newCitizens],
   };
 }

@@ -4,7 +4,10 @@ import { applyDueGrowthWaves } from "./map";
 import { evaluateObjectives } from "./objectives";
 import { tickVehicles } from "./transit";
 
-export function tickSimulation(state: GameState, deltaSeconds: number): GameState {
+export function tickSimulation(
+  state: GameState,
+  deltaSeconds: number,
+): GameState {
   if (state.paused || state.metrics.state !== "running" || state.speed === 0) {
     return state;
   }
@@ -12,7 +15,7 @@ export function tickSimulation(state: GameState, deltaSeconds: number): GameStat
   const scaledDelta = deltaSeconds * state.speed;
   const advancedState = {
     ...state,
-    time: state.time + scaledDelta
+    time: state.time + scaledDelta,
   };
   const grownState = applyDueGrowthWaves(advancedState);
   const vehicleState = tickVehicles(grownState, scaledDelta);

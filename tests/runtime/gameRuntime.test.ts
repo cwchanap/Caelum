@@ -1,21 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import type { RuntimeSnapshot } from "../../src/runtime/types";
 
 describe("Game Runtime", () => {
   it("manages game and UI state with shell-friendly selectors", () => {
     const runtime = createGameRuntime();
-    
+
     // Set a tool and unpause
     runtime.setTool("busStop");
     runtime.togglePause();
     runtime.tick(1);
-    
+
     const snapshot = runtime.getSnapshot();
-    
+
     // Verify internal state is correctly managed
     expect(snapshot.ui.activeTool).toBe("busStop");
     expect(snapshot.state.paused).toBe(false);
-    
+
     // Verify shell-friendly selectors
     expect(snapshot.shell.topbar.budget).toBe("$120,000");
     expect(snapshot.shell.controlTower.title).toBe("Growing Suburb");
@@ -23,30 +24,30 @@ describe("Game Runtime", () => {
 
   it("publishes state changes to subscribers", () => {
     const runtime = createGameRuntime();
-    const snapshots: any[] = [];
-    
+    const snapshots: RuntimeSnapshot[] = [];
+
     const unsubscribe = runtime.subscribe((snapshot) => {
       snapshots.push(snapshot);
     });
-    
+
     runtime.setTool("busStop");
     runtime.togglePause();
-    
+
     expect(snapshots.length).toBeGreaterThan(0);
     expect(snapshots[snapshots.length - 1].ui.activeTool).toBe("busStop");
-    
+
     unsubscribe();
   });
 
   it("resets to initial state", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.setTool("busRoute");
     runtime.togglePause();
     runtime.setSpeed(2);
-    
+
     runtime.reset();
-    
+
     const snapshot = runtime.getSnapshot();
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.state.paused).toBe(true);
@@ -93,10 +94,10 @@ describe("Game Runtime", () => {
 
   it("manages simulation lifecycle", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.start();
     expect(runtime.isRunning()).toBe(true);
-    
+
     runtime.stop();
     expect(runtime.isRunning()).toBe(false);
   });
@@ -123,10 +124,13 @@ describe("Game Runtime", () => {
 
   it("does not fast-forward after resuming from a paused gap", () => {
     const callbacks: Array<(timestamp: number) => void> = [];
-    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: (timestamp: number) => void) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }));
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: (timestamp: number) => void) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      }),
+    );
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
     const runtime = createGameRuntime();
@@ -147,72 +151,72 @@ describe("Game Runtime", () => {
 
   it("handles tool changes", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.setTool("metroStation");
     expect(runtime.getSnapshot().ui.activeTool).toBe("metroStation");
-    
+
     runtime.setTool("inspect");
     expect(runtime.getSnapshot().ui.activeTool).toBe("inspect");
   });
 
   it("handles overlay changes", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.setOverlay("coverage");
     expect(runtime.getSnapshot().ui.activeOverlay).toBe("coverage");
-    
+
     runtime.setOverlay(null);
     expect(runtime.getSnapshot().ui.activeOverlay).toBe(null);
   });
 
   it("handles speed changes", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.setSpeed(2);
     expect(runtime.getSnapshot().state.speed).toBe(2);
-    
+
     runtime.setSpeed(4);
     expect(runtime.getSnapshot().state.speed).toBe(4);
   });
 
   it("advances simulation time when ticking and unpaused", () => {
     const runtime = createGameRuntime();
-    
+
     const beforeTime = runtime.getSnapshot().state.time;
     runtime.togglePause(); // unpause
     runtime.tick(1);
     const afterTime = runtime.getSnapshot().state.time;
-    
+
     expect(afterTime).toBeGreaterThan(beforeTime);
   });
 
   it("does not advance time when paused", () => {
     const runtime = createGameRuntime();
-    
+
     const beforeTime = runtime.getSnapshot().state.time;
     // starts paused by default
     runtime.tick(1);
     const afterTime = runtime.getSnapshot().state.time;
-    
+
     expect(afterTime).toBe(beforeTime);
   });
 
   it("handles tile clicks", () => {
     const runtime = createGameRuntime();
-    
+
     runtime.setTool("inspect");
     runtime.handleTileClick({ x: 5, y: 5 });
-    
+
     expect(runtime.getSnapshot().ui.selectedId).toBe("5,5");
   });
 
   it("toggles control tower", () => {
     const runtime = createGameRuntime();
-    
+
     const before = runtime.getSnapshot().ui.controlTowerOpen;
     runtime.toggleControlTower();
     const after = runtime.getSnapshot().ui.controlTowerOpen;
-    
+
     expect(after).toBe(!before);
   });
 });

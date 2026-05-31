@@ -1,5 +1,9 @@
 import type { GameState, Metrics, TransitNetwork } from "../domain/types";
-import { createGrowingSuburbMap, createGrowingSuburbScenario, createStartingCitizens } from "../scenario/growingSuburb";
+import {
+  createGrowingSuburbMap,
+  createGrowingSuburbScenario,
+  createStartingCitizens,
+} from "../scenario/growingSuburb";
 
 function createEmptyTransitNetwork(): TransitNetwork {
   return {
@@ -7,7 +11,7 @@ function createEmptyTransitNetwork(): TransitNetwork {
     stations: [],
     routes: [],
     metroLines: [],
-    vehicles: []
+    vehicles: [],
   };
 }
 
@@ -21,7 +25,7 @@ function createInitialMetrics(): Metrics {
     averageWaitSeconds: 0,
     tripOutcomes: [],
     state: "running",
-    lossReason: null
+    lossReason: null,
   };
 }
 
@@ -35,6 +39,6 @@ export function createInitialGameState(): GameState {
     scenario: createGrowingSuburbScenario(),
     transit: createEmptyTransitNetwork(),
     citizens: createStartingCitizens(),
-    metrics: createInitialMetrics()
+    metrics: createInitialMetrics(),
   };
 }

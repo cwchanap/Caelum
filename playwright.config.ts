@@ -4,12 +4,12 @@ export default defineConfig({
   testDir: "tests/e2e",
   timeout: 30_000,
   use: {
-    trace: "on-first-retry"
+    trace: "on-first-retry",
   },
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] }
-    }
-  ]
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
 });

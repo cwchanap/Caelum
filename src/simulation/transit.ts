@@ -1,12 +1,19 @@
 import { entityId } from "../domain/ids";
-import type { Citizen, GameState, Point, Route, MetroLine, Vehicle } from "../domain/types";
+import type {
+  Citizen,
+  GameState,
+  Point,
+  Route,
+  MetroLine,
+  Vehicle,
+} from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
 
 const COSTS = {
   busStop: 2_000,
   metroStation: 25_000,
   bus: 8_000,
-  metro: 50_000
+  metro: 50_000,
 } as const;
 
 function canAfford(state: GameState, cost: number): boolean {
@@ -23,32 +30,58 @@ function distinctValidStopCount(state: GameState, stopIds: string[]): number {
   return new Set(stopIds.filter((stopId) => existingStopIds.has(stopId))).size;
 }
 
-function distinctValidStationCount(state: GameState, stationIds: string[]): number {
-  const existingStationIds = new Set(state.transit.stations.map((station) => station.id));
+function distinctValidStationCount(
+  state: GameState,
+  stationIds: string[],
+): number {
+  const existingStationIds = new Set(
+    state.transit.stations.map((station) => station.id),
+  );
 
-  return new Set(stationIds.filter((stationId) => existingStationIds.has(stationId))).size;
+  return new Set(
+    stationIds.filter((stationId) => existingStationIds.has(stationId)),
+  ).size;
 }
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
 }
 
-function assignedLinePositions(state: GameState, vehicle: Vehicle): Point[] | null {
+function assignedLinePositions(
+  state: GameState,
+  vehicle: Vehicle,
+): Point[] | null {
   if (vehicle.mode === "bus") {
-    const route: Route | undefined = state.transit.routes.find((candidate) => candidate.id === vehicle.lineId);
-    const stopById = new Map(state.transit.stops.map((stop) => [stop.id, stop.position]));
+    const route: Route | undefined = state.transit.routes.find(
+      (candidate) => candidate.id === vehicle.lineId,
+    );
+    const stopById = new Map(
+      state.transit.stops.map((stop) => [stop.id, stop.position]),
+    );
     const positions = route?.stopIds.map((stopId) => stopById.get(stopId));
 
-    return route !== undefined && route.active && positions !== undefined && positions.every((position) => position !== undefined)
+    return route !== undefined &&
+      route.active &&
+      positions !== undefined &&
+      positions.every((position) => position !== undefined)
       ? positions.map((position) => clonePoint(position))
       : null;
   }
 
-  const metroLine: MetroLine | undefined = state.transit.metroLines.find((candidate) => candidate.id === vehicle.lineId);
-  const stationById = new Map(state.transit.stations.map((station) => [station.id, station.position]));
-  const positions = metroLine?.stationIds.map((stationId) => stationById.get(stationId));
+  const metroLine: MetroLine | undefined = state.transit.metroLines.find(
+    (candidate) => candidate.id === vehicle.lineId,
+  );
+  const stationById = new Map(
+    state.transit.stations.map((station) => [station.id, station.position]),
+  );
+  const positions = metroLine?.stationIds.map((stationId) =>
+    stationById.get(stationId),
+  );
 
-  return metroLine !== undefined && metroLine.active && positions !== undefined && positions.every((position) => position !== undefined)
+  return metroLine !== undefined &&
+    metroLine.active &&
+    positions !== undefined &&
+    positions.every((position) => position !== undefined)
     ? positions.map((position) => clonePoint(position))
     : null;
 }
@@ -57,20 +90,30 @@ function uniquePassengerIds(passengerIds: string[]): string[] {
   return Array.from(new Set(passengerIds));
 }
 
-function citizenCanBoard(citizen: Citizen, vehicle: Vehicle, currentPosition: Point, occupiedPassengerIds: Set<string>): boolean {
+function citizenCanBoard(
+  citizen: Citizen,
+  vehicle: Vehicle,
+  currentPosition: Point,
+  occupiedPassengerIds: Set<string>,
+): boolean {
   if (citizen.status !== "waiting" || occupiedPassengerIds.has(citizen.id)) {
     return false;
   }
 
   const leg = citizen.routePlan?.legs[citizen.currentLegIndex];
-  return leg !== undefined && leg.mode === vehicle.mode && leg.lineId === vehicle.lineId && samePoint(citizen.position, currentPosition);
+  return (
+    leg !== undefined &&
+    leg.mode === vehicle.mode &&
+    leg.lineId === vehicle.lineId &&
+    samePoint(citizen.position, currentPosition)
+  );
 }
 
 function boardVehicle(
   citizens: Citizen[],
   vehicle: Vehicle,
   currentPosition: Point,
-  occupiedPassengerIds: Set<string>
+  occupiedPassengerIds: Set<string>,
 ): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const availableSeats = Math.max(0, vehicle.capacity - passengerIds.length);
@@ -86,7 +129,9 @@ function boardVehicle(
       break;
     }
 
-    if (citizenCanBoard(citizen, vehicle, currentPosition, occupiedPassengerIds)) {
+    if (
+      citizenCanBoard(citizen, vehicle, currentPosition, occupiedPassengerIds)
+    ) {
       boardingCitizenIds.push(citizen.id);
       occupiedPassengerIds.add(citizen.id);
     }
@@ -100,16 +145,23 @@ function boardVehicle(
 
   return {
     citizens: citizens.map((citizen) =>
-      boardingCitizenIdSet.has(citizen.id) ? { ...citizen, status: "riding" } : citizen
+      boardingCitizenIdSet.has(citizen.id)
+        ? { ...citizen, status: "riding" }
+        : citizen,
     ),
     vehicle: {
       ...vehicle,
-      passengerIds: [...passengerIds, ...boardingCitizenIds]
-    }
+      passengerIds: [...passengerIds, ...boardingCitizenIds],
+    },
   };
 }
 
-function disembarkVehicle(citizens: Citizen[], vehicle: Vehicle, reachedPosition: Point, stopCount: number): { citizens: Citizen[]; vehicle: Vehicle } {
+function disembarkVehicle(
+  citizens: Citizen[],
+  vehicle: Vehicle,
+  reachedPosition: Point,
+  stopCount: number,
+): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const disembarkingPassengerIds = new Set(
     citizens
@@ -119,28 +171,43 @@ function disembarkVehicle(citizens: Citizen[], vehicle: Vehicle, reachedPosition
         }
 
         const leg = citizen.routePlan?.legs[citizen.currentLegIndex];
-        return leg !== undefined && leg.mode === vehicle.mode && leg.lineId === vehicle.lineId && samePoint(leg.to, reachedPosition);
+        return (
+          leg !== undefined &&
+          leg.mode === vehicle.mode &&
+          leg.lineId === vehicle.lineId &&
+          samePoint(leg.to, reachedPosition)
+        );
       })
-      .map((citizen) => citizen.id)
+      .map((citizen) => citizen.id),
   );
 
   return {
     citizens: citizens.map((citizen) =>
       disembarkingPassengerIds.has(citizen.id)
-        ? { ...citizen, position: clonePoint(reachedPosition), status: "walking", currentLegIndex: citizen.currentLegIndex + 1 }
-        : citizen
+        ? {
+            ...citizen,
+            position: clonePoint(reachedPosition),
+            status: "walking",
+            currentLegIndex: citizen.currentLegIndex + 1,
+          }
+        : citizen,
     ),
     vehicle: {
       ...vehicle,
-      passengerIds: passengerIds.filter((passengerId) => !disembarkingPassengerIds.has(passengerId)),
+      passengerIds: passengerIds.filter(
+        (passengerId) => !disembarkingPassengerIds.has(passengerId),
+      ),
       segmentIndex: (vehicle.segmentIndex + 1) % stopCount,
-      progress: vehicle.progress % 1
-    }
+      progress: vehicle.progress % 1,
+    },
   };
 }
 
 export function addBusStop(state: GameState, point: Point): GameState {
-  if (!canAfford(state, COSTS.busStop) || !isValidBusStopPlacement(state, point)) {
+  if (
+    !canAfford(state, COSTS.busStop) ||
+    !isValidBusStopPlacement(state, point)
+  ) {
     return state;
   }
 
@@ -154,15 +221,18 @@ export function addBusStop(state: GameState, point: Point): GameState {
         {
           id: entityId("stop", state.transit.stops.length + 1),
           position: clonePoint(point),
-          queueCitizenIds: []
-        }
-      ]
-    }
+          queueCitizenIds: [],
+        },
+      ],
+    },
   };
 }
 
 export function addMetroStation(state: GameState, point: Point): GameState {
-  if (!canAfford(state, COSTS.metroStation) || !isValidMetroStationPlacement(state, point)) {
+  if (
+    !canAfford(state, COSTS.metroStation) ||
+    !isValidMetroStationPlacement(state, point)
+  ) {
     return state;
   }
 
@@ -176,10 +246,10 @@ export function addMetroStation(state: GameState, point: Point): GameState {
         {
           id: entityId("station", state.transit.stations.length + 1),
           position: clonePoint(point),
-          queueCitizenIds: []
-        }
-      ]
-    }
+          queueCitizenIds: [],
+        },
+      ],
+    },
   };
 }
 
@@ -198,14 +268,17 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
           color: "#e04f39",
           stopIds: [...stopIds],
           vehicleIds: [],
-          active: distinctValidStopCount(state, stopIds) >= 2
-        }
-      ]
-    }
+          active: distinctValidStopCount(state, stopIds) >= 2,
+        },
+      ],
+    },
   };
 }
 
-export function addMetroLine(state: GameState, stationIds: string[]): GameState {
+export function addMetroLine(
+  state: GameState,
+  stationIds: string[],
+): GameState {
   const lineNumber = state.transit.metroLines.length + 1;
 
   return {
@@ -220,14 +293,18 @@ export function addMetroLine(state: GameState, stationIds: string[]): GameState 
           color: "#2867b2",
           stationIds: [...stationIds],
           vehicleIds: [],
-          active: distinctValidStationCount(state, stationIds) >= 2
-        }
-      ]
-    }
+          active: distinctValidStationCount(state, stationIds) >= 2,
+        },
+      ],
+    },
   };
 }
 
-export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: string): GameState {
+export function assignVehicle(
+  state: GameState,
+  mode: "bus" | "metro",
+  lineId: string,
+): GameState {
   const cost = COSTS[mode];
 
   if (!canAfford(state, cost)) {
@@ -241,11 +318,13 @@ export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: s
     capacity: mode === "bus" ? 18 : 90,
     passengerIds: [],
     segmentIndex: 0,
-    progress: 0
+    progress: 0,
   };
 
   if (mode === "bus") {
-    const route = state.transit.routes.find((candidate) => candidate.id === lineId);
+    const route = state.transit.routes.find(
+      (candidate) => candidate.id === lineId,
+    );
 
     if (route === undefined || !route.active) {
       return state;
@@ -257,14 +336,21 @@ export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: s
       transit: {
         ...state.transit,
         routes: state.transit.routes.map((candidate) =>
-          candidate.id === lineId ? { ...candidate, vehicleIds: [...candidate.vehicleIds, vehicle.id] } : candidate
+          candidate.id === lineId
+            ? {
+                ...candidate,
+                vehicleIds: [...candidate.vehicleIds, vehicle.id],
+              }
+            : candidate,
         ),
-        vehicles: [...state.transit.vehicles, vehicle]
-      }
+        vehicles: [...state.transit.vehicles, vehicle],
+      },
     };
   }
 
-  const metroLine = state.transit.metroLines.find((candidate) => candidate.id === lineId);
+  const metroLine = state.transit.metroLines.find(
+    (candidate) => candidate.id === lineId,
+  );
 
   if (metroLine === undefined || !metroLine.active) {
     return state;
@@ -276,16 +362,25 @@ export function assignVehicle(state: GameState, mode: "bus" | "metro", lineId: s
     transit: {
       ...state.transit,
       metroLines: state.transit.metroLines.map((candidate) =>
-        candidate.id === lineId ? { ...candidate, vehicleIds: [...candidate.vehicleIds, vehicle.id] } : candidate
+        candidate.id === lineId
+          ? { ...candidate, vehicleIds: [...candidate.vehicleIds, vehicle.id] }
+          : candidate,
       ),
-      vehicles: [...state.transit.vehicles, vehicle]
-    }
+      vehicles: [...state.transit.vehicles, vehicle],
+    },
   };
 }
 
-export function tickVehicles(state: GameState, deltaSeconds: number): GameState {
+export function tickVehicles(
+  state: GameState,
+  deltaSeconds: number,
+): GameState {
   let citizens = state.citizens;
-  const occupiedPassengerIds = new Set(state.transit.vehicles.flatMap((vehicle) => uniquePassengerIds(vehicle.passengerIds)));
+  const occupiedPassengerIds = new Set(
+    state.transit.vehicles.flatMap((vehicle) =>
+      uniquePassengerIds(vehicle.passengerIds),
+    ),
+  );
   let changed = false;
 
   const vehicles = state.transit.vehicles.map((vehicle) => {
@@ -295,8 +390,12 @@ export function tickVehicles(state: GameState, deltaSeconds: number): GameState 
       return vehicle;
     }
 
-    const currentPosition = linePositions[vehicle.segmentIndex % linePositions.length];
-    const boarded = vehicle.progress === 0 ? boardVehicle(citizens, vehicle, currentPosition, occupiedPassengerIds) : { citizens, vehicle };
+    const currentPosition =
+      linePositions[vehicle.segmentIndex % linePositions.length];
+    const boarded =
+      vehicle.progress === 0
+        ? boardVehicle(citizens, vehicle, currentPosition, occupiedPassengerIds)
+        : { citizens, vehicle };
     citizens = boarded.citizens;
 
     const speed = vehicle.mode === "bus" ? 0.08 : 0.14;
@@ -308,8 +407,14 @@ export function tickVehicles(state: GameState, deltaSeconds: number): GameState 
       return nextVehicle;
     }
 
-    const reachedPosition = linePositions[(vehicle.segmentIndex + 1) % linePositions.length];
-    const disembarked = disembarkVehicle(citizens, { ...boarded.vehicle, progress }, reachedPosition, linePositions.length);
+    const reachedPosition =
+      linePositions[(vehicle.segmentIndex + 1) % linePositions.length];
+    const disembarked = disembarkVehicle(
+      citizens,
+      { ...boarded.vehicle, progress },
+      reachedPosition,
+      linePositions.length,
+    );
     citizens = disembarked.citizens;
     changed = true;
     return disembarked.vehicle;
@@ -324,7 +429,7 @@ export function tickVehicles(state: GameState, deltaSeconds: number): GameState 
     citizens,
     transit: {
       ...state.transit,
-      vehicles
-    }
+      vehicles,
+    },
   };
 }

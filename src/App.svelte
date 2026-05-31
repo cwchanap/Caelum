@@ -88,11 +88,16 @@
 {#if shellError}
   <main class="shell" data-testid="game-shell">
     <div class="shell-error" role="alert">
-      <strong>Shell Error:</strong> {shellError}
+      <strong>Shell Error:</strong>
+      {shellError}
     </div>
   </main>
 {:else}
-  <main class="shell" data-testid="game-shell" data-tower-open={snapshot?.ui.controlTowerOpen ?? false}>
+  <main
+    class="shell"
+    data-testid="game-shell"
+    data-tower-open={snapshot?.ui.controlTowerOpen ?? false}
+  >
     {#if snapshot !== null}
       <Topbar
         shell={snapshot.shell.topbar}
@@ -104,7 +109,7 @@
         onSetSpeed={handleSetSpeed}
       />
 
-      <GameCanvas runtime={runtime} onShellError={handleShellError} />
+      <GameCanvas {runtime} onShellError={handleShellError} />
 
       <ControlTower
         shell={snapshot.shell.controlTower}

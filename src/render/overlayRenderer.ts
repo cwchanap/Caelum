@@ -7,15 +7,33 @@ function fillTile(ctx: CanvasRenderingContext2D, point: Point): void {
   ctx.fillRect(point.x * tileSize, point.y * tileSize, tileSize, tileSize);
 }
 
-function fillCoverageArea(ctx: CanvasRenderingContext2D, point: Point, radius: number): void {
-  ctx.fillRect((point.x - radius) * tileSize, (point.y - radius) * tileSize, tileSize * (radius * 2 + 1), tileSize * (radius * 2 + 1));
+function fillCoverageArea(
+  ctx: CanvasRenderingContext2D,
+  point: Point,
+  radius: number,
+): void {
+  ctx.fillRect(
+    (point.x - radius) * tileSize,
+    (point.y - radius) * tileSize,
+    tileSize * (radius * 2 + 1),
+    tileSize * (radius * 2 + 1),
+  );
 }
 
 function isInMap(state: GameState, point: Point): boolean {
-  return point.x >= 0 && point.x < state.map.width && point.y >= 0 && point.y < state.map.height;
+  return (
+    point.x >= 0 &&
+    point.x < state.map.width &&
+    point.y >= 0 &&
+    point.y < state.map.height
+  );
 }
 
-export function renderOverlays(ctx: CanvasRenderingContext2D, state: GameState, ui: UiState): void {
+export function renderOverlays(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
   if (ui.activeOverlay === "coverage") {
     ctx.fillStyle = colors.coverage;
 
@@ -79,6 +97,11 @@ export function renderOverlays(ctx: CanvasRenderingContext2D, state: GameState, 
   if (ui.hoverTile !== null && isInMap(state, ui.hoverTile)) {
     ctx.strokeStyle = colors.hover;
     ctx.lineWidth = 2;
-    ctx.strokeRect(ui.hoverTile.x * tileSize + 2, ui.hoverTile.y * tileSize + 2, tileSize - 4, tileSize - 4);
+    ctx.strokeRect(
+      ui.hoverTile.x * tileSize + 2,
+      ui.hoverTile.y * tileSize + 2,
+      tileSize - 4,
+      tileSize - 4,
+    );
   }
 }

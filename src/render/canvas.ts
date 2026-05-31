@@ -27,7 +27,10 @@ interface CanvasSizeTarget {
   getBoundingClientRect: () => Pick<DOMRectReadOnly, "width" | "height">;
 }
 
-export function getBoardTransform(board: BoardSize, map: GameMap): BoardTransform {
+export function getBoardTransform(
+  board: BoardSize,
+  map: GameMap,
+): BoardTransform {
   const mapWidth = map.width * tileSize;
   const mapHeight = map.height * tileSize;
   const scale = Math.min(board.width / mapWidth, board.height / mapHeight);
@@ -39,7 +42,7 @@ export function getBoardTransform(board: BoardSize, map: GameMap): BoardTransfor
     offsetX: (board.width - width) / 2,
     offsetY: (board.height - height) / 2,
     width,
-    height
+    height,
   };
 }
 
@@ -65,7 +68,12 @@ export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
   return true;
 }
 
-export function canvasToTile(canvas: HTMLCanvasElement, clientX: number, clientY: number, map: GameMap): Point | null {
+export function canvasToTile(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  map: GameMap,
+): Point | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) {
     return null;
@@ -78,13 +86,22 @@ export function canvasToTile(canvas: HTMLCanvasElement, clientX: number, clientY
   const canvasY = (clientY - rect.top) * scaleY;
   const point = {
     x: Math.floor((canvasX - transform.offsetX) / transform.scale / tileSize),
-    y: Math.floor((canvasY - transform.offsetY) / transform.scale / tileSize)
+    y: Math.floor((canvasY - transform.offsetY) / transform.scale / tileSize),
   };
 
-  return point.x >= 0 && point.x < map.width && point.y >= 0 && point.y < map.height ? point : null;
+  return point.x >= 0 &&
+    point.x < map.width &&
+    point.y >= 0 &&
+    point.y < map.height
+    ? point
+    : null;
 }
 
-export function renderGame(ctx: CanvasRenderingContext2D, state: GameState, ui: UiState): void {
+export function renderGame(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   const transform = getBoardTransform(ctx.canvas, state.map);
 

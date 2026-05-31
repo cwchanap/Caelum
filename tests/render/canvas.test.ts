@@ -12,7 +12,7 @@ function mockRect(width: number, height: number) {
     bottom: height,
     x: 0,
     y: 0,
-    toJSON: () => ({})
+    toJSON: () => ({}),
   };
 }
 
@@ -21,7 +21,7 @@ describe("canvas helpers", () => {
     const canvas = document.createElement("canvas");
     vi.stubGlobal("devicePixelRatio", 2);
     Object.defineProperty(canvas, "getBoundingClientRect", {
-      value: () => mockRect(320.4, 200.6)
+      value: () => mockRect(320.4, 200.6),
     });
 
     expect(syncCanvasSize(canvas)).toBe(true);
@@ -40,7 +40,7 @@ describe("canvas helpers", () => {
     canvas.width = map.width * 32;
     canvas.height = map.height * 32;
     Object.defineProperty(canvas, "getBoundingClientRect", {
-      value: () => mockRect(canvas.width, canvas.height)
+      value: () => mockRect(canvas.width, canvas.height),
     });
 
     expect(canvasToTile(canvas, 16, 16, map)).toEqual({ x: 0, y: 0 });

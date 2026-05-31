@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { findRoutePlan } from "../../src/simulation/router";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation } from "../../src/simulation/transit";
+import {
+  addBusRoute,
+  addBusStop,
+  addMetroLine,
+  addMetroStation,
+} from "../../src/simulation/transit";
 
 describe("route planning", () => {
   it("creates a walking route for nearby destinations", () => {
@@ -11,7 +16,7 @@ describe("route planning", () => {
 
     expect(plan).toEqual({
       estimatedSeconds: 40,
-      legs: [{ mode: "walk", from: { x: 2, y: 3 }, to: { x: 4, y: 3 } }]
+      legs: [{ mode: "walk", from: { x: 2, y: 3 }, to: { x: 4, y: 3 } }],
     });
   });
 
@@ -26,8 +31,16 @@ describe("route planning", () => {
     const state = createInitialGameState();
 
     expect(findRoutePlan(state, { x: 2.5, y: 3 }, { x: 4, y: 3 })).toBeNull();
-    expect(findRoutePlan(state, { x: 2, y: 3 }, { x: Number.POSITIVE_INFINITY, y: 17 })).toBeNull();
-    expect(findRoutePlan(state, { x: 2, y: Number.NaN }, { x: 4, y: 3 })).toBeNull();
+    expect(
+      findRoutePlan(
+        state,
+        { x: 2, y: 3 },
+        { x: Number.POSITIVE_INFINITY, y: 17 },
+      ),
+    ).toBeNull();
+    expect(
+      findRoutePlan(state, { x: 2, y: Number.NaN }, { x: 4, y: 3 }),
+    ).toBeNull();
   });
 
   it("creates a bus route when stops connect the origin and destination", () => {
@@ -43,8 +56,13 @@ describe("route planning", () => {
     expect(plan?.legs[1]).toMatchObject({ mode: "bus", lineId: "route-001" });
     expect(plan?.legs).toEqual([
       { mode: "walk", from: { x: 6, y: 8 }, to: { x: 7, y: 8 } },
-      { mode: "bus", from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" },
-      { mode: "walk", from: { x: 22, y: 8 }, to: { x: 23, y: 8 } }
+      {
+        mode: "bus",
+        from: { x: 7, y: 8 },
+        to: { x: 22, y: 8 },
+        lineId: "route-001",
+      },
+      { mode: "walk", from: { x: 22, y: 8 }, to: { x: 23, y: 8 } },
     ]);
   });
 
@@ -57,12 +75,21 @@ describe("route planning", () => {
     const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
     expect(plan?.estimatedSeconds).toBe(265);
-    expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "metro", "walk"]);
+    expect(plan?.legs.map((leg) => leg.mode)).toEqual([
+      "walk",
+      "metro",
+      "walk",
+    ]);
     expect(plan?.legs[1]).toMatchObject({ mode: "metro", lineId: "metro-001" });
     expect(plan?.legs).toEqual([
       { mode: "walk", from: { x: 6, y: 8 }, to: { x: 7, y: 8 } },
-      { mode: "metro", from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "metro-001" },
-      { mode: "walk", from: { x: 22, y: 8 }, to: { x: 23, y: 8 } }
+      {
+        mode: "metro",
+        from: { x: 7, y: 8 },
+        to: { x: 22, y: 8 },
+        lineId: "metro-001",
+      },
+      { mode: "walk", from: { x: 22, y: 8 }, to: { x: 23, y: 8 } },
     ]);
   });
 
@@ -72,11 +99,15 @@ describe("route planning", () => {
       transit: {
         stops: [
           { id: "stop-001", position: { x: 0, y: 0 }, queueCitizenIds: [] },
-          { id: "stop-002", position: { x: 13, y: 8 }, queueCitizenIds: [] }
+          { id: "stop-002", position: { x: 13, y: 8 }, queueCitizenIds: [] },
         ],
         stations: [
           { id: "station-001", position: { x: 13, y: 8 }, queueCitizenIds: [] },
-          { id: "station-002", position: { x: 27, y: 17 }, queueCitizenIds: [] }
+          {
+            id: "station-002",
+            position: { x: 27, y: 17 },
+            queueCitizenIds: [],
+          },
         ],
         routes: [
           {
@@ -85,8 +116,8 @@ describe("route planning", () => {
             color: "#e04f39",
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: [],
-            active: true
-          }
+            active: true,
+          },
         ],
         metroLines: [
           {
@@ -95,22 +126,38 @@ describe("route planning", () => {
             color: "#2867b2",
             stationIds: ["station-001", "station-002"],
             vehicleIds: [],
-            active: true
-          }
+            active: true,
+          },
         ],
-        vehicles: []
-      }
+        vehicles: [],
+      },
     };
 
     const plan = findRoutePlan(state, { x: 0, y: 0 }, { x: 27, y: 17 });
 
-    expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "bus", "walk", "metro", "walk"]);
+    expect(plan?.legs.map((leg) => leg.mode)).toEqual([
+      "walk",
+      "bus",
+      "walk",
+      "metro",
+      "walk",
+    ]);
     expect(plan?.legs).toEqual([
       { mode: "walk", from: { x: 0, y: 0 }, to: { x: 0, y: 0 } },
-      { mode: "bus", from: { x: 0, y: 0 }, to: { x: 13, y: 8 }, lineId: "route-001" },
+      {
+        mode: "bus",
+        from: { x: 0, y: 0 },
+        to: { x: 13, y: 8 },
+        lineId: "route-001",
+      },
       { mode: "walk", from: { x: 13, y: 8 }, to: { x: 13, y: 8 } },
-      { mode: "metro", from: { x: 13, y: 8 }, to: { x: 27, y: 17 }, lineId: "metro-001" },
-      { mode: "walk", from: { x: 27, y: 17 }, to: { x: 27, y: 17 } }
+      {
+        mode: "metro",
+        from: { x: 13, y: 8 },
+        to: { x: 27, y: 17 },
+        lineId: "metro-001",
+      },
+      { mode: "walk", from: { x: 27, y: 17 }, to: { x: 27, y: 17 } },
     ]);
   });
 
@@ -126,16 +173,22 @@ describe("route planning", () => {
       ...state,
       transit: {
         ...state.transit,
-        routes: state.transit.routes.map((route) => ({ ...route, active: false })),
-        metroLines: state.transit.metroLines.map((line) => ({ ...line, active: false }))
-      }
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+        })),
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          active: false,
+        })),
+      },
     };
 
     const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
     expect(plan).toEqual({
       estimatedSeconds: 340,
-      legs: [{ mode: "walk", from: { x: 6, y: 8 }, to: { x: 23, y: 8 } }]
+      legs: [{ mode: "walk", from: { x: 6, y: 8 }, to: { x: 23, y: 8 } }],
     });
   });
 });

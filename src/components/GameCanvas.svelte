@@ -19,7 +19,11 @@
     try {
       return runtime.mountCanvas(host);
     } catch (error) {
-      onShellError(error instanceof Error ? error.message : "Failed to attach game canvas.");
+      onShellError(
+        error instanceof Error
+          ? error.message
+          : "Failed to attach game canvas.",
+      );
     }
   });
 </script>

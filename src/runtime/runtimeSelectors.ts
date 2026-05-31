@@ -20,7 +20,7 @@ export function formatTime(seconds: number): string {
 
 export function formatObjective(state: GameState): string {
   return `Hold late trips below ${Math.round(state.scenario.objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
-    state.scenario.objectives.maxUnservedRatio * 100
+    state.scenario.objectives.maxUnservedRatio * 100,
   )}%, average wait under ${state.scenario.objectives.maxAverageWait}s.`;
 }
 
@@ -33,17 +33,19 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       population: `${state.citizens.length}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
-      avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`
+      avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
     },
     controlTower: {
       title: state.scenario.name,
       status: state.metrics.state.toUpperCase(),
       objective: formatObjective(state),
       lossNote: state.metrics.lossReason ?? "Within tolerances. Hold the line.",
-      nextGrowth: state.scenario.growthWaves.find((wave) => !wave.applied)?.message ?? "All growth waves resolved.",
+      nextGrowth:
+        state.scenario.growthWaves.find((wave) => !wave.applied)?.message ??
+        "All growth waves resolved.",
       selectedId: ui.selectedId ?? "—",
       activeTool: ui.activeTool.toUpperCase(),
-      controlTowerOpen: ui.controlTowerOpen
-    }
+      controlTowerOpen: ui.controlTowerOpen,
+    },
   };
 }

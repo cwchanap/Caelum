@@ -5,7 +5,11 @@ import { tickSimulation } from "../simulation/simulation";
 import { handleTileClick as applyTileClick } from "../ui/actions";
 import { createUiState } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
-import type { RuntimeController, RuntimeListener, RuntimeSnapshot } from "./types";
+import type {
+  RuntimeController,
+  RuntimeListener,
+  RuntimeSnapshot,
+} from "./types";
 
 function samePoint(left: Point | null, right: Point | null): boolean {
   return left?.x === right?.x && left?.y === right?.y;
@@ -16,7 +20,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     ...current,
     activeTool,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
-    draftStationIds: activeTool === "metroLine" ? current.draftStationIds : []
+    draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
   };
 }
 
@@ -34,21 +38,31 @@ export function createGameRuntime(): RuntimeController {
   const getSnapshot = (): RuntimeSnapshot => ({
     state,
     ui,
-    shell: selectShellState(state, ui)
+    shell: selectShellState(state, ui),
   });
 
-  const canAnimate = (): boolean => running && !state.paused && state.metrics.state === "running" && state.speed !== 0;
+  const canAnimate = (): boolean =>
+    running &&
+    !state.paused &&
+    state.metrics.state === "running" &&
+    state.speed !== 0;
 
   const syncAnimationLoop = (): void => {
     if (canAnimate()) {
-      if (animationFrameId === null && typeof requestAnimationFrame === "function") {
+      if (
+        animationFrameId === null &&
+        typeof requestAnimationFrame === "function"
+      ) {
         animationFrameId = requestAnimationFrame(frame);
       }
 
       return;
     }
 
-    if (animationFrameId !== null && typeof cancelAnimationFrame === "function") {
+    if (
+      animationFrameId !== null &&
+      typeof cancelAnimationFrame === "function"
+    ) {
       cancelAnimationFrame(animationFrameId);
       animationFrameId = null;
     }
@@ -160,7 +174,12 @@ export function createGameRuntime(): RuntimeController {
         return;
       }
 
-      const point = canvasToTile(canvas, event.clientX, event.clientY, state.map);
+      const point = canvasToTile(
+        canvas,
+        event.clientX,
+        event.clientY,
+        state.map,
+      );
 
       if (point !== null) {
         api.handleTileClick(point);
@@ -172,7 +191,9 @@ export function createGameRuntime(): RuntimeController {
         return;
       }
 
-      api.setHoverTile(canvasToTile(canvas, event.clientX, event.clientY, state.map));
+      api.setHoverTile(
+        canvasToTile(canvas, event.clientX, event.clientY, state.map),
+      );
     };
 
     const handlePointerLeave = (): void => {
@@ -234,7 +255,10 @@ export function createGameRuntime(): RuntimeController {
       return commit(state, nextToolUiState(tool, ui));
     },
     setOverlay(overlay) {
-      return commit(state, overlay === ui.activeOverlay ? ui : { ...ui, activeOverlay: overlay });
+      return commit(
+        state,
+        overlay === ui.activeOverlay ? ui : { ...ui, activeOverlay: overlay },
+      );
     },
     togglePause() {
       return commit({ ...state, paused: !state.paused }, ui);
@@ -250,9 +274,12 @@ export function createGameRuntime(): RuntimeController {
       return commit(result.state, result.ui);
     },
     setHoverTile(point) {
-      return commit(state, samePoint(point, ui.hoverTile) ? ui : { ...ui, hoverTile: point });
+      return commit(
+        state,
+        samePoint(point, ui.hoverTile) ? ui : { ...ui, hoverTile: point },
+      );
     },
-    mountCanvas
+    mountCanvas,
   };
 
   return api;

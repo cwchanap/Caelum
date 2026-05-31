@@ -20,7 +20,8 @@ describe("Growing Suburb scenario", () => {
     const state = createInitialGameState();
     const kinds = new Set(state.map.tiles.map((tile) => tile.kind));
     const tileIds = new Set(state.map.tiles.map((tile) => tile.id));
-    const tileAt = (x: number, y: number) => state.map.tiles.find((tile) => tile.x === x && tile.y === y);
+    const tileAt = (x: number, y: number) =>
+      state.map.tiles.find((tile) => tile.x === x && tile.y === y);
 
     expect(kinds.has("residential")).toBe(true);
     expect(kinds.has("jobs")).toBe(true);
@@ -49,7 +50,9 @@ describe("Growing Suburb scenario", () => {
   it("creates deterministic growth waves", () => {
     const state = createInitialGameState();
 
-    expect(state.scenario.growthWaves.map((wave) => wave.triggerTime)).toEqual([240, 540, 840]);
+    expect(state.scenario.growthWaves.map((wave) => wave.triggerTime)).toEqual([
+      240, 540, 840,
+    ]);
 
     for (const wave of state.scenario.growthWaves) {
       for (const tile of wave.tiles) {
@@ -75,7 +78,11 @@ describe("Growing Suburb scenario", () => {
   });
 
   it("scales delta by simulation speed", () => {
-    const state = { ...createInitialGameState(), paused: false, speed: 2 as const };
+    const state = {
+      ...createInitialGameState(),
+      paused: false,
+      speed: 2 as const,
+    };
 
     const nextState = tickSimulation(state, 100);
 
@@ -95,11 +102,18 @@ describe("Growing Suburb scenario", () => {
           patienceRemaining: 1_000,
           routePlan: {
             estimatedSeconds: 90,
-            legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 23, y: 8 }, lineId: "route-001" }]
+            legs: [
+              {
+                mode: "bus" as const,
+                from: { x: 7, y: 8 },
+                to: { x: 23, y: 8 },
+                lineId: "route-001",
+              },
+            ],
           },
-          currentLegIndex: 0
-        }
-      ]
+          currentLegIndex: 0,
+        },
+      ],
     };
 
     const nextState = tickSimulation(state, 301);
@@ -118,9 +132,9 @@ describe("Growing Suburb scenario", () => {
         {
           ...baseState.citizens[0]!,
           destination: { x: 3, y: 3 },
-          deadline: 20
-        }
-      ]
+          deadline: 20,
+        },
+      ],
     };
 
     const nextState = tickSimulation(state, 20);

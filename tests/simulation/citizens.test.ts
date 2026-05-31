@@ -2,20 +2,32 @@ import { describe, expect, it } from "vitest";
 import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { tickCitizens } from "../../src/simulation/citizens";
-import { addBusRoute, addBusStop, assignVehicle, tickVehicles } from "../../src/simulation/transit";
+import {
+  addBusRoute,
+  addBusStop,
+  assignVehicle,
+  tickVehicles,
+} from "../../src/simulation/transit";
 import { handleTileClick } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
 
-function withFirstCitizen(state: GameState, citizen: Partial<GameState["citizens"][number]>): GameState {
+function withFirstCitizen(
+  state: GameState,
+  citizen: Partial<GameState["citizens"][number]>,
+): GameState {
   return {
     ...state,
     citizens: state.citizens.map((existingCitizen, index) =>
-      index === 0 ? { ...existingCitizen, ...citizen } : existingCitizen
-    )
+      index === 0 ? { ...existingCitizen, ...citizen } : existingCitizen,
+    ),
   };
 }
 
-function advanceCitizens(state: GameState, tickCount: number, deltaSeconds = 1): GameState {
+function advanceCitizens(
+  state: GameState,
+  tickCount: number,
+  deltaSeconds = 1,
+): GameState {
   let nextState = state;
 
   for (let tick = 0; tick < tickCount; tick += 1) {
@@ -39,14 +51,14 @@ describe("citizen lifecycle", () => {
     expect(citizen?.position.y).toBe(3);
     expect(
       Math.abs((citizen?.position.x ?? 0) - state.citizens[0]!.position.x) +
-        Math.abs((citizen?.position.y ?? 0) - state.citizens[0]!.position.y)
+        Math.abs((citizen?.position.y ?? 0) - state.citizens[0]!.position.y),
     ).toBeCloseTo(0.05);
   });
 
   it("scales walking movement by simulated time instead of frame count", () => {
     const state = withFirstCitizen(createInitialGameState(), {
       destination: { x: 5, y: 3 },
-      deadline: 900
+      deadline: 900,
     });
 
     const afterOneSecond = advanceCitizens(state, 60, 1 / 60);
@@ -56,26 +68,31 @@ describe("citizen lifecycle", () => {
     expect(afterOneSecond.metrics.completedTrips).toBe(0);
   });
 
-  it.each(["arrived", "late", "unserved"] as const)("leaves %s citizens unchanged", (status) => {
-    const state = withFirstCitizen(createInitialGameState(), {
-      status,
-      position: { x: 4, y: 4 },
-      routePlan: {
-        estimatedSeconds: 20,
-        legs: [{ mode: "walk", from: { x: 4, y: 4 }, to: { x: 5, y: 4 } }]
-      },
-      currentLegIndex: 0,
-      patienceRemaining: 123
-    });
-    const originalCitizen = state.citizens[0];
+  it.each(["arrived", "late", "unserved"] as const)(
+    "leaves %s citizens unchanged",
+    (status) => {
+      const state = withFirstCitizen(createInitialGameState(), {
+        status,
+        position: { x: 4, y: 4 },
+        routePlan: {
+          estimatedSeconds: 20,
+          legs: [{ mode: "walk", from: { x: 4, y: 4 }, to: { x: 5, y: 4 } }],
+        },
+        currentLegIndex: 0,
+        patienceRemaining: 123,
+      });
+      const originalCitizen = state.citizens[0];
 
-    const nextState = tickCitizens(state, 20);
+      const nextState = tickCitizens(state, 20);
 
-    expect(nextState.citizens[0]).toEqual(originalCitizen);
-    expect(nextState.metrics.completedTrips).toBe(state.metrics.completedTrips);
-    expect(nextState.metrics.lateTrips).toBe(state.metrics.lateTrips);
-    expect(nextState.metrics.unservedTrips).toBe(state.metrics.unservedTrips);
-  });
+      expect(nextState.citizens[0]).toEqual(originalCitizen);
+      expect(nextState.metrics.completedTrips).toBe(
+        state.metrics.completedTrips,
+      );
+      expect(nextState.metrics.lateTrips).toBe(state.metrics.lateTrips);
+      expect(nextState.metrics.unservedTrips).toBe(state.metrics.unservedTrips);
+    },
+  );
 
   it("leaves riding citizens on their current transit leg", () => {
     const state = withFirstCitizen(
@@ -91,26 +108,35 @@ describe("citizen lifecycle", () => {
               capacity: 18,
               passengerIds: ["citizen-001"],
               segmentIndex: 0,
-              progress: 0.5
-            }
-          ]
-        }
+              progress: 0.5,
+            },
+          ],
+        },
       },
       {
-      status: "riding",
-      patienceRemaining: 123,
-      routePlan: {
-        estimatedSeconds: 60,
-        legs: [{ mode: "bus", from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" }]
+        status: "riding",
+        patienceRemaining: 123,
+        routePlan: {
+          estimatedSeconds: 60,
+          legs: [
+            {
+              mode: "bus",
+              from: { x: 7, y: 8 },
+              to: { x: 15, y: 8 },
+              lineId: "route-001",
+            },
+          ],
+        },
+        currentLegIndex: 0,
       },
-      currentLegIndex: 0
-      }
     );
 
     const nextState = tickCitizens(state, 10);
 
     expect(nextState.citizens[0]).toEqual(state.citizens[0]);
-    expect(nextState.metrics.totalWaitSeconds).toBe(state.metrics.totalWaitSeconds);
+    expect(nextState.metrics.totalWaitSeconds).toBe(
+      state.metrics.totalWaitSeconds,
+    );
   });
 
   it("recovers riding citizens whose vehicle was removed", () => {
@@ -127,16 +153,25 @@ describe("citizen lifecycle", () => {
       routePlan: {
         estimatedSeconds: 216,
         legs: [
-          { mode: "bus", from: { x: 7, y: 8 }, to: { x: 15, y: 8 }, lineId: "route-001" },
-          { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } }
-        ]
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+          { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } },
+        ],
       },
-      currentLegIndex: 0
+      currentLegIndex: 0,
     });
     state = tickVehicles(state, 0);
     expect(state.citizens[0]?.status).toBe("riding");
 
-    const removed = handleTileClick(state, { ...createUiState(), activeTool: "remove" }, { x: 7, y: 8 }).state;
+    const removed = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "remove" },
+      { x: 7, y: 8 },
+    ).state;
     const recovered = tickCitizens(removed, 1);
 
     expect(recovered.transit.vehicles).toHaveLength(0);
@@ -147,24 +182,26 @@ describe("citizen lifecycle", () => {
     const state = withFirstCitizen(
       {
         ...createInitialGameState(),
-        time: 101
+        time: 101,
       },
       {
         deadline: 100,
-        destination: { x: 27, y: 17 }
-      }
+        destination: { x: 27, y: 17 },
+      },
     );
 
     const nextState = tickCitizens(state, 20);
 
-    expect(nextState.citizens.some((citizen) => citizen.status === "unserved")).toBe(true);
+    expect(
+      nextState.citizens.some((citizen) => citizen.status === "unserved"),
+    ).toBe(true);
     expect(nextState.metrics.unservedTrips).toBeGreaterThan(0);
   });
 
   it("arrives on a short walking-only route and increments completed trips without mutating home", () => {
     const state = withFirstCitizen(createInitialGameState(), {
       destination: { x: 3, y: 3 },
-      deadline: 900
+      deadline: 900,
     });
     const originalHome = state.citizens[0]?.home;
 
@@ -179,14 +216,24 @@ describe("citizen lifecycle", () => {
   });
 
   it("marks a trip late when it arrives after the deadline", () => {
-    const state = withFirstCitizen({ ...createInitialGameState(), time: 1 }, {
-      deadline: 0,
-      routePlan: {
-        estimatedSeconds: 90,
-        legs: [{ mode: "bus", from: { x: 7, y: 8 }, to: { x: 23, y: 8 }, lineId: "route-001" }]
+    const state = withFirstCitizen(
+      { ...createInitialGameState(), time: 1 },
+      {
+        deadline: 0,
+        routePlan: {
+          estimatedSeconds: 90,
+          legs: [
+            {
+              mode: "bus",
+              from: { x: 7, y: 8 },
+              to: { x: 23, y: 8 },
+              lineId: "route-001",
+            },
+          ],
+        },
+        currentLegIndex: 1,
       },
-      currentLegIndex: 1
-    });
+    );
 
     const nextState = tickCitizens(state, 1);
     const citizen = nextState.citizens[0];
@@ -198,7 +245,7 @@ describe("citizen lifecycle", () => {
 
   it("marks citizens unserved when route planning returns null", () => {
     const state = withFirstCitizen(createInitialGameState(), {
-      destination: { x: 28, y: 17 }
+      destination: { x: 28, y: 17 },
     });
 
     const nextState = tickCitizens(state, 1);
@@ -218,7 +265,7 @@ describe("citizen lifecycle", () => {
       home: { x: 6, y: 8 },
       position: { x: 6, y: 8 },
       destination: { x: 23, y: 8 },
-      patienceRemaining: 240
+      patienceRemaining: 240,
     });
 
     let nextState = advanceCitizens(state, 21);
@@ -245,18 +292,35 @@ describe("citizen lifecycle", () => {
     const baseState = createInitialGameState();
     const waitingRoutePlan = {
       estimatedSeconds: 90,
-      legs: [{ mode: "bus" as const, from: { x: 7, y: 8 }, to: { x: 22, y: 8 }, lineId: "route-001" }]
+      legs: [
+        {
+          mode: "bus" as const,
+          from: { x: 7, y: 8 },
+          to: { x: 22, y: 8 },
+          lineId: "route-001",
+        },
+      ],
     };
     const state = {
       ...baseState,
       metrics: {
         ...baseState.metrics,
-        totalWaitSeconds: 100
+        totalWaitSeconds: 100,
       },
       citizens: [
-        { ...baseState.citizens[0]!, status: "waiting" as const, patienceRemaining: 235, routePlan: waitingRoutePlan },
-        { ...baseState.citizens[1]!, status: "waiting" as const, patienceRemaining: 230, routePlan: waitingRoutePlan }
-      ]
+        {
+          ...baseState.citizens[0]!,
+          status: "waiting" as const,
+          patienceRemaining: 235,
+          routePlan: waitingRoutePlan,
+        },
+        {
+          ...baseState.citizens[1]!,
+          status: "waiting" as const,
+          patienceRemaining: 230,
+          routePlan: waitingRoutePlan,
+        },
+      ],
     };
 
     const nextState = tickCitizens(state, 0);

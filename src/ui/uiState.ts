@@ -18,6 +18,6 @@ export function createUiState(): UiState {
     hoverTile: null,
     draftStopIds: [],
     draftStationIds: [],
-    controlTowerOpen: true
+    controlTowerOpen: true,
   };
 }

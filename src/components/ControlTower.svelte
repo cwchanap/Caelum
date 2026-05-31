@@ -18,7 +18,7 @@
     { id: "metroStation", label: "Metro Station" },
     { id: "metroLine", label: "Metro Line" },
     { id: "civicAnchor", label: "Civic" },
-    { id: "remove", label: "Remove" }
+    { id: "remove", label: "Remove" },
   ];
 
   const overlays: Array<{ id: Overlay; label: string }> = [
@@ -26,14 +26,21 @@
     { id: "crowding", label: "Crowding" },
     { id: "demand", label: "Demand" },
     { id: "lateness", label: "Lateness" },
-    { id: "growth", label: "Growth" }
+    { id: "growth", label: "Growth" },
   ];
 
   function pad2(value: number): string {
     return value.toString().padStart(2, "0");
   }
 
-  let { shell, activeTool, activeOverlay, onToggleControlTower, onSetTool, onSetOverlay }: Props = $props();
+  let {
+    shell,
+    activeTool,
+    activeOverlay,
+    onToggleControlTower,
+    onSetTool,
+    onSetOverlay,
+  }: Props = $props();
 </script>
 
 <aside
@@ -60,7 +67,7 @@
   <section class="panel-section">
     <h3 class="section-head"><span class="num">01</span> Build</h3>
     <div class="toolbar" aria-label="Tools">
-      {#each tools as tool, index}
+      {#each tools as tool, index (tool.id)}
         <button
           type="button"
           data-tool={tool.id}
@@ -79,13 +86,14 @@
   <section class="panel-section">
     <h3 class="section-head"><span class="num">02</span> Overlay</h3>
     <div class="overlays" aria-label="Overlays">
-      {#each overlays as overlay}
+      {#each overlays as overlay (overlay.id)}
         <button
           type="button"
           data-overlay={overlay.id}
           aria-pressed={activeOverlay === overlay.id}
           class:active={activeOverlay === overlay.id}
-          onclick={() => onSetOverlay(activeOverlay === overlay.id ? null : overlay.id)}
+          onclick={() =>
+            onSetOverlay(activeOverlay === overlay.id ? null : overlay.id)}
         >
           {overlay.label}
         </button>

@@ -3,13 +3,16 @@ import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { evaluateObjectives } from "../../src/simulation/objectives";
 
-function withMetrics(state: GameState, metrics: Partial<GameState["metrics"]>): GameState {
+function withMetrics(
+  state: GameState,
+  metrics: Partial<GameState["metrics"]>,
+): GameState {
   return {
     ...state,
     metrics: {
       ...state.metrics,
-      ...metrics
-    }
+      ...metrics,
+    },
   };
 }
 
@@ -23,7 +26,7 @@ describe("objectives", () => {
   it("loses when unserved ratio is too high", () => {
     const state = withMetrics(createInitialGameState(), {
       completedTrips: 10,
-      unservedTrips: 10
+      unservedTrips: 10,
     });
 
     const evaluated = evaluateObjectives(state);
@@ -35,7 +38,7 @@ describe("objectives", () => {
   it("loses when late ratio is too high after enough trips", () => {
     const state = withMetrics(createInitialGameState(), {
       completedTrips: 10,
-      lateTrips: 3
+      lateTrips: 3,
     });
 
     const evaluated = evaluateObjectives(state);
@@ -48,7 +51,7 @@ describe("objectives", () => {
     const state = withMetrics(createInitialGameState(), {
       completedTrips: 10,
       lateTrips: 3,
-      unservedTrips: 0
+      unservedTrips: 0,
     });
 
     const evaluated = evaluateObjectives(state);
@@ -60,7 +63,7 @@ describe("objectives", () => {
   it("loses when average wait is too high while citizens are waiting", () => {
     const state = withMetrics(createInitialGameState(), {
       waitingCitizenCount: 2,
-      averageWaitSeconds: 181
+      averageWaitSeconds: 181,
     });
 
     const evaluated = evaluateObjectives(state);
@@ -73,18 +76,27 @@ describe("objectives", () => {
     const state = withMetrics(
       {
         ...createInitialGameState(),
-        time: 1_000
+        time: 1_000,
       },
       {
         completedTrips: 20,
         lateTrips: 8,
         unservedTrips: 0,
         tripOutcomes: [
-          ...Array.from({ length: 6 }, (_, index) => ({ time: 100 + index, outcome: "late" as const })),
-          ...Array.from({ length: 2 }, (_, index) => ({ time: 990 + index, outcome: "late" as const })),
-          ...Array.from({ length: 12 }, (_, index) => ({ time: 980 + index, outcome: "arrived" as const }))
-        ]
-      }
+          ...Array.from({ length: 6 }, (_, index) => ({
+            time: 100 + index,
+            outcome: "late" as const,
+          })),
+          ...Array.from({ length: 2 }, (_, index) => ({
+            time: 990 + index,
+            outcome: "late" as const,
+          })),
+          ...Array.from({ length: 12 }, (_, index) => ({
+            time: 980 + index,
+            outcome: "arrived" as const,
+          })),
+        ],
+      },
     );
 
     const evaluated = evaluateObjectives(state);
@@ -96,14 +108,17 @@ describe("objectives", () => {
     const state = withMetrics(
       {
         ...createInitialGameState(),
-        time: 1_000
+        time: 1_000,
       },
       {
         completedTrips: 10,
         lateTrips: 10,
         unservedTrips: 0,
-        tripOutcomes: Array.from({ length: 10 }, (_, index) => ({ time: 100 + index, outcome: "late" as const }))
-      }
+        tripOutcomes: Array.from({ length: 10 }, (_, index) => ({
+          time: 100 + index,
+          outcome: "late" as const,
+        })),
+      },
     );
 
     const evaluated = evaluateObjectives(state);
@@ -115,7 +130,7 @@ describe("objectives", () => {
     const wonState = withMetrics(createInitialGameState(), { state: "won" });
     const lostState = withMetrics(createInitialGameState(), {
       state: "lost",
-      lossReason: "Existing loss"
+      lossReason: "Existing loss",
     });
 
     expect(evaluateObjectives(wonState)).toBe(wonState);
