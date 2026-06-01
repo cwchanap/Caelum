@@ -105,11 +105,10 @@ describe("UI tile actions", () => {
       buildingRotation: 90 as const,
     };
 
-    const result = handleTileClick(
-      createInitialGameState(),
-      ui,
-      { x: 0, y: 0 },
-    );
+    const result = handleTileClick(createInitialGameState(), ui, {
+      x: 0,
+      y: 0,
+    });
 
     expect(result.ui).toBe(ui);
     expect(result.state.buildings[0]).toMatchObject({

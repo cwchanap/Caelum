@@ -149,9 +149,7 @@ describe("building catalog and footprints", () => {
     const state = createInitialGameState();
     const unaffordable = { ...state, budget: 1_999 };
 
-    expect(placeBuilding(state, "largeHouse", { x: 27, y: 17 }, 0)).toBe(
-      state,
-    );
+    expect(placeBuilding(state, "largeHouse", { x: 27, y: 17 }, 0)).toBe(state);
     expect(placeBuilding(unaffordable, "busStop", { x: 0, y: 0 }, 0)).toBe(
       unaffordable,
     );
