@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GameState } from "../../src/domain/types";
+import { placeBuilding } from "../../src/simulation/buildings";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   addBusRoute,
@@ -7,6 +8,7 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
+  stopCoverageRadius,
   tickVehicles,
 } from "../../src/simulation/transit";
 
@@ -34,15 +36,52 @@ describe("transit network actions", () => {
     const nextState = addBusStop(state, { x: 7, y: 8 });
 
     expect(nextState.transit.stops).toEqual([
-      { id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] },
+      {
+        id: "stop-001",
+        kind: "busStop",
+        position: { x: 7, y: 8 },
+        queueCitizenIds: [],
+      },
     ]);
     expect(nextState.budget).toBe(118_000);
+  });
+
+  it("returns expanded coverage for bus terminals", () => {
+    expect(
+      stopCoverageRadius({
+        id: "stop-001",
+        kind: "busTerminal",
+        position: { x: 0, y: 0 },
+        queueCitizenIds: [],
+      }),
+    ).toBe(4);
+    expect(
+      stopCoverageRadius({
+        id: "stop-002",
+        kind: "busStop",
+        position: { x: 0, y: 0 },
+        queueCitizenIds: [],
+      }),
+    ).toBe(2);
   });
 
   it("returns the original state when adding a bus stop on an invalid residential tile", () => {
     const state = createInitialGameState();
 
     const nextState = addBusStop(state, { x: 2, y: 3 });
+
+    expect(nextState).toBe(state);
+  });
+
+  it("returns the original state when adding a metro station on a placed building footprint", () => {
+    const state = placeBuilding(
+      createInitialGameState(),
+      "largeHouse",
+      { x: 0, y: 0 },
+      0,
+    );
+
+    const nextState = addMetroStation(state, { x: 2, y: 1 });
 
     expect(nextState).toBe(state);
   });
@@ -72,6 +111,67 @@ describe("transit network actions", () => {
       segmentIndex: 0,
       progress: 0,
     });
+  });
+
+  it("allocates route, metro line, and vehicle ids after lower ids are removed", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = addBusRoute(state, ["stop-002", "stop-003"]);
+    state = assignVehicle(state, "bus", "route-001");
+    state = assignVehicle(state, "bus", "route-002");
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.filter(
+          (route) => route.id !== "route-001",
+        ),
+        vehicles: state.transit.vehicles.filter(
+          (vehicle) => vehicle.id !== "vehicle-001",
+        ),
+      },
+    };
+
+    const withRoute = addBusRoute(state, ["stop-001", "stop-003"]);
+    const withVehicle = assignVehicle(withRoute, "bus", "route-002");
+
+    expect(withRoute.transit.routes.map((route) => route.id)).toEqual([
+      "route-002",
+      "route-003",
+    ]);
+    expect(withVehicle.transit.vehicles.map((vehicle) => vehicle.id)).toEqual([
+      "vehicle-002",
+      "vehicle-003",
+    ]);
+
+    let metroState = createInitialGameState();
+    metroState = addMetroStation(metroState, { x: 7, y: 8 });
+    metroState = addMetroStation(metroState, { x: 15, y: 8 });
+    metroState = addMetroStation(metroState, { x: 22, y: 8 });
+    metroState = addMetroLine(metroState, ["station-001", "station-002"]);
+    metroState = addMetroLine(metroState, ["station-002", "station-003"]);
+    metroState = {
+      ...metroState,
+      transit: {
+        ...metroState.transit,
+        metroLines: metroState.transit.metroLines.filter(
+          (line) => line.id !== "metro-001",
+        ),
+      },
+    };
+
+    const withMetroLine = addMetroLine(metroState, [
+      "station-001",
+      "station-003",
+    ]);
+
+    expect(withMetroLine.transit.metroLines.map((line) => line.id)).toEqual([
+      "metro-002",
+      "metro-003",
+    ]);
   });
 
   it("keeps bus routes inactive when stop IDs do not include two distinct valid stops", () => {

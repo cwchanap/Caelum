@@ -1,10 +1,12 @@
-import { entityId } from "../domain/ids";
+import { nextEntityId } from "../domain/ids";
 import type {
   Citizen,
   GameState,
   Point,
   Route,
   MetroLine,
+  Stop,
+  StopKind,
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
@@ -45,6 +47,15 @@ function distinctValidStationCount(
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
+}
+
+function entityNumberFromId(prefix: string, id: string): number {
+  const match = new RegExp(`^${prefix}-(\\d+)$`).exec(id);
+  return match === null ? 1 : Number(match[1]);
+}
+
+export function stopCoverageRadius(stop: Stop): number {
+  return stop.kind === "busTerminal" ? 4 : 2;
 }
 
 function assignedLinePositions(
@@ -203,7 +214,11 @@ function disembarkVehicle(
   };
 }
 
-export function addBusStop(state: GameState, point: Point): GameState {
+export function addBusStop(
+  state: GameState,
+  point: Point,
+  kind: StopKind = "busStop",
+): GameState {
   if (
     !canAfford(state, COSTS.busStop) ||
     !isValidBusStopPlacement(state, point)
@@ -219,7 +234,11 @@ export function addBusStop(state: GameState, point: Point): GameState {
       stops: [
         ...state.transit.stops,
         {
-          id: entityId("stop", state.transit.stops.length + 1),
+          id: nextEntityId(
+            "stop",
+            state.transit.stops.map((stop) => stop.id),
+          ),
+          kind,
           position: clonePoint(point),
           queueCitizenIds: [],
         },
@@ -244,7 +263,10 @@ export function addMetroStation(state: GameState, point: Point): GameState {
       stations: [
         ...state.transit.stations,
         {
-          id: entityId("station", state.transit.stations.length + 1),
+          id: nextEntityId(
+            "station",
+            state.transit.stations.map((station) => station.id),
+          ),
           position: clonePoint(point),
           queueCitizenIds: [],
         },
@@ -254,7 +276,11 @@ export function addMetroStation(state: GameState, point: Point): GameState {
 }
 
 export function addBusRoute(state: GameState, stopIds: string[]): GameState {
-  const routeNumber = state.transit.routes.length + 1;
+  const routeId = nextEntityId(
+    "route",
+    state.transit.routes.map((route) => route.id),
+  );
+  const routeNumber = entityNumberFromId("route", routeId);
 
   return {
     ...state,
@@ -263,7 +289,7 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
       routes: [
         ...state.transit.routes,
         {
-          id: entityId("route", routeNumber),
+          id: routeId,
           name: `Bus ${routeNumber}`,
           color: "#e04f39",
           stopIds: [...stopIds],
@@ -279,7 +305,11 @@ export function addMetroLine(
   state: GameState,
   stationIds: string[],
 ): GameState {
-  const lineNumber = state.transit.metroLines.length + 1;
+  const lineId = nextEntityId(
+    "metro",
+    state.transit.metroLines.map((line) => line.id),
+  );
+  const lineNumber = entityNumberFromId("metro", lineId);
 
   return {
     ...state,
@@ -288,7 +318,7 @@ export function addMetroLine(
       metroLines: [
         ...state.transit.metroLines,
         {
-          id: entityId("metro", lineNumber),
+          id: lineId,
           name: `Metro ${lineNumber}`,
           color: "#2867b2",
           stationIds: [...stationIds],
@@ -312,7 +342,10 @@ export function assignVehicle(
   }
 
   const vehicle: Vehicle = {
-    id: entityId("vehicle", state.transit.vehicles.length + 1),
+    id: nextEntityId(
+      "vehicle",
+      state.transit.vehicles.map((vehicle) => vehicle.id),
+    ),
     mode,
     lineId,
     capacity: mode === "bus" ? 18 : 90,

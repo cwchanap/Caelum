@@ -98,8 +98,18 @@ describe("route planning", () => {
       ...createInitialGameState(),
       transit: {
         stops: [
-          { id: "stop-001", position: { x: 0, y: 0 }, queueCitizenIds: [] },
-          { id: "stop-002", position: { x: 13, y: 8 }, queueCitizenIds: [] },
+          {
+            id: "stop-001",
+            kind: "busStop" as const,
+            position: { x: 0, y: 0 },
+            queueCitizenIds: [],
+          },
+          {
+            id: "stop-002",
+            kind: "busStop" as const,
+            position: { x: 13, y: 8 },
+            queueCitizenIds: [],
+          },
         ],
         stations: [
           { id: "station-001", position: { x: 13, y: 8 }, queueCitizenIds: [] },
