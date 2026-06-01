@@ -36,6 +36,7 @@ export function createInitialGameState(): GameState {
     paused: true,
     budget: 120_000,
     map: createGrowingSuburbMap(),
+    buildings: [],
     scenario: createGrowingSuburbScenario(),
     transit: createEmptyTransitNetwork(),
     citizens: createStartingCitizens(),

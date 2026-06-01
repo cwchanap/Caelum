@@ -6,6 +6,14 @@ export type TileKind =
   | "civic"
   | "park";
 export type TransitMode = "walk" | "bus" | "metro";
+export type BuildingType =
+  | "busStop"
+  | "busTerminal"
+  | "metroStation"
+  | "smallHouse"
+  | "largeHouse";
+export type BuildingRotation = 0 | 90 | 180 | 270;
+export type StopKind = "busStop" | "busTerminal";
 export type CitizenStatus =
   | "idle"
   | "walking"
@@ -46,8 +54,18 @@ export interface GameMap {
   tiles: Tile[];
 }
 
+export interface PlacedBuilding {
+  id: string;
+  type: BuildingType;
+  origin: Point;
+  rotation: BuildingRotation;
+  occupiedTiles: Point[];
+  transitNodeId?: string;
+}
+
 export interface Stop {
   id: string;
+  kind?: StopKind;
   position: Point;
   queueCitizenIds: string[];
 }
@@ -163,6 +181,7 @@ export interface GameState {
   paused: boolean;
   budget: number;
   map: GameMap;
+  buildings: PlacedBuilding[];
   scenario: Scenario;
   transit: TransitNetwork;
   citizens: Citizen[];
