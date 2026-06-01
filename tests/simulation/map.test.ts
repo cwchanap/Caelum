@@ -35,7 +35,12 @@ describe("map helpers", () => {
           transit: {
             ...state.transit,
             stops: [
-              { id: "stop-001", position: { x: 7, y: 8 }, queueCitizenIds: [] },
+              {
+                id: "stop-001",
+                kind: "busStop",
+                position: { x: 7, y: 8 },
+                queueCitizenIds: [],
+              },
             ],
           },
         },

@@ -17,7 +17,6 @@
     { id: "busRoute", label: "Bus Route" },
     { id: "metroStation", label: "Metro Station" },
     { id: "metroLine", label: "Metro Line" },
-    { id: "civicAnchor", label: "Civic" },
     { id: "remove", label: "Remove" },
   ];
 

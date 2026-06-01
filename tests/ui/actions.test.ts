@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { getTile } from "../../src/simulation/map";
-import { applyDueGrowthWaves } from "../../src/simulation/map";
 import { createInitialGameState } from "../../src/simulation/gameState";
-import { addBusStop, addMetroStation } from "../../src/simulation/transit";
+import { placeBuilding } from "../../src/simulation/buildings";
+import {
+  addBusRoute,
+  addBusStop,
+  addMetroStation,
+  assignVehicle,
+} from "../../src/simulation/transit";
 import { handleTileClick } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
 
@@ -59,7 +63,12 @@ describe("UI tile actions", () => {
     );
 
     expect(removed.state.transit.stops).toEqual([
-      { id: "stop-002", position: { x: 15, y: 8 }, queueCitizenIds: [] },
+      {
+        id: "stop-002",
+        kind: "busStop",
+        position: { x: 15, y: 8 },
+        queueCitizenIds: [],
+      },
     ]);
     expect(removed.state.transit.routes).toEqual([]);
     expect(removed.state.transit.vehicles).toEqual([]);
@@ -89,57 +98,91 @@ describe("UI tile actions", () => {
     expect(removed.state.transit.vehicles).toEqual([]);
   });
 
-  it("removes a civic anchor at the clicked tile", () => {
-    const added = handleTileClick(
+  it("places a selected building and leaves the UI unchanged", () => {
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "busTerminal" as const,
+      buildingRotation: 90 as const,
+    };
+
+    const result = handleTileClick(
       createInitialGameState(),
-      { ...createUiState(), activeTool: "civicAnchor" as const },
+      ui,
       { x: 0, y: 0 },
+    );
+
+    expect(result.ui).toBe(ui);
+    expect(result.state.buildings[0]).toMatchObject({
+      id: "building-001",
+      type: "busTerminal",
+      rotation: 90,
+      transitNodeId: "stop-001",
+    });
+  });
+
+  it("removes a whole house building from any occupied tile without removing citizens", () => {
+    const added = placeBuilding(
+      createInitialGameState(),
+      "largeHouse",
+      { x: 0, y: 0 },
+      0,
     );
 
     const removed = handleTileClick(
-      added.state,
+      added,
       { ...createUiState(), activeTool: "remove" as const },
-      { x: 0, y: 0 },
+      { x: 2, y: 1 },
     );
 
-    expect(getTile(removed.state.map, { x: 0, y: 0 })?.kind).toBe("empty");
+    expect(removed.state.buildings).toEqual([]);
+    expect(removed.state.citizens).toHaveLength(46);
   });
 
-  it("limits civic anchors and marks them as growth destinations", () => {
+  it("removes a building transit node and dependent routes and vehicles", () => {
     let state = createInitialGameState();
-    state = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "civicAnchor" as const },
-      { x: 0, y: 0 },
-    ).state;
-    state = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "civicAnchor" as const },
-      { x: 1, y: 0 },
-    ).state;
-    state = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "civicAnchor" as const },
-      { x: 2, y: 0 },
-    ).state;
-    const overLimit = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "civicAnchor" as const },
-      { x: 3, y: 0 },
-    ).state;
+    state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
+    state = placeBuilding(state, "busStop", { x: 4, y: 0 }, 0);
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignVehicle(state, "bus", "route-001");
 
-    expect(getTile(state.map, { x: 0, y: 0 })?.districtId).toBe("anchor");
-    expect(overLimit).toBe(state);
-
-    const grown = applyDueGrowthWaves({ ...state, time: 250 });
-    const newCitizens = grown.citizens.slice(
-      createInitialGameState().citizens.length,
+    const removed = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "remove" as const },
+      { x: 2, y: 1 },
     );
 
-    expect(
-      newCitizens.some(
-        (citizen) => citizen.destination.x === 0 && citizen.destination.y === 0,
-      ),
-    ).toBe(true);
+    expect(removed.state.buildings).toHaveLength(1);
+    expect(removed.state.buildings[0]?.id).toBe("building-002");
+    expect(removed.state.transit.stops).toEqual([
+      {
+        id: "stop-002",
+        kind: "busStop",
+        position: { x: 4, y: 0 },
+        queueCitizenIds: [],
+      },
+    ]);
+    expect(removed.state.transit.routes).toEqual([]);
+    expect(removed.state.transit.vehicles).toEqual([]);
+  });
+
+  it("drafts bus routes from any occupied terminal tile", () => {
+    let state = createInitialGameState();
+    state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
+    state = placeBuilding(state, "busStop", { x: 4, y: 0 }, 0);
+
+    let result = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 2, y: 1 },
+    );
+    result = handleTileClick(result.state, result.ui, { x: 4, y: 0 });
+
+    expect(result.state.transit.routes[0]).toMatchObject({
+      id: "route-001",
+      stopIds: ["stop-001", "stop-002"],
+      vehicleIds: ["vehicle-001"],
+      active: true,
+    });
+    expect(result.ui.draftStopIds).toEqual([]);
   });
 });

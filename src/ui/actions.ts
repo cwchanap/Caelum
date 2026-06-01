@@ -1,5 +1,5 @@
-import type { GameState, Point } from "../domain/types";
-import { isValidCivicAnchorPlacement } from "../simulation/map";
+import type { GameState, Point, Stop } from "../domain/types";
+import { placeBuilding } from "../simulation/buildings";
 import {
   addBusRoute,
   addBusStop,
@@ -9,8 +9,6 @@ import {
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
 
-const CIVIC_ANCHOR_COST = 12_000;
-const CIVIC_ANCHOR_LIMIT = 3;
 const BUS_VEHICLE_COST = 8_000;
 const METRO_VEHICLE_COST = 50_000;
 
@@ -18,44 +16,58 @@ function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
 }
 
-function addCivicAnchor(state: GameState, point: Point): GameState {
-  const placedAnchorCount = state.map.tiles.filter(
-    (tile) => tile.kind === "civic" && tile.districtId === "anchor",
-  ).length;
+function resolveStopAtTile(state: GameState, point: Point): Stop | undefined {
+  const exactStop = state.transit.stops.find((candidate) =>
+    samePoint(candidate.position, point),
+  );
 
-  if (
-    placedAnchorCount >= CIVIC_ANCHOR_LIMIT ||
-    state.budget < CIVIC_ANCHOR_COST ||
-    !isValidCivicAnchorPlacement(state, point)
-  ) {
-    return state;
+  if (exactStop !== undefined) {
+    return exactStop;
   }
 
-  return {
-    ...state,
-    budget: state.budget - CIVIC_ANCHOR_COST,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        samePoint(tile, point)
-          ? { ...tile, kind: "civic", districtId: "anchor" }
-          : tile,
-      ),
-    },
-  };
+  const building = state.buildings.find(
+    (candidate) =>
+      (candidate.type === "busStop" || candidate.type === "busTerminal") &&
+      candidate.transitNodeId !== undefined &&
+      candidate.occupiedTiles.some((tile) => samePoint(tile, point)),
+  );
+
+  return building?.transitNodeId === undefined
+    ? undefined
+    : state.transit.stops.find((stop) => stop.id === building.transitNodeId);
 }
 
 function removeAtTile(state: GameState, point: Point): GameState {
-  const removedStopIds = new Set(
+  const removedBuilding = state.buildings.find((building) =>
+    building.occupiedTiles.some((tile) => samePoint(tile, point)),
+  );
+  const removedStopIds = new Set<string>();
+  const removedStationIds = new Set<string>();
+
+  if (
+    removedBuilding?.transitNodeId !== undefined &&
+    (removedBuilding.type === "busStop" ||
+      removedBuilding.type === "busTerminal")
+  ) {
+    removedStopIds.add(removedBuilding.transitNodeId);
+  }
+
+  if (
+    removedBuilding?.transitNodeId !== undefined &&
+    removedBuilding.type === "metroStation"
+  ) {
+    removedStationIds.add(removedBuilding.transitNodeId);
+  }
+
+  if (removedBuilding === undefined) {
     state.transit.stops
       .filter((stop) => samePoint(stop.position, point))
-      .map((stop) => stop.id),
-  );
-  const removedStationIds = new Set(
+      .forEach((stop) => removedStopIds.add(stop.id));
     state.transit.stations
       .filter((station) => samePoint(station.position, point))
-      .map((station) => station.id),
-  );
+      .forEach((station) => removedStationIds.add(station.id));
+  }
+
   const removedRouteIds = new Set(
     state.transit.routes
       .filter((route) =>
@@ -72,35 +84,23 @@ function removeAtTile(state: GameState, point: Point): GameState {
       )
       .map((metroLine) => metroLine.id),
   );
-  const removesCivicAnchor = state.map.tiles.some(
-    (tile) =>
-      samePoint(tile, point) &&
-      tile.kind === "civic" &&
-      tile.districtId === "anchor",
-  );
 
   if (
+    removedBuilding === undefined &&
     removedStopIds.size === 0 &&
-    removedStationIds.size === 0 &&
-    !removesCivicAnchor
+    removedStationIds.size === 0
   ) {
     return state;
   }
 
   return {
     ...state,
-    map: removesCivicAnchor
-      ? {
-          ...state.map,
-          tiles: state.map.tiles.map((tile) =>
-            samePoint(tile, point) &&
-            tile.kind === "civic" &&
-            tile.districtId === "anchor"
-              ? { ...tile, kind: "empty", districtId: undefined }
-              : tile,
+    buildings:
+      removedBuilding === undefined
+        ? state.buildings
+        : state.buildings.filter(
+            (building) => building.id !== removedBuilding.id,
           ),
-        }
-      : state.map,
     transit: {
       ...state.transit,
       stops: state.transit.stops.filter((stop) => !removedStopIds.has(stop.id)),
@@ -127,6 +127,18 @@ export function handleTileClick(
   ui: UiState,
   point: Point,
 ): { state: GameState; ui: UiState } {
+  if (ui.selectedBuilding !== null) {
+    return {
+      state: placeBuilding(
+        state,
+        ui.selectedBuilding,
+        point,
+        ui.buildingRotation,
+      ),
+      ui,
+    };
+  }
+
   if (ui.activeTool === "busStop") {
     return { state: addBusStop(state, point), ui };
   }
@@ -135,14 +147,8 @@ export function handleTileClick(
     return { state: addMetroStation(state, point), ui };
   }
 
-  if (ui.activeTool === "civicAnchor") {
-    return { state: addCivicAnchor(state, point), ui };
-  }
-
   if (ui.activeTool === "busRoute") {
-    const stop = state.transit.stops.find((candidate) =>
-      samePoint(candidate.position, point),
-    );
+    const stop = resolveStopAtTile(state, point);
 
     if (stop === undefined) {
       return { state, ui };

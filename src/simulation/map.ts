@@ -9,6 +9,14 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
+function isBuildingOccupied(state: GameState, point: Point): boolean {
+  return state.buildings.some((building) =>
+    building.occupiedTiles.some((occupiedTile) =>
+      samePoint(occupiedTile, point),
+    ),
+  );
+}
+
 function destinationTiles(map: GameMap): Tile[] {
   return map.tiles
     .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
@@ -39,9 +47,9 @@ export function isValidBusStopPlacement(
   point: Point,
 ): boolean {
   const tile = getTile(state.map, point);
-  const occupied = state.transit.stops.some((stop) =>
-    samePoint(stop.position, point),
-  );
+  const occupied =
+    isBuildingOccupied(state, point) ||
+    state.transit.stops.some((stop) => samePoint(stop.position, point));
 
   return tile?.kind === "road" && !occupied;
 }
@@ -51,9 +59,11 @@ export function isValidMetroStationPlacement(
   point: Point,
 ): boolean {
   const tile = getTile(state.map, point);
-  const occupied = state.transit.stations.some((station) =>
-    samePoint(station.position, point),
-  );
+  const occupied =
+    isBuildingOccupied(state, point) ||
+    state.transit.stations.some((station) =>
+      samePoint(station.position, point),
+    );
 
   return (tile?.kind === "road" || tile?.kind === "empty") && !occupied;
 }

@@ -145,6 +145,9 @@ describe("App shell bootstrap", () => {
       within(controlTower).getByRole("button", { name: "Bus Route" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(
+      within(controlTower).queryByRole("button", { name: "Civic" }),
+    ).toBeNull();
+    expect(
       within(controlTower).getByRole("button", { name: "Growth" }),
     ).toHaveAttribute("data-overlay", "growth");
     expect(

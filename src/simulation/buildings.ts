@@ -1,8 +1,14 @@
+import { entityId, nextEntityId } from "../domain/ids";
 import type {
   BuildingRotation,
   BuildingType,
+  Citizen,
+  GameState,
+  PlacedBuilding,
   Point,
+  Tile,
 } from "../domain/types";
+import { getTile } from "./map";
 
 export type BuildingEffect =
   | "busStop"
@@ -90,4 +96,165 @@ export function getBuildingFootprint(
   }
 
   return points;
+}
+
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function clonePoint(point: Point): Point {
+  return { x: point.x, y: point.y };
+}
+
+function destinationTiles(state: GameState): Tile[] {
+  return state.map.tiles
+    .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function createHousingCitizens(
+  state: GameState,
+  occupiedTiles: Point[],
+  citizenCount: number,
+): Citizen[] {
+  const destinations = destinationTiles(state);
+  const fallbackHome = occupiedTiles[0] ?? { x: 0, y: 0 };
+
+  return Array.from({ length: citizenCount }, (_, index) => {
+    const home = occupiedTiles[index % occupiedTiles.length] ?? fallbackHome;
+    const destination = destinations[index % destinations.length] ?? home;
+
+    return {
+      id: entityId("citizen", state.citizens.length + index + 1),
+      home: clonePoint(home),
+      destination: clonePoint(destination),
+      position: clonePoint(home),
+      status: "idle",
+      patienceRemaining: 240,
+      deadline: state.time + 900,
+      routePlan: null,
+      currentLegIndex: 0,
+    };
+  });
+}
+
+export function canPlaceBuilding(
+  state: GameState,
+  type: BuildingType,
+  origin: Point,
+  rotation: BuildingRotation,
+): boolean {
+  const footprint = getBuildingFootprint(type, origin, rotation);
+
+  return footprint.every((point) => {
+    const tile = getTile(state.map, point);
+    const buildingOccupied = state.buildings.some((building) =>
+      building.occupiedTiles.some((occupiedTile) =>
+        samePoint(occupiedTile, point),
+      ),
+    );
+    const stopOccupied = state.transit.stops.some((stop) =>
+      samePoint(stop.position, point),
+    );
+    const stationOccupied = state.transit.stations.some((station) =>
+      samePoint(station.position, point),
+    );
+
+    return (
+      tile?.kind === "empty" &&
+      !buildingOccupied &&
+      !stopOccupied &&
+      !stationOccupied
+    );
+  });
+}
+
+export function placeBuilding(
+  state: GameState,
+  type: BuildingType,
+  origin: Point,
+  rotation: BuildingRotation,
+): GameState {
+  const definition = BUILDING_CATALOG[type];
+
+  if (
+    state.budget < definition.cost ||
+    !canPlaceBuilding(state, type, origin, rotation)
+  ) {
+    return state;
+  }
+
+  const occupiedTiles = getBuildingFootprint(type, origin, rotation);
+  const buildingId = nextEntityId(
+    "building",
+    state.buildings.map((building) => building.id),
+  );
+  let transit = state.transit;
+  let citizens = state.citizens;
+  let transitNodeId: string | undefined;
+
+  if (definition.effect === "busStop" || definition.effect === "busTerminal") {
+    transitNodeId = nextEntityId(
+      "stop",
+      state.transit.stops.map((stop) => stop.id),
+    );
+    transit = {
+      ...transit,
+      stops: [
+        ...transit.stops,
+        {
+          id: transitNodeId,
+          kind: definition.effect,
+          position: clonePoint(origin),
+          queueCitizenIds: [],
+        },
+      ],
+    };
+  }
+
+  if (definition.effect === "metroStation") {
+    transitNodeId = nextEntityId(
+      "station",
+      state.transit.stations.map((station) => station.id),
+    );
+    transit = {
+      ...transit,
+      stations: [
+        ...transit.stations,
+        {
+          id: transitNodeId,
+          position: clonePoint(origin),
+          queueCitizenIds: [],
+        },
+      ],
+    };
+  }
+
+  if (definition.effect === "housing") {
+    citizens = [
+      ...citizens,
+      ...createHousingCitizens(
+        state,
+        occupiedTiles,
+        definition.citizenCount ?? 0,
+      ),
+    ];
+  }
+
+  const building: PlacedBuilding = {
+    id: buildingId,
+    type,
+    origin: clonePoint(origin),
+    rotation,
+    occupiedTiles: occupiedTiles.map(clonePoint),
+    ...(transitNodeId === undefined ? {} : { transitNodeId }),
+  };
+
+  return {
+    ...state,
+    budget: state.budget - definition.cost,
+    buildings: [...state.buildings, building],
+    transit,
+    citizens,
+  };
 }
