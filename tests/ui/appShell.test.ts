@@ -242,21 +242,77 @@ describe("App shell bootstrap", () => {
     expect(selectedSpeed).toHaveClass("active");
   });
 
+  it("wires Build and Route Planning menus separately", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    expect(
+      screen.getByRole("button", {
+        name: /Rotate building, current rotation 0 degrees/i,
+      }),
+    ).toBeDisabled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Large House" }));
+    expect(runtime.setBuilding).toHaveBeenCalledWith("largeHouse");
+    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
+      "data-building",
+      "largeHouse",
+    );
+    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("LARGE HOUSE 0")).toBeVisible();
+
+    expect(
+      screen.getByRole("button", {
+        name: /Rotate building, current rotation 0 degrees/i,
+      }),
+    ).toBeEnabled();
+
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: /Rotate building, current rotation 0 degrees/i,
+      }),
+    );
+    expect(runtime.rotateBuilding).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", {
+        name: /Rotate building, current rotation 90 degrees/i,
+      }),
+    ).toBeEnabled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Bus Route" }));
+    expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
+    expect(screen.getByRole("button", { name: "Bus Route" })).toHaveAttribute(
+      "data-tool",
+      "busRoute",
+    );
+    expect(screen.getByRole("button", { name: "Bus Route" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("wires tool, overlay, and close interactions with exact runtime ids", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Metro Station" }),
+    await fireEvent.click(screen.getByRole("button", { name: "Metro Line" }));
+    expect(runtime.setTool).toHaveBeenCalledWith("metroLine");
+    expect(screen.getByRole("button", { name: "Metro Line" })).toHaveAttribute(
+      "data-tool",
+      "metroLine",
     );
-    expect(runtime.setTool).toHaveBeenCalledWith("metroStation");
-    expect(
-      screen.getByRole("button", { name: "Metro Station" }),
-    ).toHaveAttribute("data-tool", "metroStation");
-    expect(
-      screen.getByRole("button", { name: "Metro Station" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("METROSTATION")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Metro Line" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("METROLINE")).toBeVisible();
 
     await fireEvent.click(screen.getByRole("button", { name: "Coverage" }));
     expect(runtime.setOverlay).toHaveBeenCalledWith("coverage");

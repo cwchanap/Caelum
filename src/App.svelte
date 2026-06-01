@@ -3,7 +3,7 @@
   import ControlTower from "./components/ControlTower.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
-  import type { Overlay, Tool } from "./domain/types";
+  import type { BuildingType, Overlay, Tool } from "./domain/types";
   import type { RuntimeController, RuntimeSnapshot } from "./runtime/types";
 
   interface Props {
@@ -33,6 +33,14 @@
 
   function handleSetTool(tool: Tool): void {
     setSnapshot(runtime.setTool(tool));
+  }
+
+  function handleSetBuilding(building: BuildingType): void {
+    setSnapshot(runtime.setBuilding(building));
+  }
+
+  function handleRotateBuilding(): void {
+    setSnapshot(runtime.rotateBuilding());
   }
 
   function handleSetOverlay(overlay: Overlay | null): void {
@@ -115,8 +123,12 @@
         shell={snapshot.shell.controlTower}
         activeTool={snapshot.ui.activeTool}
         activeOverlay={snapshot.ui.activeOverlay}
+        selectedBuilding={snapshot.ui.selectedBuilding}
+        buildingRotation={snapshot.ui.buildingRotation}
         onToggleControlTower={handleToggleControlTower}
         onSetTool={handleSetTool}
+        onSetBuilding={handleSetBuilding}
+        onRotateBuilding={handleRotateBuilding}
         onSetOverlay={handleSetOverlay}
       />
     {/if}
