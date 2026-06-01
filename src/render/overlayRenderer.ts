@@ -1,7 +1,15 @@
 import type { GameState, Point } from "../domain/types";
+import {
+  BUILDING_CATALOG,
+  canPlaceBuilding,
+  getBuildingFootprint,
+} from "../simulation/buildings";
+import { stopCoverageRadius } from "../simulation/transit";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
+
+const previewStrokeInset = 2;
 
 function fillTile(ctx: CanvasRenderingContext2D, point: Point): void {
   ctx.fillRect(point.x * tileSize, point.y * tileSize, tileSize, tileSize);
@@ -18,6 +26,50 @@ function fillCoverageArea(
     tileSize * (radius * 2 + 1),
     tileSize * (radius * 2 + 1),
   );
+}
+
+function strokeTile(ctx: CanvasRenderingContext2D, point: Point): void {
+  ctx.strokeRect(
+    point.x * tileSize + previewStrokeInset,
+    point.y * tileSize + previewStrokeInset,
+    tileSize - previewStrokeInset * 2,
+    tileSize - previewStrokeInset * 2,
+  );
+}
+
+function renderBuildingPreview(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  if (ui.hoverTile === null || ui.selectedBuilding === null) {
+    return;
+  }
+
+  const validPlacement =
+    state.budget >= BUILDING_CATALOG[ui.selectedBuilding].cost &&
+    canPlaceBuilding(
+      state,
+      ui.selectedBuilding,
+      ui.hoverTile,
+      ui.buildingRotation,
+    );
+  const footprint = getBuildingFootprint(
+    ui.selectedBuilding,
+    ui.hoverTile,
+    ui.buildingRotation,
+  );
+
+  ctx.fillStyle = validPlacement ? colors.previewValid : colors.previewInvalid;
+  ctx.strokeStyle = validPlacement
+    ? colors.previewValidStroke
+    : colors.previewInvalidStroke;
+  ctx.lineWidth = 2;
+
+  for (const point of footprint) {
+    fillTile(ctx, point);
+    strokeTile(ctx, point);
+  }
 }
 
 function isInMap(state: GameState, point: Point): boolean {
@@ -38,7 +90,7 @@ export function renderOverlays(
     ctx.fillStyle = colors.coverage;
 
     for (const stop of state.transit.stops) {
-      fillCoverageArea(ctx, stop.position, 2);
+      fillCoverageArea(ctx, stop.position, stopCoverageRadius(stop));
     }
 
     for (const station of state.transit.stations) {
@@ -92,6 +144,11 @@ export function renderOverlays(
         }
       }
     }
+  }
+
+  if (ui.hoverTile !== null && ui.selectedBuilding !== null) {
+    renderBuildingPreview(ctx, state, ui);
+    return;
   }
 
   if (ui.hoverTile !== null && isInMap(state, ui.hoverTile)) {

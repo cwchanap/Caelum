@@ -1,5 +1,6 @@
 import type { GameMap, GameState, Point } from "../domain/types";
 import type { UiState } from "../ui/uiState";
+import { renderBuildings } from "./buildingRenderer";
 import { renderCitizens } from "./citizenRenderer";
 import { renderMap } from "./mapRenderer";
 import { renderOverlays } from "./overlayRenderer";
@@ -109,6 +110,7 @@ export function renderGame(
   ctx.translate(transform.offsetX, transform.offsetY);
   ctx.scale(transform.scale, transform.scale);
   renderMap(ctx, state);
+  renderBuildings(ctx, state);
   renderOverlays(ctx, state, ui);
   renderTransit(ctx, state);
   renderCitizens(ctx, state);
