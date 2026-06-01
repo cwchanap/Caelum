@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
-import type { GameState, Overlay, Point, Tool } from "../../src/domain/types";
+import type {
+  BuildingType,
+  GameState,
+  Overlay,
+  Point,
+  Tool,
+} from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import type {
@@ -34,6 +40,7 @@ function createRuntimeHarness(
     ui = createUiState();
     return publish();
   });
+  const rotations = [0, 90, 180, 270] as const;
 
   const runtime: RuntimeController & { resetUi: typeof resetUi } = {
     getSnapshot,
@@ -54,8 +61,30 @@ function createRuntimeHarness(
       ui = {
         ...ui,
         activeTool: tool,
+        selectedBuilding: null,
+        buildingRotation: 0,
         draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
         draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
+      };
+      return publish();
+    }),
+    setBuilding: vi.fn((building: BuildingType) => {
+      ui = {
+        ...ui,
+        activeTool: "inspect",
+        selectedId: null,
+        selectedBuilding: building,
+        buildingRotation: 0,
+        draftStopIds: [],
+        draftStationIds: [],
+      };
+      return publish();
+    }),
+    rotateBuilding: vi.fn(() => {
+      const currentIndex = rotations.indexOf(ui.buildingRotation);
+      ui = {
+        ...ui,
+        buildingRotation: rotations[(currentIndex + 1) % rotations.length],
       };
       return publish();
     }),

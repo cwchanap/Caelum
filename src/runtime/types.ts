@@ -1,4 +1,10 @@
-import type { GameState, Overlay, Point, Tool } from "../domain/types";
+import type {
+  BuildingType,
+  GameState,
+  Overlay,
+  Point,
+  Tool,
+} from "../domain/types";
 import type { UiState } from "../ui/uiState";
 
 export interface ShellTopbarState {
@@ -45,6 +51,8 @@ export interface RuntimeController {
   reset: () => RuntimeSnapshot;
   resetUi: () => RuntimeSnapshot;
   setTool: (tool: Tool) => RuntimeSnapshot;
+  setBuilding: (building: BuildingType) => RuntimeSnapshot;
+  rotateBuilding: () => RuntimeSnapshot;
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeSnapshot;
   setSpeed: (speed: GameState["speed"]) => RuntimeSnapshot;

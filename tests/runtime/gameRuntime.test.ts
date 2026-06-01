@@ -159,6 +159,37 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.activeTool).toBe("inspect");
   });
 
+  it("selects buildings separately from route tools and rotates them", () => {
+    const runtime = createGameRuntime();
+
+    runtime.setBuilding("busTerminal");
+    runtime.rotateBuilding();
+    runtime.rotateBuilding();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.activeTool).toBe("inspect");
+    expect(snapshot.ui.selectedBuilding).toBe("busTerminal");
+    expect(snapshot.ui.buildingRotation).toBe(180);
+    expect(snapshot.shell.controlTower.activeTool).toBe("BUS TERMINAL 180");
+  });
+
+  it.each(["busRoute", "remove", "inspect"] as const)(
+    "clears building selection when switching to %s",
+    (tool) => {
+      const runtime = createGameRuntime();
+
+      runtime.setBuilding("largeHouse");
+      runtime.rotateBuilding();
+      runtime.setTool(tool);
+
+      expect(runtime.getSnapshot().ui).toMatchObject({
+        activeTool: tool,
+        selectedBuilding: null,
+        buildingRotation: 0,
+      });
+    },
+  );
+
   it("handles overlay changes", () => {
     const runtime = createGameRuntime();
 

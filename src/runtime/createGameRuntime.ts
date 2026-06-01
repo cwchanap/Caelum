@@ -1,4 +1,4 @@
-import type { Point, Tool } from "../domain/types";
+import type { BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import { createInitialGameState } from "../simulation/gameState";
 import { tickSimulation } from "../simulation/simulation";
@@ -15,12 +15,31 @@ function samePoint(left: Point | null, right: Point | null): boolean {
   return left?.x === right?.x && left?.y === right?.y;
 }
 
+const rotations = [0, 90, 180, 270] as const;
+
 function nextToolUiState(activeTool: Tool, current = createUiState()) {
   return {
     ...current,
     activeTool,
+    selectedBuilding: null,
+    buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
     draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
+  };
+}
+
+function nextBuildingUiState(
+  selectedBuilding: BuildingType,
+  current = createUiState(),
+) {
+  return {
+    ...current,
+    activeTool: "inspect" as const,
+    selectedId: null,
+    selectedBuilding,
+    buildingRotation: 0 as const,
+    draftStopIds: [],
+    draftStationIds: [],
   };
 }
 
@@ -253,6 +272,17 @@ export function createGameRuntime(): RuntimeController {
     },
     setTool(tool) {
       return commit(state, nextToolUiState(tool, ui));
+    },
+    setBuilding(building) {
+      return commit(state, nextBuildingUiState(building, ui));
+    },
+    rotateBuilding() {
+      const currentIndex = rotations.indexOf(ui.buildingRotation);
+
+      return commit(state, {
+        ...ui,
+        buildingRotation: rotations[(currentIndex + 1) % rotations.length],
+      });
     },
     setOverlay(overlay) {
       return commit(

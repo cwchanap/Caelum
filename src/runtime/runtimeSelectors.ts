@@ -1,4 +1,5 @@
 import type { GameState } from "../domain/types";
+import { BUILDING_CATALOG } from "../simulation/buildings";
 import type { UiState } from "../ui/uiState";
 import type { ShellState } from "./types";
 
@@ -24,6 +25,14 @@ export function formatObjective(state: GameState): string {
   )}%, average wait under ${state.scenario.objectives.maxAverageWait}s.`;
 }
 
+export function formatActiveTool(ui: UiState): string {
+  if (ui.selectedBuilding !== null) {
+    return `${BUILDING_CATALOG[ui.selectedBuilding].label.toUpperCase()} ${ui.buildingRotation}`;
+  }
+
+  return ui.activeTool.toUpperCase();
+}
+
 export function selectShellState(state: GameState, ui: UiState): ShellState {
   return {
     topbar: {
@@ -44,7 +53,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
         state.scenario.growthWaves.find((wave) => !wave.applied)?.message ??
         "All growth waves resolved.",
       selectedId: ui.selectedId ?? "—",
-      activeTool: ui.activeTool.toUpperCase(),
+      activeTool: formatActiveTool(ui),
       controlTowerOpen: ui.controlTowerOpen,
     },
   };
