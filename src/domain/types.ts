@@ -65,7 +65,7 @@ export interface PlacedBuilding {
 
 export interface Stop {
   id: string;
-  kind?: StopKind;
+  kind: StopKind;
   position: Point;
   queueCitizenIds: string[];
 }
