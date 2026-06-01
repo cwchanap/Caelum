@@ -103,6 +103,10 @@ export function applyDueGrowthWaves(state: GameState): GameState {
 
   for (const wave of dueWaves) {
     for (const tile of wave.tiles) {
+      if (isBuildingOccupied(state, { x: tile.x, y: tile.y })) {
+        continue;
+      }
+
       for (let index = 0; index < tile.createsCitizens; index += 1) {
         const home = { x: tile.x, y: tile.y };
         const destination =

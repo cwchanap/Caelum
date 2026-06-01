@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
+import { placeBuilding } from "../../src/simulation/buildings";
 import {
   applyDueGrowthWaves,
   getTile,
@@ -111,5 +112,32 @@ describe("map helpers", () => {
 
     const reappliedState = applyDueGrowthWaves(withTime(grownState, 300));
     expect(reappliedState.citizens).toHaveLength(60);
+  });
+
+  it("skips citizen creation on building-occupied wave tiles", () => {
+    const state = withTime(createInitialGameState(), 250);
+
+    const withBuilding = placeBuilding(state, "smallHouse", { x: 8, y: 2 }, 0);
+
+    const grownState = applyDueGrowthWaves(withBuilding);
+
+    expect(getTile(grownState.map, { x: 8, y: 2 })?.kind).toBe("residential");
+
+    // smallHouse (2x1) occupies {8,2} and {9,2}; only {10,2} is free
+    const citizensOnOccupiedTiles = grownState.citizens.filter(
+      (c) =>
+        (c.home.x === 8 && c.home.y === 2) ||
+        (c.home.x === 9 && c.home.y === 2),
+    );
+    // Building creates 4 citizens across 2 tiles (2 per tile); growth wave skips both
+    expect(citizensOnOccupiedTiles).toHaveLength(4);
+
+    const citizensOnFreeTile = grownState.citizens.filter(
+      (c) => c.home.x === 10 && c.home.y === 2,
+    );
+    expect(citizensOnFreeTile).toHaveLength(8);
+
+    // Total: 36 initial + 4 building + 8 growth wave = 48
+    expect(grownState.citizens).toHaveLength(48);
   });
 });
