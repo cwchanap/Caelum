@@ -7,7 +7,7 @@ import {
   addMetroStation,
   assignVehicle,
 } from "../../src/simulation/transit";
-import { handleTileClick } from "../../src/ui/actions";
+import { handleTileClick, resolveNodeAtTile } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
 
 describe("UI tile actions", () => {
@@ -194,5 +194,96 @@ describe("UI tile actions", () => {
       active: true,
     });
     expect(result.ui.draftStopIds).toEqual([]);
+  });
+});
+
+describe("resolveNodeAtTile", () => {
+  it("resolves a bus stop at its exact tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    expect(state.transit.stops).toHaveLength(1);
+
+    const resolved = resolveNodeAtTile(state, { x: 7, y: 2 });
+    expect(resolved?.kind).toBe("stop");
+    expect(resolved?.node.id).toBe(state.transit.stops[0].id);
+  });
+
+  it("resolves a metro station at its exact tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addMetroStation(state, { x: 22, y: 2 });
+    expect(state.transit.stations).toHaveLength(1);
+
+    const resolved = resolveNodeAtTile(state, { x: 22, y: 2 });
+    expect(resolved?.kind).toBe("station");
+    expect(resolved?.node.id).toBe(state.transit.stations[0].id);
+  });
+
+  it("resolves a building-backed transit node via a non-origin occupied tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    // busTerminal has a 3x2 footprint, so it has non-origin occupied tiles.
+    state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
+
+    expect(state.buildings).toHaveLength(1);
+    const building = state.buildings[0];
+    expect(building.transitNodeId).toBeDefined();
+
+    // The stop is placed at the building origin, so its position is the node's
+    // exact tile. Resolve via a footprint tile that is NOT that exact position
+    // to exercise the building-backed branch rather than the exact-position match.
+    const nodePosition = state.transit.stops.find(
+      (stop) => stop.id === building.transitNodeId,
+    )!.position;
+    const footprintTile = building.occupiedTiles.find(
+      (tile) => !(tile.x === nodePosition.x && tile.y === nodePosition.y),
+    )!;
+    expect(footprintTile).toBeDefined();
+
+    const resolved = resolveNodeAtTile(state, footprintTile);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.kind).toBe("stop");
+    expect(resolved!.node.id).toBe(building.transitNodeId);
+  });
+
+  it("returns null on an empty tile", () => {
+    const state = createInitialGameState();
+    expect(resolveNodeAtTile(state, { x: 0, y: 0 })).toBeNull();
+  });
+});
+
+describe("removal strips routes from surviving platforms", () => {
+  it("removes a deleted route's id from a shared terminal's platforms", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal"); // survives
+    state = addBusStop(state, { x: 22, y: 2 }); // will be removed
+    expect(state.transit.stops).toHaveLength(2);
+
+    const terminalId = state.transit.stops.find(
+      (s) => s.kind === "busTerminal",
+    )!.id;
+    const stopIds = state.transit.stops.map((s) => s.id);
+    state = addBusRoute(state, stopIds);
+    const routeId = state.transit.routes.at(-1)!.id;
+    expect(state.transit.routes).toHaveLength(1);
+
+    const terminalBefore = state.transit.stops.find((s) => s.id === terminalId)!;
+    expect(
+      terminalBefore.platforms.some((p) => p.routeIds.includes(routeId)),
+    ).toBe(true);
+
+    const ui = { ...createUiState(), activeTool: "remove" as const };
+    const result = handleTileClick(state, ui, { x: 22, y: 2 });
+
+    const terminal = result.state.transit.stops.find(
+      (s) => s.id === terminalId,
+    )!;
+    const stillHolding = terminal.platforms.some((p) =>
+      p.routeIds.includes(routeId),
+    );
+    expect(result.state.transit.routes).toHaveLength(0); // route deleted
+    expect(stillHolding).toBe(false); // and scrubbed from the surviving terminal
   });
 });
