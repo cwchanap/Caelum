@@ -1,4 +1,4 @@
-import type { GameState, Point, Stop } from "../domain/types";
+import type { GameState, Point, Station, Stop } from "../domain/types";
 import { placeBuilding } from "../simulation/buildings";
 import {
   addBusRoute,
@@ -35,6 +35,70 @@ function resolveStopAtTile(state: GameState, point: Point): Stop | undefined {
   return building?.transitNodeId === undefined
     ? undefined
     : state.transit.stops.find((stop) => stop.id === building.transitNodeId);
+}
+
+export type ResolvedNode =
+  | { kind: "stop"; node: Stop }
+  | { kind: "station"; node: Station };
+
+function resolveStationAtTile(
+  state: GameState,
+  point: Point,
+): Station | undefined {
+  const exactStation = state.transit.stations.find((candidate) =>
+    samePoint(candidate.position, point),
+  );
+  if (exactStation !== undefined) {
+    return exactStation;
+  }
+
+  const building = state.buildings.find(
+    (candidate) =>
+      candidate.type === "metroStation" &&
+      candidate.transitNodeId !== undefined &&
+      candidate.occupiedTiles.some((tile) => samePoint(tile, point)),
+  );
+
+  return building?.transitNodeId === undefined
+    ? undefined
+    : state.transit.stations.find(
+        (station) => station.id === building.transitNodeId,
+      );
+}
+
+export function resolveNodeAtTile(
+  state: GameState,
+  point: Point,
+): ResolvedNode | null {
+  const stop = resolveStopAtTile(state, point);
+  if (stop !== undefined) {
+    return { kind: "stop", node: stop };
+  }
+
+  const station = resolveStationAtTile(state, point);
+  if (station !== undefined) {
+    return { kind: "station", node: station };
+  }
+
+  return null;
+}
+
+function stripRoutesFromPlatforms<
+  T extends { platforms: { routeIds: string[] }[] },
+>(nodes: T[], removedIds: Set<string>): T[] {
+  if (removedIds.size === 0) {
+    return nodes;
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    platforms: node.platforms.map((platform) => {
+      const filtered = platform.routeIds.filter((id) => !removedIds.has(id));
+      return filtered.length === platform.routeIds.length
+        ? platform
+        : { ...platform, routeIds: filtered };
+    }),
+  }));
 }
 
 function removeAtTile(state: GameState, point: Point): GameState {
@@ -103,9 +167,15 @@ function removeAtTile(state: GameState, point: Point): GameState {
           ),
     transit: {
       ...state.transit,
-      stops: state.transit.stops.filter((stop) => !removedStopIds.has(stop.id)),
-      stations: state.transit.stations.filter(
-        (station) => !removedStationIds.has(station.id),
+      stops: stripRoutesFromPlatforms(
+        state.transit.stops.filter((stop) => !removedStopIds.has(stop.id)),
+        removedRouteIds,
+      ),
+      stations: stripRoutesFromPlatforms(
+        state.transit.stations.filter(
+          (station) => !removedStationIds.has(station.id),
+        ),
+        removedMetroLineIds,
       ),
       routes: state.transit.routes.filter(
         (route) => !removedRouteIds.has(route.id),
