@@ -47,6 +47,14 @@
     setSnapshot(runtime.setOverlay(overlay));
   }
 
+  function handleAssignRouteToPlatform(
+    nodeId: string,
+    routeId: string,
+    platformId: string,
+  ): void {
+    setSnapshot(runtime.assignRouteToPlatform(nodeId, routeId, platformId));
+  }
+
   function handleShellError(message: string): void {
     shellError = message;
   }
@@ -130,6 +138,8 @@
         onSetBuilding={handleSetBuilding}
         onRotateBuilding={handleRotateBuilding}
         onSetOverlay={handleSetOverlay}
+        inspector={snapshot.shell.inspector}
+        onAssignRouteToPlatform={handleAssignRouteToPlatform}
       />
     {/if}
   </main>
