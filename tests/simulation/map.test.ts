@@ -40,7 +40,7 @@ describe("map helpers", () => {
                 id: "stop-001",
                 kind: "busStop",
                 position: { x: 7, y: 8 },
-                queueCitizenIds: [],
+                platforms: [],
               },
             ],
           },
@@ -66,7 +66,7 @@ describe("map helpers", () => {
               {
                 id: "station-001",
                 position: { x: 0, y: 0 },
-                queueCitizenIds: [],
+                platforms: [],
               },
             ],
           },

@@ -10,6 +10,7 @@ import type {
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
+import { busPlatforms, metroPlatforms } from "./platforms";
 
 const COSTS = {
   busStop: 2_000,
@@ -226,6 +227,11 @@ export function addBusStop(
     return state;
   }
 
+  const stopId = nextEntityId(
+    "stop",
+    state.transit.stops.map((stop) => stop.id),
+  );
+
   return {
     ...state,
     budget: state.budget - COSTS.busStop,
@@ -234,13 +240,10 @@ export function addBusStop(
       stops: [
         ...state.transit.stops,
         {
-          id: nextEntityId(
-            "stop",
-            state.transit.stops.map((stop) => stop.id),
-          ),
+          id: stopId,
           kind,
           position: clonePoint(point),
-          queueCitizenIds: [],
+          platforms: busPlatforms(stopId, kind),
         },
       ],
     },
@@ -255,6 +258,11 @@ export function addMetroStation(state: GameState, point: Point): GameState {
     return state;
   }
 
+  const stationId = nextEntityId(
+    "station",
+    state.transit.stations.map((station) => station.id),
+  );
+
   return {
     ...state,
     budget: state.budget - COSTS.metroStation,
@@ -263,12 +271,9 @@ export function addMetroStation(state: GameState, point: Point): GameState {
       stations: [
         ...state.transit.stations,
         {
-          id: nextEntityId(
-            "station",
-            state.transit.stations.map((station) => station.id),
-          ),
+          id: stationId,
           position: clonePoint(point),
-          queueCitizenIds: [],
+          platforms: metroPlatforms(stationId),
         },
       ],
     },

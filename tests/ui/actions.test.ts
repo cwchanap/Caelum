@@ -67,7 +67,9 @@ describe("UI tile actions", () => {
         id: "stop-002",
         kind: "busStop",
         position: { x: 15, y: 8 },
-        queueCitizenIds: [],
+        platforms: [
+          { id: "stop-002-p0", label: "A", capacity: 50, routeIds: [] },
+        ],
       },
     ]);
     expect(removed.state.transit.routes).toEqual([]);
@@ -92,7 +94,14 @@ describe("UI tile actions", () => {
     );
 
     expect(removed.state.transit.stations).toEqual([
-      { id: "station-002", position: { x: 15, y: 8 }, queueCitizenIds: [] },
+      {
+        id: "station-002",
+        position: { x: 15, y: 8 },
+        platforms: [
+          { id: "station-002-p0", label: "A", capacity: 300, routeIds: [] },
+          { id: "station-002-p1", label: "B", capacity: 300, routeIds: [] },
+        ],
+      },
     ]);
     expect(removed.state.transit.metroLines).toEqual([]);
     expect(removed.state.transit.vehicles).toEqual([]);
@@ -157,7 +166,9 @@ describe("UI tile actions", () => {
         id: "stop-002",
         kind: "busStop",
         position: { x: 4, y: 0 },
-        queueCitizenIds: [],
+        platforms: [
+          { id: "stop-002-p0", label: "A", capacity: 50, routeIds: [] },
+        ],
       },
     ]);
     expect(removed.state.transit.routes).toEqual([]);

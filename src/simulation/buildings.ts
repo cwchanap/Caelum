@@ -9,6 +9,7 @@ import type {
   Tile,
 } from "../domain/types";
 import { getTile } from "./map";
+import { busPlatforms, metroPlatforms } from "./platforms";
 
 export type BuildingEffect =
   | "busStop"
@@ -206,7 +207,7 @@ export function placeBuilding(
           id: transitNodeId,
           kind: definition.effect,
           position: clonePoint(origin),
-          queueCitizenIds: [],
+          platforms: busPlatforms(transitNodeId, definition.effect),
         },
       ],
     };
@@ -224,7 +225,7 @@ export function placeBuilding(
         {
           id: transitNodeId,
           position: clonePoint(origin),
-          queueCitizenIds: [],
+          platforms: metroPlatforms(transitNodeId),
         },
       ],
     };

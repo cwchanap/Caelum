@@ -40,7 +40,9 @@ describe("transit network actions", () => {
         id: "stop-001",
         kind: "busStop",
         position: { x: 7, y: 8 },
-        queueCitizenIds: [],
+        platforms: [
+          { id: "stop-001-p0", label: "A", capacity: 50, routeIds: [] },
+        ],
       },
     ]);
     expect(nextState.budget).toBe(118_000);
@@ -52,7 +54,7 @@ describe("transit network actions", () => {
         id: "stop-001",
         kind: "busTerminal",
         position: { x: 0, y: 0 },
-        queueCitizenIds: [],
+        platforms: [],
       }),
     ).toBe(4);
     expect(
@@ -60,7 +62,7 @@ describe("transit network actions", () => {
         id: "stop-002",
         kind: "busStop",
         position: { x: 0, y: 0 },
-        queueCitizenIds: [],
+        platforms: [],
       }),
     ).toBe(2);
   });
