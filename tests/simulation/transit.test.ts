@@ -14,6 +14,7 @@ import {
   addBusStop,
   addMetroLine,
   addMetroStation,
+  assignRouteToPlatform,
   assignVehicle,
   stopCoverageRadius,
   tickVehicles,
@@ -890,5 +891,69 @@ describe("auto-assign routes to platforms", () => {
       );
       expect(holding).toHaveLength(1);
     }
+  });
+});
+
+describe("assignRouteToPlatform", () => {
+  function terminalState() {
+    let state = { ...createInitialGameState(), budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
+    state = addBusStop(state, { x: 22, y: 2 });
+    state = addBusRoute(
+      state,
+      state.transit.stops.map((s) => s.id),
+    );
+    return state;
+  }
+
+  it("moves a route from its current platform to the target", () => {
+    const state = terminalState();
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
+    const routeId = state.transit.routes[0].id;
+    const fromPlatform = terminal.platforms.find((p) =>
+      p.routeIds.includes(routeId),
+    )!;
+    const target = terminal.platforms.find((p) => p.id !== fromPlatform.id)!;
+
+    const next = assignRouteToPlatform(state, terminal.id, routeId, target.id);
+    const movedTerminal = next.transit.stops.find((s) => s.id === terminal.id)!;
+    expect(
+      movedTerminal.platforms.find((p) => p.id === fromPlatform.id)!.routeIds,
+    ).not.toContain(routeId);
+    expect(
+      movedTerminal.platforms.find((p) => p.id === target.id)!.routeIds,
+    ).toContain(routeId);
+  });
+
+  it("is a no-op when the platform does not belong to the node", () => {
+    const state = terminalState();
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
+    const routeId = state.transit.routes[0].id;
+    const next = assignRouteToPlatform(
+      state,
+      terminal.id,
+      routeId,
+      "nonexistent-platform",
+    );
+    expect(next).toBe(state);
+  });
+
+  it("is a no-op when the route does not serve the node", () => {
+    const state = terminalState();
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
+    const target = terminal.platforms[1].id;
+    const next = assignRouteToPlatform(state, terminal.id, "route-999", target);
+    expect(next).toBe(state);
+  });
+
+  it("is a no-op when the route already sits on the target platform", () => {
+    const state = terminalState();
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
+    const routeId = state.transit.routes[0].id;
+    const current = terminal.platforms.find((p) =>
+      p.routeIds.includes(routeId),
+    )!;
+    const next = assignRouteToPlatform(state, terminal.id, routeId, current.id);
+    expect(next).toBe(state);
   });
 });
