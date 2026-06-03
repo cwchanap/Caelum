@@ -9,6 +9,7 @@ import type {
 } from "../../src/domain/types";
 import { placeBuilding } from "../../src/simulation/buildings";
 import { createInitialGameState } from "../../src/simulation/gameState";
+import { onPlatformCitizenIds } from "../../src/simulation/platforms";
 import {
   addBusRoute,
   addBusStop,
@@ -833,6 +834,129 @@ describe("on-platform boarding gate", () => {
     const next = tickVehicles(state, 0.1);
     const boarded = next.transit.vehicles[0]!.passengerIds;
     expect(boarded).toEqual(["c-low"]); // lower patience is on-platform
+  });
+
+  it("boards an identical citizen set regardless of vehicle iteration order", () => {
+    // Determinism (spec): identical inputs produce identical boarding order
+    // regardless of vehicle order.
+    //
+    // Construction: ONE capacity-2 platform at stop-001 holds route-001 and
+    // serves THREE waiters (patience 10/20/30). onPlatformCitizenIds() keeps
+    // only the 2 longest-waiting (lowest-patience: c-low, c-mid) on-platform;
+    // c-high overflows. TWO vehicles on route-001 are both parked at stop-001
+    // (segmentIndex 0, progress 0) so both attempt to board this tick from the
+    // SAME shared platform. tickVehicles computes onPlatform and
+    // occupiedPassengerIds ONCE from tick-start state and shares the (mutable)
+    // occupied set across vehicles, so whichever vehicle iterates first claims
+    // some of the on-platform riders and the next sees them as occupied. The
+    // COMBINED set of boarded ids must therefore be exactly the 2 on-platform
+    // citizens, independent of the order vehicles appear in the array.
+    const stopA: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 7, y: 8 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 2, routeIds: ["route-001"] },
+      ],
+    };
+    const stopB: Stop = {
+      id: "stop-002",
+      kind: "busStop",
+      position: { x: 15, y: 8 },
+      platforms: [
+        { id: "stop-002-p0", label: "A", capacity: 2, routeIds: ["route-001"] },
+      ],
+    };
+
+    const mkWaiter = (id: string, patience: number): Citizen => ({
+      ...createInitialGameState().citizens[0]!,
+      id,
+      home: { x: 7, y: 8 },
+      destination: { x: 15, y: 8 },
+      position: { x: 7, y: 8 },
+      status: "waiting",
+      patienceRemaining: patience,
+      deadline: 9_999,
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+        ],
+      },
+      currentLegIndex: 0,
+    });
+
+    const mkVehicle = (id: string): Vehicle => ({
+      id,
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 18,
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    });
+
+    const buildState = (vehicles: Vehicle[]): GameState => ({
+      ...createInitialGameState(),
+      transit: {
+        stops: [stopA, stopB],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: ["vehicle-001", "vehicle-002"],
+            active: true,
+          },
+        ],
+        metroLines: [],
+        vehicles,
+      },
+      citizens: [
+        mkWaiter("c-high", 30),
+        mkWaiter("c-mid", 20),
+        mkWaiter("c-low", 10),
+      ],
+    });
+
+    const v0 = mkVehicle("vehicle-001");
+    const v1 = mkVehicle("vehicle-002");
+
+    const forward = buildState([v0, v1]);
+    const reversed = buildState([v1, v0]);
+
+    // Same on-platform set for both orderings (it derives from tick-start
+    // state, which differs only in vehicle order).
+    const expectedOnPlatform = onPlatformCitizenIds(forward);
+    expect([...onPlatformCitizenIds(reversed)].sort()).toEqual(
+      [...expectedOnPlatform].sort(),
+    );
+    // The 2 lowest-patience citizens are on-platform; c-high overflows.
+    expect([...expectedOnPlatform].sort()).toEqual(["c-low", "c-mid"]);
+
+    const boardedSet = (next: GameState): string[] =>
+      [
+        ...new Set([
+          ...next.transit.vehicles[0]!.passengerIds,
+          ...next.transit.vehicles[1]!.passengerIds,
+        ]),
+      ].sort();
+
+    const boardedForward = boardedSet(tickVehicles(forward, 0.1));
+    const boardedReversed = boardedSet(tickVehicles(reversed, 0.1));
+
+    // Order-independent: identical combined boarding set either way.
+    expect(boardedReversed).toEqual(boardedForward);
+    // And it is exactly the 2 on-platform citizens; the overflow never boards.
+    expect(boardedForward).toEqual(["c-low", "c-mid"]);
+    expect(boardedForward).not.toContain("c-high");
   });
 });
 
