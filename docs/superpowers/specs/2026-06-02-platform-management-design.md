@@ -90,7 +90,7 @@ The initial game state seeds no transit nodes, so there is no scenario data to m
 
 The hard cap is enforced only at boarding. At the **start of `tickVehicles`**, compute one snapshot set of board-eligible citizen ids:
 
-```
+```text
 onPlatformCitizenIds: Set<string>
 for each node (stops + stations):
   for each platform P on the node:

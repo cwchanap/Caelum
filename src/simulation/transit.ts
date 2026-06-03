@@ -11,7 +11,7 @@ import type {
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
-import { busPlatforms, metroPlatforms, onPlatformCitizenIds } from "./platforms";
+import { busPlatforms, metroPlatforms, onPlatformCitizenIds, platformWaiterIds } from "./platforms";
 
 const COSTS = {
   busStop: 2_000,
@@ -49,6 +49,10 @@ function distinctValidStationCount(
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
+}
+
+function positionKey(x: number, y: number): string {
+  return `${x},${y}`;
 }
 
 function assignRouteToLeastLoaded<
@@ -234,6 +238,7 @@ function boardVehicle(
   currentPosition: Point,
   occupiedPassengerIds: Set<string>,
   onPlatform: Set<string>,
+  waiterOrder: readonly string[],
 ): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const availableSeats = Math.max(0, vehicle.capacity - passengerIds.length);
@@ -242,11 +247,17 @@ function boardVehicle(
     return { citizens, vehicle: { ...vehicle, passengerIds } };
   }
 
+  const citizenById = new Map(citizens.map((c) => [c.id, c]));
   const boardingCitizenIds: string[] = [];
 
-  for (const citizen of citizens) {
+  for (const citizenId of waiterOrder) {
     if (boardingCitizenIds.length >= availableSeats) {
       break;
+    }
+
+    const citizen = citizenById.get(citizenId);
+    if (citizen === undefined) {
+      continue;
     }
 
     if (
@@ -401,16 +412,15 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
   );
   const routeNumber = entityNumberFromId("route", routeId);
   const distinctStopIds = Array.from(new Set(stopIds));
+  const active = distinctValidStopCount(state, stopIds) >= 2;
 
   return {
     ...state,
     transit: {
       ...state.transit,
-      stops: assignRouteToLeastLoaded(
-        state.transit.stops,
-        distinctStopIds,
-        routeId,
-      ),
+      stops: active
+        ? assignRouteToLeastLoaded(state.transit.stops, distinctStopIds, routeId)
+        : state.transit.stops,
       routes: [
         ...state.transit.routes,
         {
@@ -419,7 +429,7 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
           color: "#e04f39",
           stopIds: [...stopIds],
           vehicleIds: [],
-          active: distinctValidStopCount(state, stopIds) >= 2,
+          active,
         },
       ],
     },
@@ -436,16 +446,19 @@ export function addMetroLine(
   );
   const lineNumber = entityNumberFromId("metro", lineId);
   const distinctStationIds = Array.from(new Set(stationIds));
+  const active = distinctValidStationCount(state, stationIds) >= 2;
 
   return {
     ...state,
     transit: {
       ...state.transit,
-      stations: assignRouteToLeastLoaded(
-        state.transit.stations,
-        distinctStationIds,
-        lineId,
-      ),
+      stations: active
+        ? assignRouteToLeastLoaded(
+            state.transit.stations,
+            distinctStationIds,
+            lineId,
+          )
+        : state.transit.stations,
       metroLines: [
         ...state.transit.metroLines,
         {
@@ -454,7 +467,7 @@ export function addMetroLine(
           color: "#2867b2",
           stationIds: [...stationIds],
           vehicleIds: [],
-          active: distinctValidStationCount(state, stationIds) >= 2,
+          active,
         },
       ],
     },
@@ -548,7 +561,28 @@ export function tickVehicles(
   // Computed once from tick-start state so the cap is enforced
   // independently of vehicle iteration order (deterministic).
   const onPlatform = onPlatformCitizenIds(state);
+  const waiterIdsByPlatform = platformWaiterIds(state);
   let changed = false;
+
+  // Build a lookup: `${posKey}|${lineId}` → ordered citizen ids
+  // (concatenation of all platform waiter lists at that position for that line).
+  const nodes = [...state.transit.stops, ...state.transit.stations];
+  const waiterOrderLookup = new Map<string, string[]>();
+  for (const node of nodes) {
+    const posKey = positionKey(node.position.x, node.position.y);
+    for (const platform of node.platforms) {
+      for (const routeId of platform.routeIds) {
+        const key = `${posKey}|${routeId}`;
+        const existing = waiterOrderLookup.get(key);
+        const ids = waiterIdsByPlatform.get(platform.id) ?? [];
+        if (existing === undefined) {
+          waiterOrderLookup.set(key, [...ids]);
+        } else {
+          existing.push(...ids);
+        }
+      }
+    }
+  }
 
   const vehicles = state.transit.vehicles.map((vehicle) => {
     const linePositions = assignedLinePositions(state, vehicle);
@@ -559,6 +593,10 @@ export function tickVehicles(
 
     const currentPosition =
       linePositions[vehicle.segmentIndex % linePositions.length];
+    const waiterOrder =
+      waiterOrderLookup.get(
+        `${positionKey(currentPosition.x, currentPosition.y)}|${vehicle.lineId}`,
+      ) ?? [];
     const boarded =
       vehicle.progress === 0
         ? boardVehicle(
@@ -567,6 +605,7 @@ export function tickVehicles(
             currentPosition,
             occupiedPassengerIds,
             onPlatform,
+            waiterOrder,
           )
         : { citizens, vehicle };
     citizens = boarded.citizens;
