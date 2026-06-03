@@ -553,3 +553,61 @@ describe("transit network actions", () => {
     expect(nextState.transit.vehicles).toEqual(state.transit.vehicles);
   });
 });
+
+describe("auto-assign routes to platforms", () => {
+  it("registers a new bus route on each served stop's least-loaded platform", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addBusStop(state, { x: 22, y: 2 });
+    const stopIds = state.transit.stops.map((s) => s.id);
+
+    state = addBusRoute(state, stopIds);
+    const routeId = state.transit.routes.at(-1)!.id;
+
+    for (const stop of state.transit.stops) {
+      const holding = stop.platforms.filter((p) =>
+        p.routeIds.includes(routeId),
+      );
+      expect(holding).toHaveLength(1);
+    }
+  });
+
+  it("spreads two routes across a terminal's platforms (least-loaded first)", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
+    state = addBusStop(state, { x: 22, y: 2 });
+    const stopIds = state.transit.stops.map((s) => s.id);
+
+    state = addBusRoute(state, stopIds);
+    const routeA = state.transit.routes.at(-1)!.id;
+    state = addBusRoute(state, stopIds);
+    const routeB = state.transit.routes.at(-1)!.id;
+
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
+    const platformOf = (routeId: string) =>
+      terminal.platforms.find((p) => p.routeIds.includes(routeId))!.label;
+    expect(platformOf(routeA)).toBe("A");
+    expect(platformOf(routeB)).toBe("B");
+  });
+
+  it("registers a new metro line on each served station's least-loaded platform", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addMetroStation(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 22, y: 2 });
+    expect(state.transit.stations).toHaveLength(2);
+    const stationIds = state.transit.stations.map((s) => s.id);
+
+    state = addMetroLine(state, stationIds);
+    const lineId = state.transit.metroLines.at(-1)!.id;
+
+    for (const station of state.transit.stations) {
+      const holding = station.platforms.filter((p) =>
+        p.routeIds.includes(lineId),
+      );
+      expect(holding).toHaveLength(1);
+    }
+  });
+});

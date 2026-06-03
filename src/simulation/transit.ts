@@ -2,6 +2,7 @@ import { nextEntityId } from "../domain/ids";
 import type {
   Citizen,
   GameState,
+  Platform,
   Point,
   Route,
   MetroLine,
@@ -48,6 +49,37 @@ function distinctValidStationCount(
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
+}
+
+function assignRouteToLeastLoaded<
+  T extends { id: string; platforms: Platform[] },
+>(nodes: T[], nodeIds: string[], routeId: string): T[] {
+  const targetIds = new Set(nodeIds);
+
+  return nodes.map((node) => {
+    if (!targetIds.has(node.id) || node.platforms.length === 0) {
+      return node;
+    }
+
+    let bestIndex = 0;
+    for (let index = 1; index < node.platforms.length; index += 1) {
+      if (
+        node.platforms[index].routeIds.length <
+        node.platforms[bestIndex].routeIds.length
+      ) {
+        bestIndex = index;
+      }
+    }
+
+    return {
+      ...node,
+      platforms: node.platforms.map((platform, index) =>
+        index === bestIndex
+          ? { ...platform, routeIds: [...platform.routeIds, routeId] }
+          : platform,
+      ),
+    };
+  });
 }
 
 function entityNumberFromId(prefix: string, id: string): number {
@@ -286,11 +318,17 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
     state.transit.routes.map((route) => route.id),
   );
   const routeNumber = entityNumberFromId("route", routeId);
+  const distinctStopIds = Array.from(new Set(stopIds));
 
   return {
     ...state,
     transit: {
       ...state.transit,
+      stops: assignRouteToLeastLoaded(
+        state.transit.stops,
+        distinctStopIds,
+        routeId,
+      ),
       routes: [
         ...state.transit.routes,
         {
@@ -315,11 +353,17 @@ export function addMetroLine(
     state.transit.metroLines.map((line) => line.id),
   );
   const lineNumber = entityNumberFromId("metro", lineId);
+  const distinctStationIds = Array.from(new Set(stationIds));
 
   return {
     ...state,
     transit: {
       ...state.transit,
+      stations: assignRouteToLeastLoaded(
+        state.transit.stations,
+        distinctStationIds,
+        lineId,
+      ),
       metroLines: [
         ...state.transit.metroLines,
         {
