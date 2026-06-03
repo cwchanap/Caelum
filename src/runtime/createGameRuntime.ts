@@ -22,6 +22,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
   return {
     ...current,
     activeTool,
+    selectedNodeKind: null,
     selectedBuilding: null,
     buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
@@ -37,6 +38,7 @@ function nextBuildingUiState(
     ...current,
     activeTool: "inspect" as const,
     selectedId: null,
+    selectedNodeKind: null,
     selectedBuilding,
     buildingRotation: 0 as const,
     draftStopIds: [],

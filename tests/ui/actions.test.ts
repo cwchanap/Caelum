@@ -7,7 +7,11 @@ import {
   addMetroStation,
   assignVehicle,
 } from "../../src/simulation/transit";
-import { handleTileClick, resolveNodeAtTile } from "../../src/ui/actions";
+import {
+  handleTileClick,
+  resolveNodeAtTile,
+  resolveNodesAtTile,
+} from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
 
 describe("UI tile actions", () => {
@@ -251,6 +255,92 @@ describe("resolveNodeAtTile", () => {
     const state = createInitialGameState();
     expect(resolveNodeAtTile(state, { x: 0, y: 0 })).toBeNull();
   });
+
+  it("prefers station when preferredKind is station", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+
+    const resolved = resolveNodeAtTile(state, { x: 7, y: 2 }, "station");
+    expect(resolved?.kind).toBe("station");
+  });
+
+  it("prefers stop when preferredKind is stop", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+
+    const resolved = resolveNodeAtTile(state, { x: 7, y: 2 }, "stop");
+    expect(resolved?.kind).toBe("stop");
+  });
+});
+
+describe("resolveNodesAtTile", () => {
+  it("returns both nodes when a stop and station share a tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+
+    const nodes = resolveNodesAtTile(state, { x: 7, y: 2 });
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map((n) => n.kind).sort()).toEqual(["station", "stop"]);
+  });
+
+  it("returns a single node when only one kind exists", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+
+    const nodes = resolveNodesAtTile(state, { x: 7, y: 2 });
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].kind).toBe("stop");
+  });
+});
+
+describe("inspect tool co-located cycling", () => {
+  it("selects stop first on a co-located tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+    const ui = createUiState();
+
+    const result = handleTileClick(state, ui, { x: 7, y: 2 });
+    expect(result.ui.selectedNodeKind).toBe("stop");
+  });
+
+  it("cycles to station on second click of same tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+    const ui = {
+      ...createUiState(),
+      selectedId: "7,2",
+      selectedNodeKind: "stop" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 7, y: 2 });
+    expect(result.ui.selectedNodeKind).toBe("station");
+  });
+
+  it("cycles back to stop on third click of same tile", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addMetroStation(state, { x: 7, y: 2 });
+    const ui = {
+      ...createUiState(),
+      selectedId: "7,2",
+      selectedNodeKind: "station" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 7, y: 2 });
+    expect(result.ui.selectedNodeKind).toBe("stop");
+  });
 });
 
 describe("stripRoutesFromPlatforms reference equality", () => {
@@ -299,7 +389,9 @@ describe("removal strips routes from surviving platforms", () => {
     const routeId = state.transit.routes.at(-1)!.id;
     expect(state.transit.routes).toHaveLength(1);
 
-    const terminalBefore = state.transit.stops.find((s) => s.id === terminalId)!;
+    const terminalBefore = state.transit.stops.find(
+      (s) => s.id === terminalId,
+    )!;
     expect(
       terminalBefore.platforms.some((p) => p.routeIds.includes(routeId)),
     ).toBe(true);

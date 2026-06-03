@@ -77,7 +77,11 @@ function buildInspector(
     return null;
   }
 
-  const resolved = resolveNodeAtTile(state, point);
+  const resolved = resolveNodeAtTile(
+    state,
+    point,
+    ui.selectedNodeKind ?? undefined,
+  );
   if (resolved === null) {
     return null;
   }

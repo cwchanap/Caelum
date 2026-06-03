@@ -66,10 +66,39 @@ function resolveStationAtTile(
       );
 }
 
+export function resolveNodesAtTile(
+  state: GameState,
+  point: Point,
+): ResolvedNode[] {
+  const nodes: ResolvedNode[] = [];
+  const stop = resolveStopAtTile(state, point);
+  if (stop !== undefined) {
+    nodes.push({ kind: "stop", node: stop });
+  }
+  const station = resolveStationAtTile(state, point);
+  if (station !== undefined) {
+    nodes.push({ kind: "station", node: station });
+  }
+  return nodes;
+}
+
 export function resolveNodeAtTile(
   state: GameState,
   point: Point,
+  preferredKind?: "stop" | "station",
 ): ResolvedNode | null {
+  if (preferredKind === "station") {
+    const station = resolveStationAtTile(state, point);
+    if (station !== undefined) {
+      return { kind: "station", node: station };
+    }
+    const stop = resolveStopAtTile(state, point);
+    if (stop !== undefined) {
+      return { kind: "stop", node: stop };
+    }
+    return null;
+  }
+
   const stop = resolveStopAtTile(state, point);
   if (stop !== undefined) {
     return { kind: "stop", node: stop };
@@ -281,7 +310,31 @@ export function handleTileClick(
   }
 
   if (ui.activeTool === "inspect") {
-    return { state, ui: { ...ui, selectedId: `${point.x},${point.y}` } };
+    const nodes = resolveNodesAtTile(state, point);
+    if (nodes.length === 0) {
+      return {
+        state,
+        ui: {
+          ...ui,
+          selectedId: `${point.x},${point.y}`,
+          selectedNodeKind: null,
+        },
+      };
+    }
+
+    const isSameTile = ui.selectedId === `${point.x},${point.y}`;
+    let selectedNodeKind: "stop" | "station";
+    if (isSameTile && nodes.length > 1) {
+      const otherNode = nodes.find((n) => n.kind !== ui.selectedNodeKind);
+      selectedNodeKind = otherNode?.kind ?? nodes[0].kind;
+    } else {
+      selectedNodeKind = nodes[0].kind;
+    }
+
+    return {
+      state,
+      ui: { ...ui, selectedId: `${point.x},${point.y}`, selectedNodeKind },
+    };
   }
 
   if (ui.activeTool === "remove") {
