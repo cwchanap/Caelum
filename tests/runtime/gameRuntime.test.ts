@@ -251,3 +251,16 @@ describe("Game Runtime", () => {
     expect(after).toBe(!before);
   });
 });
+
+describe("runtime assignRouteToPlatform", () => {
+  it("returns unchanged state when the node does not exist", () => {
+    const runtime = createGameRuntime();
+    const before = runtime.getSnapshot();
+    const after = runtime.assignRouteToPlatform(
+      "stop-001",
+      "route-001",
+      "stop-001-p1",
+    );
+    expect(after.state).toBe(before.state); // no such node -> same state reference
+  });
+});

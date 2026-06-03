@@ -2,6 +2,7 @@ import type { BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import { createInitialGameState } from "../simulation/gameState";
 import { tickSimulation } from "../simulation/simulation";
+import { assignRouteToPlatform as applyAssignRouteToPlatform } from "../simulation/transit";
 import { handleTileClick as applyTileClick } from "../ui/actions";
 import { createUiState } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
@@ -302,6 +303,12 @@ export function createGameRuntime(): RuntimeController {
     handleTileClick(point) {
       const result = applyTileClick(state, ui, point);
       return commit(result.state, result.ui);
+    },
+    assignRouteToPlatform(nodeId, routeId, platformId) {
+      return commit(
+        applyAssignRouteToPlatform(state, nodeId, routeId, platformId),
+        ui,
+      );
     },
     setHoverTile(point) {
       return commit(

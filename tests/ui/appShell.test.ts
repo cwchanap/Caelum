@@ -107,6 +107,9 @@ function createRuntimeHarness(
     }),
     resetUi,
     handleTileClick: vi.fn((_point: Point) => publish()),
+    assignRouteToPlatform: vi.fn(
+      (_nodeId: string, _routeId: string, _platformId: string) => publish(),
+    ),
     setHoverTile: vi.fn((point: Point | null) => {
       ui = { ...ui, hoverTile: point };
       return publish();

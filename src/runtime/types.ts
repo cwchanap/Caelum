@@ -86,6 +86,11 @@ export interface RuntimeController {
   setSpeed: (speed: GameState["speed"]) => RuntimeSnapshot;
   toggleControlTower: () => RuntimeSnapshot;
   handleTileClick: (point: Point) => RuntimeSnapshot;
+  assignRouteToPlatform: (
+    nodeId: string,
+    routeId: string,
+    platformId: string,
+  ) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;
 }
