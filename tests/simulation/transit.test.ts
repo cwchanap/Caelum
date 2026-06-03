@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { GameState } from "../../src/domain/types";
+import type {
+  Citizen,
+  GameState,
+  MetroLine,
+  Station,
+  Stop,
+  Vehicle,
+} from "../../src/domain/types";
 import { placeBuilding } from "../../src/simulation/buildings";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
@@ -551,6 +558,280 @@ describe("transit network actions", () => {
     const nextState = tickVehicles(state, 30);
 
     expect(nextState.transit.vehicles).toEqual(state.transit.vehicles);
+  });
+});
+
+describe("on-platform boarding gate", () => {
+  it("boards only the on-platform citizen when capacity is 1", () => {
+    const stopA: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 7, y: 8 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
+      ],
+    };
+    const stopB: Stop = {
+      id: "stop-002",
+      kind: "busStop",
+      position: { x: 15, y: 8 },
+      platforms: [
+        { id: "stop-002-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
+      ],
+    };
+
+    const mkWaiter = (id: string, patience: number): Citizen => ({
+      ...createInitialGameState().citizens[0]!,
+      id,
+      home: { x: 7, y: 8 },
+      destination: { x: 15, y: 8 },
+      position: { x: 7, y: 8 },
+      status: "waiting",
+      patienceRemaining: patience,
+      deadline: 9_999,
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+        ],
+      },
+      currentLegIndex: 0,
+    });
+
+    const vehicle: Vehicle = {
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 18,
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    };
+
+    const state: GameState = {
+      ...createInitialGameState(),
+      transit: {
+        stops: [stopA, stopB],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: ["vehicle-001"],
+            active: true,
+          },
+        ],
+        metroLines: [],
+        vehicles: [vehicle],
+      },
+      citizens: [mkWaiter("c-high", 100), mkWaiter("c-low", 10)],
+    };
+
+    const next = tickVehicles(state, 0.1);
+    const boarded = next.transit.vehicles[0]!.passengerIds;
+    expect(boarded).toEqual(["c-low"]); // lower patience is on-platform
+  });
+
+  it("frees the platform slot so an overflow citizen boards on a later tick", () => {
+    // Capacity-1 platform: of the two waiters, only the longest-waiting
+    // (lowest patience) is "on-platform"; the other is queued (overflow),
+    // not permanently rejected. Once the on-platform rider leaves the
+    // waiting set, the queued citizen takes the freed slot on a later tick.
+    const stopA: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 7, y: 8 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
+      ],
+    };
+    const stopB: Stop = {
+      id: "stop-002",
+      kind: "busStop",
+      position: { x: 15, y: 8 },
+      platforms: [
+        { id: "stop-002-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
+      ],
+    };
+
+    const mkWaiter = (id: string, patience: number): Citizen => ({
+      ...createInitialGameState().citizens[0]!,
+      id,
+      home: { x: 7, y: 8 },
+      destination: { x: 15, y: 8 },
+      position: { x: 7, y: 8 },
+      status: "waiting",
+      patienceRemaining: patience,
+      deadline: 9_999,
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+        ],
+      },
+      currentLegIndex: 0,
+    });
+
+    const vehicle: Vehicle = {
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 18,
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    };
+
+    const state: GameState = {
+      ...createInitialGameState(),
+      transit: {
+        stops: [stopA, stopB],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: ["vehicle-001"],
+            active: true,
+          },
+        ],
+        metroLines: [],
+        vehicles: [vehicle],
+      },
+      citizens: [mkWaiter("c-high", 100), mkWaiter("c-low", 10)],
+    };
+
+    // Tick 1: only the on-platform rider (c-low) boards.
+    const afterTick1 = tickVehicles(state, 0.1);
+    expect(afterTick1.transit.vehicles[0]!.passengerIds).toEqual(["c-low"]);
+
+    // Assert on real post-tick state: c-low boarded, so it is no longer
+    // "waiting" (boardVehicle sets it to "riding"), which excludes it from
+    // platformWaiterIds / onPlatformCitizenIds. The slot it held is freed.
+    const cLowAfter = afterTick1.citizens.find((c) => c.id === "c-low")!;
+    expect(cLowAfter.status).toBe("riding");
+    const cHighAfter = afterTick1.citizens.find((c) => c.id === "c-high")!;
+    expect(cHighAfter.status).toBe("waiting");
+
+    // Boarding only triggers at progress === 0; tick 1 advanced the bus past
+    // that. Reset the same vehicle to progress 0 at the stop so it is boardable
+    // again on tick 2 (deterministic: no Math.random / wall-clock involved).
+    const tick2State: GameState = {
+      ...afterTick1,
+      transit: {
+        ...afterTick1.transit,
+        vehicles: afterTick1.transit.vehicles.map((v) =>
+          v.id === "vehicle-001" ? { ...v, segmentIndex: 0, progress: 0 } : v,
+        ),
+      },
+    };
+
+    // Tick 2: with c-low gone from the waiting set, c-high is now the
+    // longest-waiting on-platform citizen and boards into the freed slot.
+    const afterTick2 = tickVehicles(tick2State, 0.1);
+    expect(afterTick2.transit.vehicles[0]!.passengerIds).toEqual([
+      "c-low",
+      "c-high",
+    ]);
+  });
+
+  it("boards only the on-platform citizen at a capacity-1 metro platform", () => {
+    const stationA: Station = {
+      id: "station-001",
+      position: { x: 7, y: 8 },
+      platforms: [
+        {
+          id: "station-001-p0",
+          label: "A",
+          capacity: 1,
+          routeIds: ["metro-001"],
+        },
+      ],
+    };
+    const stationB: Station = {
+      id: "station-002",
+      position: { x: 15, y: 8 },
+      platforms: [
+        {
+          id: "station-002-p0",
+          label: "A",
+          capacity: 1,
+          routeIds: ["metro-001"],
+        },
+      ],
+    };
+
+    const mkWaiter = (id: string, patience: number): Citizen => ({
+      ...createInitialGameState().citizens[0]!,
+      id,
+      home: { x: 7, y: 8 },
+      destination: { x: 15, y: 8 },
+      position: { x: 7, y: 8 },
+      status: "waiting",
+      patienceRemaining: patience,
+      deadline: 9_999,
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          {
+            mode: "metro",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "metro-001",
+          },
+        ],
+      },
+      currentLegIndex: 0,
+    });
+
+    const metroLine: MetroLine = {
+      id: "metro-001",
+      name: "Metro 1",
+      color: "#3b82f6",
+      stationIds: ["station-001", "station-002"],
+      vehicleIds: ["metro-vehicle-001"],
+      active: true,
+    };
+
+    const vehicle: Vehicle = {
+      id: "metro-vehicle-001",
+      mode: "metro",
+      lineId: "metro-001",
+      capacity: 40,
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    };
+
+    const state: GameState = {
+      ...createInitialGameState(),
+      transit: {
+        stops: [],
+        stations: [stationA, stationB],
+        routes: [],
+        metroLines: [metroLine],
+        vehicles: [vehicle],
+      },
+      citizens: [mkWaiter("c-high", 100), mkWaiter("c-low", 10)],
+    };
+
+    const next = tickVehicles(state, 0.1);
+    const boarded = next.transit.vehicles[0]!.passengerIds;
+    expect(boarded).toEqual(["c-low"]); // lower patience is on-platform
   });
 });
 
