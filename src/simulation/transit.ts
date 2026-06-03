@@ -11,7 +11,7 @@ import type {
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
-import { busPlatforms, metroPlatforms } from "./platforms";
+import { busPlatforms, metroPlatforms, onPlatformCitizenIds } from "./platforms";
 
 const COSTS = {
   busStop: 2_000,
@@ -139,8 +139,13 @@ function citizenCanBoard(
   vehicle: Vehicle,
   currentPosition: Point,
   occupiedPassengerIds: Set<string>,
+  onPlatform: Set<string>,
 ): boolean {
-  if (citizen.status !== "waiting" || occupiedPassengerIds.has(citizen.id)) {
+  if (
+    citizen.status !== "waiting" ||
+    occupiedPassengerIds.has(citizen.id) ||
+    !onPlatform.has(citizen.id)
+  ) {
     return false;
   }
 
@@ -158,6 +163,7 @@ function boardVehicle(
   vehicle: Vehicle,
   currentPosition: Point,
   occupiedPassengerIds: Set<string>,
+  onPlatform: Set<string>,
 ): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const availableSeats = Math.max(0, vehicle.capacity - passengerIds.length);
@@ -174,7 +180,13 @@ function boardVehicle(
     }
 
     if (
-      citizenCanBoard(citizen, vehicle, currentPosition, occupiedPassengerIds)
+      citizenCanBoard(
+        citizen,
+        vehicle,
+        currentPosition,
+        occupiedPassengerIds,
+        onPlatform,
+      )
     ) {
       boardingCitizenIds.push(citizen.id);
       occupiedPassengerIds.add(citizen.id);
@@ -463,6 +475,9 @@ export function tickVehicles(
       uniquePassengerIds(vehicle.passengerIds),
     ),
   );
+  // Computed once from tick-start state so the cap is enforced
+  // independently of vehicle iteration order (deterministic).
+  const onPlatform = onPlatformCitizenIds(state);
   let changed = false;
 
   const vehicles = state.transit.vehicles.map((vehicle) => {
@@ -476,7 +491,13 @@ export function tickVehicles(
       linePositions[vehicle.segmentIndex % linePositions.length];
     const boarded =
       vehicle.progress === 0
-        ? boardVehicle(citizens, vehicle, currentPosition, occupiedPassengerIds)
+        ? boardVehicle(
+            citizens,
+            vehicle,
+            currentPosition,
+            occupiedPassengerIds,
+            onPlatform,
+          )
         : { citizens, vehicle };
     citizens = boarded.citizens;
 
