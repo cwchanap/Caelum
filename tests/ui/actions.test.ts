@@ -253,6 +253,36 @@ describe("resolveNodeAtTile", () => {
   });
 });
 
+describe("stripRoutesFromPlatforms reference equality", () => {
+  it("returns the original node reference when no routes are stripped", () => {
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 }); // stop-001, will be removed
+    state = addBusStop(state, { x: 15, y: 8 }); // stop-002, survives
+    state = addBusStop(state, { x: 22, y: 2 }); // stop-003, survives (no route)
+    const stopIds = [state.transit.stops[0]!.id, state.transit.stops[1]!.id];
+    state = addBusRoute(state, stopIds);
+
+    const routeId = state.transit.routes[0]!.id;
+    const stop003Before = state.transit.stops.find((s) => s.id === "stop-003")!;
+
+    const ui = { ...createUiState(), activeTool: "remove" as const };
+    const result = handleTileClick(state, ui, { x: 7, y: 2 });
+
+    const stop002After = result.state.transit.stops.find(
+      (s) => s.id === "stop-002",
+    )!;
+    const stop003After = result.state.transit.stops.find(
+      (s) => s.id === "stop-003",
+    )!;
+
+    // stop-002 had the route stripped — should be a new object
+    expect(stop002After.platforms[0]!.routeIds).not.toContain(routeId);
+    // stop-003 never had the route — should be the same reference
+    expect(stop003After).toBe(stop003Before);
+  });
+});
+
 describe("removal strips routes from surviving platforms", () => {
   it("removes a deleted route's id from a shared terminal's platforms", () => {
     let state = createInitialGameState();

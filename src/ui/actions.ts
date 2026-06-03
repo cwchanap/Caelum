@@ -90,15 +90,18 @@ function stripRoutesFromPlatforms<
     return nodes;
   }
 
-  return nodes.map((node) => ({
-    ...node,
-    platforms: node.platforms.map((platform) => {
+  return nodes.map((node) => {
+    let changed = false;
+    const platforms = node.platforms.map((platform) => {
       const filtered = platform.routeIds.filter((id) => !removedIds.has(id));
-      return filtered.length === platform.routeIds.length
-        ? platform
-        : { ...platform, routeIds: filtered };
-    }),
-  }));
+      if (filtered.length !== platform.routeIds.length) {
+        changed = true;
+        return { ...platform, routeIds: filtered };
+      }
+      return platform;
+    });
+    return changed ? { ...node, platforms } : node;
+  });
 }
 
 function removeAtTile(state: GameState, point: Point): GameState {
