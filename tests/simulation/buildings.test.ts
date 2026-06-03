@@ -111,14 +111,21 @@ describe("building catalog and footprints", () => {
         id: "stop-001",
         kind: "busTerminal",
         position: { x: 0, y: 0 },
-        queueCitizenIds: [],
+        platforms: [
+          { id: "stop-001-p0", label: "A", capacity: 50, routeIds: [] },
+          { id: "stop-001-p1", label: "B", capacity: 50, routeIds: [] },
+          { id: "stop-001-p2", label: "C", capacity: 50, routeIds: [] },
+        ],
       },
     ]);
     expect(state.transit.stations).toEqual([
       {
         id: "station-001",
         position: { x: 3, y: 0 },
-        queueCitizenIds: [],
+        platforms: [
+          { id: "station-001-p0", label: "A", capacity: 300, routeIds: [] },
+          { id: "station-001-p1", label: "B", capacity: 300, routeIds: [] },
+        ],
       },
     ]);
   });

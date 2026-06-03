@@ -102,21 +102,21 @@ describe("route planning", () => {
             id: "stop-001",
             kind: "busStop" as const,
             position: { x: 0, y: 0 },
-            queueCitizenIds: [],
+            platforms: [],
           },
           {
             id: "stop-002",
             kind: "busStop" as const,
             position: { x: 13, y: 8 },
-            queueCitizenIds: [],
+            platforms: [],
           },
         ],
         stations: [
-          { id: "station-001", position: { x: 13, y: 8 }, queueCitizenIds: [] },
+          { id: "station-001", position: { x: 13, y: 8 }, platforms: [] },
           {
             id: "station-002",
             position: { x: 27, y: 17 },
-            queueCitizenIds: [],
+            platforms: [],
           },
         ],
         routes: [

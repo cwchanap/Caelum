@@ -4,6 +4,7 @@ import {
   canPlaceBuilding,
   getBuildingFootprint,
 } from "../simulation/buildings";
+import { selectPlatformOccupancy } from "../simulation/platforms";
 import { stopCoverageRadius } from "../simulation/transit";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
@@ -119,18 +120,27 @@ export function renderOverlays(
   }
 
   if (ui.activeOverlay === "crowding") {
-    ctx.fillStyle = colors.crowding;
+    const occupancy = selectPlatformOccupancy(state);
+    const nodes = [...state.transit.stops, ...state.transit.stations];
 
-    for (const stop of state.transit.stops) {
-      if (stop.queueCitizenIds.length > 0) {
-        fillTile(ctx, stop.position);
+    for (const node of nodes) {
+      let maxRatio = 0;
+      for (const platform of node.platforms) {
+        const entry = occupancy.get(platform.id);
+        if (entry !== undefined && entry.capacity > 0) {
+          maxRatio = Math.max(maxRatio, entry.count / entry.capacity);
+        }
       }
-    }
 
-    for (const station of state.transit.stations) {
-      if (station.queueCitizenIds.length > 0) {
-        fillTile(ctx, station.position);
+      if (maxRatio <= 0.5) {
+        continue;
       }
+
+      ctx.save();
+      ctx.globalAlpha = maxRatio >= 1 ? 0.55 : 0.3;
+      ctx.fillStyle = colors.crowding;
+      fillTile(ctx, node.position);
+      ctx.restore();
     }
   }
 

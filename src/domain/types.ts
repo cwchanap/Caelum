@@ -63,17 +63,24 @@ export interface PlacedBuilding {
   transitNodeId?: string;
 }
 
+export interface Platform {
+  id: string;
+  label: string;
+  capacity: number;
+  routeIds: string[];
+}
+
 export interface Stop {
   id: string;
   kind: StopKind;
   position: Point;
-  queueCitizenIds: string[];
+  platforms: Platform[];
 }
 
 export interface Station {
   id: string;
   position: Point;
-  queueCitizenIds: string[];
+  platforms: Platform[];
 }
 
 export interface Route {

@@ -142,7 +142,7 @@ describe("canvas helpers", () => {
         id: "stop-001",
         kind: "busStop",
         position: { x: 0, y: 0 },
-        queueCitizenIds: [],
+        platforms: [],
       }),
     ).toBe(2);
     expect(
@@ -150,7 +150,7 @@ describe("canvas helpers", () => {
         id: "stop-002",
         kind: "busTerminal",
         position: { x: 0, y: 0 },
-        queueCitizenIds: [],
+        platforms: [],
       }),
     ).toBe(4);
   });
@@ -224,7 +224,7 @@ describe("canvas helpers", () => {
             id: "stop-001",
             kind: "busTerminal" as const,
             position: { x: 6, y: 7 },
-            queueCitizenIds: [],
+            platforms: [],
           },
         ],
       },
