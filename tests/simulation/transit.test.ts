@@ -194,6 +194,12 @@ describe("transit network actions", () => {
       stopIds: ["stop-001", "stop-001"],
       active: false,
     });
+    // Inactive routes should NOT be assigned to any platform.
+    expect(
+      state.transit.stops[0]!.platforms.some((p) =>
+        p.routeIds.includes(state.transit.routes[0]!.id),
+      ),
+    ).toBe(false);
   });
 
   it("creates an active metro line and assigns a metro vehicle to it", () => {
@@ -232,6 +238,12 @@ describe("transit network actions", () => {
       stationIds: ["station-001", "station-001"],
       active: false,
     });
+    // Inactive lines should NOT be assigned to any platform.
+    expect(
+      state.transit.stations[0]!.platforms.some((p) =>
+        p.routeIds.includes(state.transit.metroLines[0]!.id),
+      ),
+    ).toBe(false);
   });
 
   it("returns the original state when assigning vehicles to missing or mismatched lines", () => {
@@ -957,6 +969,92 @@ describe("on-platform boarding gate", () => {
     // And it is exactly the 2 on-platform citizens; the overflow never boards.
     expect(boardedForward).toEqual(["c-low", "c-mid"]);
     expect(boardedForward).not.toContain("c-high");
+  });
+
+  it("boards citizens in patience/id order regardless of state.citizens array order", () => {
+    // Three on-platform citizens (capacity 3) with a vehicle that has only
+    // 2 free seats. The citizens appear in state.citizens in REVERSE
+    // patience order (highest patience first). Boarding must still pick
+    // the 2 longest-waiting (lowest patience), not the first 2 in the array.
+    const stopA: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 7, y: 8 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 3, routeIds: ["route-001"] },
+      ],
+    };
+    const stopB: Stop = {
+      id: "stop-002",
+      kind: "busStop",
+      position: { x: 15, y: 8 },
+      platforms: [
+        { id: "stop-002-p0", label: "A", capacity: 3, routeIds: ["route-001"] },
+      ],
+    };
+
+    const mkWaiter = (id: string, patience: number): Citizen => ({
+      ...createInitialGameState().citizens[0]!,
+      id,
+      home: { x: 7, y: 8 },
+      destination: { x: 15, y: 8 },
+      position: { x: 7, y: 8 },
+      status: "waiting",
+      patienceRemaining: patience,
+      deadline: 9_999,
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+        ],
+      },
+      currentLegIndex: 0,
+    });
+
+    const vehicle: Vehicle = {
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 2, // only 2 seats
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    };
+
+    // citizens array in reverse patience order (c-high first)
+    const state: GameState = {
+      ...createInitialGameState(),
+      transit: {
+        stops: [stopA, stopB],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#e04f39",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: ["vehicle-001"],
+            active: true,
+          },
+        ],
+        metroLines: [],
+        vehicles: [vehicle],
+      },
+      citizens: [
+        mkWaiter("c-high", 100),
+        mkWaiter("c-mid", 50),
+        mkWaiter("c-low", 10),
+      ],
+    };
+
+    const next = tickVehicles(state, 0.1);
+    // The 2 longest-waiting (c-low, c-mid) board, NOT c-high
+    expect(next.transit.vehicles[0]!.passengerIds).toEqual(["c-low", "c-mid"]);
   });
 });
 

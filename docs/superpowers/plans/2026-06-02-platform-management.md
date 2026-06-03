@@ -1943,4 +1943,4 @@ git commit -m "test: crowding overlay lights nodes with full platforms"
 - **Type consistency:** `Platform` fields (`id`, `label`, `capacity`, `routeIds`) are identical across T1, T5, T6, T8. `assignRouteToPlatform(state, nodeId, routeId, platformId)` signature is identical in T5 (pure), T7 (controller), and T8 (UI handler order: nodeId, routeId, platformId). `selectPlatformOccupancy` returns `Map<string, {count, capacity}>` in T1 and is consumed the same way in T6 and the overlay.
 - **Determinism:** no `Math.random`/wall-clock introduced; all ordering uses `patienceRemaining` then `id.localeCompare`.
 - **Risk:** Task 4 Step 5 and Task 1 Step 12 may surface pre-existing fixtures whose stops/stations now need `platforms` containing the boarding route id; instructions cover updating them.
-```
+```text
