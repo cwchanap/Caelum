@@ -87,6 +87,7 @@
 
 <aside
   class:control-tower--closed={!shell.controlTowerOpen}
+  class:panel--with-inspector={inspector !== null}
   class="panel control-tower"
   data-testid="control-tower"
   aria-hidden={!shell.controlTowerOpen}

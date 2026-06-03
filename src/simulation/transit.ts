@@ -11,7 +11,12 @@ import type {
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
-import { busPlatforms, metroPlatforms, onPlatformCitizenIds, platformWaiterIds } from "./platforms";
+import {
+  busPlatforms,
+  metroPlatforms,
+  onPlatformCitizenIds,
+  platformWaiterIds,
+} from "./platforms";
 
 const COSTS = {
   busStop: 2_000,
@@ -86,9 +91,7 @@ function assignRouteToLeastLoaded<
   });
 }
 
-function reassignWithinNode<
-  T extends { id: string; platforms: Platform[] },
->(
+function reassignWithinNode<T extends { id: string; platforms: Platform[] }>(
   nodes: T[],
   nodeId: string,
   routeId: string,
@@ -103,7 +106,11 @@ function reassignWithinNode<
   const holdsRoute = node.platforms.some((platform) =>
     platform.routeIds.includes(routeId),
   );
-  if (target === undefined || !holdsRoute || target.routeIds.includes(routeId)) {
+  if (
+    target === undefined ||
+    !holdsRoute ||
+    target.routeIds.includes(routeId)
+  ) {
     return null;
   }
 
@@ -419,7 +426,11 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
     transit: {
       ...state.transit,
       stops: active
-        ? assignRouteToLeastLoaded(state.transit.stops, distinctStopIds, routeId)
+        ? assignRouteToLeastLoaded(
+            state.transit.stops,
+            distinctStopIds,
+            routeId,
+          )
         : state.transit.stops,
       routes: [
         ...state.transit.routes,

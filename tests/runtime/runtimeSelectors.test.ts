@@ -40,9 +40,7 @@ describe("selectShellState inspector", () => {
       state,
       state.transit.stops.map((s) => s.id),
     );
-    const terminal = state.transit.stops.find(
-      (s) => s.kind === "busTerminal",
-    )!;
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
     const routeId = state.transit.routes[0].id;
 
     const ui = {
@@ -59,8 +57,8 @@ describe("selectShellState inspector", () => {
       p.routes.map((r) => r.id),
     );
     expect(routeIds).toContain(routeId);
-    const routeChip = shell.inspector!.platforms
-      .flatMap((p) => p.routes)
+    const routeChip = shell
+      .inspector!.platforms.flatMap((p) => p.routes)
       .find((r) => r.id === routeId)!;
     expect(routeChip.moveTargets.map((t) => t.label).sort()).toEqual([
       "B",
@@ -76,9 +74,7 @@ describe("selectShellState inspector", () => {
       state,
       state.transit.stops.map((s) => s.id),
     );
-    const terminal = state.transit.stops.find(
-      (s) => s.kind === "busTerminal",
-    )!;
+    const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
     const routeId = state.transit.routes[0].id;
 
     const waiter = waitingBusCitizen("c-wait", terminal.position, routeId);
@@ -128,8 +124,8 @@ describe("selectShellState inspector", () => {
     expect(shell.inspector!.nodeLabel).toBe("Metro Station");
     expect(shell.inspector!.canReassign).toBe(true);
 
-    const lineChip = shell.inspector!.platforms
-      .flatMap((p) => p.routes)
+    const lineChip = shell
+      .inspector!.platforms.flatMap((p) => p.routes)
       .find((r) => r.id === line.id);
     expect(lineChip).toBeDefined();
     expect(lineChip!.name).toBe(line.name);

@@ -434,8 +434,7 @@ body {
   display: grid;
   grid-template-columns:
     124px minmax(110px, 0.5fr) minmax(220px, 1fr)
-    minmax(166px, 0.7fr) minmax(200px, 0.8fr) minmax(244px, 1fr)
-    minmax(200px, 0.8fr);
+    minmax(166px, 0.7fr) minmax(200px, 0.8fr) minmax(244px, 1fr);
   height: min(34vh, 320px);
   border: 1px solid var(--line-strong);
   background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
@@ -446,6 +445,13 @@ body {
   transition:
     opacity 0.18s ease,
     transform 0.18s ease;
+}
+
+.panel--with-inspector {
+  grid-template-columns:
+    124px minmax(110px, 0.5fr) minmax(220px, 1fr)
+    minmax(166px, 0.7fr) minmax(200px, 0.8fr) minmax(244px, 1fr)
+    minmax(200px, 0.8fr);
 }
 
 .control-tower--closed {
