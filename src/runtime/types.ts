@@ -28,9 +28,37 @@ export interface ShellControlTowerState {
   controlTowerOpen: boolean;
 }
 
+export interface ShellPlatformMoveTarget {
+  platformId: string;
+  label: string;
+}
+
+export interface ShellPlatformRoute {
+  id: string;
+  name: string;
+  color: string;
+  moveTargets: ShellPlatformMoveTarget[];
+}
+
+export interface ShellPlatform {
+  id: string;
+  label: string;
+  occupancy: number;
+  capacity: number;
+  routes: ShellPlatformRoute[];
+}
+
+export interface ShellInspectorState {
+  nodeId: string;
+  nodeLabel: string;
+  canReassign: boolean;
+  platforms: ShellPlatform[];
+}
+
 export interface ShellState {
   topbar: ShellTopbarState;
   controlTower: ShellControlTowerState;
+  inspector: ShellInspectorState | null;
 }
 
 export interface RuntimeSnapshot {
