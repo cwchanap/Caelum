@@ -82,6 +82,76 @@ function assignRouteToLeastLoaded<
   });
 }
 
+function reassignWithinNode<
+  T extends { id: string; platforms: Platform[] },
+>(
+  nodes: T[],
+  nodeId: string,
+  routeId: string,
+  platformId: string,
+): T[] | null {
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  if (node === undefined) {
+    return null;
+  }
+
+  const target = node.platforms.find((platform) => platform.id === platformId);
+  const holdsRoute = node.platforms.some((platform) =>
+    platform.routeIds.includes(routeId),
+  );
+  if (target === undefined || !holdsRoute || target.routeIds.includes(routeId)) {
+    return null;
+  }
+
+  return nodes.map((candidate) =>
+    candidate.id !== nodeId
+      ? candidate
+      : {
+          ...candidate,
+          platforms: candidate.platforms.map((platform) => {
+            if (platform.id === platformId) {
+              return { ...platform, routeIds: [...platform.routeIds, routeId] };
+            }
+            return platform.routeIds.includes(routeId)
+              ? {
+                  ...platform,
+                  routeIds: platform.routeIds.filter((id) => id !== routeId),
+                }
+              : platform;
+          }),
+        },
+  );
+}
+
+export function assignRouteToPlatform(
+  state: GameState,
+  nodeId: string,
+  routeId: string,
+  platformId: string,
+): GameState {
+  const stops = reassignWithinNode(
+    state.transit.stops,
+    nodeId,
+    routeId,
+    platformId,
+  );
+  if (stops !== null) {
+    return { ...state, transit: { ...state.transit, stops } };
+  }
+
+  const stations = reassignWithinNode(
+    state.transit.stations,
+    nodeId,
+    routeId,
+    platformId,
+  );
+  if (stations !== null) {
+    return { ...state, transit: { ...state.transit, stations } };
+  }
+
+  return state;
+}
+
 function entityNumberFromId(prefix: string, id: string): number {
   const match = new RegExp(`^${prefix}-(\\d+)$`).exec(id);
   return match === null ? 1 : Number(match[1]);
