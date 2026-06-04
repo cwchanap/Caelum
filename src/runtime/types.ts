@@ -55,10 +55,39 @@ export interface ShellInspectorState {
   platforms: ShellPlatform[];
 }
 
+export interface ShellRouteDraftStop {
+  index: number;
+  label: string;
+  coord: string;
+}
+
+export interface ShellRouteDraftState {
+  mode: "bus" | "metro";
+  stops: ShellRouteDraftStop[];
+  distinctCount: number;
+  vehicleCost: number;
+  canFinish: boolean;
+  finishHint: string;
+}
+
+export interface ShellRouteListItem {
+  id: string;
+  name: string;
+  color: string;
+  mode: "bus" | "metro";
+  stopCount: number;
+  active: boolean;
+  selected: boolean;
+}
+
+export type ShellRouteListState = ShellRouteListItem[];
+
 export interface ShellState {
   topbar: ShellTopbarState;
   controlTower: ShellControlTowerState;
   inspector: ShellInspectorState | null;
+  routeDraft: ShellRouteDraftState | null;
+  routes: ShellRouteListState;
 }
 
 export interface RuntimeSnapshot {

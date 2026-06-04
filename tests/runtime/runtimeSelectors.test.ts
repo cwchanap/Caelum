@@ -138,3 +138,85 @@ describe("selectShellState inspector", () => {
     expect(selectShellState(state, ui).inspector).toBeNull();
   });
 });
+
+describe("route selectors", () => {
+  function twoStops() {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    return state;
+  }
+
+  it("returns null draft when not drafting", () => {
+    const shell = selectShellState(createInitialGameState(), createUiState());
+    expect(shell.routeDraft).toBe(null);
+  });
+
+  it("derives a bus draft with stop labels and a finish gate", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001"],
+    };
+    const shell = selectShellState(state, ui);
+    expect(shell.routeDraft?.mode).toBe("bus");
+    expect(shell.routeDraft?.stops).toEqual([
+      { index: 0, label: "Bus Stop", coord: "(7,8)" },
+    ]);
+    expect(shell.routeDraft?.canFinish).toBe(false);
+    expect(shell.routeDraft?.finishHint).toBe("Add another stop");
+  });
+
+  it("enables finish at two affordable stops", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001", "stop-002"],
+    };
+    expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(true);
+  });
+
+  it("blocks finish when unaffordable with a cost hint", () => {
+    const state = { ...twoStops(), budget: 1_000 };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001", "stop-002"],
+    };
+    const draft = selectShellState(state, ui).routeDraft;
+    expect(draft?.canFinish).toBe(false);
+    expect(draft?.finishHint).toBe("Need $8,000");
+  });
+
+  it("lists routes and metro lines with selection state", () => {
+    let state = twoStops();
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = addMetroStation(state, { x: 3, y: 0 });
+    state = addMetroStation(state, { x: 9, y: 0 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    const ui = { ...createUiState(), selectedRouteId: "route-001" };
+    const shell = selectShellState(state, ui);
+    expect(shell.routes).toEqual([
+      {
+        id: "route-001",
+        name: "Bus 1",
+        color: "#e04f39",
+        mode: "bus",
+        stopCount: 2,
+        active: true,
+        selected: true,
+      },
+      {
+        id: "metro-001",
+        name: "Metro 1",
+        color: "#2867b2",
+        mode: "metro",
+        stopCount: 2,
+        active: true,
+        selected: false,
+      },
+    ]);
+  });
+});
