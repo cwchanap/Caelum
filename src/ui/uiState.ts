@@ -16,6 +16,7 @@ export interface UiState {
   hoverTile: Point | null;
   draftStopIds: string[];
   draftStationIds: string[];
+  selectedRouteId: string | null;
   controlTowerOpen: boolean;
 }
 
@@ -30,6 +31,7 @@ export function createUiState(): UiState {
     hoverTile: null,
     draftStopIds: [],
     draftStationIds: [],
+    selectedRouteId: null,
     controlTowerOpen: true,
   };
 }

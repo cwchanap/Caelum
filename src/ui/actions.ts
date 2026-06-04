@@ -227,62 +227,29 @@ export function handleTileClick(
 
   if (ui.activeTool === "busRoute") {
     const stop = resolveStopAtTile(state, point);
-
     if (stop === undefined) {
       return { state, ui };
     }
-
-    const draftStopIds = [...ui.draftStopIds, stop.id];
-
-    if (draftStopIds.length >= 2) {
-      if (state.budget < BUS_VEHICLE_COST) {
-        return { state, ui };
-      }
-
-      const withRoute = addBusRoute(state, draftStopIds);
-      const routeId = withRoute.transit.routes.at(-1)?.id;
-
-      return {
-        state:
-          routeId === undefined
-            ? withRoute
-            : assignVehicle(withRoute, "bus", routeId),
-        ui: { ...ui, draftStopIds: [] },
-      };
+    if (ui.draftStopIds.at(-1) === stop.id) {
+      return { state, ui };
     }
-
-    return { state, ui: { ...ui, draftStopIds } };
+    return { state, ui: { ...ui, draftStopIds: [...ui.draftStopIds, stop.id] } };
   }
 
   if (ui.activeTool === "metroLine") {
     const station = state.transit.stations.find((candidate) =>
       samePoint(candidate.position, point),
     );
-
     if (station === undefined) {
       return { state, ui };
     }
-
-    const draftStationIds = [...ui.draftStationIds, station.id];
-
-    if (draftStationIds.length >= 2) {
-      if (state.budget < METRO_VEHICLE_COST) {
-        return { state, ui };
-      }
-
-      const withLine = addMetroLine(state, draftStationIds);
-      const lineId = withLine.transit.metroLines.at(-1)?.id;
-
-      return {
-        state:
-          lineId === undefined
-            ? withLine
-            : assignVehicle(withLine, "metro", lineId),
-        ui: { ...ui, draftStationIds: [] },
-      };
+    if (ui.draftStationIds.at(-1) === station.id) {
+      return { state, ui };
     }
-
-    return { state, ui: { ...ui, draftStationIds } };
+    return {
+      state,
+      ui: { ...ui, draftStationIds: [...ui.draftStationIds, station.id] },
+    };
   }
 
   if (ui.activeTool === "inspect") {
