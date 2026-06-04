@@ -200,6 +200,75 @@ function removeAtTile(state: GameState, point: Point): GameState {
   return next;
 }
 
+function distinctCount(ids: string[]): number {
+  return new Set(ids).size;
+}
+
+export function finishDraftRoute(
+  state: GameState,
+  ui: UiState,
+): { state: GameState; ui: UiState } {
+  if (ui.activeTool === "busRoute") {
+    if (
+      distinctCount(ui.draftStopIds) < 2 ||
+      state.budget < BUS_VEHICLE_COST
+    ) {
+      return { state, ui };
+    }
+    const withRoute = addBusRoute(state, ui.draftStopIds);
+    const routeId = withRoute.transit.routes.at(-1)?.id;
+    const next =
+      routeId === undefined
+        ? withRoute
+        : assignVehicle(withRoute, "bus", routeId);
+    return { state: next, ui: { ...ui, draftStopIds: [] } };
+  }
+
+  if (ui.activeTool === "metroLine") {
+    if (
+      distinctCount(ui.draftStationIds) < 2 ||
+      state.budget < METRO_VEHICLE_COST
+    ) {
+      return { state, ui };
+    }
+    const withLine = addMetroLine(state, ui.draftStationIds);
+    const lineId = withLine.transit.metroLines.at(-1)?.id;
+    const next =
+      lineId === undefined
+        ? withLine
+        : assignVehicle(withLine, "metro", lineId);
+    return { state: next, ui: { ...ui, draftStationIds: [] } };
+  }
+
+  return { state, ui };
+}
+
+export function removeDraftStop(ui: UiState, index: number): UiState {
+  if (ui.activeTool === "metroLine") {
+    if (index < 0 || index >= ui.draftStationIds.length) {
+      return ui;
+    }
+    return {
+      ...ui,
+      draftStationIds: ui.draftStationIds.filter((_, i) => i !== index),
+    };
+  }
+  if (index < 0 || index >= ui.draftStopIds.length) {
+    return ui;
+  }
+  return {
+    ...ui,
+    draftStopIds: ui.draftStopIds.filter((_, i) => i !== index),
+  };
+}
+
+export function cancelDraftRoute(ui: UiState): UiState {
+  if (ui.draftStopIds.length === 0 && ui.draftStationIds.length === 0) {
+    return ui;
+  }
+  return { ...ui, draftStopIds: [], draftStationIds: [] };
+}
+
 export function handleTileClick(
   state: GameState,
   ui: UiState,

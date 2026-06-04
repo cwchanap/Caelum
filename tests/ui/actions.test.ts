@@ -9,7 +9,10 @@ import {
   assignVehicle,
 } from "../../src/simulation/transit";
 import {
+  cancelDraftRoute,
+  finishDraftRoute,
   handleTileClick,
+  removeDraftStop,
   resolveNodeAtTile,
   resolveNodesAtTile,
 } from "../../src/ui/actions";
@@ -424,5 +427,79 @@ describe("removal strips routes from surviving platforms", () => {
     );
     expect(result.state.transit.routes).toHaveLength(0); // route deleted
     expect(stillHolding).toBe(false); // and scrubbed from the surviving terminal
+  });
+});
+
+describe("draft route helpers", () => {
+  function busDraft() {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001", "stop-002"],
+    };
+    return { state, ui };
+  }
+
+  it("finishes a bus route, assigns a vehicle, and clears the draft", () => {
+    const { state, ui } = busDraft();
+    const result = finishDraftRoute(state, ui);
+
+    expect(result.state.transit.routes[0]).toMatchObject({
+      id: "route-001",
+      stopIds: ["stop-001", "stop-002"],
+      vehicleIds: ["vehicle-001"],
+      active: true,
+    });
+    expect(result.ui.draftStopIds).toEqual([]);
+  });
+
+  it("does not finish when fewer than two distinct stops", () => {
+    const { state } = busDraft();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001"],
+    };
+    const result = finishDraftRoute(state, ui);
+    expect(result.state).toBe(state);
+    expect(result.ui).toBe(ui);
+  });
+
+  it("does not finish when the vehicle is unaffordable", () => {
+    const draft = busDraft();
+    const state = { ...draft.state, budget: 7_999 };
+    const result = finishDraftRoute(state, draft.ui);
+    expect(result.state).toBe(state);
+    expect(result.ui).toBe(draft.ui);
+  });
+
+  it("removes a specific draft stop by index", () => {
+    const { ui } = busDraft();
+    const next = removeDraftStop(ui, 0);
+    expect(next.draftStopIds).toEqual(["stop-002"]);
+  });
+
+  it("removes a metro draft station by index", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "metroLine" as const,
+      draftStationIds: ["station-001", "station-002"],
+    };
+    const next = removeDraftStop(ui, 1);
+    expect(next.draftStationIds).toEqual(["station-001"]);
+  });
+
+  it("cancels both drafts", () => {
+    const ui = {
+      ...createUiState(),
+      draftStopIds: ["stop-001"],
+      draftStationIds: ["station-001"],
+    };
+    const next = cancelDraftRoute(ui);
+    expect(next.draftStopIds).toEqual([]);
+    expect(next.draftStationIds).toEqual([]);
   });
 });
