@@ -91,6 +91,14 @@ export interface RuntimeController {
     routeId: string,
     platformId: string,
   ) => RuntimeSnapshot;
+  removeDraftStop: (index: number) => RuntimeSnapshot;
+  finishRoute: () => RuntimeSnapshot;
+  cancelRoute: () => RuntimeSnapshot;
+  renameRoute: (routeId: string, name: string) => RuntimeSnapshot;
+  recolorRoute: (routeId: string, color: string) => RuntimeSnapshot;
+  toggleRouteActive: (routeId: string) => RuntimeSnapshot;
+  deleteRoute: (routeId: string) => RuntimeSnapshot;
+  selectRoute: (routeId: string | null) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;
 }

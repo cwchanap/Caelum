@@ -2,8 +2,19 @@ import type { BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import { createInitialGameState } from "../simulation/gameState";
 import { tickSimulation } from "../simulation/simulation";
-import { assignRouteToPlatform as applyAssignRouteToPlatform } from "../simulation/transit";
-import { handleTileClick as applyTileClick } from "../ui/actions";
+import {
+  assignRouteToPlatform as applyAssignRouteToPlatform,
+  deleteRoute as applyDeleteRoute,
+  renameRoute as applyRenameRoute,
+  setRouteActive as applySetRouteActive,
+  setRouteColor as applySetRouteColor,
+} from "../simulation/transit";
+import {
+  cancelDraftRoute,
+  finishDraftRoute,
+  handleTileClick as applyTileClick,
+  removeDraftStop as applyRemoveDraftStop,
+} from "../ui/actions";
 import { createUiState } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
 import type {
@@ -27,6 +38,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
     draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
+    selectedRouteId: null,
   };
 }
 
@@ -43,6 +55,7 @@ function nextBuildingUiState(
     buildingRotation: 0 as const,
     draftStopIds: [],
     draftStationIds: [],
+    selectedRouteId: null,
   };
 }
 
@@ -310,6 +323,43 @@ export function createGameRuntime(): RuntimeController {
       return commit(
         applyAssignRouteToPlatform(state, nodeId, routeId, platformId),
         ui,
+      );
+    },
+    removeDraftStop(index) {
+      return commit(state, applyRemoveDraftStop(ui, index));
+    },
+    finishRoute() {
+      const result = finishDraftRoute(state, ui);
+      return commit(result.state, result.ui);
+    },
+    cancelRoute() {
+      return commit(state, cancelDraftRoute(ui));
+    },
+    renameRoute(routeId, name) {
+      return commit(applyRenameRoute(state, routeId, name), ui);
+    },
+    recolorRoute(routeId, color) {
+      return commit(applySetRouteColor(state, routeId, color), ui);
+    },
+    toggleRouteActive(routeId) {
+      const route =
+        state.transit.routes.find((r) => r.id === routeId) ??
+        state.transit.metroLines.find((l) => l.id === routeId);
+      if (route === undefined) {
+        return commit(state, ui);
+      }
+      return commit(applySetRouteActive(state, routeId, !route.active), ui);
+    },
+    deleteRoute(routeId) {
+      const nextUi =
+        ui.selectedRouteId === routeId ? { ...ui, selectedRouteId: null } : ui;
+      return commit(applyDeleteRoute(state, routeId), nextUi);
+    },
+    selectRoute(routeId) {
+      const nextId = ui.selectedRouteId === routeId ? null : routeId;
+      return commit(
+        state,
+        nextId === ui.selectedRouteId ? ui : { ...ui, selectedRouteId: nextId },
       );
     },
     setHoverTile(point) {

@@ -110,6 +110,14 @@ function createRuntimeHarness(
     assignRouteToPlatform: vi.fn(
       (_nodeId: string, _routeId: string, _platformId: string) => publish(),
     ),
+    removeDraftStop: vi.fn((_index: number) => publish()),
+    finishRoute: vi.fn(() => publish()),
+    cancelRoute: vi.fn(() => publish()),
+    renameRoute: vi.fn((_routeId: string, _name: string) => publish()),
+    recolorRoute: vi.fn((_routeId: string, _color: string) => publish()),
+    toggleRouteActive: vi.fn((_routeId: string) => publish()),
+    deleteRoute: vi.fn((_routeId: string) => publish()),
+    selectRoute: vi.fn((_routeId: string | null) => publish()),
     setHoverTile: vi.fn((point: Point | null) => {
       ui = { ...ui, hoverTile: point };
       return publish();
