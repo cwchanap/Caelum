@@ -3,7 +3,13 @@ import { BUILDING_CATALOG } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
 import { resolveNodeAtTile } from "../ui/actions";
 import type { UiState } from "../ui/uiState";
-import type { ShellInspectorState, ShellPlatform, ShellState } from "./types";
+import type {
+  ShellInspectorState,
+  ShellPlatform,
+  ShellRouteDraftState,
+  ShellRouteListState,
+  ShellState,
+} from "./types";
 
 function pad2(value: number): string {
   return value.toString().padStart(2, "0");
@@ -115,6 +121,89 @@ function buildInspector(
   };
 }
 
+const BUS_VEHICLE_COST = 8_000;
+const METRO_VEHICLE_COST = 50_000;
+
+function stopLabel(
+  state: GameState,
+  stopId: string,
+): { label: string; coord: string } {
+  const stop = state.transit.stops.find((s) => s.id === stopId);
+  if (stop !== undefined) {
+    return {
+      label: stop.kind === "busTerminal" ? "Bus Terminal" : "Bus Stop",
+      coord: `(${stop.position.x},${stop.position.y})`,
+    };
+  }
+  const station = state.transit.stations.find((s) => s.id === stopId);
+  if (station !== undefined) {
+    return {
+      label: "Metro Station",
+      coord: `(${station.position.x},${station.position.y})`,
+    };
+  }
+  return { label: stopId, coord: "" };
+}
+
+function buildRouteDraft(
+  state: GameState,
+  ui: UiState,
+): ShellRouteDraftState | null {
+  const isBus = ui.activeTool === "busRoute";
+  const isMetro = ui.activeTool === "metroLine";
+  if (!isBus && !isMetro) {
+    return null;
+  }
+  const ids = isBus ? ui.draftStopIds : ui.draftStationIds;
+  if (ids.length === 0) {
+    return null;
+  }
+  const vehicleCost = isBus ? BUS_VEHICLE_COST : METRO_VEHICLE_COST;
+  const distinct = new Set(ids).size;
+  const affordable = state.budget >= vehicleCost;
+  const canFinish = distinct >= 2 && affordable;
+  const finishHint =
+    distinct < 2
+      ? "Add another stop"
+      : affordable
+        ? "Ready"
+        : `Need ${formatBudget(vehicleCost)}`;
+
+  return {
+    mode: isBus ? "bus" : "metro",
+    stops: ids.map((id, index) => {
+      const { label, coord } = stopLabel(state, id);
+      return { index, label, coord };
+    }),
+    distinctCount: distinct,
+    vehicleCost,
+    canFinish,
+    finishHint,
+  };
+}
+
+function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
+  const buses: ShellRouteListState = state.transit.routes.map((route) => ({
+    id: route.id,
+    name: route.name,
+    color: route.color,
+    mode: "bus",
+    stopCount: route.stopIds.length,
+    active: route.active,
+    selected: ui.selectedRouteId === route.id,
+  }));
+  const metros: ShellRouteListState = state.transit.metroLines.map((line) => ({
+    id: line.id,
+    name: line.name,
+    color: line.color,
+    mode: "metro",
+    stopCount: line.stationIds.length,
+    active: line.active,
+    selected: ui.selectedRouteId === line.id,
+  }));
+  return [...buses, ...metros];
+}
+
 export function selectShellState(state: GameState, ui: UiState): ShellState {
   return {
     topbar: {
@@ -139,5 +228,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       controlTowerOpen: ui.controlTowerOpen,
     },
     inspector: buildInspector(state, ui),
+    routeDraft: buildRouteDraft(state, ui),
+    routes: buildRouteList(state, ui),
   };
 }
