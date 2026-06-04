@@ -253,13 +253,16 @@ export function removeDraftStop(ui: UiState, index: number): UiState {
       draftStationIds: ui.draftStationIds.filter((_, i) => i !== index),
     };
   }
-  if (index < 0 || index >= ui.draftStopIds.length) {
-    return ui;
+  if (ui.activeTool === "busRoute") {
+    if (index < 0 || index >= ui.draftStopIds.length) {
+      return ui;
+    }
+    return {
+      ...ui,
+      draftStopIds: ui.draftStopIds.filter((_, i) => i !== index),
+    };
   }
-  return {
-    ...ui,
-    draftStopIds: ui.draftStopIds.filter((_, i) => i !== index),
-  };
+  return ui;
 }
 
 export function cancelDraftRoute(ui: UiState): UiState {

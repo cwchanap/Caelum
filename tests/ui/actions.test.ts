@@ -502,4 +502,15 @@ describe("draft route helpers", () => {
     expect(next.draftStopIds).toEqual([]);
     expect(next.draftStationIds).toEqual([]);
   });
+
+  it("removeDraftStop returns the same ui for an out-of-range index", () => {
+    const { ui } = busDraft();
+    expect(removeDraftStop(ui, 5)).toBe(ui);
+    expect(removeDraftStop(ui, -1)).toBe(ui);
+  });
+
+  it("cancelDraftRoute returns the same ui when already empty", () => {
+    const ui = createUiState();
+    expect(cancelDraftRoute(ui)).toBe(ui);
+  });
 });
