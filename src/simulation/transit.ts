@@ -559,8 +559,10 @@ export function assignVehicle(
   };
 }
 
-function autoName(prefix: "Bus" | "Metro", idPrefix: string, id: string): string {
-  return `${prefix} ${entityNumberFromId(idPrefix, id)}`;
+function autoName(kind: "bus" | "metro", id: string): string {
+  return kind === "bus"
+    ? `Bus ${entityNumberFromId("route", id)}`
+    : `Metro ${entityNumberFromId("metro", id)}`;
 }
 
 export function renameRoute(
@@ -570,35 +572,35 @@ export function renameRoute(
 ): GameState {
   const trimmed = name.trim();
 
-  const routeIndex = state.transit.routes.findIndex((r) => r.id === routeId);
-  if (routeIndex !== -1) {
-    const finalName = trimmed === "" ? autoName("Bus", "route", routeId) : trimmed;
-    if (state.transit.routes[routeIndex].name === finalName) {
+  const route = state.transit.routes.find((r) => r.id === routeId);
+  if (route !== undefined) {
+    const finalName = trimmed === "" ? autoName("bus", routeId) : trimmed;
+    if (route.name === finalName) {
       return state;
     }
     return {
       ...state,
       transit: {
         ...state.transit,
-        routes: state.transit.routes.map((route) =>
-          route.id === routeId ? { ...route, name: finalName } : route,
+        routes: state.transit.routes.map((r) =>
+          r.id === routeId ? { ...r, name: finalName } : r,
         ),
       },
     };
   }
 
-  const lineIndex = state.transit.metroLines.findIndex((l) => l.id === routeId);
-  if (lineIndex !== -1) {
-    const finalName = trimmed === "" ? autoName("Metro", "metro", routeId) : trimmed;
-    if (state.transit.metroLines[lineIndex].name === finalName) {
+  const line = state.transit.metroLines.find((l) => l.id === routeId);
+  if (line !== undefined) {
+    const finalName = trimmed === "" ? autoName("metro", routeId) : trimmed;
+    if (line.name === finalName) {
       return state;
     }
     return {
       ...state,
       transit: {
         ...state.transit,
-        metroLines: state.transit.metroLines.map((line) =>
-          line.id === routeId ? { ...line, name: finalName } : line,
+        metroLines: state.transit.metroLines.map((l) =>
+          l.id === routeId ? { ...l, name: finalName } : l,
         ),
       },
     };
