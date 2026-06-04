@@ -1237,4 +1237,28 @@ describe("route mutators", () => {
     const sameColor = state.transit.routes[0].color;
     expect(setRouteColor(state, "route-001", sameColor)).toBe(state);
   });
+
+  it("returns the same reference when the name is unchanged", () => {
+    const state = createBusState();
+    const sameName = state.transit.routes[0].name;
+    expect(renameRoute(state, "route-001", sameName)).toBe(state);
+  });
+
+  it("sets a metro line color by id", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    const next = setRouteColor(state, "metro-001", "#abcdef");
+    expect(next.transit.metroLines[0].color).toBe("#abcdef");
+  });
+
+  it("toggles a metro line active flag by id", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    const next = setRouteActive(state, "metro-001", false);
+    expect(next.transit.metroLines[0].active).toBe(false);
+  });
 });
