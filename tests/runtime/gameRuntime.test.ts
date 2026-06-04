@@ -264,3 +264,51 @@ describe("runtime assignRouteToPlatform", () => {
     expect(after.state).toBe(before.state); // no such node -> same state reference
   });
 });
+
+describe("route creation and management", () => {
+  function withTwoStops() {
+    const runtime = createGameRuntime();
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.handleTileClick({ x: 15, y: 8 });
+    return runtime;
+  }
+
+  it("finishes a drafted route and clears the draft", () => {
+    const runtime = withTwoStops();
+    expect(runtime.getSnapshot().ui.draftStopIds).toHaveLength(2);
+
+    const snapshot = runtime.finishRoute();
+
+    expect(snapshot.state.transit.routes).toHaveLength(1);
+    expect(snapshot.ui.draftStopIds).toEqual([]);
+  });
+
+  it("removes a draft stop and cancels a draft", () => {
+    const runtime = withTwoStops();
+    expect(runtime.removeDraftStop(0).ui.draftStopIds).toEqual(["stop-002"]);
+    expect(runtime.cancelRoute().ui.draftStopIds).toEqual([]);
+  });
+
+  it("renames, recolors, toggles, selects, and deletes a route", () => {
+    const runtime = withTwoStops();
+    runtime.finishRoute();
+
+    expect(runtime.renameRoute("route-001", "Loop").state.transit.routes[0].name).toBe("Loop");
+    expect(runtime.recolorRoute("route-001", "#abcdef").state.transit.routes[0].color).toBe("#abcdef");
+    expect(runtime.toggleRouteActive("route-001").state.transit.routes[0].active).toBe(false);
+    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe("route-001");
+    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(null);
+    expect(runtime.deleteRoute("route-001").state.transit.routes).toEqual([]);
+  });
+
+  it("clears the selected route when switching tools", () => {
+    const runtime = withTwoStops();
+    runtime.finishRoute();
+    runtime.selectRoute("route-001");
+    expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
+  });
+});
