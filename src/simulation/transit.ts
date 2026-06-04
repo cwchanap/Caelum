@@ -612,28 +612,32 @@ export function setRouteColor(
   routeId: string,
   color: string,
 ): GameState {
-  if (state.transit.routes.some((r) => r.id === routeId)) {
+  const route = state.transit.routes.find((r) => r.id === routeId);
+  if (route !== undefined) {
+    if (route.color === color) {
+      return state;
+    }
     return {
       ...state,
       transit: {
         ...state.transit,
-        routes: state.transit.routes.map((route) =>
-          route.id === routeId && route.color !== color
-            ? { ...route, color }
-            : route,
+        routes: state.transit.routes.map((r) =>
+          r.id === routeId ? { ...r, color } : r,
         ),
       },
     };
   }
-  if (state.transit.metroLines.some((l) => l.id === routeId)) {
+  const line = state.transit.metroLines.find((l) => l.id === routeId);
+  if (line !== undefined) {
+    if (line.color === color) {
+      return state;
+    }
     return {
       ...state,
       transit: {
         ...state.transit,
-        metroLines: state.transit.metroLines.map((line) =>
-          line.id === routeId && line.color !== color
-            ? { ...line, color }
-            : line,
+        metroLines: state.transit.metroLines.map((l) =>
+          l.id === routeId ? { ...l, color } : l,
         ),
       },
     };
