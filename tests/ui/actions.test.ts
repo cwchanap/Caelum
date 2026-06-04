@@ -4,6 +4,7 @@ import { placeBuilding } from "../../src/simulation/buildings";
 import {
   addBusRoute,
   addBusStop,
+  addMetroLine,
   addMetroStation,
   assignVehicle,
 } from "../../src/simulation/transit";
@@ -15,44 +16,11 @@ import {
 import { createUiState } from "../../src/ui/uiState";
 
 describe("UI tile actions", () => {
-  it("preserves a bus route draft when the bus cannot be afforded", () => {
+  it("accumulates bus route stops without committing at two stops", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
-    state = { ...state, budget: 7_999 };
-    const ui = {
-      ...createUiState(),
-      activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001"],
-    };
 
-    const result = handleTileClick(state, ui, { x: 15, y: 8 });
-
-    expect(result.state).toBe(state);
-    expect(result.ui).toBe(ui);
-  });
-
-  it("preserves a metro line draft when the train cannot be afforded", () => {
-    let state = createInitialGameState();
-    state = addMetroStation(state, { x: 7, y: 8 });
-    state = addMetroStation(state, { x: 15, y: 8 });
-    state = { ...state, budget: 49_999 };
-    const ui = {
-      ...createUiState(),
-      activeTool: "metroLine" as const,
-      draftStationIds: ["station-001"],
-    };
-
-    const result = handleTileClick(state, ui, { x: 15, y: 8 });
-
-    expect(result.state).toBe(state);
-    expect(result.ui).toBe(ui);
-  });
-
-  it("removes stops and dependent routes at the clicked tile", () => {
-    let state = createInitialGameState();
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
     let result = handleTileClick(
       state,
       { ...createUiState(), activeTool: "busRoute" as const },
@@ -60,8 +28,67 @@ describe("UI tile actions", () => {
     );
     result = handleTileClick(result.state, result.ui, { x: 15, y: 8 });
 
+    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
+    expect(result.state.transit.routes).toEqual([]);
+  });
+
+  it("accumulates a third bus stop into the draft", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+
+    let result = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 7, y: 8 },
+    );
+    result = handleTileClick(result.state, result.ui, { x: 15, y: 8 });
+    result = handleTileClick(result.state, result.ui, { x: 22, y: 8 });
+
+    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002", "stop-003"]);
+  });
+
+  it("ignores clicking the same stop twice in a row", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+
+    let result = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 7, y: 8 },
+    );
+    const afterFirst = result.ui;
+    result = handleTileClick(result.state, result.ui, { x: 7, y: 8 });
+
+    expect(result.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(result.ui).toBe(afterFirst);
+  });
+
+  it("accumulates metro line stations without committing", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+
+    let result = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "metroLine" as const },
+      { x: 7, y: 8 },
+    );
+    result = handleTileClick(result.state, result.ui, { x: 15, y: 8 });
+
+    expect(result.ui.draftStationIds).toEqual(["station-001", "station-002"]);
+    expect(result.state.transit.metroLines).toEqual([]);
+  });
+
+  it("removes stops and dependent routes at the clicked tile", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignVehicle(state, "bus", "route-001");
     const removed = handleTileClick(
-      result.state,
+      state,
       { ...createUiState(), activeTool: "remove" as const },
       { x: 7, y: 8 },
     );
@@ -84,15 +111,10 @@ describe("UI tile actions", () => {
     let state = createInitialGameState();
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
-    let result = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "metroLine" as const },
-      { x: 7, y: 8 },
-    );
-    result = handleTileClick(result.state, result.ui, { x: 15, y: 8 });
-
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = assignVehicle(state, "metro", "metro-001");
     const removed = handleTileClick(
-      result.state,
+      state,
       { ...createUiState(), activeTool: "remove" as const },
       { x: 7, y: 8 },
     );
@@ -191,13 +213,8 @@ describe("UI tile actions", () => {
     );
     result = handleTileClick(result.state, result.ui, { x: 4, y: 0 });
 
-    expect(result.state.transit.routes[0]).toMatchObject({
-      id: "route-001",
-      stopIds: ["stop-001", "stop-002"],
-      vehicleIds: ["vehicle-001"],
-      active: true,
-    });
-    expect(result.ui.draftStopIds).toEqual([]);
+    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
+    expect(result.state.transit.routes).toEqual([]);
   });
 });
 
