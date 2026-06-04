@@ -1231,4 +1231,10 @@ describe("route mutators", () => {
     const state = createBusState();
     expect(setRouteActive(state, "route-001", true)).toBe(state);
   });
+
+  it("returns the same reference when the color is unchanged", () => {
+    const state = createBusState();
+    const sameColor = state.transit.routes[0].color;
+    expect(setRouteColor(state, "route-001", sameColor)).toBe(state);
+  });
 });
