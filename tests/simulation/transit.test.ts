@@ -17,6 +17,9 @@ import {
   addMetroStation,
   assignRouteToPlatform,
   assignVehicle,
+  renameRoute,
+  setRouteActive,
+  setRouteColor,
   stopCoverageRadius,
   tickVehicles,
 } from "../../src/simulation/transit";
@@ -1177,5 +1180,55 @@ describe("assignRouteToPlatform", () => {
     )!;
     const next = assignRouteToPlatform(state, terminal.id, routeId, current.id);
     expect(next).toBe(state);
+  });
+});
+
+describe("route mutators", () => {
+  it("renames a bus route and leaves others untouched", () => {
+    const state = createBusState();
+    const next = renameRoute(state, "route-001", "Airport Express");
+    expect(next.transit.routes[0].name).toBe("Airport Express");
+    expect(next).not.toBe(state);
+  });
+
+  it("falls back to the auto-name when the new name is blank", () => {
+    const state = createBusState();
+    const next = renameRoute(state, "route-001", "   ");
+    expect(next.transit.routes[0].name).toBe("Bus 1");
+  });
+
+  it("renames a metro line by id", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    const next = renameRoute(state, "metro-001", "Blue Line");
+    expect(next.transit.metroLines[0].name).toBe("Blue Line");
+  });
+
+  it("sets a route color", () => {
+    const state = createBusState();
+    const next = setRouteColor(state, "route-001", "#123456");
+    expect(next.transit.routes[0].color).toBe("#123456");
+  });
+
+  it("returns the same reference for an unknown id", () => {
+    const state = createBusState();
+    expect(renameRoute(state, "route-999", "X")).toBe(state);
+    expect(setRouteColor(state, "route-999", "#000")).toBe(state);
+    expect(setRouteActive(state, "route-999", false)).toBe(state);
+  });
+
+  it("deactivates and reactivates a route flag", () => {
+    const state = createBusState();
+    const off = setRouteActive(state, "route-001", false);
+    expect(off.transit.routes[0].active).toBe(false);
+    const on = setRouteActive(off, "route-001", true);
+    expect(on.transit.routes[0].active).toBe(true);
+  });
+
+  it("returns the same reference when active is unchanged", () => {
+    const state = createBusState();
+    expect(setRouteActive(state, "route-001", true)).toBe(state);
   });
 });

@@ -559,6 +559,126 @@ export function assignVehicle(
   };
 }
 
+function autoName(prefix: "Bus" | "Metro", idPrefix: string, id: string): string {
+  return `${prefix} ${entityNumberFromId(idPrefix, id)}`;
+}
+
+export function renameRoute(
+  state: GameState,
+  routeId: string,
+  name: string,
+): GameState {
+  const trimmed = name.trim();
+
+  const routeIndex = state.transit.routes.findIndex((r) => r.id === routeId);
+  if (routeIndex !== -1) {
+    const finalName = trimmed === "" ? autoName("Bus", "route", routeId) : trimmed;
+    if (state.transit.routes[routeIndex].name === finalName) {
+      return state;
+    }
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) =>
+          route.id === routeId ? { ...route, name: finalName } : route,
+        ),
+      },
+    };
+  }
+
+  const lineIndex = state.transit.metroLines.findIndex((l) => l.id === routeId);
+  if (lineIndex !== -1) {
+    const finalName = trimmed === "" ? autoName("Metro", "metro", routeId) : trimmed;
+    if (state.transit.metroLines[lineIndex].name === finalName) {
+      return state;
+    }
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((line) =>
+          line.id === routeId ? { ...line, name: finalName } : line,
+        ),
+      },
+    };
+  }
+
+  return state;
+}
+
+export function setRouteColor(
+  state: GameState,
+  routeId: string,
+  color: string,
+): GameState {
+  if (state.transit.routes.some((r) => r.id === routeId)) {
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) =>
+          route.id === routeId && route.color !== color
+            ? { ...route, color }
+            : route,
+        ),
+      },
+    };
+  }
+  if (state.transit.metroLines.some((l) => l.id === routeId)) {
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((line) =>
+          line.id === routeId && line.color !== color
+            ? { ...line, color }
+            : line,
+        ),
+      },
+    };
+  }
+  return state;
+}
+
+export function setRouteActive(
+  state: GameState,
+  routeId: string,
+  active: boolean,
+): GameState {
+  const route = state.transit.routes.find((r) => r.id === routeId);
+  if (route !== undefined) {
+    if (route.active === active) {
+      return state;
+    }
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((r) =>
+          r.id === routeId ? { ...r, active } : r,
+        ),
+      },
+    };
+  }
+  const line = state.transit.metroLines.find((l) => l.id === routeId);
+  if (line !== undefined) {
+    if (line.active === active) {
+      return state;
+    }
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((l) =>
+          l.id === routeId ? { ...l, active } : l,
+        ),
+      },
+    };
+  }
+  return state;
+}
+
 export function tickVehicles(
   state: GameState,
   deltaSeconds: number,
