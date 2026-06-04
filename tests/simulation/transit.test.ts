@@ -17,6 +17,7 @@ import {
   addMetroStation,
   assignRouteToPlatform,
   assignVehicle,
+  deleteRoute,
   renameRoute,
   setRouteActive,
   setRouteColor,
@@ -1260,5 +1261,48 @@ describe("route mutators", () => {
     state = addMetroLine(state, ["station-001", "station-002"]);
     const next = setRouteActive(state, "metro-001", false);
     expect(next.transit.metroLines[0].active).toBe(false);
+  });
+});
+
+describe("deleteRoute", () => {
+  it("removes a bus route, its vehicles, and its platform assignments", () => {
+    const state = createBusState(); // route-001 across stop-001/stop-002 + vehicle-001
+    const assignedBefore = state.transit.stops
+      .flatMap((s) => s.platforms)
+      .some((p) => p.routeIds.includes("route-001"));
+    expect(assignedBefore).toBe(true);
+
+    const next = deleteRoute(state, "route-001");
+
+    expect(next.transit.routes).toEqual([]);
+    expect(next.transit.vehicles).toEqual([]);
+    expect(
+      next.transit.stops
+        .flatMap((s) => s.platforms)
+        .some((p) => p.routeIds.includes("route-001")),
+    ).toBe(false);
+  });
+
+  it("removes a metro line, its vehicles, and its platform assignments", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = assignVehicle(state, "metro", "metro-001");
+
+    const next = deleteRoute(state, "metro-001");
+
+    expect(next.transit.metroLines).toEqual([]);
+    expect(next.transit.vehicles).toEqual([]);
+    expect(
+      next.transit.stations
+        .flatMap((s) => s.platforms)
+        .some((p) => p.routeIds.includes("metro-001")),
+    ).toBe(false);
+  });
+
+  it("returns the same reference for an unknown id", () => {
+    const state = createBusState();
+    expect(deleteRoute(state, "route-999")).toBe(state);
   });
 });

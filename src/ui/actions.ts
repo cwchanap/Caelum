@@ -6,6 +6,7 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
+  deleteRoute,
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
 
@@ -112,26 +113,6 @@ export function resolveNodeAtTile(
   return null;
 }
 
-function stripRoutesFromPlatforms<
-  T extends { platforms: { routeIds: string[] }[] },
->(nodes: T[], removedIds: Set<string>): T[] {
-  if (removedIds.size === 0) {
-    return nodes;
-  }
-
-  return nodes.map((node) => {
-    let changed = false;
-    const platforms = node.platforms.map((platform) => {
-      const filtered = platform.routeIds.filter((id) => !removedIds.has(id));
-      if (filtered.length !== platform.routeIds.length) {
-        changed = true;
-        return { ...platform, routeIds: filtered };
-      }
-      return platform;
-    });
-    return changed ? { ...node, platforms } : node;
-  });
-}
 
 function removeAtTile(state: GameState, point: Point): GameState {
   const removedBuilding = state.buildings.find((building) =>
@@ -189,7 +170,8 @@ function removeAtTile(state: GameState, point: Point): GameState {
     return state;
   }
 
-  return {
+  // Remove the node(s) first.
+  let next: GameState = {
     ...state,
     buildings:
       removedBuilding === undefined
@@ -199,29 +181,23 @@ function removeAtTile(state: GameState, point: Point): GameState {
           ),
     transit: {
       ...state.transit,
-      stops: stripRoutesFromPlatforms(
-        state.transit.stops.filter((stop) => !removedStopIds.has(stop.id)),
-        removedRouteIds,
-      ),
-      stations: stripRoutesFromPlatforms(
-        state.transit.stations.filter(
-          (station) => !removedStationIds.has(station.id),
-        ),
-        removedMetroLineIds,
-      ),
-      routes: state.transit.routes.filter(
-        (route) => !removedRouteIds.has(route.id),
-      ),
-      metroLines: state.transit.metroLines.filter(
-        (metroLine) => !removedMetroLineIds.has(metroLine.id),
-      ),
-      vehicles: state.transit.vehicles.filter(
-        (vehicle) =>
-          !removedRouteIds.has(vehicle.lineId) &&
-          !removedMetroLineIds.has(vehicle.lineId),
+      stops: state.transit.stops.filter((stop) => !removedStopIds.has(stop.id)),
+      stations: state.transit.stations.filter(
+        (station) => !removedStationIds.has(station.id),
       ),
     },
   };
+
+  // Then delete every dependent route/line via the shared helper, which also
+  // strips platform assignments and removes vehicles.
+  for (const routeId of removedRouteIds) {
+    next = deleteRoute(next, routeId);
+  }
+  for (const lineId of removedMetroLineIds) {
+    next = deleteRoute(next, lineId);
+  }
+
+  return next;
 }
 
 export function handleTileClick(
