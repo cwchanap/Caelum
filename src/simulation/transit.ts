@@ -485,6 +485,59 @@ export function addMetroLine(
   };
 }
 
+function stripRouteFromPlatforms<
+  T extends { platforms: { routeIds: string[] }[] },
+>(nodes: T[], routeId: string): T[] {
+  let anyChanged = false;
+  const mapped = nodes.map((node) => {
+    let changed = false;
+    const platforms = node.platforms.map((platform) => {
+      if (!platform.routeIds.includes(routeId)) {
+        return platform;
+      }
+      changed = true;
+      return {
+        ...platform,
+        routeIds: platform.routeIds.filter((id) => id !== routeId),
+      };
+    });
+    if (changed) {
+      anyChanged = true;
+      return { ...node, platforms };
+    }
+    return node;
+  });
+  return anyChanged ? mapped : nodes;
+}
+
+export function deleteRoute(state: GameState, routeId: string): GameState {
+  const isRoute = state.transit.routes.some((r) => r.id === routeId);
+  const isLine = state.transit.metroLines.some((l) => l.id === routeId);
+  if (!isRoute && !isLine) {
+    return state;
+  }
+
+  return {
+    ...state,
+    transit: {
+      ...state.transit,
+      stops: isRoute
+        ? stripRouteFromPlatforms(state.transit.stops, routeId)
+        : state.transit.stops,
+      stations: isLine
+        ? stripRouteFromPlatforms(state.transit.stations, routeId)
+        : state.transit.stations,
+      routes: isRoute
+        ? state.transit.routes.filter((r) => r.id !== routeId)
+        : state.transit.routes,
+      metroLines: isLine
+        ? state.transit.metroLines.filter((l) => l.id !== routeId)
+        : state.transit.metroLines,
+      vehicles: state.transit.vehicles.filter((v) => v.lineId !== routeId),
+    },
+  };
+}
+
 export function assignVehicle(
   state: GameState,
   mode: "bus" | "metro",
