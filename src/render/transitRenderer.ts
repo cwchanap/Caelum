@@ -109,15 +109,9 @@ export function renderTransit(
   state: GameState,
   ui: UiState,
 ): void {
-  for (const route of state.transit.routes) {
-    drawPolyline(ctx, routePositions(state, route.stopIds), route.color, 5);
-  }
-
-  for (const line of state.transit.metroLines) {
-    drawPolyline(ctx, stationPositions(state, line.stationIds), line.color, 8);
-  }
-
-  // Highlight the selected route/line with a wide translucent halo stroke.
+  // Draw the selected-route halo FIRST so the colored line renders on top of
+  // it. Drawing the halo after the line (the obvious order) covers the color
+  // with a ~67% white stroke and washes the route out.
   if (ui.selectedRouteId !== null) {
     const route = state.transit.routes.find((r) => r.id === ui.selectedRouteId);
     if (route !== undefined) {
@@ -134,6 +128,14 @@ export function renderTransit(
         12,
       );
     }
+  }
+
+  for (const route of state.transit.routes) {
+    drawPolyline(ctx, routePositions(state, route.stopIds), route.color, 5);
+  }
+
+  for (const line of state.transit.metroLines) {
+    drawPolyline(ctx, stationPositions(state, line.stationIds), line.color, 8);
   }
 
   // Draft preview: dashed stroke through the in-progress stops/stations.

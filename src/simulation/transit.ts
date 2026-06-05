@@ -33,13 +33,13 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function distinctValidStopCount(state: GameState, stopIds: string[]): number {
+export function distinctValidStopCount(state: GameState, stopIds: string[]): number {
   const existingStopIds = new Set(state.transit.stops.map((stop) => stop.id));
 
   return new Set(stopIds.filter((stopId) => existingStopIds.has(stopId))).size;
 }
 
-function distinctValidStationCount(
+export function distinctValidStationCount(
   state: GameState,
   stationIds: string[],
 ): number {
@@ -659,6 +659,11 @@ export function renameRoute(
     };
   }
 
+  // Unreachable in normal flow: the controller always has a live route in
+  // hand by the time it calls rename. Surface the miss so a stale-id bug
+  // (e.g. a route deleted while its rename input is focused) is discoverable
+  // instead of silently dropping the typed name.
+  console.warn("renameRoute: unknown routeId", routeId);
   return state;
 }
 
@@ -697,6 +702,8 @@ export function setRouteColor(
       },
     };
   }
+  // See renameRoute: surface stale-id so the no-op is observable.
+  console.warn("setRouteColor: unknown routeId", routeId);
   return state;
 }
 

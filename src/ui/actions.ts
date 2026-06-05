@@ -8,6 +8,8 @@ import {
   assignVehicle,
   COSTS,
   deleteRoute,
+  distinctValidStationCount,
+  distinctValidStopCount,
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
 
@@ -111,7 +113,6 @@ export function resolveNodeAtTile(
   return null;
 }
 
-
 function removeAtTile(state: GameState, point: Point): GameState {
   const removedBuilding = state.buildings.find((building) =>
     building.occupiedTiles.some((tile) => samePoint(tile, point)),
@@ -198,17 +199,13 @@ function removeAtTile(state: GameState, point: Point): GameState {
   return next;
 }
 
-function distinctCount(ids: string[]): number {
-  return new Set(ids).size;
-}
-
 export function finishDraftRoute(
   state: GameState,
   ui: UiState,
 ): { state: GameState; ui: UiState } {
   if (ui.activeTool === "busRoute") {
     if (
-      distinctCount(ui.draftStopIds) < 2 ||
+      distinctValidStopCount(state, ui.draftStopIds) < 2 ||
       state.budget < COSTS.bus
     ) {
       return { state, ui };
@@ -224,7 +221,7 @@ export function finishDraftRoute(
 
   if (ui.activeTool === "metroLine") {
     if (
-      distinctCount(ui.draftStationIds) < 2 ||
+      distinctValidStationCount(state, ui.draftStationIds) < 2 ||
       state.budget < COSTS.metro
     ) {
       return { state, ui };
@@ -351,10 +348,25 @@ export function handleTileClick(
   }
 
   if (ui.activeTool === "remove") {
-    return {
-      state: removeAtTile(state, point),
-      ui: { ...ui, draftStopIds: [], draftStationIds: [], selectedId: null },
-    };
+    const nextState = removeAtTile(state, point);
+    // removeAtTile may cascade-delete the route the player has selected (e.g.
+    // bulldozing a stop the route depends on). Clear the stale id so the UI
+    // does not hold a selection that no longer points at anything; otherwise
+    // selectors only mask the miss via live-id matching.
+    const selectedSurvived =
+      ui.selectedRouteId === null ||
+      nextState.transit.routes.some((r) => r.id === ui.selectedRouteId) ||
+      nextState.transit.metroLines.some((l) => l.id === ui.selectedRouteId);
+    const nextUi = selectedSurvived
+      ? { ...ui, draftStopIds: [], draftStationIds: [], selectedId: null }
+      : {
+          ...ui,
+          draftStopIds: [],
+          draftStationIds: [],
+          selectedId: null,
+          selectedRouteId: null,
+        };
+    return { state: nextState, ui: nextUi };
   }
 
   return { state, ui };
