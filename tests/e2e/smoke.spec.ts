@@ -1,36 +1,9 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { clickMapTile } from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
-
-const mapWidth = 28;
-const mapHeight = 18;
-const tileSize = 32;
-
-async function clickMapTile(
-  canvas: Locator,
-  tile: { x: number; y: number },
-): Promise<void> {
-  const box = await canvas.boundingBox();
-  if (box === null) {
-    throw new Error("Game canvas does not have a visible bounding box");
-  }
-
-  const scale = Math.min(
-    box.width / (mapWidth * tileSize),
-    box.height / (mapHeight * tileSize),
-  );
-  const offsetX = (box.width - mapWidth * tileSize * scale) / 2;
-  const offsetY = (box.height - mapHeight * tileSize * scale) / 2;
-
-  await canvas.click({
-    position: {
-      x: offsetX + (tile.x + 0.5) * tileSize * scale,
-      y: offsetY + (tile.y + 0.5) * tileSize * scale,
-    },
-  });
-}
 
 test.beforeAll(async () => {
   server = await createServer({
