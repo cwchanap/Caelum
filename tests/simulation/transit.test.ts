@@ -1305,4 +1305,60 @@ describe("deleteRoute", () => {
     const state = createBusState();
     expect(deleteRoute(state, "route-999")).toBe(state);
   });
+
+  it("preserves a sibling route and its platform assignment when deleting a shared-terminal route", () => {
+    // Two routes share a busTerminal and a survivor stop. Deleting routeA
+    // must: (a) leave routeB in routes, (b) leave routeB's vehicle alive,
+    // (c) leave routeB registered on its platform at the terminal, (d) strip
+    // routeA's id from every platform it was on, (e) leave unrelated stops
+    // untouched by reference equality.
+    let state = createInitialGameState();
+    state = { ...state, budget: 1_000_000 };
+    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal"); // shared
+    state = addBusStop(state, { x: 15, y: 2 }); // routeA only
+    state = addBusStop(state, { x: 22, y: 2 }); // routeB only
+    state = addBusRoute(state, ["stop-001", "stop-002"]); // route-001 (A)
+    state = addBusRoute(state, ["stop-001", "stop-003"]); // route-002 (B)
+    state = assignVehicle(state, "bus", "route-001");
+    state = assignVehicle(state, "bus", "route-002");
+
+    const terminalBefore = state.transit.stops.find(
+      (s) => s.id === "stop-001",
+    )!;
+    const survivorStopBefore = state.transit.stops.find(
+      (s) => s.id === "stop-003",
+    )!;
+    // Sanity: both routes are registered on the terminal (different platforms
+    // because assignRouteToLeastLoaded spreads them across A/B).
+    expect(
+      terminalBefore.platforms.flatMap((p) => p.routeIds).sort(),
+    ).toEqual(["route-001", "route-002"]);
+
+    const next = deleteRoute(state, "route-001");
+
+    // routeB survives
+    expect(next.transit.routes.map((r) => r.id)).toEqual(["route-002"]);
+    // routeB's vehicle survives; routeA's is removed
+    expect(next.transit.vehicles.map((v) => v.id)).toEqual(["vehicle-002"]);
+    // routeB is still registered at the terminal, routeA is fully scrubbed
+    const terminalAfter = next.transit.stops.find((s) => s.id === "stop-001")!;
+    expect(terminalAfter.platforms.flatMap((p) => p.routeIds)).toEqual([
+      "route-002",
+    ]);
+    // The survivor-only stop keeps its platform assignment by reference
+    const survivorStopAfter = next.transit.stops.find(
+      (s) => s.id === "stop-003",
+    )!;
+    expect(survivorStopAfter).toBe(survivorStopBefore);
+    // The routeA-only stop is gone from stops? No — stops themselves are not
+    // deleted by deleteRoute (only the route is). Confirm stop-002 is still
+    // present, just with routeA scrubbed from its platforms.
+    const routeAOnlyStopAfter = next.transit.stops.find(
+      (s) => s.id === "stop-002",
+    )!;
+    expect(routeAOnlyStopAfter).toBeDefined();
+    expect(routeAOnlyStopAfter.platforms.flatMap((p) => p.routeIds)).toEqual(
+      [],
+    );
+  });
 });

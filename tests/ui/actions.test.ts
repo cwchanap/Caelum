@@ -110,6 +110,48 @@ describe("UI tile actions", () => {
     expect(removed.state.transit.vehicles).toEqual([]);
   });
 
+  it("clears selectedRouteId when bulldozing a stop cascades to the selected route's deletion", () => {
+    // Regression: previously, handleTileClick(remove) cleared selectedId but
+    // NOT selectedRouteId, so the UI held a stale id that no longer pointed
+    // at any live route. Selectors tolerated it via live-id matching, which
+    // masked the bug.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    const ui = {
+      ...createUiState(),
+      activeTool: "remove" as const,
+      selectedRouteId: "route-001",
+    };
+
+    const removed = handleTileClick(state, ui, { x: 7, y: 8 });
+
+    expect(removed.state.transit.routes).toEqual([]);
+    expect(removed.ui.selectedRouteId).toBeNull();
+  });
+
+  it("preserves selectedRouteId when bulldozing does not affect the selected route", () => {
+    // Two routes; bulldoze a stop that only route-001 depends on while
+    // route-002 is selected. selectedRouteId must survive.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]); // route-001 (deleted)
+    state = addBusRoute(state, ["stop-002", "stop-003"]); // route-002 (selected)
+    const ui = {
+      ...createUiState(),
+      activeTool: "remove" as const,
+      selectedRouteId: "route-002",
+    };
+
+    const removed = handleTileClick(state, ui, { x: 7, y: 8 });
+
+    expect(removed.state.transit.routes.map((r) => r.id)).toEqual(["route-002"]);
+    expect(removed.ui.selectedRouteId).toBe("route-002");
+  });
+
   it("removes stations and dependent metro lines at the clicked tile", () => {
     let state = createInitialGameState();
     state = addMetroStation(state, { x: 7, y: 8 });
@@ -474,6 +516,64 @@ describe("draft route helpers", () => {
     const result = finishDraftRoute(state, draft.ui);
     expect(result.state).toBe(state);
     expect(result.ui).toBe(draft.ui);
+  });
+
+  it("finishes a metro line, assigns a metro vehicle, and clears the draft", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "metroLine" as const,
+      draftStationIds: ["station-001", "station-002"],
+    };
+
+    const result = finishDraftRoute(state, ui);
+
+    expect(result.state.transit.metroLines[0]).toMatchObject({
+      id: "metro-001",
+      stationIds: ["station-001", "station-002"],
+      vehicleIds: ["vehicle-001"],
+      active: true,
+    });
+    // Metro vehicles must be mode "metro" with metro capacity — guards
+    // against a swapped mode or cost wiring (COSTS.metro = 50_000) silently
+    // passing if the bus branch was copy-pasted incorrectly.
+    expect(result.state.transit.vehicles[0]).toMatchObject({
+      id: "vehicle-001",
+      mode: "metro",
+      lineId: "metro-001",
+      capacity: 90,
+    });
+    expect(result.ui.draftStationIds).toEqual([]);
+  });
+
+  it("does not finish a metro line when fewer than two distinct stations", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "metroLine" as const,
+      draftStationIds: ["station-001"],
+    };
+    const result = finishDraftRoute(state, ui);
+    expect(result.state).toBe(state);
+    expect(result.ui).toBe(ui);
+  });
+
+  it("does not finish a metro line when the metro vehicle is unaffordable", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "metroLine" as const,
+      draftStationIds: ["station-001", "station-002"],
+    };
+    const unaffordable = { ...state, budget: 49_999 };
+    const result = finishDraftRoute(unaffordable, ui);
+    expect(result.state).toBe(unaffordable);
+    expect(result.ui).toBe(ui);
   });
 
   it("removes a specific draft stop by index", () => {
