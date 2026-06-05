@@ -55,6 +55,38 @@
     setSnapshot(runtime.assignRouteToPlatform(nodeId, routeId, platformId));
   }
 
+  function handleRemoveDraftStop(index: number): void {
+    setSnapshot(runtime.removeDraftStop(index));
+  }
+
+  function handleFinishRoute(): void {
+    setSnapshot(runtime.finishRoute());
+  }
+
+  function handleCancelRoute(): void {
+    setSnapshot(runtime.cancelRoute());
+  }
+
+  function handleRenameRoute(routeId: string, name: string): void {
+    setSnapshot(runtime.renameRoute(routeId, name));
+  }
+
+  function handleRecolorRoute(routeId: string, color: string): void {
+    setSnapshot(runtime.recolorRoute(routeId, color));
+  }
+
+  function handleToggleRouteActive(routeId: string): void {
+    setSnapshot(runtime.toggleRouteActive(routeId));
+  }
+
+  function handleDeleteRoute(routeId: string): void {
+    setSnapshot(runtime.deleteRoute(routeId));
+  }
+
+  function handleSelectRoute(routeId: string | null): void {
+    setSnapshot(runtime.selectRoute(routeId));
+  }
+
   function handleShellError(message: string): void {
     shellError = message;
   }
@@ -140,6 +172,16 @@
         onSetOverlay={handleSetOverlay}
         inspector={snapshot.shell.inspector}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
+        routeDraft={snapshot.shell.routeDraft}
+        routes={snapshot.shell.routes}
+        onRemoveDraftStop={handleRemoveDraftStop}
+        onFinishRoute={handleFinishRoute}
+        onCancelRoute={handleCancelRoute}
+        onRenameRoute={handleRenameRoute}
+        onRecolorRoute={handleRecolorRoute}
+        onToggleRouteActive={handleToggleRouteActive}
+        onDeleteRoute={handleDeleteRoute}
+        onSelectRoute={handleSelectRoute}
       />
     {/if}
   </main>
