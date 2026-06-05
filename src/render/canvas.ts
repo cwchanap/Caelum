@@ -112,7 +112,7 @@ export function renderGame(
   renderMap(ctx, state);
   renderBuildings(ctx, state);
   renderOverlays(ctx, state, ui);
-  renderTransit(ctx, state);
+  renderTransit(ctx, state, ui);
   renderCitizens(ctx, state);
   ctx.restore();
 }

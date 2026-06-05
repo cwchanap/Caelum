@@ -1,4 +1,5 @@
 import type { GameState, Point, Vehicle } from "../domain/types";
+import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 
@@ -106,6 +107,7 @@ function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
 export function renderTransit(
   ctx: CanvasRenderingContext2D,
   state: GameState,
+  ui: UiState,
 ): void {
   for (const route of state.transit.routes) {
     drawPolyline(ctx, routePositions(state, route.stopIds), route.color, 5);
@@ -113,6 +115,43 @@ export function renderTransit(
 
   for (const line of state.transit.metroLines) {
     drawPolyline(ctx, stationPositions(state, line.stationIds), line.color, 8);
+  }
+
+  // Highlight the selected route/line with a wide translucent halo stroke.
+  if (ui.selectedRouteId !== null) {
+    const route = state.transit.routes.find((r) => r.id === ui.selectedRouteId);
+    if (route !== undefined) {
+      drawPolyline(ctx, routePositions(state, route.stopIds), "#ffffffaa", 9);
+    }
+    const line = state.transit.metroLines.find(
+      (l) => l.id === ui.selectedRouteId,
+    );
+    if (line !== undefined) {
+      drawPolyline(
+        ctx,
+        stationPositions(state, line.stationIds),
+        "#ffffffaa",
+        12,
+      );
+    }
+  }
+
+  // Draft preview: dashed stroke through the in-progress stops/stations.
+  const draftIds =
+    ui.activeTool === "busRoute"
+      ? ui.draftStopIds
+      : ui.activeTool === "metroLine"
+        ? ui.draftStationIds
+        : [];
+  if (draftIds.length >= 1) {
+    const positions =
+      ui.activeTool === "busRoute"
+        ? routePositions(state, draftIds)
+        : stationPositions(state, draftIds);
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    drawPolyline(ctx, positions, "#f4d35e", 3);
+    ctx.restore();
   }
 
   for (const stop of state.transit.stops) {
