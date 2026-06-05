@@ -231,8 +231,8 @@
           {/each}
         </ol>
         <p class="draft-readout" data-testid="route-draft-readout">
-          {routeDraft.distinctCount}
-          {routeDraft.distinctCount === 1 ? "stop" : "stops"} · {formatCost(
+          {routeDraft.stops.length}
+          {routeDraft.stops.length === 1 ? "stop" : "stops"} · {formatCost(
             routeDraft.vehicleCost,
           )} vehicle
         </p>
@@ -359,7 +359,7 @@
               >
                 {route.active ? "Pause" : "Resume"}
               </button>
-              <div class="route-colors" aria-label="Route color">
+              <div class="route-colors" role="group" aria-label="Route color">
                 {#each ROUTE_COLOR_PALETTE as color (color)}
                   <button
                     type="button"

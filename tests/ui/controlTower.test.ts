@@ -146,13 +146,35 @@ describe("ControlTower route draft", () => {
     expect(onCancelRoute).toHaveBeenCalled();
   });
 
-  it("shows a live readout of distinct stops and vehicle cost", () => {
+  it("shows a live readout of placed stops and vehicle cost", () => {
     const { getByTestId } = render(ControlTower, {
       props: props({ routeDraft: busDraft, activeTool: "busRoute" }),
     });
     const readout = getByTestId("route-draft-readout");
     expect(readout).toHaveTextContent("2 stops");
     expect(readout).toHaveTextContent("$8,000");
+  });
+
+  it("readout reflects the placed stop list, not the distinct count", () => {
+    // Drafts may legally contain non-consecutive duplicates (e.g. a route
+    // that revisits a stop). The readout must match the visible list length
+    // so the player isn't told a smaller number than the list above shows.
+    const draft: ShellRouteDraftState = {
+      mode: "bus",
+      stops: [
+        { index: 0, label: "Bus Stop", coord: "(7,8)" },
+        { index: 1, label: "Bus Stop", coord: "(15,8)" },
+        { index: 2, label: "Bus Stop", coord: "(7,8)" },
+      ],
+      distinctCount: 2,
+      vehicleCost: 8000,
+      canFinish: true,
+      finishHint: "Ready",
+    };
+    const { getByTestId } = render(ControlTower, {
+      props: props({ routeDraft: draft, activeTool: "busRoute" }),
+    });
+    expect(getByTestId("route-draft-readout")).toHaveTextContent("3 stops");
   });
 
   it("disables finish with the hint when not finishable", () => {
