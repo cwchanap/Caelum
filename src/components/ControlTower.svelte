@@ -112,6 +112,31 @@
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
+  // Local drafts for the route-name inputs. The runtime publishes fresh
+  // `routes` snapshots every tick, which would otherwise reset the input's
+  // `value` attribute mid-keystroke. Drafts are read first; on blur/Enter the
+  // draft is committed via onRenameRoute and the entry cleared so the next
+  // render pulls the canonical name back from the route snapshot.
+  let routeNameDrafts = $state<Record<string, string>>({});
+
+  function routeNameFor(routeId: string, canonical: string): string {
+    return routeNameDrafts[routeId] ?? canonical;
+  }
+
+  function handleRouteNameInput(
+    routeId: string,
+    event: Event & { currentTarget: EventTarget & HTMLInputElement },
+  ): void {
+    routeNameDrafts[routeId] = event.currentTarget.value;
+  }
+
+  function commitRouteName(routeId: string, value: string): void {
+    // Remove the draft so the input falls back to the canonical name from the
+    // next routes snapshot. Svelte 5's `$state` proxy tracks property
+    // deletions, so this re-renders without manual reassignment.
+    delete routeNameDrafts[routeId];
+    onRenameRoute(routeId, value);
+  }
 
   function handleDeleteClick(routeId: string): void {
     if (pendingDeleteId === routeId) {
@@ -338,13 +363,21 @@
                 type="text"
                 class="route-name"
                 data-testid={`route-name-${route.id}`}
-                value={route.name}
+                value={routeNameFor(route.id, route.name)}
                 aria-label={`Rename ${route.name}`}
+                oninput={(event) =>
+                  handleRouteNameInput(
+                    route.id,
+                    event as Event & {
+                      currentTarget: EventTarget & HTMLInputElement;
+                    },
+                  )}
                 onblur={(event) =>
-                  onRenameRoute(route.id, event.currentTarget.value)}
+                  commitRouteName(route.id, event.currentTarget.value)}
                 onkeydown={(event) => {
                   if (event.key === "Enter") {
-                    onRenameRoute(route.id, event.currentTarget.value);
+                    commitRouteName(route.id, event.currentTarget.value);
+                    event.currentTarget.blur();
                   }
                 }}
               />

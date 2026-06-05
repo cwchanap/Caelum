@@ -297,10 +297,19 @@ describe("route creation and management", () => {
     const runtime = withTwoStops();
     runtime.finishRoute();
 
-    expect(runtime.renameRoute("route-001", "Loop").state.transit.routes[0].name).toBe("Loop");
-    expect(runtime.recolorRoute("route-001", "#abcdef").state.transit.routes[0].color).toBe("#abcdef");
-    expect(runtime.toggleRouteActive("route-001").state.transit.routes[0].active).toBe(false);
-    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe("route-001");
+    expect(
+      runtime.renameRoute("route-001", "Loop").state.transit.routes[0].name,
+    ).toBe("Loop");
+    expect(
+      runtime.recolorRoute("route-001", "#abcdef").state.transit.routes[0]
+        .color,
+    ).toBe("#abcdef");
+    expect(
+      runtime.toggleRouteActive("route-001").state.transit.routes[0].active,
+    ).toBe(false);
+    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(
+      "route-001",
+    );
     expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(null);
     expect(runtime.deleteRoute("route-001").state.transit.routes).toEqual([]);
   });

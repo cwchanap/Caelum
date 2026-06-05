@@ -260,6 +260,50 @@ describe("ControlTower route management", () => {
     expect(onRenameRoute).toHaveBeenCalledWith("route-001", "Express");
   });
 
+  it("preserves an in-progress rename across a fresh routes snapshot", async () => {
+    // While the player is typing, the runtime may publish a new snapshot
+    // (e.g. vehicles advancing). The input must keep the typed text instead
+    // of snapping back to the canonical route name from the new snapshot.
+    const onRenameRoute = vi.fn();
+    const { rerender, getByTestId } = render(ControlTower, {
+      props: props({ routes: routeList, onRenameRoute }),
+    });
+    const input = getByTestId("route-name-route-001") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "Exp" } });
+
+    // New snapshot arrives mid-edit: same id, same canonical name, fresh ref.
+    const freshSnapshot: ShellRouteListState = [
+      { ...routeList[0]!, name: "Bus 1" },
+    ];
+    await rerender(props({ routes: freshSnapshot, onRenameRoute }));
+
+    expect(
+      (getByTestId("route-name-route-001") as HTMLInputElement).value,
+    ).toBe("Exp");
+
+    fireEvent.blur(getByTestId("route-name-route-001"));
+    expect(onRenameRoute).toHaveBeenCalledWith("route-001", "Exp");
+  });
+
+  it("restores the canonical name after a rename is committed", async () => {
+    const onRenameRoute = vi.fn();
+    const { rerender, getByTestId } = render(ControlTower, {
+      props: props({ routes: routeList, onRenameRoute }),
+    });
+    const input = getByTestId("route-name-route-001") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "Loop" } });
+    fireEvent.blur(input);
+    expect(onRenameRoute).toHaveBeenCalledWith("route-001", "Loop");
+
+    // After commit, a fresh snapshot with the new canonical name should
+    // render the canonical name (no leftover draft).
+    const updated: ShellRouteListState = [{ ...routeList[0]!, name: "Loop" }];
+    await rerender(props({ routes: updated, onRenameRoute }));
+    expect(
+      (getByTestId("route-name-route-001") as HTMLInputElement).value,
+    ).toBe("Loop");
+  });
+
   it("renders an inactive metro row with resume label and selected state", () => {
     const metroRow: ShellRouteListState = [
       {
@@ -282,7 +326,9 @@ describe("ControlTower route management", () => {
   });
 
   it("shows an empty hint when there are no routes", () => {
-    const { getByText } = render(ControlTower, { props: props({ routes: [] }) });
+    const { getByText } = render(ControlTower, {
+      props: props({ routes: [] }),
+    });
     expect(getByText(/no routes yet/i)).toBeInTheDocument();
   });
 });

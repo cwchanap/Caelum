@@ -300,7 +300,10 @@ export function handleTileClick(
     if (ui.draftStopIds.at(-1) === stop.id) {
       return { state, ui };
     }
-    return { state, ui: { ...ui, draftStopIds: [...ui.draftStopIds, stop.id] } };
+    return {
+      state,
+      ui: { ...ui, draftStopIds: [...ui.draftStopIds, stop.id] },
+    };
   }
 
   if (ui.activeTool === "metroLine") {
