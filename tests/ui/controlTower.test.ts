@@ -4,6 +4,8 @@ import ControlTower from "../../src/components/ControlTower.svelte";
 import type {
   ShellControlTowerState,
   ShellInspectorState,
+  ShellRouteDraftState,
+  ShellRouteListState,
 } from "../../src/runtime/types";
 
 const baseShell: ShellControlTowerState = {
@@ -54,6 +56,16 @@ function props(overrides = {}) {
     onRotateBuilding: vi.fn(),
     onSetOverlay: vi.fn(),
     onAssignRouteToPlatform: vi.fn(),
+    routeDraft: null,
+    routes: [] as ShellRouteListState,
+    onRemoveDraftStop: vi.fn(),
+    onFinishRoute: vi.fn(),
+    onCancelRoute: vi.fn(),
+    onRenameRoute: vi.fn(),
+    onRecolorRoute: vi.fn(),
+    onToggleRouteActive: vi.fn(),
+    onDeleteRoute: vi.fn(),
+    onSelectRoute: vi.fn(),
     ...overrides,
   };
 }
@@ -94,5 +106,59 @@ describe("ControlTower platform panel", () => {
     const { getByTestId } = render(ControlTower, props());
     const panel = within(getByTestId("platform-panel"));
     expect(panel.getByText("No routes")).toBeTruthy();
+  });
+});
+
+const busDraft: ShellRouteDraftState = {
+  mode: "bus",
+  stops: [
+    { index: 0, label: "Bus Stop", coord: "(7,8)" },
+    { index: 1, label: "Bus Stop", coord: "(15,8)" },
+  ],
+  distinctCount: 2,
+  vehicleCost: 8000,
+  canFinish: true,
+  finishHint: "Ready",
+};
+
+describe("ControlTower route draft", () => {
+  it("renders the draft stop list and fires finish/remove/cancel", () => {
+    const onFinishRoute = vi.fn();
+    const onRemoveDraftStop = vi.fn();
+    const onCancelRoute = vi.fn();
+    const { getByTestId, getByRole } = render(ControlTower, {
+      props: props({
+        routeDraft: busDraft,
+        activeTool: "busRoute",
+        onFinishRoute,
+        onRemoveDraftStop,
+        onCancelRoute,
+      }),
+    });
+
+    fireEvent.click(getByRole("button", { name: /finish route/i }));
+    expect(onFinishRoute).toHaveBeenCalled();
+
+    fireEvent.click(getByTestId("remove-draft-stop-0"));
+    expect(onRemoveDraftStop).toHaveBeenCalledWith(0);
+
+    fireEvent.click(getByRole("button", { name: /cancel route/i }));
+    expect(onCancelRoute).toHaveBeenCalled();
+  });
+
+  it("disables finish with the hint when not finishable", () => {
+    const { getByRole } = render(ControlTower, {
+      props: props({
+        routeDraft: {
+          ...busDraft,
+          canFinish: false,
+          finishHint: "Add another stop",
+        },
+        activeTool: "busRoute",
+      }),
+    });
+    const finish = getByRole("button", { name: /finish route/i });
+    expect(finish).toBeDisabled();
+    expect(finish).toHaveTextContent(/add another stop/i);
   });
 });

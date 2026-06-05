@@ -8,6 +8,8 @@
   import type {
     ShellControlTowerState,
     ShellInspectorState,
+    ShellRouteDraftState,
+    ShellRouteListState,
   } from "../runtime/types";
   import { BUILDING_CATALOG } from "../simulation/buildings";
 
@@ -32,6 +34,16 @@
       routeId: string,
       platformId: string,
     ) => void;
+    routeDraft: ShellRouteDraftState | null;
+    routes: ShellRouteListState;
+    onRemoveDraftStop: (index: number) => void;
+    onFinishRoute: () => void;
+    onCancelRoute: () => void;
+    onRenameRoute: (routeId: string, name: string) => void;
+    onRecolorRoute: (routeId: string, color: string) => void;
+    onToggleRouteActive: (routeId: string) => void;
+    onDeleteRoute: (routeId: string) => void;
+    onSelectRoute: (routeId: string | null) => void;
   }
 
   const globalTools: Array<MenuItem<GlobalTool>> = [
@@ -82,6 +94,16 @@
     onSetOverlay,
     inspector,
     onAssignRouteToPlatform,
+    routeDraft,
+    routes: _routes,
+    onRemoveDraftStop,
+    onFinishRoute,
+    onCancelRoute,
+    onRenameRoute: _onRenameRoute,
+    onRecolorRoute: _onRecolorRoute,
+    onToggleRouteActive: _onToggleRouteActive,
+    onDeleteRoute: _onDeleteRoute,
+    onSelectRoute: _onSelectRoute,
   }: Props = $props();
 </script>
 
@@ -172,6 +194,43 @@
         </button>
       {/each}
     </div>
+    {#if routeDraft !== null}
+      <div class="route-draft" data-testid="route-draft">
+        <ol class="draft-stops">
+          {#each routeDraft.stops as stop (stop.index)}
+            <li class="draft-stop">
+              <span class="draft-stop-label"
+                >{stop.index + 1} · {stop.label} {stop.coord}</span
+              >
+              <button
+                type="button"
+                class="draft-stop-remove"
+                data-testid={`remove-draft-stop-${stop.index}`}
+                aria-label={`Remove stop ${stop.index + 1}`}
+                onclick={() => onRemoveDraftStop(stop.index)}
+              >
+                ×
+              </button>
+            </li>
+          {/each}
+        </ol>
+        <div class="draft-actions">
+          <button
+            type="button"
+            class="draft-finish"
+            disabled={!routeDraft.canFinish}
+            onclick={onFinishRoute}
+          >
+            {routeDraft.canFinish
+              ? "Finish Route"
+              : `Finish Route — ${routeDraft.finishHint}`}
+          </button>
+          <button type="button" class="draft-cancel" onclick={onCancelRoute}>
+            Cancel Route
+          </button>
+        </div>
+      </div>
+    {/if}
   </section>
 
   <section class="panel-section overlay-section">
