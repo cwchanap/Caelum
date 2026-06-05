@@ -6,12 +6,10 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
+  COSTS,
   deleteRoute,
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
-
-const BUS_VEHICLE_COST = 8_000;
-const METRO_VEHICLE_COST = 50_000;
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
@@ -211,7 +209,7 @@ export function finishDraftRoute(
   if (ui.activeTool === "busRoute") {
     if (
       distinctCount(ui.draftStopIds) < 2 ||
-      state.budget < BUS_VEHICLE_COST
+      state.budget < COSTS.bus
     ) {
       return { state, ui };
     }
@@ -227,7 +225,7 @@ export function finishDraftRoute(
   if (ui.activeTool === "metroLine") {
     if (
       distinctCount(ui.draftStationIds) < 2 ||
-      state.budget < METRO_VEHICLE_COST
+      state.budget < COSTS.metro
     ) {
       return { state, ui };
     }

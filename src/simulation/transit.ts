@@ -18,7 +18,7 @@ import {
   platformWaiterIds,
 } from "./platforms";
 
-const COSTS = {
+export const COSTS = {
   busStop: 2_000,
   metroStation: 25_000,
   bus: 8_000,

@@ -1,6 +1,7 @@
 import type { GameState } from "../domain/types";
 import { BUILDING_CATALOG } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
+import { COSTS } from "../simulation/transit";
 import { resolveNodeAtTile } from "../ui/actions";
 import type { UiState } from "../ui/uiState";
 import type {
@@ -121,9 +122,6 @@ function buildInspector(
   };
 }
 
-const BUS_VEHICLE_COST = 8_000;
-const METRO_VEHICLE_COST = 50_000;
-
 function stopLabel(
   state: GameState,
   stopId: string,
@@ -158,7 +156,7 @@ function buildRouteDraft(
   if (ids.length === 0) {
     return null;
   }
-  const vehicleCost = isBus ? BUS_VEHICLE_COST : METRO_VEHICLE_COST;
+  const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
   const distinct = new Set(ids).size;
   const affordable = state.budget >= vehicleCost;
   const canFinish = distinct >= 2 && affordable;
