@@ -12,6 +12,7 @@
     ShellRouteListState,
   } from "../runtime/types";
   import { BUILDING_CATALOG } from "../simulation/buildings";
+  import { ROUTE_COLOR_PALETTE } from "../ui/routePalette";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
   type RouteTool = Extract<Tool, "busRoute" | "metroLine">;
@@ -95,16 +96,27 @@
     inspector,
     onAssignRouteToPlatform,
     routeDraft,
-    routes: _routes,
+    routes,
     onRemoveDraftStop,
     onFinishRoute,
     onCancelRoute,
-    onRenameRoute: _onRenameRoute,
-    onRecolorRoute: _onRecolorRoute,
-    onToggleRouteActive: _onToggleRouteActive,
-    onDeleteRoute: _onDeleteRoute,
-    onSelectRoute: _onSelectRoute,
+    onRenameRoute,
+    onRecolorRoute,
+    onToggleRouteActive,
+    onDeleteRoute,
+    onSelectRoute,
   }: Props = $props();
+
+  let pendingDeleteId = $state<string | null>(null);
+
+  function handleDeleteClick(routeId: string): void {
+    if (pendingDeleteId === routeId) {
+      pendingDeleteId = null;
+      onDeleteRoute(routeId);
+    } else {
+      pendingDeleteId = routeId;
+    }
+  }
 </script>
 
 <aside
@@ -285,9 +297,82 @@
     </div>
   </section>
 
+  <section class="panel-section routes-section" data-testid="routes-panel">
+    <h3 class="section-head"><span class="num">06</span> Routes</h3>
+    {#if routes.length === 0}
+      <p class="brief-id">No routes yet</p>
+    {:else}
+      <ul class="route-list">
+        {#each routes as route (route.id)}
+          <li class="route-item" class:route-item--inactive={!route.active}>
+            <div class="route-item-head">
+              <button
+                type="button"
+                class="route-select"
+                class:active={route.selected}
+                data-testid={`route-select-${route.id}`}
+                aria-pressed={route.selected}
+                style={`--route-color: ${route.color}`}
+                onclick={() => onSelectRoute(route.id)}
+              >
+                <span class="route-swatch" aria-hidden="true"></span>
+                <span class="route-mode"
+                  >{route.mode === "bus" ? "Bus" : "Metro"}</span
+                >
+                <span class="route-stops">{route.stopCount} stops</span>
+              </button>
+              <input
+                type="text"
+                class="route-name"
+                data-testid={`route-name-${route.id}`}
+                value={route.name}
+                aria-label={`Rename ${route.name}`}
+                onblur={(event) =>
+                  onRenameRoute(route.id, event.currentTarget.value)}
+              />
+            </div>
+            <div class="route-item-controls">
+              <button
+                type="button"
+                class="route-toggle"
+                data-testid={`route-toggle-${route.id}`}
+                aria-label={`${route.active ? "Pause" : "Resume"} ${route.name}`}
+                onclick={() => onToggleRouteActive(route.id)}
+              >
+                {route.active ? "Pause" : "Resume"}
+              </button>
+              <div class="route-colors" aria-label="Route color">
+                {#each ROUTE_COLOR_PALETTE as color (color)}
+                  <button
+                    type="button"
+                    class="route-color"
+                    class:active={route.color === color}
+                    data-testid={`route-color-${route.id}-${color}`}
+                    style={`--route-color: ${color}`}
+                    aria-label={`Set color ${color}`}
+                    onclick={() => onRecolorRoute(route.id, color)}
+                  ></button>
+                {/each}
+              </div>
+              <button
+                type="button"
+                class="route-delete"
+                class:route-delete--armed={pendingDeleteId === route.id}
+                data-testid={`route-delete-${route.id}`}
+                onclick={() => handleDeleteClick(route.id)}
+              >
+                {pendingDeleteId === route.id ? "Delete?" : "Delete"}
+              </button>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
   {#if inspector !== null}
     <section class="panel-section platform-panel" data-testid="platform-panel">
-      <h3 class="section-head"><span class="num">06</span> Platforms</h3>
+      <h3 class="section-head"><span class="num">07</span> Platforms</h3>
       <p class="brief-id">{inspector.nodeLabel}</p>
       {#each inspector.platforms as platform (platform.id)}
         <div class="platform-row">

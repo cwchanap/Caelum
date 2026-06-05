@@ -1095,6 +1095,163 @@ body {
   color: var(--ink-mid);
 }
 
+.route-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.route-item--inactive {
+  opacity: 0.55;
+}
+
+.route-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.route-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.route-select.active {
+  border-color: var(--route-color);
+  background: color-mix(in srgb, var(--route-color) 14%, transparent);
+}
+
+.route-select:hover {
+  border-color: var(--route-color);
+}
+
+.route-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--route-color);
+}
+
+.route-mode {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.route-stops {
+  color: var(--ink-mid);
+}
+
+.route-name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.route-name:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+.route-item-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.route-toggle,
+.route-delete {
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.route-toggle:hover {
+  border-color: var(--cyan);
+}
+
+.route-colors {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.route-color {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--route-color);
+  cursor: pointer;
+  transition: outline 0.12s ease;
+}
+
+.route-color.active {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.route-delete {
+  margin-left: auto;
+}
+
+.route-delete:hover {
+  border-color: var(--danger, #ff5b5b);
+  color: var(--danger, #ff5b5b);
+}
+
+.route-delete--armed {
+  border-color: var(--danger, #ff5b5b);
+  background: rgba(255, 91, 91, 0.12);
+  color: var(--danger, #ff5b5b);
+}
+
 .shell-error {
   grid-column: 1 / -1;
   display: grid;

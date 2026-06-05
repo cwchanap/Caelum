@@ -162,3 +162,64 @@ describe("ControlTower route draft", () => {
     expect(finish).toHaveTextContent(/add another stop/i);
   });
 });
+
+const routeList: ShellRouteListState = [
+  {
+    id: "route-001",
+    name: "Bus 1",
+    color: "#e04f39",
+    mode: "bus",
+    stopCount: 3,
+    active: true,
+    selected: false,
+  },
+];
+
+describe("ControlTower route management", () => {
+  it("lists routes and fires select / toggle / recolor", () => {
+    const onSelectRoute = vi.fn();
+    const onToggleRouteActive = vi.fn();
+    const onRecolorRoute = vi.fn();
+    const { getByTestId } = render(ControlTower, {
+      props: props({
+        routes: routeList,
+        onSelectRoute,
+        onToggleRouteActive,
+        onRecolorRoute,
+      }),
+    });
+
+    fireEvent.click(getByTestId("route-select-route-001"));
+    expect(onSelectRoute).toHaveBeenCalledWith("route-001");
+
+    fireEvent.click(getByTestId("route-toggle-route-001"));
+    expect(onToggleRouteActive).toHaveBeenCalledWith("route-001");
+
+    fireEvent.click(getByTestId("route-color-route-001-#2867b2"));
+    expect(onRecolorRoute).toHaveBeenCalledWith("route-001", "#2867b2");
+  });
+
+  it("renames on blur and requires confirm before delete", () => {
+    const onRenameRoute = vi.fn();
+    const onDeleteRoute = vi.fn();
+    const { getByTestId } = render(ControlTower, {
+      props: props({ routes: routeList, onRenameRoute, onDeleteRoute }),
+    });
+
+    const input = getByTestId("route-name-route-001") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "Loop" } });
+    fireEvent.blur(input);
+    expect(onRenameRoute).toHaveBeenCalledWith("route-001", "Loop");
+
+    // First click arms confirm; second confirms.
+    fireEvent.click(getByTestId("route-delete-route-001"));
+    expect(onDeleteRoute).not.toHaveBeenCalled();
+    fireEvent.click(getByTestId("route-delete-route-001"));
+    expect(onDeleteRoute).toHaveBeenCalledWith("route-001");
+  });
+
+  it("shows an empty hint when there are no routes", () => {
+    const { getByText } = render(ControlTower, { props: props({ routes: [] }) });
+    expect(getByText(/no routes yet/i)).toBeInTheDocument();
+  });
+});
