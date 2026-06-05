@@ -323,7 +323,10 @@
                 data-testid={`route-select-${route.id}`}
                 aria-pressed={route.selected}
                 style={`--route-color: ${route.color}`}
-                onclick={() => onSelectRoute(route.id)}
+                onclick={() => {
+                  pendingDeleteId = null;
+                  onSelectRoute(route.id);
+                }}
               >
                 <span class="route-swatch" aria-hidden="true"></span>
                 <span class="route-mode"
@@ -339,6 +342,11 @@
                 aria-label={`Rename ${route.name}`}
                 onblur={(event) =>
                   onRenameRoute(route.id, event.currentTarget.value)}
+                onkeydown={(event) => {
+                  if (event.key === "Enter") {
+                    onRenameRoute(route.id, event.currentTarget.value);
+                  }
+                }}
               />
             </div>
             <div class="route-item-controls">

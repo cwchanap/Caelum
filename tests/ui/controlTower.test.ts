@@ -227,6 +227,17 @@ describe("ControlTower route management", () => {
     expect(onDeleteRoute).toHaveBeenCalledWith("route-001");
   });
 
+  it("commits a rename when Enter is pressed", () => {
+    const onRenameRoute = vi.fn();
+    const { getByTestId } = render(ControlTower, {
+      props: props({ routes: routeList, onRenameRoute }),
+    });
+    const input = getByTestId("route-name-route-001") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "Express" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameRoute).toHaveBeenCalledWith("route-001", "Express");
+  });
+
   it("renders an inactive metro row with resume label and selected state", () => {
     const metroRow: ShellRouteListState = [
       {

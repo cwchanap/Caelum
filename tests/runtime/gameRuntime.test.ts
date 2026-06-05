@@ -311,4 +311,13 @@ describe("route creation and management", () => {
     runtime.selectRoute("route-001");
     expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
   });
+
+  it("clears the selected route when it is deleted", () => {
+    const runtime = withTwoStops();
+    runtime.finishRoute();
+    runtime.selectRoute("route-001");
+    const snapshot = runtime.deleteRoute("route-001");
+    expect(snapshot.ui.selectedRouteId).toBe(null);
+    expect(snapshot.state.transit.routes).toEqual([]);
+  });
 });
