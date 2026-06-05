@@ -49,7 +49,11 @@ describe("UI tile actions", () => {
     result = handleTileClick(result.state, result.ui, { x: 15, y: 8 });
     result = handleTileClick(result.state, result.ui, { x: 22, y: 8 });
 
-    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002", "stop-003"]);
+    expect(result.ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+      "stop-003",
+    ]);
   });
 
   it("ignores clicking the same stop twice in a row", () => {
@@ -148,7 +152,9 @@ describe("UI tile actions", () => {
 
     const removed = handleTileClick(state, ui, { x: 7, y: 8 });
 
-    expect(removed.state.transit.routes.map((r) => r.id)).toEqual(["route-002"]);
+    expect(removed.state.transit.routes.map((r) => r.id)).toEqual([
+      "route-002",
+    ]);
     expect(removed.ui.selectedRouteId).toBe("route-002");
   });
 

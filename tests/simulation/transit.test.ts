@@ -1330,9 +1330,10 @@ describe("deleteRoute", () => {
     )!;
     // Sanity: both routes are registered on the terminal (different platforms
     // because assignRouteToLeastLoaded spreads them across A/B).
-    expect(
-      terminalBefore.platforms.flatMap((p) => p.routeIds).sort(),
-    ).toEqual(["route-001", "route-002"]);
+    expect(terminalBefore.platforms.flatMap((p) => p.routeIds).sort()).toEqual([
+      "route-001",
+      "route-002",
+    ]);
 
     const next = deleteRoute(state, "route-001");
 
@@ -1360,5 +1361,122 @@ describe("deleteRoute", () => {
     expect(routeAOnlyStopAfter.platforms.flatMap((p) => p.routeIds)).toEqual(
       [],
     );
+  });
+
+  it("invalidates route plans that referenced a deleted bus route", () => {
+    // A waiting citizen whose plan points at the deleted route must drop the
+    // stale plan and return to idle, so tickCitizen replans on the next tick
+    // instead of waiting until patience runs out.
+    let state = createBusState();
+    state = {
+      ...state,
+      citizens: state.citizens.map((citizen, index) =>
+        index === 0
+          ? {
+              ...citizen,
+              home: { x: 7, y: 8 },
+              position: { x: 7, y: 8 },
+              destination: { x: 16, y: 8 },
+              status: "waiting",
+              routePlan: {
+                estimatedSeconds: 216,
+                legs: [
+                  {
+                    mode: "bus",
+                    from: { x: 7, y: 8 },
+                    to: { x: 15, y: 8 },
+                    lineId: "route-001",
+                  },
+                  { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } },
+                ],
+              },
+              currentLegIndex: 0,
+            }
+          : citizen,
+      ),
+    };
+
+    const next = deleteRoute(state, "route-001");
+    const citizen = next.citizens[0]!;
+
+    expect(next.transit.routes).toEqual([]);
+    expect(citizen.status).toBe("idle");
+    expect(citizen.routePlan).toBeNull();
+    expect(citizen.currentLegIndex).toBe(0);
+  });
+
+  it("invalidates route plans that referenced a deleted metro line", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = {
+      ...state,
+      citizens: state.citizens.map((citizen, index) =>
+        index === 0
+          ? {
+              ...citizen,
+              home: { x: 7, y: 8 },
+              position: { x: 7, y: 8 },
+              destination: { x: 16, y: 8 },
+              status: "waiting",
+              routePlan: {
+                estimatedSeconds: 216,
+                legs: [
+                  {
+                    mode: "metro",
+                    from: { x: 7, y: 8 },
+                    to: { x: 15, y: 8 },
+                    lineId: "metro-001",
+                  },
+                  { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } },
+                ],
+              },
+              currentLegIndex: 0,
+            }
+          : citizen,
+      ),
+    };
+
+    const next = deleteRoute(state, "metro-001");
+    const citizen = next.citizens[0]!;
+
+    expect(next.transit.metroLines).toEqual([]);
+    expect(citizen.status).toBe("idle");
+    expect(citizen.routePlan).toBeNull();
+  });
+
+  it("preserves reference equality for citizens whose plans did not reference the deleted route", () => {
+    // Plans referencing a *different* route or no transit at all must keep
+    // their citizen reference so the runtime's change-detection stays cheap.
+    let state = createBusState();
+    state = {
+      ...state,
+      citizens: state.citizens.map((citizen, index) =>
+        index === 0
+          ? {
+              ...citizen,
+              status: "walking",
+              routePlan: {
+                estimatedSeconds: 20,
+                legs: [
+                  {
+                    mode: "walk",
+                    from: { x: 2, y: 3 },
+                    to: { x: 3, y: 3 },
+                  },
+                ],
+              },
+              currentLegIndex: 0,
+            }
+          : citizen,
+      ),
+    };
+    const plannedCitizen = state.citizens[0]!;
+
+    const next = deleteRoute(state, "route-001");
+
+    // Same reference: walking plan did not reference the deleted route.
+    expect(next.citizens[0]).toBe(plannedCitizen);
   });
 });

@@ -33,7 +33,10 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-export function distinctValidStopCount(state: GameState, stopIds: string[]): number {
+export function distinctValidStopCount(
+  state: GameState,
+  stopIds: string[],
+): number {
   const existingStopIds = new Set(state.transit.stops.map((stop) => stop.id));
 
   return new Set(stopIds.filter((stopId) => existingStopIds.has(stopId))).size;
@@ -510,6 +513,43 @@ function stripRouteFromPlatforms<
   return anyChanged ? mapped : nodes;
 }
 
+function planReferencesLine(
+  routePlan: Citizen["routePlan"],
+  lineId: string,
+): boolean {
+  if (routePlan === null) {
+    return false;
+  }
+  return routePlan.legs.some(
+    (leg) => leg.mode !== "walk" && leg.lineId === lineId,
+  );
+}
+
+function invalidatePlansForLine(
+  citizens: Citizen[],
+  lineId: string,
+): Citizen[] {
+  let anyChanged = false;
+  const mapped = citizens.map((citizen) => {
+    if (!planReferencesLine(citizen.routePlan, lineId)) {
+      return citizen;
+    }
+    anyChanged = true;
+    // Drop the stale plan and return the citizen to idle so tickCitizen
+    // replans from scratch on the next tick. Riding citizens whose vehicle
+    // vanished are already covered by tickCitizen's vehicle-presence check,
+    // but resetting them here keeps the post-delete state consistent
+    // regardless of tick order.
+    return {
+      ...citizen,
+      status: "idle" as const,
+      routePlan: null,
+      currentLegIndex: 0,
+    };
+  });
+  return anyChanged ? mapped : citizens;
+}
+
 export function deleteRoute(state: GameState, routeId: string): GameState {
   const isRoute = state.transit.routes.some((r) => r.id === routeId);
   const isLine = state.transit.metroLines.some((l) => l.id === routeId);
@@ -535,6 +575,7 @@ export function deleteRoute(state: GameState, routeId: string): GameState {
         : state.transit.metroLines,
       vehicles: state.transit.vehicles.filter((v) => v.lineId !== routeId),
     },
+    citizens: invalidatePlansForLine(state.citizens, routeId),
   };
 }
 
