@@ -6,6 +6,7 @@ import {
   addBusStop,
   addMetroLine,
   addMetroStation,
+  setRouteActive,
 } from "../../src/simulation/transit";
 
 describe("route planning", () => {
@@ -200,5 +201,27 @@ describe("route planning", () => {
       estimatedSeconds: 340,
       legs: [{ mode: "walk", from: { x: 6, y: 8 }, to: { x: 23, y: 8 } }],
     });
+  });
+
+  it("drops the bus leg once the route is toggled inactive via setRouteActive", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+
+    const active = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
+    expect(active?.legs.map((leg) => leg.mode)).toEqual([
+      "walk",
+      "bus",
+      "walk",
+    ]);
+
+    const inactiveState = setRouteActive(state, "route-001", false);
+    const inactive = findRoutePlan(
+      inactiveState,
+      { x: 6, y: 8 },
+      { x: 23, y: 8 },
+    );
+    expect(inactive?.legs.some((leg) => leg.mode === "bus")).toBe(false);
   });
 });
