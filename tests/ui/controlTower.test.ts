@@ -146,6 +146,15 @@ describe("ControlTower route draft", () => {
     expect(onCancelRoute).toHaveBeenCalled();
   });
 
+  it("shows a live readout of distinct stops and vehicle cost", () => {
+    const { getByTestId } = render(ControlTower, {
+      props: props({ routeDraft: busDraft, activeTool: "busRoute" }),
+    });
+    const readout = getByTestId("route-draft-readout");
+    expect(readout).toHaveTextContent("2 stops");
+    expect(readout).toHaveTextContent("$8,000");
+  });
+
   it("disables finish with the hint when not finishable", () => {
     const { getByRole } = render(ControlTower, {
       props: props({
@@ -216,6 +225,27 @@ describe("ControlTower route management", () => {
     expect(onDeleteRoute).not.toHaveBeenCalled();
     fireEvent.click(getByTestId("route-delete-route-001"));
     expect(onDeleteRoute).toHaveBeenCalledWith("route-001");
+  });
+
+  it("renders an inactive metro row with resume label and selected state", () => {
+    const metroRow: ShellRouteListState = [
+      {
+        id: "metro-001",
+        name: "Metro 1",
+        color: "#2867b2",
+        mode: "metro",
+        stopCount: 4,
+        active: false,
+        selected: true,
+      },
+    ];
+    const { getByTestId, getByText } = render(ControlTower, {
+      props: props({ routes: metroRow }),
+    });
+    expect(getByText("Metro")).toBeInTheDocument();
+    expect(getByTestId("route-toggle-metro-001")).toHaveTextContent("Resume");
+    const select = getByTestId("route-select-metro-001");
+    expect(select).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows an empty hint when there are no routes", () => {

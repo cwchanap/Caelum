@@ -82,6 +82,10 @@
     return value.toString().padStart(2, "0");
   }
 
+  function formatCost(value: number): string {
+    return `$${value.toLocaleString("en-US")}`;
+  }
+
   let {
     shell,
     activeTool,
@@ -226,6 +230,12 @@
             </li>
           {/each}
         </ol>
+        <p class="draft-readout" data-testid="route-draft-readout">
+          {routeDraft.distinctCount}
+          {routeDraft.distinctCount === 1 ? "stop" : "stops"} · {formatCost(
+            routeDraft.vehicleCost,
+          )} vehicle
+        </p>
         <div class="draft-actions">
           <button
             type="button"
