@@ -241,7 +241,7 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.selectedId).toBe("5,5");
   });
 
-  it("toggles control tower", () => {
+  it("sets HUD category to data", () => {
     const runtime = createGameRuntime();
 
     const before = runtime.getSnapshot().ui.activeHudCategory;

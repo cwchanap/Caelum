@@ -144,9 +144,19 @@ describe("HudDrawer panel routing", () => {
 
   it("hides the drawer when category is null", () => {
     render(HudDrawer, { props: drawerProps({ category: null }) });
-    expect(screen.getByTestId("hud-drawer")).toHaveAttribute(
-      "aria-hidden",
-      "true",
-    );
+    const drawer = screen.getByTestId("hud-drawer");
+    expect(drawer).toHaveAttribute("aria-hidden", "true");
+    // Closed drawer must be inert so its hidden controls stay out of the
+    // keyboard tab order and accessibility tree (it is hidden via opacity,
+    // not display:none). Svelte sets the `inert` IDL property; we assert on
+    // the property because jsdom does not reflect it to the content attribute.
+    expect((drawer as HTMLElement).inert).toBe(true);
+  });
+
+  it("leaves the drawer focusable when a category is active", () => {
+    render(HudDrawer, { props: drawerProps({ category: "routes" }) });
+    const drawer = screen.getByTestId("hud-drawer");
+    expect(drawer).toHaveAttribute("aria-hidden", "false");
+    expect((drawer as HTMLElement).inert).toBe(false);
   });
 });

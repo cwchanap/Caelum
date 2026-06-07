@@ -1,12 +1,12 @@
 <script lang="ts">
-  import type { Tool } from "../../../domain/types";
+  import type { BuildingType, Tool } from "../../../domain/types";
   import type { ShellRouteDraftState } from "../../../runtime/types";
 
   type RouteTool = Extract<Tool, "busRoute" | "metroLine">;
 
   interface Props {
     activeTool: Tool;
-    selectedBuilding: string | null;
+    selectedBuilding: BuildingType | null;
     routeDraft: ShellRouteDraftState | null;
     onSetTool: (tool: Tool) => void;
     onRemoveDraftStop: (index: number) => void;
