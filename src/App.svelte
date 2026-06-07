@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import ControlTower from "./components/ControlTower.svelte";
+  import BottomHud from "./components/hud/BottomHud.svelte";
+  import HudDrawer from "./components/hud/HudDrawer.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
   import type { BuildingType, Overlay, Tool } from "./domain/types";
   import type { RuntimeController, RuntimeSnapshot } from "./runtime/types";
+  import type { HudCategory } from "./ui/uiState";
 
   interface Props {
     runtime: RuntimeController;
@@ -19,8 +21,8 @@
     snapshot = nextSnapshot;
   }
 
-  function handleToggleControlTower(): void {
-    setSnapshot(runtime.toggleControlTower());
+  function handleSetHudCategory(category: HudCategory | null): void {
+    setSnapshot(runtime.setHudCategory(category));
   }
 
   function handleTogglePause(): void {
@@ -144,36 +146,35 @@
   <main
     class="shell"
     data-testid="game-shell"
-    data-tower-open={snapshot?.ui.controlTowerOpen ?? false}
+    data-hud-category={snapshot?.ui.activeHudCategory ?? "none"}
   >
     {#if snapshot !== null}
       <Topbar
         shell={snapshot.shell.topbar}
         paused={snapshot.state.paused}
         speed={snapshot.state.speed}
-        controlTowerOpen={snapshot.ui.controlTowerOpen}
-        onToggleControlTower={handleToggleControlTower}
         onTogglePause={handleTogglePause}
         onSetSpeed={handleSetSpeed}
       />
 
       <GameCanvas {runtime} onShellError={handleShellError} />
 
-      <ControlTower
-        shell={snapshot.shell.controlTower}
+      <HudDrawer
+        category={snapshot.ui.activeHudCategory}
+        brief={snapshot.shell.controlTower}
         activeTool={snapshot.ui.activeTool}
         activeOverlay={snapshot.ui.activeOverlay}
         selectedBuilding={snapshot.ui.selectedBuilding}
         buildingRotation={snapshot.ui.buildingRotation}
-        onToggleControlTower={handleToggleControlTower}
+        inspector={snapshot.shell.inspector}
+        routeDraft={snapshot.shell.routeDraft}
+        routes={snapshot.shell.routes}
+        onCloseDrawer={() => handleSetHudCategory(null)}
         onSetTool={handleSetTool}
         onSetBuilding={handleSetBuilding}
         onRotateBuilding={handleRotateBuilding}
         onSetOverlay={handleSetOverlay}
-        inspector={snapshot.shell.inspector}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
-        routeDraft={snapshot.shell.routeDraft}
-        routes={snapshot.shell.routes}
         onRemoveDraftStop={handleRemoveDraftStop}
         onFinishRoute={handleFinishRoute}
         onCancelRoute={handleCancelRoute}
@@ -182,6 +183,12 @@
         onToggleRouteActive={handleToggleRouteActive}
         onDeleteRoute={handleDeleteRoute}
         onSelectRoute={handleSelectRoute}
+      />
+
+      <BottomHud
+        hud={snapshot.shell.hud}
+        onSetHudCategory={handleSetHudCategory}
+        onCancel={() => setSnapshot(runtime.resetUi())}
       />
     {/if}
   </main>
