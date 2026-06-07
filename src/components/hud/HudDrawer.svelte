@@ -115,7 +115,10 @@
         onSelectRoute={p.onSelectRoute}
       />
     {:else if p.category === "data"}
-      <DataPanel activeOverlay={p.activeOverlay} onSetOverlay={p.onSetOverlay} />
+      <DataPanel
+        activeOverlay={p.activeOverlay}
+        onSetOverlay={p.onSetOverlay}
+      />
     {:else if p.category === "brief"}
       <BriefPanel shell={p.brief} />
     {:else if p.category === "inspect" && p.inspector !== null}

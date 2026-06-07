@@ -23,13 +23,7 @@
     { key: "avgWait", label: "Avg Wait" },
   ];
 
-  let {
-    shell,
-    paused,
-    speed,
-    onTogglePause,
-    onSetSpeed,
-  }: Props = $props();
+  let { shell, paused, speed, onTogglePause, onSetSpeed }: Props = $props();
 </script>
 
 <section class="topbar" data-testid="topbar">

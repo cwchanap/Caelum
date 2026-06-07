@@ -1,5 +1,9 @@
 <script lang="ts">
-  import type { BuildingRotation, BuildingType, Tool } from "../../../domain/types";
+  import type {
+    BuildingRotation,
+    BuildingType,
+    Tool,
+  } from "../../../domain/types";
   import { BUILDING_CATALOG } from "../../../simulation/buildings";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
