@@ -25,7 +25,20 @@ export interface ShellControlTowerState {
   nextGrowth: string;
   selectedId: string;
   activeTool: string;
-  controlTowerOpen: boolean;
+}
+
+export interface ShellHudBadges {
+  routeDraftActive: boolean;
+  routeCount: number;
+  activeOverlayLabel: string | null;
+  inspectActive: boolean;
+}
+
+export interface ShellHudState {
+  activeCategory: HudCategory | null;
+  activeToolChip: string;
+  canCancel: boolean;
+  badges: ShellHudBadges;
 }
 
 export interface ShellPlatformMoveTarget {
@@ -85,6 +98,7 @@ export type ShellRouteListState = ShellRouteListItem[];
 export interface ShellState {
   topbar: ShellTopbarState;
   controlTower: ShellControlTowerState;
+  hud: ShellHudState;
   inspector: ShellInspectorState | null;
   routeDraft: ShellRouteDraftState | null;
   routes: ShellRouteListState;

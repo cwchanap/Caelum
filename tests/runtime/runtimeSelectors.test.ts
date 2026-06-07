@@ -220,3 +220,45 @@ describe("route selectors", () => {
     ]);
   });
 });
+
+describe("ShellHudState", () => {
+  it("derives the active tool chip and default cancel state", () => {
+    const state = createInitialGameState();
+    const ui = createUiState();
+    const shell = selectShellState(state, ui);
+
+    expect(shell.hud.activeCategory).toBe("brief");
+    expect(shell.hud.activeToolChip).toBe("INSPECT");
+    expect(shell.hud.canCancel).toBe(false);
+    expect(shell.hud.badges.routeDraftActive).toBe(false);
+    expect(shell.hud.badges.routeCount).toBe(0);
+    expect(shell.hud.badges.activeOverlayLabel).toBeNull();
+    expect(shell.hud.badges.inspectActive).toBe(false);
+  });
+
+  it("flags cancellable state and overlay label", () => {
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      activeOverlay: "coverage" as const,
+      draftStopIds: ["stop-001"],
+    };
+    const shell = selectShellState(state, ui);
+
+    expect(shell.hud.canCancel).toBe(true);
+    expect(shell.hud.badges.routeDraftActive).toBe(true);
+    expect(shell.hud.badges.activeOverlayLabel).toBe("Coverage");
+  });
+
+  it("counts routes and metro lines together", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 2 });
+    state = addBusStop(state, { x: 15, y: 2 });
+    const stopIds = state.transit.stops.map((s) => s.id);
+    state = addBusRoute(state, stopIds);
+    const shell = selectShellState(state, createUiState());
+
+    expect(shell.hud.badges.routeCount).toBe(1);
+  });
+});

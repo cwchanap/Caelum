@@ -1,16 +1,25 @@
-import type { GameState } from "../domain/types";
+import type { GameState, Overlay } from "../domain/types";
 import { BUILDING_CATALOG } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
 import { COSTS } from "../simulation/transit";
 import { resolveNodeAtTile } from "../ui/actions";
 import type { UiState } from "../ui/uiState";
 import type {
+  ShellHudState,
   ShellInspectorState,
   ShellPlatform,
   ShellRouteDraftState,
   ShellRouteListState,
   ShellState,
 } from "./types";
+
+const OVERLAY_LABELS: Record<Overlay, string> = {
+  coverage: "Coverage",
+  crowding: "Crowding",
+  demand: "Demand",
+  lateness: "Lateness",
+  growth: "Growth",
+};
 
 function pad2(value: number): string {
   return value.toString().padStart(2, "0");
@@ -203,6 +212,27 @@ function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
 }
 
 export function selectShellState(state: GameState, ui: UiState): ShellState {
+  const inspector = buildInspector(state, ui);
+  const draftActive =
+    ui.draftStopIds.length > 0 || ui.draftStationIds.length > 0;
+
+  const hud: ShellHudState = {
+    activeCategory: ui.activeHudCategory,
+    activeToolChip: formatActiveTool(ui),
+    canCancel:
+      draftActive ||
+      ui.activeTool !== "inspect" ||
+      ui.selectedBuilding !== null,
+    badges: {
+      routeDraftActive: draftActive,
+      routeCount:
+        state.transit.routes.length + state.transit.metroLines.length,
+      activeOverlayLabel:
+        ui.activeOverlay === null ? null : OVERLAY_LABELS[ui.activeOverlay],
+      inspectActive: inspector !== null,
+    },
+  };
+
   return {
     topbar: {
       budget: formatBudget(state.budget),
@@ -223,9 +253,9 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
         "All growth waves resolved.",
       selectedId: ui.selectedId ?? "—",
       activeTool: formatActiveTool(ui),
-      controlTowerOpen: ui.controlTowerOpen,
     },
-    inspector: buildInspector(state, ui),
+    hud,
+    inspector,
     routeDraft: buildRouteDraft(state, ui),
     routes: buildRouteList(state, ui),
   };
