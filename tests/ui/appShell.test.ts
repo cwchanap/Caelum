@@ -316,9 +316,7 @@ describe("App shell bootstrap", () => {
       "false",
     );
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Close drawer" }),
-    );
+    await fireEvent.click(screen.getByRole("button", { name: "Close drawer" }));
     expect(runtime.setHudCategory).toHaveBeenLastCalledWith(null);
     expect(screen.getByTestId("hud-drawer")).toHaveAttribute(
       "aria-hidden",

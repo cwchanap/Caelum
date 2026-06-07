@@ -225,8 +225,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       ui.selectedBuilding !== null,
     badges: {
       routeDraftActive: draftActive,
-      routeCount:
-        state.transit.routes.length + state.transit.metroLines.length,
+      routeCount: state.transit.routes.length + state.transit.metroLines.length,
       activeOverlayLabel:
         ui.activeOverlay === null ? null : OVERLAY_LABELS[ui.activeOverlay],
       inspectActive: inspector !== null,

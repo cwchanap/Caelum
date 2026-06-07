@@ -1372,7 +1372,11 @@ button:focus-visible {
   gap: 16px;
   padding: 0 12px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface) 100%);
+  background: linear-gradient(
+    180deg,
+    var(--surface-raised) 0%,
+    var(--surface) 100%
+  );
   box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.4);
   z-index: 9;
 }
