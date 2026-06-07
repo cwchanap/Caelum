@@ -6,8 +6,6 @@
     shell: ShellTopbarState;
     paused: boolean;
     speed: GameState["speed"];
-    controlTowerOpen: boolean;
-    onToggleControlTower: () => void;
     onTogglePause: () => void;
     onSetSpeed: (speed: 1 | 2 | 4) => void;
   }
@@ -29,8 +27,6 @@
     shell,
     paused,
     speed,
-    controlTowerOpen,
-    onToggleControlTower,
     onTogglePause,
     onSetSpeed,
   }: Props = $props();
@@ -62,16 +58,6 @@
   </div>
 
   <div class="controls">
-    <button
-      type="button"
-      class="ctrl-tower"
-      data-action="toggle-tower"
-      aria-pressed={controlTowerOpen}
-      onclick={onToggleControlTower}
-    >
-      <span data-button-label>Control Tower</span>
-    </button>
-
     <button
       type="button"
       class="ctrl-pause"
