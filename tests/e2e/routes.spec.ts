@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { clickMapTile } from "./helpers";
+import { clickMapTile, openHudCategory } from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
@@ -30,12 +30,14 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await expect(canvas).toBeVisible();
 
   // Place three bus stops on empty tiles adjacent to the y=8 road.
+  await openHudCategory(page, "build");
   await page.getByRole("button", { name: "Bus Stop" }).click();
   await clickMapTile(canvas, { x: 8, y: 7 });
   await clickMapTile(canvas, { x: 16, y: 7 });
   await clickMapTile(canvas, { x: 23, y: 7 });
 
   // Draft a route: add three stops, remove the middle one, then finish.
+  await openHudCategory(page, "routes");
   await page.getByRole("button", { name: "Bus Route" }).click();
   await clickMapTile(canvas, { x: 8, y: 7 });
   await clickMapTile(canvas, { x: 16, y: 7 });
@@ -45,6 +47,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await page.getByRole("button", { name: /finish route/i }).click();
 
   // The route now appears in the management panel.
+  await openHudCategory(page, "manage");
   await expect(page.getByTestId("routes-panel")).toBeVisible();
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
 
