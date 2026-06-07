@@ -17,6 +17,10 @@ import type {
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 
+async function openCategory(name: string): Promise<void> {
+  await fireEvent.click(screen.getByTestId(`hud-cat-${name}`));
+}
+
 function createRuntimeHarness(
   options: { state?: GameState; ui?: UiState } = {},
 ): { runtime: RuntimeController } {
@@ -101,8 +105,8 @@ function createRuntimeHarness(
       state = { ...state, speed };
       return publish();
     }),
-    toggleControlTower: vi.fn(() => {
-      ui = { ...ui, controlTowerOpen: !ui.controlTowerOpen };
+    setHudCategory: vi.fn((category) => {
+      ui = { ...ui, activeHudCategory: category };
       return publish();
     }),
     resetUi,
@@ -129,7 +133,7 @@ function createRuntimeHarness(
 }
 
 describe("App shell bootstrap", () => {
-  it("renders runtime-driven topbar, canvas host, and control tower", () => {
+  it("renders runtime-driven topbar, canvas host, and bottom HUD", async () => {
     const baseState = createInitialGameState();
     const { runtime } = createRuntimeHarness({
       state: {
@@ -157,8 +161,8 @@ describe("App shell bootstrap", () => {
     render(App, { props: { runtime } });
 
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
-      "data-tower-open",
-      "true",
+      "data-hud-category",
+      "brief",
     );
     expect(screen.getByTestId("game-canvas-host")).toBeVisible();
     expect(screen.getByText("CAELUM")).toBeVisible();
@@ -172,26 +176,24 @@ describe("App shell bootstrap", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText("North homes open")).toBeVisible();
-    expect(screen.getByText("BUSROUTE")).toBeVisible();
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("BUSROUTE");
     expect(screen.getByText("route-001")).toBeVisible();
     expect(screen.getByText("Live")).toBeVisible();
 
-    const controlTower = screen.getByTestId("control-tower");
-    expect(controlTower).toHaveAttribute("aria-hidden", "false");
+    const drawer = screen.getByTestId("hud-drawer");
+    await openCategory("routes");
     expect(
-      within(controlTower).getByRole("button", { name: "Bus Route" }),
+      within(drawer).getByRole("button", { name: "Bus Route" }),
     ).toHaveAttribute("data-tool", "busRoute");
     expect(
-      within(controlTower).getByRole("button", { name: "Bus Route" }),
+      within(drawer).getByRole("button", { name: "Bus Route" }),
     ).toHaveAttribute("aria-pressed", "true");
+    await openCategory("data");
     expect(
-      within(controlTower).queryByRole("button", { name: "Civic" }),
-    ).toBeNull();
-    expect(
-      within(controlTower).getByRole("button", { name: "Growth" }),
+      within(drawer).getByRole("button", { name: "Growth" }),
     ).toHaveAttribute("data-overlay", "growth");
     expect(
-      within(controlTower).getByRole("button", { name: "Growth" }),
+      within(drawer).getByRole("button", { name: "Growth" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -213,32 +215,6 @@ describe("App shell bootstrap", () => {
       "aria-pressed",
       "true",
     );
-
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Control Tower" }),
-    );
-    expect(runtime.toggleControlTower).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("game-shell")).toHaveAttribute(
-      "data-tower-open",
-      "false",
-    );
-    expect(screen.getByTestId("control-tower")).toHaveAttribute(
-      "aria-hidden",
-      "true",
-    );
-
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Control Tower" }),
-    );
-    expect(runtime.toggleControlTower).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("game-shell")).toHaveAttribute(
-      "data-tower-open",
-      "true",
-    );
-    expect(screen.getByTestId("control-tower")).toHaveAttribute(
-      "aria-hidden",
-      "false",
-    );
   });
 
   it("keeps the selected speed visually active while paused", () => {
@@ -256,6 +232,8 @@ describe("App shell bootstrap", () => {
   it("wires Build and Route Planning menus separately", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
+
+    await openCategory("build");
 
     expect(
       screen.getByRole("button", {
@@ -293,26 +271,20 @@ describe("App shell bootstrap", () => {
       }),
     ).toBeEnabled();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Bus Route" }));
+    await openCategory("routes");
+    await fireEvent.click(
+      within(screen.getByTestId("hud-drawer")).getByRole("button", {
+        name: "Bus Route",
+      }),
+    );
     expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
-    expect(screen.getByRole("button", { name: "Bus Route" })).toHaveAttribute(
-      "data-tool",
-      "busRoute",
-    );
-    expect(screen.getByRole("button", { name: "Bus Route" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
   });
 
   it("wires tool, overlay, and close interactions with exact runtime ids", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
 
+    await openCategory("routes");
     await fireEvent.click(screen.getByRole("button", { name: "Metro Line" }));
     expect(runtime.setTool).toHaveBeenCalledWith("metroLine");
     expect(screen.getByRole("button", { name: "Metro Line" })).toHaveAttribute(
@@ -325,6 +297,7 @@ describe("App shell bootstrap", () => {
     );
     expect(screen.getByText("METROLINE")).toBeVisible();
 
+    await openCategory("data");
     await fireEvent.click(screen.getByRole("button", { name: "Coverage" }));
     expect(runtime.setOverlay).toHaveBeenCalledWith("coverage");
     expect(screen.getByRole("button", { name: "Coverage" })).toHaveAttribute(
@@ -344,10 +317,10 @@ describe("App shell bootstrap", () => {
     );
 
     await fireEvent.click(
-      screen.getByRole("button", { name: "Close Control Tower" }),
+      screen.getByRole("button", { name: "Close drawer" }),
     );
-    expect(runtime.toggleControlTower).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("control-tower")).toHaveAttribute(
+    expect(runtime.setHudCategory).toHaveBeenLastCalledWith(null);
+    expect(screen.getByTestId("hud-drawer")).toHaveAttribute(
       "aria-hidden",
       "true",
     );
@@ -361,7 +334,7 @@ describe("App shell bootstrap", () => {
         activeOverlay: "growth",
         selectedId: "route-001",
         draftStopIds: ["stop-001"],
-        controlTowerOpen: false,
+        activeHudCategory: "routes",
       },
     });
 
@@ -371,17 +344,10 @@ describe("App shell bootstrap", () => {
 
     expect(runtime.resetUi).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
-      "data-tower-open",
-      "true",
+      "data-hud-category",
+      "brief",
     );
-    expect(screen.getByRole("button", { name: "Inspect" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Growth" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
     expect(screen.getByText("—")).toBeVisible();
   });
 
@@ -398,7 +364,7 @@ describe("App shell bootstrap", () => {
     expect(alert).toHaveTextContent("Canvas 2D context unavailable");
     expect(screen.queryByTestId("topbar")).toBeNull();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
-    expect(screen.queryByTestId("control-tower")).toBeNull();
+    expect(screen.queryByTestId("bottom-hud")).toBeNull();
   });
 
   it("renders error state when bootstrap fails", () => {
@@ -416,6 +382,6 @@ describe("App shell bootstrap", () => {
     expect(screen.getByTestId("game-shell")).toBeVisible();
     expect(screen.queryByTestId("topbar")).toBeNull();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
-    expect(screen.queryByTestId("control-tower")).toBeNull();
+    expect(screen.queryByTestId("bottom-hud")).toBeNull();
   });
 });
