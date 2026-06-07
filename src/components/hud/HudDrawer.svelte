@@ -53,11 +53,11 @@
 
   const titles: Record<HudCategory, string> = {
     build: "Build",
-    routes: "Route Planning",
-    manage: "Routes",
-    data: "Overlays",
-    brief: "Mission Brief",
-    inspect: "Inspector",
+    routes: "Routes",
+    manage: "Manage",
+    data: "Data",
+    brief: "Brief",
+    inspect: "Inspect",
   };
 </script>
 
