@@ -15,7 +15,7 @@ import {
   handleTileClick as applyTileClick,
   removeDraftStop as applyRemoveDraftStop,
 } from "../ui/actions";
-import { createUiState } from "../ui/uiState";
+import { createUiState, type HudCategory } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
 import type {
   RuntimeController,
@@ -312,8 +312,13 @@ export function createGameRuntime(): RuntimeController {
     setSpeed(speed) {
       return commit(speed === state.speed ? state : { ...state, speed }, ui);
     },
-    toggleControlTower() {
-      return commit(state, { ...ui, controlTowerOpen: !ui.controlTowerOpen });
+    setHudCategory(category: HudCategory | null) {
+      return commit(
+        state,
+        category === ui.activeHudCategory
+          ? ui
+          : { ...ui, activeHudCategory: category },
+      );
     },
     handleTileClick(point) {
       const result = applyTileClick(state, ui, point);
