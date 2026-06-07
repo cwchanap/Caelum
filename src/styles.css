@@ -414,7 +414,8 @@ body {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   CONTROL TOWER — bottom operations overlay
+   HUD drawer — bottom sliding drawer (.panel is the drawer host; .hud-drawer
+   overrides display to flex). The old ControlTower component was removed.
    ────────────────────────────────────────────────────────────────────────── */
 
 .panel {

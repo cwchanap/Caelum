@@ -2,12 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import HudDrawer from "../../src/components/hud/HudDrawer.svelte";
 import type {
-  ShellControlTowerState,
+  ShellBriefState,
   ShellInspectorState,
   ShellRouteListState,
 } from "../../src/runtime/types";
 
-const brief: ShellControlTowerState = {
+const brief: ShellBriefState = {
   title: "Scenario",
   status: "RUNNING",
   objective: "obj",

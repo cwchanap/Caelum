@@ -215,10 +215,13 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
   const inspector = buildInspector(state, ui);
   const draftActive =
     ui.draftStopIds.length > 0 || ui.draftStationIds.length > 0;
+  // Single derivation of the active-tool label — bound to both the HUD chip
+  // and the Brief panel so the two can never drift apart.
+  const activeToolLabel = formatActiveTool(ui);
 
   const hud: ShellHudState = {
     activeCategory: ui.activeHudCategory,
-    activeToolChip: formatActiveTool(ui),
+    activeToolChip: activeToolLabel,
     canCancel:
       draftActive ||
       ui.activeTool !== "inspect" ||
@@ -242,7 +245,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       unserved: `${state.metrics.unservedTrips}`,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
     },
-    controlTower: {
+    brief: {
       title: state.scenario.name,
       status: state.metrics.state.toUpperCase(),
       objective: formatObjective(state),
@@ -251,7 +254,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
         state.scenario.growthWaves.find((wave) => !wave.applied)?.message ??
         "All growth waves resolved.",
       selectedId: ui.selectedId ?? "—",
-      activeTool: formatActiveTool(ui),
+      activeTool: activeToolLabel,
     },
     hud,
     inspector,

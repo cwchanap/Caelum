@@ -479,6 +479,42 @@ describe("inspect drawer auto-open", () => {
 
     expect(result.ui.activeHudCategory).toBe("brief");
   });
+
+  it("closes the inspect drawer when its node is bulldozed", () => {
+    // Regression: the remove branch cleared selectedId but left
+    // activeHudCategory === "inspect", producing a dead-end drawer — open,
+    // empty body, no chip to close it (the inspector was null because the
+    // selection was gone).
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 7 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "remove" as const,
+      activeHudCategory: "inspect" as const,
+      selectedId: "7,7",
+      selectedNodeKind: "stop" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 7, y: 7 });
+
+    expect(result.state.transit.stops).toEqual([]);
+    expect(result.ui.selectedId).toBeNull();
+    expect(result.ui.activeHudCategory).toBeNull();
+  });
+
+  it("leaves a non-inspect drawer untouched when bulldozing", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 7 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "remove" as const,
+      activeHudCategory: "manage" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 7, y: 7 });
+
+    expect(result.ui.activeHudCategory).toBe("manage");
+  });
 });
 
 describe("removal strips routes from surviving platforms", () => {

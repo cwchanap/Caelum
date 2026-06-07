@@ -367,14 +367,28 @@ export function handleTileClick(
       ui.selectedRouteId === null ||
       nextState.transit.routes.some((r) => r.id === ui.selectedRouteId) ||
       nextState.transit.metroLines.some((l) => l.id === ui.selectedRouteId);
+    // Bulldozing clears the inspected selection. If the inspect drawer was
+    // open, close it too — otherwise the drawer stays open titled "Inspect"
+    // with an empty body and no chip to toggle it closed (the inspector is
+    // gone because selectedId is null). Mirrors the empty-tile inspect path
+    // above (see the `ui.activeTool === "inspect"` empty-nodes branch).
+    const nextHudCategory =
+      ui.activeHudCategory === "inspect" ? null : ui.activeHudCategory;
     const nextUi = selectedSurvived
-      ? { ...ui, draftStopIds: [], draftStationIds: [], selectedId: null }
+      ? {
+          ...ui,
+          draftStopIds: [],
+          draftStationIds: [],
+          selectedId: null,
+          activeHudCategory: nextHudCategory,
+        }
       : {
           ...ui,
           draftStopIds: [],
           draftStationIds: [],
           selectedId: null,
           selectedRouteId: null,
+          activeHudCategory: nextHudCategory,
         };
     return { state: nextState, ui: nextUi };
   }

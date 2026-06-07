@@ -6,13 +6,17 @@ import type {
   Tool,
 } from "../domain/types";
 
-export type HudCategory =
+// The five categories with a permanent chip in the bottom bar.
+export type PrimaryHudCategory =
   | "build"
   | "routes"
   | "manage"
   | "data"
-  | "brief"
-  | "inspect";
+  | "brief";
+
+// "inspect" is auto-opened by clicking a map node and has no permanent chip,
+// so it is legibly the odd one out of the primary set.
+export type HudCategory = PrimaryHudCategory | "inspect";
 
 export interface UiState {
   activeTool: Tool;

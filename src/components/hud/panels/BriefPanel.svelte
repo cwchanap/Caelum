@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { ShellControlTowerState } from "../../../runtime/types";
+  import type { ShellBriefState } from "../../../runtime/types";
 
   interface Props {
-    shell: ShellControlTowerState;
+    shell: ShellBriefState;
   }
 
   let { shell }: Props = $props();

@@ -251,6 +251,25 @@ describe("ShellHudState", () => {
     expect(shell.hud.badges.activeOverlayLabel).toBe("Coverage");
   });
 
+  // Lock the full OVERLAY_LABELS map so a new overlay or a renamed label is
+  // caught here rather than rendering as `undefined` in the bottom-bar badge.
+  it.each([
+    ["coverage", "Coverage"],
+    ["crowding", "Crowding"],
+    ["demand", "Demand"],
+    ["lateness", "Lateness"],
+    ["growth", "Growth"],
+  ] as const)(
+    "derives the badge label for the %s overlay",
+    (overlay, label) => {
+      const state = createInitialGameState();
+      const ui = { ...createUiState(), activeOverlay: overlay };
+      const shell = selectShellState(state, ui);
+
+      expect(shell.hud.badges.activeOverlayLabel).toBe(label);
+    },
+  );
+
   it("counts routes and metro lines together", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 2 });

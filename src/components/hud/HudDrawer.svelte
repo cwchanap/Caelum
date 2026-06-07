@@ -6,7 +6,7 @@
     Tool,
   } from "../../domain/types";
   import type {
-    ShellControlTowerState,
+    ShellBriefState,
     ShellInspectorState,
     ShellRouteDraftState,
     ShellRouteListState,
@@ -21,7 +21,7 @@
 
   interface Props {
     category: HudCategory | null;
-    brief: ShellControlTowerState;
+    brief: ShellBriefState;
     activeTool: Tool;
     activeOverlay: Overlay | null;
     selectedBuilding: BuildingType | null;

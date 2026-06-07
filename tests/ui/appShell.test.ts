@@ -365,6 +365,32 @@ describe("App shell bootstrap", () => {
     expect(screen.getByText("—")).toBeVisible();
   });
 
+  it("does not reset on Escape when Cancel is disabled (bare inspect)", async () => {
+    // canCancel is false when activeTool === "inspect" with no draft and no
+    // selected building. Escape shares the Cancel button's label, so it must
+    // share its disabled state too — otherwise Escape silently jumps the
+    // drawer to "Brief" while the button looks dead.
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "inspect",
+        activeHudCategory: "manage",
+      },
+    });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("hud-cancel")).toBeDisabled();
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(screen.getByTestId("game-shell")).toHaveAttribute(
+      "data-hud-category",
+      "manage",
+    );
+  });
+
   it("renders a shell error when the canvas host fails to attach", () => {
     const { runtime } = createRuntimeHarness();
     runtime.mountCanvas = vi.fn(() => {
