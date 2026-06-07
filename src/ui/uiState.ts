@@ -6,6 +6,14 @@ import type {
   Tool,
 } from "../domain/types";
 
+export type HudCategory =
+  | "build"
+  | "routes"
+  | "manage"
+  | "data"
+  | "brief"
+  | "inspect";
+
 export interface UiState {
   activeTool: Tool;
   activeOverlay: Overlay | null;
@@ -17,7 +25,7 @@ export interface UiState {
   draftStopIds: string[];
   draftStationIds: string[];
   selectedRouteId: string | null;
-  controlTowerOpen: boolean;
+  activeHudCategory: HudCategory | null;
 }
 
 export function createUiState(): UiState {
@@ -32,6 +40,6 @@ export function createUiState(): UiState {
     draftStopIds: [],
     draftStationIds: [],
     selectedRouteId: null,
-    controlTowerOpen: true,
+    activeHudCategory: "brief",
   };
 }
