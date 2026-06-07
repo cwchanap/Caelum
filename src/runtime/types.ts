@@ -17,7 +17,7 @@ export interface ShellTopbarState {
   avgWait: string;
 }
 
-export interface ShellControlTowerState {
+export interface ShellBriefState {
   title: string;
   status: string;
   objective: string;
@@ -97,7 +97,7 @@ export type ShellRouteListState = ShellRouteListItem[];
 
 export interface ShellState {
   topbar: ShellTopbarState;
-  controlTower: ShellControlTowerState;
+  brief: ShellBriefState;
   hud: ShellHudState;
   inspector: ShellInspectorState | null;
   routeDraft: ShellRouteDraftState | null;

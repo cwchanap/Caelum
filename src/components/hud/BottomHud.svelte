@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ShellHudState } from "../../runtime/types";
-  import type { HudCategory } from "../../ui/uiState";
+  import type { HudCategory, PrimaryHudCategory } from "../../ui/uiState";
 
   interface Props {
     hud: ShellHudState;
@@ -10,7 +10,7 @@
 
   let { hud, onSetHudCategory, onCancel }: Props = $props();
 
-  type CategoryButton = { id: HudCategory; label: string };
+  type CategoryButton = { id: PrimaryHudCategory; label: string };
 
   const categories: CategoryButton[] = [
     { id: "build", label: "Build" },

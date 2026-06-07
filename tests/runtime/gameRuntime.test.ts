@@ -19,7 +19,7 @@ describe("Game Runtime", () => {
 
     // Verify shell-friendly selectors
     expect(snapshot.shell.topbar.budget).toBe("$120,000");
-    expect(snapshot.shell.controlTower.title).toBe("Growing Suburb");
+    expect(snapshot.shell.brief.title).toBe("Growing Suburb");
   });
 
   it("publishes state changes to subscribers", () => {
@@ -170,7 +170,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.ui.selectedBuilding).toBe("busTerminal");
     expect(snapshot.ui.buildingRotation).toBe(180);
-    expect(snapshot.shell.controlTower.activeTool).toBe("BUS TERMINAL 180");
+    expect(snapshot.shell.brief.activeTool).toBe("BUS TERMINAL 180");
   });
 
   it.each(["busRoute", "remove", "inspect"] as const)(
