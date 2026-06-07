@@ -1,5 +1,12 @@
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { tileSize } from "../../src/render/canvas";
+
+export async function openHudCategory(
+  page: Page,
+  category: "build" | "routes" | "manage" | "data" | "brief" | "inspect",
+): Promise<void> {
+  await page.getByTestId(`hud-cat-${category}`).click();
+}
 
 // Must match the Growing Suburb scenario map dimensions in
 // src/scenario/growingSuburb.ts (width/height constants). If the scenario

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { clickMapTile } from "./helpers";
+import { clickMapTile, openHudCategory } from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
@@ -42,6 +42,7 @@ test("loads the svelte shell and supports active building placement", async ({
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
+  await openHudCategory(page, "build");
   await page.getByRole("button", { name: "Small House" }).click();
   await clickMapTile(canvas, { x: 0, y: 1 });
 
@@ -51,5 +52,5 @@ test("loads the svelte shell and supports active building placement", async ({
   await page.getByRole("button", { name: "Bus Terminal" }).click();
   await page.getByRole("button", { name: "Rotate" }).click();
 
-  await expect(page.getByText("BUS TERMINAL 90")).toBeVisible();
+  await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
 });

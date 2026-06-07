@@ -1497,6 +1497,20 @@ button:focus-visible {
   gap: 0;
 }
 
+/* The drawer stacks its header above the body (flex column), so the shared
+   .panel-head must not stretch to fill the drawer or it covers the panel
+   controls and intercepts their clicks. Render it as a slim top bar. */
+.hud-drawer .panel-head {
+  flex: 0 0 auto;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: 0;
+  padding: 10px 16px;
+  border-right: none;
+  border-bottom: 1px solid var(--line);
+}
+
 .hud-drawer--closed {
   opacity: 0;
   pointer-events: none;
