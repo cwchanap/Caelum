@@ -331,6 +331,8 @@ export function handleTileClick(
           ...ui,
           selectedId: `${point.x},${point.y}`,
           selectedNodeKind: null,
+          activeHudCategory:
+            ui.activeHudCategory === "inspect" ? null : ui.activeHudCategory,
         },
       };
     }
@@ -346,7 +348,12 @@ export function handleTileClick(
 
     return {
       state,
-      ui: { ...ui, selectedId: `${point.x},${point.y}`, selectedNodeKind },
+      ui: {
+        ...ui,
+        selectedId: `${point.x},${point.y}`,
+        selectedNodeKind,
+        activeHudCategory: "inspect",
+      },
     };
   }
 
