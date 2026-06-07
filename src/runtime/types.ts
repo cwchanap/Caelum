@@ -5,7 +5,7 @@ import type {
   Point,
   Tool,
 } from "../domain/types";
-import type { UiState } from "../ui/uiState";
+import type { HudCategory, UiState } from "../ui/uiState";
 
 export interface ShellTopbarState {
   budget: string;
@@ -113,7 +113,7 @@ export interface RuntimeController {
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeSnapshot;
   setSpeed: (speed: GameState["speed"]) => RuntimeSnapshot;
-  toggleControlTower: () => RuntimeSnapshot;
+  setHudCategory: (category: HudCategory | null) => RuntimeSnapshot;
   handleTileClick: (point: Point) => RuntimeSnapshot;
   assignRouteToPlatform: (
     nodeId: string,

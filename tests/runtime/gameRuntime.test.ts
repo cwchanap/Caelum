@@ -62,7 +62,7 @@ describe("Game Runtime", () => {
     runtime.tick(1);
     runtime.setOverlay("growth");
     runtime.handleTileClick({ x: 5, y: 5 });
-    runtime.toggleControlTower();
+    runtime.setHudCategory("manage");
     runtime.setTool("busStop");
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.setTool("busRoute");
@@ -76,7 +76,7 @@ describe("Game Runtime", () => {
     expect(beforeReset.ui.activeOverlay).toBe("growth");
     expect(beforeReset.ui.selectedId).toBe("5,5");
     expect(beforeReset.ui.draftStopIds).toEqual(["stop-001"]);
-    expect(beforeReset.ui.controlTowerOpen).toBe(false);
+    expect(beforeReset.ui.activeHudCategory).toBe("manage");
 
     runtime.resetUi();
 
@@ -89,7 +89,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.selectedId).toBe(null);
     expect(snapshot.ui.draftStopIds).toEqual([]);
     expect(snapshot.ui.draftStationIds).toEqual([]);
-    expect(snapshot.ui.controlTowerOpen).toBe(true);
+    expect(snapshot.ui.activeHudCategory).toBe("brief");
   });
 
   it("manages simulation lifecycle", () => {
@@ -244,11 +244,20 @@ describe("Game Runtime", () => {
   it("toggles control tower", () => {
     const runtime = createGameRuntime();
 
-    const before = runtime.getSnapshot().ui.controlTowerOpen;
-    runtime.toggleControlTower();
-    const after = runtime.getSnapshot().ui.controlTowerOpen;
+    const before = runtime.getSnapshot().ui.activeHudCategory;
+    runtime.setHudCategory("data");
+    const after = runtime.getSnapshot().ui.activeHudCategory;
 
-    expect(after).toBe(!before);
+    expect(before).toBe("brief");
+    expect(after).toBe("data");
+  });
+
+  it("collapses the drawer when setHudCategory(null) is dispatched", () => {
+    const runtime = createGameRuntime();
+    runtime.setHudCategory("build");
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
+    runtime.setHudCategory(null);
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
   });
 });
 
