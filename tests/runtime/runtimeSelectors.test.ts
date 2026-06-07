@@ -257,8 +257,11 @@ describe("ShellHudState", () => {
     state = addBusStop(state, { x: 15, y: 2 });
     const stopIds = state.transit.stops.map((s) => s.id);
     state = addBusRoute(state, stopIds);
+    state = addMetroStation(state, { x: 3, y: 0 });
+    state = addMetroStation(state, { x: 9, y: 0 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
     const shell = selectShellState(state, createUiState());
 
-    expect(shell.hud.badges.routeCount).toBe(1);
+    expect(shell.hud.badges.routeCount).toBe(2);
   });
 });
