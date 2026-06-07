@@ -441,6 +441,46 @@ describe("stripRoutesFromPlatforms reference equality", () => {
   });
 });
 
+describe("inspect drawer auto-open", () => {
+  it("opens the inspect drawer when a node is clicked", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 7 });
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = handleTileClick(state, ui, { x: 7, y: 7 });
+
+    expect(result.ui.activeHudCategory).toBe("inspect");
+    expect(result.ui.selectedId).toBe("7,7");
+  });
+
+  it("dismisses the inspect drawer when empty map is clicked", () => {
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      activeHudCategory: "inspect" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 0, y: 0 });
+
+    expect(result.ui.activeHudCategory).toBeNull();
+    expect(result.ui.selectedId).toBe("0,0");
+  });
+
+  it("leaves a non-inspect drawer untouched on empty map click", () => {
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      activeHudCategory: "brief" as const,
+    };
+
+    const result = handleTileClick(state, ui, { x: 0, y: 0 });
+
+    expect(result.ui.activeHudCategory).toBe("brief");
+  });
+});
+
 describe("removal strips routes from surviving platforms", () => {
   it("removes a deleted route's id from a shared terminal's platforms", () => {
     let state = createInitialGameState();
