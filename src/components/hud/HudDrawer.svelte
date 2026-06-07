@@ -67,6 +67,7 @@
   data-testid="hud-drawer"
   data-hud-category={p.category ?? "none"}
   aria-hidden={p.category === null}
+  inert={p.category === null}
 >
   <header class="panel-head">
     <button
