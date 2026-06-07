@@ -305,7 +305,6 @@ body {
   margin-left: auto;
 }
 
-.ctrl-tower,
 .ctrl-pause {
   border: 1px solid var(--line-strong);
   background: var(--surface-sunk);
@@ -365,17 +364,9 @@ body {
     0 0 12px rgba(255, 182, 39, 0.45);
 }
 
-.ctrl-tower:hover,
 .ctrl-pause:hover {
   border-color: var(--cyan);
   color: var(--cyan);
-}
-
-.ctrl-tower[aria-pressed="true"] {
-  background: var(--cyan);
-  border-color: var(--cyan);
-  color: var(--bg-deep);
-  box-shadow: 0 0 14px rgba(63, 224, 197, 0.42);
 }
 
 .ctrl-pause[aria-pressed="true"] {
@@ -445,19 +436,6 @@ body {
   transition:
     opacity 0.18s ease,
     transform 0.18s ease;
-}
-
-.panel--with-inspector {
-  grid-template-columns:
-    124px minmax(110px, 0.5fr) minmax(220px, 1fr)
-    minmax(166px, 0.7fr) minmax(200px, 0.8fr) minmax(244px, 1fr)
-    minmax(200px, 0.8fr);
-}
-
-.control-tower--closed {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(calc(100% + 24px));
 }
 
 .panel::before {
@@ -1376,4 +1354,151 @@ button:focus-visible {
 }
 .panel::-webkit-scrollbar-thumb:hover {
   background: var(--cyan);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   BOTTOM HUD — slim category bar + sliding drawer
+   ────────────────────────────────────────────────────────────────────────── */
+
+.bottom-hud {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface) 100%);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 9;
+}
+
+.hud-categories {
+  display: flex;
+  gap: 6px;
+}
+
+.hud-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.hud-cat:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.hud-cat.active {
+  color: var(--bg-deep);
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.hud-cat--inspect.active {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+.hud-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+}
+
+.hud-cat.active .hud-badge {
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--bg-deep);
+}
+
+.hud-badge--dot {
+  background: transparent;
+  color: var(--amber);
+  padding: 0;
+  font-size: 12px;
+}
+
+.hud-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hud-tool-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--cyan);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+}
+
+.hud-cancel {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.hud-cancel:enabled:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.hud-cancel:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Drawer docks above the slim bar (56px bar + 16px inset + 12px gap). */
+.hud-drawer {
+  bottom: 84px;
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: none;
+  height: min(40vh, 360px);
+}
+
+.hud-drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.hud-drawer-body .hud-panel {
+  height: 100%;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 0;
+}
+
+.hud-drawer--closed {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(100% + 24px));
 }
