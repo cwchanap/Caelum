@@ -324,6 +324,22 @@ describe("App shell bootstrap", () => {
     );
   });
 
+  it("collapses the drawer when the already-active category button is clicked", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    // Brief is the default-open drawer.
+    const drawer = screen.getByTestId("hud-drawer");
+    expect(drawer).toHaveAttribute("data-hud-category", "brief");
+    expect(drawer).toHaveAttribute("aria-hidden", "false");
+
+    await openCategory("brief");
+
+    expect(runtime.setHudCategory).toHaveBeenLastCalledWith(null);
+    expect(drawer).toHaveAttribute("data-hud-category", "none");
+    expect(drawer).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("resets transient ui state when Escape is pressed", async () => {
     const { runtime } = createRuntimeHarness({
       ui: {

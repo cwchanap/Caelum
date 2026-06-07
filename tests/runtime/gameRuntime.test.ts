@@ -259,6 +259,25 @@ describe("Game Runtime", () => {
     runtime.setHudCategory(null);
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
   });
+
+  it("auto-opens the inspect drawer when a node is clicked, and collapses it on empty tiles", () => {
+    const runtime = createGameRuntime();
+
+    // Place a bus stop at a known tile, then inspect it through the real runtime.
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 7, y: 8 });
+
+    runtime.setTool("inspect");
+    const onNode = runtime.handleTileClick({ x: 7, y: 8 });
+
+    expect(onNode.ui.activeHudCategory).toBe("inspect");
+    expect(onNode.shell.inspector).not.toBeNull();
+    expect(onNode.ui.selectedId).toBe("7,8");
+
+    // Clicking an empty tile while the inspect drawer is open collapses it.
+    const onEmpty = runtime.handleTileClick({ x: 20, y: 20 });
+    expect(onEmpty.ui.activeHudCategory).toBeNull();
+  });
 });
 
 describe("runtime assignRouteToPlatform", () => {
