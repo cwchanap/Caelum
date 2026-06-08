@@ -236,6 +236,19 @@ describe("ShellHudState", () => {
     expect(shell.hud.badges.inspectActive).toBe(false);
   });
 
+  it("treats an overlay-only inspect state as cancellable", () => {
+    // Enabling a data overlay while staying on the inspect tool must still
+    // arm Cancel/Escape so the player can clear the overlay without diving
+    // back into the Data drawer. resetUi() clears activeOverlay, so the gate
+    // must let it through.
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), activeOverlay: "coverage" as const };
+    const shell = selectShellState(state, ui);
+
+    expect(shell.hud.canCancel).toBe(true);
+    expect(shell.hud.badges.activeOverlayLabel).toBe("Coverage");
+  });
+
   it("flags cancellable state and overlay label", () => {
     const state = createInitialGameState();
     const ui = {

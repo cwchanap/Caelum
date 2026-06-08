@@ -100,8 +100,9 @@
 
     // Escape mirrors the Cancel button (its label is "Cancel · Esc"). Respect
     // the same canCancel gate so Escape can't fire a reset when Cancel is
-    // disabled (bare inspect with no in-flight draft/building) — otherwise it
-    // would silently jump the drawer to "Brief" while the button looks dead.
+    // disabled (bare inspect with no in-flight draft, building, or overlay) —
+    // otherwise it would silently jump the drawer to "Brief" while the button
+    // looks dead.
     if (snapshot !== null && !snapshot.shell.hud.canCancel) {
       return;
     }

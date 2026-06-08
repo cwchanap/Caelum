@@ -225,7 +225,8 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
     canCancel:
       draftActive ||
       ui.activeTool !== "inspect" ||
-      ui.selectedBuilding !== null,
+      ui.selectedBuilding !== null ||
+      ui.activeOverlay !== null,
     badges: {
       routeDraftActive: draftActive,
       routeCount: state.transit.routes.length + state.transit.metroLines.length,

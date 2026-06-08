@@ -389,6 +389,13 @@ body {
   display: block;
   position: relative;
   filter: contrast(1.02) saturate(1.05);
+  /* Reserve the always-visible bottom HUD's footprint so the canvas (and the
+     rendered map) never extends underneath it. The HUD is 56px tall and sits
+     16px up from the shell bottom (see .bottom-hud), so the bottom 72px of the
+     board is UI chrome, not playable area. Without this, the opaque bar hides
+     and intercepts clicks on the bottom map rows. box-sizing: border-box
+     (global) shrinks the canvas's content box accordingly. */
+  padding-bottom: 72px;
 }
 
 /* Frame the canvas with corner crosshairs */
