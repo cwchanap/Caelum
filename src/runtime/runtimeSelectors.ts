@@ -226,7 +226,8 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       draftActive ||
       ui.activeTool !== "inspect" ||
       ui.selectedBuilding !== null ||
-      ui.activeOverlay !== null,
+      ui.activeOverlay !== null ||
+      ui.selectedRouteId !== null,
     badges: {
       routeDraftActive: draftActive,
       routeCount: state.transit.routes.length + state.transit.metroLines.length,

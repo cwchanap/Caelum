@@ -283,6 +283,18 @@ describe("ShellHudState", () => {
     },
   );
 
+  it("treats a selected route (no draft/building/overlay) as cancellable", () => {
+    // When only selectedRouteId is set — no draft, no building, no overlay,
+    // tool === "inspect" — the player must still be able to dismiss the route
+    // halo via Cancel/Escape. resetUi() clears selectedRouteId, so the gate
+    // must let it through.
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), selectedRouteId: "route-001" };
+    const shell = selectShellState(state, ui);
+
+    expect(shell.hud.canCancel).toBe(true);
+  });
+
   it("counts routes and metro lines together", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 2 });
