@@ -72,6 +72,8 @@ describe("ManagePanel route-name draft buffering", () => {
     await fireEvent.keyDown(input, { key: "Enter" });
 
     expect(cb.onRenameRoute).toHaveBeenCalledWith("route-001", "Enter commit");
+    // Verify no double-fire from blur after Enter.
+    expect(cb.onRenameRoute).toHaveBeenCalledTimes(1);
   });
 
   it("does not clobber an in-flight draft when the parent rerenders the same canonical name", async () => {
@@ -90,15 +92,15 @@ describe("ManagePanel route-name draft buffering", () => {
     expect(input).toHaveValue("mid-keystroke");
   });
 
-  it("ignores the Enter key for drafts that did not change", async () => {
+  it("skips commit when Enter is pressed without changing the name", async () => {
     const cb = callbacks();
     render(ManagePanel, { props: { routes: routes(), ...cb } });
 
     const input = screen.getByTestId("route-name-route-001");
-    // Focus + Enter without typing: value equals canonical "Bus 1".
+    // Focus + Enter without typing: no draft was created, so commit is skipped.
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(cb.onRenameRoute).toHaveBeenCalledWith("route-001", "Bus 1");
+    expect(cb.onRenameRoute).not.toHaveBeenCalled();
   });
 });
 

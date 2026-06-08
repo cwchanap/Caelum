@@ -37,6 +37,7 @@
   }
 
   function commitRouteName(routeId: string, value: string): void {
+    if (!(routeId in routeNameDrafts)) return;
     delete routeNameDrafts[routeId];
     onRenameRoute(routeId, value);
   }
