@@ -391,6 +391,30 @@ describe("App shell bootstrap", () => {
     );
   });
 
+  it("resets on Escape when an overlay is active on the inspect tool", async () => {
+    // An overlay-only state (inspect tool, no draft/building) still has
+    // something to clear, so Cancel is enabled and Escape must fire resetUi —
+    // otherwise the overlay badge shows but the player can't dismiss it via
+    // the keyboard shortcut the Cancel button advertises.
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "inspect",
+        activeOverlay: "coverage",
+      },
+    });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("hud-cancel")).toBeEnabled();
+    expect(screen.getByTestId("hud-badge-overlay")).toBeVisible();
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("hud-badge-overlay")).toBeNull();
+  });
+
   it("renders a shell error when the canvas host fails to attach", () => {
     const { runtime } = createRuntimeHarness();
     runtime.mountCanvas = vi.fn(() => {
