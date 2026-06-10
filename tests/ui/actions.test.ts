@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { GameState, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { placeBuilding } from "../../src/simulation/buildings";
 import {
@@ -17,6 +18,26 @@ import {
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function trackRow(y: number, fromX: number, toX: number): Point[] {
+  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
+    x: fromX + i,
+    y,
+  }));
+}
 
 describe("UI tile actions", () => {
   it("accumulates bus route stops without committing at two stops", () => {
@@ -160,6 +181,7 @@ describe("UI tile actions", () => {
 
   it("removes stations and dependent metro lines at the clicked tile", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -602,6 +624,7 @@ describe("draft route helpers", () => {
 
   it("finishes a metro line, assigns a metro vehicle, and clears the draft", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     const ui = {
