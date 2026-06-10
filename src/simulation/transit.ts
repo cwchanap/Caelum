@@ -1,6 +1,7 @@
 import { nextEntityId } from "../domain/ids";
 import type {
   Citizen,
+  GameMap,
   GameState,
   Platform,
   Point,
@@ -418,6 +419,29 @@ export function addMetroStation(state: GameState, point: Point): GameState {
   };
 }
 
+/**
+ * Resolve a line's stop/station ids to positions and compute its tile-path
+ * segments in one place. Returns an empty `positions`/`segments` pair when
+ * any id no longer maps to a node (the line stays inactive/broken).
+ */
+function resolveLineSegments(
+  map: GameMap,
+  ids: string[],
+  positionById: Map<string, Point>,
+  mode: "bus" | "metro",
+): { positions: Point[]; segments: Point[][] } {
+  const positions = ids
+    .map((id) => positionById.get(id))
+    .filter((position): position is Point => position !== undefined)
+    .map(clonePoint);
+  const segments =
+    positions.length === ids.length
+      ? computeRouteSegments(map, positions, mode)
+      : [];
+
+  return { positions, segments };
+}
+
 export function addBusRoute(state: GameState, stopIds: string[]): GameState {
   const routeId = nextEntityId(
     "route",
@@ -430,14 +454,12 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
   const stopPositionById = new Map(
     state.transit.stops.map((stop) => [stop.id, stop.position]),
   );
-  const positions = stopIds
-    .map((stopId) => stopPositionById.get(stopId))
-    .filter((position): position is Point => position !== undefined)
-    .map(clonePoint);
-  const segments =
-    positions.length === stopIds.length
-      ? computeRouteSegments(state.map, positions, "bus")
-      : [];
+  const { segments } = resolveLineSegments(
+    state.map,
+    stopIds,
+    stopPositionById,
+    "bus",
+  );
 
   return {
     ...state,
@@ -482,14 +504,12 @@ export function addMetroLine(
   const stationPositionById = new Map(
     state.transit.stations.map((station) => [station.id, station.position]),
   );
-  const positions = stationIds
-    .map((stationId) => stationPositionById.get(stationId))
-    .filter((position): position is Point => position !== undefined)
-    .map(clonePoint);
-  const segments =
-    positions.length === stationIds.length
-      ? computeRouteSegments(state.map, positions, "metro")
-      : [];
+  const { segments } = resolveLineSegments(
+    state.map,
+    stationIds,
+    stationPositionById,
+    "metro",
+  );
 
   return {
     ...state,
@@ -579,6 +599,81 @@ function invalidatePlansForLine(
     };
   });
   return anyChanged ? mapped : citizens;
+}
+
+/**
+ * Refresh segments/pathBroken on every route and metro line against the
+ * current map. On the transition into broken, vehicles park at their current
+ * segment's starting stop with no passengers, and every citizen whose plan
+ * references the line replans (riders are repositioned to the parked stop
+ * via `invalidatePlansForLine`). Call after any road/track change. Always
+ * returns a new state; only call when the map actually changed.
+ */
+export function recomputeRoutePaths(state: GameState): GameState {
+  const stopPositionById = new Map(
+    state.transit.stops.map((stop) => [stop.id, stop.position]),
+  );
+  const stationPositionById = new Map(
+    state.transit.stations.map((station) => [station.id, station.position]),
+  );
+
+  let citizens = state.citizens;
+  let vehicles = state.transit.vehicles;
+
+  const refreshLine = <T extends Route | MetroLine>(
+    line: T,
+    nodeIds: string[],
+    positionById: Map<string, Point>,
+    mode: "bus" | "metro",
+  ): T => {
+    const { positions, segments } = resolveLineSegments(
+      state.map,
+      nodeIds,
+      positionById,
+      mode,
+    );
+    const pathBroken = hasBrokenSegment(segments);
+
+    if (pathBroken && !line.pathBroken) {
+      const parkedPositionByCitizenId = new Map<string, Point>();
+      vehicles = vehicles.map((vehicle) => {
+        if (vehicle.lineId !== line.id) {
+          return vehicle;
+        }
+        const parkedAt =
+          positions.length === 0
+            ? undefined
+            : positions[vehicle.segmentIndex % positions.length];
+        if (parkedAt !== undefined) {
+          for (const passengerId of vehicle.passengerIds) {
+            parkedPositionByCitizenId.set(passengerId, parkedAt);
+          }
+        }
+        return { ...vehicle, passengerIds: [], progress: 0 };
+      });
+      citizens = invalidatePlansForLine(citizens, line.id).map((citizen) => {
+        const parkedAt = parkedPositionByCitizenId.get(citizen.id);
+        return parkedAt === undefined
+          ? citizen
+          : { ...citizen, position: clonePoint(parkedAt) };
+      });
+    }
+
+    return { ...line, segments, pathBroken };
+  };
+
+  const routes = state.transit.routes.map((route) =>
+    refreshLine(route, route.stopIds, stopPositionById, "bus"),
+  );
+  const metroLines = state.transit.metroLines.map((line) =>
+    refreshLine(line, line.stationIds, stationPositionById, "metro"),
+  );
+
+  return {
+    ...state,
+    citizens,
+    transit: { ...state.transit, routes, metroLines, vehicles },
+  };
 }
 
 export function deleteRoute(state: GameState, routeId: string): GameState {

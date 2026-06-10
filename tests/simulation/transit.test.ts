@@ -19,6 +19,7 @@ import {
   assignRouteToPlatform,
   assignVehicle,
   deleteRoute,
+  recomputeRoutePaths,
   renameRoute,
   setRouteActive,
   setRouteColor,
@@ -1550,5 +1551,92 @@ describe("route path segments", () => {
 
     const rejected = assignVehicle(state, "metro", "metro-001");
     expect(rejected).toBe(state);
+  });
+});
+
+function removeRoadAt(state: GameState, point: Point): GameState {
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        tile.x === point.x && tile.y === point.y
+          ? { ...tile, kind: "empty" as const }
+          : tile,
+      ),
+    },
+  };
+}
+
+describe("recomputeRoutePaths", () => {
+  it("marks a route broken when a road tile on its path is removed, parks the vehicle, and disembarks passengers", () => {
+    let state = createBusState(); // stops at (7,8) and (15,8), one vehicle
+    // Put a rider on board: simulate a citizen mid-ride.
+    const rider: Citizen = {
+      ...state.citizens[0],
+      status: "riding",
+      routePlan: {
+        legs: [
+          {
+            mode: "bus",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "route-001",
+          },
+        ],
+        estimatedSeconds: 60,
+      },
+      currentLegIndex: 0,
+    };
+    state = {
+      ...state,
+      citizens: [rider, ...state.citizens.slice(1)],
+      transit: {
+        ...state.transit,
+        vehicles: state.transit.vehicles.map((v) => ({
+          ...v,
+          passengerIds: [rider.id],
+          progress: 0.5,
+        })),
+      },
+    };
+
+    // Sever the road between the stops, then recompute.
+    const severed = recomputeRoutePaths(removeRoadAt(state, { x: 11, y: 8 }));
+
+    const route = severed.transit.routes[0];
+    expect(route.pathBroken).toBe(true);
+    expect(route.active).toBe(true); // player toggle untouched
+
+    const vehicle = severed.transit.vehicles[0];
+    expect(vehicle.passengerIds).toEqual([]);
+    expect(vehicle.progress).toBe(0);
+
+    const citizen = severed.citizens[0];
+    expect(citizen.status).toBe("idle");
+    expect(citizen.routePlan).toBeNull();
+    expect(citizen.position).toEqual({ x: 7, y: 8 }); // segment-start stop
+  });
+
+  it("clears pathBroken when the network is restored", () => {
+    const state = createBusState();
+    const severed = recomputeRoutePaths(removeRoadAt(state, { x: 11, y: 8 }));
+    expect(severed.transit.routes[0].pathBroken).toBe(true);
+
+    // Restore the tile and recompute again.
+    const restored = recomputeRoutePaths({
+      ...severed,
+      map: {
+        ...severed.map,
+        tiles: severed.map.tiles.map((tile) =>
+          tile.x === 11 && tile.y === 8
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    });
+
+    expect(restored.transit.routes[0].pathBroken).toBe(false);
+    expect(restored.transit.routes[0].segments[0]).toHaveLength(9);
   });
 });
