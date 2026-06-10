@@ -92,6 +92,12 @@ export interface Route {
   stopIds: string[];
   vehicleIds: string[];
   active: boolean;
+  /** Tile path per consecutive stop pair, closing the loop (last -> first).
+   *  An unpathable pair is an empty array. */
+  segments: Point[][];
+  /** True when any segment is unpathable. Runs only when active && !pathBroken;
+   *  network damage never touches the player's `active` toggle. */
+  pathBroken: boolean;
 }
 
 export interface MetroLine {
@@ -101,6 +107,8 @@ export interface MetroLine {
   stationIds: string[];
   vehicleIds: string[];
   active: boolean;
+  segments: Point[][];
+  pathBroken: boolean;
 }
 
 export interface Vehicle {
