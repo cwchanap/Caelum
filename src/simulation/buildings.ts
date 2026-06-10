@@ -160,9 +160,16 @@ export function canPlaceBuilding(
     const stationOccupied = state.transit.stations.some((station) =>
       samePoint(station.position, point),
     );
+    // No building may sit on track, except the Metro Station building whose
+    // (1x1) tile must have track — mirroring the station tool rule.
+    const trackOk =
+      type === "metroStation"
+        ? tile?.hasTrack === true
+        : tile?.hasTrack !== true;
 
     return (
       tile?.kind === "empty" &&
+      trackOk &&
       !buildingOccupied &&
       !stopOccupied &&
       !stationOccupied

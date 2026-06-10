@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { GameState, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { findRoutePlan } from "../../src/simulation/router";
 import {
@@ -8,6 +9,26 @@ import {
   addMetroStation,
   setRouteActive,
 } from "../../src/simulation/transit";
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function trackRow(y: number, fromX: number, toX: number): Point[] {
+  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
+    x: fromX + i,
+    y,
+  }));
+}
 
 describe("route planning", () => {
   it("creates a walking route for nearby destinations", () => {
@@ -69,6 +90,7 @@ describe("route planning", () => {
 
   it("creates a metro route for long station-connected trips", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -181,6 +203,7 @@ describe("route planning", () => {
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = withTrack(state, trackRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);

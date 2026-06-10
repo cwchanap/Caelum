@@ -261,6 +261,7 @@ describe("transit network actions", () => {
 
   it("keeps metro lines inactive when station IDs do not include two distinct valid stations", () => {
     let state = createInitialGameState();
+    state = withTrack(state, [{ x: 7, y: 8 }]);
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroLine(state, ["station-001", "station-001"]);
 
@@ -1141,6 +1142,7 @@ describe("auto-assign routes to platforms", () => {
   it("registers a new metro line on each served station's least-loaded platform", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withTrack(state, trackRow(2, 7, 22));
     state = addMetroStation(state, { x: 7, y: 2 });
     state = addMetroStation(state, { x: 22, y: 2 });
     expect(state.transit.stations).toHaveLength(2);
@@ -1238,6 +1240,7 @@ describe("route mutators", () => {
 
   it("renames a metro line by id", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1285,6 +1288,7 @@ describe("route mutators", () => {
 
   it("sets a metro line color by id", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1294,6 +1298,7 @@ describe("route mutators", () => {
 
   it("toggles a metro line active flag by id", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1323,6 +1328,7 @@ describe("deleteRoute", () => {
 
   it("removes a metro line, its vehicles, and its platform assignments", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1445,6 +1451,7 @@ describe("deleteRoute", () => {
 
   it("invalidates route plans that referenced a deleted metro line", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1536,8 +1543,13 @@ describe("route path segments", () => {
 
   it("creates a metro line with pathBroken=true when stations have no track between them", () => {
     let state = createInitialGameState();
-    // Direct API call bypasses placement rules on purpose: stations exist
-    // but no track connects them.
+    // Track under the two station tiles only, satisfying placement rules,
+    // but with no connecting track run between them, so the line still has
+    // no path.
+    state = withTrack(state, [
+      { x: 7, y: 8 },
+      { x: 22, y: 8 },
+    ]);
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1548,6 +1560,12 @@ describe("route path segments", () => {
 
   it("does not move vehicles on a pathBroken line and rejects new vehicles for it", () => {
     let state = createInitialGameState();
+    // Track under the two station tiles only; no connecting run, so the
+    // line stays pathBroken and rejects vehicle assignment.
+    state = withTrack(state, [
+      { x: 7, y: 8 },
+      { x: 22, y: 8 },
+    ]);
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
