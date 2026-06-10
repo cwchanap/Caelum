@@ -10,6 +10,9 @@ import {
   deleteRoute,
   distinctValidStationCount,
   distinctValidStopCount,
+  layRoad,
+  layTrack,
+  removeInfrastructureAtTile,
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
 
@@ -166,7 +169,8 @@ function removeAtTile(state: GameState, point: Point): GameState {
     removedStopIds.size === 0 &&
     removedStationIds.size === 0
   ) {
-    return state;
+    // Bare tile: bulldoze track, then road (two clicks on a crossing).
+    return removeInfrastructureAtTile(state, point);
   }
 
   // Remove the node(s) first.
@@ -290,6 +294,14 @@ export function handleTileClick(
 
   if (ui.activeTool === "metroStation") {
     return { state: addMetroStation(state, point), ui };
+  }
+
+  if (ui.activeTool === "road") {
+    return { state: layRoad(state, point), ui };
+  }
+
+  if (ui.activeTool === "track") {
+    return { state: layTrack(state, point), ui };
   }
 
   if (ui.activeTool === "busRoute") {

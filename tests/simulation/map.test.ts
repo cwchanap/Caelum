@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GameState } from "../../src/domain/types";
+import type { GameState, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { placeBuilding } from "../../src/simulation/buildings";
 import {
@@ -8,10 +8,25 @@ import {
   isValidBusStopPlacement,
   isValidCivicAnchorPlacement,
   isValidMetroStationPlacement,
+  isValidRoadPlacement,
+  isValidTrackPlacement,
 } from "../../src/simulation/map";
 
 function withTime(state: GameState, time: number): GameState {
   return { ...state, time };
+}
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
 }
 
 describe("map helpers", () => {
@@ -139,5 +154,49 @@ describe("map helpers", () => {
 
     // Total: 36 initial + 4 building + 8 growth wave = 48
     expect(grownState.citizens).toHaveLength(48);
+  });
+});
+
+describe("road and track placement validation", () => {
+  it("allows road only on bare empty tiles", () => {
+    const state = createInitialGameState();
+    expect(isValidRoadPlacement(state, { x: 8, y: 2 })).toBe(true); // empty
+    expect(isValidRoadPlacement(state, { x: 7, y: 8 })).toBe(false); // road
+    expect(isValidRoadPlacement(state, { x: 2, y: 3 })).toBe(false); // residential
+  });
+
+  it("allows track on empty and road tiles (crossings) but not zones or duplicates", () => {
+    const state = createInitialGameState();
+    expect(isValidTrackPlacement(state, { x: 8, y: 2 })).toBe(true); // empty
+    expect(isValidTrackPlacement(state, { x: 7, y: 8 })).toBe(true); // road -> crossing
+    expect(isValidTrackPlacement(state, { x: 2, y: 3 })).toBe(false); // residential
+    const tracked = withTrack(state, [{ x: 8, y: 2 }]);
+    expect(isValidTrackPlacement(tracked, { x: 8, y: 2 })).toBe(false); // already tracked
+  });
+});
+
+describe("growth waves skip player infrastructure", () => {
+  it("does not convert a wave tile the player laid road on, and skips its citizens", () => {
+    let state = createInitialGameState();
+    // wave-north converts (8,2)..(10,2) to residential at t=240.
+    state = {
+      ...state,
+      time: 240,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 8 && tile.y === 2
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    };
+
+    const next = applyDueGrowthWaves(state);
+
+    const tile = next.map.tiles.find((t) => t.x === 8 && t.y === 2);
+    expect(tile?.kind).toBe("road");
+    // Only the two untouched wave tiles spawn citizens (8 each).
+    expect(next.citizens.length).toBe(state.citizens.length + 16);
   });
 });

@@ -29,6 +29,8 @@ export type Tool =
   | "metroStation"
   | "metroLine"
   | "civicAnchor"
+  | "road"
+  | "track"
   | "remove";
 export type Overlay =
   | "coverage"

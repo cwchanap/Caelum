@@ -1,5 +1,12 @@
 import { entityId } from "../domain/ids";
-import type { Citizen, GameMap, GameState, Point, Tile } from "../domain/types";
+import type {
+  Citizen,
+  GameMap,
+  GameState,
+  Point,
+  Tile,
+  TileKind,
+} from "../domain/types";
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
@@ -75,6 +82,58 @@ export function isValidCivicAnchorPlacement(
   return getTile(state.map, point)?.kind === "empty";
 }
 
+function isTransitNodeAt(state: GameState, point: Point): boolean {
+  return (
+    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
+    state.transit.stations.some((station) => samePoint(station.position, point))
+  );
+}
+
+export function isValidRoadPlacement(state: GameState, point: Point): boolean {
+  const tile = getTile(state.map, point);
+  return (
+    tile?.kind === "empty" &&
+    !isBuildingOccupied(state, point) &&
+    !isTransitNodeAt(state, point)
+  );
+}
+
+export function isValidTrackPlacement(state: GameState, point: Point): boolean {
+  const tile = getTile(state.map, point);
+  return (
+    (tile?.kind === "empty" || tile?.kind === "road") &&
+    tile?.hasTrack !== true &&
+    !isBuildingOccupied(state, point) &&
+    !isTransitNodeAt(state, point)
+  );
+}
+
+export function setTileKind(
+  map: GameMap,
+  point: Point,
+  kind: TileKind,
+): GameMap {
+  return {
+    ...map,
+    tiles: map.tiles.map((tile) =>
+      samePoint(tile, point) ? { ...tile, kind } : tile,
+    ),
+  };
+}
+
+export function setTileTrack(
+  map: GameMap,
+  point: Point,
+  hasTrack: boolean,
+): GameMap {
+  return {
+    ...map,
+    tiles: map.tiles.map((tile) =>
+      samePoint(tile, point) ? { ...tile, hasTrack } : tile,
+    ),
+  };
+}
+
 export function applyDueGrowthWaves(state: GameState): GameState {
   const dueWaves = state.scenario.growthWaves.filter(
     (wave) => !wave.applied && wave.triggerTime <= state.time,
@@ -93,7 +152,10 @@ export function applyDueGrowthWaves(state: GameState): GameState {
     ...state.map,
     tiles: state.map.tiles.map((tile) => {
       const waveTile = waveTilesById.get(tile.id);
-      return waveTile === undefined
+      // A wave tile only converts while still bare empty ground: tiles the
+      // player has already built road/track on stay as the player left them.
+      const blocked = tile.kind !== "empty" || tile.hasTrack === true;
+      return waveTile === undefined || blocked
         ? { ...tile }
         : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
     }),
@@ -103,7 +165,12 @@ export function applyDueGrowthWaves(state: GameState): GameState {
 
   for (const wave of dueWaves) {
     for (const tile of wave.tiles) {
-      if (isBuildingOccupied(state, { x: tile.x, y: tile.y })) {
+      const preWaveTile = getTile(state.map, { x: tile.x, y: tile.y });
+      const blocked =
+        preWaveTile === null ||
+        preWaveTile.kind !== "empty" ||
+        preWaveTile.hasTrack === true;
+      if (blocked || isBuildingOccupied(state, { x: tile.x, y: tile.y })) {
         continue;
       }
 
