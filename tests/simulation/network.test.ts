@@ -1,0 +1,138 @@
+import { describe, expect, it } from "vitest";
+import type { GameState, Point } from "../../src/domain/types";
+import { createInitialGameState } from "../../src/simulation/gameState";
+import { findTilePath } from "../../src/simulation/network";
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function trackRow(y: number, fromX: number, toX: number): Point[] {
+  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
+    x: fromX + i,
+    y,
+  }));
+}
+
+describe("findTilePath", () => {
+  it("finds the straight shortest bus path along the y=8 road row", () => {
+    const state = createInitialGameState();
+
+    const path = findTilePath(
+      state.map,
+      { x: 7, y: 8 },
+      { x: 11, y: 8 },
+      "bus",
+    );
+
+    expect(path).toEqual([
+      { x: 7, y: 8 },
+      { x: 8, y: 8 },
+      { x: 9, y: 8 },
+      { x: 10, y: 8 },
+      { x: 11, y: 8 },
+    ]);
+  });
+
+  it("is deterministic when two equal shortest paths exist (N,E,S,W expansion)", () => {
+    // The road network has only one row, so equal alternatives need a track
+    // ring: a 2x3 loop where (5,2)->(7,4) has two 4-step paths (across-then-
+    // down vs down-then-across). BFS discovery order must always pick the
+    // across-then-down one.
+    const ring = [
+      ...trackRow(2, 5, 7),
+      ...trackRow(4, 5, 7),
+      { x: 5, y: 3 },
+      { x: 7, y: 3 },
+    ];
+    const state = withTrack(createInitialGameState(), ring);
+
+    const path = findTilePath(
+      state.map,
+      { x: 5, y: 2 },
+      { x: 7, y: 4 },
+      "metro",
+    );
+
+    expect(path).toEqual([
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+      { x: 7, y: 2 },
+      { x: 7, y: 3 },
+      { x: 7, y: 4 },
+    ]);
+  });
+
+  it("returns null when no bus path exists", () => {
+    const state = createInitialGameState();
+
+    // (2,3) is a residential tile with no road under or near the endpoint's
+    // immediate connectivity requirement: its neighbors are residential/empty.
+    expect(
+      findTilePath(state.map, { x: 2, y: 3 }, { x: 7, y: 8 }, "bus"),
+    ).toBeNull();
+  });
+
+  it("treats endpoints as traversable so off-road stops connect via an adjacent road", () => {
+    const state = createInitialGameState();
+
+    // (8,7) and (16,7) are empty tiles directly above the y=8 road (the e2e
+    // flow places Bus Stop buildings there).
+    const path = findTilePath(
+      state.map,
+      { x: 8, y: 7 },
+      { x: 16, y: 7 },
+      "bus",
+    );
+
+    expect(path).not.toBeNull();
+    expect(path?.[0]).toEqual({ x: 8, y: 7 });
+    expect(path?.[1]).toEqual({ x: 8, y: 8 });
+    expect(path?.at(-1)).toEqual({ x: 16, y: 7 });
+    // Path goes from (8,7) via the road network to (16,7). The y=8 road is
+    // continuous, and the x=15 column also provides road connectivity. Both
+    // routes yield valid shortest paths of equal length; either is acceptable.
+    expect(path?.length).toEqual(11);
+  });
+
+  it("routes metro along track tiles only, including crossings over roads", () => {
+    // Track row y=2 from x=5 to x=9 crosses the x=7 road column at (7,2).
+    const state = withTrack(createInitialGameState(), trackRow(2, 5, 9));
+
+    const metro = findTilePath(
+      state.map,
+      { x: 5, y: 2 },
+      { x: 9, y: 2 },
+      "metro",
+    );
+    expect(metro).toHaveLength(5);
+
+    // The same tiles are not traversable for buses (except endpoints).
+    expect(
+      findTilePath(state.map, { x: 5, y: 2 }, { x: 9, y: 2 }, "bus"),
+    ).toBeNull();
+  });
+
+  it("returns a single-tile path when from equals to", () => {
+    const state = createInitialGameState();
+    expect(
+      findTilePath(state.map, { x: 7, y: 8 }, { x: 7, y: 8 }, "bus"),
+    ).toEqual([{ x: 7, y: 8 }]);
+  });
+
+  it("returns null for out-of-bounds endpoints", () => {
+    const state = createInitialGameState();
+    expect(
+      findTilePath(state.map, { x: -1, y: 8 }, { x: 7, y: 8 }, "bus"),
+    ).toBeNull();
+  });
+});
