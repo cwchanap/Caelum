@@ -11,6 +11,7 @@ import type {
   Vehicle,
 } from "../domain/types";
 import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
+import { computeRouteSegments, hasBrokenSegment } from "./network";
 import {
   busPlatforms,
   metroPlatforms,
@@ -190,6 +191,7 @@ function assignedLinePositions(
 
     return route !== undefined &&
       route.active &&
+      !route.pathBroken &&
       positions !== undefined &&
       positions.every((position) => position !== undefined)
       ? positions.map((position) => clonePoint(position))
@@ -208,6 +210,7 @@ function assignedLinePositions(
 
   return metroLine !== undefined &&
     metroLine.active &&
+    !metroLine.pathBroken &&
     positions !== undefined &&
     positions.every((position) => position !== undefined)
     ? positions.map((position) => clonePoint(position))
@@ -424,6 +427,18 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
   const distinctStopIds = Array.from(new Set(stopIds));
   const active = distinctValidStopCount(state, stopIds) >= 2;
 
+  const stopPositionById = new Map(
+    state.transit.stops.map((stop) => [stop.id, stop.position]),
+  );
+  const positions = stopIds
+    .map((stopId) => stopPositionById.get(stopId))
+    .filter((position): position is Point => position !== undefined)
+    .map(clonePoint);
+  const segments =
+    positions.length === stopIds.length
+      ? computeRouteSegments(state.map, positions, "bus")
+      : [];
+
   return {
     ...state,
     transit: {
@@ -444,6 +459,8 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
           stopIds: [...stopIds],
           vehicleIds: [],
           active,
+          segments,
+          pathBroken: hasBrokenSegment(segments),
         },
       ],
     },
@@ -461,6 +478,18 @@ export function addMetroLine(
   const lineNumber = entityNumberFromId("metro", lineId);
   const distinctStationIds = Array.from(new Set(stationIds));
   const active = distinctValidStationCount(state, stationIds) >= 2;
+
+  const stationPositionById = new Map(
+    state.transit.stations.map((station) => [station.id, station.position]),
+  );
+  const positions = stationIds
+    .map((stationId) => stationPositionById.get(stationId))
+    .filter((position): position is Point => position !== undefined)
+    .map(clonePoint);
+  const segments =
+    positions.length === stationIds.length
+      ? computeRouteSegments(state.map, positions, "metro")
+      : [];
 
   return {
     ...state,
@@ -482,6 +511,8 @@ export function addMetroLine(
           stationIds: [...stationIds],
           vehicleIds: [],
           active,
+          segments,
+          pathBroken: hasBrokenSegment(segments),
         },
       ],
     },
@@ -608,7 +639,7 @@ export function assignVehicle(
       (candidate) => candidate.id === lineId,
     );
 
-    if (route === undefined || !route.active) {
+    if (route === undefined || !route.active || route.pathBroken) {
       return state;
     }
 
@@ -634,7 +665,7 @@ export function assignVehicle(
     (candidate) => candidate.id === lineId,
   );
 
-  if (metroLine === undefined || !metroLine.active) {
+  if (metroLine === undefined || !metroLine.active || metroLine.pathBroken) {
     return state;
   }
 

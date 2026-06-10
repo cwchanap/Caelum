@@ -128,6 +128,8 @@ describe("route planning", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: [],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         metroLines: [
@@ -138,6 +140,8 @@ describe("route planning", () => {
             stationIds: ["station-001", "station-002"],
             vehicleIds: [],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         vehicles: [],

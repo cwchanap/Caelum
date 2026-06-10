@@ -3,6 +3,7 @@ import type {
   Citizen,
   GameState,
   MetroLine,
+  Point,
   Station,
   Stop,
   Vehicle,
@@ -40,6 +41,26 @@ function createThreeStopBusState(): GameState {
   state = addBusStop(state, { x: 22, y: 8 });
   state = addBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
   return assignVehicle(state, "bus", "route-001");
+}
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function trackRow(y: number, fromX: number, toX: number): Point[] {
+  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
+    x: fromX + i,
+    y,
+  }));
 }
 
 describe("transit network actions", () => {
@@ -208,6 +229,7 @@ describe("transit network actions", () => {
 
   it("creates an active metro line and assigns a metro vehicle to it", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -548,6 +570,8 @@ describe("transit network actions", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: false,
+            segments: [],
+            pathBroken: false,
           },
         ],
         vehicles: [
@@ -644,6 +668,8 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         metroLines: [],
@@ -725,6 +751,8 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         metroLines: [],
@@ -823,6 +851,8 @@ describe("on-platform boarding gate", () => {
       stationIds: ["station-001", "station-002"],
       vehicleIds: ["metro-vehicle-001"],
       active: true,
+      segments: [],
+      pathBroken: false,
     };
 
     const vehicle: Vehicle = {
@@ -930,6 +960,8 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001", "vehicle-002"],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         metroLines: [],
@@ -1044,6 +1076,8 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
+            segments: [],
+            pathBroken: false,
           },
         ],
         metroLines: [],
@@ -1478,5 +1512,43 @@ describe("deleteRoute", () => {
 
     // Same reference: walking plan did not reference the deleted route.
     expect(next.citizens[0]).toBe(plannedCitizen);
+  });
+});
+
+describe("route path segments", () => {
+  it("stores segments and pathBroken=false for a road-connected bus route", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+
+    const route = state.transit.routes[0];
+    expect(route.pathBroken).toBe(false);
+    expect(route.segments).toHaveLength(2); // out + closing loop
+    expect(route.segments[0][0]).toEqual({ x: 7, y: 8 });
+    expect(route.segments[0].at(-1)).toEqual({ x: 15, y: 8 });
+  });
+
+  it("creates a metro line with pathBroken=true when stations have no track between them", () => {
+    let state = createInitialGameState();
+    // Direct API call bypasses placement rules on purpose: stations exist
+    // but no track connects them.
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 22, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+
+    expect(state.transit.metroLines[0].pathBroken).toBe(true);
+    expect(state.transit.metroLines[0].segments).toEqual([[], []]);
+  });
+
+  it("does not move vehicles on a pathBroken line and rejects new vehicles for it", () => {
+    let state = createInitialGameState();
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 22, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+
+    const rejected = assignVehicle(state, "metro", "metro-001");
+    expect(rejected).toBe(state);
   });
 });
