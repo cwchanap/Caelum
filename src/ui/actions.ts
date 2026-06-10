@@ -1,4 +1,5 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
+import { findTilePath } from "../simulation/network";
 import { placeBuilding } from "../simulation/buildings";
 import {
   addBusRoute,
@@ -220,7 +221,10 @@ export function finishDraftRoute(
       routeId === undefined
         ? withRoute
         : assignVehicle(withRoute, "bus", routeId);
-    return { state: next, ui: { ...ui, draftStopIds: [] } };
+    return {
+      state: next,
+      ui: { ...ui, draftStopIds: [], draftStopPaths: [] },
+    };
   }
 
   if (ui.activeTool === "metroLine") {
@@ -236,39 +240,82 @@ export function finishDraftRoute(
       lineId === undefined
         ? withLine
         : assignVehicle(withLine, "metro", lineId);
-    return { state: next, ui: { ...ui, draftStationIds: [] } };
+    return {
+      state: next,
+      ui: { ...ui, draftStationIds: [], draftStationPaths: [] },
+    };
   }
 
   return { state, ui };
 }
 
-export function removeDraftStop(ui: UiState, index: number): UiState {
-  if (ui.activeTool === "metroLine") {
-    if (index < 0 || index >= ui.draftStationIds.length) {
+export function removeDraftStop(
+  state: GameState,
+  ui: UiState,
+  index: number,
+): UiState {
+  const isMetro = ui.activeTool === "metroLine";
+  const isBus = ui.activeTool === "busRoute";
+  if (!isMetro && !isBus) {
+    return ui;
+  }
+
+  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
+  const paths = isMetro ? ui.draftStationPaths : ui.draftStopPaths;
+  if (index < 0 || index >= ids.length) {
+    return ui;
+  }
+
+  let nextPaths: Point[][];
+  if (index === 0) {
+    nextPaths = paths.slice(1);
+  } else if (index === ids.length - 1) {
+    nextPaths = paths.slice(0, -1);
+  } else {
+    // Interior removal merges two legs; reject if the merged pair no longer
+    // connects, so the draft invariant "every consecutive pair has a path"
+    // always holds (the player can still cancel the whole draft).
+    const nodes: Array<Stop | Station> = isMetro
+      ? state.transit.stations
+      : state.transit.stops;
+    const before = nodes.find((node) => node.id === ids[index - 1]);
+    const after = nodes.find((node) => node.id === ids[index + 1]);
+    const merged =
+      before === undefined || after === undefined
+        ? null
+        : findTilePath(
+            state.map,
+            before.position,
+            after.position,
+            isMetro ? "metro" : "bus",
+          );
+    if (merged === null) {
       return ui;
     }
-    return {
-      ...ui,
-      draftStationIds: ui.draftStationIds.filter((_, i) => i !== index),
-    };
+    nextPaths = [
+      ...paths.slice(0, index - 1),
+      merged,
+      ...paths.slice(index + 1),
+    ];
   }
-  if (ui.activeTool === "busRoute") {
-    if (index < 0 || index >= ui.draftStopIds.length) {
-      return ui;
-    }
-    return {
-      ...ui,
-      draftStopIds: ui.draftStopIds.filter((_, i) => i !== index),
-    };
-  }
-  return ui;
+
+  const nextIds = ids.filter((_, i) => i !== index);
+  return isMetro
+    ? { ...ui, draftStationIds: nextIds, draftStationPaths: nextPaths }
+    : { ...ui, draftStopIds: nextIds, draftStopPaths: nextPaths };
 }
 
 export function cancelDraftRoute(ui: UiState): UiState {
   if (ui.draftStopIds.length === 0 && ui.draftStationIds.length === 0) {
     return ui;
   }
-  return { ...ui, draftStopIds: [], draftStationIds: [] };
+  return {
+    ...ui,
+    draftStopIds: [],
+    draftStationIds: [],
+    draftStopPaths: [],
+    draftStationPaths: [],
+  };
 }
 
 export function handleTileClick(
@@ -306,15 +353,30 @@ export function handleTileClick(
 
   if (ui.activeTool === "busRoute") {
     const stop = resolveStopAtTile(state, point);
-    if (stop === undefined) {
+    if (stop === undefined || ui.draftStopIds.at(-1) === stop.id) {
       return { state, ui };
     }
-    if (ui.draftStopIds.at(-1) === stop.id) {
+
+    const previousId = ui.draftStopIds.at(-1);
+    if (previousId === undefined) {
+      return { state, ui: { ...ui, draftStopIds: [stop.id] } };
+    }
+
+    const previous = state.transit.stops.find((s) => s.id === previousId);
+    const path =
+      previous === undefined
+        ? null
+        : findTilePath(state.map, previous.position, stop.position, "bus");
+    if (path === null) {
       return { state, ui };
     }
     return {
       state,
-      ui: { ...ui, draftStopIds: [...ui.draftStopIds, stop.id] },
+      ui: {
+        ...ui,
+        draftStopIds: [...ui.draftStopIds, stop.id],
+        draftStopPaths: [...ui.draftStopPaths, path],
+      },
     };
   }
 
@@ -322,15 +384,35 @@ export function handleTileClick(
     const station = state.transit.stations.find((candidate) =>
       samePoint(candidate.position, point),
     );
-    if (station === undefined) {
+    if (station === undefined || ui.draftStationIds.at(-1) === station.id) {
       return { state, ui };
     }
-    if (ui.draftStationIds.at(-1) === station.id) {
+
+    const previousId = ui.draftStationIds.at(-1);
+    if (previousId === undefined) {
+      return { state, ui: { ...ui, draftStationIds: [station.id] } };
+    }
+
+    const previous = state.transit.stations.find((s) => s.id === previousId);
+    const path =
+      previous === undefined
+        ? null
+        : findTilePath(
+            state.map,
+            previous.position,
+            station.position,
+            "metro",
+          );
+    if (path === null) {
       return { state, ui };
     }
     return {
       state,
-      ui: { ...ui, draftStationIds: [...ui.draftStationIds, station.id] },
+      ui: {
+        ...ui,
+        draftStationIds: [...ui.draftStationIds, station.id],
+        draftStationPaths: [...ui.draftStationPaths, path],
+      },
     };
   }
 
@@ -391,6 +473,8 @@ export function handleTileClick(
           ...ui,
           draftStopIds: [],
           draftStationIds: [],
+          draftStopPaths: [],
+          draftStationPaths: [],
           selectedId: null,
           activeHudCategory: nextHudCategory,
         }
@@ -398,6 +482,8 @@ export function handleTileClick(
           ...ui,
           draftStopIds: [],
           draftStationIds: [],
+          draftStopPaths: [],
+          draftStationPaths: [],
           selectedId: null,
           selectedRouteId: null,
           activeHudCategory: nextHudCategory,

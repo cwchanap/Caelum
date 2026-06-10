@@ -38,6 +38,9 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
     draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
+    draftStopPaths: activeTool === "busRoute" ? current.draftStopPaths : [],
+    draftStationPaths:
+      activeTool === "metroLine" ? current.draftStationPaths : [],
     selectedRouteId: null,
   };
 }
@@ -55,6 +58,8 @@ function nextBuildingUiState(
     buildingRotation: 0 as const,
     draftStopIds: [],
     draftStationIds: [],
+    draftStopPaths: [],
+    draftStationPaths: [],
     selectedRouteId: null,
   };
 }
@@ -331,7 +336,7 @@ export function createGameRuntime(): RuntimeController {
       );
     },
     removeDraftStop(index) {
-      return commit(state, applyRemoveDraftStop(ui, index));
+      return commit(state, applyRemoveDraftStop(state, ui, index));
     },
     finishRoute() {
       const result = finishDraftRoute(state, ui);

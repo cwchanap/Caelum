@@ -28,6 +28,10 @@ export interface UiState {
   hoverTile: Point | null;
   draftStopIds: string[];
   draftStationIds: string[];
+  /** Tile path per consecutive draft pair; paths[i] connects ids[i] -> ids[i+1].
+   *  Invariant: paths.length === max(0, ids.length - 1). */
+  draftStopPaths: Point[][];
+  draftStationPaths: Point[][];
   selectedRouteId: string | null;
   activeHudCategory: HudCategory | null;
 }
@@ -43,6 +47,8 @@ export function createUiState(): UiState {
     hoverTile: null,
     draftStopIds: [],
     draftStationIds: [],
+    draftStopPaths: [],
+    draftStationPaths: [],
     selectedRouteId: null,
     activeHudCategory: "brief",
   };
