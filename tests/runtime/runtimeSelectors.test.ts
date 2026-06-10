@@ -8,7 +8,27 @@ import {
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { createUiState } from "../../src/ui/uiState";
-import type { Citizen } from "../../src/domain/types";
+import type { Citizen, GameState, Point } from "../../src/domain/types";
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function trackRow(y: number, fromX: number, toX: number): Point[] {
+  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
+    x: fromX + i,
+    y,
+  }));
+}
 
 function waitingBusCitizen(
   id: string,
@@ -98,6 +118,7 @@ describe("selectShellState inspector", () => {
 
   it("emits a metro-station inspector with line route chips", () => {
     let state = { ...createInitialGameState(), budget: 1_000_000 };
+    state = withTrack(state, trackRow(2, 7, 22));
     state = addMetroStation(state, { x: 7, y: 2 });
     state = addMetroStation(state, { x: 22, y: 2 });
     state = addMetroLine(
@@ -193,6 +214,7 @@ describe("route selectors", () => {
   it("lists routes and metro lines with selection state", () => {
     let state = twoStops();
     state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = withTrack(state, trackRow(0, 3, 9));
     state = addMetroStation(state, { x: 3, y: 0 });
     state = addMetroStation(state, { x: 9, y: 0 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -301,6 +323,7 @@ describe("ShellHudState", () => {
     state = addBusStop(state, { x: 15, y: 2 });
     const stopIds = state.transit.stops.map((s) => s.id);
     state = addBusRoute(state, stopIds);
+    state = withTrack(state, trackRow(0, 3, 9));
     state = addMetroStation(state, { x: 3, y: 0 });
     state = addMetroStation(state, { x: 9, y: 0 });
     state = addMetroLine(state, ["station-001", "station-002"]);

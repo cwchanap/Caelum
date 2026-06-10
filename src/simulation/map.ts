@@ -63,7 +63,7 @@ export function isValidBusStopPlacement(
     isBuildingOccupied(state, point) ||
     state.transit.stops.some((stop) => samePoint(stop.position, point));
 
-  return tile?.kind === "road" && !occupied;
+  return tile?.kind === "road" && tile.hasTrack !== true && !occupied;
 }
 
 export function isValidMetroStationPlacement(
@@ -77,7 +77,11 @@ export function isValidMetroStationPlacement(
       samePoint(station.position, point),
     );
 
-  return (tile?.kind === "road" || tile?.kind === "empty") && !occupied;
+  return (
+    (tile?.kind === "road" || tile?.kind === "empty") &&
+    tile?.hasTrack === true &&
+    !occupied
+  );
 }
 
 export function isValidCivicAnchorPlacement(

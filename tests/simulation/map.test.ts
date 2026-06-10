@@ -65,8 +65,11 @@ describe("map helpers", () => {
     ).toBe(false);
   });
 
-  it("allows metro stations on unoccupied road or empty tiles", () => {
-    const state = createInitialGameState();
+  it("allows metro stations on unoccupied tracked road or empty tiles", () => {
+    const state = withTrack(createInitialGameState(), [
+      { x: 7, y: 8 },
+      { x: 0, y: 0 },
+    ]);
 
     expect(isValidMetroStationPlacement(state, { x: 7, y: 8 })).toBe(true);
     expect(isValidMetroStationPlacement(state, { x: 0, y: 0 })).toBe(true);
@@ -172,6 +175,27 @@ describe("road and track placement validation", () => {
     expect(isValidTrackPlacement(state, { x: 2, y: 3 })).toBe(false); // residential
     const tracked = withTrack(state, [{ x: 8, y: 2 }]);
     expect(isValidTrackPlacement(tracked, { x: 8, y: 2 })).toBe(false); // already tracked
+  });
+});
+
+describe("station and stop placement with track rules", () => {
+  it("requires track under a metro station", () => {
+    const state = createInitialGameState();
+    expect(isValidMetroStationPlacement(state, { x: 8, y: 2 })).toBe(false); // empty, no track
+    expect(isValidMetroStationPlacement(state, { x: 7, y: 8 })).toBe(false); // road, no track
+
+    const tracked = withTrack(state, [
+      { x: 8, y: 2 },
+      { x: 7, y: 8 },
+    ]);
+    expect(isValidMetroStationPlacement(tracked, { x: 8, y: 2 })).toBe(true);
+    expect(isValidMetroStationPlacement(tracked, { x: 7, y: 8 })).toBe(true); // crossing OK
+  });
+
+  it("rejects bus stops on crossings", () => {
+    const state = withTrack(createInitialGameState(), [{ x: 9, y: 8 }]);
+    expect(isValidBusStopPlacement(state, { x: 9, y: 8 })).toBe(false);
+    expect(isValidBusStopPlacement(state, { x: 10, y: 8 })).toBe(true);
   });
 });
 

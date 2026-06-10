@@ -39,6 +39,45 @@ function trackRow(y: number, fromX: number, toX: number): Point[] {
   }));
 }
 
+// Bus stops and metro stations can no longer share a tile under the new
+// placement rules (stops are banned on track crossings; stations require
+// track). Co-located inspector-cycling tests don't exercise placement, so
+// build the transit network directly to keep a stop and a station at the
+// same position.
+function withColocatedStopAndStation(
+  state: GameState,
+  point: Point,
+): GameState {
+  return {
+    ...state,
+    transit: {
+      ...state.transit,
+      stops: [
+        ...state.transit.stops,
+        {
+          id: "stop-001",
+          kind: "busStop",
+          position: { ...point },
+          platforms: [
+            { id: "stop-001-p0", label: "A", capacity: 50, routeIds: [] },
+          ],
+        },
+      ],
+      stations: [
+        ...state.transit.stations,
+        {
+          id: "station-001",
+          position: { ...point },
+          platforms: [
+            { id: "station-001-p0", label: "A", capacity: 300, routeIds: [] },
+            { id: "station-001-p1", label: "B", capacity: 300, routeIds: [] },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 describe("UI tile actions", () => {
   it("accumulates bus route stops without committing at two stops", () => {
     let state = createInitialGameState();
@@ -95,6 +134,7 @@ describe("UI tile actions", () => {
 
   it("accumulates metro line stations without committing", () => {
     let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
 
@@ -306,6 +346,7 @@ describe("resolveNodeAtTile", () => {
   it("resolves a metro station at its exact tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withTrack(state, [{ x: 22, y: 2 }]);
     state = addMetroStation(state, { x: 22, y: 2 });
     expect(state.transit.stations).toHaveLength(1);
 
@@ -349,8 +390,7 @@ describe("resolveNodeAtTile", () => {
   it("prefers station when preferredKind is station", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
 
     const resolved = resolveNodeAtTile(state, { x: 7, y: 2 }, "station");
     expect(resolved?.kind).toBe("station");
@@ -359,8 +399,7 @@ describe("resolveNodeAtTile", () => {
   it("prefers stop when preferredKind is stop", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
 
     const resolved = resolveNodeAtTile(state, { x: 7, y: 2 }, "stop");
     expect(resolved?.kind).toBe("stop");
@@ -371,8 +410,7 @@ describe("resolveNodesAtTile", () => {
   it("returns both nodes when a stop and station share a tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
 
     const nodes = resolveNodesAtTile(state, { x: 7, y: 2 });
     expect(nodes).toHaveLength(2);
@@ -394,8 +432,7 @@ describe("inspect tool co-located cycling", () => {
   it("selects stop first on a co-located tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
     const ui = createUiState();
 
     const result = handleTileClick(state, ui, { x: 7, y: 2 });
@@ -405,8 +442,7 @@ describe("inspect tool co-located cycling", () => {
   it("cycles to station on second click of same tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
     const ui = {
       ...createUiState(),
       selectedId: "7,2",
@@ -420,8 +456,7 @@ describe("inspect tool co-located cycling", () => {
   it("cycles back to stop on third click of same tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 7, y: 2 });
+    state = withColocatedStopAndStation(state, { x: 7, y: 2 });
     const ui = {
       ...createUiState(),
       selectedId: "7,2",

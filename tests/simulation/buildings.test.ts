@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { BuildingRotation } from "../../src/domain/types";
+import type {
+  BuildingRotation,
+  GameState,
+  Point,
+} from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   BUILDING_CATALOG,
@@ -8,6 +12,19 @@ import {
   getRotatedFootprintSize,
   placeBuilding,
 } from "../../src/simulation/buildings";
+
+function withTrack(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
 
 describe("building catalog and footprints", () => {
   it("defines the first Build menu catalog", () => {
@@ -75,7 +92,7 @@ describe("building catalog and footprints", () => {
   });
 
   it("places transit buildings with deterministic entity ids and effects", () => {
-    let state = createInitialGameState();
+    let state = withTrack(createInitialGameState(), [{ x: 3, y: 0 }]);
 
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 90);
     state = placeBuilding(state, "metroStation", { x: 3, y: 0 }, 0);
@@ -150,6 +167,21 @@ describe("building catalog and footprints", () => {
       routePlan: null,
       currentLegIndex: 0,
     });
+  });
+
+  it("requires track under a metro station building and rejects other buildings on track", () => {
+    const bare = createInitialGameState();
+    expect(canPlaceBuilding(bare, "metroStation", { x: 8, y: 2 }, 0)).toBe(
+      false,
+    );
+
+    const tracked = withTrack(bare, [{ x: 8, y: 2 }]);
+    expect(canPlaceBuilding(tracked, "metroStation", { x: 8, y: 2 }, 0)).toBe(
+      true,
+    );
+    expect(canPlaceBuilding(tracked, "smallHouse", { x: 8, y: 2 }, 0)).toBe(
+      false,
+    );
   });
 
   it("returns the original state object for invalid or unaffordable placement", () => {
