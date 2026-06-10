@@ -24,6 +24,11 @@ function isBuildingOccupied(state: GameState, point: Point): boolean {
   );
 }
 
+/** A growth wave only claims tiles that are still bare empty ground. */
+function isBareGround(tile: Tile): boolean {
+  return tile.kind === "empty" && tile.hasTrack !== true;
+}
+
 function destinationTiles(map: GameMap): Tile[] {
   return map.tiles
     .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
@@ -154,8 +159,7 @@ export function applyDueGrowthWaves(state: GameState): GameState {
       const waveTile = waveTilesById.get(tile.id);
       // A wave tile only converts while still bare empty ground: tiles the
       // player has already built road/track on stay as the player left them.
-      const blocked = tile.kind !== "empty" || tile.hasTrack === true;
-      return waveTile === undefined || blocked
+      return waveTile === undefined || !isBareGround(tile)
         ? { ...tile }
         : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
     }),
@@ -166,10 +170,7 @@ export function applyDueGrowthWaves(state: GameState): GameState {
   for (const wave of dueWaves) {
     for (const tile of wave.tiles) {
       const preWaveTile = getTile(state.map, { x: tile.x, y: tile.y });
-      const blocked =
-        preWaveTile === null ||
-        preWaveTile.kind !== "empty" ||
-        preWaveTile.hasTrack === true;
+      const blocked = preWaveTile === null || !isBareGround(preWaveTile);
       if (blocked || isBuildingOccupied(state, { x: tile.x, y: tile.y })) {
         continue;
       }

@@ -1671,6 +1671,12 @@ describe("laying and removing infrastructure", () => {
     expect(layTrack(state, { x: 2, y: 3 })).toBe(state); // residential
   });
 
+  it("rejects laying when the budget cannot cover the cost", () => {
+    const broke = { ...createInitialGameState(), budget: 50 };
+    expect(layRoad(broke, { x: 8, y: 2 })).toBe(broke);
+    expect(layTrack(broke, { x: 8, y: 2 })).toBe(broke);
+  });
+
   it("re-laying a severed road tile restores a broken route", () => {
     let state = createBusState(); // stops (7,8) and (15,8)
     state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
