@@ -11,7 +11,15 @@ import type {
   StopKind,
   Vehicle,
 } from "../domain/types";
-import { isValidBusStopPlacement, isValidMetroStationPlacement } from "./map";
+import {
+  isValidBusStopPlacement,
+  isValidMetroStationPlacement,
+  isValidRoadPlacement,
+  isValidTrackPlacement,
+  getTile,
+  setTileKind,
+  setTileTrack,
+} from "./map";
 import { computeRouteSegments, hasBrokenSegment } from "./network";
 import {
   busPlatforms,
@@ -25,6 +33,8 @@ export const COSTS = {
   metroStation: 25_000,
   bus: 8_000,
   metro: 50_000,
+  road: 100,
+  track: 500,
 } as const;
 
 function canAfford(state: GameState, cost: number): boolean {
@@ -674,6 +684,52 @@ export function recomputeRoutePaths(state: GameState): GameState {
     citizens,
     transit: { ...state.transit, routes, metroLines, vehicles },
   };
+}
+
+export function layRoad(state: GameState, point: Point): GameState {
+  if (!canAfford(state, COSTS.road) || !isValidRoadPlacement(state, point)) {
+    return state;
+  }
+  return recomputeRoutePaths({
+    ...state,
+    budget: state.budget - COSTS.road,
+    map: setTileKind(state.map, point, "road"),
+  });
+}
+
+export function layTrack(state: GameState, point: Point): GameState {
+  if (!canAfford(state, COSTS.track) || !isValidTrackPlacement(state, point)) {
+    return state;
+  }
+  return recomputeRoutePaths({
+    ...state,
+    budget: state.budget - COSTS.track,
+    map: setTileTrack(state.map, point, true),
+  });
+}
+
+/** Bulldoze priority for bare tiles: track first, then road. No refunds. */
+export function removeInfrastructureAtTile(
+  state: GameState,
+  point: Point,
+): GameState {
+  const tile = getTile(state.map, point);
+  if (tile === null) {
+    return state;
+  }
+  if (tile.hasTrack === true) {
+    return recomputeRoutePaths({
+      ...state,
+      map: setTileTrack(state.map, point, false),
+    });
+  }
+  if (tile.kind === "road") {
+    return recomputeRoutePaths({
+      ...state,
+      map: setTileKind(state.map, point, "empty"),
+    });
+  }
+  return state;
 }
 
 export function deleteRoute(state: GameState, routeId: string): GameState {

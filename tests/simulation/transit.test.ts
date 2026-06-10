@@ -19,7 +19,10 @@ import {
   assignRouteToPlatform,
   assignVehicle,
   deleteRoute,
+  layRoad,
+  layTrack,
   recomputeRoutePaths,
+  removeInfrastructureAtTile,
   renameRoute,
   setRouteActive,
   setRouteColor,
@@ -1638,5 +1641,76 @@ describe("recomputeRoutePaths", () => {
 
     expect(restored.transit.routes[0].pathBroken).toBe(false);
     expect(restored.transit.routes[0].segments[0]).toHaveLength(9);
+  });
+});
+
+describe("laying and removing infrastructure", () => {
+  it("lays a road on an empty tile and charges $100", () => {
+    const state = createInitialGameState();
+    const next = layRoad(state, { x: 8, y: 2 });
+
+    expect(next.map.tiles.find((t) => t.x === 8 && t.y === 2)?.kind).toBe(
+      "road",
+    );
+    expect(next.budget).toBe(119_900);
+  });
+
+  it("lays track on a road tile to form a crossing and charges $500", () => {
+    const state = createInitialGameState();
+    const next = layTrack(state, { x: 9, y: 8 });
+
+    const tile = next.map.tiles.find((t) => t.x === 9 && t.y === 8);
+    expect(tile?.kind).toBe("road");
+    expect(tile?.hasTrack).toBe(true);
+    expect(next.budget).toBe(119_500);
+  });
+
+  it("rejects invalid placements unchanged", () => {
+    const state = createInitialGameState();
+    expect(layRoad(state, { x: 7, y: 8 })).toBe(state); // already road
+    expect(layTrack(state, { x: 2, y: 3 })).toBe(state); // residential
+  });
+
+  it("re-laying a severed road tile restores a broken route", () => {
+    let state = createBusState(); // stops (7,8) and (15,8)
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    expect(state.transit.routes[0].pathBroken).toBe(true);
+
+    state = layRoad(state, { x: 11, y: 8 });
+    expect(state.transit.routes[0].pathBroken).toBe(false);
+  });
+
+  it("does not re-park vehicles when recomputing while already broken", () => {
+    // Guard test for the broken->broken transition: side effects must fire
+    // only on the transition INTO broken, not on every recompute.
+    let state = createBusState();
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    expect(state.transit.routes[0].pathBroken).toBe(true);
+
+    // Manually un-park the vehicle to detect a second (incorrect) re-park.
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        vehicles: state.transit.vehicles.map((v) => ({ ...v, progress: 0.4 })),
+      },
+    };
+    // Another unrelated network change while the route is still broken.
+    const next = removeInfrastructureAtTile(state, { x: 3, y: 8 });
+    expect(next.transit.routes[0].pathBroken).toBe(true);
+    expect(next.transit.vehicles[0].progress).toBe(0.4); // not re-parked
+  });
+
+  it("bulldozes track before road on a crossing tile", () => {
+    let state = layTrack(createInitialGameState(), { x: 9, y: 8 });
+
+    state = removeInfrastructureAtTile(state, { x: 9, y: 8 });
+    let tile = state.map.tiles.find((t) => t.x === 9 && t.y === 8);
+    expect(tile?.hasTrack).toBe(false);
+    expect(tile?.kind).toBe("road");
+
+    state = removeInfrastructureAtTile(state, { x: 9, y: 8 });
+    tile = state.map.tiles.find((t) => t.x === 9 && t.y === 8);
+    expect(tile?.kind).toBe("empty");
   });
 });

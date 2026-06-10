@@ -719,3 +719,37 @@ describe("draft route helpers", () => {
     expect(cancelDraftRoute(ui)).toBe(ui);
   });
 });
+
+describe("road and track tools", () => {
+  it("lays road and track via their tools and bulldozes bare infrastructure", () => {
+    const state = createInitialGameState();
+    const ui = createUiState();
+
+    const road = handleTileClick(
+      state,
+      { ...ui, activeTool: "road" },
+      { x: 8, y: 2 },
+    );
+    expect(road.state.map.tiles.find((t) => t.x === 8 && t.y === 2)?.kind).toBe(
+      "road",
+    );
+
+    const track = handleTileClick(
+      road.state,
+      { ...ui, activeTool: "track" },
+      { x: 9, y: 2 },
+    );
+    expect(
+      track.state.map.tiles.find((t) => t.x === 9 && t.y === 2)?.hasTrack,
+    ).toBe(true);
+
+    const removed = handleTileClick(
+      track.state,
+      { ...ui, activeTool: "remove" },
+      { x: 9, y: 2 },
+    );
+    expect(
+      removed.state.map.tiles.find((t) => t.x === 9 && t.y === 2)?.hasTrack,
+    ).toBe(false);
+  });
+});
