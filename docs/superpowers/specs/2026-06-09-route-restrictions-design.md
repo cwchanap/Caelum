@@ -93,6 +93,15 @@ New module `src/simulation/network.ts`:
   `hasTrack === true` for metro. Fixed neighbor expansion order (N, E, S, W)
   makes the shortest path fully deterministic. Returns the inclusive tile
   path (from → … → to) or `null`.
+- **Endpoint exception (amendment):** the `from` and `to` tiles are always
+  traversable regardless of kind/track. Stops and stations can also be
+  created via the *building* path (`placeBuilding`), whose footprints sit on
+  `empty` tiles — e.g. the e2e flow places Bus Stop buildings beside the
+  road, not on it. The endpoint exception lets such a node connect through
+  an adjacent network tile; a node with no adjacent road/track simply has no
+  path and cannot be added to a route. Building placement additionally
+  changes: no building may sit on a track tile, except the Metro Station
+  building, whose tile must have track (mirroring the station tool rule).
 - `recomputeRoutePaths(state): GameState` — refreshes `segments` and
   `pathBroken` on every route and metro line. Runs after laying/removing
   road or track and after route/line creation. (Stop/station removal already
