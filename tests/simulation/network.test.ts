@@ -176,7 +176,9 @@ describe("computeRouteSegments", () => {
 
   it("returns no segments for fewer than two positions, which is not broken", () => {
     const state = createInitialGameState();
-    expect(computeRouteSegments(state.map, [{ x: 7, y: 8 }], "bus")).toEqual([]);
+    expect(computeRouteSegments(state.map, [{ x: 7, y: 8 }], "bus")).toEqual(
+      [],
+    );
     expect(hasBrokenSegment([])).toBe(false);
   });
 });
