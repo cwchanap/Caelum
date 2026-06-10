@@ -46,6 +46,8 @@ export interface Tile extends Point {
   id: string;
   kind: TileKind;
   districtId?: string;
+  /** Track is a layer, not a TileKind: a road tile with track is a level crossing. */
+  hasTrack?: boolean;
 }
 
 export interface GameMap {
