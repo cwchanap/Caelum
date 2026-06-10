@@ -8,6 +8,7 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
+  removeInfrastructureAtTile,
 } from "../../src/simulation/transit";
 import {
   cancelDraftRoute,
@@ -17,7 +18,7 @@ import {
   resolveNodeAtTile,
   resolveNodesAtTile,
 } from "../../src/ui/actions";
-import { createUiState } from "../../src/ui/uiState";
+import { createUiState, type UiState } from "../../src/ui/uiState";
 
 function withTrack(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
@@ -27,6 +28,19 @@ function withTrack(state: GameState, points: Point[]): GameState {
       ...state.map,
       tiles: state.map.tiles.map((tile) =>
         keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}
+
+function withRoad(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
       ),
     },
   };
@@ -318,6 +332,13 @@ describe("UI tile actions", () => {
     let state = createInitialGameState();
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
     state = placeBuilding(state, "busStop", { x: 4, y: 0 }, 0);
+    // Connect the terminal's transit node (0,0) to the stop's (4,0) so the
+    // draft path validation finds a route between them.
+    state = withRoad(state, [
+      { x: 1, y: 0 },
+      { x: 2, y: 0 },
+      { x: 3, y: 0 },
+    ]);
 
     let result = handleTileClick(
       state,
@@ -717,18 +738,22 @@ describe("draft route helpers", () => {
   });
 
   it("removes a specific draft stop by index", () => {
-    const { ui } = busDraft();
-    const next = removeDraftStop(ui, 0);
+    const { state, ui } = busDraft();
+    const next = removeDraftStop(state, ui, 0);
     expect(next.draftStopIds).toEqual(["stop-002"]);
   });
 
   it("removes a metro draft station by index", () => {
+    let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
     const ui = {
       ...createUiState(),
       activeTool: "metroLine" as const,
       draftStationIds: ["station-001", "station-002"],
     };
-    const next = removeDraftStop(ui, 1);
+    const next = removeDraftStop(state, ui, 1);
     expect(next.draftStationIds).toEqual(["station-001"]);
   });
 
@@ -744,9 +769,9 @@ describe("draft route helpers", () => {
   });
 
   it("removeDraftStop returns the same ui for an out-of-range index", () => {
-    const { ui } = busDraft();
-    expect(removeDraftStop(ui, 5)).toBe(ui);
-    expect(removeDraftStop(ui, -1)).toBe(ui);
+    const { state, ui } = busDraft();
+    expect(removeDraftStop(state, ui, 5)).toBe(ui);
+    expect(removeDraftStop(state, ui, -1)).toBe(ui);
   });
 
   it("cancelDraftRoute returns the same ui when already empty", () => {
@@ -786,5 +811,58 @@ describe("road and track tools", () => {
     expect(
       removed.state.map.tiles.find((t) => t.x === 9 && t.y === 2)?.hasTrack,
     ).toBe(false);
+  });
+});
+
+describe("draft route path validation", () => {
+  function busDraftState(): { state: GameState; ui: UiState } {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    return { state, ui: { ...createUiState(), activeTool: "busRoute" as const } };
+  }
+
+  it("appends a stop and its connecting path when a road path exists", () => {
+    const { state, ui } = busDraftState();
+
+    let result = handleTileClick(state, ui, { x: 7, y: 8 });
+    expect(result.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(result.ui.draftStopPaths).toEqual([]);
+
+    result = handleTileClick(state, result.ui, { x: 15, y: 8 });
+    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
+    expect(result.ui.draftStopPaths).toHaveLength(1);
+    expect(result.ui.draftStopPaths[0][0]).toEqual({ x: 7, y: 8 });
+    expect(result.ui.draftStopPaths[0].at(-1)).toEqual({ x: 15, y: 8 });
+  });
+
+  it("rejects adding a stop with no road path from the previous stop", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    // Sever the only row between them; columns can't bridge (no other rows).
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    const ui = { ...createUiState(), activeTool: "busRoute" as const };
+
+    let result = handleTileClick(state, ui, { x: 7, y: 8 });
+    const before = result.ui;
+    result = handleTileClick(state, before, { x: 15, y: 8 });
+
+    expect(result.ui).toBe(before); // silent no-op
+  });
+
+  it("merges legs when removing a middle draft stop and keeps paths in sync", () => {
+    const { state, ui } = busDraftState();
+    let result = handleTileClick(state, ui, { x: 7, y: 8 });
+    result = handleTileClick(state, result.ui, { x: 15, y: 8 });
+    result = handleTileClick(state, result.ui, { x: 22, y: 8 });
+    expect(result.ui.draftStopPaths).toHaveLength(2);
+
+    const merged = removeDraftStop(state, result.ui, 1);
+    expect(merged.draftStopIds).toEqual(["stop-001", "stop-003"]);
+    expect(merged.draftStopPaths).toHaveLength(1);
+    expect(merged.draftStopPaths[0][0]).toEqual({ x: 7, y: 8 });
+    expect(merged.draftStopPaths[0].at(-1)).toEqual({ x: 22, y: 8 });
   });
 });
