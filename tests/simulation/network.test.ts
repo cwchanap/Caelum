@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { GameState, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
-import { findTilePath } from "../../src/simulation/network";
+import {
+  computeRouteSegments,
+  findTilePath,
+  hasBrokenSegment,
+} from "../../src/simulation/network";
 
 function withTrack(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
@@ -134,5 +138,45 @@ describe("findTilePath", () => {
     expect(
       findTilePath(state.map, { x: -1, y: 8 }, { x: 7, y: 8 }, "bus"),
     ).toBeNull();
+  });
+});
+
+describe("computeRouteSegments", () => {
+  it("returns one segment per consecutive pair plus the closing loop segment", () => {
+    const state = createInitialGameState();
+    const positions = [
+      { x: 7, y: 8 },
+      { x: 15, y: 8 },
+      { x: 22, y: 8 },
+    ];
+
+    const segments = computeRouteSegments(state.map, positions, "bus");
+
+    expect(segments).toHaveLength(3);
+    expect(segments[0]).toHaveLength(9); // 7..15 along y=8
+    expect(segments[1]).toHaveLength(8); // 15..22
+    expect(segments[2]).toHaveLength(16); // 22..7 closing loop
+    expect(hasBrokenSegment(segments)).toBe(false);
+  });
+
+  it("marks unpathable pairs as empty segments and reports them broken", () => {
+    const state = createInitialGameState();
+    const positions = [
+      { x: 7, y: 8 },
+      { x: 2, y: 3 }, // residential island, unreachable by road
+    ];
+
+    const segments = computeRouteSegments(state.map, positions, "bus");
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toEqual([]);
+    expect(segments[1]).toEqual([]);
+    expect(hasBrokenSegment(segments)).toBe(true);
+  });
+
+  it("returns no segments for fewer than two positions, which is not broken", () => {
+    const state = createInitialGameState();
+    expect(computeRouteSegments(state.map, [{ x: 7, y: 8 }], "bus")).toEqual([]);
+    expect(hasBrokenSegment([])).toBe(false);
   });
 });

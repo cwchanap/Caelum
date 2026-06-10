@@ -85,3 +85,27 @@ export function findTilePath(
 
   return null;
 }
+
+/**
+ * Tile path for every consecutive position pair, including the closing
+ * loop segment (last -> first); vehicles cycle the whole loop. An
+ * unpathable pair is stored as an empty array.
+ */
+export function computeRouteSegments(
+  map: GameMap,
+  positions: Point[],
+  mode: NetworkMode,
+): Point[][] {
+  if (positions.length < 2) {
+    return [];
+  }
+
+  return positions.map((from, index) => {
+    const to = positions[(index + 1) % positions.length];
+    return findTilePath(map, from, to, mode) ?? [];
+  });
+}
+
+export function hasBrokenSegment(segments: Point[][]): boolean {
+  return segments.some((segment) => segment.length === 0);
+}
