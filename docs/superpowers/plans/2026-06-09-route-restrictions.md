@@ -1574,7 +1574,7 @@ Update every timing assertion with the formula `progressPerSecond = TILES_PER_SE
 - `createBusState` segments (7,8)↔(15,8): 8 steps ⇒ 0.1 progress/s, full segment in 10s (was 12.5s).
 - `createThreeStopBusState` segments: 8, 7, and 15 (closing) steps.
 - Metro lines over `trackRow(8, 7, 22)`: 15 steps ⇒ 1.6/15 ≈ 0.10667/s.
-- `tests/simulation/citizens.test.ts` end-to-end trip outcomes shift with ride times; recompute expected times/staus with the same formula plus unchanged walk (20 s/tile) and boarding behavior.
+- `tests/simulation/citizens.test.ts` end-to-end trip outcomes shift with ride times; recompute expected times/status with the same formula plus unchanged walk (20 s/tile) and boarding behavior.
 
 Expected: PASS after updates.
 
