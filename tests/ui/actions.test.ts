@@ -802,6 +802,44 @@ describe("draft route helpers", () => {
     expect(removeDraftStop(state, ui, -1)).toBe(ui);
   });
 
+  it("removeDraftStop empties the draft when removing the only stop", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001"],
+      draftStopPaths: [],
+    };
+    const next = removeDraftStop(state, ui, 0);
+    expect(next.draftStopIds).toEqual([]);
+    expect(next.draftStopPaths).toEqual([]);
+  });
+
+  it("removeDraftStop rejects an interior merge when the outer stops are not connected", () => {
+    // Three stops on the y=8 road: (7,8), (15,8), (22,8). Pre-assemble a
+    // draft with computed paths between consecutive pairs, then sever the road
+    // between stop 1 and stop 3 so the merge path is null.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    // Sever the road between (7,8) and (22,8) — removes the tile at (11,8).
+    const severed = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      draftStopIds: ["stop-001", "stop-002", "stop-003"],
+      draftStopPaths: [
+        Array.from({ length: 9 }, (_, i) => ({ x: 7 + i, y: 8 })),
+        Array.from({ length: 8 }, (_, i) => ({ x: 15 + i, y: 8 })),
+      ],
+    };
+    const next = removeDraftStop(severed, ui, 1);
+    expect(next).toBe(ui); // merge rejected, ui unchanged
+  });
+
   it("cancelDraftRoute returns the same ui when already empty", () => {
     const ui = createUiState();
     expect(cancelDraftRoute(ui)).toBe(ui);

@@ -161,14 +161,20 @@ export function canPlaceBuilding(
       samePoint(station.position, point),
     );
     // No building may sit on track, except the Metro Station building whose
-    // (1x1) tile must have track — mirroring the station tool rule.
+    // (1x1) tile must have track — mirroring the station tool rule which
+    // allows road + track crossings (isValidMetroStationPlacement).
+    const kindOk =
+      type === "metroStation"
+        ? tile?.kind === "empty" || tile?.kind === "road"
+        : tile?.kind === "empty";
+
     const trackOk =
       type === "metroStation"
         ? tile?.hasTrack === true
         : tile?.hasTrack !== true;
 
     return (
-      tile?.kind === "empty" &&
+      kindOk &&
       trackOk &&
       !buildingOccupied &&
       !stopOccupied &&

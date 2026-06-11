@@ -410,9 +410,7 @@ export function handleTileClick(
   }
 
   if (ui.activeTool === "metroLine") {
-    const station = state.transit.stations.find((candidate) =>
-      samePoint(candidate.position, point),
-    );
+    const station = resolveStationAtTile(state, point);
     if (station === undefined) {
       return { state, ui };
     }

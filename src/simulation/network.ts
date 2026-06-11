@@ -76,7 +76,25 @@ export function findTilePath(
           path.push({ x, y });
           cursor = parents.get(cursor) ?? null;
         }
-        return path.reverse();
+        path.reverse();
+
+        // Guard: reject a 2-tile path where neither endpoint is traversable.
+        // The "endpoints are always traversable" rule allows off-network stops
+        // to connect through an adjacent road/track tile, but when two stops
+        // are directly adjacent on non-traversable ground the "path" contains
+        // zero traversable tiles — which is never a valid transit connection.
+        if (path.length === 2) {
+          const fromTile = tileByKey.get(fromKey)!;
+          if (
+            !isTraversable(fromTile, mode) &&
+            !isTraversable(tile, mode)
+          ) {
+            // Undo the parents entry so the BFS can find a longer valid route.
+            parents.delete(nextKey);
+            continue;
+          }
+        }
+        return path;
       }
 
       queue.push(next);
