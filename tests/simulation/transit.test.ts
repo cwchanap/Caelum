@@ -1718,6 +1718,10 @@ describe("recomputeRoutePaths", () => {
 
     expect(restored.transit.routes[0].pathBroken).toBe(false);
     expect(restored.transit.routes[0].segments[0]).toHaveLength(9);
+
+    // Vehicle parked at progress=0 should resume movement on the next tick.
+    const ticked = tickVehicles(restored, 1);
+    expect(ticked.transit.vehicles[0].progress).toBeGreaterThan(0);
   });
 
   it("marks a metro line broken when track on its path is removed, parks the vehicle, and disembarks passengers", () => {
