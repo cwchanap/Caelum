@@ -1,10 +1,4 @@
-import type {
-  GameState,
-  MetroLine,
-  Point,
-  Route,
-  Vehicle,
-} from "../domain/types";
+import type { GameState, Point, Vehicle } from "../domain/types";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
@@ -98,22 +92,50 @@ function lineDrawPositions(
   return line.segments.flat();
 }
 
+/**
+ * Resolves a vehicle's line to its concretely-typed node ids/segments,
+ * regardless of whether it runs on a bus route or a metro line.
+ */
+function vehicleLineData(
+  state: GameState,
+  vehicle: Vehicle,
+): {
+  ids: string[];
+  segments: Point[][];
+  pathBroken: boolean;
+  kind: "stops" | "stations";
+} | null {
+  if (vehicle.mode === "bus") {
+    const route = state.transit.routes.find((r) => r.id === vehicle.lineId);
+    return route === undefined
+      ? null
+      : {
+          ids: route.stopIds,
+          segments: route.segments,
+          pathBroken: route.pathBroken,
+          kind: "stops",
+        };
+  }
+  const line = state.transit.metroLines.find((l) => l.id === vehicle.lineId);
+  return line === undefined
+    ? null
+    : {
+        ids: line.stationIds,
+        segments: line.segments,
+        pathBroken: line.pathBroken,
+        kind: "stations",
+      };
+}
+
 function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
-  const line =
-    vehicle.mode === "bus"
-      ? state.transit.routes.find((route) => route.id === vehicle.lineId)
-      : state.transit.metroLines.find((l) => l.id === vehicle.lineId);
-  if (line === undefined) {
+  const line = vehicleLineData(state, vehicle);
+  if (line === null) {
     return null;
   }
-  const ids =
-    vehicle.mode === "bus"
-      ? (line as Route).stopIds
-      : (line as MetroLine).stationIds;
   const nodePositions =
-    vehicle.mode === "bus"
-      ? routePositions(state, ids)
-      : stationPositions(state, ids);
+    line.kind === "stops"
+      ? routePositions(state, line.ids)
+      : stationPositions(state, line.ids);
   if (nodePositions.length < 2) {
     return null;
   }
@@ -124,6 +146,8 @@ function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
     ((vehicle.segmentIndex % segmentCount) + segmentCount) % segmentCount;
   const segment = line.segments[segmentIndex];
 
+  // Defensive only: hasBrokenSegment guarantees pathBroken=true whenever any
+  // segment is empty, so `line.pathBroken ||` already short-circuits this.
   if (line.pathBroken || segment === undefined || segment.length === 0) {
     // Parked at the segment-start stop while the network is broken.
     const parked = nodePositions[segmentIndex % nodePositions.length];
