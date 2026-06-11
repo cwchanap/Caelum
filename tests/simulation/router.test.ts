@@ -7,7 +7,10 @@ import {
   addBusStop,
   addMetroLine,
   addMetroStation,
+  assignVehicle,
+  removeInfrastructureAtTile,
   setRouteActive,
+  TILES_PER_SECOND,
 } from "../../src/simulation/transit";
 
 function withTrack(state: GameState, points: Point[]): GameState {
@@ -73,7 +76,10 @@ describe("route planning", () => {
 
     const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
-    expect(plan?.estimatedSeconds).toBe(310);
+    // walk(6,8)->(7,8) = 20*1 = 20
+    // bus ride: 15 steps at 0.8 tiles/s + 90s boarding = 90 + 15/0.8 = 108.75
+    // walk(22,8)->(23,8) = 20*1 = 20
+    expect(plan?.estimatedSeconds).toBe(148.75);
     expect(plan?.legs.map((leg) => leg.mode)).toEqual(["walk", "bus", "walk"]);
     expect(plan?.legs[1]).toMatchObject({ mode: "bus", lineId: "route-001" });
     expect(plan?.legs).toEqual([
@@ -97,7 +103,10 @@ describe("route planning", () => {
 
     const plan = findRoutePlan(state, { x: 6, y: 8 }, { x: 23, y: 8 });
 
-    expect(plan?.estimatedSeconds).toBe(265);
+    // walk(6,8)->(7,8) = 20*1 = 20
+    // metro ride: 15 steps at 1.6 tiles/s + 120s boarding = 120 + 15/1.6 = 129.375
+    // walk(22,8)->(23,8) = 20*1 = 20
+    expect(plan?.estimatedSeconds).toBe(169.375);
     expect(plan?.legs.map((leg) => leg.mode)).toEqual([
       "walk",
       "metro",
@@ -250,5 +259,38 @@ describe("route planning", () => {
       { x: 23, y: 8 },
     );
     expect(inactive?.legs.some((leg) => leg.mode === "bus")).toBe(false);
+  });
+});
+
+describe("path-length ride estimates", () => {
+  it("estimates bus rides from stored segment steps, not Manhattan distance", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignVehicle(state, "bus", "route-001");
+
+    const plan = findRoutePlan(state, { x: 7, y: 8 }, { x: 22, y: 8 });
+
+    expect(plan).not.toBeNull();
+    const busLeg = plan?.legs.find((leg) => leg.mode === "bus");
+    expect(busLeg).toBeDefined();
+    // 15 steps at 0.8 tiles/s + 90s boarding = 108.75s
+    expect(plan?.estimatedSeconds).toBeCloseTo(
+      90 + 15 / TILES_PER_SECOND.bus,
+      5,
+    );
+  });
+
+  it("ignores pathBroken routes when planning", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    expect(state.transit.routes[0].pathBroken).toBe(true);
+
+    const plan = findRoutePlan(state, { x: 7, y: 8 }, { x: 22, y: 8 });
+    expect(plan?.legs.every((leg) => leg.mode === "walk")).toBe(true);
   });
 });

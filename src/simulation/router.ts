@@ -1,16 +1,11 @@
-import type {
-  GameState,
-  Point,
-  RouteLeg,
-  RoutePlan,
-  Station,
-  Stop,
-} from "../domain/types";
+import type { GameState, Point, RouteLeg, RoutePlan } from "../domain/types";
+import { TILES_PER_SECOND } from "./transit";
 
 interface TransitService {
   mode: "bus" | "metro";
   lineId: string;
   anchors: Point[];
+  segments: Point[][];
 }
 
 function manhattanDistance(from: Point, to: Point): number {
@@ -38,35 +33,36 @@ function walkSeconds(from: Point, to: Point): number {
   return manhattanDistance(from, to) * 20;
 }
 
-function busSeconds(from: Point, to: Point): number {
-  return 90 + manhattanDistance(from, to) * 12;
-}
-
-function metroSeconds(from: Point, to: Point): number {
-  return 120 + manhattanDistance(from, to) * 7;
-}
-
-function transitSeconds(mode: "bus" | "metro", from: Point, to: Point): number {
-  return mode === "bus" ? busSeconds(from, to) : metroSeconds(from, to);
-}
-
-function nearestByPosition<T extends Stop | Station>(
-  points: T[],
-  target: Point,
-): T | null {
-  let nearest: T | null = null;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-
-  for (const point of points) {
-    const distance = manhattanDistance(point.position, target);
-
-    if (distance < nearestDistance) {
-      nearest = point;
-      nearestDistance = distance;
-    }
+/**
+ * Number of forward steps a vehicle travels along the loop's stored
+ * segments to get from anchor `fromIndex` to anchor `toIndex`. Segment `i`
+ * is the path from anchor `i` to anchor `(i + 1) % count` (the last segment
+ * closes the loop), and a segment with `n` tile positions takes `n - 1`
+ * steps; an unexpectedly degenerate segment still counts as at least one
+ * step so a ride is never free.
+ */
+function rideSteps(
+  segments: Point[][],
+  fromIndex: number,
+  toIndex: number,
+): number {
+  const count = segments.length;
+  if (count === 0 || fromIndex === toIndex) {
+    return 0;
   }
 
-  return nearest;
+  let steps = 0;
+  let index = fromIndex;
+  while (index !== toIndex) {
+    steps += Math.max(1, segments[index].length - 1);
+    index = (index + 1) % count;
+  }
+
+  return steps;
+}
+
+function rideSeconds(mode: "bus" | "metro", steps: number): number {
+  return (mode === "bus" ? 90 : 120) + steps / TILES_PER_SECOND[mode];
 }
 
 function bestCandidate(candidates: RoutePlan[]): RoutePlan | null {
@@ -103,7 +99,7 @@ function activeServices(state: GameState): TransitService[] {
   const services: TransitService[] = [];
 
   for (const route of state.transit.routes) {
-    if (!route.active) continue;
+    if (!route.active || route.pathBroken) continue;
     const anchors = route.stopIds
       .map(
         (stopId) =>
@@ -112,13 +108,19 @@ function activeServices(state: GameState): TransitService[] {
       .filter((point): point is Point => point !== undefined)
       .map(clonePoint);
 
-    if (anchors.length >= 2) {
-      services.push({ mode: "bus", lineId: route.id, anchors });
+    // A dangling stopId would desync anchor indexes from segment indexes.
+    if (anchors.length >= 2 && anchors.length === route.stopIds.length) {
+      services.push({
+        mode: "bus",
+        lineId: route.id,
+        anchors,
+        segments: route.segments,
+      });
     }
   }
 
   for (const line of state.transit.metroLines) {
-    if (!line.active) continue;
+    if (!line.active || line.pathBroken) continue;
     const anchors = line.stationIds
       .map(
         (stationId) =>
@@ -128,49 +130,60 @@ function activeServices(state: GameState): TransitService[] {
       .filter((point): point is Point => point !== undefined)
       .map(clonePoint);
 
-    if (anchors.length >= 2) {
-      services.push({ mode: "metro", lineId: line.id, anchors });
+    if (anchors.length >= 2 && anchors.length === line.stationIds.length) {
+      services.push({
+        mode: "metro",
+        lineId: line.id,
+        anchors,
+        segments: line.segments,
+      });
     }
   }
 
   return services;
 }
 
-function nearestAnchor(anchors: Point[], target: Point): Point | null {
-  let nearest: Point | null = null;
+/** Index of the anchor nearest to `target`; -1 when `anchors` is empty. */
+function nearestAnchorIndex(anchors: Point[], target: Point): number {
+  let nearestIndex = -1;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
-  for (const anchor of anchors) {
-    const distance = manhattanDistance(anchor, target);
+  for (let index = 0; index < anchors.length; index += 1) {
+    const distance = manhattanDistance(anchors[index], target);
 
     if (distance < nearestDistance) {
-      nearest = anchor;
       nearestDistance = distance;
+      nearestIndex = index;
     }
   }
 
-  return nearest === null ? null : clonePoint(nearest);
+  return nearestIndex;
 }
 
-function bestTransferPair(
+function bestTransferIndexes(
   first: TransitService,
   second: TransitService,
-): { first: Point; second: Point } | null {
-  let best: { first: Point; second: Point; distance: number } | null = null;
+): { first: number; second: number } | null {
+  let best: { first: number; second: number; distance: number } | null = null;
 
-  for (const firstAnchor of first.anchors) {
-    for (const secondAnchor of second.anchors) {
-      const distance = manhattanDistance(firstAnchor, secondAnchor);
+  for (let firstIndex = 0; firstIndex < first.anchors.length; firstIndex += 1) {
+    for (
+      let secondIndex = 0;
+      secondIndex < second.anchors.length;
+      secondIndex += 1
+    ) {
+      const distance = manhattanDistance(
+        first.anchors[firstIndex],
+        second.anchors[secondIndex],
+      );
 
       if (best === null || distance < best.distance) {
-        best = { first: firstAnchor, second: secondAnchor, distance };
+        best = { first: firstIndex, second: secondIndex, distance };
       }
     }
   }
 
-  return best === null
-    ? null
-    : { first: clonePoint(best.first), second: clonePoint(best.second) };
+  return best === null ? null : { first: best.first, second: best.second };
 }
 
 export function findRoutePlan(
@@ -189,83 +202,48 @@ export function findRoutePlan(
     },
   ];
 
-  for (const route of state.transit.routes) {
-    if (!route.active) {
-      continue;
-    }
-
-    const routeStops = route.stopIds
-      .map((stopId) => state.transit.stops.find((stop) => stop.id === stopId))
-      .filter((stop): stop is Stop => stop !== undefined);
-    const originStop = nearestByPosition(routeStops, origin);
-    const destinationStop = nearestByPosition(routeStops, destination);
-
-    if (
-      originStop === null ||
-      destinationStop === null ||
-      originStop.id === destinationStop.id
-    ) {
-      continue;
-    }
-
-    candidates.push({
-      legs: [
-        walkLeg(origin, originStop.position),
-        transitLeg(
-          "bus",
-          originStop.position,
-          destinationStop.position,
-          route.id,
-        ),
-        walkLeg(destinationStop.position, destination),
-      ],
-      estimatedSeconds:
-        walkSeconds(origin, originStop.position) +
-        busSeconds(originStop.position, destinationStop.position) +
-        walkSeconds(destinationStop.position, destination),
-    });
-  }
-
-  for (const line of state.transit.metroLines) {
-    if (!line.active) {
-      continue;
-    }
-
-    const lineStations = line.stationIds
-      .map((stationId) =>
-        state.transit.stations.find((station) => station.id === stationId),
-      )
-      .filter((station): station is Station => station !== undefined);
-    const originStation = nearestByPosition(lineStations, origin);
-    const destinationStation = nearestByPosition(lineStations, destination);
-
-    if (
-      originStation === null ||
-      destinationStation === null ||
-      originStation.id === destinationStation.id
-    ) {
-      continue;
-    }
-
-    candidates.push({
-      legs: [
-        walkLeg(origin, originStation.position),
-        transitLeg(
-          "metro",
-          originStation.position,
-          destinationStation.position,
-          line.id,
-        ),
-        walkLeg(destinationStation.position, destination),
-      ],
-      estimatedSeconds:
-        walkSeconds(origin, originStation.position) +
-        metroSeconds(originStation.position, destinationStation.position) +
-        walkSeconds(destinationStation.position, destination),
-    });
-  }
-
   const services = activeServices(state);
+
+  for (const service of services) {
+    let originIndex = -1;
+    let destinationIndex = -1;
+    let originDistance = Number.POSITIVE_INFINITY;
+    let destinationDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < service.anchors.length; index += 1) {
+      const anchor = service.anchors[index];
+      const fromOrigin = manhattanDistance(anchor, origin);
+      const toDestination = manhattanDistance(anchor, destination);
+      if (fromOrigin < originDistance) {
+        originDistance = fromOrigin;
+        originIndex = index;
+      }
+      if (toDestination < destinationDistance) {
+        destinationDistance = toDestination;
+        destinationIndex = index;
+      }
+    }
+
+    if (originIndex === -1 || originIndex === destinationIndex) {
+      continue;
+    }
+
+    const boardAt = service.anchors[originIndex];
+    const alightAt = service.anchors[destinationIndex];
+    const steps = rideSteps(service.segments, originIndex, destinationIndex);
+
+    candidates.push({
+      legs: [
+        walkLeg(origin, boardAt),
+        transitLeg(service.mode, boardAt, alightAt, service.lineId),
+        walkLeg(alightAt, destination),
+      ],
+      estimatedSeconds:
+        walkSeconds(origin, boardAt) +
+        rideSeconds(service.mode, steps) +
+        walkSeconds(alightAt, destination),
+    });
+  }
 
   for (const first of services) {
     for (const second of services) {
@@ -273,27 +251,47 @@ export function findRoutePlan(
         continue;
       }
 
-      const firstStart = nearestAnchor(first.anchors, origin);
-      const secondEnd = nearestAnchor(second.anchors, destination);
-      const transfer = bestTransferPair(first, second);
+      const firstStartIndex = nearestAnchorIndex(first.anchors, origin);
+      const secondEndIndex = nearestAnchorIndex(second.anchors, destination);
+      const transfer = bestTransferIndexes(first, second);
 
-      if (firstStart === null || secondEnd === null || transfer === null) {
+      if (
+        firstStartIndex === -1 ||
+        secondEndIndex === -1 ||
+        transfer === null
+      ) {
         continue;
       }
+
+      const firstStart = first.anchors[firstStartIndex];
+      const secondEnd = second.anchors[secondEndIndex];
+      const transferFirst = first.anchors[transfer.first];
+      const transferSecond = second.anchors[transfer.second];
+
+      const firstSteps = rideSteps(
+        first.segments,
+        firstStartIndex,
+        transfer.first,
+      );
+      const secondSteps = rideSteps(
+        second.segments,
+        transfer.second,
+        secondEndIndex,
+      );
 
       candidates.push({
         legs: [
           walkLeg(origin, firstStart),
-          transitLeg(first.mode, firstStart, transfer.first, first.lineId),
-          walkLeg(transfer.first, transfer.second),
-          transitLeg(second.mode, transfer.second, secondEnd, second.lineId),
+          transitLeg(first.mode, firstStart, transferFirst, first.lineId),
+          walkLeg(transferFirst, transferSecond),
+          transitLeg(second.mode, transferSecond, secondEnd, second.lineId),
           walkLeg(secondEnd, destination),
         ],
         estimatedSeconds:
           walkSeconds(origin, firstStart) +
-          transitSeconds(first.mode, firstStart, transfer.first) +
-          walkSeconds(transfer.first, transfer.second) +
-          transitSeconds(second.mode, transfer.second, secondEnd) +
+          rideSeconds(first.mode, firstSteps) +
+          walkSeconds(transferFirst, transferSecond) +
+          rideSeconds(second.mode, secondSteps) +
           walkSeconds(secondEnd, destination),
       });
     }
