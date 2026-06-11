@@ -306,7 +306,9 @@ describe("transit network actions", () => {
   it("moves vehicles along their assigned line", () => {
     const state = createBusState();
 
-    const nextState = tickVehicles(state, 30);
+    // 8 steps per segment -> 0.8/8 = 0.1 progress/s; over 5s that is 0.5,
+    // still mid-segment (< 1) so progress stays > 0 without wrapping to 0.
+    const nextState = tickVehicles(state, 5);
 
     expect(nextState.transit.vehicles[0]?.progress).toBeGreaterThan(0);
   });
@@ -605,6 +607,21 @@ describe("transit network actions", () => {
     const nextState = tickVehicles(state, 30);
 
     expect(nextState.transit.vehicles).toEqual(state.transit.vehicles);
+  });
+});
+
+describe("distance-based vehicle movement", () => {
+  it("advances progress by speed/steps so longer segments take longer", () => {
+    // createBusState: stops (7,8)->(15,8), 8 steps per segment.
+    const state = createBusState();
+
+    const after1s = tickVehicles(state, 1);
+    // bus 0.8 tiles/s over 8 steps -> 0.1 progress/s
+    expect(after1s.transit.vehicles[0].progress).toBeCloseTo(0.1, 5);
+
+    const after10s = tickVehicles(state, 10);
+    // Segment completed exactly at 10s: vehicle disembarks and advances.
+    expect(after10s.transit.vehicles[0].segmentIndex).toBe(1);
   });
 });
 
