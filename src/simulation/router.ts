@@ -40,6 +40,10 @@ function walkSeconds(from: Point, to: Point): number {
  * closes the loop), and a segment with `n` tile positions takes `n - 1`
  * steps; an unexpectedly degenerate segment still counts as at least one
  * step so a ride is never free.
+ *
+ * Callers must pass valid indexes into `segments` when it is non-empty
+ * (activeServices guarantees anchors.length === segments.length), else the
+ * forward walk would never terminate.
  */
 function rideSteps(
   segments: Point[][],

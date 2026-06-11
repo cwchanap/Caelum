@@ -293,4 +293,22 @@ describe("path-length ride estimates", () => {
     const plan = findRoutePlan(state, { x: 7, y: 8 }, { x: 22, y: 8 });
     expect(plan?.legs.every((leg) => leg.mode === "walk")).toBe(true);
   });
+
+  it("rides forward around the loop when the alighting stop is behind the boarding stop", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
+    state = assignVehicle(state, "bus", "route-001");
+
+    // Origin beside stop-002 (index 1), destination beside stop-001 (index 0):
+    // vehicles only travel forward, so the ride wraps 1 -> 2 -> 0 through the
+    // closing segment: 7 + 15 = 22 steps. 90 + 22/0.8 = 117.5, plus 20s walk
+    // on each end.
+    const plan = findRoutePlan(state, { x: 16, y: 8 }, { x: 6, y: 8 });
+
+    expect(plan).not.toBeNull();
+    expect(plan?.estimatedSeconds).toBeCloseTo(20 + 117.5 + 20, 5);
+  });
 });
