@@ -65,8 +65,10 @@ describe("Game Runtime", () => {
     runtime.setHudCategory("manage");
     runtime.setTool("busStop");
     runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.handleTileClick({ x: 15, y: 8 });
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.handleTileClick({ x: 15, y: 8 });
 
     const beforeReset = runtime.getSnapshot();
     expect(beforeReset.state.paused).toBe(false);
@@ -75,7 +77,8 @@ describe("Game Runtime", () => {
     expect(beforeReset.ui.activeTool).toBe("busRoute");
     expect(beforeReset.ui.activeOverlay).toBe("growth");
     expect(beforeReset.ui.selectedId).toBe("5,5");
-    expect(beforeReset.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(beforeReset.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
+    expect(beforeReset.ui.draftStopPaths).toHaveLength(1);
     expect(beforeReset.ui.activeHudCategory).toBe("manage");
 
     runtime.resetUi();
@@ -89,6 +92,8 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.selectedId).toBe(null);
     expect(snapshot.ui.draftStopIds).toEqual([]);
     expect(snapshot.ui.draftStationIds).toEqual([]);
+    expect(snapshot.ui.draftStopPaths).toEqual([]);
+    expect(snapshot.ui.draftStationPaths).toEqual([]);
     expect(snapshot.ui.activeHudCategory).toBe("brief");
   });
 
@@ -317,8 +322,13 @@ describe("route creation and management", () => {
 
   it("removes a draft stop and cancels a draft", () => {
     const runtime = withTwoStops();
-    expect(runtime.removeDraftStop(0).ui.draftStopIds).toEqual(["stop-002"]);
-    expect(runtime.cancelRoute().ui.draftStopIds).toEqual([]);
+    const afterRemove = runtime.removeDraftStop(0);
+    expect(afterRemove.ui.draftStopIds).toEqual(["stop-002"]);
+    expect(afterRemove.ui.draftStopPaths).toEqual([]);
+
+    const afterCancel = runtime.cancelRoute();
+    expect(afterCancel.ui.draftStopIds).toEqual([]);
+    expect(afterCancel.ui.draftStopPaths).toEqual([]);
   });
 
   it("renames, recolors, toggles, selects, and deletes a route", () => {

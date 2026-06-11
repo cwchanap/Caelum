@@ -305,6 +305,55 @@ export function removeDraftStop(
     : { ...ui, draftStopIds: nextIds, draftStopPaths: nextPaths };
 }
 
+// Shared by the busRoute/metroLine click branches in handleTileClick: appends
+// `node` to the in-progress draft, computing the connecting path from the
+// previous draft node. Mirrors removeDraftStop's mode discriminator. Returns
+// the same `ui` reference (no-op) when the node repeats the last one or no
+// path connects it to the previous node, so callers can detect "no change".
+function appendDraftNode(
+  state: GameState,
+  ui: UiState,
+  node: Stop | Station,
+  mode: "bus" | "metro",
+): UiState {
+  const isMetro = mode === "metro";
+  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
+  if (ids.at(-1) === node.id) {
+    return ui;
+  }
+
+  const previousId = ids.at(-1);
+  if (previousId === undefined) {
+    return isMetro
+      ? { ...ui, draftStationIds: [node.id] }
+      : { ...ui, draftStopIds: [node.id] };
+  }
+
+  const nodes: Array<Stop | Station> = isMetro
+    ? state.transit.stations
+    : state.transit.stops;
+  const previous = nodes.find((n) => n.id === previousId);
+  const path =
+    previous === undefined
+      ? null
+      : findTilePath(state.map, previous.position, node.position, mode);
+  if (path === null) {
+    return ui;
+  }
+
+  return isMetro
+    ? {
+        ...ui,
+        draftStationIds: [...ids, node.id],
+        draftStationPaths: [...ui.draftStationPaths, path],
+      }
+    : {
+        ...ui,
+        draftStopIds: [...ids, node.id],
+        draftStopPaths: [...ui.draftStopPaths, path],
+      };
+}
+
 export function cancelDraftRoute(ui: UiState): UiState {
   if (ui.draftStopIds.length === 0 && ui.draftStationIds.length === 0) {
     return ui;
@@ -353,67 +402,22 @@ export function handleTileClick(
 
   if (ui.activeTool === "busRoute") {
     const stop = resolveStopAtTile(state, point);
-    if (stop === undefined || ui.draftStopIds.at(-1) === stop.id) {
+    if (stop === undefined) {
       return { state, ui };
     }
-
-    const previousId = ui.draftStopIds.at(-1);
-    if (previousId === undefined) {
-      return { state, ui: { ...ui, draftStopIds: [stop.id] } };
-    }
-
-    const previous = state.transit.stops.find((s) => s.id === previousId);
-    const path =
-      previous === undefined
-        ? null
-        : findTilePath(state.map, previous.position, stop.position, "bus");
-    if (path === null) {
-      return { state, ui };
-    }
-    return {
-      state,
-      ui: {
-        ...ui,
-        draftStopIds: [...ui.draftStopIds, stop.id],
-        draftStopPaths: [...ui.draftStopPaths, path],
-      },
-    };
+    const nextUi = appendDraftNode(state, ui, stop, "bus");
+    return { state, ui: nextUi };
   }
 
   if (ui.activeTool === "metroLine") {
     const station = state.transit.stations.find((candidate) =>
       samePoint(candidate.position, point),
     );
-    if (station === undefined || ui.draftStationIds.at(-1) === station.id) {
+    if (station === undefined) {
       return { state, ui };
     }
-
-    const previousId = ui.draftStationIds.at(-1);
-    if (previousId === undefined) {
-      return { state, ui: { ...ui, draftStationIds: [station.id] } };
-    }
-
-    const previous = state.transit.stations.find((s) => s.id === previousId);
-    const path =
-      previous === undefined
-        ? null
-        : findTilePath(
-            state.map,
-            previous.position,
-            station.position,
-            "metro",
-          );
-    if (path === null) {
-      return { state, ui };
-    }
-    return {
-      state,
-      ui: {
-        ...ui,
-        draftStationIds: [...ui.draftStationIds, station.id],
-        draftStationPaths: [...ui.draftStationPaths, path],
-      },
-    };
+    const nextUi = appendDraftNode(state, ui, station, "metro");
+    return { state, ui: nextUi };
   }
 
   if (ui.activeTool === "inspect") {

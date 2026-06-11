@@ -641,6 +641,19 @@ describe("draft route helpers", () => {
       ...createUiState(),
       activeTool: "busRoute" as const,
       draftStopIds: ["stop-001", "stop-002"],
+      draftStopPaths: [
+        [
+          { x: 7, y: 8 },
+          { x: 8, y: 8 },
+          { x: 9, y: 8 },
+          { x: 10, y: 8 },
+          { x: 11, y: 8 },
+          { x: 12, y: 8 },
+          { x: 13, y: 8 },
+          { x: 14, y: 8 },
+          { x: 15, y: 8 },
+        ],
+      ],
     };
     return { state, ui };
   }
@@ -741,6 +754,7 @@ describe("draft route helpers", () => {
     const { state, ui } = busDraft();
     const next = removeDraftStop(state, ui, 0);
     expect(next.draftStopIds).toEqual(["stop-002"]);
+    expect(next.draftStopPaths).toEqual([]);
   });
 
   it("removes a metro draft station by index", () => {
@@ -752,9 +766,23 @@ describe("draft route helpers", () => {
       ...createUiState(),
       activeTool: "metroLine" as const,
       draftStationIds: ["station-001", "station-002"],
+      draftStationPaths: [
+        [
+          { x: 7, y: 8 },
+          { x: 8, y: 8 },
+          { x: 9, y: 8 },
+          { x: 10, y: 8 },
+          { x: 11, y: 8 },
+          { x: 12, y: 8 },
+          { x: 13, y: 8 },
+          { x: 14, y: 8 },
+          { x: 15, y: 8 },
+        ],
+      ],
     };
     const next = removeDraftStop(state, ui, 1);
     expect(next.draftStationIds).toEqual(["station-001"]);
+    expect(next.draftStationPaths).toEqual([]);
   });
 
   it("cancels both drafts", () => {
