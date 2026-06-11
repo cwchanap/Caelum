@@ -85,5 +85,6 @@ test("create a metro line on laid track", async ({ page }) => {
   await page.getByRole("button", { name: /finish route/i }).click();
 
   await openHudCategory(page, "manage");
+  await expect(page.getByTestId("routes-panel")).toBeVisible();
   await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
 });
