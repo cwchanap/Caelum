@@ -184,6 +184,19 @@ describe("building catalog and footprints", () => {
     );
   });
 
+  it("allows metro station building on road + track crossings, matching the station tool rule", () => {
+    const state = createInitialGameState();
+    // (7,8) is a road tile in the initial map. Add track to create a crossing.
+    const crossing = withTrack(state, [{ x: 7, y: 8 }]);
+    expect(canPlaceBuilding(crossing, "metroStation", { x: 7, y: 8 }, 0)).toBe(
+      true,
+    );
+    // Non-metro buildings are still rejected on any track.
+    expect(canPlaceBuilding(crossing, "smallHouse", { x: 7, y: 8 }, 0)).toBe(
+      false,
+    );
+  });
+
   it("returns the original state object for invalid or unaffordable placement", () => {
     const state = createInitialGameState();
     const unaffordable = { ...state, budget: 1_999 };

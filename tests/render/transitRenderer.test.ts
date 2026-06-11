@@ -5,6 +5,8 @@ import { createUiState } from "../../src/ui/uiState";
 import {
   addBusRoute,
   addBusStop,
+  addMetroLine,
+  addMetroStation,
   assignVehicle,
   removeInfrastructureAtTile,
 } from "../../src/simulation/transit";
@@ -54,12 +56,23 @@ describe("renderTransit highlight", () => {
   });
 
   it("renders a draft preview", () => {
+    const mockCtx = ctx();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
       draftStopIds: ["stop-001", "stop-002"],
+      draftStopPaths: [
+        [
+          { x: 7, y: 8 },
+          { x: 8, y: 8 },
+          { x: 9, y: 8 },
+        ],
+      ],
     };
-    expect(() => renderTransit(ctx(), busState(), ui)).not.toThrow();
+    renderTransit(mockCtx, busState(), ui);
+    // The draft polyline was drawn — at minimum moveTo + lineTo for the path.
+    expect(mockCtx.moveTo).toHaveBeenCalled();
+    expect(mockCtx.lineTo).toHaveBeenCalled();
   });
 
   it("draws the route line through the road path tiles, not stop-to-stop", () => {
@@ -116,4 +129,47 @@ describe("renderTransit highlight", () => {
     // Vehicles are drawn via fillRect(point.x-7, point.y-14, 14, 8).
     expect(context.fillRect).toHaveBeenCalledWith(361, 258, 14, 8);
   });
+
+  it("parks a metro vehicle at the segment-start station when its line is broken", () => {
+    let state = createInitialGameState();
+    // Track under stations (7,8) and (15,8) with a connecting track run.
+    state = withTrack(state, [
+      { x: 7, y: 8 },
+      { x: 8, y: 8 },
+      { x: 9, y: 8 },
+      { x: 10, y: 8 },
+      { x: 11, y: 8 },
+      { x: 12, y: 8 },
+      { x: 13, y: 8 },
+      { x: 14, y: 8 },
+      { x: 15, y: 8 },
+    ]);
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = assignVehicle(state, "metro", "metro-001");
+
+    // Sever the connecting track at (11,8) so the line becomes broken.
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    expect(state.transit.metroLines[0].pathBroken).toBe(true);
+
+    const context = ctx();
+    renderTransit(context, state, createUiState());
+
+    // Parked at station-001 (7,8), centre = (7*32+16, 8*32+16) = (240, 272).
+    expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
+  });
 });
+
+function withTrack(state: ReturnType<typeof createInitialGameState>, points: Array<{ x: number; y: number }>): ReturnType<typeof createInitialGameState> {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
+      ),
+    },
+  };
+}

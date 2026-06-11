@@ -1719,6 +1719,73 @@ describe("recomputeRoutePaths", () => {
     expect(restored.transit.routes[0].pathBroken).toBe(false);
     expect(restored.transit.routes[0].segments[0]).toHaveLength(9);
   });
+
+  it("marks a metro line broken when track on its path is removed, parks the vehicle, and disembarks passengers", () => {
+    // Build a working metro line with continuous track.
+    let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = assignVehicle(state, "metro", "metro-001");
+
+    // Put a rider on board.
+    const rider: Citizen = {
+      ...state.citizens[0],
+      status: "riding",
+      routePlan: {
+        legs: [
+          {
+            mode: "metro",
+            from: { x: 7, y: 8 },
+            to: { x: 15, y: 8 },
+            lineId: "metro-001",
+          },
+        ],
+        estimatedSeconds: 60,
+      },
+      currentLegIndex: 0,
+    };
+    state = {
+      ...state,
+      citizens: [rider, ...state.citizens.slice(1)],
+      transit: {
+        ...state.transit,
+        vehicles: state.transit.vehicles.map((v) => ({
+          ...v,
+          passengerIds: [rider.id],
+          progress: 0.5,
+        })),
+      },
+    };
+
+    // Sever the connecting track, then recompute.
+    const severed = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 11 && tile.y === 8
+            ? { ...tile, hasTrack: false }
+            : tile,
+        ),
+      },
+    };
+    const result = recomputeRoutePaths(severed);
+
+    const line = result.transit.metroLines[0];
+    expect(line.pathBroken).toBe(true);
+    expect(line.active).toBe(true);
+
+    const vehicle = result.transit.vehicles[0];
+    expect(vehicle.passengerIds).toEqual([]);
+    expect(vehicle.progress).toBe(0);
+
+    const citizen = result.citizens[0];
+    expect(citizen.status).toBe("idle");
+    expect(citizen.routePlan).toBeNull();
+    expect(citizen.position).toEqual({ x: 7, y: 8 });
+  });
 });
 
 describe("laying and removing infrastructure", () => {
@@ -1752,6 +1819,13 @@ describe("laying and removing infrastructure", () => {
     const broke = { ...createInitialGameState(), budget: 50 };
     expect(layRoad(broke, { x: 8, y: 2 })).toBe(broke);
     expect(layTrack(broke, { x: 8, y: 2 })).toBe(broke);
+  });
+
+  it("allows laying when budget equals the exact cost (boundary check)", () => {
+    const exact = { ...createInitialGameState(), budget: 100 };
+    const next = layRoad(exact, { x: 8, y: 2 });
+    expect(next.map.tiles.find((t) => t.x === 8 && t.y === 2)?.kind).toBe("road");
+    expect(next.budget).toBe(0); // 100 - 100
   });
 
   it("re-laying a severed road tile restores a broken route", () => {

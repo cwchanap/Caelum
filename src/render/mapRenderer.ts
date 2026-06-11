@@ -22,6 +22,7 @@ export function renderMap(
   );
 
   if (trackKeys.size > 0) {
+    ctx.save();
     ctx.strokeStyle = colors.track;
     ctx.lineWidth = 4;
     ctx.lineCap = "round";
@@ -59,5 +60,6 @@ export function renderMap(
         ctx.stroke();
       }
     }
+    ctx.restore();
   }
 }

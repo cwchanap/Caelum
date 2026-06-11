@@ -139,6 +139,41 @@ describe("findTilePath", () => {
       findTilePath(state.map, { x: -1, y: 8 }, { x: 7, y: 8 }, "bus"),
     ).toBeNull();
   });
+
+  it("returns null when adjacent endpoints are both non-traversable for buses", () => {
+    const state = createInitialGameState();
+    // (1,2) and (1,3) are empty tiles with no road connection between them.
+    expect(
+      findTilePath(state.map, { x: 1, y: 2 }, { x: 1, y: 3 }, "bus"),
+    ).toBeNull();
+  });
+
+  it("returns null when adjacent endpoints are both non-traversable for metro", () => {
+    const state = createInitialGameState();
+    // No track on any tile by default; both are non-traversable for metro.
+    expect(
+      findTilePath(state.map, { x: 1, y: 2 }, { x: 1, y: 3 }, "metro"),
+    ).toBeNull();
+  });
+
+  it("rejects the degenerate adjacent-empty path and finds the valid road-connected alternative", () => {
+    const state = createInitialGameState();
+    // (8,7) and (9,7) are both empty and adjacent above the y=8 road row.
+    // The degenerate 2-tile path is rejected; BFS finds the road path:
+    // (8,7)→(8,8)→(9,8)→(9,7).
+    const path = findTilePath(
+      state.map,
+      { x: 8, y: 7 },
+      { x: 9, y: 7 },
+      "bus",
+    );
+    expect(path).not.toBeNull();
+    expect(path).toHaveLength(4);
+    expect(path?.[0]).toEqual({ x: 8, y: 7 });
+    expect(path?.[1]).toEqual({ x: 8, y: 8 }); // road
+    expect(path?.[2]).toEqual({ x: 9, y: 8 }); // road
+    expect(path?.[3]).toEqual({ x: 9, y: 7 });
+  });
 });
 
 describe("computeRouteSegments", () => {
