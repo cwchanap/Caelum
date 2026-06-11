@@ -848,7 +848,10 @@ describe("draft route path validation", () => {
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
-    return { state, ui: { ...createUiState(), activeTool: "busRoute" as const } };
+    return {
+      state,
+      ui: { ...createUiState(), activeTool: "busRoute" as const },
+    };
   }
 
   it("appends a stop and its connecting path when a road path exists", () => {
