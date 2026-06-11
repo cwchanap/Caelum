@@ -57,3 +57,33 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await page.getByTestId("route-delete-route-001").click();
   await expect(page.getByTestId("route-name-route-001")).toHaveCount(0);
 });
+
+test("create a metro line on laid track", async ({ page }) => {
+  await page.goto(appUrl);
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // Lay a 5-tile track run on empty ground.
+  await openHudCategory(page, "build");
+  await page.locator("[data-tool='track']").click();
+  for (let x = 8; x <= 12; x += 1) {
+    await clickMapTile(canvas, { x, y: 2 });
+  }
+
+  // Stations on the track ends (Metro Station building requires track).
+  await page.getByRole("button", { name: "Metro Station" }).click();
+  await clickMapTile(canvas, { x: 8, y: 2 });
+  await clickMapTile(canvas, { x: 12, y: 2 });
+
+  // Connect them with a metro line.
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Metro Line" }).click();
+  await clickMapTile(canvas, { x: 8, y: 2 });
+  await clickMapTile(canvas, { x: 12, y: 2 });
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await page.getByRole("button", { name: /finish route/i }).click();
+
+  await openHudCategory(page, "manage");
+  await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
+});
