@@ -1,4 +1,10 @@
-import type { GameState, Point, Vehicle } from "../domain/types";
+import type {
+  GameState,
+  MetroLine,
+  Point,
+  Route,
+  Vehicle,
+} from "../domain/types";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
@@ -73,35 +79,68 @@ function stationPositions(
   return stationIds.map((stationId) => stationById.get(stationId) ?? null);
 }
 
+/**
+ * Positions used to draw a route/line polyline. Broken or segment-less lines
+ * fall back to straight stop-to-stop/station-to-station lines as the visible
+ * "off the network" cue; otherwise the line follows the stored tile path.
+ */
+function lineDrawPositions(
+  state: GameState,
+  line: { segments: Point[][]; pathBroken: boolean },
+  fallbackIds: string[],
+  kind: "stops" | "stations",
+): Array<Point | null> {
+  if (line.pathBroken || line.segments.length === 0) {
+    return kind === "stops"
+      ? routePositions(state, fallbackIds)
+      : stationPositions(state, fallbackIds);
+  }
+  return line.segments.flat();
+}
+
 function vehiclePosition(state: GameState, vehicle: Vehicle): Point | null {
-  const positions =
+  const line =
     vehicle.mode === "bus"
-      ? routePositions(
-          state,
-          state.transit.routes.find((route) => route.id === vehicle.lineId)
-            ?.stopIds ?? [],
-        )
-      : stationPositions(
-          state,
-          state.transit.metroLines.find((line) => line.id === vehicle.lineId)
-            ?.stationIds ?? [],
-        );
-
-  if (positions.length < 2) {
+      ? state.transit.routes.find((route) => route.id === vehicle.lineId)
+      : state.transit.metroLines.find((l) => l.id === vehicle.lineId);
+  if (line === undefined) {
+    return null;
+  }
+  const ids =
+    vehicle.mode === "bus"
+      ? (line as Route).stopIds
+      : (line as MetroLine).stationIds;
+  const nodePositions =
+    vehicle.mode === "bus"
+      ? routePositions(state, ids)
+      : stationPositions(state, ids);
+  if (nodePositions.length < 2) {
     return null;
   }
 
+  const segmentCount =
+    line.segments.length > 0 ? line.segments.length : nodePositions.length;
   const segmentIndex =
-    ((vehicle.segmentIndex % positions.length) + positions.length) %
-    positions.length;
-  const from = positions[segmentIndex];
-  const to = positions[(segmentIndex + 1) % positions.length];
+    ((vehicle.segmentIndex % segmentCount) + segmentCount) % segmentCount;
+  const segment = line.segments[segmentIndex];
 
-  if (from === null || to === null) {
-    return null;
+  if (line.pathBroken || segment === undefined || segment.length === 0) {
+    // Parked at the segment-start stop while the network is broken.
+    const parked = nodePositions[segmentIndex % nodePositions.length];
+    return parked === null ? null : center(parked);
   }
 
-  return interpolate(from, to, vehicle.progress);
+  const steps = segment.length - 1;
+  if (steps <= 0) {
+    return center(segment[0]);
+  }
+  const along = Math.max(0, Math.min(1, vehicle.progress)) * steps;
+  const tileIndex = Math.min(Math.floor(along), steps - 1);
+  return interpolate(
+    segment[tileIndex],
+    segment[tileIndex + 1],
+    along - tileIndex,
+  );
 }
 
 export function renderTransit(
@@ -115,7 +154,12 @@ export function renderTransit(
   if (ui.selectedRouteId !== null) {
     const route = state.transit.routes.find((r) => r.id === ui.selectedRouteId);
     if (route !== undefined) {
-      drawPolyline(ctx, routePositions(state, route.stopIds), "#ffffffaa", 9);
+      drawPolyline(
+        ctx,
+        lineDrawPositions(state, route, route.stopIds, "stops"),
+        "#ffffffaa",
+        9,
+      );
     }
     const line = state.transit.metroLines.find(
       (l) => l.id === ui.selectedRouteId,
@@ -123,7 +167,7 @@ export function renderTransit(
     if (line !== undefined) {
       drawPolyline(
         ctx,
-        stationPositions(state, line.stationIds),
+        lineDrawPositions(state, line, line.stationIds, "stations"),
         "#ffffffaa",
         12,
       );
@@ -131,28 +175,35 @@ export function renderTransit(
   }
 
   for (const route of state.transit.routes) {
-    drawPolyline(ctx, routePositions(state, route.stopIds), route.color, 5);
+    drawPolyline(
+      ctx,
+      lineDrawPositions(state, route, route.stopIds, "stops"),
+      route.color,
+      5,
+    );
   }
 
   for (const line of state.transit.metroLines) {
-    drawPolyline(ctx, stationPositions(state, line.stationIds), line.color, 8);
+    drawPolyline(
+      ctx,
+      lineDrawPositions(state, line, line.stationIds, "stations"),
+      line.color,
+      8,
+    );
   }
 
-  // Draft preview: dashed stroke through the in-progress stops/stations.
-  const draftIds =
+  // Draft preview: dashed stroke through the in-progress stops/stations,
+  // following the stored draft tile paths so it matches the network.
+  const draftPaths =
     ui.activeTool === "busRoute"
-      ? ui.draftStopIds
+      ? ui.draftStopPaths
       : ui.activeTool === "metroLine"
-        ? ui.draftStationIds
+        ? ui.draftStationPaths
         : [];
-  if (draftIds.length >= 1) {
-    const positions =
-      ui.activeTool === "busRoute"
-        ? routePositions(state, draftIds)
-        : stationPositions(state, draftIds);
+  if (draftPaths.length >= 1) {
     ctx.save();
     ctx.setLineDash([6, 6]);
-    drawPolyline(ctx, positions, "#f4d35e", 3);
+    drawPolyline(ctx, draftPaths.flat(), "#f4d35e", 3);
     ctx.restore();
   }
 

@@ -60,4 +60,19 @@ describe("renderTransit highlight", () => {
     };
     expect(() => renderTransit(ctx(), busState(), ui)).not.toThrow();
   });
+
+  it("draws the route line through the road path tiles, not stop-to-stop", () => {
+    // Stops at (7,8) and (15,4): the path runs along y=8 then up x=15, so the
+    // polyline must include the corner tile (15,8) — a straight line would not.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 4 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+
+    const context = ctx();
+    renderTransit(context, state, createUiState());
+
+    // tileSize=32: corner tile (15,8) centre = (15*32+16, 8*32+16) = (496, 272).
+    expect(context.lineTo).toHaveBeenCalledWith(496, 272);
+  });
 });
