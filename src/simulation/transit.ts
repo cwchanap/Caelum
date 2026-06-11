@@ -451,17 +451,17 @@ function resolveLineSegments(
   ids: string[],
   positionById: Map<string, Point>,
   mode: "bus" | "metro",
-): { positions: Point[]; segments: Point[][] } {
+): { positions: Point[]; segments: Point[][]; idsMissing: boolean } {
   const positions = ids
     .map((id) => positionById.get(id))
     .filter((position): position is Point => position !== undefined)
     .map(clonePoint);
-  const segments =
-    positions.length === ids.length
-      ? computeRouteSegments(map, positions, mode)
-      : [];
+  const idsMissing = positions.length !== ids.length;
+  const segments = idsMissing
+    ? []
+    : computeRouteSegments(map, positions, mode);
 
-  return { positions, segments };
+  return { positions, segments, idsMissing };
 }
 
 export function addBusRoute(state: GameState, stopIds: string[]): GameState {
@@ -476,7 +476,7 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
   const stopPositionById = new Map(
     state.transit.stops.map((stop) => [stop.id, stop.position]),
   );
-  const { segments } = resolveLineSegments(
+  const { segments, idsMissing } = resolveLineSegments(
     state.map,
     stopIds,
     stopPositionById,
@@ -504,7 +504,7 @@ export function addBusRoute(state: GameState, stopIds: string[]): GameState {
           vehicleIds: [],
           active,
           segments,
-          pathBroken: hasBrokenSegment(segments),
+          pathBroken: idsMissing || hasBrokenSegment(segments),
         },
       ],
     },
@@ -526,7 +526,7 @@ export function addMetroLine(
   const stationPositionById = new Map(
     state.transit.stations.map((station) => [station.id, station.position]),
   );
-  const { segments } = resolveLineSegments(
+  const { segments, idsMissing } = resolveLineSegments(
     state.map,
     stationIds,
     stationPositionById,
@@ -554,7 +554,7 @@ export function addMetroLine(
           vehicleIds: [],
           active,
           segments,
-          pathBroken: hasBrokenSegment(segments),
+          pathBroken: idsMissing || hasBrokenSegment(segments),
         },
       ],
     },
@@ -648,13 +648,13 @@ export function recomputeRoutePaths(state: GameState): GameState {
     positionById: Map<string, Point>,
     mode: "bus" | "metro",
   ): T => {
-    const { positions, segments } = resolveLineSegments(
+    const { positions, segments, idsMissing } = resolveLineSegments(
       state.map,
       nodeIds,
       positionById,
       mode,
     );
-    const pathBroken = hasBrokenSegment(segments);
+    const pathBroken = idsMissing || hasBrokenSegment(segments);
 
     if (pathBroken && !line.pathBroken) {
       const parkedPositionByCitizenId = new Map<string, Point>();
@@ -1058,9 +1058,8 @@ export function tickVehicles(
       (TILES_PER_SECOND[vehicle.mode] * deltaSeconds) / steps;
 
     if (progress < 1) {
-      const nextVehicle = { ...boarded.vehicle, progress };
-      changed = changed || nextVehicle !== vehicle;
-      return nextVehicle;
+      changed = true;
+      return { ...boarded.vehicle, progress };
     }
 
     const reachedPosition =

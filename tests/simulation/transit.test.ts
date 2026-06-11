@@ -1606,6 +1606,32 @@ describe("route path segments", () => {
     const rejected = assignVehicle(state, "metro", "metro-001");
     expect(rejected).toBe(state);
   });
+
+  it("sets pathBroken=true when a bus route references a dangling stop id", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    // Create a route with one real stop and one dangling id that maps to
+    // no stop in state.transit.stops.
+    state = addBusRoute(state, ["stop-001", "stop-999"]);
+
+    const route = state.transit.routes[0];
+    expect(route.active).toBe(false); // only one distinct valid stop
+    expect(route.pathBroken).toBe(true); // dangling id → broken
+    expect(route.segments).toEqual([]);
+  });
+
+  it("sets pathBroken=true when a metro line references a dangling station id", () => {
+    let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 22));
+    state = addMetroStation(state, { x: 7, y: 8 });
+    // station-999 does not exist in state.transit.stations.
+    state = addMetroLine(state, ["station-001", "station-999"]);
+
+    const line = state.transit.metroLines[0];
+    expect(line.active).toBe(false);
+    expect(line.pathBroken).toBe(true);
+    expect(line.segments).toEqual([]);
+  });
 });
 
 function removeRoadAt(state: GameState, point: Point): GameState {
