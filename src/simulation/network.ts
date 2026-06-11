@@ -85,10 +85,7 @@ export function findTilePath(
         // zero traversable tiles — which is never a valid transit connection.
         if (path.length === 2) {
           const fromTile = tileByKey.get(fromKey)!;
-          if (
-            !isTraversable(fromTile, mode) &&
-            !isTraversable(tile, mode)
-          ) {
+          if (!isTraversable(fromTile, mode) && !isTraversable(tile, mode)) {
             // Undo the parents entry so the BFS can find a longer valid route.
             parents.delete(nextKey);
             continue;
