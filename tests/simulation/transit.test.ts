@@ -1765,9 +1765,7 @@ describe("recomputeRoutePaths", () => {
       map: {
         ...state.map,
         tiles: state.map.tiles.map((tile) =>
-          tile.x === 11 && tile.y === 8
-            ? { ...tile, hasTrack: false }
-            : tile,
+          tile.x === 11 && tile.y === 8 ? { ...tile, hasTrack: false } : tile,
         ),
       },
     };
@@ -1824,7 +1822,9 @@ describe("laying and removing infrastructure", () => {
   it("allows laying when budget equals the exact cost (boundary check)", () => {
     const exact = { ...createInitialGameState(), budget: 100 };
     const next = layRoad(exact, { x: 8, y: 2 });
-    expect(next.map.tiles.find((t) => t.x === 8 && t.y === 2)?.kind).toBe("road");
+    expect(next.map.tiles.find((t) => t.x === 8 && t.y === 2)?.kind).toBe(
+      "road",
+    );
     expect(next.budget).toBe(0); // 100 - 100
   });
 

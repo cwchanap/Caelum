@@ -161,12 +161,7 @@ describe("findTilePath", () => {
     // (8,7) and (9,7) are both empty and adjacent above the y=8 road row.
     // The degenerate 2-tile path is rejected; BFS finds the road path:
     // (8,7)→(8,8)→(9,8)→(9,7).
-    const path = findTilePath(
-      state.map,
-      { x: 8, y: 7 },
-      { x: 9, y: 7 },
-      "bus",
-    );
+    const path = findTilePath(state.map, { x: 8, y: 7 }, { x: 9, y: 7 }, "bus");
     expect(path).not.toBeNull();
     expect(path).toHaveLength(4);
     expect(path?.[0]).toEqual({ x: 8, y: 7 });

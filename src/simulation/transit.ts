@@ -457,9 +457,7 @@ function resolveLineSegments(
     .filter((position): position is Point => position !== undefined)
     .map(clonePoint);
   const idsMissing = positions.length !== ids.length;
-  const segments = idsMissing
-    ? []
-    : computeRouteSegments(map, positions, mode);
+  const segments = idsMissing ? [] : computeRouteSegments(map, positions, mode);
 
   return { positions, segments, idsMissing };
 }

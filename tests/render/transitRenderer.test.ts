@@ -161,7 +161,10 @@ describe("renderTransit highlight", () => {
   });
 });
 
-function withTrack(state: ReturnType<typeof createInitialGameState>, points: Array<{ x: number; y: number }>): ReturnType<typeof createInitialGameState> {
+function withTrack(
+  state: ReturnType<typeof createInitialGameState>,
+  points: Array<{ x: number; y: number }>,
+): ReturnType<typeof createInitialGameState> {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
   return {
     ...state,
