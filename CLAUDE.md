@@ -49,6 +49,7 @@ The central rule: **`createGameRuntime()` (`src/runtime/createGameRuntime.ts`) i
 `applyDueGrowthWaves` → `tickVehicles` → `tickCitizens` → `evaluateObjectives`. Every step takes a `GameState` and returns a new one.
 
 **Layers (`src/`):**
+
 - `domain/` — `types.ts` is the shared data model (`GameState`, `Citizen`, `TransitNetwork`, `Tool`, etc.); `ids.ts` generates stable IDs (`tileId`, zero-padded `entityId`, `nextEntityId`).
 - `simulation/` — pure sim: `gameState.ts` (initial state), `map.ts` (growth waves), `transit.ts` (stops/routes/vehicles), `citizens.ts`, `router.ts` (multi-leg walk/bus/metro trip planning), `buildings.ts`, `objectives.ts`.
 - `scenario/growingSuburb.ts` — the single built-in scenario: map layout, starting citizens, timed growth waves, win/loss objectives.
