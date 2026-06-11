@@ -368,6 +368,9 @@ function disembarkVehicle(
         (passengerId) => !disembarkingPassengerIds.has(passengerId),
       ),
       segmentIndex: (vehicle.segmentIndex + 1) % stopCount,
+      // Carry assumes consecutive segments have similar step counts;
+      // overshoot is at most one tick's progress, so any speed
+      // discontinuity is sub-tile.
       progress: vehicle.progress % 1,
     },
   };
@@ -1042,14 +1045,14 @@ export function tickVehicles(
 
     // segments.length normally matches linePositions.length: !pathBroken
     // guarantees every consecutive pair (including the closing loop) has a
-    // non-empty path. Some hand-built test fixtures set segments: [] while
-    // still providing >= 2 positions; fall back to a single-tile segment
-    // (steps = 1) so movement stays defined instead of throwing.
+    // non-empty path.
     const segment =
       segments.length === 0
         ? undefined
         : segments[vehicle.segmentIndex % segments.length];
-    const steps = Math.max(1, (segment?.length ?? 2) - 1);
+    // Real lines always carry populated segments when !pathBroken; treat a
+    // missing segment as a single step so a malformed line still advances.
+    const steps = segment === undefined ? 1 : Math.max(1, segment.length - 1);
     const progress =
       boarded.vehicle.progress +
       (TILES_PER_SECOND[vehicle.mode] * deltaSeconds) / steps;

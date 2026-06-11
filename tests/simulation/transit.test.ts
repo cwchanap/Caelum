@@ -67,6 +67,22 @@ function trackRow(y: number, fromX: number, toX: number): Point[] {
   }));
 }
 
+/** Inclusive tile run along a row, in either direction. */
+function rowPath(y: number, fromX: number, toX: number): Point[] {
+  const step = fromX <= toX ? 1 : -1;
+  const out: Point[] = [];
+  for (let x = fromX; ; x += step) {
+    out.push({ x, y });
+    if (x === toX) break;
+  }
+  return out;
+}
+
+/** Two-segment loop for a 2-node line along row y between x=fromX and x=toX. */
+function loopSegments(y: number, fromX: number, toX: number): Point[][] {
+  return [rowPath(y, fromX, toX), rowPath(y, toX, fromX)];
+}
+
 describe("transit network actions", () => {
   it("adds a bus stop on a valid road tile and charges the budget", () => {
     const state = createInitialGameState();
@@ -690,7 +706,7 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
-            segments: [],
+            segments: loopSegments(8, 7, 15),
             pathBroken: false,
           },
         ],
@@ -773,7 +789,7 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
-            segments: [],
+            segments: loopSegments(8, 7, 15),
             pathBroken: false,
           },
         ],
@@ -873,7 +889,7 @@ describe("on-platform boarding gate", () => {
       stationIds: ["station-001", "station-002"],
       vehicleIds: ["metro-vehicle-001"],
       active: true,
-      segments: [],
+      segments: loopSegments(8, 7, 15),
       pathBroken: false,
     };
 
@@ -982,7 +998,7 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001", "vehicle-002"],
             active: true,
-            segments: [],
+            segments: loopSegments(8, 7, 15),
             pathBroken: false,
           },
         ],
@@ -1098,7 +1114,7 @@ describe("on-platform boarding gate", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: ["vehicle-001"],
             active: true,
-            segments: [],
+            segments: loopSegments(8, 7, 15),
             pathBroken: false,
           },
         ],
