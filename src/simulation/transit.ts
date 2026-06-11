@@ -37,6 +37,9 @@ export const COSTS = {
   track: 500,
 } as const;
 
+/** Vehicle speeds in tiles per second; ride time = path steps / speed. */
+export const TILES_PER_SECOND = { bus: 0.8, metro: 1.6 } as const;
+
 function canAfford(state: GameState, cost: number): boolean {
   return state.budget >= cost;
 }
@@ -187,10 +190,10 @@ export function stopCoverageRadius(stop: Stop): number {
   return stop.kind === "busTerminal" ? 4 : 2;
 }
 
-function assignedLinePositions(
+function assignedLineData(
   state: GameState,
   vehicle: Vehicle,
-): Point[] | null {
+): { positions: Point[]; segments: Point[][] } | null {
   if (vehicle.mode === "bus") {
     const route: Route | undefined = state.transit.routes.find(
       (candidate) => candidate.id === vehicle.lineId,
@@ -205,7 +208,10 @@ function assignedLinePositions(
       !route.pathBroken &&
       positions !== undefined &&
       positions.every((position) => position !== undefined)
-      ? positions.map((position) => clonePoint(position))
+      ? {
+          positions: positions.map((position) => clonePoint(position)),
+          segments: route.segments,
+        }
       : null;
   }
 
@@ -224,7 +230,10 @@ function assignedLinePositions(
     !metroLine.pathBroken &&
     positions !== undefined &&
     positions.every((position) => position !== undefined)
-    ? positions.map((position) => clonePoint(position))
+    ? {
+        positions: positions.map((position) => clonePoint(position)),
+        segments: metroLine.segments,
+      }
     : null;
 }
 
@@ -1005,11 +1014,12 @@ export function tickVehicles(
   }
 
   const vehicles = state.transit.vehicles.map((vehicle) => {
-    const linePositions = assignedLinePositions(state, vehicle);
+    const lineData = assignedLineData(state, vehicle);
 
-    if (linePositions === null || linePositions.length < 2) {
+    if (lineData === null || lineData.positions.length < 2) {
       return vehicle;
     }
+    const { positions: linePositions, segments } = lineData;
 
     const currentPosition =
       linePositions[vehicle.segmentIndex % linePositions.length];
@@ -1030,8 +1040,19 @@ export function tickVehicles(
         : { citizens, vehicle };
     citizens = boarded.citizens;
 
-    const speed = vehicle.mode === "bus" ? 0.08 : 0.14;
-    const progress = boarded.vehicle.progress + speed * deltaSeconds;
+    // segments.length normally matches linePositions.length: !pathBroken
+    // guarantees every consecutive pair (including the closing loop) has a
+    // non-empty path. Some hand-built test fixtures set segments: [] while
+    // still providing >= 2 positions; fall back to a single-tile segment
+    // (steps = 1) so movement stays defined instead of throwing.
+    const segment =
+      segments.length === 0
+        ? undefined
+        : segments[vehicle.segmentIndex % segments.length];
+    const steps = Math.max(1, (segment?.length ?? 2) - 1);
+    const progress =
+      boarded.vehicle.progress +
+      (TILES_PER_SECOND[vehicle.mode] * deltaSeconds) / steps;
 
     if (progress < 1) {
       const nextVehicle = { ...boarded.vehicle, progress };
