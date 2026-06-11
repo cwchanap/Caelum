@@ -7,6 +7,7 @@
   import { BUILDING_CATALOG } from "../../../simulation/buildings";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
+  type NetworkTool = Extract<Tool, "road" | "track">;
 
   interface Props {
     activeTool: Tool;
@@ -29,6 +30,11 @@
   const globalTools: Array<{ id: GlobalTool; label: string }> = [
     { id: "inspect", label: "Inspect" },
     { id: "remove", label: "Remove" },
+  ];
+
+  const networkTools: Array<{ id: NetworkTool; label: string }> = [
+    { id: "road", label: "Road" },
+    { id: "track", label: "Track" },
   ];
 
   const buildToolIds: BuildingType[] = [
@@ -69,8 +75,27 @@
     </div>
   </section>
 
+  <section class="panel-section">
+    <h3 class="section-head"><span class="num">02</span> Network</h3>
+    <div class="toolbar toolbar--compact" aria-label="Network tools">
+      {#each networkTools as tool, index (tool.id)}
+        <button
+          type="button"
+          data-tool={tool.id}
+          aria-pressed={selectedBuilding === null && activeTool === tool.id}
+          aria-label={tool.label}
+          class:active={selectedBuilding === null && activeTool === tool.id}
+          onclick={() => onSetTool(tool.id)}
+        >
+          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
+          <span class="tool-label" aria-hidden="true">{tool.label}</span>
+        </button>
+      {/each}
+    </div>
+  </section>
+
   <section class="panel-section build-section">
-    <h3 class="section-head"><span class="num">02</span> Build</h3>
+    <h3 class="section-head"><span class="num">03</span> Build</h3>
     <div class="toolbar" aria-label="Build tools">
       {#each buildTools as building, index (building.id)}
         <button
