@@ -176,7 +176,7 @@ function tickCitizen(
   if (routePlan === null) {
     const plannedRoute = findRoutePlan(
       state,
-      nextCitizen.home,
+      nextCitizen.position,
       nextCitizen.destination,
     );
 
