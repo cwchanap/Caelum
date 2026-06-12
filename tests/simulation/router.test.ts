@@ -311,4 +311,24 @@ describe("path-length ride estimates", () => {
     expect(plan).not.toBeNull();
     expect(plan?.estimatedSeconds).toBeCloseTo(20 + 117.5 + 20, 5);
   });
+
+  it("picks the optimal boarding stop, not just the nearest by walk distance", () => {
+    // Three stops at (7,8), (15,8), (22,8). Origin at (11,0) is equidistant
+    // from stops 0 and 1 (both 12 tiles walk). Boarding at stop 1 (15,8)
+    // has a shorter ride to stop 2 (22,8) than boarding at stop 0 (7,8).
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
+    state = assignVehicle(state, "bus", "route-001");
+
+    const plan = findRoutePlan(state, { x: 11, y: 0 }, { x: 22, y: 8 });
+
+    expect(plan).not.toBeNull();
+    // Board at (15,8): walk 240 + ride(15→22, 7 steps) = 90 + 7/0.8 = 98.75 = 338.75
+    // Board at (7,8):  walk 240 + ride(7→22, 15 steps) = 90 + 15/0.8 = 108.75 = 348.75
+    expect(plan?.estimatedSeconds).toBeCloseTo(338.75, 5);
+    expect(plan?.legs[1]?.from).toEqual({ x: 15, y: 8 });
+  });
 });

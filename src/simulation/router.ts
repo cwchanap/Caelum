@@ -209,44 +209,43 @@ export function findRoutePlan(
   const services = activeServices(state);
 
   for (const service of services) {
-    let originIndex = -1;
-    let destinationIndex = -1;
-    let originDistance = Number.POSITIVE_INFINITY;
-    let destinationDistance = Number.POSITIVE_INFINITY;
+    // Evaluate every valid board/alight pair so the global bestCandidate
+    // comparison considers ride-time differences, not just walk distance.
+    for (
+      let boardIndex = 0;
+      boardIndex < service.anchors.length;
+      boardIndex += 1
+    ) {
+      for (
+        let alightIndex = 0;
+        alightIndex < service.anchors.length;
+        alightIndex += 1
+      ) {
+        if (boardIndex === alightIndex) {
+          continue;
+        }
 
-    for (let index = 0; index < service.anchors.length; index += 1) {
-      const anchor = service.anchors[index];
-      const fromOrigin = manhattanDistance(anchor, origin);
-      const toDestination = manhattanDistance(anchor, destination);
-      if (fromOrigin < originDistance) {
-        originDistance = fromOrigin;
-        originIndex = index;
-      }
-      if (toDestination < destinationDistance) {
-        destinationDistance = toDestination;
-        destinationIndex = index;
+        const boardAt = service.anchors[boardIndex];
+        const alightAt = service.anchors[alightIndex];
+        const steps = rideSteps(
+          service.segments,
+          boardIndex,
+          alightIndex,
+        );
+
+        candidates.push({
+          legs: [
+            walkLeg(origin, boardAt),
+            transitLeg(service.mode, boardAt, alightAt, service.lineId),
+            walkLeg(alightAt, destination),
+          ],
+          estimatedSeconds:
+            walkSeconds(origin, boardAt) +
+            rideSeconds(service.mode, steps) +
+            walkSeconds(alightAt, destination),
+        });
       }
     }
-
-    if (originIndex === -1 || originIndex === destinationIndex) {
-      continue;
-    }
-
-    const boardAt = service.anchors[originIndex];
-    const alightAt = service.anchors[destinationIndex];
-    const steps = rideSteps(service.segments, originIndex, destinationIndex);
-
-    candidates.push({
-      legs: [
-        walkLeg(origin, boardAt),
-        transitLeg(service.mode, boardAt, alightAt, service.lineId),
-        walkLeg(alightAt, destination),
-      ],
-      estimatedSeconds:
-        walkSeconds(origin, boardAt) +
-        rideSeconds(service.mode, steps) +
-        walkSeconds(alightAt, destination),
-    });
   }
 
   for (const first of services) {
