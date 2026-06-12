@@ -87,7 +87,10 @@ export function findTilePath(
           const fromTile = tileByKey.get(fromKey)!;
           if (!isTraversable(fromTile, mode) && !isTraversable(tile, mode)) {
             // Undo the parents entry so the BFS can find a longer valid route.
-            // The target will be re-enqueued when a longer path reaches it.
+            // Safe to delete: the target (toKey) is never enqueued — the
+            // nextKey === toKey branch above either returns or continues
+            // before reaching queue.push(next) — so no queue entry will be
+            // orphaned by this removal from the visited set.
             parents.delete(nextKey);
             continue;
           }

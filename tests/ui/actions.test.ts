@@ -14,7 +14,7 @@ import {
   cancelDraftRoute,
   finishDraftRoute,
   handleTileClick,
-  removeDraftStop,
+  removeDraftNode,
   resolveNodeAtTile,
   resolveNodesAtTile,
 } from "../../src/ui/actions";
@@ -752,7 +752,7 @@ describe("draft route helpers", () => {
 
   it("removes a specific draft stop by index", () => {
     const { state, ui } = busDraft();
-    const next = removeDraftStop(state, ui, 0);
+    const next = removeDraftNode(state, ui, 0);
     expect(next.draftStopIds).toEqual(["stop-002"]);
     expect(next.draftStopPaths).toEqual([]);
   });
@@ -780,7 +780,7 @@ describe("draft route helpers", () => {
         ],
       ],
     };
-    const next = removeDraftStop(state, ui, 1);
+    const next = removeDraftNode(state, ui, 1);
     expect(next.draftStationIds).toEqual(["station-001"]);
     expect(next.draftStationPaths).toEqual([]);
   });
@@ -796,13 +796,13 @@ describe("draft route helpers", () => {
     expect(next.draftStationIds).toEqual([]);
   });
 
-  it("removeDraftStop returns the same ui for an out-of-range index", () => {
+  it("removeDraftNode returns the same ui for an out-of-range index", () => {
     const { state, ui } = busDraft();
-    expect(removeDraftStop(state, ui, 5)).toBe(ui);
-    expect(removeDraftStop(state, ui, -1)).toBe(ui);
+    expect(removeDraftNode(state, ui, 5)).toBe(ui);
+    expect(removeDraftNode(state, ui, -1)).toBe(ui);
   });
 
-  it("removeDraftStop empties the draft when removing the only stop", () => {
+  it("removeDraftNode empties the draft when removing the only stop", () => {
     let state = createInitialGameState();
     state = addBusStop(state, { x: 7, y: 8 });
     const ui = {
@@ -811,12 +811,12 @@ describe("draft route helpers", () => {
       draftStopIds: ["stop-001"],
       draftStopPaths: [],
     };
-    const next = removeDraftStop(state, ui, 0);
+    const next = removeDraftNode(state, ui, 0);
     expect(next.draftStopIds).toEqual([]);
     expect(next.draftStopPaths).toEqual([]);
   });
 
-  it("removeDraftStop rejects an interior merge when the outer stops are not connected", () => {
+  it("removeDraftNode rejects an interior merge when the outer stops are not connected", () => {
     // Three stops on the y=8 road: (7,8), (15,8), (22,8). Pre-assemble a
     // draft with computed paths between consecutive pairs, then sever the road
     // between stop 1 and stop 3 so the merge path is null.
@@ -836,7 +836,7 @@ describe("draft route helpers", () => {
         Array.from({ length: 8 }, (_, i) => ({ x: 15 + i, y: 8 })),
       ],
     };
-    const next = removeDraftStop(severed, ui, 1);
+    const next = removeDraftNode(severed, ui, 1);
     expect(next).toBe(ui); // merge rejected, ui unchanged
   });
 
@@ -928,7 +928,7 @@ describe("draft route path validation", () => {
     result = handleTileClick(state, result.ui, { x: 22, y: 8 });
     expect(result.ui.draftStopPaths).toHaveLength(2);
 
-    const merged = removeDraftStop(state, result.ui, 1);
+    const merged = removeDraftNode(state, result.ui, 1);
     expect(merged.draftStopIds).toEqual(["stop-001", "stop-003"]);
     expect(merged.draftStopPaths).toHaveLength(1);
     expect(merged.draftStopPaths[0][0]).toEqual({ x: 7, y: 8 });

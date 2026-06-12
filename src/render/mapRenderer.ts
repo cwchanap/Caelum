@@ -15,6 +15,8 @@ export function renderMap(
     ctx.strokeRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
   }
 
+  // PERF: Rebuilds every frame; fine for a ~504-tile map. Could cache on
+  // GameState identity if this ever shows up in a profile.
   const trackKeys = new Set(
     state.map.tiles
       .filter((tile) => tile.hasTrack === true)
