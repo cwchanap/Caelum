@@ -29,6 +29,7 @@ import {
   stopCoverageRadius,
   tickVehicles,
 } from "../../src/simulation/transit";
+import { hasBrokenSegment } from "../../src/simulation/network";
 
 function createBusState(): GameState {
   let state = createInitialGameState();
@@ -640,7 +641,7 @@ describe("distance-based vehicle movement", () => {
     expect(after10s.transit.vehicles[0].segmentIndex).toBe(1);
   });
 
-  it("converts overshoot progress when segments have different lengths", () => {
+  it("converts overshoot progress when segments have different lengths (long→short)", () => {
     // Three stops at (7,8), (15,8), (22,8) on a loop.
     // Segments: [0]=7→15 (8 steps), [1]=15→22 (7 steps), [2]=22→7 (15 steps).
     const state = createThreeStopBusState();
@@ -667,6 +668,37 @@ describe("distance-based vehicle movement", () => {
     expect(after.transit.vehicles[0]!.segmentIndex).toBe(1);
     expect(after.transit.vehicles[0]!.progress).toBeCloseTo(
       (0.2 * 8) / 7,
+      5,
+    );
+  });
+
+  it("converts overshoot progress when segments have different lengths (short→long)", () => {
+    // Three stops at (7,8), (15,8), (22,8) on a loop.
+    // Segments: [0]=7→15 (8 steps), [1]=15→22 (7 steps), [2]=22→7 (15 steps).
+    const state = createThreeStopBusState();
+    const vehicle = state.transit.vehicles[0]!;
+
+    // Place vehicle near end of segment 1 (15→22, 7 steps).
+    const preTick: GameState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        vehicles: [{ ...vehicle, segmentIndex: 1, progress: 0.9 }],
+      },
+    };
+
+    // Overshoot from segment 1 (7 steps) into segment 2 (15 steps).
+    // bus speed = 0.8 tiles/s; increment = 0.8 * 3.0 / 7 ≈ 0.34286
+    // total = 0.9 + 0.34286 ≈ 1.24286
+    // Overshoot in segment-1 fractions: 0.24286
+    // Overshoot in tiles: 0.24286 * 7 ≈ 1.7 tiles past stop-003
+    // Converted to segment 2 (15 steps): 1.7 / 15 ≈ 0.11333
+    const after = tickVehicles(preTick, 3.0);
+    const overshoot = 0.9 + (0.8 * 3.0) / 7 - 1;
+
+    expect(after.transit.vehicles[0]!.segmentIndex).toBe(2);
+    expect(after.transit.vehicles[0]!.progress).toBeCloseTo(
+      (overshoot * 7) / 15,
       5,
     );
   });
@@ -1818,6 +1850,37 @@ describe("recomputeRoutePaths", () => {
     expect(citizen.status).toBe("idle");
     expect(citizen.routePlan).toBeNull();
     expect(citizen.position).toEqual({ x: 7, y: 8 });
+  });
+
+  it("maintains pathBroken consistency with hasBrokenSegment after recomputation", () => {
+    // Build a bus route and a metro line, then damage and restore the network.
+    let state = createThreeStopBusState();
+
+    // Damage the road between stops.
+    const damaged = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    const result = recomputeRoutePaths(damaged);
+    const route = result.transit.routes[0];
+
+    // pathBroken must agree with hasBrokenSegment when no IDs are missing.
+    // (idsMissing is always false here because stops aren't removed.)
+    expect(route.pathBroken).toBe(hasBrokenSegment(route.segments));
+
+    // Restore and verify consistency holds in the non-broken direction too.
+    const restored = recomputeRoutePaths({
+      ...result,
+      map: {
+        ...result.map,
+        tiles: result.map.tiles.map((tile) =>
+          tile.x === 11 && tile.y === 8
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    });
+    const restoredRoute = restored.transit.routes[0];
+    expect(restoredRoute.pathBroken).toBe(
+      hasBrokenSegment(restoredRoute.segments),
+    );
   });
 });
 

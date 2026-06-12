@@ -8,6 +8,7 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
+  layTrack,
   removeInfrastructureAtTile,
   setRouteActive,
   TILES_PER_SECOND,
@@ -330,5 +331,52 @@ describe("path-length ride estimates", () => {
     // Board at (7,8):  walk 240 + ride(7→22, 15 steps) = 90 + 15/0.8 = 108.75 = 348.75
     expect(plan?.estimatedSeconds).toBeCloseTo(338.75, 5);
     expect(plan?.legs[1]?.from).toEqual({ x: 15, y: 8 });
+  });
+
+  it("estimates transfer ride time using real segment steps", () => {
+    // Build a bus route (7,8)→(15,8) and a metro line (15,8)→(27,8).
+    // The bus stop and metro station at (15,8) form a transfer point.
+    // Both routes have real populated segments from BFS, not [].
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignVehicle(state, "bus", "route-001");
+
+    // Lay track for metro.
+    state = withTrack(state, trackRow(8, 15, 27));
+    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addMetroStation(state, { x: 27, y: 8 });
+    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = assignVehicle(state, "metro", "metro-001");
+
+    // Verify segments are populated (not []).
+    expect(state.transit.routes[0].segments.length).toBeGreaterThan(0);
+    expect(
+      state.transit.routes[0].segments.every((s) => s.length > 0),
+    ).toBe(true);
+    expect(state.transit.metroLines[0].segments.length).toBeGreaterThan(0);
+    expect(
+      state.transit.metroLines[0].segments.every((s) => s.length > 0),
+    ).toBe(true);
+
+    const plan = findRoutePlan(state, { x: 7, y: 8 }, { x: 27, y: 8 });
+
+    expect(plan).not.toBeNull();
+    expect(plan?.legs.map((leg) => leg.mode)).toEqual([
+      "walk",
+      "bus",
+      "walk",
+      "metro",
+      "walk",
+    ]);
+
+    // Bus: (7,8)→(15,8), 8 steps at 0.8 tiles/s + 90s boarding = 100s
+    const busRideSeconds = 90 + 8 / TILES_PER_SECOND.bus;
+    // Metro: (15,8)→(27,8), 12 steps at 2.0 tiles/s + 120s boarding = 126s
+    const metroRideSeconds = 120 + 12 / TILES_PER_SECOND.metro;
+    const expectedTotal = 0 + busRideSeconds + 0 + metroRideSeconds + 0;
+
+    expect(plan?.estimatedSeconds).toBeCloseTo(expectedTotal, 5);
   });
 });
