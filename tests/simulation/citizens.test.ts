@@ -178,6 +178,36 @@ describe("citizen lifecycle", () => {
     expect(recovered.citizens[0]?.status).not.toBe("riding");
   });
 
+  it("replans from the citizen's current position, not home, after being dropped at a stop", () => {
+    // Simulate a citizen whose home is far from the transit stop where they
+    // were parked after a route break. The replan must originate from the
+    // parked position, not from home.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignVehicle(state, "bus", "route-001");
+
+    // Citizen's home is at (2,3) — far from any stop — but they were riding
+    // and got parked at stop-001 (15,8) after a route break.
+    state = withFirstCitizen(state, {
+      home: { x: 2, y: 3 },
+      position: { x: 15, y: 8 },
+      destination: { x: 23, y: 8 },
+      status: "idle",
+      routePlan: null,
+      currentLegIndex: 0,
+    });
+
+    const nextState = tickCitizens(state, 1);
+    const citizen = nextState.citizens[0]!;
+
+    // The plan must exist and the first leg must start from the citizen's
+    // current position (15,8), not from home (2,3).
+    expect(citizen.routePlan).not.toBeNull();
+    expect(citizen.routePlan!.legs[0]!.from).toEqual({ x: 15, y: 8 });
+  });
+
   it("marks long overdue walking-only trips unserved when no transit exists", () => {
     const state = withFirstCitizen(
       {
