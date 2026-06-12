@@ -639,6 +639,37 @@ describe("distance-based vehicle movement", () => {
     // Segment completed exactly at 10s: vehicle disembarks and advances.
     expect(after10s.transit.vehicles[0].segmentIndex).toBe(1);
   });
+
+  it("converts overshoot progress when segments have different lengths", () => {
+    // Three stops at (7,8), (15,8), (22,8) on a loop.
+    // Segments: [0]=7→15 (8 steps), [1]=15→22 (7 steps), [2]=22→7 (15 steps).
+    const state = createThreeStopBusState();
+    const vehicle = state.transit.vehicles[0]!;
+
+    // Place vehicle near end of segment 0 (7→15, 8 steps).
+    // progress = 0.9 means 0.9 of the way from stop-001 to stop-002.
+    const preTick: GameState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        vehicles: [{ ...vehicle, segmentIndex: 0, progress: 0.9 }],
+      },
+    };
+
+    // Tick with enough delta to overshoot segment 0 by several tiles.
+    // bus speed = 0.8 tiles/s; progress increment = 0.8 * delta / steps.
+    // With 8 steps, need progress > 0.1 to cross: delta > 1.0s
+    // Use delta = 3.0s: increment = 0.8*3/8 = 0.3; total = 0.9 + 0.3 = 1.2
+    // Overshoot: 0.2 of segment 0 = 0.2 * 8 = 1.6 tiles past stop-002
+    // Next segment 1 has 7 steps, so converted progress = 1.6 / 7 ≈ 0.22857
+    const after = tickVehicles(preTick, 3.0);
+
+    expect(after.transit.vehicles[0]!.segmentIndex).toBe(1);
+    expect(after.transit.vehicles[0]!.progress).toBeCloseTo(
+      (0.2 * 8) / 7,
+      5,
+    );
+  });
 });
 
 describe("on-platform boarding gate", () => {
