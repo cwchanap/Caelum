@@ -640,6 +640,10 @@ export function recomputeRoutePaths(state: GameState): GameState {
   let citizens = state.citizens;
   let vehicles = state.transit.vehicles;
 
+  // Invariant: stop/station removal cascade-deletes dependent routes/lines
+  // (see removeAtTile in actions.ts), so idsMissing should never be true here.
+  // If it is, vehicles park at positions[segmentIndex % positions.length] which
+  // may map to a wrong anchor — but the pathBroken flag forces full revalidation.
   const refreshLine = <T extends Route | MetroLine>(
     line: T,
     nodeIds: string[],

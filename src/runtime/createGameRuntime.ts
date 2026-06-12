@@ -13,7 +13,7 @@ import {
   cancelDraftRoute,
   finishDraftRoute,
   handleTileClick as applyTileClick,
-  removeDraftStop as applyRemoveDraftStop,
+  removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
 import { createUiState } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
@@ -336,7 +336,7 @@ export function createGameRuntime(): RuntimeController {
       );
     },
     removeDraftStop(index) {
-      return commit(state, applyRemoveDraftStop(state, ui, index));
+      return commit(state, applyRemoveDraftNode(state, ui, index));
     },
     finishRoute() {
       const result = finishDraftRoute(state, ui);

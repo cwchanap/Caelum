@@ -249,7 +249,7 @@ export function finishDraftRoute(
   return { state, ui };
 }
 
-export function removeDraftStop(
+export function removeDraftNode(
   state: GameState,
   ui: UiState,
   index: number,
@@ -307,7 +307,7 @@ export function removeDraftStop(
 
 // Shared by the busRoute/metroLine click branches in handleTileClick: appends
 // `node` to the in-progress draft, computing the connecting path from the
-// previous draft node. Mirrors removeDraftStop's mode discriminator. Returns
+// previous draft node. Mirrors removeDraftNode's mode discriminator. Returns
 // the same `ui` reference (no-op) when the node repeats the last one or no
 // path connects it to the previous node, so callers can detect "no change".
 function appendDraftNode(
