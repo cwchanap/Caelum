@@ -8,7 +8,6 @@ import {
   addMetroLine,
   addMetroStation,
   assignVehicle,
-  layTrack,
   removeInfrastructureAtTile,
   setRouteActive,
   TILES_PER_SECOND,
