@@ -174,9 +174,16 @@ function tickCitizen(
   }
 
   if (routePlan === null) {
+    // A citizen whose plan was invalidated mid-walk retains a fractional
+    // position. findRoutePlan rejects non-integer coordinates, so snap to
+    // the nearest tile before replanning.
+    const snappedOrigin: Point = {
+      x: Math.round(nextCitizen.position.x),
+      y: Math.round(nextCitizen.position.y),
+    };
     const plannedRoute = findRoutePlan(
       state,
-      nextCitizen.position,
+      snappedOrigin,
       nextCitizen.destination,
     );
 

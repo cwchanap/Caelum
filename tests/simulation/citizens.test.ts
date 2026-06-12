@@ -208,6 +208,35 @@ describe("citizen lifecycle", () => {
     expect(citizen.routePlan!.legs[0]!.from).toEqual({ x: 15, y: 8 });
   });
 
+  it("replans successfully when a citizen has a fractional walking position", () => {
+    // A citizen mid-walk has a fractional position (e.g. x=5.3) when their
+    // route is invalidated. The replan must snap to the nearest integer and
+    // produce a valid plan rather than marking the citizen unserved.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 22, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+
+    state = withFirstCitizen(state, {
+      home: { x: 5, y: 8 },
+      position: { x: 5.3, y: 8 },
+      destination: { x: 23, y: 8 },
+      status: "idle",
+      routePlan: null,
+      currentLegIndex: 0,
+      deadline: 900,
+    });
+
+    const nextState = tickCitizens(state, 1);
+    const citizen = nextState.citizens[0]!;
+
+    expect(citizen.status).not.toBe("unserved");
+    expect(citizen.routePlan).not.toBeNull();
+    // First leg should start from the snapped position (5,8), not the
+    // fractional one — and definitely not from home (2,3).
+    expect(citizen.routePlan!.legs[0]!.from).toEqual({ x: 5, y: 8 });
+  });
+
   it("marks long overdue walking-only trips unserved when no transit exists", () => {
     const state = withFirstCitizen(
       {
