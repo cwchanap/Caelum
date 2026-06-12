@@ -1854,7 +1854,7 @@ describe("recomputeRoutePaths", () => {
 
   it("maintains pathBroken consistency with hasBrokenSegment after recomputation", () => {
     // Build a bus route and a metro line, then damage and restore the network.
-    let state = createThreeStopBusState();
+    const state = createThreeStopBusState();
 
     // Damage the road between stops.
     const damaged = removeInfrastructureAtTile(state, { x: 11, y: 8 });
