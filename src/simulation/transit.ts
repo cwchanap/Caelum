@@ -331,6 +331,8 @@ function disembarkVehicle(
   vehicle: Vehicle,
   reachedPosition: Point,
   stopCount: number,
+  currentSteps: number,
+  nextSteps: number,
 ): { citizens: Citizen[]; vehicle: Vehicle } {
   const passengerIds = uniquePassengerIds(vehicle.passengerIds);
   const disembarkingPassengerIds = new Set(
@@ -368,10 +370,13 @@ function disembarkVehicle(
         (passengerId) => !disembarkingPassengerIds.has(passengerId),
       ),
       segmentIndex: (vehicle.segmentIndex + 1) % stopCount,
-      // Carry assumes consecutive segments have similar step counts;
-      // overshoot is at most one tick's progress, so any speed
-      // discontinuity is sub-tile.
-      progress: vehicle.progress % 1,
+      // Convert overshoot from current segment units to next segment
+      // units so the carried distance (in tiles) is preserved across
+      // segments of different lengths.
+      progress:
+        nextSteps > 0
+          ? ((vehicle.progress - 1) * currentSteps) / nextSteps
+          : 0,
     },
   };
 }
@@ -1066,11 +1071,20 @@ export function tickVehicles(
 
     const reachedPosition =
       linePositions[(vehicle.segmentIndex + 1) % linePositions.length];
+    // Compute next segment's step count for overshoot conversion.
+    const nextSegment =
+      segments.length === 0
+        ? undefined
+        : segments[(vehicle.segmentIndex + 1) % segments.length];
+    const nextSteps =
+      nextSegment === undefined ? 1 : Math.max(1, nextSegment.length - 1);
     const disembarked = disembarkVehicle(
       citizens,
       { ...boarded.vehicle, progress },
       reachedPosition,
       linePositions.length,
+      steps,
+      nextSteps,
     );
     citizens = disembarked.citizens;
     changed = true;
