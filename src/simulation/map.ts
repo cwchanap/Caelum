@@ -4,6 +4,7 @@ import type {
   GameMap,
   GameState,
   Point,
+  RoadDirection,
   Tile,
   TileKind,
 } from "../domain/types";
@@ -124,9 +125,37 @@ export function setTileKind(
 ): GameMap {
   return {
     ...map,
-    tiles: map.tiles.map((tile) =>
-      samePoint(tile, point) ? { ...tile, kind } : tile,
-    ),
+    tiles: map.tiles.map((tile) => {
+      if (!samePoint(tile, point)) {
+        return tile;
+      }
+      if (kind === "road") {
+        return { ...tile, kind };
+      }
+      // oneWay is only meaningful on roads; drop it when the tile changes kind.
+      const { oneWay: _oneWay, ...rest } = tile;
+      return { ...rest, kind };
+    }),
+  };
+}
+
+export function setTileOneWay(
+  map: GameMap,
+  point: Point,
+  oneWay: RoadDirection | undefined,
+): GameMap {
+  return {
+    ...map,
+    tiles: map.tiles.map((tile) => {
+      if (!samePoint(tile, point)) {
+        return tile;
+      }
+      if (oneWay === undefined) {
+        const { oneWay: _oneWay, ...rest } = tile;
+        return rest;
+      }
+      return { ...tile, oneWay };
+    }),
   };
 }
 
