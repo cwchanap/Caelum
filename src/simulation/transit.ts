@@ -5,6 +5,7 @@ import type {
   GameState,
   Platform,
   Point,
+  RoadDirection,
   Route,
   MetroLine,
   Stop,
@@ -18,6 +19,7 @@ import {
   isValidTrackPlacement,
   getTile,
   setTileKind,
+  setTileOneWay,
   setTileTrack,
 } from "./map";
 import { computeRouteSegments, hasBrokenSegment } from "./network";
@@ -724,6 +726,29 @@ export function layTrack(state: GameState, point: Point): GameState {
     ...state,
     budget: state.budget - COSTS.track,
     map: setTileTrack(state.map, point, true),
+  });
+}
+
+// two-way -> north -> east -> south -> west -> two-way. The cardinal order
+// matches network.ts neighborOffsets for consistency.
+const ROAD_DIRECTION_CYCLE: readonly (RoadDirection | undefined)[] = [
+  undefined,
+  "north",
+  "east",
+  "south",
+  "west",
+];
+
+export function cycleRoadDirection(state: GameState, point: Point): GameState {
+  const tile = getTile(state.map, point);
+  if (tile === null || tile.kind !== "road") {
+    return state;
+  }
+  const index = ROAD_DIRECTION_CYCLE.indexOf(tile.oneWay);
+  const next = ROAD_DIRECTION_CYCLE[(index + 1) % ROAD_DIRECTION_CYCLE.length];
+  return recomputeRoutePaths({
+    ...state,
+    map: setTileOneWay(state.map, point, next),
   });
 }
 

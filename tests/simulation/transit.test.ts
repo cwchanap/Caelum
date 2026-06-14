@@ -18,6 +18,7 @@ import {
   addMetroStation,
   assignRouteToPlatform,
   assignVehicle,
+  cycleRoadDirection,
   deleteRoute,
   layRoad,
   layTrack,
@@ -29,6 +30,7 @@ import {
   stopCoverageRadius,
   tickVehicles,
 } from "../../src/simulation/transit";
+import { getTile } from "../../src/simulation/map";
 import { hasBrokenSegment } from "../../src/simulation/network";
 
 function createBusState(): GameState {
@@ -1694,6 +1696,47 @@ describe("route path segments", () => {
     expect(line.active).toBe(false);
     expect(line.pathBroken).toBe(true);
     expect(line.segments).toEqual([]);
+  });
+});
+
+describe("cycleRoadDirection", () => {
+  it("cycles two-way -> N -> E -> S -> W -> two-way on a road tile", () => {
+    const state = createInitialGameState();
+    const order = ["north", "east", "south", "west", undefined];
+    let next = state;
+    for (const expected of order) {
+      next = cycleRoadDirection(next, { x: 8, y: 8 });
+      expect(getTile(next.map, { x: 8, y: 8 })?.oneWay).toBe(expected);
+    }
+  });
+
+  it("ignores tiles that are not roads", () => {
+    const state = createInitialGameState();
+    // (2,3) is residential.
+    const next = cycleRoadDirection(state, { x: 2, y: 3 });
+    expect(next).toBe(state);
+  });
+
+  it("breaks a route's loop when a one-way severs it and restores it when reversed", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    expect(state.transit.routes[0].pathBroken).toBe(false);
+
+    // One cycle -> north: (8,8) may now only be exited northward, so the
+    // 7<->15 legs along y=8 can no longer pass through it.
+    const broken = cycleRoadDirection(state, { x: 8, y: 8 });
+    expect(getTile(broken.map, { x: 8, y: 8 })?.oneWay).toBe("north");
+    expect(broken.transit.routes[0].pathBroken).toBe(true);
+
+    // Four more cycles return the tile to two-way and repair the route.
+    let restored = broken;
+    for (let i = 0; i < 4; i += 1) {
+      restored = cycleRoadDirection(restored, { x: 8, y: 8 });
+    }
+    expect(getTile(restored.map, { x: 8, y: 8 })?.oneWay).toBeUndefined();
+    expect(restored.transit.routes[0].pathBroken).toBe(false);
   });
 });
 
