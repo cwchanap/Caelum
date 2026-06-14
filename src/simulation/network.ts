@@ -1,4 +1,5 @@
 import type { GameMap, Point, Tile } from "../domain/types";
+import { ROAD_DIRECTION_OFFSET } from "../domain/types";
 
 export type NetworkMode = "bus" | "metro";
 
@@ -49,8 +50,22 @@ export function findTilePath(
 
   for (let head = 0; head < queue.length; head += 1) {
     const current = queue[head];
+    const currentTile = tileByKey.get(positionKey(current.x, current.y));
 
     for (const offset of neighborOffsets) {
+      // One-way roads constrain buses only: a directed road tile may be left
+      // only along its arrow. Metro ignores it (tracks have no direction).
+      if (
+        mode === "bus" &&
+        currentTile?.kind === "road" &&
+        currentTile.oneWay !== undefined
+      ) {
+        const allowed = ROAD_DIRECTION_OFFSET[currentTile.oneWay];
+        if (offset.x !== allowed.x || offset.y !== allowed.y) {
+          continue;
+        }
+      }
+
       const next = { x: current.x + offset.x, y: current.y + offset.y };
       const nextKey = positionKey(next.x, next.y);
 

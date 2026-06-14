@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, Point } from "../../src/domain/types";
+import type { GameState, Point, RoadDirection } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   computeRouteSegments,
@@ -25,6 +25,36 @@ function trackRow(y: number, fromX: number, toX: number): Point[] {
     x: fromX + i,
     y,
   }));
+}
+
+function withRoad(state: GameState, points: Point[]): GameState {
+  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
+      ),
+    },
+  };
+}
+
+function withOneWay(
+  state: GameState,
+  entries: Array<{ x: number; y: number; oneWay: RoadDirection }>,
+): GameState {
+  const byKey = new Map(entries.map((e) => [`${e.x},${e.y}`, e.oneWay]));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) => {
+        const oneWay = byKey.get(`${tile.x},${tile.y}`);
+        return oneWay === undefined ? tile : { ...tile, oneWay };
+      }),
+    },
+  };
 }
 
 describe("findTilePath", () => {
@@ -168,6 +198,73 @@ describe("findTilePath", () => {
     expect(path?.[1]).toEqual({ x: 8, y: 8 }); // road
     expect(path?.[2]).toEqual({ x: 9, y: 8 }); // road
     expect(path?.[3]).toEqual({ x: 9, y: 7 });
+  });
+});
+
+describe("findTilePath one-way roads", () => {
+  it("permits forward traversal of a one-way road and blocks the reverse", () => {
+    const state = withOneWay(createInitialGameState(), [
+      { x: 8, y: 8, oneWay: "east" },
+    ]);
+    // Forward: (7,8) -> (9,8) crosses (8,8) heading east.
+    expect(
+      findTilePath(state.map, { x: 7, y: 8 }, { x: 9, y: 8 }, "bus"),
+    ).toEqual([
+      { x: 7, y: 8 },
+      { x: 8, y: 8 },
+      { x: 9, y: 8 },
+    ]);
+    // Reverse is impossible: y=8 is the only horizontal road, and (8,8) may
+    // only be exited eastward, so there is no way back west.
+    expect(
+      findTilePath(state.map, { x: 9, y: 8 }, { x: 7, y: 8 }, "bus"),
+    ).toBeNull();
+  });
+
+  it("leaves two-way roads traversable in both directions", () => {
+    const state = createInitialGameState();
+    expect(
+      findTilePath(state.map, { x: 9, y: 8 }, { x: 7, y: 8 }, "bus"),
+    ).toEqual([
+      { x: 9, y: 8 },
+      { x: 8, y: 8 },
+      { x: 7, y: 8 },
+    ]);
+  });
+
+  it("ignores one-way direction for metro/track pathing", () => {
+    let state = withTrack(createInitialGameState(), trackRow(8, 7, 9));
+    state = withOneWay(state, [{ x: 8, y: 8, oneWay: "east" }]);
+    // (8,8) is a road+track crossing; oneWay constrains buses only, so metro
+    // still traverses it in reverse.
+    expect(
+      findTilePath(state.map, { x: 9, y: 8 }, { x: 7, y: 8 }, "metro"),
+    ).toHaveLength(3);
+  });
+
+  it("routes a two-way corridor built from opposing one-way lanes", () => {
+    // Rectangle loop between the x=7 and x=15 road columns: top row y=8 and a
+    // new parallel bottom row y=9 (interior x=8..14; (7,9) and (15,9) are
+    // already road from the columns). Top interior = one-way east, bottom
+    // interior = one-way west; the x=7/x=15 corners stay two-way.
+    const interiorXs = [8, 9, 10, 11, 12, 13, 14];
+    let state = withRoad(
+      createInitialGameState(),
+      interiorXs.map((x) => ({ x, y: 9 })),
+    );
+    state = withOneWay(state, [
+      ...interiorXs.map((x) => ({ x, y: 8, oneWay: "east" as const })),
+      ...interiorXs.map((x) => ({ x, y: 9, oneWay: "west" as const })),
+    ]);
+
+    const forward = findTilePath(state.map, { x: 7, y: 8 }, { x: 15, y: 8 }, "bus");
+    expect(forward).not.toBeNull();
+    expect(forward?.every((p) => p.y === 8)).toBe(true);
+
+    const reverse = findTilePath(state.map, { x: 15, y: 8 }, { x: 7, y: 8 }, "bus");
+    expect(reverse).not.toBeNull();
+    // The return trip cannot use the eastbound top row, so it drops to y=9.
+    expect(reverse?.some((p) => p.y === 9)).toBe(true);
   });
 });
 
