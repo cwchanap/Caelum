@@ -5,6 +5,7 @@ export type TileKind =
   | "jobs"
   | "civic"
   | "park";
+export type RoadDirection = "north" | "east" | "south" | "west";
 export type TransitMode = "walk" | "bus" | "metro";
 export type BuildingType =
   | "busStop"
@@ -44,12 +45,22 @@ export interface Point {
   y: number;
 }
 
+/** Unit direction vector for each road arrow; single source of truth. */
+export const ROAD_DIRECTION_OFFSET: Record<RoadDirection, Point> = {
+  north: { x: 0, y: -1 },
+  east: { x: 1, y: 0 },
+  south: { x: 0, y: 1 },
+  west: { x: -1, y: 0 },
+};
+
 export interface Tile extends Point {
   id: string;
   kind: TileKind;
   districtId?: string;
   /** Track is a layer, not a TileKind: a road tile with track is a level crossing. */
   hasTrack?: boolean;
+  /** One-way constraint on a road lane. Undefined = two-way (default). */
+  oneWay?: RoadDirection;
 }
 
 export interface GameMap {
