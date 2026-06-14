@@ -10,6 +10,8 @@ import {
   isValidMetroStationPlacement,
   isValidRoadPlacement,
   isValidTrackPlacement,
+  setTileKind,
+  setTileOneWay,
 } from "../../src/simulation/map";
 
 function withTime(state: GameState, time: number): GameState {
@@ -222,5 +224,38 @@ describe("growth waves skip player infrastructure", () => {
     expect(tile?.kind).toBe("road");
     // Only the two untouched wave tiles spawn citizens (8 each).
     expect(next.citizens.length).toBe(state.citizens.length + 16);
+  });
+});
+
+describe("road direction helpers", () => {
+  it("sets a one-way direction on a tile", () => {
+    const state = createInitialGameState();
+    const map = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
+    expect(getTile(map, { x: 8, y: 8 })?.oneWay).toBe("east");
+  });
+
+  it("clears the one-way direction when set to undefined", () => {
+    const state = createInitialGameState();
+    const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
+    const cleared = setTileOneWay(withDir, { x: 8, y: 8 }, undefined);
+    const tile = getTile(cleared, { x: 8, y: 8 });
+    expect(tile?.oneWay).toBeUndefined();
+    expect("oneWay" in (tile as object)).toBe(false);
+  });
+
+  it("drops one-way when a road tile stops being a road", () => {
+    const state = createInitialGameState();
+    const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
+    const emptied = setTileKind(withDir, { x: 8, y: 8 }, "empty");
+    const tile = getTile(emptied, { x: 8, y: 8 });
+    expect(tile?.kind).toBe("empty");
+    expect("oneWay" in (tile as object)).toBe(false);
+  });
+
+  it("keeps one-way when the tile stays a road", () => {
+    const state = createInitialGameState();
+    const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
+    const stillRoad = setTileKind(withDir, { x: 8, y: 8 }, "road");
+    expect(getTile(stillRoad, { x: 8, y: 8 })?.oneWay).toBe("east");
   });
 });
