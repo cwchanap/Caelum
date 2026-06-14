@@ -53,6 +53,10 @@ function trackRow(y: number, fromX: number, toX: number): Point[] {
   }));
 }
 
+function tileAt(state: GameState, x: number, y: number) {
+  return state.map.tiles.find((t) => t.x === x && t.y === y)!;
+}
+
 // Bus stops and metro stations can no longer share a tile under the new
 // placement rules (stops are banned on track crossings; stations require
 // track). Co-located inspector-cycling tests don't exercise placement, so
@@ -877,6 +881,31 @@ describe("road and track tools", () => {
     expect(
       removed.state.map.tiles.find((t) => t.x === 9 && t.y === 2)?.hasTrack,
     ).toBe(false);
+  });
+});
+
+describe("road tool direction", () => {
+  it("lays a two-way road on an empty tile and charges COSTS.road", () => {
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), activeTool: "road" as const };
+    // (8,7) is empty, directly above the y=8 road.
+    const result = handleTileClick(state, ui, { x: 8, y: 7 });
+    expect(tileAt(result.state, 8, 7).kind).toBe("road");
+    expect(tileAt(result.state, 8, 7).oneWay).toBeUndefined();
+    expect(result.state.budget).toBe(state.budget - 100);
+  });
+
+  it("cycles direction (free) when clicking an existing road with the road tool", () => {
+    const state = createInitialGameState();
+    const ui: UiState = { ...createUiState(), activeTool: "road" };
+    const order = ["north", "east", "south", "west", undefined];
+    let result: { state: GameState; ui: UiState } = { state, ui };
+    for (const expected of order) {
+      result = handleTileClick(result.state, result.ui, { x: 8, y: 8 });
+      expect(tileAt(result.state, 8, 8).oneWay).toBe(expected);
+    }
+    // Cycling never spends budget (only laying does).
+    expect(result.state.budget).toBe(state.budget);
   });
 });
 

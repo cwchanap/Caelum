@@ -1,5 +1,6 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
 import { findTilePath } from "../simulation/network";
+import { getTile } from "../simulation/map";
 import { placeBuilding } from "../simulation/buildings";
 import {
   addBusRoute,
@@ -8,6 +9,7 @@ import {
   addMetroStation,
   assignVehicle,
   COSTS,
+  cycleRoadDirection,
   deleteRoute,
   distinctValidStationCount,
   distinctValidStopCount,
@@ -393,6 +395,10 @@ export function handleTileClick(
   }
 
   if (ui.activeTool === "road") {
+    const tile = getTile(state.map, point);
+    if (tile?.kind === "road") {
+      return { state: cycleRoadDirection(state, point), ui };
+    }
     return { state: layRoad(state, point), ui };
   }
 
