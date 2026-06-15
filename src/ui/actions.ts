@@ -217,6 +217,13 @@ export function finishDraftRoute(
     ) {
       return { state, ui };
     }
+    // Validate the closing loop (last -> first) before committing: under
+    // directed (one-way) roads, a valid forward draft does not prove the loop
+    // can close. Reject the finish so the player is not left with a pathBroken
+    // route, no vehicle, and a cleared draft they cannot recover.
+    if (!closingLoopIsPathable(state, ui.draftStopIds, "stop", "bus")) {
+      return { state, ui };
+    }
     const withRoute = addBusRoute(state, ui.draftStopIds);
     const routeId = withRoute.transit.routes.at(-1)?.id;
     const next =
@@ -236,6 +243,9 @@ export function finishDraftRoute(
     ) {
       return { state, ui };
     }
+    if (!closingLoopIsPathable(state, ui.draftStationIds, "station", "metro")) {
+      return { state, ui };
+    }
     const withLine = addMetroLine(state, ui.draftStationIds);
     const lineId = withLine.transit.metroLines.at(-1)?.id;
     const next =
@@ -249,6 +259,33 @@ export function finishDraftRoute(
   }
 
   return { state, ui };
+}
+
+/**
+ * Check that the closing loop segment (last node -> first node) has a valid
+ * tile path. Forward draft validation already proves every consecutive pair
+ * connects, but under directed graphs that does not guarantee the loop closes.
+ * Returns true when the closing path exists (or there are fewer than 2 nodes).
+ */
+function closingLoopIsPathable(
+  state: GameState,
+  ids: string[],
+  kind: "stop" | "station",
+  mode: "bus" | "metro",
+): boolean {
+  if (ids.length < 2) {
+    return true;
+  }
+  const nodes: Array<Stop | Station> =
+    kind === "stop" ? state.transit.stops : state.transit.stations;
+  const first = nodes.find((node) => node.id === ids[0]);
+  const last = nodes.find((node) => node.id === ids.at(-1));
+  if (first === undefined || last === undefined) {
+    return true;
+  }
+  return (
+    findTilePath(state.map, last.position, first.position, mode) !== null
+  );
 }
 
 export function removeDraftNode(
