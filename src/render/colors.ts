@@ -2,6 +2,7 @@ export const colors = {
   empty: "#d7e2df",
   road: "#5f6d75",
   track: "#33302b",
+  oneWayArrow: "#e8eef0",
   residential: "#8bcf8b",
   jobs: "#d8b45f",
   civic: "#82a7d8",

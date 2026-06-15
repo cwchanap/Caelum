@@ -41,6 +41,22 @@ function withTrack(state: GameState, points: Point[]): GameState {
   };
 }
 
+function withOneWay(
+  state: GameState,
+  point: Point,
+  oneWay: "north" | "east" | "south" | "west",
+): GameState {
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        tile.x === point.x && tile.y === point.y ? { ...tile, oneWay } : tile,
+      ),
+    },
+  };
+}
+
 describe("renderMap track layer", () => {
   it("draws spokes between adjacent track tiles and a dot for an isolated tile", () => {
     // (2,2) and (3,2) are adjacent (connected); (10,10) has no track neighbors.
@@ -67,5 +83,20 @@ describe("renderMap track layer", () => {
     // (10,10) has no track neighbors: drawn as a lone dot at its center
     // (10*32+16, 10*32+16) = (336, 336) with radius 4.
     expect(context.arc).toHaveBeenCalledWith(336, 336, 4, 0, Math.PI * 2);
+  });
+});
+
+describe("renderMap one-way arrows", () => {
+  it("draws a direction arrow shaft for a one-way road tile", () => {
+    // (8,8) is a road tile; make it one-way east.
+    const state = withOneWay(createInitialGameState(), { x: 8, y: 8 }, "east");
+
+    const context = ctx();
+    renderMap(context, state);
+
+    // tileSize=32: center (8,8) = (272, 272). The shaft runs from tail to tip
+    // along the arrow axis by tileSize/4 = 8 either side of center.
+    expect(context.moveTo).toHaveBeenCalledWith(264, 272); // tail (west of center)
+    expect(context.lineTo).toHaveBeenCalledWith(280, 272); // tip (east of center)
   });
 });

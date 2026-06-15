@@ -1,4 +1,5 @@
 import type { GameState } from "../domain/types";
+import { ROAD_DIRECTION_OFFSET } from "../domain/types";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 
@@ -62,6 +63,59 @@ export function renderMap(
         ctx.stroke();
       }
     }
+    ctx.restore();
+  }
+
+  const oneWayTiles = state.map.tiles.filter(
+    (tile) => tile.kind === "road" && tile.oneWay !== undefined,
+  );
+
+  if (oneWayTiles.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = colors.oneWayArrow;
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (const tile of oneWayTiles) {
+      const oneWay = tile.oneWay;
+      if (oneWay === undefined) {
+        continue;
+      }
+      const offset = ROAD_DIRECTION_OFFSET[oneWay];
+      const cx = tile.x * tileSize + tileSize / 2;
+      const cy = tile.y * tileSize + tileSize / 2;
+      const half = tileSize / 4;
+      const tipX = cx + offset.x * half;
+      const tipY = cy + offset.y * half;
+      const tailX = cx - offset.x * half;
+      const tailY = cy - offset.y * half;
+
+      // Shaft.
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+
+      // Chevron head: two short barbs from the tip, angled back along the
+      // perpendicular axis.
+      const perpX = offset.y;
+      const perpY = -offset.x;
+      const head = tileSize / 6;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(
+        tipX - offset.x * head + perpX * head,
+        tipY - offset.y * head + perpY * head,
+      );
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(
+        tipX - offset.x * head - perpX * head,
+        tipY - offset.y * head - perpY * head,
+      );
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 }
