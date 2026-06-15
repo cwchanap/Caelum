@@ -19,6 +19,7 @@ import {
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import type { RoadDirection } from "../../src/domain/types";
 
 function withTrack(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
@@ -42,6 +43,23 @@ function withRoad(state: GameState, points: Point[]): GameState {
       tiles: state.map.tiles.map((tile) =>
         keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
       ),
+    },
+  };
+}
+
+function withOneWay(
+  state: GameState,
+  entries: Array<{ x: number; y: number; oneWay: RoadDirection }>,
+): GameState {
+  const byKey = new Map(entries.map((e) => [`${e.x},${e.y}`, e.oneWay]));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) => {
+        const oneWay = byKey.get(`${tile.x},${tile.y}`);
+        return oneWay === undefined ? tile : { ...tile, oneWay };
+      }),
     },
   };
 }
@@ -962,5 +980,40 @@ describe("draft route path validation", () => {
     expect(merged.draftStopPaths).toHaveLength(1);
     expect(merged.draftStopPaths[0][0]).toEqual({ x: 7, y: 8 });
     expect(merged.draftStopPaths[0].at(-1)).toEqual({ x: 22, y: 8 });
+  });
+
+  it("rejects finishing a bus route when the closing loop is unpathable under one-way roads", () => {
+    // Two stops at (7,8) and (9,8) on the y=8 road. Set (8,8) to one-way
+    // east so the forward path (7,8)->(9,8) is valid (heading east with the
+    // arrow) but the closing loop (9,8)->(7,8) is impossible (heading west
+    // against the arrow, and y=8 is the only horizontal road). The draft
+    // phase accepts the forward pair; finishDraftRoute must reject the finish
+    // so the player is not left with a pathBroken route and a cleared draft.
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 9, y: 8 });
+    // (8,8) is the only tile between the two stops on y=8; make it east-only.
+    // The x=7 column stays two-way so (7,8) is reachable, but heading west
+    // from (9,8) is blocked at (8,8).
+    state = withOneWay(state, [{ x: 8, y: 8, oneWay: "east" }]);
+    // There is no westbound return route: y=8 is the only horizontal road,
+    // and columns x=7/x=15/x=22 do not connect (7,8) back to (9,8) without
+    // traversing (8,8) westbound.
+
+    let draft = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 7, y: 8 },
+    );
+    draft = handleTileClick(draft.state, draft.ui, { x: 9, y: 8 });
+    expect(draft.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
+
+    const result = finishDraftRoute(draft.state, draft.ui);
+
+    // The finish must be rejected: state and ui are unchanged, no route is
+    // created, and the draft is preserved so the player can fix the loop.
+    expect(result.state).toBe(draft.state);
+    expect(result.ui).toBe(draft.ui);
+    expect(result.state.transit.routes).toEqual([]);
   });
 });

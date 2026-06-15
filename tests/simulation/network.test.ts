@@ -276,6 +276,60 @@ describe("findTilePath one-way roads", () => {
     // The return trip cannot use the eastbound top row, so it drops to y=9.
     expect(reverse?.some((p) => p.y === 9)).toBe(true);
   });
+
+  it("connects off-network destination stops adjacent to one-way roads (final hop exemption)", () => {
+    // Isolated one-way road segment away from the default road network:
+    //   (0,1) [road, two-way] -> (1,1) [road, one-way east]
+    // Destination: (1,0) is an empty tile (off-network bus stop footprint)
+    // directly north of the one-way road at (1,1). The one-way exit check
+    // must exempt the final hop from (1,1) north to (1,0) because (1,0) is
+    // a non-traversable destination — the connector hop is the only way in.
+    let state = withRoad(createInitialGameState(), [
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+    ]);
+    state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
+
+    const path = findTilePath(
+      state.map,
+      { x: 0, y: 1 },
+      { x: 1, y: 0 },
+      "bus",
+    );
+
+    // Without the exemption, (1,1) one-way east cannot exit north, so the
+    // only route to (1,0) is blocked and the path is null.
+    expect(path).not.toBeNull();
+    expect(path).toEqual([
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+      { x: 1, y: 0 },
+    ]);
+  });
+
+  it("still enforces one-way exit when the destination is itself traversable (on-network)", () => {
+    // Same one-way segment: (0,1) [two-way] -> (1,1) [one-way east].
+    // Destination: (1,2) — but here we make (1,2) a road tile (traversable).
+    // The one-way exit check must still apply to a traversable destination:
+    // the off-network exemption covers only non-traversable stop tiles.
+    let state = withRoad(createInitialGameState(), [
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+      { x: 1, y: 2 },
+    ]);
+    state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
+
+    const path = findTilePath(
+      state.map,
+      { x: 0, y: 1 },
+      { x: 1, y: 2 },
+      "bus",
+    );
+
+    // (1,1) one-way east cannot exit south to (1,2), and there is no
+    // alternate route, so the path must be null.
+    expect(path).toBeNull();
+  });
 });
 
 describe("computeRouteSegments", () => {
