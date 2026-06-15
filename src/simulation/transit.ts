@@ -376,9 +376,7 @@ function disembarkVehicle(
       // units so the carried distance (in tiles) is preserved across
       // segments of different lengths.
       progress:
-        nextSteps > 0
-          ? ((vehicle.progress - 1) * currentSteps) / nextSteps
-          : 0,
+        nextSteps > 0 ? ((vehicle.progress - 1) * currentSteps) / nextSteps : 0,
     },
   };
 }

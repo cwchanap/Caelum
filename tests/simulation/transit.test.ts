@@ -668,10 +668,7 @@ describe("distance-based vehicle movement", () => {
     const after = tickVehicles(preTick, 3.0);
 
     expect(after.transit.vehicles[0]!.segmentIndex).toBe(1);
-    expect(after.transit.vehicles[0]!.progress).toBeCloseTo(
-      (0.2 * 8) / 7,
-      5,
-    );
+    expect(after.transit.vehicles[0]!.progress).toBeCloseTo((0.2 * 8) / 7, 5);
   });
 
   it("converts overshoot progress when segments have different lengths (short→long)", () => {

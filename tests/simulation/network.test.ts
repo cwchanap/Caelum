@@ -257,11 +257,21 @@ describe("findTilePath one-way roads", () => {
       ...interiorXs.map((x) => ({ x, y: 9, oneWay: "west" as const })),
     ]);
 
-    const forward = findTilePath(state.map, { x: 7, y: 8 }, { x: 15, y: 8 }, "bus");
+    const forward = findTilePath(
+      state.map,
+      { x: 7, y: 8 },
+      { x: 15, y: 8 },
+      "bus",
+    );
     expect(forward).not.toBeNull();
     expect(forward?.every((p) => p.y === 8)).toBe(true);
 
-    const reverse = findTilePath(state.map, { x: 15, y: 8 }, { x: 7, y: 8 }, "bus");
+    const reverse = findTilePath(
+      state.map,
+      { x: 15, y: 8 },
+      { x: 7, y: 8 },
+      "bus",
+    );
     expect(reverse).not.toBeNull();
     // The return trip cannot use the eastbound top row, so it drops to y=9.
     expect(reverse?.some((p) => p.y === 9)).toBe(true);
