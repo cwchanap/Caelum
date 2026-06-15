@@ -147,7 +147,7 @@ export function setTileOneWay(
   return {
     ...map,
     tiles: map.tiles.map((tile) => {
-      if (!samePoint(tile, point)) {
+      if (!samePoint(tile, point) || tile.kind !== "road") {
         return tile;
       }
       if (oneWay === undefined) {

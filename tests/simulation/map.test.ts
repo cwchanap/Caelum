@@ -258,4 +258,15 @@ describe("road direction helpers", () => {
     const stillRoad = setTileKind(withDir, { x: 8, y: 8 }, "road");
     expect(getTile(stillRoad, { x: 8, y: 8 })?.oneWay).toBe("east");
   });
+
+  it("ignores one-way on non-road tiles", () => {
+    const state = createInitialGameState();
+    // (2, 3) is residential in the Growing Suburb map.
+    const nonRoad: Point = { x: 2, y: 3 };
+    expect(getTile(state.map, nonRoad)?.kind).toBe("residential");
+    const before = getTile(state.map, nonRoad);
+    const attempted = setTileOneWay(state.map, nonRoad, "east");
+    expect(getTile(attempted, nonRoad)?.oneWay).toBeUndefined();
+    expect(getTile(attempted, nonRoad)).toEqual(before);
+  });
 });
