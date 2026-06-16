@@ -48,6 +48,66 @@ function layLane(
   return { ...withRoad, map: setTileOneWay(withRoad.map, point, direction) };
 }
 
+const REVERSE_OF: Record<RoadDirection, RoadDirection> = {
+  north: "south",
+  east: "west",
+  south: "north",
+  west: "east",
+};
+
+/** Unit offset to the left of travel (right-hand-traffic 2nd-lane placement). */
+const LEFT_OF: Record<RoadDirection, Point> = {
+  north: { x: -1, y: 0 },
+  east: { x: 0, y: -1 },
+  south: { x: 1, y: 0 },
+  west: { x: 0, y: 1 },
+};
+
+/** The reverse-lane tiles for a dual-lane drag (left-of-travel offset of every
+ *  tile in `line`). Empty when the line has no axis. Shared by the gesture and
+ *  the drag preview so both agree on the 2-lane footprint. */
+export function reverseLanePoints(line: Point[]): Point[] {
+  const forward = lineDirection(line);
+  if (forward === null) {
+    return [];
+  }
+  const offset = LEFT_OF[forward];
+  return line.map((point) => ({ x: point.x + offset.x, y: point.y + offset.y }));
+}
+
+/** Lay a *new* reverse lane only on an empty, placeable tile — never hijacks an
+ *  existing road and never runs off the map. */
+function layReverseLane(
+  state: GameState,
+  point: Point,
+  direction: RoadDirection,
+): GameState {
+  if (getTile(state.map, point)?.kind !== "empty") {
+    return state;
+  }
+  const withRoad = layRoad(state, point);
+  if (getTile(withRoad.map, point)?.kind !== "road") {
+    return withRoad;
+  }
+  return { ...withRoad, map: setTileOneWay(withRoad.map, point, direction) };
+}
+
+function applyDualLane(state: GameState, line: Point[]): GameState {
+  const forward = lineDirection(line);
+  if (forward === null) {
+    return line.reduce((acc, point) => layLane(acc, point, undefined), state);
+  }
+  const reverse = REVERSE_OF[forward];
+  const withForward = line.reduce(
+    (acc, point) => layLane(acc, point, forward),
+    state,
+  );
+  return reverseLanePoints(line).reduce(
+    (acc, point) => layReverseLane(acc, point, reverse),
+    withForward,
+  );
+}
+
 /** Apply a >=2-tile road/track drag line. Routes by tool + road preset and
  *  composes existing pure helpers. Single-tile taps and the remove tool are
  *  handled by the runtime via the legacy click path, not here. */
@@ -63,6 +123,9 @@ export function applyDragGesture(
     return line.reduce((acc, point) => layTrack(acc, point), state);
   }
   if (ui.activeTool === "road") {
+    if (ui.roadPreset === "dualBidirectional") {
+      return applyDualLane(state, line);
+    }
     const direction =
       ui.roadPreset === "oneWay" ? (lineDirection(line) ?? undefined) : undefined;
     return line.reduce((acc, point) => layLane(acc, point, direction), state);
