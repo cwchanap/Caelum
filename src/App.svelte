@@ -4,7 +4,7 @@
   import HudDrawer from "./components/hud/HudDrawer.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
-  import type { BuildingType, Overlay, Tool } from "./domain/types";
+  import type { BuildingType, Overlay, RoadPreset, Tool } from "./domain/types";
   import type { RuntimeController, RuntimeSnapshot } from "./runtime/types";
   import type { HudCategory } from "./ui/uiState";
 
@@ -43,6 +43,10 @@
 
   function handleRotateBuilding(): void {
     setSnapshot(runtime.rotateBuilding());
+  }
+
+  function handleSetRoadPreset(preset: RoadPreset): void {
+    setSnapshot(runtime.setRoadPreset(preset));
   }
 
   function handleSetOverlay(overlay: Overlay | null): void {
@@ -175,6 +179,7 @@
         activeOverlay={snapshot.ui.activeOverlay}
         selectedBuilding={snapshot.ui.selectedBuilding}
         buildingRotation={snapshot.ui.buildingRotation}
+        roadPreset={snapshot.ui.roadPreset}
         inspector={snapshot.shell.inspector}
         routeDraft={snapshot.shell.routeDraft}
         routes={snapshot.shell.routes}
@@ -182,6 +187,7 @@
         onSetTool={handleSetTool}
         onSetBuilding={handleSetBuilding}
         onRotateBuilding={handleRotateBuilding}
+        onSetRoadPreset={handleSetRoadPreset}
         onSetOverlay={handleSetOverlay}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
         onRemoveDraftStop={handleRemoveDraftStop}
