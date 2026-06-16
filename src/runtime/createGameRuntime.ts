@@ -15,6 +15,7 @@ import {
   handleTileClick as applyTileClick,
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
+import { applyDragGesture, axisLockedLine } from "../ui/roadDrag";
 import { createUiState } from "../ui/uiState";
 import { selectShellState } from "./runtimeSelectors";
 import type {
@@ -314,8 +315,32 @@ export function createGameRuntime(): RuntimeController {
       return commit(state, ui.dragStart === null ? ui : { ...ui, dragStart: null });
     },
     commitDrag() {
-      // Placeholder: clears drag without building roads. Task 6 will replace this.
-      return commit(state, ui.dragStart === null ? ui : { ...ui, dragStart: null });
+      if (ui.dragStart === null || ui.hoverTile === null) {
+        return commit(
+          state,
+          ui.dragStart === null ? ui : { ...ui, dragStart: null },
+        );
+      }
+      const line = axisLockedLine(ui.dragStart, ui.hoverTile);
+      // A tap (single tile) reuses the legacy click path so road cycling and
+      // the full remove (buildings/nodes/routes + UI cleanup) are preserved.
+      if (line.length <= 1) {
+        const result = applyTileClick(state, ui, line[0]);
+        return commit(result.state, { ...result.ui, dragStart: null });
+      }
+      // A remove drag deletes every tile via the same full per-tile removal.
+      if (ui.activeTool === "remove") {
+        let nextState = state;
+        let nextUi = ui;
+        for (const point of line) {
+          const result = applyTileClick(nextState, nextUi, point);
+          nextState = result.state;
+          nextUi = result.ui;
+        }
+        return commit(nextState, { ...nextUi, dragStart: null });
+      }
+      // A road/track build drag uses the preset-aware line painter.
+      return commit(applyDragGesture(state, ui, line), { ...ui, dragStart: null });
     },
     rotateBuilding() {
       const currentIndex = rotations.indexOf(ui.buildingRotation);
