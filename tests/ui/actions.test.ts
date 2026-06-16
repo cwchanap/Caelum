@@ -1016,4 +1016,72 @@ describe("draft route path validation", () => {
     expect(result.ui).toBe(draft.ui);
     expect(result.state.transit.routes).toEqual([]);
   });
+
+  it("rejects finishing when a draft stop id no longer resolves (fail-closed)", () => {
+    // Three stops drafted on the y=8 road. Delete the first stop from state
+    // without clearing the draft (simulating a stale id). distinctValidStopCount
+    // still sees 2 valid stops (stop-002, stop-003) so the count gate passes,
+    // but closingLoopIsPathable must fail closed — returning false rather than
+    // allowing a route over a vanished node (which would create a pathBroken
+    // orphan, the exact state this guard exists to prevent).
+    const { state } = busDraftState();
+    let draft = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 7, y: 8 },
+    );
+    draft = handleTileClick(draft.state, draft.ui, { x: 15, y: 8 });
+    draft = handleTileClick(draft.state, draft.ui, { x: 22, y: 8 });
+    expect(draft.ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+      "stop-003",
+    ]);
+
+    const stale: GameState = {
+      ...draft.state,
+      transit: {
+        ...draft.state.transit,
+        stops: draft.state.transit.stops.filter((s) => s.id !== "stop-001"),
+      },
+    };
+
+    const result = finishDraftRoute(stale, draft.ui);
+
+    expect(result.state).toBe(stale);
+    expect(result.ui).toBe(draft.ui);
+    expect(result.state.transit.routes).toEqual([]);
+  });
+
+  it("rejects finishing a metro line when the closing loop track is severed after drafting", () => {
+    // Metro tracks are undirected, so on a static map a valid forward draft
+    // always implies a valid closing loop (the reverse path exists through the
+    // same track). The guard is still meaningful when the map changes between
+    // drafting and finishing: sever the track so the closing loop
+    // (last -> first) becomes unpathable even though the stale draft paths
+    // still show a connection.
+    let state = createInitialGameState();
+    state = withTrack(state, trackRow(8, 7, 15));
+    state = addMetroStation(state, { x: 7, y: 8 });
+    state = addMetroStation(state, { x: 15, y: 8 });
+
+    let draft = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "metroLine" as const },
+      { x: 7, y: 8 },
+    );
+    draft = handleTileClick(draft.state, draft.ui, { x: 15, y: 8 });
+    expect(draft.ui.draftStationIds).toEqual(["station-001", "station-002"]);
+
+    // Sever the track between the two stations after the draft was accepted.
+    const severed = removeInfrastructureAtTile(draft.state, { x: 11, y: 8 });
+
+    const result = finishDraftRoute(severed, draft.ui);
+
+    // Closing loop (15,8)->(7,8) has no track path → finish rejected, no line
+    // created, draft preserved.
+    expect(result.state).toBe(severed);
+    expect(result.ui).toBe(draft.ui);
+    expect(result.state.transit.metroLines).toEqual([]);
+  });
 });

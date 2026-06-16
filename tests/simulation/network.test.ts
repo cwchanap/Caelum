@@ -221,6 +221,48 @@ describe("findTilePath one-way roads", () => {
     ).toBeNull();
   });
 
+  it("permits forward traversal of a north one-way road and blocks the reverse", () => {
+    // The x=7 column is a road. Make (7,9) one-way north so the forward
+    // trip (7,10)->(7,8) crosses it heading north, but the reverse is blocked.
+    const state = withOneWay(createInitialGameState(), [
+      { x: 7, y: 9, oneWay: "north" },
+    ]);
+    // Forward: (7,10) -> (7,8) crosses (7,9) heading north.
+    expect(
+      findTilePath(state.map, { x: 7, y: 10 }, { x: 7, y: 8 }, "bus"),
+    ).toEqual([
+      { x: 7, y: 10 },
+      { x: 7, y: 9 },
+      { x: 7, y: 8 },
+    ]);
+    // Reverse: (7,8) -> (7,10) reaches (7,9) but cannot exit south (only
+    // north), and no other vertical road connects y=8 to y=10 near x=7.
+    expect(
+      findTilePath(state.map, { x: 7, y: 8 }, { x: 7, y: 10 }, "bus"),
+    ).toBeNull();
+  });
+
+  it("permits forward traversal of a south one-way road and blocks the reverse", () => {
+    // The x=7 column is a road. Make (7,9) one-way south so the forward
+    // trip (7,8)->(7,10) crosses it heading south, but the reverse is blocked.
+    const state = withOneWay(createInitialGameState(), [
+      { x: 7, y: 9, oneWay: "south" },
+    ]);
+    // Forward: (7,8) -> (7,10) crosses (7,9) heading south.
+    expect(
+      findTilePath(state.map, { x: 7, y: 8 }, { x: 7, y: 10 }, "bus"),
+    ).toEqual([
+      { x: 7, y: 8 },
+      { x: 7, y: 9 },
+      { x: 7, y: 10 },
+    ]);
+    // Reverse: (7,10) -> (7,8) reaches (7,9) but cannot exit north (only
+    // south), and no other vertical road connects y=10 to y=8 near x=7.
+    expect(
+      findTilePath(state.map, { x: 7, y: 10 }, { x: 7, y: 8 }, "bus"),
+    ).toBeNull();
+  });
+
   it("leaves two-way roads traversable in both directions", () => {
     const state = createInitialGameState();
     expect(

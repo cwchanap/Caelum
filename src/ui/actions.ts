@@ -264,8 +264,11 @@ export function finishDraftRoute(
 /**
  * Check that the closing loop segment (last node -> first node) has a valid
  * tile path. Forward draft validation already proves every consecutive pair
- * connects, but under directed graphs that does not guarantee the loop closes.
- * Returns true when the closing path exists (or there are fewer than 2 nodes).
+ * connects, but the closing pair (last -> first) is never validated during
+ * drafting — neither for directed bus roads nor for undirected metro track
+ * (the track can be severed between drafting and finishing). Returns true
+ * when the closing path exists (or there are fewer than 2 nodes), false
+ * (fail-closed) when a referenced node has vanished.
  */
 function closingLoopIsPathable(
   state: GameState,
@@ -281,7 +284,10 @@ function closingLoopIsPathable(
   const first = nodes.find((node) => node.id === ids[0]);
   const last = nodes.find((node) => node.id === ids.at(-1));
   if (first === undefined || last === undefined) {
-    return true;
+    // A draft node id no longer resolves — fail closed (block the finish)
+    // rather than committing a route over a vanished node, which would
+    // produce exactly the orphaned pathBroken state this guard prevents.
+    return false;
   }
   return (
     findTilePath(state.map, last.position, first.position, mode) !== null
