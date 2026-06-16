@@ -33,6 +33,7 @@ export type Tool =
   | "road"
   | "track"
   | "remove";
+export type RoadPreset = "twoWay" | "oneWay" | "dualBidirectional";
 export type Overlay =
   | "coverage"
   | "crowding"
