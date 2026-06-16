@@ -144,3 +144,65 @@ describe("applyDragGesture track", () => {
     expect(next.budget).toBe(state.budget - 4 * COSTS.track);
   });
 });
+
+describe("applyDragGesture dual bidirectional", () => {
+  const dualUi = {
+    ...createUiState(),
+    activeTool: "road" as const,
+    roadPreset: "dualBidirectional" as const,
+  };
+
+  it("east drag: forward east on the dragged row, west on the lane to the north", () => {
+    const state = createInitialGameState();
+    const line = axisLockedLine({ x: 1, y: 1 }, { x: 4, y: 1 });
+    const next = applyDragGesture(state, dualUi, line);
+    for (const x of [1, 2, 3, 4]) {
+      expect(tileAt(next, x, 1).oneWay).toBe("east");
+      expect(tileAt(next, x, 0).oneWay).toBe("west");
+    }
+    expect(next.budget).toBe(state.budget - 8 * COSTS.road);
+  });
+
+  it("west drag: forward west, east on the lane to the south", () => {
+    const state = createInitialGameState();
+    const line = axisLockedLine({ x: 4, y: 1 }, { x: 1, y: 1 });
+    const next = applyDragGesture(state, dualUi, line);
+    for (const x of [1, 2, 3, 4]) {
+      expect(tileAt(next, x, 1).oneWay).toBe("west");
+      expect(tileAt(next, x, 2).oneWay).toBe("east");
+    }
+  });
+
+  it("south drag: forward south, north on the lane to the east", () => {
+    const state = createInitialGameState();
+    const line = axisLockedLine({ x: 24, y: 0 }, { x: 24, y: 4 });
+    const next = applyDragGesture(state, dualUi, line);
+    for (const y of [0, 1, 2, 3, 4]) {
+      expect(tileAt(next, 24, y).oneWay).toBe("south");
+      expect(tileAt(next, 25, y).oneWay).toBe("north");
+    }
+  });
+
+  it("north drag: forward north, south on the lane to the west", () => {
+    const state = createInitialGameState();
+    const line = axisLockedLine({ x: 24, y: 4 }, { x: 24, y: 0 });
+    const next = applyDragGesture(state, dualUi, line);
+    for (const y of [0, 1, 2, 3, 4]) {
+      expect(tileAt(next, 24, y).oneWay).toBe("north");
+      expect(tileAt(next, 23, y).oneWay).toBe("south");
+    }
+  });
+
+  it("never hijacks an existing road for the reverse lane", () => {
+    const state = createInitialGameState();
+    // Row y=9 is empty; the lane to the north (y=8) is an existing road row.
+    const line = axisLockedLine({ x: 24, y: 9 }, { x: 26, y: 9 });
+    const next = applyDragGesture(state, dualUi, line);
+    for (const x of [24, 25, 26]) {
+      expect(tileAt(next, x, 9).oneWay).toBe("east"); // forward lane laid
+      expect(tileAt(next, x, 8).kind).toBe("road");
+      expect(tileAt(next, x, 8).oneWay).toBeUndefined(); // existing road untouched
+    }
+    expect(next.budget).toBe(state.budget - 3 * COSTS.road); // reverse lane skipped
+  });
+});
