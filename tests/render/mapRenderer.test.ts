@@ -99,4 +99,35 @@ describe("renderMap one-way arrows", () => {
     expect(context.moveTo).toHaveBeenCalledWith(264, 272); // tail (west of center)
     expect(context.lineTo).toHaveBeenCalledWith(280, 272); // tip (east of center)
   });
+
+  it("draws both chevron-head barbs from the tip", () => {
+    // The chevron head is the most error-prone perp/sign math: two barbs
+    // angled back from the tip along the perpendicular axis. Verify both
+    // barbs start at the tip and land symmetrically about the arrow axis.
+    const state = withOneWay(createInitialGameState(), { x: 8, y: 8 }, "east");
+
+    const context = ctx();
+    renderMap(context, state);
+
+    // tip = (280, 272); head = tileSize/6.
+    const head = 32 / 6;
+    // Both barbs begin at the tip.
+    expect(context.moveTo).toHaveBeenCalledWith(280, 272);
+    // Upper barb (perp = (0,-1) for east) and lower barb (perp reflected).
+    expect(context.lineTo).toHaveBeenCalledWith(280 - head, 272 - head);
+    expect(context.lineTo).toHaveBeenCalledWith(280 - head, 272 + head);
+  });
+
+  it("draws no arrow for two-way road tiles", () => {
+    // The initial map has roads (y=8, x=7/15/22) but they are all two-way
+    // (oneWay undefined) with no track. Neither the track-spoke layer nor
+    // the one-way arrow layer should issue any path commands.
+    const state = createInitialGameState();
+
+    const context = ctx();
+    renderMap(context, state);
+
+    expect(context.moveTo).not.toHaveBeenCalled();
+    expect(context.lineTo).not.toHaveBeenCalled();
+  });
 });

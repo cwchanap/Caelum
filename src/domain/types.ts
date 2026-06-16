@@ -45,7 +45,7 @@ export interface Point {
   y: number;
 }
 
-/** Unit direction vector for each road arrow; single source of truth. */
+/** Unit direction vector for each road arrow (canonical direction -> vector). */
 export const ROAD_DIRECTION_OFFSET: Record<RoadDirection, Point> = {
   north: { x: 0, y: -1 },
   east: { x: 1, y: 0 },

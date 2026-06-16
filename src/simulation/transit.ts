@@ -727,8 +727,8 @@ export function layTrack(state: GameState, point: Point): GameState {
   });
 }
 
-// two-way -> north -> east -> south -> west -> two-way. The cardinal order
-// matches network.ts neighborOffsets for consistency.
+// Player-facing cycle order for the road tool. This is a pure UX choice and
+// is NOT coupled to network.ts BFS expansion order.
 const ROAD_DIRECTION_CYCLE: readonly (RoadDirection | undefined)[] = [
   undefined,
   "north",
