@@ -1,4 +1,4 @@
-import type { GameState, Point } from "../domain/types";
+import type { GameState, Point, Tool } from "../domain/types";
 import {
   BUILDING_CATALOG,
   canPlaceBuilding,
@@ -6,6 +6,7 @@ import {
 } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
 import { stopCoverageRadius } from "../simulation/transit";
+import { axisLockedLine, reverseLanePoints } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
@@ -82,6 +83,35 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
+const DRAG_PREVIEW_TOOLS: Tool[] = ["road", "track", "remove"];
+
+function renderDragPreview(ctx: CanvasRenderingContext2D, ui: UiState): void {
+  if (
+    ui.dragStart === null ||
+    ui.hoverTile === null ||
+    !DRAG_PREVIEW_TOOLS.includes(ui.activeTool)
+  ) {
+    return;
+  }
+  const isDelete = ui.activeTool === "remove";
+  ctx.fillStyle = isDelete ? colors.previewInvalid : colors.previewValid;
+  ctx.strokeStyle = isDelete
+    ? colors.previewInvalidStroke
+    : colors.previewValidStroke;
+  ctx.lineWidth = 2;
+  const line = axisLockedLine(ui.dragStart, ui.hoverTile);
+  // Dual preset shows both lanes so the 2-lane footprint is visible while
+  // dragging. Direction is conveyed by the cursor badge and committed arrows.
+  const tiles =
+    ui.activeTool === "road" && ui.roadPreset === "dualBidirectional"
+      ? [...line, ...reverseLanePoints(line)]
+      : line;
+  for (const point of tiles) {
+    fillTile(ctx, point);
+    strokeTile(ctx, point);
+  }
+}
+
 export function renderOverlays(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -154,6 +184,11 @@ export function renderOverlays(
         }
       }
     }
+  }
+
+  if (ui.dragStart !== null) {
+    renderDragPreview(ctx, ui);
+    return;
   }
 
   if (ui.hoverTile !== null && ui.selectedBuilding !== null) {
