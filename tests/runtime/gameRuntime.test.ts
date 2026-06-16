@@ -380,3 +380,62 @@ describe("route creation and management", () => {
     expect(snapshot.state.transit.routes).toEqual([]);
   });
 });
+
+describe("runtime road drag", () => {
+  function tileKind(runtime: ReturnType<typeof createGameRuntime>, x: number, y: number) {
+    return runtime
+      .getSnapshot()
+      .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;
+  }
+
+  it("builds a road line from startDrag -> hover -> commitDrag", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setHoverTile({ x: 4, y: 0 });
+    const snap = runtime.commitDrag();
+    for (const x of [1, 2, 3, 4]) {
+      expect(tileKind(runtime, x, 0)).toBe("road");
+    }
+    expect(snap.ui.dragStart).toBeNull();
+  });
+
+  it("treats a zero-length drag as a tap (cycles an existing road's direction)", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("road");
+    runtime.startDrag({ x: 8, y: 8 }); // existing road tile
+    runtime.setHoverTile({ x: 8, y: 8 });
+    runtime.commitDrag();
+    expect(
+      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 8 && t.y === 8)
+        ?.oneWay,
+    ).toBe("north"); // first cycle: undefined -> north
+  });
+
+  it("bulldozes a line with the remove tool drag", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setHoverTile({ x: 3, y: 0 });
+    runtime.commitDrag();
+    runtime.setTool("remove");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setHoverTile({ x: 3, y: 0 });
+    runtime.commitDrag();
+    for (const x of [1, 2, 3]) {
+      expect(tileKind(runtime, x, 0)).toBe("empty");
+    }
+  });
+
+  it("cancelDrag clears the drag without building", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("road");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setHoverTile({ x: 4, y: 0 });
+    runtime.cancelDrag();
+    expect(runtime.getSnapshot().ui.dragStart).toBeNull();
+    expect(tileKind(runtime, 4, 0)).toBe("empty");
+  });
+});
