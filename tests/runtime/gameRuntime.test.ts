@@ -62,13 +62,13 @@ describe("Game Runtime", () => {
     runtime.tick(1);
     runtime.setOverlay("growth");
     runtime.handleTileClick({ x: 5, y: 5 });
-    runtime.setHudCategory("manage");
     runtime.setTool("busStop");
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.handleTileClick({ x: 15, y: 8 });
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.setHudCategory("manage");
 
     const beforeReset = runtime.getSnapshot();
     expect(beforeReset.state.paused).toBe(false);
@@ -437,5 +437,22 @@ describe("runtime road drag", () => {
     runtime.cancelDrag();
     expect(runtime.getSnapshot().ui.dragStart).toBeNull();
     expect(tileKind(runtime, 4, 0)).toBe("empty");
+  });
+});
+
+describe("build drawer auto-hide", () => {
+  it("closes the drawer when a tool or building is selected, but not on preset change", () => {
+    const runtime = createGameRuntime();
+    runtime.setHudCategory("build");
+    runtime.setTool("road");
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+
+    runtime.setHudCategory("build");
+    runtime.setRoadPreset("oneWay");
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
+
+    runtime.setHudCategory("build");
+    runtime.setBuilding("smallHouse");
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
   });
 });

@@ -45,6 +45,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     dragStart: null,
+    activeHudCategory: null,
   };
 }
 
@@ -66,6 +67,7 @@ function nextBuildingUiState(
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     dragStart: null,
+    activeHudCategory: null,
   };
 }
 
