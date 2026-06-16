@@ -28,6 +28,8 @@ function samePoint(left: Point | null, right: Point | null): boolean {
   return left?.x === right?.x && left?.y === right?.y;
 }
 
+const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove"]);
+
 const rotations = [0, 90, 180, 270] as const;
 
 function nextToolUiState(activeTool: Tool, current = createUiState()) {
@@ -221,6 +223,10 @@ export function createGameRuntime(): RuntimeController {
         return;
       }
 
+      if (DRAG_TOOLS.has(ui.activeTool)) {
+        return; // road/track/remove are driven by pointerdown/up below.
+      }
+
       const point = canvasToTile(
         canvas,
         event.clientX,
@@ -243,7 +249,31 @@ export function createGameRuntime(): RuntimeController {
       );
     };
 
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (canvas === null || !DRAG_TOOLS.has(ui.activeTool)) {
+        return;
+      }
+      const point = canvasToTile(canvas, event.clientX, event.clientY, state.map);
+      if (point !== null) {
+        api.startDrag(point);
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent): void => {
+      if (canvas === null || ui.dragStart === null) {
+        return;
+      }
+      const point = canvasToTile(canvas, event.clientX, event.clientY, state.map);
+      if (point !== null) {
+        api.setHoverTile(point);
+      }
+      api.commitDrag();
+    };
+
     const handlePointerLeave = (): void => {
+      if (ui.dragStart !== null) {
+        api.cancelDrag();
+      }
       api.setHoverTile(null);
     };
 
@@ -253,6 +283,8 @@ export function createGameRuntime(): RuntimeController {
 
     canvas.addEventListener("click", handleClick);
     canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointerup", handlePointerUp);
     canvas.addEventListener("pointerleave", handlePointerLeave);
     globalThis.window?.addEventListener("resize", handleResize);
     render();
@@ -264,6 +296,8 @@ export function createGameRuntime(): RuntimeController {
 
       canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("pointermove", handlePointerMove);
+      canvas.removeEventListener("pointerdown", handlePointerDown);
+      canvas.removeEventListener("pointerup", handlePointerUp);
       canvas.removeEventListener("pointerleave", handlePointerLeave);
       globalThis.window?.removeEventListener("resize", handleResize);
       host.innerHTML = "";
