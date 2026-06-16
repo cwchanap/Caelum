@@ -2,6 +2,7 @@
   import type {
     BuildingRotation,
     BuildingType,
+    RoadPreset,
     Tool,
   } from "../../../domain/types";
   import { BUILDING_CATALOG } from "../../../simulation/buildings";
@@ -13,18 +14,22 @@
     activeTool: Tool;
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
+    roadPreset: RoadPreset;
     onSetTool: (tool: Tool) => void;
     onSetBuilding: (building: BuildingType) => void;
     onRotateBuilding: () => void;
+    onSetRoadPreset: (preset: RoadPreset) => void;
   }
 
   let {
     activeTool,
     selectedBuilding,
     buildingRotation,
+    roadPreset,
     onSetTool,
     onSetBuilding,
     onRotateBuilding,
+    onSetRoadPreset,
   }: Props = $props();
 
   const globalTools: Array<{ id: GlobalTool; label: string }> = [
@@ -35,6 +40,12 @@
   const networkTools: Array<{ id: NetworkTool; label: string }> = [
     { id: "road", label: "Road" },
     { id: "track", label: "Track" },
+  ];
+
+  const roadPresets: Array<{ id: RoadPreset; label: string }> = [
+    { id: "twoWay", label: "1-Lane" },
+    { id: "oneWay", label: "1-Lane One-Way" },
+    { id: "dualBidirectional", label: "2-Lane" },
   ];
 
   const buildToolIds: BuildingType[] = [
@@ -92,6 +103,23 @@
         </button>
       {/each}
     </div>
+    {#if activeTool === "road"}
+      <div class="toolbar toolbar--compact" aria-label="Road presets">
+        {#each roadPresets as preset, index (preset.id)}
+          <button
+            type="button"
+            data-road-preset={preset.id}
+            aria-pressed={roadPreset === preset.id}
+            aria-label={preset.label}
+            class:active={roadPreset === preset.id}
+            onclick={() => onSetRoadPreset(preset.id)}
+          >
+            <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
+            <span class="tool-label" aria-hidden="true">{preset.label}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </section>
 
   <section class="panel-section build-section">

@@ -3,6 +3,7 @@
     BuildingRotation,
     BuildingType,
     Overlay,
+    RoadPreset,
     Tool,
   } from "../../domain/types";
   import type {
@@ -26,6 +27,7 @@
     activeOverlay: Overlay | null;
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
+    roadPreset: RoadPreset;
     inspector: ShellInspectorState | null;
     routeDraft: ShellRouteDraftState | null;
     routes: ShellRouteListState;
@@ -33,6 +35,7 @@
     onSetTool: (tool: Tool) => void;
     onSetBuilding: (building: BuildingType) => void;
     onRotateBuilding: () => void;
+    onSetRoadPreset: (preset: RoadPreset) => void;
     onSetOverlay: (overlay: Overlay | null) => void;
     onAssignRouteToPlatform: (
       nodeId: string,
@@ -92,9 +95,11 @@
         activeTool={p.activeTool}
         selectedBuilding={p.selectedBuilding}
         buildingRotation={p.buildingRotation}
+        roadPreset={p.roadPreset}
         onSetTool={p.onSetTool}
         onSetBuilding={p.onSetBuilding}
         onRotateBuilding={p.onRotateBuilding}
+        onSetRoadPreset={p.onSetRoadPreset}
       />
     {:else if p.category === "routes"}
       <RoutesPanel

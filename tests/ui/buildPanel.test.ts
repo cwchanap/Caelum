@@ -8,13 +8,39 @@ function renderPanel(onSetTool = vi.fn()) {
       activeTool: "inspect" as const,
       selectedBuilding: null,
       buildingRotation: 0 as const,
+      roadPreset: "twoWay" as const,
       onSetTool,
       onSetBuilding: vi.fn(),
       onRotateBuilding: vi.fn(),
+      onSetRoadPreset: vi.fn(),
     },
   });
   return onSetTool;
 }
+
+describe("BuildPanel road presets", () => {
+  it("renders the three road presets and reports selection", async () => {
+    const onSetRoadPreset = vi.fn();
+    render(BuildPanel, {
+      props: {
+        activeTool: "road" as const,
+        selectedBuilding: null,
+        buildingRotation: 0 as const,
+        roadPreset: "twoWay" as const,
+        onSetTool: vi.fn(),
+        onSetBuilding: vi.fn(),
+        onRotateBuilding: vi.fn(),
+        onSetRoadPreset,
+      },
+    });
+    expect(screen.getByRole("button", { name: "1-Lane" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "1-Lane One-Way" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "2-Lane" })).toBeVisible();
+
+    await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
+    expect(onSetRoadPreset).toHaveBeenCalledWith("dualBidirectional");
+  });
+});
 
 describe("BuildPanel network tools", () => {
   it("renders Road and Track buttons", () => {
