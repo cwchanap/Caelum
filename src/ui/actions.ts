@@ -266,9 +266,12 @@ export function finishDraftRoute(
  * tile path. Forward draft validation already proves every consecutive pair
  * connects, but the closing pair (last -> first) is never validated during
  * drafting — neither for directed bus roads nor for undirected metro track
- * (the track can be severed between drafting and finishing). Returns true
- * when the closing path exists (or there are fewer than 2 nodes), false
- * (fail-closed) when a referenced node has vanished.
+ * (the track can be severed between drafting and finishing). Every draft id
+ * is resolved first so a vanished middle node is also rejected; endpoint-only
+ * resolution would let a stale middle id pass distinctValidStopCount (>= 2
+ * from the endpoints alone) and commit a pathBroken orphan. Returns true when
+ * the closing path exists (or there are fewer than 2 nodes), false
+ * (fail-closed) when any referenced node has vanished.
  */
 function closingLoopIsPathable(
   state: GameState,
@@ -281,17 +284,21 @@ function closingLoopIsPathable(
   }
   const nodes: Array<Stop | Station> =
     kind === "stop" ? state.transit.stops : state.transit.stations;
-  const first = nodes.find((node) => node.id === ids[0]);
-  const last = nodes.find((node) => node.id === ids.at(-1));
-  if (first === undefined || last === undefined) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  // Resolve every draft id, not just the endpoints — a vanished middle node
+  // would otherwise slip past the endpoint-only check, pass distinctValidStop
+  // count (endpoints alone can satisfy >= 2), and commit a pathBroken route
+  // with no vehicle while clearing the draft.
+  const resolved = ids.map((id) => nodeById.get(id));
+  if (resolved.some((node) => node === undefined)) {
     // A draft node id no longer resolves — fail closed (block the finish)
     // rather than committing a route over a vanished node, which would
     // produce exactly the orphaned pathBroken state this guard prevents.
     return false;
   }
-  return (
-    findTilePath(state.map, last.position, first.position, mode) !== null
-  );
+  const first = resolved[0]!;
+  const last = resolved[resolved.length - 1]!;
+  return findTilePath(state.map, last.position, first.position, mode) !== null;
 }
 
 export function removeDraftNode(

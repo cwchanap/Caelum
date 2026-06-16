@@ -1053,6 +1053,42 @@ describe("draft route path validation", () => {
     expect(result.state.transit.routes).toEqual([]);
   });
 
+  it("rejects finishing when a middle draft stop id no longer resolves (fail-closed)", () => {
+    // Same fail-closed contract as the endpoint case, but the vanished node is
+    // in the middle of the draft. distinctValidStopCount sees 2 valid stops
+    // (stop-001, stop-003) so the count gate passes, and the endpoints both
+    // resolve — so an endpoint-only guard would let this through and commit a
+    // pathBroken route with no vehicle. The guard must resolve every draft id.
+    const { state } = busDraftState();
+    let draft = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "busRoute" as const },
+      { x: 7, y: 8 },
+    );
+    draft = handleTileClick(draft.state, draft.ui, { x: 15, y: 8 });
+    draft = handleTileClick(draft.state, draft.ui, { x: 22, y: 8 });
+    expect(draft.ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+      "stop-003",
+    ]);
+
+    // Remove the MIDDLE stop — endpoints still resolve, count is still >= 2.
+    const stale: GameState = {
+      ...draft.state,
+      transit: {
+        ...draft.state.transit,
+        stops: draft.state.transit.stops.filter((s) => s.id !== "stop-002"),
+      },
+    };
+
+    const result = finishDraftRoute(stale, draft.ui);
+
+    expect(result.state).toBe(stale);
+    expect(result.ui).toBe(draft.ui);
+    expect(result.state.transit.routes).toEqual([]);
+  });
+
   it("rejects finishing a metro line when the closing loop track is severed after drafting", () => {
     // Metro tracks are undirected, so on a static map a valid forward draft
     // always implies a valid closing loop (the reverse path exists through the
