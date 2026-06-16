@@ -298,6 +298,18 @@ describe("runtime assignRouteToPlatform", () => {
   });
 });
 
+describe("runtime road preset", () => {
+  it("sets the road preset and preserves it across tool switches", () => {
+    const runtime = createGameRuntime();
+    runtime.setRoadPreset("oneWay");
+    expect(runtime.getSnapshot().ui.roadPreset).toBe("oneWay");
+    runtime.setTool("track");
+    expect(runtime.getSnapshot().ui.roadPreset).toBe("oneWay");
+    runtime.setBuilding("smallHouse");
+    expect(runtime.getSnapshot().ui.roadPreset).toBe("oneWay");
+  });
+});
+
 describe("route creation and management", () => {
   function withTwoStops() {
     const runtime = createGameRuntime();

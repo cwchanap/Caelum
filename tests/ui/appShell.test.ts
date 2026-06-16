@@ -6,6 +6,7 @@ import type {
   GameState,
   Overlay,
   Point,
+  RoadPreset,
   Tool,
 } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
@@ -82,6 +83,22 @@ function createRuntimeHarness(
         draftStopIds: [],
         draftStationIds: [],
       };
+      return publish();
+    }),
+    setRoadPreset: vi.fn((preset: RoadPreset) => {
+      ui = { ...ui, roadPreset: preset };
+      return publish();
+    }),
+    startDrag: vi.fn((point: Point) => {
+      ui = { ...ui, dragStart: point, hoverTile: point };
+      return publish();
+    }),
+    commitDrag: vi.fn(() => {
+      ui = { ...ui, dragStart: null };
+      return publish();
+    }),
+    cancelDrag: vi.fn(() => {
+      ui = { ...ui, dragStart: null };
       return publish();
     }),
     rotateBuilding: vi.fn(() => {

@@ -3,6 +3,7 @@ import type {
   GameState,
   Overlay,
   Point,
+  RoadPreset,
   Tool,
 } from "../domain/types";
 import type { HudCategory, UiState } from "../ui/uiState";
@@ -123,6 +124,10 @@ export interface RuntimeController {
   resetUi: () => RuntimeSnapshot;
   setTool: (tool: Tool) => RuntimeSnapshot;
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
+  setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
+  startDrag: (point: Point) => RuntimeSnapshot;
+  commitDrag: () => RuntimeSnapshot;
+  cancelDrag: () => RuntimeSnapshot;
   rotateBuilding: () => RuntimeSnapshot;
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeSnapshot;

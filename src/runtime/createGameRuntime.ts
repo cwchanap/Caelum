@@ -42,6 +42,8 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     draftStationPaths:
       activeTool === "metroLine" ? current.draftStationPaths : [],
     selectedRouteId: null,
+    roadPreset: current.roadPreset,
+    dragStart: null,
   };
 }
 
@@ -61,6 +63,8 @@ function nextBuildingUiState(
     draftStopPaths: [],
     draftStationPaths: [],
     selectedRouteId: null,
+    roadPreset: current.roadPreset,
+    dragStart: null,
   };
 }
 
@@ -296,6 +300,22 @@ export function createGameRuntime(): RuntimeController {
     },
     setBuilding(building) {
       return commit(state, nextBuildingUiState(building, ui));
+    },
+    setRoadPreset(preset) {
+      return commit(
+        state,
+        ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
+      );
+    },
+    startDrag(point) {
+      return commit(state, { ...ui, dragStart: point, hoverTile: point });
+    },
+    cancelDrag() {
+      return commit(state, ui.dragStart === null ? ui : { ...ui, dragStart: null });
+    },
+    commitDrag() {
+      // Placeholder: clears drag without building roads. Task 6 will replace this.
+      return commit(state, ui.dragStart === null ? ui : { ...ui, dragStart: null });
     },
     rotateBuilding() {
       const currentIndex = rotations.indexOf(ui.buildingRotation);
