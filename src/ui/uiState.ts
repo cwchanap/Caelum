@@ -3,6 +3,7 @@ import type {
   BuildingType,
   Overlay,
   Point,
+  RoadPreset,
   Tool,
 } from "../domain/types";
 
@@ -20,6 +21,10 @@ export type HudCategory = PrimaryHudCategory | "inspect";
 
 export interface UiState {
   activeTool: Tool;
+  /** Road build style for the road tool's drag gesture. */
+  roadPreset: RoadPreset;
+  /** Pressed tile during an in-progress road/track/remove drag; null otherwise. */
+  dragStart: Point | null;
   activeOverlay: Overlay | null;
   selectedId: string | null;
   selectedNodeKind: "stop" | "station" | null;
@@ -39,6 +44,8 @@ export interface UiState {
 export function createUiState(): UiState {
   return {
     activeTool: "inspect",
+    roadPreset: "twoWay",
+    dragStart: null,
     activeOverlay: null,
     selectedId: null,
     selectedNodeKind: null,
