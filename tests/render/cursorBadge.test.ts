@@ -25,7 +25,12 @@ describe("renderCursorBadge", () => {
   it("draws nothing when there is no hover tile", () => {
     const { ctx, calls } = badgeCtx();
     const state = createInitialGameState();
-    renderCursorBadge(ctx, state, createUiState(), getBoardTransform(ctx.canvas, state.map));
+    renderCursorBadge(
+      ctx,
+      state,
+      createUiState(),
+      getBoardTransform(ctx.canvas, state.map),
+    );
     expect(calls).toHaveLength(0);
   });
 

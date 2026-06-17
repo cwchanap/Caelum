@@ -1,8 +1,5 @@
 import type { GameState } from "../domain/types";
-import {
-  BUILDING_CATALOG,
-  canPlaceBuilding,
-} from "../simulation/buildings";
+import { BUILDING_CATALOG, canPlaceBuilding } from "../simulation/buildings";
 import {
   getTile,
   isValidRoadPlacement,
@@ -22,7 +19,12 @@ function badgeText(state: GameState, ui: UiState): string | null {
     const def = BUILDING_CATALOG[ui.selectedBuilding];
     const ok =
       state.budget >= def.cost &&
-      canPlaceBuilding(state, ui.selectedBuilding, ui.hoverTile, ui.buildingRotation);
+      canPlaceBuilding(
+        state,
+        ui.selectedBuilding,
+        ui.hoverTile,
+        ui.buildingRotation,
+      );
     return `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}`;
   }
   switch (ui.activeTool) {

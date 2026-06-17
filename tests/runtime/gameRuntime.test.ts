@@ -382,7 +382,11 @@ describe("route creation and management", () => {
 });
 
 describe("runtime road drag", () => {
-  function tileKind(runtime: ReturnType<typeof createGameRuntime>, x: number, y: number) {
+  function tileKind(
+    runtime: ReturnType<typeof createGameRuntime>,
+    x: number,
+    y: number,
+  ) {
     return runtime
       .getSnapshot()
       .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;

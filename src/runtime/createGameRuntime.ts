@@ -253,7 +253,12 @@ export function createGameRuntime(): RuntimeController {
       if (canvas === null || !DRAG_TOOLS.has(ui.activeTool)) {
         return;
       }
-      const point = canvasToTile(canvas, event.clientX, event.clientY, state.map);
+      const point = canvasToTile(
+        canvas,
+        event.clientX,
+        event.clientY,
+        state.map,
+      );
       if (point !== null) {
         api.startDrag(point);
       }
@@ -263,7 +268,12 @@ export function createGameRuntime(): RuntimeController {
       if (canvas === null || ui.dragStart === null) {
         return;
       }
-      const point = canvasToTile(canvas, event.clientX, event.clientY, state.map);
+      const point = canvasToTile(
+        canvas,
+        event.clientX,
+        event.clientY,
+        state.map,
+      );
       if (point !== null) {
         api.setHoverTile(point);
       }
@@ -348,7 +358,10 @@ export function createGameRuntime(): RuntimeController {
       return commit(state, { ...ui, dragStart: point, hoverTile: point });
     },
     cancelDrag() {
-      return commit(state, ui.dragStart === null ? ui : { ...ui, dragStart: null });
+      return commit(
+        state,
+        ui.dragStart === null ? ui : { ...ui, dragStart: null },
+      );
     },
     commitDrag() {
       if (ui.dragStart === null || ui.hoverTile === null) {
@@ -376,7 +389,10 @@ export function createGameRuntime(): RuntimeController {
         return commit(nextState, { ...nextUi, dragStart: null });
       }
       // A road/track build drag uses the preset-aware line painter.
-      return commit(applyDragGesture(state, ui, line), { ...ui, dragStart: null });
+      return commit(applyDragGesture(state, ui, line), {
+        ...ui,
+        dragStart: null,
+      });
     },
     rotateBuilding() {
       const currentIndex = rotations.indexOf(ui.buildingRotation);
