@@ -250,7 +250,13 @@ export function createGameRuntime(): RuntimeController {
     };
 
     const handlePointerDown = (event: PointerEvent): void => {
-      if (canvas === null || !DRAG_TOOLS.has(ui.activeTool)) {
+      // Only the primary (left) button initiates a drag. Right/middle clicks
+      // would otherwise start a stale drag gesture.
+      if (
+        canvas === null ||
+        event.button !== 0 ||
+        !DRAG_TOOLS.has(ui.activeTool)
+      ) {
         return;
       }
       const point = canvasToTile(
@@ -296,6 +302,7 @@ export function createGameRuntime(): RuntimeController {
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointerup", handlePointerUp);
     canvas.addEventListener("pointerleave", handlePointerLeave);
+    canvas.addEventListener("pointercancel", handlePointerLeave);
     globalThis.window?.addEventListener("resize", handleResize);
     render();
 
@@ -309,6 +316,7 @@ export function createGameRuntime(): RuntimeController {
       canvas.removeEventListener("pointerdown", handlePointerDown);
       canvas.removeEventListener("pointerup", handlePointerUp);
       canvas.removeEventListener("pointerleave", handlePointerLeave);
+      canvas.removeEventListener("pointercancel", handlePointerLeave);
       globalThis.window?.removeEventListener("resize", handleResize);
       host.innerHTML = "";
       canvas = null;
