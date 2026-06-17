@@ -2,6 +2,7 @@ import type { GameMap, GameState, Point } from "../domain/types";
 import type { UiState } from "../ui/uiState";
 import { renderBuildings } from "./buildingRenderer";
 import { renderCitizens } from "./citizenRenderer";
+import { renderCursorBadge } from "./cursorBadge";
 import { renderMap } from "./mapRenderer";
 import { renderOverlays } from "./overlayRenderer";
 import { renderTransit } from "./transitRenderer";
@@ -115,4 +116,6 @@ export function renderGame(
   renderTransit(ctx, state, ui);
   renderCitizens(ctx, state);
   ctx.restore();
+
+  renderCursorBadge(ctx, state, ui, transform);
 }

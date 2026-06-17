@@ -30,4 +30,6 @@ export const colors = {
   previewValidStroke: "#c8ff5c",
   previewInvalidStroke: "#ff5b5b",
   hover: "#111820",
+  badgeBackground: "rgba(17, 24, 32, 0.88)",
+  badgeText: "#e8eef0",
 } as const;
