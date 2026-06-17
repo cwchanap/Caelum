@@ -112,6 +112,14 @@
     }
 
     if (event.key === "Escape") {
+      // An in-flight drag is abandoned first (spec §C/§G): drop the preview
+      // line but keep the active tool and drawer so the player can resume
+      // building. A subsequent Escape (no drag in flight) falls through to the
+      // full reset below.
+      if (snapshot !== null && snapshot.ui.drag !== null) {
+        setSnapshot(runtime.cancelDrag());
+        return;
+      }
       // Escape mirrors the Cancel button (its label is "Cancel · Esc"). Respect
       // the same canCancel gate so Escape can't fire a reset when Cancel is
       // disabled (bare inspect with no in-flight draft, building, or overlay) —
