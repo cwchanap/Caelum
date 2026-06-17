@@ -75,4 +75,34 @@ describe("renderCursorBadge", () => {
     renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
     expect(calls.join("")).toContain("Demolish");
   });
+
+  it("flips the badge below the tile on the top row so it does not clip", () => {
+    const { ctx } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 1, y: 0 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const boxY = (ctx.fillRect as unknown as { mock: { calls: number[][] } })
+      .mock.calls[0][1];
+    // y=0 tile bottom is 32; badge sits just below it instead of above the top.
+    expect(boxY).toBe(32 + 8);
+  });
+
+  it("draws the badge above the tile when there is room", () => {
+    const { ctx } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 1, y: 5 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const boxY = (ctx.fillRect as unknown as { mock: { calls: number[][] } })
+      .mock.calls[0][1];
+    // y=5 tile top is 160; badge sits 20px tall + 8px padding above it.
+    expect(boxY).toBe(160 - 20 - 8);
+  });
 });

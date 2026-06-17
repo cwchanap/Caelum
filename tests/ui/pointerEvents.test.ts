@@ -1,0 +1,268 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { tileSize } from "../../src/render/canvas";
+
+// jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
+// returns null. The runtime guards all of those, but to exercise the real
+// pointer -> commit wiring we stub them here so a genuine PointerEvent flows
+// through mountCanvas's listeners.
+
+class FakePointerEvent extends Event {
+  button: number;
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+  constructor(
+    type: string,
+    init: {
+      button?: number;
+      clientX?: number;
+      clientY?: number;
+      pointerId?: number;
+      bubbles?: boolean;
+    } = {},
+  ) {
+    super(type, { bubbles: init.bubbles ?? true });
+    this.button = init.button ?? 0;
+    this.clientX = init.clientX ?? 0;
+    this.clientY = init.clientY ?? 0;
+    this.pointerId = init.pointerId ?? 1;
+  }
+}
+
+interface Stubbed {
+  getContext: typeof HTMLCanvasElement.prototype.getContext;
+  getBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
+  setPointerCapture: typeof Element.prototype.setPointerCapture;
+  releasePointerCapture: typeof Element.prototype.releasePointerCapture;
+  hasPointerCapture: typeof Element.prototype.hasPointerCapture;
+  pointerEvent: typeof PointerEvent;
+  devicePixelRatio: number | undefined;
+}
+
+let stubs: Stubbed;
+let restore: (() => void) | null = null;
+
+beforeEach(() => {
+  stubs = {
+    getContext: HTMLCanvasElement.prototype.getContext,
+    getBoundingClientRect: Element.prototype.getBoundingClientRect,
+    setPointerCapture: Element.prototype.setPointerCapture,
+    releasePointerCapture: Element.prototype.releasePointerCapture,
+    hasPointerCapture: Element.prototype.hasPointerCapture,
+    pointerEvent: globalThis.PointerEvent,
+    devicePixelRatio: globalThis.devicePixelRatio,
+  };
+
+  const fakeCtx = {
+    canvas: null as unknown as HTMLCanvasElement,
+    clearRect: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    translate: vi.fn(),
+    scale: vi.fn(),
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    arc: vi.fn(),
+    stroke: vi.fn(),
+    fill: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn(() => ({ width: 10 })),
+    fillStyle: "",
+    strokeStyle: "",
+    lineWidth: 0,
+    lineCap: "",
+    lineJoin: "",
+    globalAlpha: 1,
+    font: "",
+    textAlign: "",
+    textBaseline: "",
+  };
+
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
+    fakeCtx.canvas = this;
+    return fakeCtx as unknown as CanvasRenderingContext2D;
+  } as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+  vi.stubGlobal("PointerEvent", FakePointerEvent);
+  vi.stubGlobal("devicePixelRatio", 1);
+
+  const setCapture = vi.fn();
+  const releaseCapture = vi.fn();
+  Element.prototype.setPointerCapture = setCapture as never;
+  Element.prototype.releasePointerCapture = releaseCapture as never;
+  Element.prototype.hasPointerCapture = vi.fn(() => true) as never;
+
+  restore = () => {
+    HTMLCanvasElement.prototype.getContext = stubs.getContext;
+    Element.prototype.getBoundingClientRect = stubs.getBoundingClientRect;
+    Element.prototype.setPointerCapture = stubs.setPointerCapture as never;
+    Element.prototype.releasePointerCapture =
+      stubs.releasePointerCapture as never;
+    Element.prototype.hasPointerCapture = stubs.hasPointerCapture as never;
+    vi.unstubAllGlobals();
+  };
+});
+
+afterEach(() => {
+  restore?.();
+});
+
+/** Mount the runtime canvas against the real board size and return it. */
+function mount() {
+  const runtime = createGameRuntime();
+  const map = runtime.getSnapshot().state.map;
+  const boardWidth = map.width * tileSize;
+  const boardHeight = map.height * tileSize;
+
+  // Map client coords 1:1 onto tiles: clientX = tileX * tileSize + half.
+  Element.prototype.getBoundingClientRect = vi.fn(
+    () =>
+      ({
+        width: boardWidth,
+        height: boardHeight,
+        left: 0,
+        top: 0,
+        right: boardWidth,
+        bottom: boardHeight,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect,
+  );
+
+  const host = document.createElement("div");
+  host.style.width = `${boardWidth}px`;
+  host.style.height = `${boardHeight}px`;
+  document.body.appendChild(host);
+
+  const detach = runtime.mountCanvas(host);
+  const canvas = host.querySelector("canvas") as HTMLCanvasElement;
+
+  return { runtime, canvas, detach };
+}
+
+const center = (tile: { x: number; y: number }) => ({
+  clientX: tile.x * tileSize + tileSize / 2,
+  clientY: tile.y * tileSize + tileSize / 2,
+});
+
+function dispatch(canvas: HTMLCanvasElement, type: string, init: object) {
+  canvas.dispatchEvent(new FakePointerEvent(type, init));
+}
+
+function tileKind(
+  runtime: ReturnType<typeof createGameRuntime>,
+  x: number,
+  y: number,
+) {
+  return runtime
+    .getSnapshot()
+    .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;
+}
+
+describe("runtime canvas pointer wiring", () => {
+  it("builds a road line from a real pointerdown -> move -> pointerup", () => {
+    const { runtime, canvas, detach } = mount();
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+
+    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
+    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointerup", center({ x: 4, y: 0 }));
+
+    // The release tile snaps the final hover, so the line covers 1..4 (not 1..3).
+    for (const x of [1, 2, 3, 4]) {
+      expect(tileKind(runtime, x, 0)).toBe("road");
+    }
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+
+    detach();
+    document.body.innerHTML = "";
+  });
+
+  it("requests pointer capture on drag start so an edge release still commits", () => {
+    const setCapture = Element.prototype.setPointerCapture as unknown as {
+      mock: { calls: number[][] };
+    };
+    const { runtime, canvas, detach } = mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 7,
+    });
+
+    expect(setCapture.mock.calls).toContainEqual([7]);
+    // And is released on commit.
+    const releaseCapture = Element.prototype
+      .releasePointerCapture as unknown as { mock: { calls: number[][] } };
+    dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), pointerId: 7 });
+    expect(releaseCapture.mock.calls).toContainEqual([7]);
+
+    detach();
+    document.body.innerHTML = "";
+  });
+
+  it("ignores a non-primary (right) button press so no drag starts", () => {
+    const { runtime, canvas, detach } = mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), button: 2 });
+    dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
+
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    expect(tileKind(runtime, 3, 0)).toBe("empty");
+
+    detach();
+    document.body.innerHTML = "";
+  });
+
+  it("does not commit on a non-primary button release mid-drag", () => {
+    const { runtime, canvas, detach } = mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
+    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    // A stray right-button release must not place the road early.
+    dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), button: 2 });
+
+    expect(runtime.getSnapshot().ui.drag).not.toBeNull();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+
+    // The primary release then commits normally.
+    dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
+    expect(tileKind(runtime, 1, 0)).toBe("road");
+
+    detach();
+    document.body.innerHTML = "";
+  });
+
+  it("tears the drag down on pointercancel and releases capture", () => {
+    const releaseCapture = Element.prototype
+      .releasePointerCapture as unknown as { mock: { calls: number[][] } };
+    const { runtime, canvas, detach } = mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 5,
+    });
+    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 5,
+    });
+
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    expect(releaseCapture.mock.calls).toContainEqual([5]);
+
+    detach();
+    document.body.innerHTML = "";
+  });
+});

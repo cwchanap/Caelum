@@ -90,15 +90,24 @@ function createRuntimeHarness(
       return publish();
     }),
     startDrag: vi.fn((point: Point) => {
-      ui = { ...ui, dragStart: point, hoverTile: point };
+      const tool = ui.activeTool;
+      if (tool === "road" || tool === "track" || tool === "remove") {
+        ui = { ...ui, drag: { tool, start: point, current: point } };
+      }
+      return publish();
+    }),
+    setDragCurrent: vi.fn((point: Point | null) => {
+      if (point !== null && ui.drag !== null) {
+        ui = { ...ui, drag: { ...ui.drag, current: point } };
+      }
       return publish();
     }),
     commitDrag: vi.fn(() => {
-      ui = { ...ui, dragStart: null };
+      ui = { ...ui, drag: null };
       return publish();
     }),
     cancelDrag: vi.fn(() => {
-      ui = { ...ui, dragStart: null };
+      ui = { ...ui, drag: null };
       return publish();
     }),
     rotateBuilding: vi.fn(() => {

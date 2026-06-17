@@ -392,24 +392,24 @@ describe("runtime road drag", () => {
       .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;
   }
 
-  it("builds a road line from startDrag -> hover -> commitDrag", () => {
+  it("builds a road line from startDrag -> move -> commitDrag", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
-    runtime.setHoverTile({ x: 4, y: 0 });
+    runtime.setDragCurrent({ x: 4, y: 0 });
     const snap = runtime.commitDrag();
     for (const x of [1, 2, 3, 4]) {
       expect(tileKind(runtime, x, 0)).toBe("road");
     }
-    expect(snap.ui.dragStart).toBeNull();
+    expect(snap.ui.drag).toBeNull();
   });
 
   it("treats a zero-length drag as a tap (cycles an existing road's direction)", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");
     runtime.startDrag({ x: 8, y: 8 }); // existing road tile
-    runtime.setHoverTile({ x: 8, y: 8 });
+    runtime.setDragCurrent({ x: 8, y: 8 });
     runtime.commitDrag();
     expect(
       runtime.getSnapshot().state.map.tiles.find((t) => t.x === 8 && t.y === 8)
@@ -422,11 +422,11 @@ describe("runtime road drag", () => {
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
-    runtime.setHoverTile({ x: 3, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
     runtime.commitDrag();
     runtime.setTool("remove");
     runtime.startDrag({ x: 1, y: 0 });
-    runtime.setHoverTile({ x: 3, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
     runtime.commitDrag();
     for (const x of [1, 2, 3]) {
       expect(tileKind(runtime, x, 0)).toBe("empty");
@@ -437,10 +437,29 @@ describe("runtime road drag", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
-    runtime.setHoverTile({ x: 4, y: 0 });
+    runtime.setDragCurrent({ x: 4, y: 0 });
     runtime.cancelDrag();
-    expect(runtime.getSnapshot().ui.dragStart).toBeNull();
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(tileKind(runtime, 4, 0)).toBe("empty");
+  });
+
+  it("startDrag captures the tool and ignores a non-drag tool", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("inspect");
+    // inspect is not a drag tool, so no gesture opens.
+    runtime.startDrag({ x: 1, y: 0 });
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+  });
+
+  it("setDragCurrent ignores an off-map (null) move so the preview holds", () => {
+    const runtime = createGameRuntime();
+    runtime.setTool("road");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 4, y: 0 });
+    runtime.setDragCurrent(null); // pointer wanders off-map mid-drag
+    const gesture = runtime.getSnapshot().ui.drag;
+    expect(gesture).not.toBeNull();
+    expect(gesture?.current).toEqual({ x: 4, y: 0 }); // unchanged
   });
 });
 
