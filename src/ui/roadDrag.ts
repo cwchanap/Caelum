@@ -72,7 +72,10 @@ export function reverseLanePoints(line: Point[]): Point[] {
     return [];
   }
   const offset = LEFT_OF[forward];
-  return line.map((point) => ({ x: point.x + offset.x, y: point.y + offset.y }));
+  return line.map((point) => ({
+    x: point.x + offset.x,
+    y: point.y + offset.y,
+  }));
 }
 
 /** Lay a *new* reverse lane only on an empty, placeable tile — never hijacks an
@@ -127,7 +130,9 @@ export function applyDragGesture(
       return applyDualLane(state, line);
     }
     const direction =
-      ui.roadPreset === "oneWay" ? (lineDirection(line) ?? undefined) : undefined;
+      ui.roadPreset === "oneWay"
+        ? (lineDirection(line) ?? undefined)
+        : undefined;
     return line.reduce((acc, point) => layLane(acc, point, direction), state);
   }
   return state;

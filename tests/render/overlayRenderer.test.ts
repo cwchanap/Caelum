@@ -126,8 +126,10 @@ describe("renderOverlays drag preview", () => {
     };
     renderOverlays(ctx, state, ui);
     const line = axisLockedLine(ui.dragStart, ui.hoverTile);
-    expect((ctx.fillRect as unknown as { mock: { calls: unknown[] } }).mock.calls.length)
-      .toBeGreaterThanOrEqual(line.length);
+    expect(
+      (ctx.fillRect as unknown as { mock: { calls: unknown[] } }).mock.calls
+        .length,
+    ).toBeGreaterThanOrEqual(line.length);
     expect(ctx.fillStyle).toBe(colors.previewValid);
   });
 

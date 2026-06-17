@@ -34,7 +34,9 @@ describe("BuildPanel road presets", () => {
       },
     });
     expect(screen.getByRole("button", { name: "1-Lane" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "1-Lane One-Way" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "1-Lane One-Way" }),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "2-Lane" })).toBeVisible();
 
     await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
