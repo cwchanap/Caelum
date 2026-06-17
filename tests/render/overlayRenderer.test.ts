@@ -162,4 +162,72 @@ describe("renderOverlays drag preview", () => {
         .length,
     ).toBeGreaterThanOrEqual(8);
   });
+
+  it("draws one-way arrows pointing along the drag axis", () => {
+    const ctx = dragCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "oneWay" as const,
+      dragStart: { x: 1, y: 0 },
+      hoverTile: { x: 4, y: 0 },
+    };
+    renderOverlays(ctx, state, ui);
+    const strokeCalls = (
+      ctx.stroke as unknown as { mock: { calls: unknown[] } }
+    ).mock.calls.length;
+    // Each arrow is a shaft stroke + chevron stroke (2 per tile).
+    expect(strokeCalls).toBe(
+      2 * axisLockedLine(ui.dragStart, ui.hoverTile).length,
+    );
+    expect(ctx.lineCap).toBe("round");
+    expect(ctx.lineJoin).toBe("round");
+  });
+
+  it("draws opposing arrows on both lanes of a dual-bidirectional drag", () => {
+    const ctx = dragCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      dragStart: { x: 1, y: 0 },
+      hoverTile: { x: 4, y: 0 },
+    };
+    renderOverlays(ctx, state, ui);
+    const line = axisLockedLine(ui.dragStart, ui.hoverTile);
+    // Forward lane + reverse lane, 2 strokes per arrow each.
+    expect(
+      (ctx.stroke as unknown as { mock: { calls: unknown[] } }).mock.calls
+        .length,
+    ).toBe(4 * line.length);
+  });
+
+  it("draws no direction arrows for a two-way road drag", () => {
+    const ctx = dragCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "twoWay" as const,
+      dragStart: { x: 1, y: 0 },
+      hoverTile: { x: 4, y: 0 },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("draws no direction arrows for a remove drag", () => {
+    const ctx = dragCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "remove" as const,
+      dragStart: { x: 1, y: 0 },
+      hoverTile: { x: 3, y: 0 },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
 });

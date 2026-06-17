@@ -1,7 +1,51 @@
-import type { GameState } from "../domain/types";
+import type { GameState, Point, RoadDirection } from "../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../domain/types";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
+
+/** Draw a directional road arrow (shaft + chevron head) centered on `point`,
+ *  pointing along `direction`. Rendered in world coordinates. The caller is
+ *  responsible for strokeStyle / lineWidth / lineCap / lineJoin. Shared by the
+ *  committed-road render pass and the drag-line preview so both agree on glyph
+ *  shape. */
+export function drawDirectionArrow(
+  ctx: CanvasRenderingContext2D,
+  point: Point,
+  direction: RoadDirection,
+): void {
+  const offset = ROAD_DIRECTION_OFFSET[direction];
+  const cx = point.x * tileSize + tileSize / 2;
+  const cy = point.y * tileSize + tileSize / 2;
+  const half = tileSize / 4;
+  const tipX = cx + offset.x * half;
+  const tipY = cy + offset.y * half;
+  const tailX = cx - offset.x * half;
+  const tailY = cy - offset.y * half;
+
+  // Shaft.
+  ctx.beginPath();
+  ctx.moveTo(tailX, tailY);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  // Chevron head: two short barbs from the tip, angled back along the
+  // perpendicular axis.
+  const perpX = offset.y;
+  const perpY = -offset.x;
+  const head = tileSize / 6;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(
+    tipX - offset.x * head + perpX * head,
+    tipY - offset.y * head + perpY * head,
+  );
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(
+    tipX - offset.x * head - perpX * head,
+    tipY - offset.y * head - perpY * head,
+  );
+  ctx.stroke();
+}
 
 export function renderMap(
   ctx: CanvasRenderingContext2D,
@@ -82,38 +126,7 @@ export function renderMap(
       if (oneWay === undefined) {
         continue;
       }
-      const offset = ROAD_DIRECTION_OFFSET[oneWay];
-      const cx = tile.x * tileSize + tileSize / 2;
-      const cy = tile.y * tileSize + tileSize / 2;
-      const half = tileSize / 4;
-      const tipX = cx + offset.x * half;
-      const tipY = cy + offset.y * half;
-      const tailX = cx - offset.x * half;
-      const tailY = cy - offset.y * half;
-
-      // Shaft.
-      ctx.beginPath();
-      ctx.moveTo(tailX, tailY);
-      ctx.lineTo(tipX, tipY);
-      ctx.stroke();
-
-      // Chevron head: two short barbs from the tip, angled back along the
-      // perpendicular axis.
-      const perpX = offset.y;
-      const perpY = -offset.x;
-      const head = tileSize / 6;
-      ctx.beginPath();
-      ctx.moveTo(tipX, tipY);
-      ctx.lineTo(
-        tipX - offset.x * head + perpX * head,
-        tipY - offset.y * head + perpY * head,
-      );
-      ctx.moveTo(tipX, tipY);
-      ctx.lineTo(
-        tipX - offset.x * head - perpX * head,
-        tipY - offset.y * head - perpY * head,
-      );
-      ctx.stroke();
+      drawDirectionArrow(ctx, tile, oneWay);
     }
 
     ctx.restore();

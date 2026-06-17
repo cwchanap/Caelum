@@ -48,6 +48,22 @@ describe("renderCursorBadge", () => {
     expect(calls.join("")).toContain("→");
   });
 
+  it("labels the 2-lane bidirectional preset with the ⇄ glyph", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      hoverTile: { x: 1, y: 0 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Road");
+    expect(calls.join("")).toContain("⇄");
+    // Must not also emit the one-way glyph.
+    expect(calls.join("")).not.toContain("→");
+  });
+
   it("labels the remove tool as Demolish", () => {
     const { ctx, calls } = badgeCtx();
     const state = createInitialGameState();
