@@ -15,9 +15,41 @@ const mapWidth = 28;
 const mapHeight = 18;
 
 /**
- * Click the centre of the given map tile on the runtime canvas. The transform
- * math mirrors `getBoardTransform` in src/render/canvas.ts but operates in CSS
- * pixels (Playwright's `boundingBox`) rather than canvas backing-store pixels.
+ * Board transform mirroring `getBoardTransform` in src/render/canvas.ts, but
+ * operating in CSS pixels (Playwright's `boundingBox`) rather than canvas
+ * backing-store pixels. Shared by both click and drag helpers so the tile→pixel
+ * mapping stays in sync.
+ */
+function boardTransform(box: {
+  width: number;
+  height: number;
+}): { scale: number; offsetX: number; offsetY: number } {
+  const scale = Math.min(
+    box.width / (mapWidth * tileSize),
+    box.height / (mapHeight * tileSize),
+  );
+  return {
+    scale,
+    offsetX: (box.width - mapWidth * tileSize * scale) / 2,
+    offsetY: (box.height - mapHeight * tileSize * scale) / 2,
+  };
+}
+
+/**
+ * Exported for unit-testing against `getBoardTransform` (see
+ * tests/runtime/e2eHelpers.test.ts).
+ */
+export function _boardTransformForTest(box: {
+  width: number;
+  height: number;
+}): { scale: number; offsetX: number; offsetY: number } {
+  return boardTransform(box);
+}
+
+/**
+ * Click the centre of the given map tile on the runtime canvas. The `position`
+ * is element-relative (Playwright `click`), so it does not include the canvas's
+ * viewport offset.
  */
 export async function clickMapTile(
   canvas: Locator,
@@ -28,12 +60,7 @@ export async function clickMapTile(
     throw new Error("Game canvas does not have a visible bounding box");
   }
 
-  const scale = Math.min(
-    box.width / (mapWidth * tileSize),
-    box.height / (mapHeight * tileSize),
-  );
-  const offsetX = (box.width - mapWidth * tileSize * scale) / 2;
-  const offsetY = (box.height - mapHeight * tileSize * scale) / 2;
+  const { scale, offsetX, offsetY } = boardTransform(box);
 
   await canvas.click({
     position: {
@@ -54,12 +81,9 @@ export async function dragMapTiles(
   if (box === null) {
     throw new Error("Game canvas does not have a visible bounding box");
   }
-  const scale = Math.min(
-    box.width / (mapWidth * tileSize),
-    box.height / (mapHeight * tileSize),
-  );
-  const offsetX = (box.width - mapWidth * tileSize * scale) / 2;
-  const offsetY = (box.height - mapHeight * tileSize * scale) / 2;
+  const { scale, offsetX, offsetY } = boardTransform(box);
+  // `page.mouse` uses viewport coordinates, so add the canvas's bounding-box
+  // origin (box.x/box.y) on top of the element-relative board transform.
   const at = (tile: { x: number; y: number }) => ({
     x: box.x + offsetX + (tile.x + 0.5) * tileSize * scale,
     y: box.y + offsetY + (tile.y + 0.5) * tileSize * scale,
