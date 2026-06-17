@@ -1,4 +1,4 @@
-import type { GameState, Point, Tool } from "../domain/types";
+import type { GameState, Point } from "../domain/types";
 import {
   BUILDING_CATALOG,
   canPlaceBuilding,
@@ -10,6 +10,7 @@ import {
   axisLockedLine,
   lineDirection,
   oppositeDirection,
+  planDragPreview,
   reverseLanePoints,
 } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
@@ -89,38 +90,47 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
-const DRAG_PREVIEW_TOOLS: Tool[] = ["road", "track", "remove"];
-
-function renderDragPreview(ctx: CanvasRenderingContext2D, ui: UiState): void {
-  if (
-    ui.dragStart === null ||
-    ui.hoverTile === null ||
-    !DRAG_PREVIEW_TOOLS.includes(ui.activeTool)
-  ) {
+function renderDragPreview(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  // The gesture is atomic — a non-null `drag` already implies a drag tool and a
+  // concrete current tile, so this single check replaces the old three-field
+  // guard (dragStart + hoverTile + activeTool).
+  const gesture = ui.drag;
+  if (gesture === null) {
     return;
   }
-  const isDelete = ui.activeTool === "remove";
-  ctx.fillStyle = isDelete ? colors.previewInvalid : colors.previewValid;
-  ctx.strokeStyle = isDelete
-    ? colors.previewInvalidStroke
-    : colors.previewValidStroke;
+  const isDelete = gesture.tool === "remove";
   ctx.lineWidth = 2;
-  const line = axisLockedLine(ui.dragStart, ui.hoverTile);
-  // Dual preset shows both lanes so the 2-lane footprint is visible while
-  // dragging; reverse-lane tiles sit left-of-travel (right-hand traffic).
-  const isDual =
-    ui.activeTool === "road" && ui.roadPreset === "dualBidirectional";
-  const reverse = isDual ? reverseLanePoints(line) : [];
-  const tiles = isDual ? [...line, ...reverse] : line;
-  for (const point of tiles) {
-    fillTile(ctx, point);
-    strokeTile(ctx, point);
+  const line = axisLockedLine(gesture.start, gesture.current);
+
+  // Per-tile validity mirrors the commit path: a tile tints green only where a
+  // road/track would actually land, and red where it collides, runs off-map, or
+  // is unaffordable. The remove tool has no per-tile predicate — tint red.
+  if (isDelete) {
+    ctx.fillStyle = colors.previewInvalid;
+    ctx.strokeStyle = colors.previewInvalidStroke;
+    for (const point of line) {
+      fillTile(ctx, point);
+      strokeTile(ctx, point);
+    }
+  } else {
+    for (const { point, buildable } of planDragPreview(state, ui, line)) {
+      ctx.fillStyle = buildable ? colors.previewValid : colors.previewInvalid;
+      ctx.strokeStyle = buildable
+        ? colors.previewValidStroke
+        : colors.previewInvalidStroke;
+      fillTile(ctx, point);
+      strokeTile(ctx, point);
+    }
   }
 
-  // Direction arrows on the preview (design spec §E): the oneWay preset shows
-  // the drag-axis direction; dualBidirectional shows forward + opposing arrows.
+  // Dual preset direction arrows: the oneWay preset shows the drag-axis
+  // direction; dualBidirectional shows forward + opposing arrows.
   // twoWay / track / remove carry no per-tile direction, so they draw none.
-  if (ui.activeTool === "road") {
+  if (gesture.tool === "road") {
     const forward = lineDirection(line);
     if (forward !== null) {
       ctx.save();
@@ -130,7 +140,8 @@ function renderDragPreview(ctx: CanvasRenderingContext2D, ui: UiState): void {
         for (const point of line) {
           drawDirectionArrow(ctx, point, forward);
         }
-      } else if (isDual) {
+      } else if (ui.roadPreset === "dualBidirectional") {
+        const reverse = reverseLanePoints(line);
         const reverseDir = oppositeDirection(forward);
         for (const point of line) {
           drawDirectionArrow(ctx, point, forward);
@@ -218,8 +229,8 @@ export function renderOverlays(
     }
   }
 
-  if (ui.dragStart !== null) {
-    renderDragPreview(ctx, ui);
+  if (ui.drag !== null) {
+    renderDragPreview(ctx, state, ui);
     return;
   }
 

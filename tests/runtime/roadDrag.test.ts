@@ -4,7 +4,11 @@ import { createInitialGameState } from "../../src/simulation/gameState";
 import { getTile } from "../../src/simulation/map";
 import { COSTS, addBusStop, addBusRoute } from "../../src/simulation/transit";
 import { createUiState } from "../../src/ui/uiState";
-import { axisLockedLine, applyDragGesture } from "../../src/ui/roadDrag";
+import {
+  applyDragGesture,
+  axisLockedLine,
+  planDragPreview,
+} from "../../src/ui/roadDrag";
 
 describe("axisLockedLine", () => {
   it("locks to the horizontal axis when |dx| >= |dy|", () => {
@@ -204,6 +208,86 @@ describe("applyDragGesture dual bidirectional", () => {
       expect(tileAt(next, x, 8).oneWay).toBeUndefined(); // existing road untouched
     }
     expect(next.budget).toBe(state.budget - 3 * COSTS.road); // reverse lane skipped
+  });
+});
+
+describe("planDragPreview", () => {
+  const dualUi = {
+    ...createUiState(),
+    activeTool: "road" as const,
+    roadPreset: "dualBidirectional" as const,
+  };
+
+  it("marks every tile of an affordable two-way line as buildable", () => {
+    const state = createInitialGameState();
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
+    const plan = planDragPreview(state, roadUi("twoWay"), line);
+    expect(plan).toHaveLength(line.length);
+    expect(plan.map((t) => t.buildable)).toEqual([true, true, true, true]);
+  });
+
+  it("marks occupied (residential) tiles as not buildable", () => {
+    const state = createInitialGameState();
+    // Row y=3 crosses residential at x 2..5.
+    const line = axisLockedLine({ x: 1, y: 3 }, { x: 3, y: 3 });
+    const plan = planDragPreview(state, roadUi("twoWay"), line);
+    const byPoint = new Map(
+      plan.map((t) => [`${t.point.x},${t.point.y}`, t.buildable]),
+    );
+    expect(byPoint.get("1,3")).toBe(true); // empty
+    expect(byPoint.get("2,3")).toBe(false); // residential
+    expect(byPoint.get("3,3")).toBe(false); // residential
+  });
+
+  it("treats an existing forward-lane road as a free redirect (buildable)", () => {
+    const state = createInitialGameState();
+    // {8,8} is an existing road tile in the scenario.
+    const plan = planDragPreview(state, roadUi("twoWay"), [{ x: 8, y: 8 }]);
+    expect(plan[0].buildable).toBe(true);
+  });
+
+  it("marks trailing tiles not buildable once the budget is exhausted", () => {
+    const state = { ...createInitialGameState(), budget: 250 };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
+    const plan = planDragPreview(state, roadUi("twoWay"), line);
+    // 250 -> 150 -> 50 -> (stop): the preview must reflect the silent trunc.
+    expect(plan.map((t) => t.buildable)).toEqual([true, true, false, false]);
+  });
+
+  it("never marks a reverse lane on an existing road as buildable", () => {
+    const state = createInitialGameState();
+    // Drag east along y=9; the reverse lane lands on y=8 (existing road row),
+    // so it must not be laid — mirroring layReverseLane.
+    const line = axisLockedLine({ x: 24, y: 9 }, { x: 26, y: 9 });
+    const plan = planDragPreview(state, dualUi, line);
+    const forward = plan.filter((t) => t.point.y === 9);
+    const reverse = plan.filter((t) => t.point.y === 8);
+    expect(forward.map((t) => t.buildable)).toEqual([true, true, true]);
+    expect(reverse.map((t) => t.buildable)).toEqual([false, false, false]);
+  });
+
+  it("marks an off-map reverse lane as not buildable (dual east on the top row)", () => {
+    const state = createInitialGameState();
+    // Drag east along y=0; LEFT_OF(east) = north (y - 1) runs off the map.
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
+    const plan = planDragPreview(state, dualUi, line);
+    const reverse = plan.filter((t) => t.point.y === -1);
+    expect(reverse.map((t) => t.buildable)).toEqual([false, false, false]);
+  });
+
+  it("returns no tiles for the remove tool (renderer tints the line red)", () => {
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), activeTool: "remove" as const };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
+    expect(planDragPreview(state, ui, line)).toEqual([]);
+  });
+
+  it("marks track tiles buildable where track placement is valid", () => {
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), activeTool: "track" as const };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
+    const plan = planDragPreview(state, ui, line);
+    expect(plan.map((t) => t.buildable)).toEqual([true, true, true]);
   });
 });
 

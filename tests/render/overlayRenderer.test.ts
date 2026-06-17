@@ -113,7 +113,84 @@ function dragCtx() {
   } as unknown as CanvasRenderingContext2D;
 }
 
+// Records fillStyle/strokeStyle assignments so per-tile tints can be asserted.
+function recordingFillCtx() {
+  const fillStyles: string[] = [];
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    fill: vi.fn(),
+    set fillStyle(v: string) {
+      fillStyles.push(v);
+    },
+    get fillStyle() {
+      return fillStyles.at(-1) ?? "";
+    },
+    strokeStyle: "",
+    lineWidth: 0,
+    lineCap: "",
+    lineJoin: "",
+    globalAlpha: 1,
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, fillStyles };
+}
+
+// Records canvas path tokens to derive each arrow shaft's direction vector.
+// A shaft is a moveTo->lineTo pair whose displacement is large (>= tile/4); the
+// chevron barbs are smaller and filtered out. This makes the test fail if the
+// arrow is ever drawn pointing the wrong way, not merely on a stroke count.
+function pathRecorderCtx() {
+  const tokens: Array<{ t: "M" | "L"; x: number; y: number }> = [];
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn((x: number, y: number) => tokens.push({ t: "M", x, y })),
+    lineTo: vi.fn((x: number, y: number) => tokens.push({ t: "L", x, y })),
+    stroke: vi.fn(),
+    fill: vi.fn(),
+    fillStyle: "",
+    strokeStyle: "",
+    lineWidth: 0,
+    lineCap: "",
+    lineJoin: "",
+    globalAlpha: 1,
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, tokens };
+}
+
+function shaftDeltas(
+  tokens: Array<{ t: "M" | "L"; x: number; y: number }>,
+): Array<{ dx: number; dy: number }> {
+  const out: Array<{ dx: number; dy: number }> = [];
+  for (let i = 1; i < tokens.length; i += 1) {
+    if (tokens[i].t === "L" && tokens[i - 1].t === "M") {
+      const dx = tokens[i].x - tokens[i - 1].x;
+      const dy = tokens[i].y - tokens[i - 1].y;
+      // tileSize/2 == 16 for a full shaft; chevron barbs are ~7.5.
+      if (Math.max(Math.abs(dx), Math.abs(dy)) >= 10) {
+        out.push({ dx, dy });
+      }
+    }
+  }
+  return out;
+}
+
 describe("renderOverlays drag preview", () => {
+  const drag = (
+    tool: "road" | "track" | "remove",
+    start: { x: number; y: number },
+    current: { x: number; y: number },
+  ) => ({ tool, start, current });
+
   it("fills each tile of a road drag line with the build (green) tint", () => {
     const ctx = dragCtx();
     const state = createInitialGameState();
@@ -121,11 +198,10 @@ describe("renderOverlays drag preview", () => {
       ...createUiState(),
       activeTool: "road" as const,
       roadPreset: "twoWay" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 4, y: 0 },
+      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
-    const line = axisLockedLine(ui.dragStart, ui.hoverTile);
+    const line = axisLockedLine(ui.drag.start, ui.drag.current);
     expect(
       (ctx.fillRect as unknown as { mock: { calls: unknown[] } }).mock.calls
         .length,
@@ -139,8 +215,7 @@ describe("renderOverlays drag preview", () => {
     const ui = {
       ...createUiState(),
       activeTool: "remove" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 3, y: 0 },
+      drag: drag("remove", { x: 1, y: 0 }, { x: 3, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
     expect(ctx.fillStyle).toBe(colors.previewInvalid);
@@ -153,8 +228,7 @@ describe("renderOverlays drag preview", () => {
       ...createUiState(),
       activeTool: "road" as const,
       roadPreset: "dualBidirectional" as const,
-      dragStart: { x: 1, y: 1 },
-      hoverTile: { x: 4, y: 1 },
+      drag: drag("road", { x: 1, y: 1 }, { x: 4, y: 1 }),
     };
     renderOverlays(ctx, state, ui);
     expect(
@@ -163,45 +237,58 @@ describe("renderOverlays drag preview", () => {
     ).toBeGreaterThanOrEqual(8);
   });
 
-  it("draws one-way arrows pointing along the drag axis", () => {
-    const ctx = dragCtx();
+  it("tints per-tile: valid where placeable, invalid where occupied", () => {
+    const { ctx, fillStyles } = recordingFillCtx();
+    const state = createInitialGameState();
+    // Row y=3 crosses residential at x 2..5; x1 is empty.
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "twoWay" as const,
+      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
+    };
+    renderOverlays(ctx, state, ui);
+    expect(fillStyles).toContain(colors.previewValid); // x1
+    expect(fillStyles).toContain(colors.previewInvalid); // x2,x3 residential
+  });
+
+  it("draws one-way arrows pointing along the drag axis (east)", () => {
+    const { ctx, tokens } = pathRecorderCtx();
     const state = createInitialGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
       roadPreset: "oneWay" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 4, y: 0 },
+      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
-    const strokeCalls = (
-      ctx.stroke as unknown as { mock: { calls: unknown[] } }
-    ).mock.calls.length;
-    // Each arrow is a shaft stroke + chevron stroke (2 per tile).
-    expect(strokeCalls).toBe(
-      2 * axisLockedLine(ui.dragStart, ui.hoverTile).length,
-    );
+    const line = axisLockedLine(ui.drag.start, ui.drag.current);
+    const shafts = shaftDeltas(tokens);
+    // One shaft per tile, every shaft pointing east (positive x, ~0 y).
+    expect(shafts).toHaveLength(line.length);
+    expect(shafts.every((s) => s.dx > 0 && Math.abs(s.dy) < 1)).toBe(true);
     expect(ctx.lineCap).toBe("round");
     expect(ctx.lineJoin).toBe("round");
   });
 
   it("draws opposing arrows on both lanes of a dual-bidirectional drag", () => {
-    const ctx = dragCtx();
+    const { ctx, tokens } = pathRecorderCtx();
     const state = createInitialGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
       roadPreset: "dualBidirectional" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 4, y: 0 },
+      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
-    const line = axisLockedLine(ui.dragStart, ui.hoverTile);
-    // Forward lane + reverse lane, 2 strokes per arrow each.
-    expect(
-      (ctx.stroke as unknown as { mock: { calls: unknown[] } }).mock.calls
-        .length,
-    ).toBe(4 * line.length);
+    const line = axisLockedLine(ui.drag.start, ui.drag.current);
+    const shafts = shaftDeltas(tokens);
+    // Forward lane points east, reverse lane points west — half each.
+    expect(shafts).toHaveLength(2 * line.length);
+    const eastbound = shafts.filter((s) => s.dx > 0);
+    const westbound = shafts.filter((s) => s.dx < 0);
+    expect(eastbound).toHaveLength(line.length);
+    expect(westbound).toHaveLength(line.length);
   });
 
   it("draws no direction arrows for a two-way road drag", () => {
@@ -211,8 +298,7 @@ describe("renderOverlays drag preview", () => {
       ...createUiState(),
       activeTool: "road" as const,
       roadPreset: "twoWay" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 4, y: 0 },
+      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
     expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
@@ -224,8 +310,7 @@ describe("renderOverlays drag preview", () => {
     const ui = {
       ...createUiState(),
       activeTool: "remove" as const,
-      dragStart: { x: 1, y: 0 },
-      hoverTile: { x: 3, y: 0 },
+      drag: drag("remove", { x: 1, y: 0 }, { x: 3, y: 0 }),
     };
     renderOverlays(ctx, state, ui);
     expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();

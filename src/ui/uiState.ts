@@ -19,17 +19,32 @@ export type PrimaryHudCategory =
 // so it is legibly the odd one out of the primary set.
 export type HudCategory = PrimaryHudCategory | "inspect";
 
+/** Tools that drive placement via a press-drag gesture rather than a click. */
+export type DragTool = "road" | "track" | "remove";
+
+/** An in-progress road/track/remove drag. Atomic by construction — `tool`,
+ *  `start`, and `current` are always present together, so the illegal states a
+ *  three-field model allows (a start with no current tile, or a drag lingering
+ *  after switching to a non-drag tool) are unrepresentable. Consumers collapse
+ *  to a single `drag === null` check. */
+export interface DragGesture {
+  tool: DragTool;
+  start: Point;
+  current: Point;
+}
+
 export interface UiState {
   activeTool: Tool;
   /** Road build style for the road tool's drag gesture. */
   roadPreset: RoadPreset;
-  /** Pressed tile during an in-progress road/track/remove drag; null otherwise. */
-  dragStart: Point | null;
+  /** In-progress drag gesture, or null when idle. */
+  drag: DragGesture | null;
   activeOverlay: Overlay | null;
   selectedId: string | null;
   selectedNodeKind: "stop" | "station" | null;
   selectedBuilding: BuildingType | null;
   buildingRotation: BuildingRotation;
+  /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
   draftStopIds: string[];
   draftStationIds: string[];
@@ -45,7 +60,7 @@ export function createUiState(): UiState {
   return {
     activeTool: "inspect",
     roadPreset: "twoWay",
-    dragStart: null,
+    drag: null,
     activeOverlay: null,
     selectedId: null,
     selectedNodeKind: null,

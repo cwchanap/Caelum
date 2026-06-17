@@ -126,6 +126,7 @@ export interface RuntimeController {
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
+  setDragCurrent: (point: Point | null) => RuntimeSnapshot;
   commitDrag: () => RuntimeSnapshot;
   cancelDrag: () => RuntimeSnapshot;
   rotateBuilding: () => RuntimeSnapshot;

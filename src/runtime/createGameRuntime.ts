@@ -46,7 +46,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
       activeTool === "metroLine" ? current.draftStationPaths : [],
     selectedRouteId: null,
     roadPreset: current.roadPreset,
-    dragStart: null,
+    drag: null,
     activeHudCategory: null,
   };
 }
@@ -68,7 +68,7 @@ function nextBuildingUiState(
     draftStationPaths: [],
     selectedRouteId: null,
     roadPreset: current.roadPreset,
-    dragStart: null,
+    drag: null,
     activeHudCategory: null,
   };
 }
@@ -243,10 +243,43 @@ export function createGameRuntime(): RuntimeController {
       if (canvas === null) {
         return;
       }
-
-      api.setHoverTile(
-        canvasToTile(canvas, event.clientX, event.clientY, state.map),
+      const point = canvasToTile(
+        canvas,
+        event.clientX,
+        event.clientY,
+        state.map,
       );
+      // A live drag tracks its own `current`; only idle movement updates the
+      // hover tile (badge / building preview / hover highlight).
+      if (ui.drag !== null) {
+        api.setDragCurrent(point);
+      } else {
+        api.setHoverTile(point);
+      }
+    };
+
+    const capturePointer = (pointerId: number): void => {
+      // Capture so a release a pixel past the board edge still commits instead
+      // of firing pointerleave -> cancelDrag (which would discard the road).
+      if (canvas !== null && typeof canvas.setPointerCapture === "function") {
+        try {
+          canvas.setPointerCapture(pointerId);
+        } catch {
+          // Some engines throw if the pointer is already inactive; a missed
+          // capture only falls back to the pre-capture behavior, so ignore.
+        }
+      }
+    };
+
+    const releasePointer = (pointerId: number): void => {
+      if (
+        canvas !== null &&
+        typeof canvas.hasPointerCapture === "function" &&
+        typeof canvas.releasePointerCapture === "function" &&
+        canvas.hasPointerCapture(pointerId)
+      ) {
+        canvas.releasePointerCapture(pointerId);
+      }
     };
 
     const handlePointerDown = (event: PointerEvent): void => {
@@ -265,13 +298,17 @@ export function createGameRuntime(): RuntimeController {
         event.clientY,
         state.map,
       );
-      if (point !== null) {
-        api.startDrag(point);
+      if (point === null) {
+        return;
       }
+      api.startDrag(point);
+      capturePointer(event.pointerId);
     };
 
     const handlePointerUp = (event: PointerEvent): void => {
-      if (canvas === null || ui.dragStart === null) {
+      // Only the primary button commits; a stray right/middle release mid-drag
+      // must not place the road early.
+      if (canvas === null || ui.drag === null || event.button !== 0) {
         return;
       }
       const point = canvasToTile(
@@ -280,17 +317,32 @@ export function createGameRuntime(): RuntimeController {
         event.clientY,
         state.map,
       );
-      if (point !== null) {
-        api.setHoverTile(point);
-      }
+      // Snap the gesture to the release tile before committing, so a release on
+      // a different tile than the last move builds to where the user let go.
+      api.setDragCurrent(point);
       api.commitDrag();
+      releasePointer(event.pointerId);
     };
 
     const handlePointerLeave = (): void => {
-      if (ui.dragStart !== null) {
+      // With pointer capture active the browser suppresses leave mid-drag, so
+      // reaching here means the cursor left the board outside a drag — or the
+      // host engine lacks pointer capture, in which case an abandoned drag
+      // should still be cancelled rather than left dangling.
+      if (ui.drag !== null) {
         api.cancelDrag();
       }
       api.setHoverTile(null);
+    };
+
+    const handlePointerCancel = (event: PointerEvent): void => {
+      // pointercancel is a genuine interruption (OS stealing the pointer, etc.)
+      // and still fires under pointer capture: tear the drag down explicitly.
+      if (ui.drag !== null) {
+        api.cancelDrag();
+      }
+      api.setHoverTile(null);
+      releasePointer(event.pointerId);
     };
 
     const handleResize = (): void => {
@@ -302,7 +354,7 @@ export function createGameRuntime(): RuntimeController {
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointerup", handlePointerUp);
     canvas.addEventListener("pointerleave", handlePointerLeave);
-    canvas.addEventListener("pointercancel", handlePointerLeave);
+    canvas.addEventListener("pointercancel", handlePointerCancel);
     globalThis.window?.addEventListener("resize", handleResize);
     render();
 
@@ -316,7 +368,7 @@ export function createGameRuntime(): RuntimeController {
       canvas.removeEventListener("pointerdown", handlePointerDown);
       canvas.removeEventListener("pointerup", handlePointerUp);
       canvas.removeEventListener("pointerleave", handlePointerLeave);
-      canvas.removeEventListener("pointercancel", handlePointerLeave);
+      canvas.removeEventListener("pointercancel", handlePointerCancel);
       globalThis.window?.removeEventListener("resize", handleResize);
       host.innerHTML = "";
       canvas = null;
@@ -363,30 +415,49 @@ export function createGameRuntime(): RuntimeController {
       );
     },
     startDrag(point) {
-      return commit(state, { ...ui, dragStart: point, hoverTile: point });
+      // Only drag tools open a gesture; capture the tool so the gesture stays
+      // self-describing even if activeTool later changes (a tool switch clears
+      // `drag` via nextToolUiState, so the two never drift in practice).
+      const tool = ui.activeTool;
+      if (tool !== "road" && tool !== "track" && tool !== "remove") {
+        return commit(state, ui);
+      }
+      return commit(state, {
+        ...ui,
+        drag: { tool, start: point, current: point },
+      });
+    },
+    setDragCurrent(point) {
+      // A null (off-map) move is ignored so the preview holds its last tile;
+      // the gesture always carries a concrete `current`.
+      if (point === null || ui.drag === null) {
+        return commit(state, ui);
+      }
+      if (samePoint(point, ui.drag.current)) {
+        return commit(state, ui);
+      }
+      return commit(state, {
+        ...ui,
+        drag: { ...ui.drag, current: point },
+      });
     },
     cancelDrag() {
-      return commit(
-        state,
-        ui.dragStart === null ? ui : { ...ui, dragStart: null },
-      );
+      return commit(state, ui.drag === null ? ui : { ...ui, drag: null });
     },
     commitDrag() {
-      if (ui.dragStart === null || ui.hoverTile === null) {
-        return commit(
-          state,
-          ui.dragStart === null ? ui : { ...ui, dragStart: null },
-        );
+      const gesture = ui.drag;
+      if (gesture === null) {
+        return commit(state, ui);
       }
-      const line = axisLockedLine(ui.dragStart, ui.hoverTile);
+      const line = axisLockedLine(gesture.start, gesture.current);
       // A tap (single tile) reuses the legacy click path so road cycling and
       // the full remove (buildings/nodes/routes + UI cleanup) are preserved.
       if (line.length <= 1) {
         const result = applyTileClick(state, ui, line[0]);
-        return commit(result.state, { ...result.ui, dragStart: null });
+        return commit(result.state, { ...result.ui, drag: null });
       }
       // A remove drag deletes every tile via the same full per-tile removal.
-      if (ui.activeTool === "remove") {
+      if (gesture.tool === "remove") {
         let nextState = state;
         let nextUi = ui;
         for (const point of line) {
@@ -394,12 +465,12 @@ export function createGameRuntime(): RuntimeController {
           nextState = result.state;
           nextUi = result.ui;
         }
-        return commit(nextState, { ...nextUi, dragStart: null });
+        return commit(nextState, { ...nextUi, drag: null });
       }
       // A road/track build drag uses the preset-aware line painter.
       return commit(applyDragGesture(state, ui, line), {
         ...ui,
-        dragStart: null,
+        drag: null,
       });
     },
     rotateBuilding() {
