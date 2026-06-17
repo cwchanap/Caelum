@@ -441,6 +441,44 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("hud-badge-overlay")).toBeNull();
   });
 
+  it("abandons an in-flight drag on Escape without resetting the tool", async () => {
+    // Spec §C/§G: Escape first abandons an active drag — clearing the preview
+    // line but keeping the active tool and drawer — so the player can resume
+    // building. Only a second Escape (no drag in flight) does the full resetUi.
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "road",
+        activeHudCategory: "build",
+        roadPreset: "oneWay",
+        drag: { tool: "road", start: { x: 2, y: 3 }, current: { x: 5, y: 3 } },
+      },
+    });
+
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(runtime.cancelDrag).toHaveBeenCalledTimes(1);
+    expect(runtime.resetUi).not.toHaveBeenCalled();
+    // Tool + preset survive; only the drag is dropped.
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("ROAD");
+    expect(screen.getByTestId("game-shell")).toHaveAttribute(
+      "data-hud-category",
+      "build",
+    );
+
+    // A second Escape now performs the full reset.
+    await fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
+    expect(screen.getByTestId("game-shell")).toHaveAttribute(
+      "data-hud-category",
+      "brief",
+    );
+  });
+
   it("renders a shell error when the canvas host fails to attach", () => {
     const { runtime } = createRuntimeHarness();
     runtime.mountCanvas = vi.fn(() => {
