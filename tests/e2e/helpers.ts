@@ -42,3 +42,32 @@ export async function clickMapTile(
     },
   });
 }
+
+/** Press-drag from one map tile to another on the runtime canvas. */
+export async function dragMapTiles(
+  page: Page,
+  canvas: Locator,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): Promise<void> {
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
+  const scale = Math.min(
+    box.width / (mapWidth * tileSize),
+    box.height / (mapHeight * tileSize),
+  );
+  const offsetX = (box.width - mapWidth * tileSize * scale) / 2;
+  const offsetY = (box.height - mapHeight * tileSize * scale) / 2;
+  const at = (tile: { x: number; y: number }) => ({
+    x: box.x + offsetX + (tile.x + 0.5) * tileSize * scale,
+    y: box.y + offsetY + (tile.y + 0.5) * tileSize * scale,
+  });
+  const start = at(from);
+  const end = at(to);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await page.mouse.up();
+}

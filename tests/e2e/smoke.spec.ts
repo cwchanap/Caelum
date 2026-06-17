@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { clickMapTile, openHudCategory } from "./helpers";
+import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
@@ -49,8 +49,16 @@ test("loads the svelte shell and supports active building placement", async ({
   await expect(topbar.getByText("$116,000")).toBeVisible();
   await expect(populationReadout.getByText("40")).toBeVisible();
 
-  await page.getByRole("button", { name: "Bus Terminal" }).click();
-  await page.getByRole("button", { name: "Rotate" }).click();
+  // Build a road line by dragging (road tool drag, two-way preset by default).
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await dragMapTiles(page, canvas, { x: 0, y: 0 }, { x: 3, y: 0 });
+  // Four road tiles at $100 each: 116,000 - 400 = 115,600.
+  await expect(topbar.getByText("$115,600")).toBeVisible();
 
+  // Select a building, then rotate it with the hotkey (drawer is auto-hidden).
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: "Bus Terminal" }).click();
+  await page.keyboard.press("r");
   await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
 });
