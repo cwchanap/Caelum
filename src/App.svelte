@@ -97,21 +97,76 @@
     shellError = message;
   }
 
+  function isTextInput(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable)
+    );
+  }
+
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (shellError || event.key !== "Escape") {
+    if (shellError) {
       return;
     }
 
-    // Escape mirrors the Cancel button (its label is "Cancel · Esc"). Respect
-    // the same canCancel gate so Escape can't fire a reset when Cancel is
-    // disabled (bare inspect with no in-flight draft, building, or overlay) —
-    // otherwise it would silently jump the drawer to "Brief" while the button
-    // looks dead.
-    if (snapshot !== null && !snapshot.shell.hud.canCancel) {
+    if (event.key === "Escape") {
+      // Escape mirrors the Cancel button (its label is "Cancel · Esc"). Respect
+      // the same canCancel gate so Escape can't fire a reset when Cancel is
+      // disabled (bare inspect with no in-flight draft, building, or overlay) —
+      // otherwise it would silently jump the drawer to "Brief" while the button
+      // looks dead.
+      if (snapshot !== null && !snapshot.shell.hud.canCancel) {
+        return;
+      }
+      setSnapshot(runtime.resetUi());
       return;
     }
 
-    setSnapshot(runtime.resetUi());
+    if (
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      isTextInput(event.target)
+    ) {
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+    if (key === "b") {
+      const next = snapshot?.ui.activeHudCategory === "build" ? null : "build";
+      setSnapshot(runtime.setHudCategory(next));
+      return;
+    }
+    if (key === "r") {
+      if (snapshot?.ui.selectedBuilding != null) {
+        setSnapshot(runtime.rotateBuilding());
+      } else {
+        setSnapshot(runtime.setTool("road"));
+      }
+      return;
+    }
+    if (key === "t") {
+      setSnapshot(runtime.setTool("track"));
+      return;
+    }
+    if (key === "x") {
+      setSnapshot(runtime.setTool("remove"));
+      return;
+    }
+    if (key === "v") {
+      setSnapshot(runtime.setTool("inspect"));
+      return;
+    }
+    if (
+      (key === "1" || key === "2" || key === "3") &&
+      snapshot?.ui.activeTool === "road"
+    ) {
+      const preset =
+        key === "1" ? "twoWay" : key === "2" ? "oneWay" : "dualBidirectional";
+      setSnapshot(runtime.setRoadPreset(preset));
+    }
   }
 
   $effect(() => {
