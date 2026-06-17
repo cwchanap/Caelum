@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { getTile } from "../../src/simulation/map";
-import { COSTS } from "../../src/simulation/transit";
+import { COSTS, addBusStop, addBusRoute } from "../../src/simulation/transit";
 import { createUiState } from "../../src/ui/uiState";
 import { axisLockedLine, applyDragGesture } from "../../src/ui/roadDrag";
 
@@ -204,5 +204,30 @@ describe("applyDragGesture dual bidirectional", () => {
       expect(tileAt(next, x, 8).oneWay).toBeUndefined(); // existing road untouched
     }
     expect(next.budget).toBe(state.budget - 3 * COSTS.road); // reverse lane skipped
+  });
+});
+
+describe("applyDragGesture recomputes route paths after setting directions", () => {
+  it("breaks a route's return leg when a one-way drag severs it", () => {
+    let state = createInitialGameState();
+    state = addBusStop(state, { x: 7, y: 8 });
+    state = addBusStop(state, { x: 15, y: 8 });
+    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    expect(state.transit.routes[0].pathBroken).toBe(false);
+
+    // Drag an existing stretch of the y=8 road one-way EAST. The eastbound
+    // leg still works but the westbound return can no longer pass, so the
+    // round-trip route must be reported broken — which only happens if route
+    // paths are recomputed after the drag sets the directions.
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "oneWay" as const,
+    };
+    const line = axisLockedLine({ x: 8, y: 8 }, { x: 10, y: 8 });
+    const dragged = applyDragGesture(state, ui, line);
+
+    expect(getTile(dragged.map, { x: 8, y: 8 })?.oneWay).toBe("east");
+    expect(dragged.transit.routes[0].pathBroken).toBe(true);
   });
 });

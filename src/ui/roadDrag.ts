@@ -1,6 +1,6 @@
 import type { GameState, Point, RoadDirection } from "../domain/types";
 import { getTile, setTileOneWay } from "../simulation/map";
-import { layRoad, layTrack } from "../simulation/transit";
+import { layRoad, layTrack, recomputeRoutePaths } from "../simulation/transit";
 import type { UiState } from "./uiState";
 
 /** Inclusive straight tile line from `start`, locked to the dominant axis.
@@ -127,13 +127,15 @@ export function applyDragGesture(
   }
   if (ui.activeTool === "road") {
     if (ui.roadPreset === "dualBidirectional") {
-      return applyDualLane(state, line);
+      return recomputeRoutePaths(applyDualLane(state, line));
     }
     const direction =
       ui.roadPreset === "oneWay"
         ? (lineDirection(line) ?? undefined)
         : undefined;
-    return line.reduce((acc, point) => layLane(acc, point, direction), state);
+    return recomputeRoutePaths(
+      line.reduce((acc, point) => layLane(acc, point, direction), state),
+    );
   }
   return state;
 }
