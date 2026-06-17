@@ -20,7 +20,7 @@ export function axisLockedLine(start: Point, end: Point): Point[] {
 }
 
 /** Drag-axis travel direction from the first two tiles (null if < 2 tiles). */
-function lineDirection(line: Point[]): RoadDirection | null {
+export function lineDirection(line: Point[]): RoadDirection | null {
   if (line.length < 2) {
     return null;
   }
@@ -54,6 +54,12 @@ const REVERSE_OF: Record<RoadDirection, RoadDirection> = {
   south: "north",
   west: "east",
 };
+
+/** The direction opposing `direction` (north↔south, east↔west). Shared by the
+ *  gesture (reverse-lane commit) and the drag preview (opposing arrows). */
+export function oppositeDirection(direction: RoadDirection): RoadDirection {
+  return REVERSE_OF[direction];
+}
 
 /** Unit offset to the left of travel (right-hand-traffic 2nd-lane placement). */
 const LEFT_OF: Record<RoadDirection, Point> = {
@@ -100,7 +106,7 @@ function applyDualLane(state: GameState, line: Point[]): GameState {
   if (forward === null) {
     return line.reduce((acc, point) => layLane(acc, point, undefined), state);
   }
-  const reverse = REVERSE_OF[forward];
+  const reverse = oppositeDirection(forward);
   const withForward = line.reduce(
     (acc, point) => layLane(acc, point, forward),
     state,

@@ -6,10 +6,16 @@ import {
 } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
 import { stopCoverageRadius } from "../simulation/transit";
-import { axisLockedLine, reverseLanePoints } from "../ui/roadDrag";
+import {
+  axisLockedLine,
+  lineDirection,
+  oppositeDirection,
+  reverseLanePoints,
+} from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
+import { drawDirectionArrow } from "./mapRenderer";
 
 const previewStrokeInset = 2;
 
@@ -101,14 +107,40 @@ function renderDragPreview(ctx: CanvasRenderingContext2D, ui: UiState): void {
   ctx.lineWidth = 2;
   const line = axisLockedLine(ui.dragStart, ui.hoverTile);
   // Dual preset shows both lanes so the 2-lane footprint is visible while
-  // dragging. Direction is conveyed by the cursor badge and committed arrows.
-  const tiles =
-    ui.activeTool === "road" && ui.roadPreset === "dualBidirectional"
-      ? [...line, ...reverseLanePoints(line)]
-      : line;
+  // dragging; reverse-lane tiles sit left-of-travel (right-hand traffic).
+  const isDual =
+    ui.activeTool === "road" && ui.roadPreset === "dualBidirectional";
+  const reverse = isDual ? reverseLanePoints(line) : [];
+  const tiles = isDual ? [...line, ...reverse] : line;
   for (const point of tiles) {
     fillTile(ctx, point);
     strokeTile(ctx, point);
+  }
+
+  // Direction arrows on the preview (design spec §E): the oneWay preset shows
+  // the drag-axis direction; dualBidirectional shows forward + opposing arrows.
+  // twoWay / track / remove carry no per-tile direction, so they draw none.
+  if (ui.activeTool === "road") {
+    const forward = lineDirection(line);
+    if (forward !== null) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      if (ui.roadPreset === "oneWay") {
+        for (const point of line) {
+          drawDirectionArrow(ctx, point, forward);
+        }
+      } else if (isDual) {
+        const reverseDir = oppositeDirection(forward);
+        for (const point of line) {
+          drawDirectionArrow(ctx, point, forward);
+        }
+        for (const point of reverse) {
+          drawDirectionArrow(ctx, point, reverseDir);
+        }
+      }
+      ctx.restore();
+    }
   }
 }
 
