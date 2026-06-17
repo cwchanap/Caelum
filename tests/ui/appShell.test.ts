@@ -466,3 +466,49 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("bottom-hud")).toBeNull();
   });
 });
+
+describe("App hotkeys", () => {
+  it("selects the road tool on 'r' when no building is selected", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "r" });
+    expect(runtime.setTool).toHaveBeenCalledWith("road");
+  });
+
+  it("toggles the build drawer on 'b'", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "b" });
+    expect(runtime.setHudCategory).toHaveBeenCalledWith("build");
+  });
+
+  it("rotates the building on 'r' when a building is selected", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), selectedBuilding: "smallHouse" },
+    });
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "r" });
+    expect(runtime.rotateBuilding).toHaveBeenCalled();
+    expect(runtime.setTool).not.toHaveBeenCalledWith("road");
+  });
+
+  it("selects a road preset on '2' while the road tool is active", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "2" });
+    expect(runtime.setRoadPreset).toHaveBeenCalledWith("oneWay");
+  });
+
+  it("ignores hotkeys typed into an input field", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    await fireEvent.keyDown(input, { key: "r" });
+    expect(runtime.setTool).not.toHaveBeenCalledWith("road");
+    input.remove();
+  });
+});
