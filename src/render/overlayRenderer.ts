@@ -134,6 +134,11 @@ function renderDragPreview(
     const forward = lineDirection(line);
     if (forward !== null) {
       ctx.save();
+      // Set an explicit arrow color: without this the arrows inherit the
+      // strokeStyle left by the last tile of the per-tile preview loop above,
+      // so every arrow would render red/green based on the line's final tile
+      // instead of a stable glyph color. Mirrors renderMap's committed arrows.
+      ctx.strokeStyle = colors.oneWayArrow;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       if (ui.roadPreset === "oneWay") {
