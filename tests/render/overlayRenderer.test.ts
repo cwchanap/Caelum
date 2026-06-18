@@ -184,6 +184,39 @@ function shaftDeltas(
   return out;
 }
 
+// Captures the strokeStyle value in effect at each stroke() call. Only
+// drawDirectionArrow calls stroke() (the per-tile loop uses strokeRect), so
+// this records exactly the colors used for arrow shafts + chevron barbs.
+function arrowStrokeColorCtx() {
+  let currentStrokeStyle = "";
+  const strokeStylesAtStroke: string[] = [];
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(() => {
+      strokeStylesAtStroke.push(currentStrokeStyle);
+    }),
+    fill: vi.fn(),
+    fillStyle: "",
+    set strokeStyle(v: string) {
+      currentStrokeStyle = v;
+    },
+    get strokeStyle() {
+      return currentStrokeStyle;
+    },
+    lineWidth: 0,
+    lineCap: "",
+    lineJoin: "",
+    globalAlpha: 1,
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, strokeStylesAtStroke };
+}
+
 describe("renderOverlays drag preview", () => {
   const drag = (
     tool: "road" | "track" | "remove",
@@ -314,5 +347,40 @@ describe("renderOverlays drag preview", () => {
     };
     renderOverlays(ctx, state, ui);
     expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("renders one-way arrows in the stable arrow color even when the line's last tile is invalid", () => {
+    const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
+    const state = createInitialGameState();
+    // Row y=3: x1 empty (valid/green), x2..x3 residential (invalid/red). The
+    // last forward tile is invalid, so without an explicit strokeStyle the
+    // arrows would inherit the red previewInvalidStroke from the per-tile loop.
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "oneWay" as const,
+      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
+    };
+    renderOverlays(ctx, state, ui);
+    expect(strokeStylesAtStroke.length).toBeGreaterThan(0);
+    expect(strokeStylesAtStroke.every((c) => c === colors.oneWayArrow)).toBe(
+      true,
+    );
+  });
+
+  it("renders dual-bidirectional arrows in the stable arrow color even when the line's last tile is invalid", () => {
+    const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
+    };
+    renderOverlays(ctx, state, ui);
+    expect(strokeStylesAtStroke.length).toBeGreaterThan(0);
+    expect(strokeStylesAtStroke.every((c) => c === colors.oneWayArrow)).toBe(
+      true,
+    );
   });
 });
