@@ -7,8 +7,8 @@ import {
 } from "../simulation/map";
 import {
   COSTS,
-  layRoad,
-  layTrack,
+  layRoadNoRecompute,
+  layTrackNoRecompute,
   recomputeRoutePaths,
 } from "../simulation/transit";
 import type { UiState } from "./uiState";
@@ -56,7 +56,8 @@ function layLane(
   direction: RoadDirection | undefined,
 ): GameState {
   const existing = getTile(state.map, point);
-  const withRoad = existing?.kind === "road" ? state : layRoad(state, point);
+  const withRoad =
+    existing?.kind === "road" ? state : layRoadNoRecompute(state, point);
   if (getTile(withRoad.map, point)?.kind !== "road") {
     return withRoad;
   }
@@ -109,7 +110,7 @@ function layReverseLane(
   if (getTile(state.map, point)?.kind !== "empty") {
     return state;
   }
-  const withRoad = layRoad(state, point);
+  const withRoad = layRoadNoRecompute(state, point);
   if (getTile(withRoad.map, point)?.kind !== "road") {
     return withRoad;
   }
@@ -134,7 +135,13 @@ function applyDualLane(state: GameState, line: Point[]): GameState {
 
 /** Apply a >=2-tile road/track drag line. Routes by tool + road preset and
  *  composes existing pure helpers. Single-tile taps and the remove tool are
- *  handled by the runtime via the legacy click path, not here. */
+ *  handled by the runtime via the legacy click path, not here.
+ *
+ *  Recompute discipline: layLane/layReverseLane/track-laying all use the
+ *  *NoRecompute placement helpers, so a K-tile drag pays exactly one
+ *  recomputeRoutePaths at the end instead of K (track) or K+1 (road). A no-op
+ *  drag (nothing placed) returns the same `state` reference so the runtime's
+ *  commit can skip a spurious re-render. */
 export function applyDragGesture(
   state: GameState,
   ui: UiState,
@@ -144,27 +151,38 @@ export function applyDragGesture(
     return state;
   }
   if (ui.activeTool === "track") {
-    return line.reduce((acc, point) => layTrack(acc, point), state);
+    const built = line.reduce(
+      (acc, point) => layTrackNoRecompute(acc, point),
+      state,
+    );
+    return built === state ? state : recomputeRoutePaths(built);
   }
   if (ui.activeTool === "road") {
     // Exhaustive over RoadPreset so a future preset is a compile error here
     // instead of silently falling through to two-way.
+    let built: GameState;
     switch (ui.roadPreset) {
       case "dualBidirectional":
-        return recomputeRoutePaths(applyDualLane(state, line));
+        built = applyDualLane(state, line);
+        break;
       case "oneWay": {
         const direction = lineDirection(line) ?? undefined;
-        return recomputeRoutePaths(
-          line.reduce((acc, point) => layLane(acc, point, direction), state),
+        built = line.reduce(
+          (acc, point) => layLane(acc, point, direction),
+          state,
         );
+        break;
       }
       case "twoWay":
-        return recomputeRoutePaths(
-          line.reduce((acc, point) => layLane(acc, point, undefined), state),
+        built = line.reduce(
+          (acc, point) => layLane(acc, point, undefined),
+          state,
         );
+        break;
       default:
         return assertNever(ui.roadPreset);
     }
+    return built === state ? state : recomputeRoutePaths(built);
   }
   return state;
 }

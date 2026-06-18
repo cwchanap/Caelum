@@ -315,3 +315,40 @@ describe("applyDragGesture recomputes route paths after setting directions", () 
     expect(dragged.transit.routes[0].pathBroken).toBe(true);
   });
 });
+
+describe("applyDragGesture recompute discipline", () => {
+  // The drag commit must defer route recomputation to a single call at the end
+  // (K+1 -> 1) and must return the same state reference when nothing is placed,
+  // so the runtime's commit can skip a spurious re-render.
+  it("refreshes transit exactly once after a track drag", () => {
+    const state = createInitialGameState();
+    const ui = { ...createUiState(), activeTool: "track" as const };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
+    const next = applyDragGesture(state, ui, line);
+    for (const x of [1, 2, 3, 4]) {
+      expect(getTile(next.map, { x, y: 0 })?.hasTrack).toBe(true);
+    }
+    // Single end-recompute produces a refreshed transit object.
+    expect(next.transit).not.toBe(state.transit);
+  });
+
+  it("returns the same state reference when a track drag places nothing", () => {
+    const state = { ...createInitialGameState(), budget: 0 };
+    const ui = { ...createUiState(), activeTool: "track" as const };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
+    expect(applyDragGesture(state, ui, line)).toBe(state);
+  });
+
+  it("returns the same state reference when a road drag places nothing", () => {
+    const state = { ...createInitialGameState(), budget: 0 };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
+    for (const preset of ["twoWay", "oneWay", "dualBidirectional"] as const) {
+      const ui = {
+        ...createUiState(),
+        activeTool: "road" as const,
+        roadPreset: preset,
+      };
+      expect(applyDragGesture(state, ui, line)).toBe(state);
+    }
+  });
+});

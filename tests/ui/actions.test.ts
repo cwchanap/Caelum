@@ -1032,11 +1032,7 @@ describe("draft route path validation", () => {
     );
     draft = handleTileClick(draft.state, draft.ui, { x: 15, y: 8 });
     draft = handleTileClick(draft.state, draft.ui, { x: 22, y: 8 });
-    expect(draft.ui.draftStopIds).toEqual([
-      "stop-001",
-      "stop-002",
-      "stop-003",
-    ]);
+    expect(draft.ui.draftStopIds).toEqual(["stop-001", "stop-002", "stop-003"]);
 
     const stale: GameState = {
       ...draft.state,
@@ -1067,11 +1063,7 @@ describe("draft route path validation", () => {
     );
     draft = handleTileClick(draft.state, draft.ui, { x: 15, y: 8 });
     draft = handleTileClick(draft.state, draft.ui, { x: 22, y: 8 });
-    expect(draft.ui.draftStopIds).toEqual([
-      "stop-001",
-      "stop-002",
-      "stop-003",
-    ]);
+    expect(draft.ui.draftStopIds).toEqual(["stop-001", "stop-002", "stop-003"]);
 
     // Remove the MIDDLE stop — endpoints still resolve, count is still >= 2.
     const stale: GameState = {

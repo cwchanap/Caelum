@@ -332,12 +332,7 @@ describe("findTilePath one-way roads", () => {
     ]);
     state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
 
-    const path = findTilePath(
-      state.map,
-      { x: 0, y: 1 },
-      { x: 1, y: 0 },
-      "bus",
-    );
+    const path = findTilePath(state.map, { x: 0, y: 1 }, { x: 1, y: 0 }, "bus");
 
     // Without the exemption, (1,1) one-way east cannot exit north, so the
     // only route to (1,0) is blocked and the path is null.
@@ -361,12 +356,7 @@ describe("findTilePath one-way roads", () => {
     ]);
     state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
 
-    const path = findTilePath(
-      state.map,
-      { x: 0, y: 1 },
-      { x: 1, y: 2 },
-      "bus",
-    );
+    const path = findTilePath(state.map, { x: 0, y: 1 }, { x: 1, y: 2 }, "bus");
 
     // (1,1) one-way east cannot exit south to (1,2), and there is no
     // alternate route, so the path must be null.

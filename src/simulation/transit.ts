@@ -705,26 +705,45 @@ export function recomputeRoutePaths(state: GameState): GameState {
   };
 }
 
-export function layRoad(state: GameState, point: Point): GameState {
+/** Place a road tile (charging COSTS.road) without recomputing route paths.
+ *  Used by drag commit (applyDragGesture) so a K-tile drag can defer the single
+ *  recomputeRoutePaths to the end instead of paying K recomputes. Returns the
+ *  same `state` reference (no new object) when the tile cannot be placed, so
+ *  callers can detect no-ops via reference equality. */
+export function layRoadNoRecompute(state: GameState, point: Point): GameState {
   if (!canAfford(state, COSTS.road) || !isValidRoadPlacement(state, point)) {
     return state;
   }
-  return recomputeRoutePaths({
+  return {
     ...state,
     budget: state.budget - COSTS.road,
     map: setTileKind(state.map, point, "road"),
-  });
+  };
 }
 
-export function layTrack(state: GameState, point: Point): GameState {
+export function layRoad(state: GameState, point: Point): GameState {
+  const next = layRoadNoRecompute(state, point);
+  // Preserve reference equality for no-op placements so the runtime's commit
+  // (which dispatches on `nextState !== state`) can skip a spurious re-render.
+  return next === state ? state : recomputeRoutePaths(next);
+}
+
+/** Place track (charging COSTS.track) without recomputing route paths; see
+ *  layRoadNoRecompute. */
+export function layTrackNoRecompute(state: GameState, point: Point): GameState {
   if (!canAfford(state, COSTS.track) || !isValidTrackPlacement(state, point)) {
     return state;
   }
-  return recomputeRoutePaths({
+  return {
     ...state,
     budget: state.budget - COSTS.track,
     map: setTileTrack(state.map, point, true),
-  });
+  };
+}
+
+export function layTrack(state: GameState, point: Point): GameState {
+  const next = layTrackNoRecompute(state, point);
+  return next === state ? state : recomputeRoutePaths(next);
 }
 
 // Player-facing cycle order for the road tool. This is a pure UX choice and

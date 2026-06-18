@@ -105,4 +105,37 @@ describe("renderCursorBadge", () => {
     // y=5 tile top is 160; badge sits 20px tall + 8px padding above it.
     expect(boxY).toBe(160 - 20 - 8);
   });
+
+  it("scales the badge geometry by devicePixelRatio so it stays constant in CSS px", () => {
+    // The badge draws after renderGame's ctx.restore() in raw backing-store
+    // pixels; on a retina (DPR=2) target its font/height/gap must be doubled
+    // or it renders at half-size. jsdom defaults to DPR=1, so stub explicitly.
+    vi.stubGlobal("devicePixelRatio", 2);
+    try {
+      const { ctx } = badgeCtx();
+      const state = createInitialGameState();
+      const ui = {
+        ...createUiState(),
+        activeTool: "road" as const,
+        hoverTile: { x: 1, y: 5 },
+      };
+      renderCursorBadge(
+        ctx,
+        state,
+        ui,
+        getBoardTransform(ctx.canvas, state.map),
+      );
+      // Font, height and the above-tile gap all double at DPR=2.
+      expect(ctx.font).toBe("24px ui-monospace, monospace");
+      const fillRectCalls = (
+        ctx.fillRect as unknown as { mock: { calls: number[][] } }
+      ).mock.calls;
+      // [x, y, width, height] — height must be 20 * 2.
+      expect(fillRectCalls[0][3]).toBe(40);
+      // boxY = tileTop(160) - height(40) - gap(16) = 104.
+      expect(fillRectCalls[0][1]).toBe(104);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

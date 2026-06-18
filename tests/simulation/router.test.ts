@@ -351,9 +351,9 @@ describe("path-length ride estimates", () => {
 
     // Verify segments are populated (not []).
     expect(state.transit.routes[0].segments.length).toBeGreaterThan(0);
-    expect(
-      state.transit.routes[0].segments.every((s) => s.length > 0),
-    ).toBe(true);
+    expect(state.transit.routes[0].segments.every((s) => s.length > 0)).toBe(
+      true,
+    );
     expect(state.transit.metroLines[0].segments.length).toBeGreaterThan(0);
     expect(
       state.transit.metroLines[0].segments.every((s) => s.length > 0),

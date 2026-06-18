@@ -20,10 +20,11 @@ const mapHeight = 18;
  * backing-store pixels. Shared by both click and drag helpers so the tile→pixel
  * mapping stays in sync.
  */
-function boardTransform(box: {
-  width: number;
-  height: number;
-}): { scale: number; offsetX: number; offsetY: number } {
+function boardTransform(box: { width: number; height: number }): {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+} {
   const scale = Math.min(
     box.width / (mapWidth * tileSize),
     box.height / (mapHeight * tileSize),
