@@ -227,11 +227,7 @@ export function findRoutePlan(
 
         const boardAt = service.anchors[boardIndex];
         const alightAt = service.anchors[alightIndex];
-        const steps = rideSteps(
-          service.segments,
-          boardIndex,
-          alightIndex,
-        );
+        const steps = rideSteps(service.segments, boardIndex, alightIndex);
 
         candidates.push({
           legs: [

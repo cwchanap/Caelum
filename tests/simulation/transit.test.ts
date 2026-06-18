@@ -18,10 +18,13 @@ import {
   addMetroStation,
   assignRouteToPlatform,
   assignVehicle,
+  COSTS,
   cycleRoadDirection,
   deleteRoute,
   layRoad,
+  layRoadNoRecompute,
   layTrack,
+  layTrackNoRecompute,
   recomputeRoutePaths,
   removeInfrastructureAtTile,
   renameRoute,
@@ -2007,5 +2010,55 @@ describe("laying and removing infrastructure", () => {
     state = removeInfrastructureAtTile(state, { x: 9, y: 8 });
     tile = state.map.tiles.find((t) => t.x === 9 && t.y === 8);
     expect(tile?.kind).toBe("empty");
+  });
+});
+
+describe("no-recompute placement helpers", () => {
+  it("layRoadNoRecompute places the road but skips route recomputation", () => {
+    // Stops at (7,8) and (15,8) share the y=8 road; severing (11,8) breaks the
+    // route. Re-laying via the no-recompute helper must put the road back while
+    // leaving route paths stale (pathBroken unchanged) — the drag commit then
+    // refreshes exactly once at the end. layRoad delegates and does refresh.
+    let state = createBusState();
+    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    expect(state.transit.routes[0].pathBroken).toBe(true);
+
+    const noRec = layRoadNoRecompute(state, { x: 11, y: 8 });
+    expect(getTile(noRec.map, { x: 11, y: 8 })?.kind).toBe("road");
+    expect(noRec.budget).toBe(state.budget - COSTS.road);
+    // Skipped recompute: transit untouched (same ref) and route still broken.
+    expect(noRec.transit).toBe(state.transit);
+    expect(noRec.transit.routes[0].pathBroken).toBe(true);
+
+    // The full helper refreshes transit and restores the route.
+    const rec = layRoad(state, { x: 11, y: 8 });
+    expect(rec.transit).not.toBe(state.transit);
+    expect(rec.transit.routes[0].pathBroken).toBe(false);
+  });
+
+  it("layTrackNoRecompute places track but skips route recomputation", () => {
+    const state = createInitialGameState();
+    // (9,8) is a road tile; laying track normally refreshes transit.
+    const noRec = layTrackNoRecompute(state, { x: 9, y: 8 });
+    expect(getTile(noRec.map, { x: 9, y: 8 })?.hasTrack).toBe(true);
+    expect(noRec.budget).toBe(state.budget - COSTS.track);
+    // Skipped recompute: transit untouched (same ref).
+    expect(noRec.transit).toBe(state.transit);
+
+    // The full helper refreshes transit.
+    const rec = layTrack(state, { x: 9, y: 8 });
+    expect(getTile(rec.map, { x: 9, y: 8 })?.hasTrack).toBe(true);
+    expect(rec.transit).not.toBe(state.transit);
+  });
+
+  it("no-recompute helpers return the same reference for no-op placements", () => {
+    const state = createInitialGameState();
+    // (7,8) is already a road; (2,3) is residential — both invalid.
+    expect(layRoadNoRecompute(state, { x: 7, y: 8 })).toBe(state);
+    expect(layTrackNoRecompute(state, { x: 2, y: 3 })).toBe(state);
+    // Unaffordable.
+    const broke = { ...createInitialGameState(), budget: 50 };
+    expect(layRoadNoRecompute(broke, { x: 8, y: 2 })).toBe(broke);
+    expect(layTrackNoRecompute(broke, { x: 8, y: 2 })).toBe(broke);
   });
 });
