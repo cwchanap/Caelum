@@ -42,6 +42,9 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await clickMapTile(canvas, { x: 8, y: 7 });
   await clickMapTile(canvas, { x: 16, y: 7 });
   await clickMapTile(canvas, { x: 23, y: 7 });
+  // Selecting the Bus Route tool auto-hides the drawer; reopen it to manage
+  // the in-progress draft (stop list + finish/cancel actions).
+  await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByTestId("remove-draft-stop-1").click();
   await page.getByRole("button", { name: /finish route/i }).click();
@@ -72,6 +75,8 @@ test("create a metro line on laid track", async ({ page }) => {
   }
 
   // Stations on the track ends (Metro Station building requires track).
+  // The track tool auto-hides the build drawer; reopen it to reach buildings.
+  await openHudCategory(page, "build");
   await page.getByRole("button", { name: "Metro Station" }).click();
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
@@ -81,6 +86,8 @@ test("create a metro line on laid track", async ({ page }) => {
   await page.getByRole("button", { name: "Metro Line" }).click();
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
+  // The Metro Line tool auto-hides the drawer; reopen it to finish the draft.
+  await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByRole("button", { name: /finish route/i }).click();
 
