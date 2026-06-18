@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { getBoardTransform } from "../../src/render/canvas";
 import type { GameMap } from "../../src/domain/types";
+import {
+  createGrowingSuburbMap,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+} from "../../src/scenario/growingSuburb";
 import { _boardTransformForTest as boardTransform } from "../e2e/helpers";
 
-// The Growing Suburb scenario map dimensions that tests/e2e/helpers.ts assumes.
+// The Growing Suburb scenario map dimensions, taken from the source of truth.
 // getBoardTransform only reads width/height, so an empty tiles array is fine.
-const map: GameMap = { width: 28, height: 18, tiles: [] };
+const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles: [] };
+
+describe("growing suburb map dimensions", () => {
+  it("exports the authoritative dimensions used by the real map", () => {
+    // Guards against re-introducing a hard-coded duplicate: the constants the
+    // e2e helpers import must match the actual scenario map size.
+    const real = createGrowingSuburbMap();
+    expect(real.width).toBe(MAP_WIDTH);
+    expect(real.height).toBe(MAP_HEIGHT);
+  });
+});
 
 describe("e2e boardTransform", () => {
   it("matches getBoardTransform (the render source of truth)", () => {

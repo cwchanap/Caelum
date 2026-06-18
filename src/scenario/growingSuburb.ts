@@ -8,8 +8,11 @@ import type {
   TileKind,
 } from "../domain/types";
 
-const width = 28;
-const height = 18;
+// Authoritative Growing Suburb map dimensions. Exported so tests (e2e helpers,
+// runtime helper tests) can reference the source of truth instead of
+// duplicating magic numbers that silently drift if the scenario changes.
+export const MAP_WIDTH = 28;
+export const MAP_HEIGHT = 18;
 
 function kindFor(x: number, y: number): TileKind {
   if (y === 8 || x === 7 || x === 15 || x === 22) return "road";
@@ -23,13 +26,13 @@ function kindFor(x: number, y: number): TileKind {
 export function createGrowingSuburbMap(): GameMap {
   const tiles: Tile[] = [];
 
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
+  for (let y = 0; y < MAP_HEIGHT; y += 1) {
+    for (let x = 0; x < MAP_WIDTH; x += 1) {
       tiles.push({ id: tileId(x, y), x, y, kind: kindFor(x, y) });
     }
   }
 
-  return { width, height, tiles };
+  return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles };
 }
 
 export function createStartingCitizens(): Citizen[] {
