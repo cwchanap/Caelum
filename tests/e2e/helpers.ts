@@ -1,4 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
+import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
 
 export async function openHudCategory(
@@ -6,6 +7,42 @@ export async function openHudCategory(
   category: "build" | "routes" | "manage" | "data" | "brief" | "inspect",
 ): Promise<void> {
   await page.getByTestId(`hud-cat-${category}`).click();
+}
+
+export interface AppServer {
+  server: ViteDevServer;
+  url: string;
+}
+
+/**
+ * Start a Vite dev server on an ephemeral port for e2e tests, and pre-warm it.
+ *
+ * Vite lazily pre-bundles dependencies (it logs "Forced re-optimization of
+ * dependencies") and transforms modules on the first request. On a cold CI
+ * runner this can take longer than Playwright's default 5s `expect` timeout, so
+ * the very first `page.goto` occasionally fails its initial `game-shell`
+ * assertion before the app has hydrated. Hitting the root page and the entry
+ * module here forces that work to finish up front, so every browser navigation
+ * — including the first — lands on a warm server.
+ */
+export async function startAppServer(): Promise<AppServer> {
+  const server = await createServer({
+    configFile: "vite.config.ts",
+    server: { host: "127.0.0.1", port: 0 },
+  });
+  await server.listen();
+  const resolved = server.resolvedUrls?.local[0];
+  if (!resolved) {
+    throw new Error("Vite dev server did not expose a local URL");
+  }
+  // The root page triggers dependency pre-bundling; the entry module primes the
+  // on-demand transform cache. A failure here is non-fatal — it only means the
+  // first browser load pays the warm-up cost instead.
+  await Promise.all([
+    fetch(resolved).then((r) => r.text()),
+    fetch(new URL("/src/main.ts", resolved).toString()).then((r) => r.text()),
+  ]).catch(() => {});
+  return { server, url: resolved };
 }
 
 // Must match the Growing Suburb scenario map dimensions in
