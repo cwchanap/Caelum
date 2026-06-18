@@ -42,6 +42,9 @@ interface Stubbed {
 
 let stubs: Stubbed;
 let restore: (() => void) | null = null;
+// Tracked so afterEach can tear down the mounted canvas even when a test's
+// assertion throws before reaching inline cleanup.
+let currentDetach: (() => void) | null = null;
 
 beforeEach(() => {
   stubs = {
@@ -108,7 +111,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Runs even when a test assertion threw, so a failing test cannot leak a
+  // mounted runtime (event listeners/canvas) or DOM into the next one.
+  currentDetach?.();
+  currentDetach = null;
   restore?.();
+  restore = null;
+  document.body.innerHTML = "";
 });
 
 /** Mount the runtime canvas against the real board size and return it. */
@@ -140,6 +149,7 @@ function mount() {
   document.body.appendChild(host);
 
   const detach = runtime.mountCanvas(host);
+  currentDetach = detach;
   const canvas = host.querySelector("canvas") as HTMLCanvasElement;
 
   return { runtime, canvas, detach };
@@ -166,7 +176,7 @@ function tileKind(
 
 describe("runtime canvas pointer wiring", () => {
   it("builds a road line from a real pointerdown -> move -> pointerup", () => {
-    const { runtime, canvas, detach } = mount();
+    const { runtime, canvas } = mount();
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
 
@@ -179,16 +189,13 @@ describe("runtime canvas pointer wiring", () => {
       expect(tileKind(runtime, x, 0)).toBe("road");
     }
     expect(runtime.getSnapshot().ui.drag).toBeNull();
-
-    detach();
-    document.body.innerHTML = "";
   });
 
   it("requests pointer capture on drag start so an edge release still commits", () => {
     const setCapture = Element.prototype.setPointerCapture as unknown as {
       mock: { calls: number[][] };
     };
-    const { runtime, canvas, detach } = mount();
+    const { runtime, canvas } = mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", {
@@ -202,13 +209,10 @@ describe("runtime canvas pointer wiring", () => {
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
     dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), pointerId: 7 });
     expect(releaseCapture.mock.calls).toContainEqual([7]);
-
-    detach();
-    document.body.innerHTML = "";
   });
 
   it("ignores a non-primary (right) button press so no drag starts", () => {
-    const { runtime, canvas, detach } = mount();
+    const { runtime, canvas } = mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), button: 2 });
@@ -217,13 +221,10 @@ describe("runtime canvas pointer wiring", () => {
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(tileKind(runtime, 1, 0)).toBe("empty");
     expect(tileKind(runtime, 3, 0)).toBe("empty");
-
-    detach();
-    document.body.innerHTML = "";
   });
 
   it("does not commit on a non-primary button release mid-drag", () => {
-    const { runtime, canvas, detach } = mount();
+    const { runtime, canvas } = mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
@@ -237,15 +238,12 @@ describe("runtime canvas pointer wiring", () => {
     // The primary release then commits normally.
     dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
     expect(tileKind(runtime, 1, 0)).toBe("road");
-
-    detach();
-    document.body.innerHTML = "";
   });
 
   it("tears the drag down on pointercancel and releases capture", () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
-    const { runtime, canvas, detach } = mount();
+    const { runtime, canvas } = mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", {
@@ -261,8 +259,5 @@ describe("runtime canvas pointer wiring", () => {
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(tileKind(runtime, 1, 0)).toBe("empty");
     expect(releaseCapture.mock.calls).toContainEqual([5]);
-
-    detach();
-    document.body.innerHTML = "";
   });
 });

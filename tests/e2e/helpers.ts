@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 
 export async function openHudCategory(
   page: Page,
@@ -45,11 +46,10 @@ export async function startAppServer(): Promise<AppServer> {
   return { server, url: resolved };
 }
 
-// Must match the Growing Suburb scenario map dimensions in
-// src/scenario/growingSuburb.ts (width/height constants). If the scenario
-// changes its map size, update these to match.
-const mapWidth = 28;
-const mapHeight = 18;
+// Authoritative dimensions imported from the Growing Suburb scenario, so the
+// e2e board transform tracks the actual map size without silent drift.
+const mapWidth = MAP_WIDTH;
+const mapHeight = MAP_HEIGHT;
 
 /**
  * Board transform mirroring `getBoardTransform` in src/render/canvas.ts, but
