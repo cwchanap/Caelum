@@ -1,22 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { createServer, type ViteDevServer } from "vite";
-import { clickMapTile, openHudCategory } from "./helpers";
+import type { ViteDevServer } from "vite";
+import { clickMapTile, openHudCategory, startAppServer } from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
 
 test.beforeAll(async () => {
-  server = await createServer({
-    configFile: "vite.config.ts",
-    server: {
-      host: "127.0.0.1",
-      port: 0,
-    },
-  });
-  await server.listen();
-  const resolved = server.resolvedUrls?.local[0];
-  if (!resolved) throw new Error("Vite dev server did not expose a local URL");
-  appUrl = resolved;
+  ({ server, url: appUrl } = await startAppServer());
 });
 
 test.afterAll(async () => {
