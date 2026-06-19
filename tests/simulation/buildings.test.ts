@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AreaKind,
   BuildingRotation,
   GameState,
   Point,
@@ -26,6 +27,23 @@ function withTrack(state: GameState, points: Point[]): GameState {
   };
 }
 
+function withArea(
+  state: GameState,
+  area: AreaKind,
+  points: Point[],
+): GameState {
+  const keys = new Set(points.map((point) => `${point.x},${point.y}`));
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        keys.has(`${tile.x},${tile.y}`) ? { ...tile, area } : tile,
+      ),
+    },
+  };
+}
+
 describe("building catalog and footprints", () => {
   it("defines the first Build menu catalog", () => {
     expect(Object.keys(BUILDING_CATALOG)).toEqual([
@@ -34,6 +52,15 @@ describe("building catalog and footprints", () => {
       "metroStation",
       "smallHouse",
       "largeHouse",
+      "supermarket",
+      "cinema",
+      "factory",
+      "warehouse",
+      "officeTower",
+      "businessPark",
+      "clinic",
+      "school",
+      "parkPlaza",
     ]);
     expect(BUILDING_CATALOG.busTerminal).toMatchObject({
       label: "Bus Terminal",
@@ -49,6 +76,26 @@ describe("building catalog and footprints", () => {
       cost: 4_000,
       citizenCount: 4,
       effect: "housing",
+    });
+  });
+
+  it("defines zoned destination buildings in the catalog", () => {
+    expect(BUILDING_CATALOG.supermarket).toMatchObject({
+      label: "Supermarket",
+      width: 2,
+      height: 2,
+      allowedArea: "commercial",
+      effect: "destination",
+    });
+    expect(BUILDING_CATALOG.officeTower).toMatchObject({
+      label: "Office Tower",
+      allowedArea: "office",
+      effect: "destination",
+    });
+    expect(BUILDING_CATALOG.parkPlaza).toMatchObject({
+      label: "Park Plaza",
+      allowedArea: "park",
+      effect: "destination",
     });
   });
 
@@ -73,6 +120,10 @@ describe("building catalog and footprints", () => {
 
   it("validates the full building footprint against the map and occupancy", () => {
     const state = createInitialGameState();
+    const residential = withArea(state, "residential", [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+    ]);
 
     expect(canPlaceBuilding(state, "busTerminal", { x: 0, y: 0 }, 0)).toBe(
       true,
@@ -84,10 +135,35 @@ describe("building catalog and footprints", () => {
       false,
     );
 
-    const withHouse = placeBuilding(state, "smallHouse", { x: 0, y: 0 }, 0);
+    const withHouse = placeBuilding(
+      residential,
+      "smallHouse",
+      { x: 0, y: 0 },
+      0,
+    );
 
     expect(canPlaceBuilding(withHouse, "busStop", { x: 0, y: 0 }, 0)).toBe(
       false,
+    );
+  });
+
+  it("requires matching area for zoned building footprints", () => {
+    const base = createInitialGameState();
+    const residential = withArea(base, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    const commercial = withArea(base, "commercial", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+
+    expect(canPlaceBuilding(base, "smallHouse", { x: 1, y: 1 }, 0)).toBe(false);
+    expect(canPlaceBuilding(commercial, "smallHouse", { x: 1, y: 1 }, 0)).toBe(
+      false,
+    );
+    expect(canPlaceBuilding(residential, "smallHouse", { x: 1, y: 1 }, 0)).toBe(
+      true,
     );
   });
 
@@ -149,17 +225,24 @@ describe("building catalog and footprints", () => {
 
   it("adds deterministic citizens immediately for house placement", () => {
     const state = placeBuilding(
-      createInitialGameState(),
+      withArea(createInitialGameState(), "residential", [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ]),
       "largeHouse",
       { x: 0, y: 0 },
       0,
     );
 
-    expect(state.citizens).toHaveLength(46);
-    expect(state.citizens[36]).toEqual({
-      id: "citizen-037",
+    expect(state.citizens).toHaveLength(10);
+    expect(state.citizens[0]).toEqual({
+      id: "citizen-001",
       home: { x: 0, y: 0 },
-      destination: { x: 10, y: 4 },
+      destination: { x: 0, y: 0 },
       position: { x: 0, y: 0 },
       status: "idle",
       patienceRemaining: 240,
@@ -167,6 +250,45 @@ describe("building catalog and footprints", () => {
       routePlan: null,
       currentLegIndex: 0,
     });
+  });
+
+  it("uses home as a fallback destination when no destination building exists", () => {
+    const state = placeBuilding(
+      withArea(createInitialGameState(), "residential", [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ]),
+      "smallHouse",
+      { x: 1, y: 1 },
+      0,
+    );
+
+    expect(state.citizens).toHaveLength(4);
+    expect(state.citizens[0]).toMatchObject({
+      id: "citizen-001",
+      home: { x: 1, y: 1 },
+      destination: { x: 1, y: 1 },
+    });
+  });
+
+  it("uses placed destination buildings for later housing citizens", () => {
+    let state = withArea(createInitialGameState(), "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    state = withArea(state, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+
+    expect(state.citizens[0].destination).toEqual({ x: 5, y: 1 });
+    expect(state.citizens[1].destination).toEqual({ x: 6, y: 1 });
+    expect(state.citizens[2].destination).toEqual({ x: 5, y: 2 });
+    expect(state.citizens[3].destination).toEqual({ x: 6, y: 2 });
   });
 
   it("requires track under a metro station building and rejects other buildings on track", () => {
