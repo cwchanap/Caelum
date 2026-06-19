@@ -5,6 +5,13 @@ export type TileKind =
   | "jobs"
   | "civic"
   | "park";
+export type AreaKind =
+  | "residential"
+  | "commercial"
+  | "industrial"
+  | "office"
+  | "civic"
+  | "park";
 export type RoadDirection = "north" | "east" | "south" | "west";
 export type TransitMode = "walk" | "bus" | "metro";
 export type BuildingType =
@@ -58,6 +65,7 @@ export interface Tile extends Point {
   id: string;
   kind: TileKind;
   districtId?: string;
+  area?: AreaKind;
   /** Track is a layer, not a TileKind: a road tile with track is a level crossing. */
   hasTrack?: boolean;
   /** One-way constraint on a road lane. Undefined = two-way (default). */
