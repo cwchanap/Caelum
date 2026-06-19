@@ -1,5 +1,6 @@
-import type { BuildingType, Point, Tool } from "../domain/types";
+import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
+import { paintAreaRectangle } from "../simulation/areas";
 import { createInitialGameState } from "../simulation/gameState";
 import { tickSimulation } from "../simulation/simulation";
 import {
@@ -28,7 +29,7 @@ function samePoint(left: Point | null, right: Point | null): boolean {
   return left?.x === right?.x && left?.y === right?.y;
 }
 
-const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove"]);
+const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
 
 const rotations = [0, 90, 180, 270] as const;
 
@@ -38,12 +39,33 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     activeTool,
     selectedNodeKind: null,
     selectedBuilding: null,
+    selectedArea: null,
     buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
     draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
     draftStopPaths: activeTool === "busRoute" ? current.draftStopPaths : [],
     draftStationPaths:
       activeTool === "metroLine" ? current.draftStationPaths : [],
+    selectedRouteId: null,
+    roadPreset: current.roadPreset,
+    drag: null,
+    activeHudCategory: null,
+  };
+}
+
+function nextAreaUiState(area: AreaKind, current = createUiState()) {
+  return {
+    ...current,
+    activeTool: "area" as const,
+    selectedId: null,
+    selectedNodeKind: null,
+    selectedBuilding: null,
+    selectedArea: area,
+    buildingRotation: 0 as const,
+    draftStopIds: [],
+    draftStationIds: [],
+    draftStopPaths: [],
+    draftStationPaths: [],
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     drag: null,
@@ -61,6 +83,7 @@ function nextBuildingUiState(
     selectedId: null,
     selectedNodeKind: null,
     selectedBuilding,
+    selectedArea: null,
     buildingRotation: 0 as const,
     draftStopIds: [],
     draftStationIds: [],
@@ -408,6 +431,9 @@ export function createGameRuntime(): RuntimeController {
     setBuilding(building) {
       return commit(state, nextBuildingUiState(building, ui));
     },
+    setArea(area) {
+      return commit(state, nextAreaUiState(area, ui));
+    },
     setRoadPreset(preset) {
       return commit(
         state,
@@ -419,6 +445,15 @@ export function createGameRuntime(): RuntimeController {
       // self-describing even if activeTool later changes (a tool switch clears
       // `drag` via nextToolUiState, so the two never drift in practice).
       const tool = ui.activeTool;
+      if (tool === "area") {
+        if (ui.selectedArea === null) {
+          return commit(state, ui);
+        }
+        return commit(state, {
+          ...ui,
+          drag: { tool, area: ui.selectedArea, start: point, current: point },
+        });
+      }
       if (tool !== "road" && tool !== "track" && tool !== "remove") {
         return commit(state, ui);
       }
@@ -448,6 +483,17 @@ export function createGameRuntime(): RuntimeController {
       const gesture = ui.drag;
       if (gesture === null) {
         return commit(state, ui);
+      }
+      if (gesture.tool === "area") {
+        return commit(
+          paintAreaRectangle(
+            state,
+            gesture.area,
+            gesture.start,
+            gesture.current,
+          ),
+          { ...ui, drag: null },
+        );
       }
       const line = axisLockedLine(gesture.start, gesture.current);
       // A tap (single tile) reuses the legacy click path so road cycling and

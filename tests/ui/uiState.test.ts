@@ -6,5 +6,6 @@ describe("createUiState road UX defaults", () => {
     const ui = createUiState();
     expect(ui.roadPreset).toBe("twoWay");
     expect(ui.drag).toBeNull();
+    expect(ui.selectedArea).toBeNull();
   });
 });

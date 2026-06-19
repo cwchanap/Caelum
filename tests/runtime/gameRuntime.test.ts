@@ -63,11 +63,11 @@ describe("Game Runtime", () => {
     runtime.setOverlay("growth");
     runtime.handleTileClick({ x: 5, y: 5 });
     runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 7, y: 8 });
-    runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
     runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 7, y: 8 });
-    runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
     runtime.setHudCategory("manage");
 
     const beforeReset = runtime.getSnapshot();
@@ -314,11 +314,11 @@ describe("route creation and management", () => {
   function withTwoStops() {
     const runtime = createGameRuntime();
     runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 7, y: 8 });
-    runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
     runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 7, y: 8 });
-    runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
     return runtime;
   }
 
@@ -408,11 +408,11 @@ describe("runtime road drag", () => {
   it("treats a zero-length drag as a tap (cycles an existing road's direction)", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");
-    runtime.startDrag({ x: 8, y: 8 }); // existing road tile
-    runtime.setDragCurrent({ x: 8, y: 8 });
+    runtime.startDrag({ x: 14, y: 8 }); // existing road tile
+    runtime.setDragCurrent({ x: 14, y: 8 });
     runtime.commitDrag();
     expect(
-      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 8 && t.y === 8)
+      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 14 && t.y === 8)
         ?.oneWay,
     ).toBe("north"); // first cycle: undefined -> north
   });
@@ -460,6 +460,65 @@ describe("runtime road drag", () => {
     const gesture = runtime.getSnapshot().ui.drag;
     expect(gesture).not.toBeNull();
     expect(gesture?.current).toEqual({ x: 4, y: 0 }); // unchanged
+  });
+});
+
+describe("runtime area drag", () => {
+  function areaAt(
+    runtime: ReturnType<typeof createGameRuntime>,
+    x: number,
+    y: number,
+  ) {
+    return runtime
+      .getSnapshot()
+      .state.map.tiles.find((tile) => tile.x === x && tile.y === y)?.area;
+  }
+
+  it("selects an area independently from buildings and tools", () => {
+    const runtime = createGameRuntime();
+
+    runtime.setArea("residential");
+
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "area",
+      selectedArea: "residential",
+      selectedBuilding: null,
+      drag: null,
+    });
+    expect(runtime.getSnapshot().shell.hud.activeToolChip).toBe(
+      "AREA RESIDENTIAL",
+    );
+  });
+
+  it("paints an area rectangle from startDrag -> move -> commitDrag", () => {
+    const runtime = createGameRuntime();
+    runtime.setArea("commercial");
+    runtime.startDrag({ x: 1, y: 1 });
+    runtime.setDragCurrent({ x: 2, y: 2 });
+
+    const snap = runtime.commitDrag();
+
+    expect(areaAt(runtime, 1, 1)).toBe("commercial");
+    expect(areaAt(runtime, 2, 2)).toBe("commercial");
+    expect(snap.ui.drag).toBeNull();
+  });
+
+  it("paints a single tile area drag", () => {
+    const runtime = createGameRuntime();
+    runtime.setArea("office");
+    runtime.startDrag({ x: 1, y: 1 });
+
+    runtime.commitDrag();
+
+    expect(areaAt(runtime, 1, 1)).toBe("office");
+  });
+
+  it("clears area selection when a building is selected", () => {
+    const runtime = createGameRuntime();
+    runtime.setArea("residential");
+    runtime.setBuilding("smallHouse");
+
+    expect(runtime.getSnapshot().ui.selectedArea).toBeNull();
   });
 });
 

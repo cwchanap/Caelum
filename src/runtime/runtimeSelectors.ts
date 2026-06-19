@@ -1,4 +1,5 @@
 import type { GameState, Overlay } from "../domain/types";
+import { AREA_LABELS } from "../simulation/areas";
 import { BUILDING_CATALOG } from "../simulation/buildings";
 import { selectPlatformOccupancy } from "../simulation/platforms";
 import { COSTS } from "../simulation/transit";
@@ -44,6 +45,10 @@ export function formatObjective(state: GameState): string {
 }
 
 export function formatActiveTool(ui: UiState): string {
+  if (ui.selectedArea !== null) {
+    return `AREA ${AREA_LABELS[ui.selectedArea].toUpperCase()}`;
+  }
+
   if (ui.selectedBuilding !== null) {
     return `${BUILDING_CATALOG[ui.selectedBuilding].label.toUpperCase()} ${ui.buildingRotation}`;
   }
@@ -226,6 +231,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       draftActive ||
       ui.activeTool !== "inspect" ||
       ui.selectedBuilding !== null ||
+      ui.selectedArea !== null ||
       ui.activeOverlay !== null ||
       ui.selectedRouteId !== null,
     badges: {
