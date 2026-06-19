@@ -54,8 +54,8 @@ function waitingBusCitizen(
 describe("selectShellState inspector", () => {
   it("emits an inspector block for a selected terminal with route chips", () => {
     let state = { ...createInitialGameState(), budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
-    state = addBusStop(state, { x: 22, y: 2 });
+    state = addBusStop(state, { x: 14, y: 7 }, "busTerminal");
+    state = addBusStop(state, { x: 14, y: 8 });
     state = addBusRoute(
       state,
       state.transit.stops.map((s) => s.id),
@@ -66,7 +66,7 @@ describe("selectShellState inspector", () => {
     const ui = {
       ...createUiState(),
       activeTool: "inspect" as const,
-      selectedId: "7,2",
+      selectedId: "14,7",
     };
     const shell = selectShellState(state, ui);
 
@@ -88,8 +88,8 @@ describe("selectShellState inspector", () => {
 
   it("reports platform occupancy from waiting citizens", () => {
     let state = { ...createInitialGameState(), budget: 1_000_000 };
-    state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
-    state = addBusStop(state, { x: 22, y: 2 });
+    state = addBusStop(state, { x: 14, y: 7 }, "busTerminal");
+    state = addBusStop(state, { x: 14, y: 8 });
     state = addBusRoute(
       state,
       state.transit.stops.map((s) => s.id),
@@ -103,7 +103,7 @@ describe("selectShellState inspector", () => {
     const ui = {
       ...createUiState(),
       activeTool: "inspect" as const,
-      selectedId: "7,2",
+      selectedId: "14,7",
     };
     const shell = selectShellState(state, ui);
 
@@ -314,6 +314,19 @@ describe("ShellHudState", () => {
     const ui = { ...createUiState(), selectedRouteId: "route-001" };
     const shell = selectShellState(state, ui);
 
+    expect(shell.hud.canCancel).toBe(true);
+  });
+
+  it("formats a selected area as the active tool and allows cancel", () => {
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: "commercial" as const,
+    };
+    const shell = selectShellState(state, ui);
+
+    expect(shell.hud.activeToolChip).toBe("AREA COMMERCIAL");
     expect(shell.hud.canCancel).toBe(true);
   });
 

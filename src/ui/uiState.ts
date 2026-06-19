@@ -1,4 +1,5 @@
 import type {
+  AreaKind,
   BuildingRotation,
   BuildingType,
   Overlay,
@@ -20,18 +21,25 @@ export type PrimaryHudCategory =
 export type HudCategory = PrimaryHudCategory | "inspect";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
-export type DragTool = "road" | "track" | "remove";
+export type DragTool = "road" | "track" | "remove" | "area";
 
 /** An in-progress road/track/remove drag. Atomic by construction — `tool`,
  *  `start`, and `current` are always present together, so the illegal states a
  *  three-field model allows (a start with no current tile, or a drag lingering
  *  after switching to a non-drag tool) are unrepresentable. Consumers collapse
  *  to a single `drag === null` check. */
-export interface DragGesture {
-  tool: DragTool;
-  start: Point;
-  current: Point;
-}
+export type DragGesture =
+  | {
+      tool: "road" | "track" | "remove";
+      start: Point;
+      current: Point;
+    }
+  | {
+      tool: "area";
+      area: AreaKind;
+      start: Point;
+      current: Point;
+    };
 
 export interface UiState {
   activeTool: Tool;
@@ -43,6 +51,7 @@ export interface UiState {
   selectedId: string | null;
   selectedNodeKind: "stop" | "station" | null;
   selectedBuilding: BuildingType | null;
+  selectedArea: AreaKind | null;
   buildingRotation: BuildingRotation;
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
@@ -65,6 +74,7 @@ export function createUiState(): UiState {
     selectedId: null,
     selectedNodeKind: null,
     selectedBuilding: null,
+    selectedArea: null,
     buildingRotation: 0,
     hoverTile: null,
     draftStopIds: [],

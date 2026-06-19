@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
 import type {
+  AreaKind,
   BuildingType,
   GameState,
   Overlay,
@@ -67,6 +68,7 @@ function createRuntimeHarness(
         ...ui,
         activeTool: tool,
         selectedBuilding: null,
+        selectedArea: null,
         buildingRotation: 0,
         draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
         draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
@@ -79,6 +81,20 @@ function createRuntimeHarness(
         activeTool: "inspect",
         selectedId: null,
         selectedBuilding: building,
+        selectedArea: null,
+        buildingRotation: 0,
+        draftStopIds: [],
+        draftStationIds: [],
+      };
+      return publish();
+    }),
+    setArea: vi.fn((area: AreaKind) => {
+      ui = {
+        ...ui,
+        activeTool: "area",
+        selectedId: null,
+        selectedBuilding: null,
+        selectedArea: area,
         buildingRotation: 0,
         draftStopIds: [],
         draftStationIds: [],

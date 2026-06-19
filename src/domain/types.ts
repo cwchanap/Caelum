@@ -46,6 +46,7 @@ export type Tool =
   | "metroStation"
   | "metroLine"
   | "civicAnchor"
+  | "area"
   | "road"
   | "track"
   | "remove";

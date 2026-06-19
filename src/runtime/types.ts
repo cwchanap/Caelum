@@ -1,4 +1,5 @@
 import type {
+  AreaKind,
   BuildingType,
   GameState,
   Overlay,
@@ -124,6 +125,7 @@ export interface RuntimeController {
   resetUi: () => RuntimeSnapshot;
   setTool: (tool: Tool) => RuntimeSnapshot;
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
+  setArea: (area: AreaKind) => RuntimeSnapshot;
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
   setDragCurrent: (point: Point | null) => RuntimeSnapshot;
