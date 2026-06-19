@@ -8,6 +8,15 @@ const buildingColors = {
   metroStation: colors.buildingMetro,
   smallHouse: colors.buildingHouse,
   largeHouse: colors.buildingHouse,
+  supermarket: colors.buildingCommercial,
+  cinema: colors.buildingCommercial,
+  factory: colors.buildingIndustrial,
+  warehouse: colors.buildingIndustrial,
+  officeTower: colors.buildingOffice,
+  businessPark: colors.buildingOffice,
+  clinic: colors.buildingCivic,
+  school: colors.buildingCivic,
+  parkPlaza: colors.buildingPark,
 } satisfies Record<BuildingType, string>;
 
 function colorForBuilding(type: BuildingType): string {

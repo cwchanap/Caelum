@@ -19,7 +19,16 @@ export type BuildingType =
   | "busTerminal"
   | "metroStation"
   | "smallHouse"
-  | "largeHouse";
+  | "largeHouse"
+  | "supermarket"
+  | "cinema"
+  | "factory"
+  | "warehouse"
+  | "officeTower"
+  | "businessPark"
+  | "clinic"
+  | "school"
+  | "parkPlaza";
 export type BuildingRotation = 0 | 90 | 180 | 270;
 export type StopKind = "busStop" | "busTerminal";
 export type CitizenStatus =

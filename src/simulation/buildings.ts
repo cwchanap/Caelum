@@ -1,12 +1,12 @@
 import { entityId, nextEntityId } from "../domain/ids";
 import type {
+  AreaKind,
   BuildingRotation,
   BuildingType,
   Citizen,
   GameState,
   PlacedBuilding,
   Point,
-  Tile,
 } from "../domain/types";
 import { getTile } from "./map";
 import { busPlatforms, metroPlatforms } from "./platforms";
@@ -15,7 +15,8 @@ export type BuildingEffect =
   | "busStop"
   | "busTerminal"
   | "metroStation"
-  | "housing";
+  | "housing"
+  | "destination";
 
 export interface BuildingDefinition {
   type: BuildingType;
@@ -24,6 +25,7 @@ export interface BuildingDefinition {
   height: number;
   cost: number;
   effect: BuildingEffect;
+  allowedArea?: AreaKind;
   citizenCount?: number;
 }
 
@@ -59,6 +61,7 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     height: 1,
     cost: 4_000,
     effect: "housing",
+    allowedArea: "residential",
     citizenCount: 4,
   },
   largeHouse: {
@@ -68,7 +71,89 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     height: 2,
     cost: 10_000,
     effect: "housing",
+    allowedArea: "residential",
     citizenCount: 10,
+  },
+  supermarket: {
+    type: "supermarket",
+    label: "Supermarket",
+    width: 2,
+    height: 2,
+    cost: 8_000,
+    effect: "destination",
+    allowedArea: "commercial",
+  },
+  cinema: {
+    type: "cinema",
+    label: "Cinema",
+    width: 3,
+    height: 2,
+    cost: 14_000,
+    effect: "destination",
+    allowedArea: "commercial",
+  },
+  factory: {
+    type: "factory",
+    label: "Factory",
+    width: 3,
+    height: 2,
+    cost: 16_000,
+    effect: "destination",
+    allowedArea: "industrial",
+  },
+  warehouse: {
+    type: "warehouse",
+    label: "Warehouse",
+    width: 3,
+    height: 2,
+    cost: 12_000,
+    effect: "destination",
+    allowedArea: "industrial",
+  },
+  officeTower: {
+    type: "officeTower",
+    label: "Office Tower",
+    width: 2,
+    height: 2,
+    cost: 18_000,
+    effect: "destination",
+    allowedArea: "office",
+  },
+  businessPark: {
+    type: "businessPark",
+    label: "Business Park",
+    width: 3,
+    height: 2,
+    cost: 15_000,
+    effect: "destination",
+    allowedArea: "office",
+  },
+  clinic: {
+    type: "clinic",
+    label: "Clinic",
+    width: 2,
+    height: 2,
+    cost: 12_000,
+    effect: "destination",
+    allowedArea: "civic",
+  },
+  school: {
+    type: "school",
+    label: "School",
+    width: 3,
+    height: 2,
+    cost: 18_000,
+    effect: "destination",
+    allowedArea: "civic",
+  },
+  parkPlaza: {
+    type: "parkPlaza",
+    label: "Park Plaza",
+    width: 2,
+    height: 2,
+    cost: 6_000,
+    effect: "destination",
+    allowedArea: "park",
   },
 };
 
@@ -107,10 +192,12 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function destinationTiles(state: GameState): Tile[] {
-  return state.map.tiles
-    .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
-    .sort((left, right) => left.id.localeCompare(right.id));
+export function destinationPoints(state: GameState): Point[] {
+  return state.buildings
+    .filter(
+      (building) => BUILDING_CATALOG[building.type].effect === "destination",
+    )
+    .flatMap((building) => building.occupiedTiles.map(clonePoint));
 }
 
 function createHousingCitizens(
@@ -118,7 +205,7 @@ function createHousingCitizens(
   occupiedTiles: Point[],
   citizenCount: number,
 ): Citizen[] {
-  const destinations = destinationTiles(state);
+  const destinations = destinationPoints(state);
   const fallbackHome = occupiedTiles[0] ?? { x: 0, y: 0 };
 
   return Array.from({ length: citizenCount }, (_, index) => {
@@ -145,6 +232,7 @@ export function canPlaceBuilding(
   origin: Point,
   rotation: BuildingRotation,
 ): boolean {
+  const definition = BUILDING_CATALOG[type];
   const footprint = getBuildingFootprint(type, origin, rotation);
 
   return footprint.every((point) => {
@@ -172,10 +260,14 @@ export function canPlaceBuilding(
       type === "metroStation"
         ? tile?.hasTrack === true
         : tile?.hasTrack !== true;
+    const areaOk =
+      definition.allowedArea === undefined ||
+      tile?.area === definition.allowedArea;
 
     return (
       kindOk &&
       trackOk &&
+      areaOk &&
       !buildingOccupied &&
       !stopOccupied &&
       !stationOccupied
