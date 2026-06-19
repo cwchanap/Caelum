@@ -132,7 +132,7 @@ export function setTileKind(
       if (kind === "road") {
         return { ...tile, kind };
       }
-      // oneWay is only meaningful on roads; drop it when the tile changes kind.
+      // oneWay is only meaningful on roads; area remains a separate layer.
       const { oneWay: _oneWay, ...rest } = tile;
       return { ...rest, kind };
     }),
