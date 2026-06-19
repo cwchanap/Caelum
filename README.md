@@ -10,7 +10,7 @@ bun run dev
 bun run tauri:dev
 ```
 
-Open http://127.0.0.1:5173.
+Open http://127.0.0.1:5281.
 
 ## Test
 

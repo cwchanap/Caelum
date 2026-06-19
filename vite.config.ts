@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     host: "127.0.0.1",
-    port: 5173,
+    port: 5281,
   },
   resolve: {
     // Ensure Svelte uses browser exports (index-client.js) instead of server exports (index-server.js)

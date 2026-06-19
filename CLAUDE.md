@@ -12,7 +12,7 @@ This repo uses **Bun** (see `bun.lock`); CI runs `bun install --frozen-lockfile`
 
 ```sh
 bun install
-bun run dev          # Vite dev server at http://127.0.0.1:5173
+bun run dev          # Vite dev server at http://127.0.0.1:5281
 bun run tauri:dev    # Tauri desktop shell (same frontend)
 
 bun run check        # tsc --noEmit + svelte-check (type check)
