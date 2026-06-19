@@ -1,7 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { tileId } from "../../src/domain/ids";
+import type { Citizen } from "../../src/domain/types";
+import {
+  createGrowingSuburbMap,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+} from "../../src/scenario/growingSuburb";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { tickSimulation } from "../../src/simulation/simulation";
+
+function testCitizen(overrides: Partial<Citizen> = {}): Citizen {
+  return {
+    id: "citizen-001",
+    home: { x: 2, y: 3 },
+    destination: { x: 3, y: 3 },
+    position: { x: 2, y: 3 },
+    status: "idle",
+    patienceRemaining: 240,
+    deadline: 900,
+    routePlan: null,
+    currentLegIndex: 0,
+    ...overrides,
+  };
+}
 
 describe("Growing Suburb scenario", () => {
   it("creates a deterministic starting city", () => {
@@ -12,63 +32,42 @@ describe("Growing Suburb scenario", () => {
     expect(state.map.height).toBe(18);
     expect(state.map.tiles).toHaveLength(state.map.width * state.map.height);
     expect(state.budget).toBe(120_000);
-    expect(state.citizens.length).toBe(36);
-    expect(state.scenario.growthWaves).toHaveLength(3);
+    expect(state.citizens).toEqual([]);
+    expect(state.scenario.growthWaves).toEqual([]);
   });
 
-  it("has deterministic tile IDs and representative tile kinds", () => {
-    const state = createInitialGameState();
-    const kinds = new Set(state.map.tiles.map((tile) => tile.kind));
-    const tileIds = new Set(state.map.tiles.map((tile) => tile.id));
+  it("starts mostly empty with only a two-lane arterial cross", () => {
+    const map = createGrowingSuburbMap();
+    const roadTiles = map.tiles.filter((tile) => tile.kind === "road");
     const tileAt = (x: number, y: number) =>
-      state.map.tiles.find((tile) => tile.x === x && tile.y === y);
+      map.tiles.find((tile) => tile.x === x && tile.y === y);
 
-    expect(kinds.has("residential")).toBe(true);
-    expect(kinds.has("jobs")).toBe(true);
-    expect(kinds.has("road")).toBe(true);
-    expect(kinds.has("empty")).toBe(true);
-    expect(tileIds.size).toBe(state.map.tiles.length);
+    expect(map.tiles.filter((tile) => tile.area !== undefined)).toEqual([]);
+    expect(roadTiles).toHaveLength(88);
 
-    expect(tileAt(7, 8)?.kind).toBe("road");
-    expect(tileAt(2, 3)?.kind).toBe("residential");
-    expect(tileAt(10, 4)?.kind).toBe("jobs");
-    expect(tileAt(18, 10)?.kind).toBe("civic");
-    expect(tileAt(4, 12)?.kind).toBe("park");
-    expect(tileAt(0, 0)?.kind).toBe("empty");
-  });
-
-  it("creates deterministic citizen IDs with independent point objects", () => {
-    const state = createInitialGameState();
-    const citizenIds = new Set(state.citizens.map((citizen) => citizen.id));
-    const firstCitizen = state.citizens[0];
-
-    expect(citizenIds.size).toBe(state.citizens.length);
-    expect(firstCitizen?.home).toEqual(firstCitizen?.position);
-    expect(firstCitizen?.home).not.toBe(firstCitizen?.position);
-  });
-
-  it("creates deterministic growth waves", () => {
-    const state = createInitialGameState();
-
-    expect(state.scenario.growthWaves.map((wave) => wave.triggerTime)).toEqual([
-      240, 540, 840,
-    ]);
-
-    for (const wave of state.scenario.growthWaves) {
-      for (const tile of wave.tiles) {
-        expect(tile.id).toBe(tileId(tile.x, tile.y));
-      }
+    for (let x = 0; x < MAP_WIDTH; x += 1) {
+      expect(tileAt(x, 8)?.kind).toBe("road");
+      expect(tileAt(x, 9)?.kind).toBe("road");
     }
+
+    for (let y = 0; y < MAP_HEIGHT; y += 1) {
+      expect(tileAt(14, y)?.kind).toBe("road");
+      expect(tileAt(15, y)?.kind).toBe("road");
+    }
+
+    expect(tileAt(7, 8)?.oneWay).toBe("west");
+    expect(tileAt(7, 9)?.oneWay).toBe("east");
+    expect(tileAt(14, 3)?.oneWay).toBe("south");
+    expect(tileAt(15, 3)?.oneWay).toBe("north");
+    expect(tileAt(14, 8)?.oneWay).toBeUndefined();
+    expect(tileAt(15, 9)?.oneWay).toBeUndefined();
   });
 
-  it("ticks the running simulation and applies the first growth wave", () => {
-    const state = { ...createInitialGameState(), paused: false };
+  it("starts without citizens or growth waves", () => {
+    const state = createInitialGameState();
 
-    const nextState = tickSimulation(state, 250);
-
-    expect(nextState.time).toBe(250);
-    expect(nextState.citizens).toHaveLength(60);
-    expect(nextState.scenario.growthWaves[0]?.applied).toBe(true);
+    expect(state.citizens).toEqual([]);
+    expect(state.scenario.growthWaves).toEqual([]);
   });
 
   it("does not advance while paused", () => {
@@ -96,7 +95,7 @@ describe("Growing Suburb scenario", () => {
       paused: false,
       citizens: [
         {
-          ...baseState.citizens[0]!,
+          ...testCitizen(),
           destination: { x: 23, y: 8 },
           deadline: 0,
           patienceRemaining: 1_000,
@@ -130,7 +129,7 @@ describe("Growing Suburb scenario", () => {
       paused: false,
       citizens: [
         {
-          ...baseState.citizens[0]!,
+          ...testCitizen(),
           destination: { x: 3, y: 3 },
           deadline: 20,
         },
