@@ -322,6 +322,17 @@ describe("App shell bootstrap", () => {
     expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
   });
 
+  it("wires area selection into the runtime", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Commercial" }));
+
+    expect(runtime.setArea).toHaveBeenCalledWith("commercial");
+    expect(screen.getByText("AREA COMMERCIAL")).toBeVisible();
+  });
+
   it("wires tool, overlay, and close interactions with exact runtime ids", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

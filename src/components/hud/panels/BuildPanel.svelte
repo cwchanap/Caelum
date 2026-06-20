@@ -1,10 +1,12 @@
 <script lang="ts">
   import type {
+    AreaKind,
     BuildingRotation,
     BuildingType,
     RoadPreset,
     Tool,
   } from "../../../domain/types";
+  import { AREA_KINDS, AREA_LABELS } from "../../../simulation/areas";
   import { BUILDING_CATALOG } from "../../../simulation/buildings";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
@@ -12,10 +14,12 @@
 
   interface Props {
     activeTool: Tool;
+    selectedArea: AreaKind | null;
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
     roadPreset: RoadPreset;
     onSetTool: (tool: Tool) => void;
+    onSetArea: (area: AreaKind) => void;
     onSetBuilding: (building: BuildingType) => void;
     onRotateBuilding: () => void;
     onSetRoadPreset: (preset: RoadPreset) => void;
@@ -23,10 +27,12 @@
 
   let {
     activeTool,
+    selectedArea,
     selectedBuilding,
     buildingRotation,
     roadPreset,
     onSetTool,
+    onSetArea,
     onSetBuilding,
     onRotateBuilding,
     onSetRoadPreset,
@@ -54,6 +60,15 @@
     "metroStation",
     "smallHouse",
     "largeHouse",
+    "supermarket",
+    "cinema",
+    "factory",
+    "warehouse",
+    "officeTower",
+    "businessPark",
+    "clinic",
+    "school",
+    "parkPlaza",
   ];
 
   const buildTools = buildToolIds.map((id) => ({
@@ -74,9 +89,13 @@
         <button
           type="button"
           data-tool={tool.id}
-          aria-pressed={selectedBuilding === null && activeTool === tool.id}
+          aria-pressed={selectedArea === null &&
+            selectedBuilding === null &&
+            activeTool === tool.id}
           aria-label={tool.label}
-          class:active={selectedBuilding === null && activeTool === tool.id}
+          class:active={selectedArea === null &&
+            selectedBuilding === null &&
+            activeTool === tool.id}
           onclick={() => onSetTool(tool.id)}
         >
           <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
@@ -87,15 +106,38 @@
   </section>
 
   <section class="panel-section">
-    <h3 class="section-head"><span class="num">02</span> Network</h3>
+    <h3 class="section-head"><span class="num">02</span> Areas</h3>
+    <div class="toolbar toolbar--compact" aria-label="Area tools">
+      {#each AREA_KINDS as area, index (area)}
+        <button
+          type="button"
+          data-area={area}
+          aria-pressed={selectedArea === area}
+          aria-label={AREA_LABELS[area]}
+          class:active={selectedArea === area}
+          onclick={() => onSetArea(area)}
+        >
+          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
+          <span class="tool-label" aria-hidden="true">{AREA_LABELS[area]}</span>
+        </button>
+      {/each}
+    </div>
+  </section>
+
+  <section class="panel-section">
+    <h3 class="section-head"><span class="num">03</span> Network</h3>
     <div class="toolbar toolbar--compact" aria-label="Network tools">
       {#each networkTools as tool, index (tool.id)}
         <button
           type="button"
           data-tool={tool.id}
-          aria-pressed={selectedBuilding === null && activeTool === tool.id}
+          aria-pressed={selectedArea === null &&
+            selectedBuilding === null &&
+            activeTool === tool.id}
           aria-label={tool.label}
-          class:active={selectedBuilding === null && activeTool === tool.id}
+          class:active={selectedArea === null &&
+            selectedBuilding === null &&
+            activeTool === tool.id}
           onclick={() => onSetTool(tool.id)}
         >
           <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
@@ -123,7 +165,7 @@
   </section>
 
   <section class="panel-section build-section">
-    <h3 class="section-head"><span class="num">03</span> Build</h3>
+    <h3 class="section-head"><span class="num">04</span> Build</h3>
     <div class="toolbar" aria-label="Build tools">
       {#each buildTools as building, index (building.id)}
         <button
