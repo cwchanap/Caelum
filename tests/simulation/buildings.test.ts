@@ -13,6 +13,7 @@ import {
   getRotatedFootprintSize,
   placeBuilding,
 } from "../../src/simulation/buildings";
+import { withRoads } from "../helpers/mapFixtures";
 
 function withTrack(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
@@ -307,8 +308,7 @@ describe("building catalog and footprints", () => {
   });
 
   it("allows metro station building on road + track crossings, matching the station tool rule", () => {
-    const state = createInitialGameState();
-    // (7,8) is a road tile in the initial map. Add track to create a crossing.
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     const crossing = withTrack(state, [{ x: 7, y: 8 }]);
     expect(canPlaceBuilding(crossing, "metroStation", { x: 7, y: 8 }, 0)).toBe(
       true,

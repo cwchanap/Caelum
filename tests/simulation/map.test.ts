@@ -14,7 +14,7 @@ import {
   setTileKind,
   setTileOneWay,
 } from "../../src/simulation/map";
-import { withAreas, withTracks } from "../helpers/mapFixtures";
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function withTime(state: GameState, time: number): GameState {
   return { ...state, time };
@@ -81,7 +81,7 @@ function testGrowthWave(): GrowthWave {
 
 describe("map helpers", () => {
   it("returns tiles by point and null for out-of-bounds points", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
 
     expect(getTile(state.map, { x: 7, y: 8 })?.kind).toBe("road");
     expect(getTile(state.map, { x: -1, y: 8 })).toBeNull();
@@ -90,9 +90,10 @@ describe("map helpers", () => {
   });
 
   it("allows bus stops only on unoccupied road tiles", () => {
-    const state = withAreas(createInitialGameState(), "residential", [
-      { x: 1, y: 1 },
-    ]);
+    const state = withRoads(
+      withAreas(createInitialGameState(), "residential", [{ x: 1, y: 1 }]),
+      [{ x: 7, y: 8 }],
+    );
 
     expect(isValidBusStopPlacement(state, { x: 7, y: 8 })).toBe(true);
     expect(isValidBusStopPlacement(state, { x: 1, y: 1 })).toBe(false);
@@ -118,10 +119,13 @@ describe("map helpers", () => {
   });
 
   it("allows metro stations on unoccupied tracked road or empty tiles", () => {
-    const state = withTracks(createInitialGameState(), [
-      { x: 7, y: 8 },
-      { x: 0, y: 0 },
-    ]);
+    const state = withTracks(
+      withRoads(createInitialGameState(), [{ x: 7, y: 8 }]),
+      [
+        { x: 7, y: 8 },
+        { x: 0, y: 0 },
+      ],
+    );
 
     expect(isValidMetroStationPlacement(state, { x: 7, y: 8 })).toBe(true);
     expect(isValidMetroStationPlacement(state, { x: 0, y: 0 })).toBe(true);
@@ -147,7 +151,7 @@ describe("map helpers", () => {
   });
 
   it("allows civic anchors only on empty tiles", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
 
     expect(isValidCivicAnchorPlacement(state, { x: 0, y: 0 })).toBe(true);
     expect(isValidCivicAnchorPlacement(state, { x: 7, y: 8 })).toBe(false);
@@ -222,17 +226,19 @@ describe("map helpers", () => {
 
 describe("road and track placement validation", () => {
   it("allows road on empty tiles and rejects existing roads", () => {
-    const state = withAreas(createInitialGameState(), "commercial", [
-      { x: 1, y: 1 },
-    ]);
+    const state = withRoads(
+      withAreas(createInitialGameState(), "commercial", [{ x: 1, y: 1 }]),
+      [{ x: 7, y: 8 }],
+    );
     expect(isValidRoadPlacement(state, { x: 1, y: 1 })).toBe(true);
     expect(isValidRoadPlacement(state, { x: 7, y: 8 })).toBe(false);
   });
 
   it("allows track on empty and road tiles but not duplicates", () => {
-    const state = withAreas(createInitialGameState(), "office", [
-      { x: 1, y: 1 },
-    ]);
+    const state = withRoads(
+      withAreas(createInitialGameState(), "office", [{ x: 1, y: 1 }]),
+      [{ x: 7, y: 8 }],
+    );
     expect(isValidTrackPlacement(state, { x: 1, y: 1 })).toBe(true);
     expect(isValidTrackPlacement(state, { x: 7, y: 8 })).toBe(true);
     const tracked = withTracks(state, [{ x: 1, y: 1 }]);
@@ -242,7 +248,7 @@ describe("road and track placement validation", () => {
 
 describe("station and stop placement with track rules", () => {
   it("requires track under a metro station", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     expect(isValidMetroStationPlacement(state, { x: 8, y: 2 })).toBe(false); // empty, no track
     expect(isValidMetroStationPlacement(state, { x: 7, y: 8 })).toBe(false); // road, no track
 
@@ -255,7 +261,13 @@ describe("station and stop placement with track rules", () => {
   });
 
   it("rejects bus stops on crossings", () => {
-    const state = withTracks(createInitialGameState(), [{ x: 9, y: 8 }]);
+    const state = withTracks(
+      withRoads(createInitialGameState(), [
+        { x: 9, y: 8 },
+        { x: 10, y: 8 },
+      ]),
+      [{ x: 9, y: 8 }],
+    );
     expect(isValidBusStopPlacement(state, { x: 9, y: 8 })).toBe(false);
     expect(isValidBusStopPlacement(state, { x: 10, y: 8 })).toBe(true);
   });
