@@ -84,6 +84,70 @@ describe("area painting", () => {
     expect(next).not.toBe(state);
   });
 
+  it("skips placed building footprints", () => {
+    const state: GameState = {
+      ...createInitialGameState(),
+      buildings: [
+        {
+          id: "building-001",
+          type: "smallHouse",
+          origin: { x: 1, y: 1 },
+          rotation: 0,
+          occupiedTiles: [
+            { x: 1, y: 1 },
+            { x: 2, y: 1 },
+          ],
+        },
+      ],
+    };
+
+    const next = paintAreaRectangle(
+      state,
+      "commercial",
+      { x: 1, y: 1 },
+      { x: 3, y: 1 },
+    );
+
+    expect(areaAt(next, 1, 1)).toBeUndefined();
+    expect(areaAt(next, 2, 1)).toBeUndefined();
+    expect(areaAt(next, 3, 1)).toBe("commercial");
+  });
+
+  it("skips transit stop and station positions", () => {
+    const state: GameState = {
+      ...createInitialGameState(),
+      transit: {
+        ...createInitialGameState().transit,
+        stops: [
+          {
+            id: "stop-001",
+            kind: "busStop",
+            position: { x: 1, y: 1 },
+            platforms: [],
+          },
+        ],
+        stations: [
+          {
+            id: "station-001",
+            position: { x: 2, y: 1 },
+            platforms: [],
+          },
+        ],
+      },
+    };
+
+    const next = paintAreaRectangle(
+      state,
+      "office",
+      { x: 1, y: 1 },
+      { x: 3, y: 1 },
+    );
+
+    expect(areaAt(next, 1, 1)).toBeUndefined();
+    expect(areaAt(next, 2, 1)).toBeUndefined();
+    expect(areaAt(next, 3, 1)).toBe("office");
+  });
+
   it("returns the same state reference when nothing can be painted", () => {
     const state = withRoad(createInitialGameState(), [
       { x: 1, y: 1 },
