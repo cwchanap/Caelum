@@ -22,7 +22,7 @@ export default defineConfig({
           name: "ui",
           include: ["tests/ui/**/*.test.ts", "tests/render/**/*.test.ts"],
           environment: "jsdom",
-          setupFiles: ["@testing-library/jest-dom/vitest"],
+          setupFiles: ["./tests/ui/setup.ts"],
         },
       },
       {

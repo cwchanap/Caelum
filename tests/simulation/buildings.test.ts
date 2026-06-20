@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AreaKind,
-  BuildingRotation,
-  GameState,
-  Point,
-} from "../../src/domain/types";
+import type { BuildingRotation } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   BUILDING_CATALOG,
@@ -13,37 +8,7 @@ import {
   getRotatedFootprintSize,
   placeBuilding,
 } from "../../src/simulation/buildings";
-import { withRoads } from "../helpers/mapFixtures";
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
-
-function withArea(
-  state: GameState,
-  area: AreaKind,
-  points: Point[],
-): GameState {
-  const keys = new Set(points.map((point) => `${point.x},${point.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, area } : tile,
-      ),
-    },
-  };
-}
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 
 describe("building catalog and footprints", () => {
   it("defines the first Build menu catalog", () => {
@@ -121,7 +86,7 @@ describe("building catalog and footprints", () => {
 
   it("validates the full building footprint against the map and occupancy", () => {
     const state = createInitialGameState();
-    const residential = withArea(state, "residential", [
+    const residential = withAreas(state, "residential", [
       { x: 0, y: 0 },
       { x: 1, y: 0 },
     ]);
@@ -150,11 +115,11 @@ describe("building catalog and footprints", () => {
 
   it("requires matching area for zoned building footprints", () => {
     const base = createInitialGameState();
-    const residential = withArea(base, "residential", [
+    const residential = withAreas(base, "residential", [
       { x: 1, y: 1 },
       { x: 2, y: 1 },
     ]);
-    const commercial = withArea(base, "commercial", [
+    const commercial = withAreas(base, "commercial", [
       { x: 1, y: 1 },
       { x: 2, y: 1 },
     ]);
@@ -169,7 +134,7 @@ describe("building catalog and footprints", () => {
   });
 
   it("places transit buildings with deterministic entity ids and effects", () => {
-    let state = withTrack(createInitialGameState(), [{ x: 3, y: 0 }]);
+    let state = withTracks(createInitialGameState(), [{ x: 3, y: 0 }]);
 
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 90);
     state = placeBuilding(state, "metroStation", { x: 3, y: 0 }, 0);
@@ -226,7 +191,7 @@ describe("building catalog and footprints", () => {
 
   it("adds deterministic citizens immediately for house placement", () => {
     const state = placeBuilding(
-      withArea(createInitialGameState(), "residential", [
+      withAreas(createInitialGameState(), "residential", [
         { x: 0, y: 0 },
         { x: 1, y: 0 },
         { x: 2, y: 0 },
@@ -255,7 +220,7 @@ describe("building catalog and footprints", () => {
 
   it("uses home as a fallback destination when no destination building exists", () => {
     const state = placeBuilding(
-      withArea(createInitialGameState(), "residential", [
+      withAreas(createInitialGameState(), "residential", [
         { x: 1, y: 1 },
         { x: 2, y: 1 },
       ]),
@@ -273,14 +238,14 @@ describe("building catalog and footprints", () => {
   });
 
   it("uses placed destination buildings for later housing citizens", () => {
-    let state = withArea(createInitialGameState(), "commercial", [
+    let state = withAreas(createInitialGameState(), "commercial", [
       { x: 5, y: 1 },
       { x: 6, y: 1 },
       { x: 5, y: 2 },
       { x: 6, y: 2 },
     ]);
     state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
-    state = withArea(state, "residential", [
+    state = withAreas(state, "residential", [
       { x: 1, y: 1 },
       { x: 2, y: 1 },
     ]);
@@ -298,7 +263,7 @@ describe("building catalog and footprints", () => {
       false,
     );
 
-    const tracked = withTrack(bare, [{ x: 8, y: 2 }]);
+    const tracked = withTracks(bare, [{ x: 8, y: 2 }]);
     expect(canPlaceBuilding(tracked, "metroStation", { x: 8, y: 2 }, 0)).toBe(
       true,
     );
@@ -309,7 +274,7 @@ describe("building catalog and footprints", () => {
 
   it("allows metro station building on road + track crossings, matching the station tool rule", () => {
     const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
-    const crossing = withTrack(state, [{ x: 7, y: 8 }]);
+    const crossing = withTracks(state, [{ x: 7, y: 8 }]);
     expect(canPlaceBuilding(crossing, "metroStation", { x: 7, y: 8 }, 0)).toBe(
       true,
     );

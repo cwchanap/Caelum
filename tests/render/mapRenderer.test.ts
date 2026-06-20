@@ -140,7 +140,7 @@ describe("renderMap area layer", () => {
     expect(fills).toContainEqual({
       x: areaTile.x * 32,
       y: areaTile.y * 32,
-      style: "#82a7d8",
+      style: colors.areaOffice,
     });
     expect(fills).toContainEqual({
       x: 7 * 32,
