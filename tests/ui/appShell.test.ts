@@ -67,11 +67,17 @@ function createRuntimeHarness(
       ui = {
         ...ui,
         activeTool: tool,
+        selectedNodeKind: null,
         selectedBuilding: null,
         selectedArea: null,
         buildingRotation: 0,
         draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
         draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
+        draftStopPaths: tool === "busRoute" ? ui.draftStopPaths : [],
+        draftStationPaths: tool === "metroLine" ? ui.draftStationPaths : [],
+        selectedRouteId: null,
+        drag: null,
+        activeHudCategory: null,
       };
       return publish();
     }),
@@ -80,11 +86,17 @@ function createRuntimeHarness(
         ...ui,
         activeTool: "inspect",
         selectedId: null,
+        selectedNodeKind: null,
         selectedBuilding: building,
         selectedArea: null,
         buildingRotation: 0,
         draftStopIds: [],
         draftStationIds: [],
+        draftStopPaths: [],
+        draftStationPaths: [],
+        selectedRouteId: null,
+        drag: null,
+        activeHudCategory: null,
       };
       return publish();
     }),
@@ -93,11 +105,17 @@ function createRuntimeHarness(
         ...ui,
         activeTool: "area",
         selectedId: null,
+        selectedNodeKind: null,
         selectedBuilding: null,
         selectedArea: area,
         buildingRotation: 0,
         draftStopIds: [],
         draftStationIds: [],
+        draftStopPaths: [],
+        draftStationPaths: [],
+        selectedRouteId: null,
+        drag: null,
+        activeHudCategory: null,
       };
       return publish();
     }),
@@ -285,6 +303,11 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Large House" }));
     expect(runtime.setBuilding).toHaveBeenCalledWith("largeHouse");
+    // Selecting a building resets activeHudCategory to null (matching
+    // production's nextBuildingUiState), which closes the drawer. Re-open
+    // Build to assert the selection persisted in the panel.
+    await openCategory("build");
+
     expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
       "data-building",
       "largeHouse",
@@ -340,6 +363,11 @@ describe("App shell bootstrap", () => {
     await openCategory("routes");
     await fireEvent.click(screen.getByRole("button", { name: "Metro Line" }));
     expect(runtime.setTool).toHaveBeenCalledWith("metroLine");
+    expect(screen.getByText("METROLINE")).toBeVisible();
+    // Selecting a tool resets activeHudCategory to null (matching production's
+    // nextToolUiState), closing the drawer. Re-open Routes to assert the tool
+    // selection persisted in the panel.
+    await openCategory("routes");
     expect(screen.getByRole("button", { name: "Metro Line" })).toHaveAttribute(
       "data-tool",
       "metroLine",
@@ -348,7 +376,6 @@ describe("App shell bootstrap", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByText("METROLINE")).toBeVisible();
 
     await openCategory("data");
     await fireEvent.click(screen.getByRole("button", { name: "Coverage" }));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, Point } from "../../src/domain/types";
+import type { GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   AREA_KINDS,
@@ -8,32 +8,7 @@ import {
   planAreaPaintPreview,
   rectanglePoints,
 } from "../../src/simulation/areas";
-
-function withRoad(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((point) => `${point.x},${point.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
-      ),
-    },
-  };
-}
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((point) => `${point.x},${point.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
+import { withRoads, withTracks } from "../helpers/mapFixtures";
 
 function areaAt(state: GameState, x: number, y: number) {
   return state.map.tiles.find((tile) => tile.x === x && tile.y === y)?.area;
@@ -67,8 +42,8 @@ describe("area painting", () => {
 
   it("paints valid empty tiles and skips roads and tracks", () => {
     let state = createInitialGameState();
-    state = withRoad(state, [{ x: 2, y: 1 }]);
-    state = withTrack(state, [{ x: 3, y: 1 }]);
+    state = withRoads(state, [{ x: 2, y: 1 }]);
+    state = withTracks(state, [{ x: 3, y: 1 }]);
 
     const next = paintAreaRectangle(
       state,
@@ -149,7 +124,7 @@ describe("area painting", () => {
   });
 
   it("returns the same state reference when nothing can be painted", () => {
-    const state = withRoad(createInitialGameState(), [
+    const state = withRoads(createInitialGameState(), [
       { x: 1, y: 1 },
       { x: 2, y: 1 },
     ]);
@@ -160,7 +135,7 @@ describe("area painting", () => {
   });
 
   it("plans per-tile preview validity for the rectangle", () => {
-    const state = withRoad(createInitialGameState(), [{ x: 2, y: 1 }]);
+    const state = withRoads(createInitialGameState(), [{ x: 2, y: 1 }]);
 
     expect(
       planAreaPaintPreview(state, "office", { x: 1, y: 1 }, { x: 2, y: 1 }),
