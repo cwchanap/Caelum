@@ -499,7 +499,10 @@ describe("runtime area drag", () => {
     const snap = runtime.commitDrag();
 
     expect(areaAt(runtime, 1, 1)).toBe("commercial");
+    expect(areaAt(runtime, 2, 1)).toBe("commercial");
+    expect(areaAt(runtime, 1, 2)).toBe("commercial");
     expect(areaAt(runtime, 2, 2)).toBe("commercial");
+    expect(areaAt(runtime, 3, 2)).toBeUndefined();
     expect(snap.ui.drag).toBeNull();
   });
 

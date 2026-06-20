@@ -324,8 +324,10 @@ export function createGameRuntime(): RuntimeController {
       if (point === null) {
         return;
       }
-      api.startDrag(point);
-      capturePointer(event.pointerId);
+      const snapshot = api.startDrag(point);
+      if (snapshot.ui.drag !== null) {
+        capturePointer(event.pointerId);
+      }
     };
 
     const handlePointerUp = (event: PointerEvent): void => {
