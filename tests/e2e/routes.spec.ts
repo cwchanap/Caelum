@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import type { ViteDevServer } from "vite";
-import { clickMapTile, openHudCategory, startAppServer } from "./helpers";
+import {
+  clickMapTile,
+  dragMapTiles,
+  openHudCategory,
+  startAppServer,
+} from "./helpers";
 
 let server: ViteDevServer;
 let appUrl: string;
@@ -19,19 +24,23 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
-  // Place three bus stops on empty tiles adjacent to the y=8 road.
+  // Lay a two-way road and place three bus stops beside it.
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
+
   await openHudCategory(page, "build");
   await page.getByRole("button", { name: "Bus Stop" }).click();
-  await clickMapTile(canvas, { x: 8, y: 7 });
-  await clickMapTile(canvas, { x: 16, y: 7 });
-  await clickMapTile(canvas, { x: 23, y: 7 });
+  await clickMapTile(canvas, { x: 3, y: 5 });
+  await clickMapTile(canvas, { x: 7, y: 5 });
+  await clickMapTile(canvas, { x: 11, y: 5 });
 
   // Draft a route: add three stops, remove the middle one, then finish.
   await openHudCategory(page, "routes");
   await page.getByRole("button", { name: "Bus Route" }).click();
-  await clickMapTile(canvas, { x: 8, y: 7 });
-  await clickMapTile(canvas, { x: 16, y: 7 });
-  await clickMapTile(canvas, { x: 23, y: 7 });
+  await clickMapTile(canvas, { x: 3, y: 5 });
+  await clickMapTile(canvas, { x: 7, y: 5 });
+  await clickMapTile(canvas, { x: 11, y: 5 });
   // Selecting the Bus Route tool auto-hides the drawer; reopen it to manage
   // the in-progress draft (stop list + finish/cancel actions).
   await openHudCategory(page, "routes");
