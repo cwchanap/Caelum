@@ -68,6 +68,25 @@ function crowdingState(citizens: Citizen[]) {
   };
 }
 
+function withBuildingAt(
+  state: ReturnType<typeof createInitialGameState>,
+  points: Array<{ x: number; y: number }>,
+) {
+  return {
+    ...state,
+    buildings: [
+      ...state.buildings,
+      {
+        id: "building-001",
+        type: "smallHouse" as const,
+        origin: points[0] ?? { x: 0, y: 0 },
+        rotation: 0 as const,
+        occupiedTiles: points,
+      },
+    ],
+  };
+}
+
 describe("crowding overlay", () => {
   it("fills a node tile when a platform is at capacity", () => {
     const state = crowdingState([waiter()]);
@@ -331,10 +350,9 @@ describe("renderOverlays drag preview", () => {
     ).toBeGreaterThanOrEqual(8);
   });
 
-  it("tints per-tile: valid where placeable, invalid where occupied", () => {
+  it("tints per-tile: valid where placeable, invalid where blocked", () => {
     const { ctx, fillStyles } = recordingFillCtx();
-    const state = createInitialGameState();
-    // Row y=3 crosses residential at x 2..5; x1 is empty.
+    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -342,8 +360,8 @@ describe("renderOverlays drag preview", () => {
       drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
     };
     renderOverlays(ctx, state, ui);
-    expect(fillStyles).toContain(colors.previewValid); // x1
-    expect(fillStyles).toContain(colors.previewInvalid); // x2,x3 residential
+    expect(fillStyles).toContain(colors.previewValid);
+    expect(fillStyles).toContain(colors.previewInvalid);
   });
 
   it("draws one-way arrows pointing along the drag axis (east)", () => {
@@ -412,9 +430,8 @@ describe("renderOverlays drag preview", () => {
 
   it("renders one-way arrows in the stable arrow color even when the line's last tile is invalid", () => {
     const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = createInitialGameState();
-    // Row y=3: x1 empty (valid/green), x2..x3 residential (invalid/red). The
-    // last forward tile is invalid, so without an explicit strokeStyle the
+    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
+    // The last forward tile is invalid, so without an explicit strokeStyle the
     // arrows would inherit the red previewInvalidStroke from the per-tile loop.
     const ui = {
       ...createUiState(),
@@ -431,7 +448,7 @@ describe("renderOverlays drag preview", () => {
 
   it("renders dual-bidirectional arrows in the stable arrow color even when the line's last tile is invalid", () => {
     const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = createInitialGameState();
+    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
