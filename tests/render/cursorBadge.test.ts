@@ -79,11 +79,15 @@ describe("renderCursorBadge", () => {
   it("labels a valid area paint target without the blocked marker", () => {
     const { ctx, calls } = badgeCtx();
     const state = createInitialGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected the scenario to have at least one empty tile");
+    }
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
       selectedArea: "commercial" as const,
-      hoverTile: { x: 1, y: 1 },
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
     };
     renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
     const text = calls.join("");
@@ -115,6 +119,9 @@ describe("renderCursorBadge", () => {
     };
     renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
     expect(calls).toHaveLength(0);
+    expect(ctx.save).not.toHaveBeenCalled();
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+    expect(ctx.fillText).not.toHaveBeenCalled();
   });
 
   it("flips the badge below the tile on the top row so it does not clip", () => {
