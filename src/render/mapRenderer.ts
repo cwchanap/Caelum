@@ -1,7 +1,7 @@
 import type { GameState, Point, RoadDirection } from "../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../domain/types";
 import { tileSize } from "./canvas";
-import { colors } from "./colors";
+import { areaColors, colors } from "./colors";
 
 /** Draw a directional road arrow (shaft + chevron head) centered on `point`,
  *  pointing along `direction`. Rendered in world coordinates. The caller is
@@ -55,7 +55,10 @@ export function renderMap(
   ctx.strokeStyle = colors.grid;
 
   for (const tile of state.map.tiles) {
-    ctx.fillStyle = colors[tile.kind];
+    ctx.fillStyle =
+      tile.kind === "empty" && tile.area !== undefined
+        ? areaColors[tile.area]
+        : colors[tile.kind];
     ctx.fillRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
     ctx.strokeRect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
   }

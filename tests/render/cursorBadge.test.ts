@@ -76,6 +76,47 @@ describe("renderCursorBadge", () => {
     expect(calls.join("")).toContain("Demolish");
   });
 
+  it("labels a valid area paint target without the blocked marker", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: "commercial" as const,
+      hoverTile: { x: 1, y: 1 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("Area Commercial");
+    expect(text).not.toContain("⊘");
+  });
+
+  it("marks area paint blocked over a starter road tile", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: "commercial" as const,
+      hoverTile: { x: 7, y: 8 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("⊘");
+  });
+
+  it("draws nothing in area mode when no area is selected", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: null,
+      hoverTile: { x: 1, y: 1 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls).toHaveLength(0);
+  });
+
   it("flips the badge below the tile on the top row so it does not clip", () => {
     const { ctx } = badgeCtx();
     const state = createInitialGameState();

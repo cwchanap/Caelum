@@ -7,6 +7,12 @@ export const colors = {
   jobs: "#d8b45f",
   civic: "#82a7d8",
   park: "#4f9a61",
+  areaResidential: "#8bcf8b",
+  areaCommercial: "#d8b45f",
+  areaIndustrial: "#8d7f99",
+  areaOffice: "#82a7d8",
+  areaCivic: "#5fb8a6",
+  areaPark: "#4f9a61",
   grid: "#b6c2c8",
   bus: "#e04f39",
   metro: "#2867b2",
@@ -37,4 +43,13 @@ export const colors = {
   hover: "#111820",
   badgeBackground: "rgba(17, 24, 32, 0.88)",
   badgeText: "#e8eef0",
+} as const;
+
+export const areaColors = {
+  residential: colors.areaResidential,
+  commercial: colors.areaCommercial,
+  industrial: colors.areaIndustrial,
+  office: colors.areaOffice,
+  civic: colors.areaCivic,
+  park: colors.areaPark,
 } as const;
