@@ -217,7 +217,7 @@ describe("App shell bootstrap", () => {
         /Hold late trips below 25%, unserved below 20%, average wait under 180s\./,
       ),
     ).toBeVisible();
-    expect(screen.getByText("North homes open")).toBeVisible();
+    expect(screen.getByText("All growth waves resolved.")).toBeVisible();
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("BUSROUTE");
     expect(screen.getByText("route-001")).toBeVisible();
     expect(screen.getByText("Live")).toBeVisible();
