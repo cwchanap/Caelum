@@ -1,5 +1,6 @@
 <script lang="ts">
   import type {
+    AreaKind,
     BuildingRotation,
     BuildingType,
     Overlay,
@@ -25,6 +26,7 @@
     brief: ShellBriefState;
     activeTool: Tool;
     activeOverlay: Overlay | null;
+    selectedArea: AreaKind | null;
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
     roadPreset: RoadPreset;
@@ -33,6 +35,7 @@
     routes: ShellRouteListState;
     onCloseDrawer: () => void;
     onSetTool: (tool: Tool) => void;
+    onSetArea: (area: AreaKind) => void;
     onSetBuilding: (building: BuildingType) => void;
     onRotateBuilding: () => void;
     onSetRoadPreset: (preset: RoadPreset) => void;
@@ -93,10 +96,12 @@
     {#if p.category === "build"}
       <BuildPanel
         activeTool={p.activeTool}
+        selectedArea={p.selectedArea}
         selectedBuilding={p.selectedBuilding}
         buildingRotation={p.buildingRotation}
         roadPreset={p.roadPreset}
         onSetTool={p.onSetTool}
+        onSetArea={p.onSetArea}
         onSetBuilding={p.onSetBuilding}
         onRotateBuilding={p.onRotateBuilding}
         onSetRoadPreset={p.onSetRoadPreset}
