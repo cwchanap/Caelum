@@ -1,4 +1,5 @@
 import type { GameState } from "../domain/types";
+import { AREA_LABELS, isAreaPaintable } from "../simulation/areas";
 import { BUILDING_CATALOG, canPlaceBuilding } from "../simulation/buildings";
 import {
   getTile,
@@ -44,6 +45,13 @@ function badgeText(state: GameState, ui: UiState): string | null {
     }
     case "track":
       return `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`;
+    case "area": {
+      if (ui.selectedArea === null) {
+        return null;
+      }
+      const ok = isAreaPaintable(state, cursor);
+      return `⦿ Area ${AREA_LABELS[ui.selectedArea]}${ok ? "" : " ⊘"}`;
+    }
     case "remove":
       return "⦿ Demolish";
     default:

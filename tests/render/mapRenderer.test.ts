@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderMap } from "../../src/render/mapRenderer";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import type { GameState, Point } from "../../src/domain/types";
+import { colors } from "../../src/render/colors";
 
 // jsdom does not implement HTMLCanvasElement.getContext without the optional
 // `canvas` package, so the render tests use a method stub. The tests only
@@ -26,6 +27,37 @@ function ctx(): CanvasRenderingContext2D {
     lineCap: "butt",
     lineJoin: "miter",
   } as unknown as CanvasRenderingContext2D;
+}
+
+function recordingFillCtx() {
+  let fillStyle = "";
+  const fills: Array<{ x: number; y: number; style: string }> = [];
+  const context = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    fill: vi.fn(),
+    arc: vi.fn(),
+    fillRect: vi.fn((x: number, y: number) => {
+      fills.push({ x, y, style: fillStyle });
+    }),
+    strokeRect: vi.fn(),
+    setLineDash: vi.fn(),
+    get fillStyle() {
+      return fillStyle;
+    },
+    set fillStyle(value: string) {
+      fillStyle = value;
+    },
+    strokeStyle: "",
+    lineWidth: 0,
+    lineCap: "butt",
+    lineJoin: "miter",
+  } as unknown as CanvasRenderingContext2D;
+  return { context, fills };
 }
 
 function withTrack(state: GameState, points: Point[]): GameState {
@@ -56,6 +88,41 @@ function withOneWay(
     },
   };
 }
+
+describe("renderMap area layer", () => {
+  it("fills empty area tiles with area colors while preserving road tiles", () => {
+    const initialState = createInitialGameState();
+    const state: GameState = {
+      ...initialState,
+      map: {
+        ...initialState.map,
+        tiles: initialState.map.tiles.map((tile) => {
+          if (tile.x === 1 && tile.y === 1) {
+            return { ...tile, area: "office" };
+          }
+          if (tile.x === 7 && tile.y === 8) {
+            return { ...tile, area: "office" };
+          }
+          return tile;
+        }),
+      },
+    };
+
+    const { context, fills } = recordingFillCtx();
+    renderMap(context, state);
+
+    expect(fills).toContainEqual({
+      x: 1 * 32,
+      y: 1 * 32,
+      style: "#82a7d8",
+    });
+    expect(fills).toContainEqual({
+      x: 7 * 32,
+      y: 8 * 32,
+      style: colors.road,
+    });
+  });
+});
 
 describe("renderMap track layer", () => {
   it("draws spokes between adjacent track tiles and a dot for an isolated tile", () => {
