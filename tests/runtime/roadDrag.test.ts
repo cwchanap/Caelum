@@ -9,6 +9,7 @@ import {
   axisLockedLine,
   planDragPreview,
 } from "../../src/ui/roadDrag";
+import { pointsOnRow, withAreas, withRoads } from "../helpers/mapFixtures";
 
 describe("axisLockedLine", () => {
   it("locks to the horizontal axis when |dx| >= |dy|", () => {
@@ -114,15 +115,19 @@ describe("applyDragGesture single-lane road", () => {
     expect(cleared.budget).toBe(oneWay.budget); // already road -> no charge
   });
 
-  it("skips non-empty tiles in the line and only charges placed tiles", () => {
-    const state = createInitialGameState();
-    // Row y=3 crosses residential at x 2..5; x1 and x6 are empty.
-    const line = axisLockedLine({ x: 1, y: 3 }, { x: 6, y: 3 });
+  it("preserves area metadata when laying roads over zoned empty ground", () => {
+    const state = withAreas(createInitialGameState(), "residential", [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+    ]);
+    const line = axisLockedLine({ x: 1, y: 3 }, { x: 4, y: 3 });
     const next = applyDragGesture(state, roadUi("twoWay"), line);
+
     expect(tileAt(next, 1, 3).kind).toBe("road");
-    expect(tileAt(next, 2, 3).kind).toBe("residential");
-    expect(tileAt(next, 6, 3).kind).toBe("road");
-    expect(next.budget).toBe(state.budget - 2 * COSTS.road);
+    expect(tileAt(next, 2, 3).kind).toBe("road");
+    expect(tileAt(next, 2, 3).area).toBe("residential");
+    expect(tileAt(next, 4, 3).kind).toBe("road");
+    expect(next.budget).toBe(state.budget - 4 * COSTS.road);
   });
 
   it("stops laying when the budget is exhausted mid-line", () => {
@@ -198,14 +203,14 @@ describe("applyDragGesture dual bidirectional", () => {
   });
 
   it("never hijacks an existing road for the reverse lane", () => {
-    const state = createInitialGameState();
-    // Row y=9 is empty; the lane to the north (y=8) is an existing road row.
-    const line = axisLockedLine({ x: 24, y: 9 }, { x: 26, y: 9 });
+    const state = withRoads(createInitialGameState(), pointsOnRow(4, 24, 26));
+    // Row y=5 is empty; the lane to the north (y=4) is an explicit road row.
+    const line = axisLockedLine({ x: 24, y: 5 }, { x: 26, y: 5 });
     const next = applyDragGesture(state, dualUi, line);
     for (const x of [24, 25, 26]) {
-      expect(tileAt(next, x, 9).oneWay).toBe("east"); // forward lane laid
-      expect(tileAt(next, x, 8).kind).toBe("road");
-      expect(tileAt(next, x, 8).oneWay).toBeUndefined(); // existing road untouched
+      expect(tileAt(next, x, 5).oneWay).toBe("east"); // forward lane laid
+      expect(tileAt(next, x, 4).kind).toBe("road");
+      expect(tileAt(next, x, 4).oneWay).toBeUndefined(); // existing road untouched
     }
     expect(next.budget).toBe(state.budget - 3 * COSTS.road); // reverse lane skipped
   });
@@ -226,22 +231,23 @@ describe("planDragPreview", () => {
     expect(plan.map((t) => t.buildable)).toEqual([true, true, true, true]);
   });
 
-  it("marks occupied (residential) tiles as not buildable", () => {
-    const state = createInitialGameState();
-    // Row y=3 crosses residential at x 2..5.
+  it("marks zoned empty tiles buildable for roads", () => {
+    const state = withAreas(createInitialGameState(), "residential", [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+    ]);
     const line = axisLockedLine({ x: 1, y: 3 }, { x: 3, y: 3 });
     const plan = planDragPreview(state, roadUi("twoWay"), line);
     const byPoint = new Map(
       plan.map((t) => [`${t.point.x},${t.point.y}`, t.buildable]),
     );
     expect(byPoint.get("1,3")).toBe(true); // empty
-    expect(byPoint.get("2,3")).toBe(false); // residential
-    expect(byPoint.get("3,3")).toBe(false); // residential
+    expect(byPoint.get("2,3")).toBe(true); // residential area
+    expect(byPoint.get("3,3")).toBe(true); // residential area
   });
 
   it("treats an existing forward-lane road as a free redirect (buildable)", () => {
-    const state = createInitialGameState();
-    // {8,8} is an existing road tile in the scenario.
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const plan = planDragPreview(state, roadUi("twoWay"), [{ x: 8, y: 8 }]);
     expect(plan[0].buildable).toBe(true);
   });
@@ -255,13 +261,13 @@ describe("planDragPreview", () => {
   });
 
   it("never marks a reverse lane on an existing road as buildable", () => {
-    const state = createInitialGameState();
-    // Drag east along y=9; the reverse lane lands on y=8 (existing road row),
+    const state = withRoads(createInitialGameState(), pointsOnRow(4, 24, 26));
+    // Drag east along y=5; the reverse lane lands on y=4 (existing road row),
     // so it must not be laid — mirroring layReverseLane.
-    const line = axisLockedLine({ x: 24, y: 9 }, { x: 26, y: 9 });
+    const line = axisLockedLine({ x: 24, y: 5 }, { x: 26, y: 5 });
     const plan = planDragPreview(state, dualUi, line);
-    const forward = plan.filter((t) => t.point.y === 9);
-    const reverse = plan.filter((t) => t.point.y === 8);
+    const forward = plan.filter((t) => t.point.y === 5);
+    const reverse = plan.filter((t) => t.point.y === 4);
     expect(forward.map((t) => t.buildable)).toEqual([true, true, true]);
     expect(reverse.map((t) => t.buildable)).toEqual([false, false, false]);
   });
@@ -294,6 +300,7 @@ describe("planDragPreview", () => {
 describe("applyDragGesture recomputes route paths after setting directions", () => {
   it("breaks a route's return leg when a one-way drag severs it", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);

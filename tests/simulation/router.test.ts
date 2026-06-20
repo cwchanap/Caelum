@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { findRoutePlan } from "../../src/simulation/router";
 import {
@@ -12,26 +11,7 @@ import {
   setRouteActive,
   TILES_PER_SECOND,
 } from "../../src/simulation/transit";
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
-
-function trackRow(y: number, fromX: number, toX: number): Point[] {
-  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
-    x: fromX + i,
-    y,
-  }));
-}
+import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 
 describe("route planning", () => {
   it("creates a walking route for nearby destinations", () => {
@@ -70,6 +50,7 @@ describe("route planning", () => {
 
   it("creates a bus route when stops connect the origin and destination", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -96,7 +77,7 @@ describe("route planning", () => {
 
   it("creates a metro route for long station-connected trips", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 22));
+    state = withTracks(state, pointsOnRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -209,10 +190,11 @@ describe("route planning", () => {
 
   it("ignores inactive routes and lines deterministically", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
-    state = withTrack(state, trackRow(8, 7, 22));
+    state = withTracks(state, pointsOnRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -241,6 +223,7 @@ describe("route planning", () => {
 
   it("drops the bus leg once the route is toggled inactive via setRouteActive", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -265,6 +248,7 @@ describe("route planning", () => {
 describe("path-length ride estimates", () => {
   it("estimates bus rides from stored segment steps, not Manhattan distance", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -284,6 +268,7 @@ describe("path-length ride estimates", () => {
 
   it("ignores pathBroken routes when planning", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -296,6 +281,7 @@ describe("path-length ride estimates", () => {
 
   it("rides forward around the loop when the alighting stop is behind the boarding stop", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -317,6 +303,7 @@ describe("path-length ride estimates", () => {
     // from stops 0 and 1 (both 12 tiles walk). Boarding at stop 1 (15,8)
     // has a shorter ride to stop 2 (22,8) than boarding at stop 0 (7,8).
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -337,13 +324,14 @@ describe("path-length ride estimates", () => {
     // The bus stop and metro station at (15,8) form a transfer point.
     // Both routes have real populated segments from BFS, not [].
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
     state = assignVehicle(state, "bus", "route-001");
 
     // Lay track for metro.
-    state = withTrack(state, trackRow(8, 15, 27));
+    state = withTracks(state, pointsOnRow(8, 15, 27));
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroStation(state, { x: 27, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);

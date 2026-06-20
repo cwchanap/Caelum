@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { tileId } from "../../src/domain/ids";
-import type {
-  AreaKind,
-  GameState,
-  GrowthWave,
-  Point,
-} from "../../src/domain/types";
+import type { GameState, GrowthWave, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { placeBuilding } from "../../src/simulation/buildings";
 import {
@@ -19,39 +14,10 @@ import {
   setTileKind,
   setTileOneWay,
 } from "../../src/simulation/map";
+import { withAreas, withTracks } from "../helpers/mapFixtures";
 
 function withTime(state: GameState, time: number): GameState {
   return { ...state, time };
-}
-
-function withArea(
-  state: GameState,
-  area: AreaKind,
-  points: Point[],
-): GameState {
-  const keys = new Set(points.map((point) => `${point.x},${point.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, area } : tile,
-      ),
-    },
-  };
-}
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
 }
 
 function withGrowthWaves(
@@ -124,7 +90,7 @@ describe("map helpers", () => {
   });
 
   it("allows bus stops only on unoccupied road tiles", () => {
-    const state = withArea(createInitialGameState(), "residential", [
+    const state = withAreas(createInitialGameState(), "residential", [
       { x: 1, y: 1 },
     ]);
 
@@ -152,7 +118,7 @@ describe("map helpers", () => {
   });
 
   it("allows metro stations on unoccupied tracked road or empty tiles", () => {
-    const state = withTrack(createInitialGameState(), [
+    const state = withTracks(createInitialGameState(), [
       { x: 7, y: 8 },
       { x: 0, y: 0 },
     ]);
@@ -223,9 +189,16 @@ describe("map helpers", () => {
   });
 
   it("skips citizen creation on building-occupied wave tiles", () => {
-    const state = withGrowthWaves(withTime(createInitialGameState(), 250), [
-      testGrowthWave(),
-    ]);
+    const state = withAreas(
+      withGrowthWaves(withTime(createInitialGameState(), 250), [
+        testGrowthWave(),
+      ]),
+      "residential",
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ],
+    );
 
     const withBuilding = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
 
@@ -249,7 +222,7 @@ describe("map helpers", () => {
 
 describe("road and track placement validation", () => {
   it("allows road on empty tiles and rejects existing roads", () => {
-    const state = withArea(createInitialGameState(), "commercial", [
+    const state = withAreas(createInitialGameState(), "commercial", [
       { x: 1, y: 1 },
     ]);
     expect(isValidRoadPlacement(state, { x: 1, y: 1 })).toBe(true);
@@ -257,12 +230,12 @@ describe("road and track placement validation", () => {
   });
 
   it("allows track on empty and road tiles but not duplicates", () => {
-    const state = withArea(createInitialGameState(), "office", [
+    const state = withAreas(createInitialGameState(), "office", [
       { x: 1, y: 1 },
     ]);
     expect(isValidTrackPlacement(state, { x: 1, y: 1 })).toBe(true);
     expect(isValidTrackPlacement(state, { x: 7, y: 8 })).toBe(true);
-    const tracked = withTrack(state, [{ x: 1, y: 1 }]);
+    const tracked = withTracks(state, [{ x: 1, y: 1 }]);
     expect(isValidTrackPlacement(tracked, { x: 1, y: 1 })).toBe(false);
   });
 });
@@ -273,7 +246,7 @@ describe("station and stop placement with track rules", () => {
     expect(isValidMetroStationPlacement(state, { x: 8, y: 2 })).toBe(false); // empty, no track
     expect(isValidMetroStationPlacement(state, { x: 7, y: 8 })).toBe(false); // road, no track
 
-    const tracked = withTrack(state, [
+    const tracked = withTracks(state, [
       { x: 8, y: 2 },
       { x: 7, y: 8 },
     ]);
@@ -282,7 +255,7 @@ describe("station and stop placement with track rules", () => {
   });
 
   it("rejects bus stops on crossings", () => {
-    const state = withTrack(createInitialGameState(), [{ x: 9, y: 8 }]);
+    const state = withTracks(createInitialGameState(), [{ x: 9, y: 8 }]);
     expect(isValidBusStopPlacement(state, { x: 9, y: 8 })).toBe(false);
     expect(isValidBusStopPlacement(state, { x: 10, y: 8 })).toBe(true);
   });
