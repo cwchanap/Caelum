@@ -1698,7 +1698,7 @@ describe("route path segments", () => {
   });
 
   it("sets pathBroken=true when a bus route references a dangling stop id", () => {
-    let state = createInitialGameState();
+    let state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     state = addBusStop(state, { x: 7, y: 8 });
     // Create a route with one real stop and one dangling id that maps to
     // no stop in state.transit.stops.
@@ -1965,7 +1965,7 @@ describe("laying and removing infrastructure", () => {
   });
 
   it("lays track on a road tile to form a crossing and charges $500", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 9, y: 8 }]);
     const next = layTrack(state, { x: 9, y: 8 });
 
     const tile = next.map.tiles.find((t) => t.x === 9 && t.y === 8);
@@ -1975,7 +1975,7 @@ describe("laying and removing infrastructure", () => {
   });
 
   it("rejects invalid placements unchanged", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     const tracked = withTracks(state, [{ x: 2, y: 3 }]);
     expect(layRoad(state, { x: 7, y: 8 })).toBe(state); // already road
     expect(layTrack(tracked, { x: 2, y: 3 })).toBe(tracked); // already tracked
@@ -2027,7 +2027,10 @@ describe("laying and removing infrastructure", () => {
   });
 
   it("bulldozes track before road on a crossing tile", () => {
-    let state = layTrack(createInitialGameState(), { x: 9, y: 8 });
+    let state = layTrack(
+      withRoads(createInitialGameState(), [{ x: 9, y: 8 }]),
+      { x: 9, y: 8 },
+    );
 
     state = removeInfrastructureAtTile(state, { x: 9, y: 8 });
     let tile = state.map.tiles.find((t) => t.x === 9 && t.y === 8);
@@ -2064,8 +2067,7 @@ describe("no-recompute placement helpers", () => {
   });
 
   it("layTrackNoRecompute places track but skips route recomputation", () => {
-    const state = createInitialGameState();
-    // (9,8) is a road tile; laying track normally refreshes transit.
+    const state = withRoads(createInitialGameState(), [{ x: 9, y: 8 }]);
     const noRec = layTrackNoRecompute(state, { x: 9, y: 8 });
     expect(getTile(noRec.map, { x: 9, y: 8 })?.hasTrack).toBe(true);
     expect(noRec.budget).toBe(state.budget - COSTS.track);
@@ -2079,9 +2081,8 @@ describe("no-recompute placement helpers", () => {
   });
 
   it("no-recompute helpers return the same reference for no-op placements", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     const tracked = withTracks(state, [{ x: 2, y: 3 }]);
-    // (7,8) is already a road; (2,3) is already tracked — both invalid.
     expect(layRoadNoRecompute(state, { x: 7, y: 8 })).toBe(state);
     expect(layTrackNoRecompute(tracked, { x: 2, y: 3 })).toBe(tracked);
     // Unaffordable.
