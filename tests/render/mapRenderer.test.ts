@@ -92,12 +92,19 @@ function withOneWay(
 describe("renderMap area layer", () => {
   it("fills empty area tiles with area colors while preserving road tiles", () => {
     const initialState = createInitialGameState();
+    const areaTile = initialState.map.tiles.find(
+      (tile) => tile.kind === "empty",
+    );
+    if (areaTile === undefined) {
+      throw new Error("expected the scenario to have at least one empty tile");
+    }
+
     const state: GameState = {
       ...initialState,
       map: {
         ...initialState.map,
         tiles: initialState.map.tiles.map((tile) => {
-          if (tile.x === 1 && tile.y === 1) {
+          if (tile.x === areaTile.x && tile.y === areaTile.y) {
             return { ...tile, area: "office" };
           }
           if (tile.x === 7 && tile.y === 8) {
@@ -112,8 +119,8 @@ describe("renderMap area layer", () => {
     renderMap(context, state);
 
     expect(fills).toContainEqual({
-      x: 1 * 32,
-      y: 1 * 32,
+      x: areaTile.x * 32,
+      y: areaTile.y * 32,
       style: "#82a7d8",
     });
     expect(fills).toContainEqual({
