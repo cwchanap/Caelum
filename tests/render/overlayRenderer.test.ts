@@ -6,6 +6,7 @@ import type { Citizen, Stop } from "../../src/domain/types";
 import { axisLockedLine } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
+import { withRoads } from "../helpers/mapFixtures";
 
 function fakeCtx() {
   return {
@@ -300,12 +301,12 @@ describe("renderOverlays drag preview", () => {
 
   it("tints area preview tiles by paintability", () => {
     const { ctx, fillStyles } = recordingFillCtx();
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 2, y: 2 }]);
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
       selectedArea: "commercial" as const,
-      drag: areaDrag("commercial", { x: 13, y: 7 }, { x: 14, y: 8 }),
+      drag: areaDrag("commercial", { x: 1, y: 1 }, { x: 2, y: 2 }),
     };
 
     renderOverlays(ctx, state, ui);

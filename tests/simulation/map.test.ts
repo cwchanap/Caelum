@@ -33,20 +33,6 @@ function withGrowthWaves(
   };
 }
 
-function withDestinationTile(state: GameState, point: Point): GameState {
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        tile.x === point.x && tile.y === point.y
-          ? { ...tile, kind: "jobs" as const }
-          : tile,
-      ),
-    },
-  };
-}
-
 function testGrowthWave(): GrowthWave {
   return {
     id: "wave-test",
@@ -164,11 +150,22 @@ describe("map helpers", () => {
   });
 
   it("applies due growth waves once and preserves unique citizen IDs", () => {
-    const state = withDestinationTile(
-      withGrowthWaves(withTime(createInitialGameState(), 250), [
-        testGrowthWave(),
-      ]),
+    const state = placeBuilding(
+      withAreas(
+        withGrowthWaves(withTime(createInitialGameState(), 250), [
+          testGrowthWave(),
+        ]),
+        "commercial",
+        [
+          { x: 4, y: 1 },
+          { x: 5, y: 1 },
+          { x: 4, y: 2 },
+          { x: 5, y: 2 },
+        ],
+      ),
+      "supermarket",
       { x: 4, y: 1 },
+      0,
     );
 
     const grownState = applyDueGrowthWaves(state);

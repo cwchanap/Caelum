@@ -8,6 +8,7 @@ import type {
   Tile,
   TileKind,
 } from "../domain/types";
+import { destinationPoints } from "./buildingSelectors";
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
@@ -28,18 +29,6 @@ function isBuildingOccupied(state: GameState, point: Point): boolean {
 /** A growth wave only claims tiles that are still bare empty ground. */
 function isBareGround(tile: Tile): boolean {
   return tile.kind === "empty" && tile.hasTrack !== true;
-}
-
-function destinationTiles(map: GameMap): Tile[] {
-  return map.tiles
-    .filter((tile) => tile.kind === "jobs" || tile.kind === "civic")
-    .sort((left, right) => {
-      if (left.districtId === "anchor" && right.districtId !== "anchor")
-        return -1;
-      if (right.districtId === "anchor" && left.districtId !== "anchor")
-        return 1;
-      return 0;
-    });
 }
 
 export function getTile(map: GameMap, point: Point): Tile | null {
@@ -197,7 +186,7 @@ export function applyDueGrowthWaves(state: GameState): GameState {
         : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
     }),
   };
-  const destinations = destinationTiles(nextMap);
+  const destinations = destinationPoints(state);
   const newCitizens: Citizen[] = [];
 
   for (const wave of dueWaves) {

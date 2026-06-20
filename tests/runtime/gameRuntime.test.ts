@@ -408,11 +408,16 @@ describe("runtime road drag", () => {
   it("treats a zero-length drag as a tap (cycles an existing road's direction)", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");
-    runtime.startDrag({ x: 14, y: 8 }); // existing road tile
-    runtime.setDragCurrent({ x: 14, y: 8 });
+    runtime.setRoadPreset("twoWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 2, y: 0 });
+    runtime.commitDrag();
+
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 1, y: 0 });
     runtime.commitDrag();
     expect(
-      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 14 && t.y === 8)
+      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 1 && t.y === 0)
         ?.oneWay,
     ).toBe("north"); // first cycle: undefined -> north
   });

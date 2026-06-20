@@ -3,6 +3,7 @@ import { renderCursorBadge } from "../../src/render/cursorBadge";
 import { getBoardTransform } from "../../src/render/canvas";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
+import { withRoads } from "../helpers/mapFixtures";
 
 function badgeCtx() {
   const calls: string[] = [];
@@ -95,9 +96,9 @@ describe("renderCursorBadge", () => {
     expect(text).not.toContain("⊘");
   });
 
-  it("marks area paint blocked over a starter road tile", () => {
+  it("marks area paint blocked over a road tile", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,

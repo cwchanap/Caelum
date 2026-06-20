@@ -91,14 +91,17 @@ function withOneWay(
   };
 }
 
-function withTwoWayRoads(state: GameState): GameState {
+function withOnlyRoads(state: GameState, points: Point[]): GameState {
+  const roadKeys = new Set(points.map((point) => `${point.x},${point.y}`));
   return {
     ...state,
     map: {
       ...state.map,
       tiles: state.map.tiles.map((tile) => {
         const { oneWay: _oneWay, ...rest } = tile;
-        return tile.kind === "road" ? rest : tile;
+        return roadKeys.has(`${tile.x},${tile.y}`)
+          ? { ...rest, kind: "road" as const, hasTrack: false }
+          : { ...rest, kind: "empty" as const, hasTrack: false };
       }),
     },
   };
@@ -208,7 +211,7 @@ describe("renderMap one-way arrows", () => {
   });
 
   it("draws no arrow for two-way road tiles", () => {
-    const state = withTwoWayRoads(createInitialGameState());
+    const state = withOnlyRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
 
     const context = ctx();
     renderMap(context, state);
