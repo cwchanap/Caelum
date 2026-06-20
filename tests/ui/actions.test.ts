@@ -19,57 +19,13 @@ import {
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState, type UiState } from "../../src/ui/uiState";
-import type { RoadDirection } from "../../src/domain/types";
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
-
-function withRoad(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
-      ),
-    },
-  };
-}
-
-function withOneWay(
-  state: GameState,
-  entries: Array<{ x: number; y: number; oneWay: RoadDirection }>,
-): GameState {
-  const byKey = new Map(entries.map((e) => [`${e.x},${e.y}`, e.oneWay]));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) => {
-        const oneWay = byKey.get(`${tile.x},${tile.y}`);
-        return oneWay === undefined ? tile : { ...tile, oneWay };
-      }),
-    },
-  };
-}
-
-function trackRow(y: number, fromX: number, toX: number): Point[] {
-  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
-    x: fromX + i,
-    y,
-  }));
-}
+import {
+  pointsOnRow,
+  withAreas,
+  withOneWayRoads,
+  withRoads,
+  withTracks,
+} from "../helpers/mapFixtures";
 
 function tileAt(state: GameState, x: number, y: number) {
   return state.map.tiles.find((t) => t.x === x && t.y === y)!;
@@ -117,6 +73,7 @@ function withColocatedStopAndStation(
 describe("UI tile actions", () => {
   it("accumulates bus route stops without committing at two stops", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
 
@@ -133,6 +90,7 @@ describe("UI tile actions", () => {
 
   it("accumulates a third bus stop into the draft", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -154,6 +112,7 @@ describe("UI tile actions", () => {
 
   it("ignores clicking the same stop twice in a row", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 8 }]);
     state = addBusStop(state, { x: 7, y: 8 });
 
     let result = handleTileClick(
@@ -170,7 +129,7 @@ describe("UI tile actions", () => {
 
   it("accumulates metro line stations without committing", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
 
@@ -187,6 +146,7 @@ describe("UI tile actions", () => {
 
   it("removes stops and dependent routes at the clicked tile", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -217,6 +177,7 @@ describe("UI tile actions", () => {
     // at any live route. Selectors tolerated it via live-id matching, which
     // masked the bug.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -236,6 +197,7 @@ describe("UI tile actions", () => {
     // Two routes; bulldoze a stop that only route-001 depends on while
     // route-002 is selected. selectedRouteId must survive.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -257,7 +219,7 @@ describe("UI tile actions", () => {
 
   it("removes stations and dependent metro lines at the clicked tile", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -305,7 +267,14 @@ describe("UI tile actions", () => {
 
   it("removes a whole house building from any occupied tile without removing citizens", () => {
     const added = placeBuilding(
-      createInitialGameState(),
+      withAreas(createInitialGameState(), "residential", [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ]),
       "largeHouse",
       { x: 0, y: 0 },
       0,
@@ -318,13 +287,18 @@ describe("UI tile actions", () => {
     );
 
     expect(removed.state.buildings).toEqual([]);
-    expect(removed.state.citizens).toHaveLength(46);
+    expect(removed.state.citizens).toHaveLength(10);
   });
 
   it("removes a building transit node and dependent routes and vehicles", () => {
     let state = createInitialGameState();
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
     state = placeBuilding(state, "busStop", { x: 4, y: 0 }, 0);
+    state = withRoads(state, [
+      { x: 1, y: 0 },
+      { x: 2, y: 0 },
+      { x: 3, y: 0 },
+    ]);
     state = addBusRoute(state, ["stop-001", "stop-002"]);
     state = assignVehicle(state, "bus", "route-001");
 
@@ -356,7 +330,7 @@ describe("UI tile actions", () => {
     state = placeBuilding(state, "busStop", { x: 4, y: 0 }, 0);
     // Connect the terminal's transit node (0,0) to the stop's (4,0) so the
     // draft path validation finds a route between them.
-    state = withRoad(state, [
+    state = withRoads(state, [
       { x: 1, y: 0 },
       { x: 2, y: 0 },
       { x: 3, y: 0 },
@@ -378,6 +352,7 @@ describe("resolveNodeAtTile", () => {
   it("resolves a bus stop at its exact tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, [{ x: 7, y: 2 }]);
     state = addBusStop(state, { x: 7, y: 2 });
     expect(state.transit.stops).toHaveLength(1);
 
@@ -389,7 +364,7 @@ describe("resolveNodeAtTile", () => {
   it("resolves a metro station at its exact tile", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = withTrack(state, [{ x: 22, y: 2 }]);
+    state = withTracks(state, [{ x: 22, y: 2 }]);
     state = addMetroStation(state, { x: 22, y: 2 });
     expect(state.transit.stations).toHaveLength(1);
 
@@ -463,6 +438,7 @@ describe("resolveNodesAtTile", () => {
   it("returns a single node when only one kind exists", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, [{ x: 7, y: 2 }]);
     state = addBusStop(state, { x: 7, y: 2 });
 
     const nodes = resolveNodesAtTile(state, { x: 7, y: 2 });
@@ -515,6 +491,11 @@ describe("stripRoutesFromPlatforms reference equality", () => {
   it("returns the original node reference when no routes are stripped", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, [
+      { x: 7, y: 2 },
+      { x: 15, y: 8 },
+      { x: 22, y: 2 },
+    ]);
     state = addBusStop(state, { x: 7, y: 2 }); // stop-001, will be removed
     state = addBusStop(state, { x: 15, y: 8 }); // stop-002, survives
     state = addBusStop(state, { x: 22, y: 2 }); // stop-003, survives (no route)
@@ -544,6 +525,7 @@ describe("stripRoutesFromPlatforms reference equality", () => {
 describe("inspect drawer auto-open", () => {
   it("opens the inspect drawer when a node is clicked", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
     state = addBusStop(state, { x: 7, y: 7 });
     const ui = { ...createUiState(), activeTool: "inspect" as const };
 
@@ -586,6 +568,7 @@ describe("inspect drawer auto-open", () => {
     // empty body, no chip to close it (the inspector was null because the
     // selection was gone).
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
     state = addBusStop(state, { x: 7, y: 7 });
     const ui = {
       ...createUiState(),
@@ -604,6 +587,7 @@ describe("inspect drawer auto-open", () => {
 
   it("leaves a non-inspect drawer untouched when bulldozing", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
     state = addBusStop(state, { x: 7, y: 7 });
     const ui = {
       ...createUiState(),
@@ -621,6 +605,7 @@ describe("removal strips routes from surviving platforms", () => {
   it("removes a deleted route's id from a shared terminal's platforms", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, pointsOnRow(2, 7, 22));
     state = addBusStop(state, { x: 7, y: 2 }, "busTerminal"); // survives
     state = addBusStop(state, { x: 22, y: 2 }); // will be removed
     expect(state.transit.stops).toHaveLength(2);
@@ -657,6 +642,7 @@ describe("removal strips routes from surviving platforms", () => {
 describe("draft route helpers", () => {
   function busDraft() {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     const ui = {
@@ -715,7 +701,7 @@ describe("draft route helpers", () => {
 
   it("finishes a metro line, assigns a metro vehicle, and clears the draft", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     const ui = {
@@ -746,6 +732,7 @@ describe("draft route helpers", () => {
 
   it("does not finish a metro line when fewer than two distinct stations", () => {
     let state = createInitialGameState();
+    state = withTracks(state, [{ x: 7, y: 8 }]);
     state = addMetroStation(state, { x: 7, y: 8 });
     const ui = {
       ...createUiState(),
@@ -759,6 +746,7 @@ describe("draft route helpers", () => {
 
   it("does not finish a metro line when the metro vehicle is unaffordable", () => {
     let state = createInitialGameState();
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     const ui = {
@@ -781,7 +769,7 @@ describe("draft route helpers", () => {
 
   it("removes a metro draft station by index", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     const ui = {
@@ -826,6 +814,7 @@ describe("draft route helpers", () => {
 
   it("removeDraftNode empties the draft when removing the only stop", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 8 }]);
     state = addBusStop(state, { x: 7, y: 8 });
     const ui = {
       ...createUiState(),
@@ -843,6 +832,7 @@ describe("draft route helpers", () => {
     // draft with computed paths between consecutive pairs, then sever the road
     // between stop 1 and stop 3 so the merge path is null.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -914,7 +904,7 @@ describe("road tool direction", () => {
   });
 
   it("cycles direction (free) when clicking an existing road with the road tool", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const ui: UiState = { ...createUiState(), activeTool: "road" };
     const order = ["north", "east", "south", "west", undefined];
     let result: { state: GameState; ui: UiState } = { state, ui };
@@ -930,6 +920,7 @@ describe("road tool direction", () => {
 describe("draft route path validation", () => {
   function busDraftState(): { state: GameState; ui: UiState } {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -955,6 +946,7 @@ describe("draft route path validation", () => {
 
   it("rejects adding a stop with no road path from the previous stop", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     // Sever the only row between them; columns can't bridge (no other rows).
@@ -990,12 +982,13 @@ describe("draft route path validation", () => {
     // phase accepts the forward pair; finishDraftRoute must reject the finish
     // so the player is not left with a pathBroken route and a cleared draft.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 9));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 9, y: 8 });
     // (8,8) is the only tile between the two stops on y=8; make it east-only.
     // The x=7 column stays two-way so (7,8) is reachable, but heading west
     // from (9,8) is blocked at (8,8).
-    state = withOneWay(state, [{ x: 8, y: 8, oneWay: "east" }]);
+    state = withOneWayRoads(state, [{ x: 8, y: 8, oneWay: "east" }]);
     // There is no westbound return route: y=8 is the only horizontal road,
     // and columns x=7/x=15/x=22 do not connect (7,8) back to (9,8) without
     // traversing (8,8) westbound.
@@ -1089,7 +1082,7 @@ describe("draft route path validation", () => {
     // (last -> first) becomes unpathable even though the stale draft paths
     // still show a connection.
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
 

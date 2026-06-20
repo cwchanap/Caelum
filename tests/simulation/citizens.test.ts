@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GameState } from "../../src/domain/types";
+import type { Citizen, GameState } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { tickCitizens } from "../../src/simulation/citizens";
 import {
@@ -10,16 +10,38 @@ import {
 } from "../../src/simulation/transit";
 import { handleTileClick } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
+import { pointsOnRow, withRoads } from "../helpers/mapFixtures";
+
+function testCitizen(overrides: Partial<Citizen> = {}): Citizen {
+  return {
+    id: "citizen-001",
+    home: { x: 2, y: 3 },
+    destination: { x: 5, y: 3 },
+    position: { x: 2, y: 3 },
+    status: "idle",
+    patienceRemaining: 240,
+    deadline: 900,
+    routePlan: null,
+    currentLegIndex: 0,
+    ...overrides,
+  };
+}
 
 function withFirstCitizen(
   state: GameState,
-  citizen: Partial<GameState["citizens"][number]>,
+  citizen: Partial<Citizen>,
 ): GameState {
+  const nextCitizen = testCitizen(citizen);
   return {
     ...state,
-    citizens: state.citizens.map((existingCitizen, index) =>
-      index === 0 ? { ...existingCitizen, ...citizen } : existingCitizen,
-    ),
+    citizens:
+      state.citizens.length === 0
+        ? [nextCitizen]
+        : state.citizens.map((existingCitizen, index) =>
+            index === 0
+              ? { ...existingCitizen, ...nextCitizen, ...citizen }
+              : existingCitizen,
+          ),
   };
 }
 
@@ -39,7 +61,7 @@ function advanceCitizens(
 
 describe("citizen lifecycle", () => {
   it("plans a route for the first citizen and starts walking", () => {
-    const state = createInitialGameState();
+    const state = withFirstCitizen(createInitialGameState(), {});
 
     const nextState = tickCitizens(state, 1);
     const citizen = nextState.citizens[0];
@@ -141,6 +163,7 @@ describe("citizen lifecycle", () => {
 
   it("recovers riding citizens whose vehicle was removed", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -183,6 +206,7 @@ describe("citizen lifecycle", () => {
     // were parked after a route break. The replan must originate from the
     // parked position, not from home.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 15, 22));
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -213,6 +237,7 @@ describe("citizen lifecycle", () => {
     // route is invalidated. The replan must snap to the nearest integer and
     // produce a valid plan rather than marking the citizen unserved.
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -317,6 +342,7 @@ describe("citizen lifecycle", () => {
 
   it("marks waiting citizens unserved when patience reaches zero", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -367,18 +393,17 @@ describe("citizen lifecycle", () => {
         totalWaitSeconds: 100,
       },
       citizens: [
-        {
-          ...baseState.citizens[0]!,
+        testCitizen({
           status: "waiting" as const,
           patienceRemaining: 235,
           routePlan: waitingRoutePlan,
-        },
-        {
-          ...baseState.citizens[1]!,
+        }),
+        testCitizen({
+          id: "citizen-002",
           status: "waiting" as const,
           patienceRemaining: 230,
           routePlan: waitingRoutePlan,
-        },
+        }),
       ],
     };
 

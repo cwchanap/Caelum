@@ -35,42 +35,47 @@ import {
 } from "../../src/simulation/transit";
 import { getTile } from "../../src/simulation/map";
 import { hasBrokenSegment } from "../../src/simulation/network";
+import {
+  pointsOnRow,
+  withAreas,
+  withRoads,
+  withTracks,
+} from "../helpers/mapFixtures";
+
+function testCitizen(overrides: Partial<Citizen> = {}): Citizen {
+  return {
+    id: "citizen-001",
+    home: { x: 2, y: 3 },
+    destination: { x: 5, y: 3 },
+    position: { x: 2, y: 3 },
+    status: "idle",
+    patienceRemaining: 240,
+    deadline: 9_999,
+    routePlan: null,
+    currentLegIndex: 0,
+    ...overrides,
+  };
+}
 
 function createBusState(): GameState {
   let state = createInitialGameState();
+  state = withRoads(state, pointsOnRow(8, 7, 15));
   state = addBusStop(state, { x: 7, y: 8 });
   state = addBusStop(state, { x: 15, y: 8 });
   state = addBusRoute(state, ["stop-001", "stop-002"]);
-  return assignVehicle(state, "bus", "route-001");
+  state = assignVehicle(state, "bus", "route-001");
+  return { ...state, citizens: [testCitizen()] };
 }
 
 function createThreeStopBusState(): GameState {
   let state = createInitialGameState();
+  state = withRoads(state, pointsOnRow(8, 7, 22));
   state = addBusStop(state, { x: 7, y: 8 });
   state = addBusStop(state, { x: 15, y: 8 });
   state = addBusStop(state, { x: 22, y: 8 });
   state = addBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
-  return assignVehicle(state, "bus", "route-001");
-}
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
-
-function trackRow(y: number, fromX: number, toX: number): Point[] {
-  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
-    x: fromX + i,
-    y,
-  }));
+  state = assignVehicle(state, "bus", "route-001");
+  return { ...state, citizens: [testCitizen()] };
 }
 
 /** Inclusive tile run along a row, in either direction. */
@@ -128,7 +133,9 @@ describe("transit network actions", () => {
   });
 
   it("returns the original state when adding a bus stop on an invalid residential tile", () => {
-    const state = createInitialGameState();
+    const state = withAreas(createInitialGameState(), "residential", [
+      { x: 2, y: 3 },
+    ]);
 
     const nextState = addBusStop(state, { x: 2, y: 3 });
 
@@ -137,7 +144,14 @@ describe("transit network actions", () => {
 
   it("returns the original state when adding a metro station on a placed building footprint", () => {
     const state = placeBuilding(
-      createInitialGameState(),
+      withAreas(createInitialGameState(), "residential", [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ]),
       "largeHouse",
       { x: 0, y: 0 },
       0,
@@ -150,6 +164,7 @@ describe("transit network actions", () => {
 
   it("creates an active bus route and assigns a bus vehicle to it", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -177,6 +192,7 @@ describe("transit network actions", () => {
 
   it("allocates route, metro line, and vehicle ids after lower ids are removed", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
@@ -209,7 +225,10 @@ describe("transit network actions", () => {
       "vehicle-003",
     ]);
 
-    let metroState = createInitialGameState();
+    let metroState = withTracks(
+      createInitialGameState(),
+      pointsOnRow(8, 7, 22),
+    );
     metroState = addMetroStation(metroState, { x: 7, y: 8 });
     metroState = addMetroStation(metroState, { x: 15, y: 8 });
     metroState = addMetroStation(metroState, { x: 22, y: 8 });
@@ -238,6 +257,7 @@ describe("transit network actions", () => {
 
   it("keeps bus routes inactive when stop IDs do not include two distinct valid stops", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 8 }]);
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-001"]);
 
@@ -255,7 +275,7 @@ describe("transit network actions", () => {
 
   it("creates an active metro line and assigns a metro vehicle to it", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 22));
+    state = withTracks(state, pointsOnRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 22, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -283,7 +303,7 @@ describe("transit network actions", () => {
 
   it("keeps metro lines inactive when station IDs do not include two distinct valid stations", () => {
     let state = createInitialGameState();
-    state = withTrack(state, [{ x: 7, y: 8 }]);
+    state = withTracks(state, [{ x: 7, y: 8 }]);
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroLine(state, ["station-001", "station-001"]);
 
@@ -301,6 +321,7 @@ describe("transit network actions", () => {
 
   it("returns the original state when assigning vehicles to missing or mismatched lines", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 22));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 22, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -311,6 +332,7 @@ describe("transit network actions", () => {
 
   it("returns the original state when assigning a bus vehicle to an inactive route", () => {
     let state = createInitialGameState();
+    state = withRoads(state, [{ x: 7, y: 8 }]);
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusRoute(state, ["stop-001"]);
 
@@ -319,6 +341,7 @@ describe("transit network actions", () => {
 
   it("returns the original state when assigning a metro vehicle to an inactive line", () => {
     let state = createInitialGameState();
+    state = withTracks(state, [{ x: 7, y: 8 }]);
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroLine(state, ["station-001"]);
 
@@ -339,7 +362,7 @@ describe("transit network actions", () => {
     const state = {
       ...createBusState(),
       citizens: Array.from({ length: 20 }, (_, index) => ({
-        ...createInitialGameState().citizens[0]!,
+        ...testCitizen(),
         id: `citizen-${String(index + 1).padStart(3, "0")}`,
         position: { x: 7, y: 8 },
         status: "waiting" as const,
@@ -371,7 +394,7 @@ describe("transit network actions", () => {
       ...createBusState(),
       citizens: [
         {
-          ...createInitialGameState().citizens[0]!,
+          ...testCitizen(),
           position: { x: 15, y: 8 },
           status: "waiting" as const,
           routePlan: {
@@ -406,7 +429,7 @@ describe("transit network actions", () => {
       },
       citizens: [
         {
-          ...createInitialGameState().citizens[0]!,
+          ...testCitizen(),
           position: { x: 7, y: 8 },
           status: "waiting" as const,
           routePlan: {
@@ -454,7 +477,7 @@ describe("transit network actions", () => {
       },
       citizens: [
         {
-          ...createInitialGameState().citizens[0]!,
+          ...testCitizen(),
           position: { x: 7, y: 8 },
           status: "waiting" as const,
           routePlan: {
@@ -495,10 +518,9 @@ describe("transit network actions", () => {
           },
         ],
       },
-      citizens: createInitialGameState()
-        .citizens.slice(0, 2)
-        .map((citizen) => ({
-          ...citizen,
+      citizens: ["citizen-001", "citizen-002"].map((id) =>
+        testCitizen({
+          id,
           status: "riding" as const,
           routePlan: {
             estimatedSeconds: 60,
@@ -517,7 +539,8 @@ describe("transit network actions", () => {
             ],
           },
           currentLegIndex: 0,
-        })),
+        }),
+      ),
     };
 
     const nextState = tickVehicles(state, 1);
@@ -556,7 +579,7 @@ describe("transit network actions", () => {
       },
       citizens: [
         {
-          ...createInitialGameState().citizens[0]!,
+          ...testCitizen(),
           status: "riding" as const,
           routePlan: {
             estimatedSeconds: 120,
@@ -726,7 +749,7 @@ describe("on-platform boarding gate", () => {
     };
 
     const mkWaiter = (id: string, patience: number): Citizen => ({
-      ...createInitialGameState().citizens[0]!,
+      ...testCitizen(),
       id,
       home: { x: 7, y: 8 },
       destination: { x: 15, y: 8 },
@@ -809,7 +832,7 @@ describe("on-platform boarding gate", () => {
     };
 
     const mkWaiter = (id: string, patience: number): Citizen => ({
-      ...createInitialGameState().citizens[0]!,
+      ...testCitizen(),
       id,
       home: { x: 7, y: 8 },
       destination: { x: 15, y: 8 },
@@ -925,7 +948,7 @@ describe("on-platform boarding gate", () => {
     };
 
     const mkWaiter = (id: string, patience: number): Citizen => ({
-      ...createInitialGameState().citizens[0]!,
+      ...testCitizen(),
       id,
       home: { x: 7, y: 8 },
       destination: { x: 15, y: 8 },
@@ -1018,7 +1041,7 @@ describe("on-platform boarding gate", () => {
     };
 
     const mkWaiter = (id: string, patience: number): Citizen => ({
-      ...createInitialGameState().citizens[0]!,
+      ...testCitizen(),
       id,
       home: { x: 7, y: 8 },
       destination: { x: 15, y: 8 },
@@ -1133,7 +1156,7 @@ describe("on-platform boarding gate", () => {
     };
 
     const mkWaiter = (id: string, patience: number): Citizen => ({
-      ...createInitialGameState().citizens[0]!,
+      ...testCitizen(),
       id,
       home: { x: 7, y: 8 },
       destination: { x: 15, y: 8 },
@@ -1203,6 +1226,7 @@ describe("auto-assign routes to platforms", () => {
   it("registers a new bus route on each served stop's least-loaded platform", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, pointsOnRow(2, 7, 22));
     state = addBusStop(state, { x: 7, y: 2 });
     state = addBusStop(state, { x: 22, y: 2 });
     const stopIds = state.transit.stops.map((s) => s.id);
@@ -1221,6 +1245,7 @@ describe("auto-assign routes to platforms", () => {
   it("spreads two routes across a terminal's platforms (least-loaded first)", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, pointsOnRow(2, 7, 22));
     state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
     state = addBusStop(state, { x: 22, y: 2 });
     const stopIds = state.transit.stops.map((s) => s.id);
@@ -1240,7 +1265,7 @@ describe("auto-assign routes to platforms", () => {
   it("registers a new metro line on each served station's least-loaded platform", () => {
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
-    state = withTrack(state, trackRow(2, 7, 22));
+    state = withTracks(state, pointsOnRow(2, 7, 22));
     state = addMetroStation(state, { x: 7, y: 2 });
     state = addMetroStation(state, { x: 22, y: 2 });
     expect(state.transit.stations).toHaveLength(2);
@@ -1261,6 +1286,7 @@ describe("auto-assign routes to platforms", () => {
 describe("assignRouteToPlatform", () => {
   function terminalState() {
     let state = { ...createInitialGameState(), budget: 1_000_000 };
+    state = withRoads(state, pointsOnRow(2, 7, 22));
     state = addBusStop(state, { x: 7, y: 2 }, "busTerminal");
     state = addBusStop(state, { x: 22, y: 2 });
     state = addBusRoute(
@@ -1338,7 +1364,7 @@ describe("route mutators", () => {
 
   it("renames a metro line by id", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1386,7 +1412,7 @@ describe("route mutators", () => {
 
   it("sets a metro line color by id", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1396,7 +1422,7 @@ describe("route mutators", () => {
 
   it("toggles a metro line active flag by id", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1426,7 +1452,7 @@ describe("deleteRoute", () => {
 
   it("removes a metro line, its vehicles, and its platform assignments", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1456,6 +1482,7 @@ describe("deleteRoute", () => {
     // untouched by reference equality.
     let state = createInitialGameState();
     state = { ...state, budget: 1_000_000 };
+    state = withRoads(state, pointsOnRow(2, 7, 22));
     state = addBusStop(state, { x: 7, y: 2 }, "busTerminal"); // shared
     state = addBusStop(state, { x: 15, y: 2 }); // routeA only
     state = addBusStop(state, { x: 22, y: 2 }); // routeB only
@@ -1549,36 +1576,33 @@ describe("deleteRoute", () => {
 
   it("invalidates route plans that referenced a deleted metro line", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
     state = {
       ...state,
-      citizens: state.citizens.map((citizen, index) =>
-        index === 0
-          ? {
-              ...citizen,
-              home: { x: 7, y: 8 },
-              position: { x: 7, y: 8 },
-              destination: { x: 16, y: 8 },
-              status: "waiting",
-              routePlan: {
-                estimatedSeconds: 216,
-                legs: [
-                  {
-                    mode: "metro",
-                    from: { x: 7, y: 8 },
-                    to: { x: 15, y: 8 },
-                    lineId: "metro-001",
-                  },
-                  { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } },
-                ],
+      citizens: [
+        testCitizen({
+          home: { x: 7, y: 8 },
+          position: { x: 7, y: 8 },
+          destination: { x: 16, y: 8 },
+          status: "waiting",
+          routePlan: {
+            estimatedSeconds: 216,
+            legs: [
+              {
+                mode: "metro",
+                from: { x: 7, y: 8 },
+                to: { x: 15, y: 8 },
+                lineId: "metro-001",
               },
-              currentLegIndex: 0,
-            }
-          : citizen,
-      ),
+              { mode: "walk", from: { x: 15, y: 8 }, to: { x: 16, y: 8 } },
+            ],
+          },
+          currentLegIndex: 0,
+        }),
+      ],
     };
 
     const next = deleteRoute(state, "metro-001");
@@ -1627,6 +1651,7 @@ describe("deleteRoute", () => {
 describe("route path segments", () => {
   it("stores segments and pathBroken=false for a road-connected bus route", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
 
@@ -1644,7 +1669,7 @@ describe("route path segments", () => {
     // Track under the two station tiles only, satisfying placement rules,
     // but with no connecting track run between them, so the line still has
     // no path.
-    state = withTrack(state, [
+    state = withTracks(state, [
       { x: 7, y: 8 },
       { x: 22, y: 8 },
     ]);
@@ -1660,7 +1685,7 @@ describe("route path segments", () => {
     let state = createInitialGameState();
     // Track under the two station tiles only; no connecting run, so the
     // line stays pathBroken and rejects vehicle assignment.
-    state = withTrack(state, [
+    state = withTracks(state, [
       { x: 7, y: 8 },
       { x: 22, y: 8 },
     ]);
@@ -1687,7 +1712,7 @@ describe("route path segments", () => {
 
   it("sets pathBroken=true when a metro line references a dangling station id", () => {
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 22));
+    state = withTracks(state, pointsOnRow(8, 7, 22));
     state = addMetroStation(state, { x: 7, y: 8 });
     // station-999 does not exist in state.transit.stations.
     state = addMetroLine(state, ["station-001", "station-999"]);
@@ -1701,7 +1726,7 @@ describe("route path segments", () => {
 
 describe("cycleRoadDirection", () => {
   it("cycles two-way -> N -> E -> S -> W -> two-way on a road tile", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const order = ["north", "east", "south", "west", undefined];
     let next = state;
     for (const expected of order) {
@@ -1712,13 +1737,14 @@ describe("cycleRoadDirection", () => {
 
   it("ignores tiles that are not roads", () => {
     const state = createInitialGameState();
-    // (2,3) is residential.
+    // (2,3) is empty non-road ground.
     const next = cycleRoadDirection(state, { x: 2, y: 3 });
     expect(next).toBe(state);
   });
 
   it("breaks a route's loop when a one-way severs it and restores it when reversed", () => {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -1833,7 +1859,7 @@ describe("recomputeRoutePaths", () => {
   it("marks a metro line broken when track on its path is removed, parks the vehicle, and disembarks passengers", () => {
     // Build a working metro line with continuous track.
     let state = createInitialGameState();
-    state = withTrack(state, trackRow(8, 7, 15));
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -1950,8 +1976,9 @@ describe("laying and removing infrastructure", () => {
 
   it("rejects invalid placements unchanged", () => {
     const state = createInitialGameState();
+    const tracked = withTracks(state, [{ x: 2, y: 3 }]);
     expect(layRoad(state, { x: 7, y: 8 })).toBe(state); // already road
-    expect(layTrack(state, { x: 2, y: 3 })).toBe(state); // residential
+    expect(layTrack(tracked, { x: 2, y: 3 })).toBe(tracked); // already tracked
   });
 
   it("rejects laying when the budget cannot cover the cost", () => {
@@ -2053,9 +2080,10 @@ describe("no-recompute placement helpers", () => {
 
   it("no-recompute helpers return the same reference for no-op placements", () => {
     const state = createInitialGameState();
-    // (7,8) is already a road; (2,3) is residential — both invalid.
+    const tracked = withTracks(state, [{ x: 2, y: 3 }]);
+    // (7,8) is already a road; (2,3) is already tracked — both invalid.
     expect(layRoadNoRecompute(state, { x: 7, y: 8 })).toBe(state);
-    expect(layTrackNoRecompute(state, { x: 2, y: 3 })).toBe(state);
+    expect(layTrackNoRecompute(tracked, { x: 2, y: 3 })).toBe(tracked);
     // Unaffordable.
     const broke = { ...createInitialGameState(), budget: 50 };
     expect(layRoadNoRecompute(broke, { x: 8, y: 2 })).toBe(broke);

@@ -1,65 +1,21 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, Point, RoadDirection } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import {
   computeRouteSegments,
   findTilePath,
   hasBrokenSegment,
 } from "../../src/simulation/network";
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
-
-function trackRow(y: number, fromX: number, toX: number): Point[] {
-  return Array.from({ length: toX - fromX + 1 }, (_, i) => ({
-    x: fromX + i,
-    y,
-  }));
-}
-
-function withRoad(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, kind: "road" } : tile,
-      ),
-    },
-  };
-}
-
-function withOneWay(
-  state: GameState,
-  entries: Array<{ x: number; y: number; oneWay: RoadDirection }>,
-): GameState {
-  const byKey = new Map(entries.map((e) => [`${e.x},${e.y}`, e.oneWay]));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) => {
-        const oneWay = byKey.get(`${tile.x},${tile.y}`);
-        return oneWay === undefined ? tile : { ...tile, oneWay };
-      }),
-    },
-  };
-}
+import {
+  pointsOnColumn,
+  pointsOnRow,
+  withOneWayRoads,
+  withRoads,
+  withTracks,
+} from "../helpers/mapFixtures";
 
 describe("findTilePath", () => {
   it("finds the straight shortest bus path along the y=8 road row", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), pointsOnRow(8, 7, 11));
 
     const path = findTilePath(
       state.map,
@@ -83,12 +39,12 @@ describe("findTilePath", () => {
     // down vs down-then-across). BFS discovery order must always pick the
     // across-then-down one.
     const ring = [
-      ...trackRow(2, 5, 7),
-      ...trackRow(4, 5, 7),
+      ...pointsOnRow(2, 5, 7),
+      ...pointsOnRow(4, 5, 7),
       { x: 5, y: 3 },
       { x: 7, y: 3 },
     ];
-    const state = withTrack(createInitialGameState(), ring);
+    const state = withTracks(createInitialGameState(), ring);
 
     const path = findTilePath(
       state.map,
@@ -117,7 +73,7 @@ describe("findTilePath", () => {
   });
 
   it("treats endpoints as traversable so off-road stops connect via an adjacent road", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), pointsOnRow(8, 8, 16));
 
     // (8,7) and (16,7) are empty tiles directly above the y=8 road (the e2e
     // flow places Bus Stop buildings there).
@@ -140,7 +96,7 @@ describe("findTilePath", () => {
 
   it("routes metro along track tiles only, including crossings over roads", () => {
     // Track row y=2 from x=5 to x=9 crosses the x=7 road column at (7,2).
-    const state = withTrack(createInitialGameState(), trackRow(2, 5, 9));
+    const state = withTracks(createInitialGameState(), pointsOnRow(2, 5, 9));
 
     const metro = findTilePath(
       state.map,
@@ -187,7 +143,7 @@ describe("findTilePath", () => {
   });
 
   it("rejects the degenerate adjacent-empty path and finds the valid road-connected alternative", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), pointsOnRow(8, 8, 9));
     // (8,7) and (9,7) are both empty and adjacent above the y=8 road row.
     // The degenerate 2-tile path is rejected; BFS finds the road path:
     // (8,7)→(8,8)→(9,8)→(9,7).
@@ -203,9 +159,10 @@ describe("findTilePath", () => {
 
 describe("findTilePath one-way roads", () => {
   it("permits forward traversal of a one-way road and blocks the reverse", () => {
-    const state = withOneWay(createInitialGameState(), [
-      { x: 8, y: 8, oneWay: "east" },
-    ]);
+    const state = withOneWayRoads(
+      withRoads(createInitialGameState(), pointsOnRow(8, 7, 9)),
+      [{ x: 8, y: 8, oneWay: "east" }],
+    );
     // Forward: (7,8) -> (9,8) crosses (8,8) heading east.
     expect(
       findTilePath(state.map, { x: 7, y: 8 }, { x: 9, y: 8 }, "bus"),
@@ -224,9 +181,10 @@ describe("findTilePath one-way roads", () => {
   it("permits forward traversal of a north one-way road and blocks the reverse", () => {
     // The x=7 column is a road. Make (7,9) one-way north so the forward
     // trip (7,10)->(7,8) crosses it heading north, but the reverse is blocked.
-    const state = withOneWay(createInitialGameState(), [
-      { x: 7, y: 9, oneWay: "north" },
-    ]);
+    const state = withOneWayRoads(
+      withRoads(createInitialGameState(), pointsOnColumn(7, 8, 10)),
+      [{ x: 7, y: 9, oneWay: "north" }],
+    );
     // Forward: (7,10) -> (7,8) crosses (7,9) heading north.
     expect(
       findTilePath(state.map, { x: 7, y: 10 }, { x: 7, y: 8 }, "bus"),
@@ -245,9 +203,10 @@ describe("findTilePath one-way roads", () => {
   it("permits forward traversal of a south one-way road and blocks the reverse", () => {
     // The x=7 column is a road. Make (7,9) one-way south so the forward
     // trip (7,8)->(7,10) crosses it heading south, but the reverse is blocked.
-    const state = withOneWay(createInitialGameState(), [
-      { x: 7, y: 9, oneWay: "south" },
-    ]);
+    const state = withOneWayRoads(
+      withRoads(createInitialGameState(), pointsOnColumn(7, 8, 10)),
+      [{ x: 7, y: 9, oneWay: "south" }],
+    );
     // Forward: (7,8) -> (7,10) crosses (7,9) heading south.
     expect(
       findTilePath(state.map, { x: 7, y: 8 }, { x: 7, y: 10 }, "bus"),
@@ -264,7 +223,7 @@ describe("findTilePath one-way roads", () => {
   });
 
   it("leaves two-way roads traversable in both directions", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), pointsOnRow(8, 7, 9));
     expect(
       findTilePath(state.map, { x: 9, y: 8 }, { x: 7, y: 8 }, "bus"),
     ).toEqual([
@@ -275,8 +234,11 @@ describe("findTilePath one-way roads", () => {
   });
 
   it("ignores one-way direction for metro/track pathing", () => {
-    let state = withTrack(createInitialGameState(), trackRow(8, 7, 9));
-    state = withOneWay(state, [{ x: 8, y: 8, oneWay: "east" }]);
+    let state = withTracks(
+      withRoads(createInitialGameState(), pointsOnRow(8, 7, 9)),
+      pointsOnRow(8, 7, 9),
+    );
+    state = withOneWayRoads(state, [{ x: 8, y: 8, oneWay: "east" }]);
     // (8,8) is a road+track crossing; oneWay constrains buses only, so metro
     // still traverses it in reverse.
     expect(
@@ -290,11 +252,11 @@ describe("findTilePath one-way roads", () => {
     // already road from the columns). Top interior = one-way east, bottom
     // interior = one-way west; the x=7/x=15 corners stay two-way.
     const interiorXs = [8, 9, 10, 11, 12, 13, 14];
-    let state = withRoad(
-      createInitialGameState(),
-      interiorXs.map((x) => ({ x, y: 9 })),
-    );
-    state = withOneWay(state, [
+    let state = withRoads(createInitialGameState(), [
+      ...pointsOnRow(8, 7, 15),
+      ...pointsOnRow(9, 7, 15),
+    ]);
+    state = withOneWayRoads(state, [
       ...interiorXs.map((x) => ({ x, y: 8, oneWay: "east" as const })),
       ...interiorXs.map((x) => ({ x, y: 9, oneWay: "west" as const })),
     ]);
@@ -326,11 +288,11 @@ describe("findTilePath one-way roads", () => {
     // directly north of the one-way road at (1,1). The one-way exit check
     // must exempt the final hop from (1,1) north to (1,0) because (1,0) is
     // a non-traversable destination — the connector hop is the only way in.
-    let state = withRoad(createInitialGameState(), [
+    let state = withRoads(createInitialGameState(), [
       { x: 0, y: 1 },
       { x: 1, y: 1 },
     ]);
-    state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
+    state = withOneWayRoads(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
 
     const path = findTilePath(state.map, { x: 0, y: 1 }, { x: 1, y: 0 }, "bus");
 
@@ -349,12 +311,12 @@ describe("findTilePath one-way roads", () => {
     // Destination: (1,2) — but here we make (1,2) a road tile (traversable).
     // The one-way exit check must still apply to a traversable destination:
     // the off-network exemption covers only non-traversable stop tiles.
-    let state = withRoad(createInitialGameState(), [
+    let state = withRoads(createInitialGameState(), [
       { x: 0, y: 1 },
       { x: 1, y: 1 },
       { x: 1, y: 2 },
     ]);
-    state = withOneWay(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
+    state = withOneWayRoads(state, [{ x: 1, y: 1, oneWay: "east" as const }]);
 
     const path = findTilePath(state.map, { x: 0, y: 1 }, { x: 1, y: 2 }, "bus");
 
@@ -366,7 +328,7 @@ describe("findTilePath one-way roads", () => {
 
 describe("computeRouteSegments", () => {
   it("returns one segment per consecutive pair plus the closing loop segment", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), pointsOnRow(8, 7, 22));
     const positions = [
       { x: 7, y: 8 },
       { x: 15, y: 8 },

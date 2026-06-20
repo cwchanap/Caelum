@@ -10,6 +10,7 @@ import {
   assignVehicle,
   removeInfrastructureAtTile,
 } from "../../src/simulation/transit";
+import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 
 // jsdom does not implement HTMLCanvasElement.getContext without the optional
 // `canvas` package, so the render tests use a method stub. The tests only
@@ -38,6 +39,7 @@ function ctx(): CanvasRenderingContext2D {
 describe("renderTransit highlight", () => {
   function busState() {
     let state = createInitialGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 8 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -79,6 +81,13 @@ describe("renderTransit highlight", () => {
     // Stops at (7,8) and (15,4): the path runs along y=8 then up x=15, so the
     // polyline must include the corner tile (15,8) — a straight line would not.
     let state = createInitialGameState();
+    state = withRoads(state, [
+      ...pointsOnRow(8, 7, 15),
+      { x: 15, y: 4 },
+      { x: 15, y: 5 },
+      { x: 15, y: 6 },
+      { x: 15, y: 7 },
+    ]);
     state = addBusStop(state, { x: 7, y: 8 });
     state = addBusStop(state, { x: 15, y: 4 });
     state = addBusRoute(state, ["stop-001", "stop-002"]);
@@ -133,17 +142,7 @@ describe("renderTransit highlight", () => {
   it("parks a metro vehicle at the segment-start station when its line is broken", () => {
     let state = createInitialGameState();
     // Track under stations (7,8) and (15,8) with a connecting track run.
-    state = withTrack(state, [
-      { x: 7, y: 8 },
-      { x: 8, y: 8 },
-      { x: 9, y: 8 },
-      { x: 10, y: 8 },
-      { x: 11, y: 8 },
-      { x: 12, y: 8 },
-      { x: 13, y: 8 },
-      { x: 14, y: 8 },
-      { x: 15, y: 8 },
-    ]);
+    state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addMetroStation(state, { x: 7, y: 8 });
     state = addMetroStation(state, { x: 15, y: 8 });
     state = addMetroLine(state, ["station-001", "station-002"]);
@@ -160,19 +159,3 @@ describe("renderTransit highlight", () => {
     expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
   });
 });
-
-function withTrack(
-  state: ReturnType<typeof createInitialGameState>,
-  points: Array<{ x: number; y: number }>,
-): ReturnType<typeof createInitialGameState> {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
-}
