@@ -89,6 +89,19 @@ function withOneWay(
   };
 }
 
+function withTwoWayRoads(state: GameState): GameState {
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) => {
+        const { oneWay: _oneWay, ...rest } = tile;
+        return tile.kind === "road" ? rest : tile;
+      }),
+    },
+  };
+}
+
 describe("renderMap area layer", () => {
   it("fills empty area tiles with area colors while preserving road tiles", () => {
     const initialState = createInitialGameState();
@@ -193,10 +206,7 @@ describe("renderMap one-way arrows", () => {
   });
 
   it("draws no arrow for two-way road tiles", () => {
-    // The initial map has roads (y=8, x=7/15/22) but they are all two-way
-    // (oneWay undefined) with no track. Neither the track-spoke layer nor
-    // the one-way arrow layer should issue any path commands.
-    const state = createInitialGameState();
+    const state = withTwoWayRoads(createInitialGameState());
 
     const context = ctx();
     renderMap(context, state);

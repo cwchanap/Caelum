@@ -96,7 +96,7 @@ function loopSegments(y: number, fromX: number, toX: number): Point[][] {
 
 describe("transit network actions", () => {
   it("adds a bus stop on a valid road tile and charges the budget", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
 
     const nextState = addBusStop(state, { x: 7, y: 8 });
 
