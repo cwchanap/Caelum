@@ -83,7 +83,9 @@ function withOneWay(
     map: {
       ...state.map,
       tiles: state.map.tiles.map((tile) =>
-        tile.x === point.x && tile.y === point.y ? { ...tile, oneWay } : tile,
+        tile.x === point.x && tile.y === point.y
+          ? { ...tile, kind: "road", oneWay }
+          : tile,
       ),
     },
   };
@@ -121,7 +123,8 @@ describe("renderMap area layer", () => {
             return { ...tile, area: "office" };
           }
           if (tile.x === 7 && tile.y === 8) {
-            return { ...tile, area: "office" };
+            const { oneWay: _oneWay, ...rest } = tile;
+            return { ...rest, kind: "road" as const, area: "office" };
           }
           return tile;
         }),
@@ -175,7 +178,6 @@ describe("renderMap track layer", () => {
 
 describe("renderMap one-way arrows", () => {
   it("draws a direction arrow shaft for a one-way road tile", () => {
-    // (8,8) is a road tile; make it one-way east.
     const state = withOneWay(createInitialGameState(), { x: 8, y: 8 }, "east");
 
     const context = ctx();

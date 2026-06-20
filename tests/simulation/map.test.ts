@@ -299,13 +299,13 @@ describe("growth waves skip player infrastructure", () => {
 
 describe("road direction helpers", () => {
   it("sets a one-way direction on a tile", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const map = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
     expect(getTile(map, { x: 8, y: 8 })?.oneWay).toBe("east");
   });
 
   it("clears the one-way direction when set to undefined", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
     const cleared = setTileOneWay(withDir, { x: 8, y: 8 }, undefined);
     const tile = getTile(cleared, { x: 8, y: 8 });
@@ -314,7 +314,7 @@ describe("road direction helpers", () => {
   });
 
   it("drops one-way when a road tile stops being a road", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
     const emptied = setTileKind(withDir, { x: 8, y: 8 }, "empty");
     const tile = getTile(emptied, { x: 8, y: 8 });
@@ -323,7 +323,7 @@ describe("road direction helpers", () => {
   });
 
   it("keeps one-way when the tile stays a road", () => {
-    const state = createInitialGameState();
+    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
     const withDir = setTileOneWay(state.map, { x: 8, y: 8 }, "east");
     const stillRoad = setTileKind(withDir, { x: 8, y: 8 }, "road");
     expect(getTile(stillRoad, { x: 8, y: 8 })?.oneWay).toBe("east");
