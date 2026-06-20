@@ -5,6 +5,7 @@ import { createUiState } from "../../src/ui/uiState";
 import type { Citizen, Stop } from "../../src/domain/types";
 import { axisLockedLine } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
+import { tileSize } from "../../src/render/canvas";
 
 function fakeCtx() {
   return {
@@ -223,6 +224,11 @@ describe("renderOverlays drag preview", () => {
     start: { x: number; y: number },
     current: { x: number; y: number },
   ) => ({ tool, start, current });
+  const areaDrag = (
+    area: "residential" | "commercial",
+    start: { x: number; y: number },
+    current: { x: number; y: number },
+  ) => ({ tool: "area" as const, area, start, current });
 
   it("fills each tile of a road drag line with the build (green) tint", () => {
     const ctx = dragCtx();
@@ -252,6 +258,60 @@ describe("renderOverlays drag preview", () => {
     };
     renderOverlays(ctx, state, ui);
     expect(ctx.fillStyle).toBe(colors.previewInvalid);
+  });
+
+  it("previews an area drag as a full rectangle", () => {
+    const ctx = dragCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: "residential" as const,
+      drag: areaDrag("residential", { x: 1, y: 1 }, { x: 2, y: 2 }),
+    };
+
+    renderOverlays(ctx, state, ui);
+
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      1 * tileSize,
+      1 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      2 * tileSize,
+      1 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      1 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      2 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("tints area preview tiles by paintability", () => {
+    const { ctx, fillStyles } = recordingFillCtx();
+    const state = createInitialGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "area" as const,
+      selectedArea: "commercial" as const,
+      drag: areaDrag("commercial", { x: 13, y: 7 }, { x: 14, y: 8 }),
+    };
+
+    renderOverlays(ctx, state, ui);
+
+    expect(fillStyles).toContain(colors.previewValid);
+    expect(fillStyles).toContain(colors.previewInvalid);
   });
 
   it("previews both lanes for the dual-bidirectional preset", () => {

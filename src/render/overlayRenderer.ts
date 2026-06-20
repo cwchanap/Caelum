@@ -1,4 +1,5 @@
 import type { GameState, Point } from "../domain/types";
+import { planAreaPaintPreview } from "../simulation/areas";
 import {
   BUILDING_CATALOG,
   canPlaceBuilding,
@@ -102,8 +103,26 @@ function renderDragPreview(
   if (gesture === null) {
     return;
   }
-  const isDelete = gesture.tool === "remove";
   ctx.lineWidth = 2;
+
+  if (gesture.tool === "area") {
+    for (const { point, paintable } of planAreaPaintPreview(
+      state,
+      gesture.area,
+      gesture.start,
+      gesture.current,
+    )) {
+      ctx.fillStyle = paintable ? colors.previewValid : colors.previewInvalid;
+      ctx.strokeStyle = paintable
+        ? colors.previewValidStroke
+        : colors.previewInvalidStroke;
+      fillTile(ctx, point);
+      strokeTile(ctx, point);
+    }
+    return;
+  }
+
+  const isDelete = gesture.tool === "remove";
   const line = axisLockedLine(gesture.start, gesture.current);
 
   // Per-tile validity mirrors the commit path: a tile tints green only where a
