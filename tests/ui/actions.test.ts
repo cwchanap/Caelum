@@ -828,24 +828,25 @@ describe("draft route helpers", () => {
   });
 
   it("removeDraftNode rejects an interior merge when the outer stops are not connected", () => {
-    // Three stops on the y=8 road: (7,8), (15,8), (22,8). Pre-assemble a
+    // Three stops on the y=4 row: (1,4), (7,4), (13,4). Pre-assemble a
     // draft with computed paths between consecutive pairs, then sever the road
-    // between stop 1 and stop 3 so the merge path is null.
+    // between stop 1 and stop 3 so the merge path is null. Uses y=4 (a
+    // non-starter row) so severing truly blocks the only path.
     let state = createInitialGameState();
-    state = withRoads(state, pointsOnRow(8, 7, 22));
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
-    state = addBusStop(state, { x: 22, y: 8 });
-    // Sever the road between (7,8) and (22,8) — removes the tile at (11,8).
-    const severed = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    state = withRoads(state, pointsOnRow(4, 1, 13));
+    state = addBusStop(state, { x: 1, y: 4 });
+    state = addBusStop(state, { x: 7, y: 4 });
+    state = addBusStop(state, { x: 13, y: 4 });
+    // Sever the road between (1,4) and (13,4) — removes the tile at (4,4).
+    const severed = removeInfrastructureAtTile(state, { x: 4, y: 4 });
 
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
       draftStopIds: ["stop-001", "stop-002", "stop-003"],
       draftStopPaths: [
-        Array.from({ length: 9 }, (_, i) => ({ x: 7 + i, y: 8 })),
-        Array.from({ length: 8 }, (_, i) => ({ x: 15 + i, y: 8 })),
+        Array.from({ length: 7 }, (_, i) => ({ x: 1 + i, y: 4 })),
+        Array.from({ length: 7 }, (_, i) => ({ x: 7 + i, y: 4 })),
       ],
     };
     const next = removeDraftNode(severed, ui, 1);
@@ -946,16 +947,17 @@ describe("draft route path validation", () => {
 
   it("rejects adding a stop with no road path from the previous stop", () => {
     let state = createInitialGameState();
-    state = withRoads(state, pointsOnRow(8, 7, 15));
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
-    // Sever the only row between them; columns can't bridge (no other rows).
-    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    state = withRoads(state, pointsOnRow(4, 1, 9));
+    state = addBusStop(state, { x: 1, y: 4 });
+    state = addBusStop(state, { x: 9, y: 4 });
+    // Sever the only row between them; no other rows or columns can bridge
+    // (y=4 is a non-starter row, x=1-9 avoids starter columns x=14/x=15).
+    state = removeInfrastructureAtTile(state, { x: 5, y: 4 });
     const ui = { ...createUiState(), activeTool: "busRoute" as const };
 
-    let result = handleTileClick(state, ui, { x: 7, y: 8 });
+    let result = handleTileClick(state, ui, { x: 1, y: 4 });
     const before = result.ui;
-    result = handleTileClick(state, before, { x: 15, y: 8 });
+    result = handleTileClick(state, before, { x: 9, y: 4 });
 
     expect(result.ui).toBe(before); // silent no-op
   });

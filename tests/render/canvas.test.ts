@@ -9,6 +9,7 @@ import {
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { stopCoverageRadius } from "../../src/simulation/transit";
 import { createUiState } from "../../src/ui/uiState";
+import { withAreas } from "../helpers/mapFixtures";
 
 const tileSize = 32;
 
@@ -315,7 +316,10 @@ describe("canvas helpers", () => {
   it("renders invalid selected building preview colors when placement overlaps", () => {
     const { ctx, calls } = createContextRecorder();
     const state = placeBuilding(
-      createInitialGameState(),
+      withAreas(createInitialGameState(), "residential", [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+      ]),
       "smallHouse",
       { x: 0, y: 0 },
       0,
