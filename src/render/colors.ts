@@ -1,3 +1,5 @@
+import type { AreaKind } from "../domain/types";
+
 export const colors = {
   empty: "#d7e2df",
   road: "#5f6d75",
@@ -48,4 +50,4 @@ export const areaColors = {
   office: colors.areaOffice,
   civic: colors.areaCivic,
   park: colors.areaPark,
-} as const;
+} as const satisfies Record<AreaKind, string>;
