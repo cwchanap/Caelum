@@ -8,7 +8,11 @@ import type {
   Point,
 } from "../domain/types";
 import { BUILDING_CATALOG } from "./buildingCatalog";
-import { destinationPoints } from "./buildingSelectors";
+import {
+  destinationPoints,
+  isHomeFallbackCitizen,
+  retargetCitizens,
+} from "./buildingSelectors";
 import { getTile } from "./map";
 import { busPlatforms, metroPlatforms } from "./platforms";
 
@@ -22,6 +26,8 @@ export {
   type BuildingDefinition,
   type BuildingEffect,
 } from "./buildingCatalog";
+export { retargetCitizens } from "./buildingSelectors";
+export { destinationIsOnTile } from "./buildingSelectors";
 
 export function getRotatedFootprintSize(
   type: BuildingType,
@@ -222,11 +228,32 @@ export function placeBuilding(
     ...(transitNodeId === undefined ? {} : { transitNodeId }),
   };
 
+  const buildings = [...state.buildings, building];
+
+  // Sandbox flow: housing placed before any destination building leaves its
+  // citizens with home-as-destination (a phantom zero-length trip). When a
+  // destination building is later placed, retarget those home-fallback
+  // citizens to a real destination and queue them for replanning. Citizens
+  // already targeting a real destination are left alone (no load balancing).
+  let citizensAfter = citizens;
+  let transitAfter = transit;
+  if (definition.effect === "destination") {
+    const retargeted = retargetCitizens(
+      { ...state, buildings, transit },
+      isHomeFallbackCitizen,
+    );
+    citizensAfter = retargeted.citizens;
+    transitAfter =
+      retargeted.vehicles === state.transit.vehicles
+        ? transit
+        : { ...transit, vehicles: retargeted.vehicles };
+  }
+
   return {
     ...state,
     budget: state.budget - definition.cost,
-    buildings: [...state.buildings, building],
-    transit,
-    citizens,
+    buildings,
+    transit: transitAfter,
+    citizens: citizensAfter,
   };
 }

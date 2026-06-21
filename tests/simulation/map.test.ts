@@ -221,14 +221,13 @@ describe("map helpers", () => {
     expect(grownState.citizens).toHaveLength(12);
   });
 
-  it("does not retarget fallback citizens when destinations later appear", () => {
+  it("retargets fallback citizens when a destination building is later placed", () => {
     // With no destination buildings on the map, applyDueGrowthWaves falls
-    // back to `destination = home` for every spawned citizen. This test
-    // documents the non-retargeting contract: placing a destination building
-    // after the wave fires must not rewrite the existing citizens'
-    // destinations. Citizens are immutable post-creation, so the contract
-    // holds by construction — but a regression here would silently turn
-    // fallback citizens into phantom-trip scorers.
+    // back to `destination = home` for every spawned citizen. In the sandbox
+    // this leaves them scoring phantom zero-length trips forever. Placing a
+    // destination building after the wave fires must retarget those
+    // home-fallback citizens to a real destination and queue them for
+    // replanning (routePlan cleared, status idle).
     const state = withGrowthWaves(withTime(createInitialGameState(), 250), [
       testGrowthWave(),
     ]);
@@ -260,13 +259,19 @@ describe("map helpers", () => {
     );
     expect(destinationPoints(withDestination)).not.toHaveLength(0);
 
-    // The pre-existing fallback citizens keep `destination === home`.
+    // Every previously home-fallback citizen now targets a supermarket tile
+    // and has its route plan cleared so the router replans next tick.
     const stillFallback = withDestination.citizens.filter(
       (citizen) =>
         citizen.home.x === citizen.destination.x &&
         citizen.home.y === citizen.destination.y,
     );
-    expect(stillFallback).toHaveLength(24);
+    expect(stillFallback).toHaveLength(0);
+    for (const citizen of withDestination.citizens) {
+      expect(citizen.routePlan).toBeNull();
+      expect(citizen.status).toBe("idle");
+      expect(citizen.currentLegIndex).toBe(0);
+    }
   });
 });
 

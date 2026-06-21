@@ -327,6 +327,121 @@ describe("UI tile actions", () => {
     ).toBe("residential");
   });
 
+  it("retargets citizens when their destination building is bulldozed", () => {
+    // Sandbox flow: a supermarket is bulldozed after housing citizens were
+    // assigned to it. Those citizens must be re-resolved to a remaining
+    // destination (or back to home if none remain) and queued for replanning,
+    // instead of walking to the now-empty tiles forever.
+    let state = withAreas(createInitialGameState(), "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    state = withAreas(state, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+    const supermarketTile = { x: 5, y: 1 };
+    const targetedBefore = state.citizens.filter(
+      (citizen) =>
+        citizen.destination.x === supermarketTile.x &&
+        citizen.destination.y === supermarketTile.y,
+    ).length;
+    expect(targetedBefore).toBeGreaterThan(0);
+
+    const removed = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "remove" as const },
+      supermarketTile,
+    );
+
+    expect(
+      removed.state.buildings.some(
+        (building) => building.type === "supermarket",
+      ),
+    ).toBe(false);
+    // No citizen still targets the bulldozed supermarket's tiles.
+    for (const citizen of removed.state.citizens) {
+      const stillTargetsSupermarket = [
+        supermarketTile,
+        { x: 6, y: 1 },
+        { x: 5, y: 2 },
+        { x: 6, y: 2 },
+      ].some(
+        (tile) =>
+          tile.x === citizen.destination.x && tile.y === citizen.destination.y,
+      );
+      expect(stillTargetsSupermarket).toBe(false);
+      expect(citizen.routePlan).toBeNull();
+      expect(citizen.status).toBe("idle");
+      expect(citizen.currentLegIndex).toBe(0);
+    }
+  });
+
+  it("falls citizens back to home when the last destination building is bulldozed", () => {
+    let state = withAreas(createInitialGameState(), "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    state = withAreas(state, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+
+    const removed = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "remove" as const },
+      { x: 5, y: 1 },
+    );
+
+    // No destinations remain → citizens fall back to home (the documented
+    // empty-destinations semantics), queued for replan.
+    for (const citizen of removed.state.citizens) {
+      expect(citizen.destination).toEqual(citizen.home);
+      expect(citizen.routePlan).toBeNull();
+      expect(citizen.status).toBe("idle");
+    }
+  });
+
+  it("does not retarget citizens when a housing building is bulldozed", () => {
+    // Bulldozing housing must not touch citizens: existing behavior keeps the
+    // citizens (and their destinations) intact. Retargeting is scoped to
+    // destination-building changes only.
+    let state = withAreas(createInitialGameState(), "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    state = withAreas(state, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+    const destinationsBefore = state.citizens.map((citizen) => ({
+      ...citizen.destination,
+    }));
+
+    const removed = handleTileClick(
+      state,
+      { ...createUiState(), activeTool: "remove" as const },
+      { x: 1, y: 1 },
+    );
+
+    expect(removed.state.buildings).toHaveLength(1);
+    expect(
+      removed.state.citizens.map((citizen) => ({ ...citizen.destination })),
+    ).toEqual(destinationsBefore);
+  });
+
   it("removes a building transit node and dependent routes and vehicles", () => {
     let state = createInitialGameState();
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
