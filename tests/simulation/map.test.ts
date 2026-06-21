@@ -44,21 +44,24 @@ function testGrowthWave(): GrowthWave {
         id: tileId(1, 1),
         x: 1,
         y: 1,
-        kind: "residential",
+        kind: "empty",
+        area: "residential",
         createsCitizens: 8,
       },
       {
         id: tileId(2, 1),
         x: 2,
         y: 1,
-        kind: "residential",
+        kind: "empty",
+        area: "residential",
         createsCitizens: 8,
       },
       {
         id: tileId(3, 1),
         x: 3,
         y: 1,
-        kind: "residential",
+        kind: "empty",
+        area: "residential",
         createsCitizens: 8,
       },
     ],
@@ -184,6 +187,14 @@ describe("map helpers", () => {
     expect(newCitizen?.home).not.toBe(newCitizen?.destination);
     expect(newCitizen?.position).not.toBe(newCitizen?.destination);
     expect(newCitizen?.deadline).toBe(1_150);
+
+    // Growth waves zone the area layer; they must not change the physical
+    // tile kind (empty ground stays empty until the player builds on it).
+    const zonedTile = grownState.map.tiles.find(
+      (tile) => tile.x === 1 && tile.y === 1,
+    );
+    expect(zonedTile?.area).toBe("residential");
+    expect(zonedTile?.kind).toBe("empty");
 
     const reappliedState = applyDueGrowthWaves(withTime(grownState, 300));
     expect(reappliedState.citizens).toHaveLength(24);
