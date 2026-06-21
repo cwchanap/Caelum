@@ -1,10 +1,4 @@
-export type TileKind =
-  | "empty"
-  | "road"
-  | "residential"
-  | "jobs"
-  | "civic"
-  | "park";
+export type TileKind = "empty" | "road";
 export type AreaKind =
   | "residential"
   | "commercial"
@@ -184,7 +178,7 @@ export interface RoutePlan {
 export interface GrowthWave {
   id: string;
   triggerTime: number;
-  tiles: Array<Tile & { createsCitizens: number }>;
+  tiles: Array<Tile & { createsCitizens: number; area: AreaKind }>;
   message: string;
   applied: boolean;
 }

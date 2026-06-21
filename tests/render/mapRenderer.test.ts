@@ -3,6 +3,7 @@ import { renderMap } from "../../src/render/mapRenderer";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import type { GameState, Point } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
+import { withTracks } from "../helpers/mapFixtures";
 
 // jsdom does not implement HTMLCanvasElement.getContext without the optional
 // `canvas` package, so the render tests use a method stub. The tests only
@@ -58,19 +59,6 @@ function recordingFillCtx() {
     lineJoin: "miter",
   } as unknown as CanvasRenderingContext2D;
   return { context, fills };
-}
-
-function withTrack(state: GameState, points: Point[]): GameState {
-  const keys = new Set(points.map((p) => `${p.x},${p.y}`));
-  return {
-    ...state,
-    map: {
-      ...state.map,
-      tiles: state.map.tiles.map((tile) =>
-        keys.has(`${tile.x},${tile.y}`) ? { ...tile, hasTrack: true } : tile,
-      ),
-    },
-  };
 }
 
 function withOneWay(
@@ -153,7 +141,7 @@ describe("renderMap area layer", () => {
 describe("renderMap track layer", () => {
   it("draws spokes between adjacent track tiles and a dot for an isolated tile", () => {
     // (2,2) and (3,2) are adjacent (connected); (10,10) has no track neighbors.
-    const state = withTrack(createInitialGameState(), [
+    const state = withTracks(createInitialGameState(), [
       { x: 2, y: 2 },
       { x: 3, y: 2 },
       { x: 10, y: 10 },

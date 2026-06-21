@@ -181,9 +181,11 @@ export function applyDueGrowthWaves(state: GameState): GameState {
       const waveTile = waveTilesById.get(tile.id);
       // A wave tile only converts while still bare empty ground: tiles the
       // player has already built road/track on stay as the player left them.
+      // Growth waves zone the `area` layer; the physical kind is untouched
+      // (empty ground remains empty until the player builds on it).
       return waveTile === undefined || !isBareGround(tile)
         ? { ...tile }
-        : { ...tile, kind: waveTile.kind, districtId: waveTile.districtId };
+        : { ...tile, area: waveTile.area, districtId: waveTile.districtId };
     }),
   };
   const destinations = destinationPoints(state);

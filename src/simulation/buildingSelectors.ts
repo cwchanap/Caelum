@@ -1,16 +1,5 @@
-import type { BuildingType, GameState, Point } from "../domain/types";
-
-const DESTINATION_BUILDING_TYPES: ReadonlySet<BuildingType> = new Set([
-  "supermarket",
-  "cinema",
-  "factory",
-  "warehouse",
-  "officeTower",
-  "businessPark",
-  "clinic",
-  "school",
-  "parkPlaza",
-]);
+import type { GameState, Point } from "../domain/types";
+import { BUILDING_CATALOG } from "./buildings";
 
 function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
@@ -18,6 +7,6 @@ function clonePoint(point: Point): Point {
 
 export function destinationPoints(state: GameState): Point[] {
   return state.buildings
-    .filter((building) => DESTINATION_BUILDING_TYPES.has(building.type))
+    .filter((building) => BUILDING_CATALOG[building.type].effect === "destination")
     .flatMap((building) => building.occupiedTiles.map(clonePoint));
 }
