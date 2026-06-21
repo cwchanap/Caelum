@@ -67,13 +67,18 @@ export function isAreaPaintable(state: GameState, point: Point): boolean {
   );
 }
 
+/**
+ * Preview which tiles in the rectangle would be paintable. Paintability never
+ * depends on the area kind — `paintAreaRectangle` writes whichever area it is
+ * given to every tile that passes the same `isAreaPaintable` gate — so the
+ * area kind is deliberately absent from this signature. Adding it would risk
+ * desyncing the preview from the commit path.
+ */
 export function planAreaPaintPreview(
   state: GameState,
-  area: AreaKind,
   start: Point,
   end: Point,
 ): AreaPreviewTile[] {
-  void area;
   return rectanglePoints(start, end).map((point) => ({
     point,
     paintable: isAreaPaintable(state, point),

@@ -211,6 +211,29 @@ describe("runtime canvas pointer wiring", () => {
     expect(releaseCapture.mock.calls).toContainEqual([7]);
   });
 
+  it("does not capture the pointer when startDrag is a no-op", () => {
+    // Guards the conditional-capture branch in handlePointerDown: a regression
+    // to unconditional setPointerCapture would capture a pointer with no drag
+    // to commit, leaking capture state across tool switches. The trigger is
+    // `setTool("area")` without `setArea`, which leaves selectedArea null so
+    // startDrag returns the unchanged state (drag stays null).
+    const setCapture = Element.prototype.setPointerCapture as unknown as {
+      mock: { calls: number[][] };
+    };
+    const { runtime, canvas } = mount();
+    runtime.setTool("area");
+
+    expect(runtime.getSnapshot().ui.selectedArea).toBeNull();
+
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 9,
+    });
+
+    expect(setCapture.mock.calls).not.toContainEqual([9]);
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+  });
+
   it("ignores a non-primary (right) button press so no drag starts", () => {
     const { runtime, canvas } = mount();
     runtime.setTool("road");

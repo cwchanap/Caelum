@@ -69,10 +69,15 @@ export interface Tile extends Point {
   id: string;
   kind: TileKind;
   districtId?: string;
+  /** Zoning layer; independent of `kind`. Long-lived across kind transitions
+   *  (setTileKind retains it) and only honored by the renderer on `empty`
+   *  tiles, so an `area` set on a road/building tile is latent state until
+   *  the tile is bulldozed back to empty. */
   area?: AreaKind;
   /** Track is a layer, not a TileKind: a road tile with track is a level crossing. */
   hasTrack?: boolean;
-  /** One-way constraint on a road lane. Undefined = two-way (default). */
+  /** One-way constraint on a road lane. Undefined = two-way (default).
+   *  Only meaningful when `kind === "road"`; stripped on non-road kinds. */
   oneWay?: RoadDirection;
 }
 
@@ -175,10 +180,24 @@ export interface RoutePlan {
   estimatedSeconds: number;
 }
 
+/**
+ * A tile seeded by a growth wave. Purpose-built (rather than intersecting
+ * `Tile`) so authors cannot accidentally supply `kind`/`hasTrack`/`oneWay` —
+ * applyDueGrowthWaves ignores them and zoned `area` only takes effect on
+ * tiles that are still bare empty ground at trigger time.
+ */
+export interface GrowthWaveTile extends Point {
+  id: string;
+  area: AreaKind;
+  districtId?: string;
+  /** Citizens spawned at this tile when the wave fires and the tile is bare. */
+  createsCitizens: number;
+}
+
 export interface GrowthWave {
   id: string;
   triggerTime: number;
-  tiles: Array<Tile & { createsCitizens: number; area: AreaKind }>;
+  tiles: GrowthWaveTile[];
   message: string;
   applied: boolean;
 }

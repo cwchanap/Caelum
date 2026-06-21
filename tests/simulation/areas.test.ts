@@ -155,12 +155,12 @@ describe("area painting", () => {
   it("plans per-tile preview validity for the rectangle", () => {
     const state = withRoads(createInitialGameState(), [{ x: 2, y: 1 }]);
 
-    expect(
-      planAreaPaintPreview(state, "office", { x: 1, y: 1 }, { x: 2, y: 1 }),
-    ).toEqual([
-      { point: { x: 1, y: 1 }, paintable: true },
-      { point: { x: 2, y: 1 }, paintable: false },
-    ]);
+    expect(planAreaPaintPreview(state, { x: 1, y: 1 }, { x: 2, y: 1 })).toEqual(
+      [
+        { point: { x: 1, y: 1 }, paintable: true },
+        { point: { x: 2, y: 1 }, paintable: false },
+      ],
+    );
   });
 
   it("rejects off-map points", () => {

@@ -203,7 +203,15 @@ function createHousingCitizens(
 
   return Array.from({ length: citizenCount }, (_, index) => {
     const home = occupiedTiles[index % occupiedTiles.length] ?? fallbackHome;
-    const destination = destinations[index % destinations.length] ?? home;
+    // Explicit empty-destination check: with no destination buildings yet,
+    // `index % 0` is NaN and the lookup silently falls back to `home`, which
+    // then scores a phantom "arrived" trip (zero-length walk). This keeps the
+    // long-standing home-fallback semantics (see buildings.test.ts) while
+    // making the empty case deliberate rather than an accident of NaN-indexing.
+    const destination =
+      destinations.length === 0
+        ? home
+        : destinations[index % destinations.length];
 
     return {
       id: entityId("citizen", state.citizens.length + index + 1),

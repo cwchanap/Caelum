@@ -44,7 +44,6 @@ function testGrowthWave(): GrowthWave {
         id: tileId(1, 1),
         x: 1,
         y: 1,
-        kind: "empty",
         area: "residential",
         createsCitizens: 8,
       },
@@ -52,7 +51,6 @@ function testGrowthWave(): GrowthWave {
         id: tileId(2, 1),
         x: 2,
         y: 1,
-        kind: "empty",
         area: "residential",
         createsCitizens: 8,
       },
@@ -60,7 +58,6 @@ function testGrowthWave(): GrowthWave {
         id: tileId(3, 1),
         x: 3,
         y: 1,
-        kind: "empty",
         area: "residential",
         createsCitizens: 8,
       },
@@ -302,6 +299,13 @@ describe("growth waves skip player infrastructure", () => {
     const tile = next.map.tiles.find((t) => t.x === 1 && t.y === 1);
     expect(tile?.kind).toBe("road");
     expect(next.citizens.length).toBe(state.citizens.length + 16);
+
+    // No destination buildings exist, so each spawned citizen's destination
+    // falls back to its home. Locks the explicit empty-destination branch in
+    // applyDueGrowthWaves (the prior `?? home` relied on NaN-indexing).
+    for (const citizen of next.citizens) {
+      expect(citizen.destination).toEqual(citizen.home);
+    }
   });
 });
 

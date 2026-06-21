@@ -121,7 +121,11 @@ export function setTileKind(
       if (kind === "road") {
         return { ...tile, kind };
       }
-      // oneWay is only meaningful on roads; area remains a separate layer.
+      // oneWay is only meaningful on roads, so strip it on non-road kinds.
+      // `area` is intentionally retained across kind transitions: it is a
+      // separate zoning layer, not a property of the physical tile kind, and
+      // the renderer only honors it on `kind === "empty"` tiles. See the
+      // Tile type invariant in domain/types.ts.
       const { oneWay: _oneWay, ...rest } = tile;
       return { ...rest, kind };
     }),
@@ -201,8 +205,14 @@ export function applyDueGrowthWaves(state: GameState): GameState {
 
       for (let index = 0; index < tile.createsCitizens; index += 1) {
         const home = { x: tile.x, y: tile.y };
+        // See `createHousingCitizens` in buildings.ts: an empty destinations
+        // array would NaN-index and silently fall back to home, scoring a
+        // phantom trip. Explicit check preserves the fallback semantics
+        // without relying on NaN lookup behavior.
         const destination =
-          destinations[newCitizens.length % destinations.length] ?? home;
+          destinations.length === 0
+            ? home
+            : destinations[newCitizens.length % destinations.length];
 
         newCitizens.push({
           id: entityId(

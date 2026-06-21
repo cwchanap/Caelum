@@ -456,6 +456,23 @@ describe("runtime road drag", () => {
     expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
+  it("startDrag on the area tool without a selected area is a no-op", () => {
+    // setTool("area") (vs setArea) leaves selectedArea null; startDrag must
+    // return the unchanged state so handlePointerDown's conditional capture
+    // also skips. A regression here would either open a drag with an undefined
+    // area kind or assert at render time.
+    const runtime = createGameRuntime();
+    runtime.setTool("area");
+
+    const before = runtime.getSnapshot();
+    const after = runtime.startDrag({ x: 1, y: 1 });
+
+    expect(after.ui.drag).toBeNull();
+    // State and ui references are unchanged (commit short-circuits on no-op).
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+  });
+
   it("setDragCurrent ignores an off-map (null) move so the preview holds", () => {
     const runtime = createGameRuntime();
     runtime.setTool("road");

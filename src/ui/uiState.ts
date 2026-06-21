@@ -23,11 +23,13 @@ export type HudCategory = PrimaryHudCategory | "inspect";
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 export type DragTool = "road" | "track" | "remove" | "area";
 
-/** An in-progress road/track/remove drag. Atomic by construction — `tool`,
- *  `start`, and `current` are always present together, so the illegal states a
- *  three-field model allows (a start with no current tile, or a drag lingering
- *  after switching to a non-drag tool) are unrepresentable. Consumers collapse
- *  to a single `drag === null` check. */
+/** An in-progress road/track/remove/area drag. Atomic by construction —
+ *  `tool`, `start`, and `current` are always present together (and the `area`
+ *  variant additionally carries its `area: AreaKind`), so the illegal states
+ *  a three-field model allows (a start with no current tile, an area drag
+ *  without an area kind, or a drag lingering after switching to a non-drag
+ *  tool) are unrepresentable. Consumers collapse to a single `drag === null`
+ *  check. */
 export type DragGesture =
   | {
       tool: "road" | "track" | "remove";
