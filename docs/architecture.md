@@ -14,6 +14,12 @@ Caelum now runs as a shared browser + Tauri frontend with a Svelte shell around 
 
 The simulation, routing, map growth, transit logic, and objective evaluation remain pure TypeScript and stay independent of Svelte and Tauri.
 
+## Area zoning layer
+
+`Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; `src/simulation/areas.ts` owns the paintability gate and the immutable `paintAreaRectangle` writer. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea` (`src/simulation/buildings.ts` → `canPlaceBuilding`). Growth waves zone the `area` layer rather than overwriting the tile `kind`, so empty ground stays empty until the player builds on it. Shared tile-query helpers (`samePoint`, `isBuildingOccupied`, `isTransitNodeAt`) live in `src/simulation/tileQueries.ts`, and the building catalog (`BUILDING_CATALOG`) lives in `src/simulation/buildingCatalog.ts` to break the `buildings.ts ↔ buildingSelectors.ts ↔ map.ts` import cycle.
+
+The Growing Suburb scenario ships as a sandbox: the map starts empty (no pre-seeded districts, no timed growth waves, no starting citizens), and growth is entirely player-driven through area painting and building placement. The growth-wave mechanism remains in place and tested for future scenarios.
+
 ## UI shell
 
 The shell is fully Svelte-owned:

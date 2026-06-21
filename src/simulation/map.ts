@@ -9,21 +9,10 @@ import type {
   TileKind,
 } from "../domain/types";
 import { destinationPoints } from "./buildingSelectors";
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
+import { isBuildingOccupied, isTransitNodeAt, samePoint } from "./tileQueries";
 
 function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
-}
-
-function isBuildingOccupied(state: GameState, point: Point): boolean {
-  return state.buildings.some((building) =>
-    building.occupiedTiles.some((occupiedTile) =>
-      samePoint(occupiedTile, point),
-    ),
-  );
 }
 
 /** A growth wave only claims tiles that are still bare empty ground. */
@@ -71,13 +60,6 @@ export function isValidMetroStationPlacement(
     (tile?.kind === "road" || tile?.kind === "empty") &&
     tile?.hasTrack === true &&
     !occupied
-  );
-}
-
-function isTransitNodeAt(state: GameState, point: Point): boolean {
-  return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
   );
 }
 
