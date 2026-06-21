@@ -8,7 +8,7 @@ import {
   planAreaPaintPreview,
   rectanglePoints,
 } from "../../src/simulation/areas";
-import { withRoads, withTracks } from "../helpers/mapFixtures";
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function areaAt(state: GameState, x: number, y: number) {
   return state.map.tiles.find((tile) => tile.x === x && tile.y === y)?.area;
@@ -121,6 +121,24 @@ describe("area painting", () => {
     expect(areaAt(next, 1, 1)).toBeUndefined();
     expect(areaAt(next, 2, 1)).toBeUndefined();
     expect(areaAt(next, 3, 1)).toBe("office");
+  });
+
+  it("re-zones empty tiles that already carry a different area", () => {
+    const state = withAreas(createInitialGameState(), "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+
+    const next = paintAreaRectangle(
+      state,
+      "commercial",
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    );
+
+    expect(areaAt(next, 1, 1)).toBe("commercial");
+    expect(areaAt(next, 2, 1)).toBe("commercial");
+    expect(next).not.toBe(state);
   });
 
   it("returns the same state reference when nothing can be painted", () => {
