@@ -1,7 +1,12 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
 import { findTilePath } from "../simulation/network";
 import { getTile } from "../simulation/map";
-import { placeBuilding } from "../simulation/buildings";
+import {
+  BUILDING_CATALOG,
+  destinationIsOnTile,
+  placeBuilding,
+  retargetCitizens,
+} from "../simulation/buildings";
 import {
   addBusRoute,
   addBusStop,
@@ -201,6 +206,31 @@ function removeAtTile(state: GameState, point: Point): GameState {
   }
   for (const lineId of removedMetroLineIds) {
     next = deleteRoute(next, lineId);
+  }
+
+  // Sandbox flow: bulldozing a destination building leaves citizens targeting
+  // its now-empty tiles forever. Retarget any non-terminal citizen whose
+  // destination lies on the removed building's tiles to a remaining
+  // destination (or back to home if none remain) and queue them for replan.
+  // Riding citizens are forcibly disembarked by retargetCitizens. Housing
+  // bulldozes are intentionally excluded: existing behavior keeps those
+  // citizens (and their destinations) intact.
+  if (
+    removedBuilding !== undefined &&
+    BUILDING_CATALOG[removedBuilding.type].effect === "destination"
+  ) {
+    const removedTiles = removedBuilding.occupiedTiles;
+    const retargeted = retargetCitizens(next, (citizen) =>
+      destinationIsOnTile(citizen, removedTiles),
+    );
+    next =
+      retargeted.vehicles === next.transit.vehicles
+        ? { ...next, citizens: retargeted.citizens }
+        : {
+            ...next,
+            citizens: retargeted.citizens,
+            transit: { ...next.transit, vehicles: retargeted.vehicles },
+          };
   }
 
   return next;

@@ -279,6 +279,79 @@ describe("building catalog and footprints", () => {
     expect(state.citizens[3].destination).toEqual({ x: 6, y: 2 });
   });
 
+  it("retargets home-fallback citizens when a destination building is later placed", () => {
+    // Sandbox flow: player places housing before any destination building.
+    // Citizens fall back to home-as-destination (phantom arrived trip). When
+    // a destination building is later placed, those citizens must be
+    // re-resolved to a real destination and queued for replanning.
+    let state = withAreas(createInitialGameState(), "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+    // Sanity: citizens start with home-as-destination fallback.
+    expect(state.citizens[0].destination).toEqual({ x: 1, y: 1 });
+
+    state = withAreas(state, "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+
+    // Every previously home-fallback citizen now targets a supermarket tile
+    // and has its route plan cleared so the router replans next tick.
+    for (const citizen of state.citizens) {
+      expect(citizen.destination).not.toEqual(citizen.home);
+      expect(
+        state.buildings.some((building) =>
+          building.occupiedTiles.some(
+            (tile) =>
+              tile.x === citizen.destination.x &&
+              tile.y === citizen.destination.y,
+          ),
+        ),
+      ).toBe(true);
+      expect(citizen.routePlan).toBeNull();
+      expect(citizen.status).toBe("idle");
+      expect(citizen.currentLegIndex).toBe(0);
+    }
+  });
+
+  it("does not retarget citizens already targeting a real destination when another destination is placed", () => {
+    // Load-balancing is out of scope: placing a second destination must not
+    // disrupt citizens already en route to the first. Only home-fallback
+    // citizens (destination === home) are retargeted.
+    let state = withAreas(createInitialGameState(), "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    state = withAreas(state, "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    state = placeBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+    const destinationsBefore = state.citizens.map((citizen) => ({
+      ...citizen.destination,
+    }));
+
+    state = withAreas(state, "commercial", [
+      { x: 10, y: 1 },
+      { x: 11, y: 1 },
+      { x: 10, y: 2 },
+      { x: 11, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 10, y: 1 }, 0);
+
+    expect(
+      state.citizens.map((citizen) => ({ ...citizen.destination })),
+    ).toEqual(destinationsBefore);
+  });
+
   it("requires track under a metro station building and rejects other buildings on track", () => {
     const bare = createInitialGameState();
     expect(canPlaceBuilding(bare, "metroStation", { x: 8, y: 2 }, 0)).toBe(
