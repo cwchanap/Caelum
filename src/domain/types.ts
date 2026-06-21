@@ -39,7 +39,6 @@ export type Tool =
   | "busRoute"
   | "metroStation"
   | "metroLine"
-  | "civicAnchor"
   | "area"
   | "road"
   | "track"
@@ -68,7 +67,6 @@ export const ROAD_DIRECTION_OFFSET: Record<RoadDirection, Point> = {
 export interface Tile extends Point {
   id: string;
   kind: TileKind;
-  districtId?: string;
   /** Zoning layer; independent of `kind`. Long-lived across kind transitions
    *  (setTileKind retains it) and only honored by the renderer on `empty`
    *  tiles, so an `area` set on a road/building tile is latent state until
@@ -189,7 +187,6 @@ export interface RoutePlan {
 export interface GrowthWaveTile extends Point {
   id: string;
   area: AreaKind;
-  districtId?: string;
   /** Citizens spawned at this tile when the wave fires and the tile is bare. */
   createsCitizens: number;
 }

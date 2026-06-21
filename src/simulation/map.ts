@@ -74,13 +74,6 @@ export function isValidMetroStationPlacement(
   );
 }
 
-export function isValidCivicAnchorPlacement(
-  state: GameState,
-  point: Point,
-): boolean {
-  return getTile(state.map, point)?.kind === "empty";
-}
-
 function isTransitNodeAt(state: GameState, point: Point): boolean {
   return (
     state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
@@ -189,7 +182,7 @@ export function applyDueGrowthWaves(state: GameState): GameState {
       // (empty ground remains empty until the player builds on it).
       return waveTile === undefined || !isBareGround(tile)
         ? { ...tile }
-        : { ...tile, area: waveTile.area, districtId: waveTile.districtId };
+        : { ...tile, area: waveTile.area };
     }),
   };
   const destinations = destinationPoints(state);

@@ -3,11 +3,11 @@ import { tileId } from "../../src/domain/ids";
 import type { GameState, GrowthWave, Point } from "../../src/domain/types";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { placeBuilding } from "../../src/simulation/buildings";
+import { destinationPoints } from "../../src/simulation/buildingSelectors";
 import {
   applyDueGrowthWaves,
   getTile,
   isValidBusStopPlacement,
-  isValidCivicAnchorPlacement,
   isValidMetroStationPlacement,
   isValidRoadPlacement,
   isValidTrackPlacement,
@@ -136,13 +136,6 @@ describe("map helpers", () => {
     ).toBe(false);
   });
 
-  it("allows civic anchors only on empty tiles", () => {
-    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
-
-    expect(isValidCivicAnchorPlacement(state, { x: 0, y: 0 })).toBe(true);
-    expect(isValidCivicAnchorPlacement(state, { x: 7, y: 8 })).toBe(false);
-  });
-
   it("returns the original state when no growth waves are due", () => {
     const state = withTime(createInitialGameState(), 200);
 
@@ -226,6 +219,54 @@ describe("map helpers", () => {
     expect(citizensOnFreeTile).toHaveLength(8);
 
     expect(grownState.citizens).toHaveLength(12);
+  });
+
+  it("does not retarget fallback citizens when destinations later appear", () => {
+    // With no destination buildings on the map, applyDueGrowthWaves falls
+    // back to `destination = home` for every spawned citizen. This test
+    // documents the non-retargeting contract: placing a destination building
+    // after the wave fires must not rewrite the existing citizens'
+    // destinations. Citizens are immutable post-creation, so the contract
+    // holds by construction — but a regression here would silently turn
+    // fallback citizens into phantom-trip scorers.
+    const state = withGrowthWaves(withTime(createInitialGameState(), 250), [
+      testGrowthWave(),
+    ]);
+
+    expect(destinationPoints(state)).toHaveLength(0);
+
+    const grownState = applyDueGrowthWaves(state);
+
+    const fallbackCitizens = grownState.citizens.filter(
+      (citizen) =>
+        citizen.home.x === citizen.destination.x &&
+        citizen.home.y === citizen.destination.y,
+    );
+    // Every spawned citizen took the home fallback.
+    expect(fallbackCitizens).toHaveLength(grownState.citizens.length);
+    expect(grownState.citizens).toHaveLength(24);
+
+    // Place a destination building after the wave fired.
+    const withDestination = placeBuilding(
+      withAreas(grownState, "commercial", [
+        { x: 4, y: 1 },
+        { x: 5, y: 1 },
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+      ]),
+      "supermarket",
+      { x: 4, y: 1 },
+      0,
+    );
+    expect(destinationPoints(withDestination)).not.toHaveLength(0);
+
+    // The pre-existing fallback citizens keep `destination === home`.
+    const stillFallback = withDestination.citizens.filter(
+      (citizen) =>
+        citizen.home.x === citizen.destination.x &&
+        citizen.home.y === citizen.destination.y,
+    );
+    expect(stillFallback).toHaveLength(24);
   });
 });
 
