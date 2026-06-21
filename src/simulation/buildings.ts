@@ -1,6 +1,5 @@
 import { entityId, nextEntityId } from "../domain/ids";
 import type {
-  AreaKind,
   BuildingRotation,
   BuildingType,
   Citizen,
@@ -8,155 +7,21 @@ import type {
   PlacedBuilding,
   Point,
 } from "../domain/types";
+import { BUILDING_CATALOG } from "./buildingCatalog";
 import { destinationPoints } from "./buildingSelectors";
 import { getTile } from "./map";
 import { busPlatforms, metroPlatforms } from "./platforms";
 
-export type BuildingEffect =
-  | "busStop"
-  | "busTerminal"
-  | "metroStation"
-  | "housing"
-  | "destination";
-
-export interface BuildingDefinition {
-  type: BuildingType;
-  label: string;
-  width: number;
-  height: number;
-  cost: number;
-  effect: BuildingEffect;
-  allowedArea?: AreaKind;
-  citizenCount?: number;
-}
-
-export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
-  busStop: {
-    type: "busStop",
-    label: "Bus Stop",
-    width: 1,
-    height: 1,
-    cost: 2_000,
-    effect: "busStop",
-  },
-  busTerminal: {
-    type: "busTerminal",
-    label: "Bus Terminal",
-    width: 3,
-    height: 2,
-    cost: 12_000,
-    effect: "busTerminal",
-  },
-  metroStation: {
-    type: "metroStation",
-    label: "Metro Station",
-    width: 1,
-    height: 1,
-    cost: 25_000,
-    effect: "metroStation",
-  },
-  smallHouse: {
-    type: "smallHouse",
-    label: "Small House",
-    width: 2,
-    height: 1,
-    cost: 4_000,
-    effect: "housing",
-    allowedArea: "residential",
-    citizenCount: 4,
-  },
-  largeHouse: {
-    type: "largeHouse",
-    label: "Large House",
-    width: 3,
-    height: 2,
-    cost: 10_000,
-    effect: "housing",
-    allowedArea: "residential",
-    citizenCount: 10,
-  },
-  supermarket: {
-    type: "supermarket",
-    label: "Supermarket",
-    width: 2,
-    height: 2,
-    cost: 8_000,
-    effect: "destination",
-    allowedArea: "commercial",
-  },
-  cinema: {
-    type: "cinema",
-    label: "Cinema",
-    width: 3,
-    height: 2,
-    cost: 14_000,
-    effect: "destination",
-    allowedArea: "commercial",
-  },
-  factory: {
-    type: "factory",
-    label: "Factory",
-    width: 3,
-    height: 2,
-    cost: 16_000,
-    effect: "destination",
-    allowedArea: "industrial",
-  },
-  warehouse: {
-    type: "warehouse",
-    label: "Warehouse",
-    width: 3,
-    height: 2,
-    cost: 12_000,
-    effect: "destination",
-    allowedArea: "industrial",
-  },
-  officeTower: {
-    type: "officeTower",
-    label: "Office Tower",
-    width: 2,
-    height: 2,
-    cost: 18_000,
-    effect: "destination",
-    allowedArea: "office",
-  },
-  businessPark: {
-    type: "businessPark",
-    label: "Business Park",
-    width: 3,
-    height: 2,
-    cost: 15_000,
-    effect: "destination",
-    allowedArea: "office",
-  },
-  clinic: {
-    type: "clinic",
-    label: "Clinic",
-    width: 2,
-    height: 2,
-    cost: 12_000,
-    effect: "destination",
-    allowedArea: "civic",
-  },
-  school: {
-    type: "school",
-    label: "School",
-    width: 3,
-    height: 2,
-    cost: 18_000,
-    effect: "destination",
-    allowedArea: "civic",
-  },
-  parkPlaza: {
-    type: "parkPlaza",
-    label: "Park Plaza",
-    width: 2,
-    height: 2,
-    cost: 6_000,
-    effect: "destination",
-    allowedArea: "park",
-  },
-};
+// Re-export so existing consumers can keep importing the catalog and its
+// types from buildings.ts. The definitions live in buildingCatalog.ts to
+// break the buildings.ts <-> buildingSelectors.ts <-> map.ts import cycle
+// (buildingSelectors.ts needs BUILDING_CATALOG but buildings.ts needs
+// destinationPoints from buildingSelectors.ts).
+export {
+  BUILDING_CATALOG,
+  type BuildingDefinition,
+  type BuildingEffect,
+} from "./buildingCatalog";
 
 export function getRotatedFootprintSize(
   type: BuildingType,

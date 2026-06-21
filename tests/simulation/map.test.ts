@@ -351,3 +351,37 @@ describe("road direction helpers", () => {
     expect(getTile(attempted, nonRoad)).toEqual(before);
   });
 });
+
+describe("area persistence through setTileKind", () => {
+  // Guards the core "areas are a layer, not a TileKind" invariant: painting
+  // an area, then building a road over it, then bulldozing the road back to
+  // empty ground must leave the original area zoning intact. setTileKind
+  // retains `area` across kind transitions by design (see map.ts).
+  it("keeps the painted area when a road is built and then bulldozed back", () => {
+    const painted = withAreas(createInitialGameState(), "residential", [
+      { x: 6, y: 6 },
+    ]);
+    expect(getTile(painted.map, { x: 6, y: 6 })?.area).toBe("residential");
+
+    const roaded = setTileKind(painted.map, { x: 6, y: 6 }, "road");
+    expect(getTile(roaded, { x: 6, y: 6 })?.kind).toBe("road");
+    expect(getTile(roaded, { x: 6, y: 6 })?.area).toBe("residential");
+
+    const bulldozed = setTileKind(roaded, { x: 6, y: 6 }, "empty");
+    expect(getTile(bulldozed, { x: 6, y: 6 })?.kind).toBe("empty");
+    expect(getTile(bulldozed, { x: 6, y: 6 })?.area).toBe("residential");
+  });
+
+  it("keeps the area when transitioning empty -> road -> empty without painting", () => {
+    // A tile with no area must stay area-undefined through the same cycle,
+    // so setTileKind does not accidentally synthesize an area.
+    const state = createInitialGameState();
+    const point: Point = { x: 7, y: 7 };
+    expect(getTile(state.map, point)?.area).toBeUndefined();
+
+    const roaded = setTileKind(state.map, point, "road");
+    const bulldozed = setTileKind(roaded, point, "empty");
+    expect(getTile(bulldozed, point)?.kind).toBe("empty");
+    expect(getTile(bulldozed, point)?.area).toBeUndefined();
+  });
+});
