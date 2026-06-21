@@ -260,7 +260,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       lossNote: state.metrics.lossReason ?? "Within tolerances. Hold the line.",
       nextGrowth:
         state.scenario.growthWaves.find((wave) => !wave.applied)?.message ??
-        "All growth waves resolved.",
+        "Sandbox: paint areas to grow.",
       selectedId: ui.selectedId ?? "—",
       activeTool: activeToolLabel,
     },

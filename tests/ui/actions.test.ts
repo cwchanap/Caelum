@@ -290,6 +290,43 @@ describe("UI tile actions", () => {
     expect(removed.state.citizens).toHaveLength(10);
   });
 
+  it("preserves the tile area when a building is bulldozed", () => {
+    // Locks the area-as-layer invariant: `area` is a latent zoning layer that
+    // survives building removal so the player can re-build without re-painting.
+    // `removeAtTile` only filters `state.buildings` and never touches
+    // `state.map.tiles`, so the area is retained by construction today. This
+    // test backstops a future refactor that might "reset" tiles on bulldoze
+    // and silently break the paint -> build -> bulldoze -> rebuild loop.
+    const added = placeBuilding(
+      withAreas(createInitialGameState(), "residential", [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+      ]),
+      "smallHouse",
+      { x: 0, y: 0 },
+      0,
+    );
+    const areaBefore = added.map.tiles.find(
+      (tile) => tile.x === 0 && tile.y === 0,
+    )?.area;
+
+    const removed = handleTileClick(
+      added,
+      { ...createUiState(), activeTool: "remove" as const },
+      { x: 0, y: 0 },
+    );
+
+    expect(removed.state.buildings).toEqual([]);
+    expect(
+      removed.state.map.tiles.find((tile) => tile.x === 0 && tile.y === 0)
+        ?.area,
+    ).toBe(areaBefore);
+    expect(
+      removed.state.map.tiles.find((tile) => tile.x === 1 && tile.y === 0)
+        ?.area,
+    ).toBe("residential");
+  });
+
   it("removes a building transit node and dependent routes and vehicles", () => {
     let state = createInitialGameState();
     state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);

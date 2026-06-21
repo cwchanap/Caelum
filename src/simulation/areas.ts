@@ -1,5 +1,6 @@
 import type { AreaKind, GameState, Point } from "../domain/types";
 import { getTile } from "./map";
+import { isBuildingOccupied, isTransitNodeAt } from "./tileQueries";
 
 export const AREA_KINDS = [
   "residential",
@@ -22,23 +23,6 @@ export const AREA_LABELS: Record<AreaKind, string> = {
 export interface AreaPreviewTile {
   point: Point;
   paintable: boolean;
-}
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
-
-function isBuildingOccupied(state: GameState, point: Point): boolean {
-  return state.buildings.some((building) =>
-    building.occupiedTiles.some((tile) => samePoint(tile, point)),
-  );
-}
-
-function isTransitNodeAt(state: GameState, point: Point): boolean {
-  return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
-  );
 }
 
 export function rectanglePoints(start: Point, end: Point): Point[] {
