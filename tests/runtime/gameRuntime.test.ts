@@ -531,7 +531,7 @@ describe("runtime area drag", () => {
 });
 
 describe("build drawer auto-hide", () => {
-  it("closes the drawer when a tool or building is selected, but not on preset change", () => {
+  it("closes the drawer when a tool, building, or area is selected, but not on preset change", () => {
     const runtime = createGameRuntime();
     runtime.setHudCategory("build");
     runtime.setTool("road");
@@ -543,6 +543,10 @@ describe("build drawer auto-hide", () => {
 
     runtime.setHudCategory("build");
     runtime.setBuilding("smallHouse");
+    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+
+    runtime.setHudCategory("build");
+    runtime.setArea("commercial");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
   });
 });
