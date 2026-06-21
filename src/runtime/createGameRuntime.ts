@@ -247,7 +247,7 @@ export function createGameRuntime(): RuntimeController {
       }
 
       if (DRAG_TOOLS.has(ui.activeTool)) {
-        return; // road/track/remove are driven by pointerdown/up below.
+        return; // drag tools are driven by pointerdown/up below.
       }
 
       const point = canvasToTile(

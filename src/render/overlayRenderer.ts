@@ -108,7 +108,6 @@ function renderDragPreview(
   if (gesture.tool === "area") {
     for (const { point, paintable } of planAreaPaintPreview(
       state,
-      gesture.area,
       gesture.start,
       gesture.current,
     )) {

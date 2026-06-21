@@ -65,6 +65,28 @@ describe("building catalog and footprints", () => {
     });
   });
 
+  it("enforces the effect ↔ allowedArea invariant across the catalog", () => {
+    // Locks the convention that housing/destination buildings must declare a
+    // zoned allowedArea (so they are placeable only in their district) and
+    // transit buildings must NOT (so they remain freely placeable on roads).
+    // A catalog edit that violates this would be silently legal at the type
+    // level today; this test is the low-cost backstop until BuildingDefinition
+    // becomes a proper discriminated union.
+    for (const def of Object.values(BUILDING_CATALOG)) {
+      if (def.effect === "housing" || def.effect === "destination") {
+        expect(
+          def.allowedArea,
+          `${def.type} must declare allowedArea`,
+        ).toBeDefined();
+      } else {
+        expect(
+          def.allowedArea,
+          `${def.type} must not declare allowedArea`,
+        ).toBeUndefined();
+      }
+    }
+  });
+
   it.each([
     [0, { width: 3, height: 2 }],
     [90, { width: 2, height: 3 }],
