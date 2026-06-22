@@ -57,7 +57,13 @@ export function evaluateObjectives(state: GameState): GameState {
     return lose(state, "Average wait time is too high");
   }
 
-  if (state.time >= survivalTime) {
+  // Gate the survival win on actual served demand: a scenario with no
+  // completed trips (e.g. an empty sandbox that never spawned/travelled
+  // citizens) must not auto-win merely by reaching `survivalTime`. Requiring
+  // at least one completed trip forces the player to provide destinations and
+  // move citizens before the scenario can be won. Without this, unpausing an
+  // empty map and waiting would mark the scenario won.
+  if (state.time >= survivalTime && state.metrics.completedTrips > 0) {
     return {
       ...state,
       metrics: {

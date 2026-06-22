@@ -137,7 +137,9 @@ describe("map helpers", () => {
   });
 
   it("returns the original state when no growth waves are due", () => {
-    const state = withTime(createInitialGameState(), 200);
+    // The default scenario now seeds a demand wave (triggerTime 0), so strip
+    // it to test the genuine no-op path: no due waves → same reference.
+    const state = withGrowthWaves(withTime(createInitialGameState(), 200), []);
 
     expect(applyDueGrowthWaves(state)).toBe(state);
   });

@@ -33,7 +33,11 @@ describe("Growing Suburb scenario", () => {
     expect(state.map.tiles).toHaveLength(state.map.width * state.map.height);
     expect(state.budget).toBe(120_000);
     expect(state.citizens).toEqual([]);
-    expect(state.scenario.growthWaves).toEqual([]);
+    // A seed growth wave provides minimal demand (see createGrowingSuburbWaves)
+    // so the scenario cannot be auto-won without playing.
+    expect(state.scenario.growthWaves).toHaveLength(1);
+    expect(state.scenario.growthWaves[0]?.id).toBe("wave-seed-residential");
+    expect(state.scenario.growthWaves[0]?.applied).toBe(false);
   });
 
   it("starts mostly empty with only a two-lane arterial cross", () => {
@@ -63,11 +67,20 @@ describe("Growing Suburb scenario", () => {
     expect(tileAt(15, 9)?.oneWay).toBeUndefined();
   });
 
-  it("starts without citizens or growth waves", () => {
+  it("starts without citizens but seeds a demand growth wave", () => {
     const state = createInitialGameState();
 
+    // Citizens are empty at t=0 because the seed wave has not fired yet.
     expect(state.citizens).toEqual([]);
-    expect(state.scenario.growthWaves).toEqual([]);
+    expect(state.scenario.growthWaves).toHaveLength(1);
+    expect(state.scenario.growthWaves[0]?.tiles).toHaveLength(2);
+    // 12 citizens total across the two seed tiles.
+    expect(
+      state.scenario.growthWaves[0]?.tiles.reduce(
+        (sum, tile) => sum + tile.createsCitizens,
+        0,
+      ),
+    ).toBe(12);
   });
 
   it("does not advance while paused", () => {
