@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Citizen, GameState } from "../../src/domain/types";
+import { placeBuilding } from "../../src/simulation/buildings";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { tickCitizens } from "../../src/simulation/citizens";
+import { tickSimulation } from "../../src/simulation/simulation";
 import {
   addBusRoute,
   addBusStop,
@@ -10,7 +12,7 @@ import {
 } from "../../src/simulation/transit";
 import { handleTileClick } from "../../src/ui/actions";
 import { createUiState } from "../../src/ui/uiState";
-import { pointsOnRow, withRoads } from "../helpers/mapFixtures";
+import { pointsOnRow, withAreas, withRoads } from "../helpers/mapFixtures";
 
 function testCitizen(overrides: Partial<Citizen> = {}): Citizen {
   return {
@@ -412,5 +414,85 @@ describe("citizen lifecycle", () => {
     expect(nextState.metrics.totalWaitSeconds).toBe(100);
     expect(nextState.metrics.waitingCitizenCount).toBe(2);
     expect(nextState.metrics.averageWaitSeconds).toBe(7.5);
+  });
+});
+
+describe("home-fallback citizens while no destination exists", () => {
+  // Regression: housing placed while the clock is running and no destination
+  // building exists yet gave every citizen destination = home. The router
+  // planned a zero-length walk, so the next tick immediately flipped them to
+  // terminal `arrived` and recorded phantom completedTrips. Worse, terminal
+  // citizens are skipped by retargetCitizens, so later placing a destination
+  // never revived them — those houses permanently lost demand. The fix holds
+  // home-fallback citizens dormant (non-terminal, no trip scored) until a real
+  // destination is assigned.
+
+  function residentialWithHouse(): GameState {
+    const withArea = withAreas(createInitialGameState(), "residential", [
+      { x: 1, y: 1 },
+      { x: 2, y: 1 },
+    ]);
+    const placed = placeBuilding(withArea, "smallHouse", { x: 1, y: 1 }, 0);
+    // Unpause so tickSimulation actually advances the sim.
+    return {
+      ...placed,
+      paused: false,
+      speed: 1,
+      metrics: { ...placed.metrics, state: "running" },
+    };
+  }
+
+  it("does not score a phantom arrived trip when destination equals home", () => {
+    const state = residentialWithHouse();
+
+    const ticked = tickSimulation(state, 30);
+
+    for (const citizen of ticked.citizens) {
+      // Must stay non-terminal and home-fallback so retarget can still reach them.
+      expect(citizen.status).not.toBe("arrived");
+      expect(citizen.status).not.toBe("late");
+      expect(citizen.status).not.toBe("unserved");
+      expect(citizen.destination).toEqual(citizen.home);
+    }
+    // No phantom completed/late/unserved trips from the zero-length walk.
+    expect(ticked.metrics.completedTrips).toBe(0);
+    expect(ticked.metrics.lateTrips).toBe(0);
+    expect(ticked.metrics.unservedTrips).toBe(0);
+    expect(ticked.metrics.tripOutcomes).toEqual([]);
+  });
+
+  it("stays retargetable after the clock has ticked when a destination is placed later", () => {
+    // This is the core sandbox flow: player drops housing, the sim runs, then
+    // they add a destination. Before the fix, the intermediate tick terminals
+    // the citizens and the later placeBuilding's retarget is a no-op.
+    let state = residentialWithHouse();
+    state = tickSimulation(state, 30);
+
+    state = withAreas(state, "commercial", [
+      { x: 5, y: 1 },
+      { x: 6, y: 1 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    state = placeBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+
+    // Every previously home-fallback citizen must now target a real
+    // supermarket tile, be idle, and have its route plan cleared for replanning.
+    expect(state.citizens.length).toBeGreaterThan(0);
+    for (const citizen of state.citizens) {
+      expect(citizen.destination).not.toEqual(citizen.home);
+      expect(
+        state.buildings.some((building) =>
+          building.occupiedTiles.some(
+            (tile) =>
+              tile.x === citizen.destination.x &&
+              tile.y === citizen.destination.y,
+          ),
+        ),
+      ).toBe(true);
+      expect(citizen.status).toBe("idle");
+      expect(citizen.routePlan).toBeNull();
+      expect(citizen.currentLegIndex).toBe(0);
+    }
   });
 });

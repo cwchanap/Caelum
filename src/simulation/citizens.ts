@@ -133,6 +133,33 @@ function tickCitizen(
     };
   }
 
+  // Home-fallback citizens (destination === home, created when no destination
+  // building exists yet — see createHousingCitizens / isHomeFallbackCitizen)
+  // have no real trip to make. Planning route home→home would score a phantom
+  // zero-length "arrived" trip on the very next tick, flipping them terminal
+  // and so making them unretargetable when a destination is later placed
+  // (retargetCitizens skips terminal statuses). Hold them dormant instead:
+  // unchanged, non-terminal, zero metrics, so they remain eligible for
+  // retargeting. The same path covers bulldozing the last destination, which
+  // retargets citizens back to home.
+  if (samePoint(citizen.destination, citizen.home)) {
+    return {
+      citizen: {
+        ...citizen,
+        home: clonePoint(citizen.home),
+        destination: clonePoint(citizen.destination),
+        position: clonePoint(citizen.position),
+        routePlan:
+          citizen.routePlan === null ? null : cloneRoutePlan(citizen.routePlan),
+      },
+      completedTrips: 0,
+      lateTrips: 0,
+      unservedTrips: 0,
+      waitSeconds: 0,
+      outcomes: [],
+    };
+  }
+
   const isOnVehicle = state.transit.vehicles.some((vehicle) =>
     vehicle.passengerIds.includes(citizen.id),
   );
