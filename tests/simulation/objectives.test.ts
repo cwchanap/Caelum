@@ -17,10 +17,22 @@ function withMetrics(
 }
 
 describe("objectives", () => {
-  it("wins after survival time when thresholds are healthy", () => {
-    const state = { ...createInitialGameState(), time: 1_201 };
+  it("wins after survival time when thresholds are healthy and demand was served", () => {
+    const state = withMetrics(
+      { ...createInitialGameState(), time: 1_201 },
+      { completedTrips: 1 },
+    );
 
     expect(evaluateObjectives(state).metrics.state).toBe("won");
+  });
+
+  it("does not auto-win at survival time when no trips were ever completed", () => {
+    // Guards against the empty-sandbox auto-win: with zero completed trips the
+    // survival win must not fire, even past survivalTime, so the player cannot
+    // complete the scenario without actually serving demand.
+    const state = { ...createInitialGameState(), time: 1_201 };
+
+    expect(evaluateObjectives(state).metrics.state).toBe("running");
   });
 
   it("loses when unserved ratio is too high", () => {

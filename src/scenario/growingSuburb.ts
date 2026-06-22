@@ -59,8 +59,42 @@ export function createStartingCitizens(): Citizen[] {
   return [];
 }
 
+// A minimal seed demand source so the scenario cannot be completed without
+// playing. The wave fires on the first tick after unpause, zoning a small
+// residential cluster and spawning citizens. With no destination buildings on
+// the map, every spawned citizen takes the home-fallback (destination ===
+// home) and is held dormant by tickCitizen until the player places a
+// destination building, which retargets them to a real trip. Combined with the
+// completedTrips > 0 gate on the survival win in objectives.ts, this means the
+// player must build destinations and actually serve at least one trip before
+// the scenario can be won. Tiles are bare ground off the starter arterial
+// cross (y=8,9 / x=14,15) so the wave can claim them.
 export function createGrowingSuburbWaves(): GrowthWave[] {
-  return [];
+  return [
+    {
+      id: "wave-seed-residential",
+      triggerTime: 0,
+      message:
+        "First residents arrive — build destinations so they can commute.",
+      applied: false,
+      tiles: [
+        {
+          id: tileId(2, 3),
+          x: 2,
+          y: 3,
+          area: "residential",
+          createsCitizens: 6,
+        },
+        {
+          id: tileId(3, 3),
+          x: 3,
+          y: 3,
+          area: "residential",
+          createsCitizens: 6,
+        },
+      ],
+    },
+  ];
 }
 
 export function createGrowingSuburbScenario(): Scenario {
