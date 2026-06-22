@@ -425,8 +425,14 @@ describe("retargetCitizens", () => {
     expect(after.citizens[0].destination).toEqual({ x: 5, y: 1 });
   });
 
-  it("preserves the home point and other citizen fields on retarget", () => {
+  it("preserves the home point and id on retarget, refreshes trip timers", () => {
+    // Retargeting starts a fresh trip: routePlan, currentLegIndex and status
+    // are already reset, so deadline/patienceRemaining must be reset too.
+    // Otherwise a home-fallback citizen held dormant long after its original
+    // deadline would be marked unserved on the very next tick after being
+    // assigned a real destination (see tickCitizen's deadline checks).
     const state = stateWith({
+      time: 1200,
       buildings: [supermarketAt({ x: 5, y: 1 })],
       citizens: [
         citizen({
@@ -434,7 +440,7 @@ describe("retargetCitizens", () => {
           home: { x: 1, y: 1 },
           destination: { x: 1, y: 1 },
           patienceRemaining: 120,
-          deadline: 1500,
+          deadline: 900,
         }),
       ],
     });
@@ -442,9 +448,41 @@ describe("retargetCitizens", () => {
     const result = retargetCitizens(state, isHomeFallbackCitizen);
 
     expect(result.citizens[0].home).toEqual({ x: 1, y: 1 });
-    expect(result.citizens[0].patienceRemaining).toBe(120);
-    expect(result.citizens[0].deadline).toBe(1500);
     expect(result.citizens[0].id).toBe("c-1");
+    // Timers refreshed relative to the current sim time, mirroring the
+    // deadline = state.time + 900 / patienceRemaining = 240 used at citizen
+    // creation (buildings.ts, map.ts).
+    expect(result.citizens[0].deadline).toBe(1200 + 900);
+    expect(result.citizens[0].patienceRemaining).toBe(240);
+  });
+
+  it("refreshes trip timers for non-home-fallback retargets too", () => {
+    // A citizen whose destination was bulldozed mid-trip has already consumed
+    // patience and possibly blown past its deadline while in transit.
+    // Retargeting gives them a fresh trip window consistent with the full
+    // plan/status reset already performed.
+    const state = stateWith({
+      time: 2000,
+      buildings: [supermarketAt({ x: 10, y: 1 })],
+      citizens: [
+        citizen({
+          id: "c-1",
+          home: { x: 1, y: 1 },
+          destination: { x: 5, y: 1 },
+          position: { x: 3, y: 1 },
+          status: "walking",
+          patienceRemaining: 30,
+          deadline: 900,
+        }),
+      ],
+    });
+
+    const result = retargetCitizens(state, (c) =>
+      destinationIsOnTile(c, [{ x: 5, y: 1 }]),
+    );
+
+    expect(result.citizens[0].deadline).toBe(2000 + 900);
+    expect(result.citizens[0].patienceRemaining).toBe(240);
   });
 
   it("returns original citizens array reference when no citizen matches the predicate", () => {

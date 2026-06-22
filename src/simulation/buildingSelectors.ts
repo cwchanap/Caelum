@@ -81,6 +81,15 @@ export function retargetCitizens(
       status: "idle" as const,
       routePlan: null,
       currentLegIndex: 0,
+      // Refresh trip timers: retargeting starts a fresh trip (plan nulled,
+      // status reset to idle), so the deadline/patience window must reset
+      // too. Otherwise a home-fallback citizen held dormant long after its
+      // original deadline would be marked unserved on the next tick, and a
+      // citizen retargeted after a bulldoze would keep partially-consumed
+      // patience. Mirrors the deadline = state.time + 900 / patienceRemaining
+      // = 240 used at citizen creation (buildings.ts, map.ts).
+      deadline: state.time + 900,
+      patienceRemaining: 240,
     };
   });
 
