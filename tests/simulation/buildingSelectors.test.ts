@@ -496,4 +496,76 @@ describe("retargetCitizens", () => {
     const result = retargetCitizens(state, () => false);
     expect(result.citizens).toBe(state.citizens);
   });
+
+  it("does not assign a destination equal to a citizen's home when alternatives exist", () => {
+    // Bulldoze+rezone flow: housing was built (citizens created with `home`
+    // on its tiles, destination falling back to home since no destination
+    // building existed yet), then bulldozed — housing bulldozes intentionally
+    // keep citizens alive (see actions.ts removeAtTile) — then the same
+    // footprint was rezoned and a destination built on it. The surviving
+    // citizens still carry `home` on tiles that are now destination tiles.
+    //
+    // Assigning one of those tiles as `destination` would make
+    // destination === home, indistinguishable from the home-fallback case
+    // and trapping the citizen in tickCitizen's dormant branch forever
+    // (see citizens.ts). retargetCitizens must steer them to a different
+    // destination tile when one exists.
+    const state = stateWith({
+      // Supermarket footprint {1,1},{2,1},{1,2},{2,2} overlaps both homes.
+      buildings: [supermarketAt({ x: 1, y: 1 })],
+      citizens: [
+        citizen({
+          id: "c-1",
+          home: { x: 1, y: 1 },
+          destination: { x: 1, y: 1 },
+        }),
+        citizen({
+          id: "c-2",
+          home: { x: 2, y: 1 },
+          destination: { x: 2, y: 1 },
+        }),
+      ],
+    });
+
+    const result = retargetCitizens(state, isHomeFallbackCitizen);
+
+    for (const c of result.citizens) {
+      expect(c.destination).not.toEqual(c.home);
+      expect(c.routePlan).toBeNull();
+      expect(c.status).toBe("idle");
+    }
+  });
+
+  it("falls back to home when the only destination tile equals home", () => {
+    // Degenerate case: the sole remaining destination sits exactly on the
+    // citizen's home. There is genuinely nowhere else to send them, so
+    // retarget falls through to home (the dormant branch keeps them
+    // retargetable if a different destination is added later) rather than
+    // leaving the destination field unset.
+    const state = stateWith({
+      buildings: [
+        {
+          id: "building-001",
+          type: "parkPlaza",
+          origin: { x: 1, y: 1 },
+          rotation: 0,
+          // Single-tile destination exactly on the citizen's home.
+          occupiedTiles: [{ x: 1, y: 1 }],
+        },
+      ],
+      citizens: [
+        citizen({
+          id: "c-1",
+          home: { x: 1, y: 1 },
+          destination: { x: 1, y: 1 },
+        }),
+      ],
+    });
+
+    const result = retargetCitizens(state, isHomeFallbackCitizen);
+
+    expect(result.citizens[0].destination).toEqual({ x: 1, y: 1 });
+    expect(result.citizens[0].status).toBe("idle");
+    expect(result.citizens[0].routePlan).toBeNull();
+  });
 });

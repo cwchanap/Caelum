@@ -67,10 +67,24 @@ export function retargetCitizens(
     }
     anyChanged = true;
     retargetedIds.add(citizen.id);
+    // Avoid assigning a destination that equals the citizen's home when any
+    // alternative exists. A same-home destination is indistinguishable from
+    // the documented home-fallback case (see `isHomeFallbackCitizen` /
+    // tickCitizen's dormant branch), which would trap the citizen idle
+    // forever even though a real destination building stands on that tile.
+    // This arises when housing is bulldozed (citizens survive with `home` on
+    // the now-empty tiles) and the same footprint is later rezoned for a
+    // destination — breaking the "housing and destinations cannot overlap"
+    // assumption `isHomeFallbackCitizen` relies on. Filter per-citizen; if
+    // every remaining destination equals home (degenerate: the only
+    // destination IS home), fall through to the home destination rather than
+    // leaving the citizen unassigned.
+    const eligible = destinations.filter(
+      (destination) => !samePoint(destination, citizen.home),
+    );
+    const pool = eligible.length > 0 ? eligible : destinations;
     const destination =
-      destinations.length === 0
-        ? citizen.home
-        : destinations[retargetIndex % destinations.length];
+      pool.length === 0 ? citizen.home : pool[retargetIndex % pool.length];
     retargetIndex += 1;
 
     return {

@@ -15,9 +15,17 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-/** A growth wave only claims tiles that are still bare empty ground. */
+/** A growth wave only claims tiles that are still bare, *unzoned* empty ground.
+ *  `area` is a persistent claim layer (see the `Tile.area` invariant in
+ *  domain/types.ts): it survives kind transitions and is only honored by the
+ *  renderer on `empty` tiles, so a zoned tile keeps `kind === "empty"`. Without
+ *  the `area === undefined` check here, a later wave (or the same wave after a
+ *  player rezones) would overwrite an existing zoning and spawn citizens on an
+ *  already-claimed tile — losing the "first claim wins" semantic the old
+ *  district-kind behavior had. (Player-driven rezoning in areas.ts deliberately
+ *  does NOT use this gate, so players can still rezone their own tiles.) */
 function isBareGround(tile: Tile): boolean {
-  return tile.kind === "empty" && tile.hasTrack !== true;
+  return tile.kind === "empty" && tile.hasTrack !== true && tile.area === undefined;
 }
 
 export function getTile(map: GameMap, point: Point): Tile | null {

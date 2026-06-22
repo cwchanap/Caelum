@@ -353,6 +353,45 @@ describe("growth waves skip player infrastructure", () => {
       expect(citizen.destination).toEqual(citizen.home);
     }
   });
+
+  it("treats already-zoned tiles as claimed (first claim wins)", () => {
+    // `area` is a persistent zoning layer that stays even when the physical
+    // tile kind remains "empty" (see Tile.area invariant). A growth wave must
+    // not overwrite a tile the player (or an earlier wave) already zoned, nor
+    // spawn citizens on it. This restores the "first claim prevents later
+    // claims" semantic the old district-kind behavior had before the area
+    // refactor moved zoning off the tile kind.
+    const state = withAreas(
+      withGrowthWaves(withTime(createInitialGameState(), 250), [
+        testGrowthWave(),
+      ]),
+      // Different area than the wave's "residential" to make an overwrite
+      // observable.
+      "commercial",
+      [{ x: 2, y: 1 }],
+    );
+
+    const grownState = applyDueGrowthWaves(state);
+
+    // The claimed tile keeps the player's commercial zoning (no overwrite).
+    const claimed = grownState.map.tiles.find(
+      (tile) => tile.x === 2 && tile.y === 1,
+    );
+    expect(claimed?.area).toBe("commercial");
+
+    // No citizen spawned on the already-claimed tile.
+    const citizensOnClaimed = grownState.citizens.filter(
+      (citizen) => citizen.home.x === 2 && citizen.home.y === 1,
+    );
+    expect(citizensOnClaimed).toHaveLength(0);
+
+    // The two unzoned wave tiles still get zoned and spawn citizens (8 each).
+    const zonedResidential = grownState.map.tiles.find(
+      (tile) => tile.x === 1 && tile.y === 1,
+    );
+    expect(zonedResidential?.area).toBe("residential");
+    expect(grownState.citizens).toHaveLength(16);
+  });
 });
 
 describe("road direction helpers", () => {
