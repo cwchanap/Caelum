@@ -25,7 +25,9 @@ function clonePoint(point: Point): Point {
  *  district-kind behavior had. (Player-driven rezoning in areas.ts deliberately
  *  does NOT use this gate, so players can still rezone their own tiles.) */
 function isBareGround(tile: Tile): boolean {
-  return tile.kind === "empty" && tile.hasTrack !== true && tile.area === undefined;
+  return (
+    tile.kind === "empty" && tile.hasTrack !== true && tile.area === undefined
+  );
 }
 
 export function getTile(map: GameMap, point: Point): Tile | null {
