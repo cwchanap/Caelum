@@ -1,25 +1,12 @@
 import { expect, test } from "@playwright/test";
-import type { ViteDevServer } from "vite";
 import {
   clickMapTile,
   dragMapTiles,
   openHudCategory,
-  startAppServer,
 } from "./helpers";
 
-let server: ViteDevServer;
-let appUrl: string;
-
-test.beforeAll(async () => {
-  ({ server, url: appUrl } = await startAppServer());
-});
-
-test.afterAll(async () => {
-  await server.close();
-});
-
 test("create, manage, and delete a bus route", async ({ page }) => {
-  await page.goto(appUrl);
+  await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
@@ -61,7 +48,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
 });
 
 test("create a metro line on laid track", async ({ page }) => {
-  await page.goto(appUrl);
+  await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
