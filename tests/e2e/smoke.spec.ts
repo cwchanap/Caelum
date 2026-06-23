@@ -1,27 +1,14 @@
 import { expect, test } from "@playwright/test";
-import type { ViteDevServer } from "vite";
 import {
   clickMapTile,
   dragMapTiles,
   openHudCategory,
-  startAppServer,
 } from "./helpers";
-
-let server: ViteDevServer;
-let appUrl: string;
-
-test.beforeAll(async () => {
-  ({ server, url: appUrl } = await startAppServer());
-});
-
-test.afterAll(async () => {
-  await server.close();
-});
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
   page,
 }) => {
-  await page.goto(appUrl);
+  await page.goto("/");
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
