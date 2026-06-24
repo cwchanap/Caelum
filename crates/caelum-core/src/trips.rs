@@ -132,6 +132,9 @@ fn advance_active_trips_with_zero_delta_ids(
     let mut next = state.clone();
     next.active_trips = Vec::with_capacity(results.len());
     for result in results {
+        if is_terminal_status(&result.trip.status) {
+            apply_commute_resolution_to_sim(&mut next, &result.trip);
+        }
         if result.completed_trips > 0 {
             apply_arrival_to_sim(&mut next, &result.trip);
         }
@@ -170,7 +173,9 @@ fn reset_daily_commute_flags(state: &mut GameSnapshot) {
     for sim in &mut state.sims {
         if sim.commute_day != state.day {
             sim.commute_day = state.day;
+            sim.outbound_resolved_today = false;
             sim.outbound_arrived_today = false;
+            sim.return_resolved_today = false;
             sim.returned_home_today = false;
         }
     }
@@ -187,7 +192,10 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             continue;
         };
 
-        if !sim.outbound_arrived_today && has_valid_workplace_destination(state, &sim) {
+        if !sim.outbound_resolved_today
+            && !sim.outbound_arrived_today
+            && has_valid_workplace_destination(state, &sim)
+        {
             let workplace = sim
                 .workplace
                 .clone()
@@ -213,7 +221,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
         if !sim.outbound_arrived_today {
             continue;
         }
-        if sim.returned_home_today {
+        if sim.return_resolved_today || sim.returned_home_today {
             continue;
         }
         let return_departure = departure_minute_for_sim(&sim.id, template, "return");
@@ -251,7 +259,8 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             continue;
         };
 
-        if !sim.outbound_arrived_today
+        if !sim.outbound_resolved_today
+            && !sim.outbound_arrived_today
             && has_valid_workplace_destination(state, sim)
             && !has_trip_for_sim_day(state, &sim.id, "commuteOutbound", state.day)
         {
@@ -263,7 +272,8 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             );
         }
 
-        if !sim.returned_home_today
+        if !sim.return_resolved_today
+            && !sim.returned_home_today
             && !has_trip_for_sim_day(state, &sim.id, "commuteReturn", state.day)
         {
             let return_departure = departure_minute_for_sim(&sim.id, template, "return");
@@ -666,6 +676,26 @@ fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.returned_home_today = true;
             }
+        }
+        _ => {}
+    }
+}
+
+fn apply_commute_resolution_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
+    if !trip_service_day(trip).is_some_and(|day| day == state.day) {
+        return;
+    }
+
+    let Some(sim) = state.sims.iter_mut().find(|sim| sim.id == trip.sim_id) else {
+        return;
+    };
+
+    match trip.purpose.as_str() {
+        "commuteOutbound" => {
+            sim.outbound_resolved_today = true;
+        }
+        "commuteReturn" => {
+            sim.return_resolved_today = true;
         }
         _ => {}
     }

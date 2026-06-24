@@ -1,5 +1,6 @@
 use caelum_core::model::{
-    ActiveTrip, Point, RouteLeg, RoutePlan, Sim, TransitNetwork, TripOutcome, TripPosition, Vehicle,
+    ActiveTrip, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, TransitNetwork, TripOutcome,
+    TripPosition, Vehicle,
 };
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, trips};
 use caelum_core::{GameEngine, GameIntent};
@@ -13,7 +14,9 @@ fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
         shift_template: Some("standard".to_string()),
         workplace,
         commute_day: 0,
+        outbound_resolved_today: false,
         outbound_arrived_today: false,
+        return_resolved_today: false,
         returned_home_today: false,
     }
 }
@@ -55,6 +58,17 @@ fn bus_plan(from: Point, to: Point, line_id: &str) -> RoutePlan {
             to,
             line_id: Some(line_id.to_string()),
         }],
+    }
+}
+
+fn destination_building(point: Point) -> PlacedBuilding {
+    PlacedBuilding {
+        id: "building-001".to_string(),
+        building_type: "supermarket".to_string(),
+        origin: point.clone(),
+        rotation: 0,
+        occupied_tiles: vec![point],
+        transit_node_id: None,
     }
 }
 
@@ -453,7 +467,9 @@ fn outbound_home_fallback_trip_stays_dormant_when_away_from_home() {
         shift_template: Some("standard".to_string()),
         workplace: None,
         commute_day: 0,
+        outbound_resolved_today: false,
         outbound_arrived_today: false,
+        return_resolved_today: false,
         returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
@@ -493,7 +509,9 @@ fn return_home_trip_is_not_treated_as_home_fallback() {
         shift_template: Some("standard".to_string()),
         workplace: Some((5, 3).into()),
         commute_day: 0,
+        outbound_resolved_today: true,
         outbound_arrived_today: true,
+        return_resolved_today: false,
         returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
@@ -533,7 +551,9 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         shift_template: Some("standard".to_string()),
         workplace: Some(workplace.clone()),
         commute_day: 1,
+        outbound_resolved_today: false,
         outbound_arrived_today: false,
+        return_resolved_today: false,
         returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
@@ -554,6 +574,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
     assert!(arrived.active_trips.is_empty());
     assert_eq!(sim.position, workplace);
+    assert!(!sim.outbound_resolved_today);
     assert!(!sim.outbound_arrived_today);
 
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
@@ -591,26 +612,114 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
         shift_template: Some("standard".to_string()),
         workplace: Some((3, 3).into()),
         commute_day: 0,
+        outbound_resolved_today: true,
         outbound_arrived_today: true,
+        return_resolved_today: false,
         returned_home_today: false,
     }];
 
     let arrived = trips::tick_trips(&state, 20.0);
+    let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
-    assert_eq!(
-        arrived
-            .sims
-            .iter()
-            .find(|sim| sim.id == "sim-001")
-            .unwrap()
-            .position,
-        Point { x: 2, y: 3 }
-    );
+    assert_eq!(sim.position, Point { x: 2, y: 3 });
+    assert!(sim.return_resolved_today);
+    assert!(sim.returned_home_today);
 
     let ticked_again = trips::tick_trips(&arrived, 0.0);
 
     assert!(ticked_again.active_trips.is_empty());
     assert_eq!(ticked_again.metrics.completed_trips, 1);
+}
+
+#[test]
+fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
+    let mut state = create_initial_snapshot();
+    let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
+    let departure_time =
+        (f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 28, y: 17 };
+    state.time = departure_time;
+    state.day = 0;
+    state.clock_minutes = departure_minute;
+    state.paused = false;
+    state.buildings = vec![destination_building(workplace.clone())];
+    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: "commuteOutbound".to_string(),
+        origin: home,
+        destination: workplace,
+        position: Point { x: 7, y: 8 }.into(),
+        status: "waiting".to_string(),
+        deadline: departure_time + 900.0,
+        route_plan: Some(bus_plan(
+            Point { x: 7, y: 8 },
+            Point { x: 22, y: 8 },
+            "route-001",
+        )),
+        current_leg_index: 0,
+        patience_remaining: 1.0,
+    }];
+
+    let next = trips::tick_trips(&state, 2.0);
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert!(sim.outbound_resolved_today);
+    assert!(!sim.outbound_arrived_today);
+}
+
+#[test]
+fn unserved_same_day_return_is_not_respawned_after_pruning() {
+    let mut state = create_initial_snapshot();
+    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let return_time =
+        (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 28, y: 17 };
+    state.time = return_time;
+    state.day = 0;
+    state.clock_minutes = return_minute;
+    state.paused = false;
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: home.clone(),
+        position: workplace.clone(),
+        worker_profile: "worker".to_string(),
+        shift_template: Some("standard".to_string()),
+        workplace: Some(workplace.clone()),
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: "commuteReturn".to_string(),
+        origin: workplace.clone(),
+        destination: home,
+        position: workplace.clone().into(),
+        status: "waiting".to_string(),
+        deadline: return_time + 900.0,
+        route_plan: Some(bus_plan(workplace, Point { x: 7, y: 8 }, "route-001")),
+        current_leg_index: 0,
+        patience_remaining: 1.0,
+    }];
+
+    let next = trips::tick_trips(&state, 2.0);
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert!(sim.return_resolved_today);
+    assert!(!sim.returned_home_today);
 }

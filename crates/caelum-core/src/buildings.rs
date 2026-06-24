@@ -181,7 +181,9 @@ pub fn place_building(
                 shift_template: shift_template_for_id(&sim_id).map(str::to_string),
                 workplace: None,
                 commute_day: 0,
+                outbound_resolved_today: false,
                 outbound_arrived_today: false,
+                return_resolved_today: false,
                 returned_home_today: false,
             });
         }
