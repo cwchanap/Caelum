@@ -69,6 +69,31 @@ impl From<(i32, i32)> for Point {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TripPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl From<(i32, i32)> for TripPosition {
+    fn from(value: (i32, i32)) -> Self {
+        Self {
+            x: f64::from(value.0),
+            y: f64::from(value.1),
+        }
+    }
+}
+
+impl From<Point> for TripPosition {
+    fn from(value: Point) -> Self {
+        Self {
+            x: f64::from(value.x),
+            y: f64::from(value.y),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransitNetwork {
     pub stops: Vec<Stop>,
     pub stations: Vec<Station>,
@@ -163,7 +188,7 @@ pub struct ActiveTrip {
     pub purpose: String,
     pub origin: Point,
     pub destination: Point,
-    pub position: Point,
+    pub position: TripPosition,
     pub status: String,
     pub deadline: f64,
     pub route_plan: Option<RoutePlan>,

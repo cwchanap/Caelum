@@ -9,6 +9,12 @@ use crate::model::{GameSnapshot, Point};
     rename_all_fields = "camelCase"
 )]
 pub enum GameIntent {
+    SetPaused {
+        paused: bool,
+    },
+    SetSpeed {
+        speed: u8,
+    },
     AssignVehicle {
         mode: String,
         line_id: String,

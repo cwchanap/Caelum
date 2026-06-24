@@ -13,6 +13,7 @@ pub mod router;
 pub mod scenario;
 pub mod state;
 pub mod transit;
+pub mod trips;
 
 pub use engine::GameEngine;
 pub use intent::{DispatchResult, GameIntent};

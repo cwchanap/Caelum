@@ -4,6 +4,7 @@ use crate::intent::{DispatchResult, GameIntent};
 use crate::model::GameSnapshot;
 use crate::state::create_initial_snapshot;
 use crate::transit;
+use crate::trips;
 
 #[derive(Clone, Debug)]
 pub struct GameEngine {
@@ -33,7 +34,7 @@ impl GameEngine {
     }
 
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
-        let next = transit::tick_vehicles(&self.snapshot, delta_seconds);
+        let next = trips::tick_trips(&self.snapshot, delta_seconds);
         if next == self.snapshot {
             return DispatchResult {
                 snapshot: self.snapshot(),
@@ -52,6 +53,29 @@ impl GameEngine {
 
     pub fn dispatch(&mut self, intent: GameIntent) -> DispatchResult {
         match intent {
+            GameIntent::SetPaused { paused } => {
+                self.snapshot.paused = paused;
+                DispatchResult {
+                    snapshot: self.snapshot(),
+                    applied: true,
+                    rejection: None,
+                }
+            }
+            GameIntent::SetSpeed { speed } => {
+                if !matches!(speed, 0 | 1 | 2 | 4) {
+                    return DispatchResult {
+                        snapshot: self.snapshot(),
+                        applied: false,
+                        rejection: Some(format!("invalid speed: {speed}")),
+                    };
+                }
+                self.snapshot.speed = speed;
+                DispatchResult {
+                    snapshot: self.snapshot(),
+                    applied: true,
+                    rejection: None,
+                }
+            }
             GameIntent::AssignVehicle { mode, line_id } => {
                 self.commit_result(transit::assign_vehicle(&self.snapshot, &mode, &line_id))
             }
