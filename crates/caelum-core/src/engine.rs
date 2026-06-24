@@ -1,5 +1,6 @@
 use crate::intent::{DispatchResult, GameIntent};
-use crate::model::{GameMap, GameSnapshot, Metrics, TransitNetwork};
+use crate::model::GameSnapshot;
+use crate::state::create_initial_snapshot;
 
 #[derive(Clone, Debug)]
 pub struct GameEngine {
@@ -15,7 +16,7 @@ impl Default for GameEngine {
 impl GameEngine {
     pub fn new() -> Self {
         Self {
-            snapshot: initial_snapshot(),
+            snapshot: create_initial_snapshot(),
         }
     }
 
@@ -24,7 +25,7 @@ impl GameEngine {
     }
 
     pub fn reset(&mut self) -> GameSnapshot {
-        self.snapshot = initial_snapshot();
+        self.snapshot = create_initial_snapshot();
         self.snapshot()
     }
 
@@ -44,41 +45,5 @@ impl GameEngine {
                 rejection: Some(format!("line not found: {line_id}")),
             },
         }
-    }
-}
-
-fn initial_snapshot() -> GameSnapshot {
-    GameSnapshot {
-        time: 0.0,
-        day: 0,
-        clock_minutes: 0,
-        speed: 1,
-        paused: true,
-        budget: 120_000,
-        map: GameMap {
-            width: 28,
-            height: 18,
-            tiles: Vec::new(),
-        },
-        buildings: Vec::new(),
-        transit: TransitNetwork {
-            stops: Vec::new(),
-            stations: Vec::new(),
-            routes: Vec::new(),
-            metro_lines: Vec::new(),
-            vehicles: Vec::new(),
-        },
-        sims: Vec::new(),
-        active_trips: Vec::new(),
-        metrics: Metrics {
-            late_trips: 0,
-            completed_trips: 0,
-            unserved_trips: 0,
-            total_wait_seconds: 0.0,
-            waiting_trip_count: 0,
-            average_wait_seconds: 0.0,
-            state: "running".to_string(),
-            loss_reason: None,
-        },
     }
 }
