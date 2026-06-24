@@ -15,6 +15,11 @@ pub enum GameIntent {
     SetSpeed {
         speed: u8,
     },
+    RecordTripOutcome {
+        outcome: String,
+        wait_seconds: f64,
+        time: f64,
+    },
     AssignVehicle {
         mode: String,
         line_id: String,

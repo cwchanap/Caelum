@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
-use crate::model::{ActiveTrip, GameSnapshot, Metrics, Point, RoutePlan, Sim, TripPosition};
+use crate::model::{
+    ActiveTrip, GameSnapshot, Metrics, Point, RoutePlan, Sim, TripOutcome, TripPosition,
+};
+use crate::objectives;
 use crate::router;
 use crate::transit;
 
@@ -15,6 +20,7 @@ struct TripTickResult {
     late_trips: u32,
     unserved_trips: u32,
     wait_seconds: f64,
+    outcome: Option<TripOutcome>,
 }
 
 pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
@@ -56,7 +62,11 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let end_day = clock::day_index(final_time);
     let day_count = end_day.saturating_sub(start_day) as usize + 1;
     let events_per_day = state.sims.len().saturating_mul(6).saturating_add(2);
-    day_count.saturating_mul(events_per_day).saturating_add(1)
+    let time_step_cap = (final_time - state.time).max(0.0).ceil() as usize;
+    day_count
+        .saturating_mul(events_per_day)
+        .saturating_add(time_step_cap)
+        .saturating_add(1)
 }
 
 fn advance_tick_substep(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
@@ -66,7 +76,12 @@ fn advance_tick_substep(state: &GameSnapshot, delta_seconds: f64) -> GameSnapsho
     reset_daily_commute_flags(&mut next);
 
     let vehicle_state = transit::tick_vehicles(&next, delta_seconds);
-    advance_active_trips(&vehicle_state, delta_seconds)
+    let just_disembarked_trip_ids = just_disembarked_trip_ids(&next, &vehicle_state);
+    advance_active_trips_with_zero_delta_ids(
+        &vehicle_state,
+        delta_seconds,
+        &just_disembarked_trip_ids,
+    )
 }
 
 fn sync_clock(state: &mut GameSnapshot) {
@@ -75,16 +90,34 @@ fn sync_clock(state: &mut GameSnapshot) {
 }
 
 pub fn advance_active_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    advance_active_trips_with_zero_delta_ids(state, delta_seconds, &HashSet::new())
+}
+
+fn advance_active_trips_with_zero_delta_ids(
+    state: &GameSnapshot,
+    delta_seconds: f64,
+    zero_delta_trip_ids: &HashSet<String>,
+) -> GameSnapshot {
     let mut results = Vec::with_capacity(state.active_trips.len());
 
     for trip in &state.active_trips {
-        results.push(tick_trip(state, trip, delta_seconds));
+        let trip_delta_seconds = if zero_delta_trip_ids.contains(&trip.id) {
+            0.0
+        } else {
+            delta_seconds
+        };
+        let tick_start_time = (state.time - trip_delta_seconds).max(0.0);
+        results.push(tick_trip(state, trip, trip_delta_seconds, tick_start_time));
     }
 
     let completed_trips = results.iter().map(|result| result.completed_trips).sum();
     let late_trips = results.iter().map(|result| result.late_trips).sum();
     let unserved_trips = results.iter().map(|result| result.unserved_trips).sum();
     let wait_seconds = results.iter().map(|result| result.wait_seconds).sum();
+    let outcomes = results
+        .iter()
+        .filter_map(|result| result.outcome.clone())
+        .collect::<Vec<_>>();
 
     let mut next = state.clone();
     next.active_trips = Vec::with_capacity(results.len());
@@ -102,8 +135,32 @@ pub fn advance_active_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSna
         late_trips,
         unserved_trips,
         wait_seconds,
+        outcomes,
+        state.time,
     );
     next
+}
+
+fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> HashSet<String> {
+    after
+        .active_trips
+        .iter()
+        .filter(|trip| {
+            let Some(previous) = before
+                .active_trips
+                .iter()
+                .find(|candidate| candidate.id == trip.id)
+            else {
+                return false;
+            };
+
+            previous.status == "riding"
+                && trip.status == "walking"
+                && trip.current_leg_index > previous.current_leg_index
+                && !is_trip_on_vehicle(after, &trip.id)
+        })
+        .map(|trip| trip.id.clone())
+        .collect()
 }
 
 fn reset_daily_commute_flags(state: &mut GameSnapshot) {
@@ -213,6 +270,12 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         track_active_trip_boundary(&mut next, state, trip, after);
     }
 
+    for vehicle in &state.transit.vehicles {
+        if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
+            track_next_boundary(&mut next, state.time + seconds, after);
+        }
+    }
+
     next
 }
 
@@ -248,6 +311,7 @@ fn track_active_trip_boundary(
         return;
     };
     if leg.mode != "walk" {
+        track_waiting_terminal_boundaries(next, state, trip, after);
         return;
     }
 
@@ -255,6 +319,22 @@ fn track_active_trip_boundary(
         return;
     };
     track_next_boundary(next, state.time + seconds, after);
+}
+
+fn track_waiting_terminal_boundaries(
+    next: &mut Option<f64>,
+    state: &GameSnapshot,
+    trip: &ActiveTrip,
+    after: f64,
+) {
+    if trip.patience_remaining > EPSILON {
+        track_next_boundary(next, state.time + trip.patience_remaining, after);
+    }
+
+    let deadline_timeout = trip.deadline + DEADLINE_GRACE_SECONDS;
+    if deadline_timeout > state.time {
+        track_next_boundary(next, deadline_timeout, after);
+    }
 }
 
 fn seconds_to_next_walk_boundary(position: &TripPosition, target: &Point) -> Option<f64> {
@@ -328,7 +408,12 @@ fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
         + (f64::from(minute) / f64::from(MINUTES_PER_DAY)) * GAME_DAY_SECONDS
 }
 
-fn tick_trip(state: &GameSnapshot, trip: &ActiveTrip, delta_seconds: f64) -> TripTickResult {
+fn tick_trip(
+    state: &GameSnapshot,
+    trip: &ActiveTrip,
+    delta_seconds: f64,
+    tick_start_time: f64,
+) -> TripTickResult {
     if matches!(trip.status.as_str(), "arrived" | "late" | "unserved")
         || is_home_fallback_trip(state, trip)
     {
@@ -360,6 +445,7 @@ fn tick_trip(state: &GameSnapshot, trip: &ActiveTrip, delta_seconds: f64) -> Tri
                 late_trips: 0,
                 unserved_trips: 1,
                 wait_seconds: 0.0,
+                outcome: Some(trip_outcome("unserved", 0.0, tick_start_time)),
             };
         };
 
@@ -380,6 +466,7 @@ fn tick_trip(state: &GameSnapshot, trip: &ActiveTrip, delta_seconds: f64) -> Tri
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds: 0.0,
+            outcome: Some(trip_outcome("unserved", 0.0, tick_start_time)),
         };
     }
 
@@ -411,21 +498,29 @@ fn tick_trip(state: &GameSnapshot, trip: &ActiveTrip, delta_seconds: f64) -> Tri
             late_trips: 0,
             unserved_trips: 0,
             wait_seconds: 0.0,
+            outcome: None,
         };
     }
 
+    let terminal_wait_seconds =
+        waiting_terminal_elapsed_seconds(&next_trip, delta_seconds, tick_start_time, state.time);
+    let elapsed_wait_seconds = terminal_wait_seconds.unwrap_or(delta_seconds);
     next_trip.status = "waiting".to_string();
-    next_trip.patience_remaining = (next_trip.patience_remaining - delta_seconds).max(0.0);
+    next_trip.patience_remaining = (next_trip.patience_remaining - elapsed_wait_seconds).max(0.0);
 
-    if next_trip.patience_remaining <= 0.0
-        || state.time > next_trip.deadline + DEADLINE_GRACE_SECONDS
-    {
+    if terminal_wait_seconds.is_some() {
+        let outcome_wait_seconds = (WAIT_PATIENCE_SECONDS - next_trip.patience_remaining).max(0.0);
         return TripTickResult {
             trip: mark_unserved(next_trip),
             completed_trips: 0,
             late_trips: 0,
             unserved_trips: 1,
-            wait_seconds: delta_seconds,
+            wait_seconds: elapsed_wait_seconds,
+            outcome: Some(trip_outcome(
+                "unserved",
+                outcome_wait_seconds,
+                tick_start_time + elapsed_wait_seconds,
+            )),
         };
     }
 
@@ -435,6 +530,34 @@ fn tick_trip(state: &GameSnapshot, trip: &ActiveTrip, delta_seconds: f64) -> Tri
         late_trips: 0,
         unserved_trips: 0,
         wait_seconds: delta_seconds,
+        outcome: None,
+    }
+}
+
+fn waiting_terminal_elapsed_seconds(
+    trip: &ActiveTrip,
+    delta_seconds: f64,
+    tick_start_time: f64,
+    tick_end_time: f64,
+) -> Option<f64> {
+    let patience_elapsed = if trip.patience_remaining <= delta_seconds {
+        Some(trip.patience_remaining.max(0.0))
+    } else {
+        None
+    };
+    let deadline_timeout = trip.deadline + DEADLINE_GRACE_SECONDS;
+    let deadline_elapsed = if tick_start_time >= deadline_timeout {
+        Some(0.0)
+    } else if tick_end_time >= deadline_timeout {
+        Some((deadline_timeout - tick_start_time).max(0.0))
+    } else {
+        None
+    };
+
+    match (patience_elapsed, deadline_elapsed) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(elapsed), None) | (None, Some(elapsed)) => Some(elapsed),
+        (None, None) => None,
     }
 }
 
@@ -445,6 +568,7 @@ fn unchanged(trip: &ActiveTrip) -> TripTickResult {
         late_trips: 0,
         unserved_trips: 0,
         wait_seconds: 0.0,
+        outcome: None,
     }
 }
 
@@ -457,6 +581,19 @@ fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
         late_trips: u32::from(late),
         unserved_trips: 0,
         wait_seconds: 0.0,
+        outcome: Some(trip_outcome(
+            if late { "late" } else { "arrived" },
+            0.0,
+            time,
+        )),
+    }
+}
+
+fn trip_outcome(outcome: &str, wait_seconds: f64, time: f64) -> TripOutcome {
+    TripOutcome {
+        outcome: outcome.to_string(),
+        wait_seconds: wait_seconds.max(0.0),
+        time,
     }
 }
 
@@ -473,6 +610,8 @@ fn update_metrics(
     late_trips: u32,
     unserved_trips: u32,
     wait_seconds: f64,
+    outcomes: Vec<TripOutcome>,
+    current_time: f64,
 ) -> Metrics {
     let total_wait_seconds = metrics.total_wait_seconds + wait_seconds;
     let waiting_trip_count = trips.iter().filter(|trip| trip.status == "waiting").count() as u32;
@@ -481,6 +620,14 @@ fn update_metrics(
         .filter(|trip| trip.status == "waiting")
         .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
         .sum();
+
+    let mut trip_outcomes = metrics
+        .trip_outcomes
+        .iter()
+        .cloned()
+        .chain(outcomes)
+        .collect();
+    objectives::prune_trip_outcomes(&mut trip_outcomes, current_time);
 
     Metrics {
         late_trips: metrics.late_trips + late_trips,
@@ -493,6 +640,7 @@ fn update_metrics(
         } else {
             0.0
         },
+        trip_outcomes,
         state: metrics.state.clone(),
         loss_reason: metrics.loss_reason.clone(),
     }

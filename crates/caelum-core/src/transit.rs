@@ -424,6 +424,18 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     next
 }
 
+pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
+    let (line_positions, segments) = assigned_line_data(state, vehicle)?;
+    if line_positions.len() < 2 {
+        return None;
+    }
+
+    let segment = segments.get(vehicle.segment_index % segments.len().max(1));
+    let steps = segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
+    let remaining_progress = (1.0 - vehicle.progress).max(0.0);
+    Some((remaining_progress * steps as f64) / tiles_per_second(&vehicle.mode))
+}
+
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
     let Some(tile) = get_tile(&state.map, point) else {
         return Err("tile not found".to_string());

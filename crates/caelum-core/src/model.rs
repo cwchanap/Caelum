@@ -215,6 +215,14 @@ pub struct RouteLeg {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TripOutcome {
+    pub outcome: String,
+    pub wait_seconds: f64,
+    pub time: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub late_trips: u32,
     pub completed_trips: u32,
@@ -222,6 +230,8 @@ pub struct Metrics {
     pub total_wait_seconds: f64,
     pub waiting_trip_count: u32,
     pub average_wait_seconds: f64,
+    #[serde(default)]
+    pub trip_outcomes: Vec<TripOutcome>,
     pub state: String,
     pub loss_reason: Option<String>,
 }
