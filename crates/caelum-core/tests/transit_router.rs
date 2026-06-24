@@ -26,7 +26,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied);
-    assert_eq!(route.snapshot.transit.routes[0].path_broken, false);
+    assert!(!route.snapshot.transit.routes[0].path_broken);
 
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),

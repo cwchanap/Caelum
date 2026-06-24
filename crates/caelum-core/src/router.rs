@@ -165,7 +165,7 @@ fn best_candidate(candidates: Vec<RoutePlan>) -> Option<RoutePlan> {
     for candidate in candidates {
         if best
             .as_ref()
-            .is_none_or(|current| candidate.estimated_seconds < current.estimated_seconds)
+            .map_or(true, |current| candidate.estimated_seconds < current.estimated_seconds)
         {
             best = Some(candidate);
         }
@@ -198,7 +198,10 @@ fn best_transfer_indexes(
     for (first_index, first_anchor) in first.anchors.iter().enumerate() {
         for (second_index, second_anchor) in second.anchors.iter().enumerate() {
             let distance = manhattan_distance(first_anchor, second_anchor);
-            if best.is_none_or(|(_, _, best_distance)| distance < best_distance) {
+            if best
+                .as_ref()
+                .map_or(true, |(_, _, best_distance)| distance < *best_distance)
+            {
                 best = Some((first_index, second_index, distance));
             }
         }
