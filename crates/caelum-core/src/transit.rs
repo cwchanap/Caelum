@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::building_catalog::building_definition;
 use crate::ids::next_entity_id;
 use crate::model::{
-    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLeg, Tile, Vehicle,
+    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLeg, Tile,
+    TripPosition, Vehicle,
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
@@ -737,13 +738,17 @@ fn safe_trip_destination(
     map: &GameMap,
     removed_destination_tiles: &HashSet<String>,
     origin: &Point,
-    position: &Point,
+    position: &TripPosition,
 ) -> Point {
     if !removed_destination_tiles.contains(&point_key(origin)) {
         return origin.clone();
     }
-    if !removed_destination_tiles.contains(&point_key(position)) {
-        return position.clone();
+    let rounded_position = Point {
+        x: position.x.round() as i32,
+        y: position.y.round() as i32,
+    };
+    if !removed_destination_tiles.contains(&point_key(&rounded_position)) {
+        return rounded_position;
     }
     map.tiles
         .iter()
@@ -964,7 +969,7 @@ fn invalidate_trips_for_line(
         trip.route_plan = None;
         trip.current_leg_index = 0;
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
-            trip.position = parked_at.clone();
+            trip.position = parked_at.clone().into();
         }
     }
 }
@@ -1121,7 +1126,7 @@ fn disembark_vehicle(
 
     for trip in active_trips {
         if disembarking_ids.contains(&trip.id) {
-            trip.position = reached_position.clone();
+            trip.position = reached_position.clone().into();
             trip.status = "walking".to_string();
             trip.current_leg_index += 1;
         }
@@ -1161,8 +1166,13 @@ fn trip_can_board(
         .is_some_and(|leg| {
             leg.mode == vehicle.mode
                 && leg.line_id.as_deref() == Some(vehicle.line_id.as_str())
-                && trip.position == *current_position
+                && trip_position_matches_point(&trip.position, current_position)
         })
+}
+
+fn trip_position_matches_point(position: &TripPosition, point: &Point) -> bool {
+    (position.x - f64::from(point.x)).abs() < 0.000_001
+        && (position.y - f64::from(point.y)).abs() < 0.000_001
 }
 
 fn waiter_order_lookup(

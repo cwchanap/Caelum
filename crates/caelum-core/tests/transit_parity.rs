@@ -323,6 +323,7 @@ fn bulldozes_track_before_road_on_crossing_tile() {
 #[test]
 fn vehicles_advance_by_speed_over_segment_steps() {
     let mut engine = two_stop_bus_engine();
+    engine.dispatch(GameIntent::SetPaused { paused: false });
 
     let ticked = engine.tick(1.0);
 
@@ -424,7 +425,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         purpose: "commute".to_string(),
         origin: Point { x: 2, y: 5 },
         destination: removed_tiles[0].clone(),
-        position: Point { x: 3, y: 5 },
+        position: Point { x: 3, y: 5 }.into(),
         status: "riding".to_string(),
         deadline: 3_600.0,
         route_plan: Some(RoutePlan {

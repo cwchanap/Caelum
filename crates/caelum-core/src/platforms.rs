@@ -48,7 +48,10 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
         };
         let key = format!(
             "{}|{}",
-            position_key(trip.position.x, trip.position.y),
+            position_key(
+                trip.position.x.round() as i32,
+                trip.position.y.round() as i32
+            ),
             line_id
         );
         let Some(platform_id) = index.get(&key) else {

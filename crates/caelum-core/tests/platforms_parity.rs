@@ -8,7 +8,7 @@ fn waiting_trip(id: &str, position: Point, line_id: &str, patience_remaining: f6
         purpose: "commute".to_string(),
         origin: position.clone(),
         destination: (0, 0).into(),
-        position: position.clone(),
+        position: position.clone().into(),
         status: "waiting".to_string(),
         deadline: 9_999.0,
         route_plan: Some(RoutePlan {
