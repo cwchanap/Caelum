@@ -170,6 +170,11 @@ fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> Has
 }
 
 fn reset_daily_commute_flags(state: &mut GameSnapshot) {
+    if state.trip_sequence_day != state.day {
+        state.trip_sequence_day = state.day;
+        state.next_trip_sequence = 1;
+    }
+
     for sim in &mut state.sims {
         if sim.commute_day != state.day {
             sim.commute_day = state.day;
@@ -381,7 +386,7 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, after: f64) {
 }
 
 fn build_trip(
-    state: &GameSnapshot,
+    state: &mut GameSnapshot,
     sim_id: &str,
     purpose: &str,
     origin: Point,
@@ -390,7 +395,7 @@ fn build_trip(
     scheduled_time: f64,
 ) -> ActiveTrip {
     ActiveTrip {
-        id: next_trip_id_for_day(state, state.day),
+        id: next_trip_id_for_day(state),
         sim_id: sim_id.to_string(),
         purpose: purpose.to_string(),
         origin,
@@ -404,14 +409,15 @@ fn build_trip(
     }
 }
 
-fn next_trip_id_for_day(state: &GameSnapshot, day: u32) -> String {
-    let prefix = format!("trip-day-{day}-trip-");
-    let next_number = state
-        .active_trips
-        .iter()
-        .filter(|trip| trip.id.starts_with(&prefix))
-        .count()
-        + 1;
+fn next_trip_id_for_day(state: &mut GameSnapshot) -> String {
+    if state.trip_sequence_day != state.day {
+        state.trip_sequence_day = state.day;
+        state.next_trip_sequence = 1;
+    }
+
+    let prefix = format!("trip-day-{}-trip-", state.day);
+    let next_number = state.next_trip_sequence.max(1);
+    state.next_trip_sequence = next_number + 1;
     format!("{prefix}{next_number:03}")
 }
 

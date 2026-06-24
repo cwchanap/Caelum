@@ -723,3 +723,54 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
     assert!(sim.return_resolved_today);
     assert!(!sim.returned_home_today);
 }
+
+#[test]
+fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
+    let mut state = create_initial_snapshot();
+    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let return_time =
+        (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    state.time = return_time;
+    state.day = 0;
+    state.clock_minutes = return_minute;
+    state.paused = false;
+    state.trip_sequence_day = 0;
+    state.next_trip_sequence = 3;
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: (2, 3).into(),
+        position: (3, 3).into(),
+        worker_profile: "worker".to_string(),
+        shift_template: Some("standard".to_string()),
+        workplace: Some((3, 3).into()),
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-002".to_string(),
+        sim_id: "sim-002".to_string(),
+        purpose: "commuteOutbound".to_string(),
+        origin: (8, 3).into(),
+        destination: (9, 3).into(),
+        position: (8, 3).into(),
+        status: "walking".to_string(),
+        deadline: return_time + 900.0,
+        route_plan: Some(walk_plan((8, 3).into(), (9, 3).into(), 20.0)),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let next = trips::tick_trips(&state, 0.0);
+
+    let ids = next
+        .active_trips
+        .iter()
+        .map(|trip| trip.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"trip-day-0-trip-002"));
+    assert!(ids.contains(&"trip-day-0-trip-003"));
+    assert_eq!(next.next_trip_sequence, 4);
+}
