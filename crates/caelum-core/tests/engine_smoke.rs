@@ -32,6 +32,68 @@ fn assign_vehicle_intent_uses_camel_case_json_fields() {
 }
 
 #[test]
+fn area_and_building_intents_use_camel_case_json_fields() {
+    let paint_intent: GameIntent = serde_json::from_value(serde_json::json!({
+        "type": "paintAreaRectangle",
+        "area": "residential",
+        "start": { "x": 2, "y": 3 },
+        "end": { "x": 4, "y": 4 }
+    }))
+    .expect("paint area intent should deserialize from camelCase JSON");
+
+    assert_eq!(
+        paint_intent,
+        GameIntent::PaintAreaRectangle {
+            area: "residential".to_string(),
+            start: (2, 3).into(),
+            end: (4, 4).into(),
+        }
+    );
+
+    let serialized_paint =
+        serde_json::to_value(&paint_intent).expect("paint area intent should serialize to JSON");
+    assert_eq!(
+        serialized_paint,
+        serde_json::json!({
+            "type": "paintAreaRectangle",
+            "area": "residential",
+            "start": { "x": 2, "y": 3 },
+            "end": { "x": 4, "y": 4 }
+        })
+    );
+
+    let building_intent: GameIntent = serde_json::from_value(serde_json::json!({
+        "type": "placeBuilding",
+        "buildingType": "largeHouse",
+        "origin": { "x": 2, "y": 3 },
+        "rotation": 90
+    }))
+    .expect("place building intent should deserialize from camelCase JSON");
+
+    assert_eq!(
+        building_intent,
+        GameIntent::PlaceBuilding {
+            building_type: "largeHouse".to_string(),
+            origin: (2, 3).into(),
+            rotation: 90,
+        }
+    );
+
+    let serialized_building = serde_json::to_value(&building_intent)
+        .expect("place building intent should serialize to JSON");
+    assert_eq!(
+        serialized_building,
+        serde_json::json!({
+            "type": "placeBuilding",
+            "buildingType": "largeHouse",
+            "origin": { "x": 2, "y": 3 },
+            "rotation": 90
+        })
+    );
+    assert!(serialized_building.get("building_type").is_none());
+}
+
+#[test]
 fn new_engine_exposes_initial_snapshot() {
     let engine = GameEngine::new();
     let snapshot = engine.snapshot();

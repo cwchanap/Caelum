@@ -58,6 +58,15 @@ pub struct Point {
     pub y: i32,
 }
 
+impl From<(i32, i32)> for Point {
+    fn from(value: (i32, i32)) -> Self {
+        Self {
+            x: value.0,
+            y: value.1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitNetwork {
