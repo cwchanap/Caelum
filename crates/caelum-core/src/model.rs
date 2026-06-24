@@ -115,7 +115,18 @@ pub struct Route {
     pub path_broken: bool,
 }
 
-pub type MetroLine = Route;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetroLine {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub station_ids: Vec<String>,
+    pub vehicle_ids: Vec<String>,
+    pub active: bool,
+    pub segments: Vec<Vec<Point>>,
+    pub path_broken: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
