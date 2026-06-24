@@ -23,6 +23,14 @@ struct TripTickResult {
     outcome: Option<TripOutcome>,
 }
 
+struct TripMetricDelta {
+    completed_trips: u32,
+    late_trips: u32,
+    unserved_trips: u32,
+    wait_seconds: f64,
+    outcomes: Vec<TripOutcome>,
+}
+
 pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     if state.paused || state.metrics.state != "running" || state.speed == 0 {
         return state.clone();
@@ -110,14 +118,16 @@ fn advance_active_trips_with_zero_delta_ids(
         results.push(tick_trip(state, trip, trip_delta_seconds, tick_start_time));
     }
 
-    let completed_trips = results.iter().map(|result| result.completed_trips).sum();
-    let late_trips = results.iter().map(|result| result.late_trips).sum();
-    let unserved_trips = results.iter().map(|result| result.unserved_trips).sum();
-    let wait_seconds = results.iter().map(|result| result.wait_seconds).sum();
-    let outcomes = results
-        .iter()
-        .filter_map(|result| result.outcome.clone())
-        .collect::<Vec<_>>();
+    let metric_delta = TripMetricDelta {
+        completed_trips: results.iter().map(|result| result.completed_trips).sum(),
+        late_trips: results.iter().map(|result| result.late_trips).sum(),
+        unserved_trips: results.iter().map(|result| result.unserved_trips).sum(),
+        wait_seconds: results.iter().map(|result| result.wait_seconds).sum(),
+        outcomes: results
+            .iter()
+            .filter_map(|result| result.outcome.clone())
+            .collect(),
+    };
 
     let mut next = state.clone();
     next.active_trips = Vec::with_capacity(results.len());
@@ -131,11 +141,7 @@ fn advance_active_trips_with_zero_delta_ids(
     next.metrics = update_metrics(
         &state.metrics,
         &next.active_trips,
-        completed_trips,
-        late_trips,
-        unserved_trips,
-        wait_seconds,
-        outcomes,
+        metric_delta,
         state.time,
     );
     next
@@ -356,7 +362,7 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, after: f64) {
         return;
     }
 
-    if next.is_none_or(|current| candidate < current) {
+    if next.as_ref().map_or(true, |current| candidate < *current) {
         *next = Some(candidate);
     }
 }
@@ -606,14 +612,10 @@ fn mark_unserved(mut trip: ActiveTrip) -> ActiveTrip {
 fn update_metrics(
     metrics: &Metrics,
     trips: &[ActiveTrip],
-    completed_trips: u32,
-    late_trips: u32,
-    unserved_trips: u32,
-    wait_seconds: f64,
-    outcomes: Vec<TripOutcome>,
+    metric_delta: TripMetricDelta,
     current_time: f64,
 ) -> Metrics {
-    let total_wait_seconds = metrics.total_wait_seconds + wait_seconds;
+    let total_wait_seconds = metrics.total_wait_seconds + metric_delta.wait_seconds;
     let waiting_trip_count = trips.iter().filter(|trip| trip.status == "waiting").count() as u32;
     let current_wait_seconds: f64 = trips
         .iter()
@@ -625,14 +627,14 @@ fn update_metrics(
         .trip_outcomes
         .iter()
         .cloned()
-        .chain(outcomes)
+        .chain(metric_delta.outcomes)
         .collect();
     objectives::prune_trip_outcomes(&mut trip_outcomes, current_time);
 
     Metrics {
-        late_trips: metrics.late_trips + late_trips,
-        completed_trips: metrics.completed_trips + completed_trips,
-        unserved_trips: metrics.unserved_trips + unserved_trips,
+        late_trips: metrics.late_trips + metric_delta.late_trips,
+        completed_trips: metrics.completed_trips + metric_delta.completed_trips,
+        unserved_trips: metrics.unserved_trips + metric_delta.unserved_trips,
         total_wait_seconds,
         waiting_trip_count,
         average_wait_seconds: if waiting_trip_count > 0 {
