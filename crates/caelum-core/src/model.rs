@@ -14,6 +14,10 @@ pub struct GameSnapshot {
     pub transit: TransitNetwork,
     pub sims: Vec<Sim>,
     pub active_trips: Vec<ActiveTrip>,
+    #[serde(default)]
+    pub trip_sequence_day: u32,
+    #[serde(default)]
+    pub next_trip_sequence: u32,
     pub metrics: Metrics,
 }
 

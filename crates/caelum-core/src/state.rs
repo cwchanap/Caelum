@@ -21,6 +21,8 @@ pub fn create_initial_snapshot() -> GameSnapshot {
         },
         sims: Vec::new(),
         active_trips: Vec::new(),
+        trip_sequence_day: day_index(0.0),
+        next_trip_sequence: 1,
         metrics: Metrics {
             late_trips: 0,
             completed_trips: 0,
