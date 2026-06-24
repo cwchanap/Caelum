@@ -14,6 +14,7 @@ fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
         workplace,
         commute_day: 0,
         outbound_arrived_today: false,
+        returned_home_today: false,
     }
 }
 
@@ -101,9 +102,12 @@ fn walking_movement_scales_by_simulated_time() {
 }
 
 #[test]
-fn terminal_trips_do_not_advance_again() {
+fn terminal_trips_are_pruned_without_double_counting() {
     for status in ["arrived", "late", "unserved"] {
         let mut state = create_initial_snapshot();
+        state.metrics.completed_trips = 11;
+        state.metrics.late_trips = 3;
+        state.metrics.unserved_trips = 5;
         let mut terminal = trip("trip-001", status, (4, 4).into(), (5, 4).into());
         terminal.route_plan = Some(walk_plan((4, 4).into(), (5, 4).into(), 20.0));
         terminal.patience_remaining = 123.0;
@@ -111,7 +115,7 @@ fn terminal_trips_do_not_advance_again() {
 
         let next = trips::advance_active_trips(&state, 20.0);
 
-        assert_eq!(next.active_trips[0], terminal);
+        assert!(next.active_trips.is_empty());
         assert_eq!(next.metrics.completed_trips, state.metrics.completed_trips);
         assert_eq!(next.metrics.late_trips, state.metrics.late_trips);
         assert_eq!(next.metrics.unserved_trips, state.metrics.unserved_trips);
@@ -198,10 +202,8 @@ fn waiting_trips_lose_patience_and_update_wait_metrics() {
     state.active_trips = vec![waiting];
 
     let next = trips::advance_active_trips(&state, 2.0);
-    let unserved = &next.active_trips[0];
 
-    assert_eq!(unserved.status, "unserved");
-    assert_eq!(unserved.patience_remaining, 0.0);
+    assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(next.metrics.total_wait_seconds, 1.0);
     assert_eq!(next.metrics.waiting_trip_count, 0);
@@ -224,7 +226,7 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     on_time.active_trips = vec![trip("trip-001", "idle", (2, 3).into(), (3, 3).into())];
     let arrived = trips::advance_active_trips(&on_time, 20.0);
 
-    assert_eq!(arrived.active_trips[0].status, "arrived");
+    assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(arrived.metrics.late_trips, 0);
     assert_eq!(
@@ -254,7 +256,7 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     late.active_trips = vec![terminal_leg];
     let late_next = trips::advance_active_trips(&late, 1.0);
 
-    assert_eq!(late_next.active_trips[0].status, "late");
+    assert!(late_next.active_trips.is_empty());
     assert_eq!(late_next.metrics.completed_trips, 1);
     assert_eq!(late_next.metrics.late_trips, 1);
     assert_eq!(
@@ -274,8 +276,7 @@ fn no_route_planning_marks_trip_unserved() {
 
     let next = trips::advance_active_trips(&state, 1.0);
 
-    assert_eq!(next.active_trips[0].status, "unserved");
-    assert!(next.active_trips[0].route_plan.is_none());
+    assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(
         next.metrics.trip_outcomes,
@@ -301,7 +302,7 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
 
     let next = trips::tick_trips(&state, 100.0);
 
-    assert_eq!(next.active_trips[0].status, "unserved");
+    assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(next.metrics.total_wait_seconds, 5.0);
     assert_eq!(next.metrics.trip_outcomes.len(), 1);
@@ -372,7 +373,7 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
 
     let next = trips::tick_trips(&state, 20.0);
 
-    assert_eq!(next.active_trips[0].status, "arrived");
+    assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
     assert_eq!(next.metrics.trip_outcomes.len(), 1);
     assert_eq!(next.metrics.trip_outcomes[0].outcome, "arrived");
@@ -431,10 +432,8 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     assert!(disembarked.metrics.trip_outcomes.is_empty());
 
     let arrived = trips::tick_trips(&disembarked, 20.0);
-    let finished = &arrived.active_trips[0];
 
-    assert_eq!(finished.status, "arrived");
-    assert_eq!(finished.position, (13, 5).into());
+    assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(arrived.metrics.trip_outcomes.len(), 1);
     assert_eq!(arrived.metrics.trip_outcomes[0].outcome, "arrived");
@@ -455,6 +454,7 @@ fn outbound_home_fallback_trip_stays_dormant_when_away_from_home() {
         workplace: None,
         commute_day: 0,
         outbound_arrived_today: false,
+        returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -494,6 +494,7 @@ fn return_home_trip_is_not_treated_as_home_fallback() {
         workplace: Some((5, 3).into()),
         commute_day: 0,
         outbound_arrived_today: true,
+        returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -533,6 +534,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         workplace: Some(workplace.clone()),
         commute_day: 1,
         outbound_arrived_today: false,
+        returned_home_today: false,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -550,7 +552,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
 
     let arrived = trips::advance_active_trips(&state, 0.0);
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
-    assert_eq!(arrived.active_trips[0].status, "arrived");
+    assert!(arrived.active_trips.is_empty());
     assert_eq!(sim.position, workplace);
     assert!(!sim.outbound_arrived_today);
 
@@ -569,4 +571,46 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         .active_trips
         .iter()
         .any(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn"));
+}
+
+#[test]
+fn completed_same_day_return_is_not_respawned_after_pruning() {
+    let mut state = create_initial_snapshot();
+    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let return_time =
+        (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    state.time = return_time;
+    state.day = 0;
+    state.clock_minutes = return_minute;
+    state.paused = false;
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: (2, 3).into(),
+        position: (3, 3).into(),
+        worker_profile: "worker".to_string(),
+        shift_template: Some("standard".to_string()),
+        workplace: Some((3, 3).into()),
+        commute_day: 0,
+        outbound_arrived_today: true,
+        returned_home_today: false,
+    }];
+
+    let arrived = trips::tick_trips(&state, 20.0);
+
+    assert!(arrived.active_trips.is_empty());
+    assert_eq!(arrived.metrics.completed_trips, 1);
+    assert_eq!(
+        arrived
+            .sims
+            .iter()
+            .find(|sim| sim.id == "sim-001")
+            .unwrap()
+            .position,
+        Point { x: 2, y: 3 }
+    );
+
+    let ticked_again = trips::tick_trips(&arrived, 0.0);
+
+    assert!(ticked_again.active_trips.is_empty());
+    assert_eq!(ticked_again.metrics.completed_trips, 1);
 }

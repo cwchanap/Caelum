@@ -168,3 +168,100 @@ fn place_building_rejects_invalid_rotation_without_placing() {
     assert_eq!(rejected.rejection.as_deref(), Some("invalid rotation"));
     assert!(rejected.snapshot.buildings.is_empty());
 }
+
+#[test]
+fn place_bus_stop_building_creates_linked_stop() {
+    let mut engine = GameEngine::new();
+
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+
+    assert!(placed.applied);
+    assert_eq!(placed.snapshot.buildings.len(), 1);
+    assert_eq!(placed.snapshot.transit.stops.len(), 1);
+    let building = &placed.snapshot.buildings[0];
+    let stop = &placed.snapshot.transit.stops[0];
+    assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
+    assert_eq!(stop.id, "stop-001");
+    assert_eq!(stop.kind, "busStop");
+    assert_eq!(stop.position, building.origin);
+    assert_eq!(stop.platforms.len(), 1);
+    assert_eq!(stop.platforms[0].id, "stop-001-p0");
+}
+
+#[test]
+fn place_bus_terminal_building_creates_terminal_stop_platforms() {
+    let mut engine = GameEngine::new();
+
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+
+    assert!(placed.applied);
+    assert_eq!(placed.snapshot.buildings.len(), 1);
+    assert_eq!(placed.snapshot.transit.stops.len(), 1);
+    let building = &placed.snapshot.buildings[0];
+    let stop = &placed.snapshot.transit.stops[0];
+    assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
+    assert_eq!(stop.kind, "busTerminal");
+    assert_eq!(stop.position, building.origin);
+    assert_eq!(stop.platforms.len(), 3);
+    assert_eq!(stop.platforms[2].id, "stop-001-p2");
+}
+
+#[test]
+fn remove_transit_building_removes_linked_stop() {
+    let mut engine = GameEngine::new();
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+    assert!(placed.applied);
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 3).into(),
+    });
+
+    assert!(removed.applied);
+    assert!(removed.snapshot.buildings.is_empty());
+    assert!(removed.snapshot.transit.stops.is_empty());
+}
+
+#[test]
+fn place_metro_station_building_requires_track_and_creates_linked_station() {
+    let mut engine = GameEngine::new();
+
+    let rejected = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "metroStation".to_string(),
+        origin: (8, 2).into(),
+        rotation: 0,
+    });
+    assert!(!rejected.applied);
+    assert_eq!(rejected.rejection.as_deref(), Some("track required"));
+
+    engine.dispatch(GameIntent::LayTrack {
+        point: (8, 2).into(),
+    });
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "metroStation".to_string(),
+        origin: (8, 2).into(),
+        rotation: 0,
+    });
+
+    assert!(placed.applied);
+    assert_eq!(placed.snapshot.buildings.len(), 1);
+    assert_eq!(placed.snapshot.transit.stations.len(), 1);
+    let building = &placed.snapshot.buildings[0];
+    let station = &placed.snapshot.transit.stations[0];
+    assert_eq!(building.transit_node_id.as_deref(), Some("station-001"));
+    assert_eq!(station.id, "station-001");
+    assert_eq!(station.position, building.origin);
+    assert_eq!(station.platforms.len(), 2);
+    assert_eq!(station.platforms[1].id, "station-001-p1");
+}

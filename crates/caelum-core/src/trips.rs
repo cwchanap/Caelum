@@ -135,15 +135,12 @@ fn advance_active_trips_with_zero_delta_ids(
         if result.completed_trips > 0 {
             apply_arrival_to_sim(&mut next, &result.trip);
         }
-        next.active_trips.push(result.trip);
+        if !is_terminal_status(&result.trip.status) {
+            next.active_trips.push(result.trip);
+        }
     }
 
-    next.metrics = update_metrics(
-        &state.metrics,
-        &next.active_trips,
-        metric_delta,
-        state.time,
-    );
+    next.metrics = update_metrics(&state.metrics, &next.active_trips, metric_delta, state.time);
     next
 }
 
@@ -174,6 +171,7 @@ fn reset_daily_commute_flags(state: &mut GameSnapshot) {
         if sim.commute_day != state.day {
             sim.commute_day = state.day;
             sim.outbound_arrived_today = false;
+            sim.returned_home_today = false;
         }
     }
 }
@@ -213,6 +211,9 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
         }
 
         if !sim.outbound_arrived_today {
+            continue;
+        }
+        if sim.returned_home_today {
             continue;
         }
         let return_departure = departure_minute_for_sim(&sim.id, template, "return");
@@ -262,7 +263,9 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             );
         }
 
-        if !has_trip_for_sim_day(state, &sim.id, "commuteReturn", state.day) {
+        if !sim.returned_home_today
+            && !has_trip_for_sim_day(state, &sim.id, "commuteReturn", state.day)
+        {
             let return_departure = departure_minute_for_sim(&sim.id, template, "return");
             track_next_boundary(
                 &mut next,
@@ -420,9 +423,7 @@ fn tick_trip(
     delta_seconds: f64,
     tick_start_time: f64,
 ) -> TripTickResult {
-    if matches!(trip.status.as_str(), "arrived" | "late" | "unserved")
-        || is_home_fallback_trip(state, trip)
-    {
+    if is_terminal_status(&trip.status) || is_home_fallback_trip(state, trip) {
         return unchanged(trip);
     }
 
@@ -662,9 +663,16 @@ fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
         }
         "commuteReturn" => {
             sim.position = sim.home.clone();
+            if trip_service_day(trip).is_some_and(|day| day == state.day) {
+                sim.returned_home_today = true;
+            }
         }
         _ => {}
     }
+}
+
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "arrived" | "late" | "unserved")
 }
 
 fn trip_service_day(trip: &ActiveTrip) -> Option<u32> {
