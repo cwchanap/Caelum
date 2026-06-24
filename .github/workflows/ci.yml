@@ -114,13 +114,13 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
       - name: Check Rust formatting
-        run: cargo +stable fmt --manifest-path src-tauri/Cargo.toml --check
+        run: cargo +stable fmt --all --check
 
       - name: Run Clippy
-        run: cargo +stable clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+        run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build Rust crate
-        run: cargo +stable build --manifest-path src-tauri/Cargo.toml --all-targets --locked
+        run: cargo +stable build --workspace --all-targets --locked
 
   rust-unit-test:
     name: Rust unit test
@@ -147,4 +147,4 @@ jobs:
         run: rustup toolchain install stable --profile minimal
 
       - name: Run Rust tests
-        run: cargo +stable test --manifest-path src-tauri/Cargo.toml --all-targets --locked
+        run: cargo +stable test --workspace --locked
