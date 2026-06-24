@@ -41,7 +41,9 @@ fn worker_sim(id: &str, position: Point, workplace: Point) -> Sim {
         shift_template: None,
         workplace: Some(workplace),
         commute_day: 0,
+        outbound_resolved_today: false,
         outbound_arrived_today: false,
+        return_resolved_today: false,
         returned_home_today: false,
     }
 }

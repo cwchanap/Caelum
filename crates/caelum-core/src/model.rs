@@ -177,7 +177,11 @@ pub struct Sim {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workplace: Option<Point>,
     pub commute_day: u32,
+    #[serde(default)]
+    pub outbound_resolved_today: bool,
     pub outbound_arrived_today: bool,
+    #[serde(default)]
+    pub return_resolved_today: bool,
     #[serde(default)]
     pub returned_home_today: bool,
 }
