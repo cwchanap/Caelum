@@ -1,7 +1,8 @@
 use crate::building_catalog::{building_definition, BuildingDefinition};
 use crate::commute::{shift_template_for_id, worker_profile_for_id};
 use crate::ids::next_entity_id;
-use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim};
+use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop};
+use crate::platforms::{bus_platforms, metro_platforms};
 
 pub fn footprint(definition: &BuildingDefinition, origin: &Point, rotation: u16) -> Vec<Point> {
     let (width, height) = if matches!(rotation, 90 | 270) {
@@ -57,11 +58,20 @@ pub fn can_place_building(
             return Err("off map".to_string());
         };
 
-        if tile.kind != "empty" {
-            return Err("tile is not empty".to_string());
-        }
-        if tile.has_track {
-            return Err("track occupied".to_string());
+        if building_type == "metroStation" {
+            if !matches!(tile.kind.as_str(), "empty" | "road") {
+                return Err("tile is not empty".to_string());
+            }
+            if !tile.has_track {
+                return Err("track required".to_string());
+            }
+        } else {
+            if tile.kind != "empty" {
+                return Err("tile is not empty".to_string());
+            }
+            if tile.has_track {
+                return Err("track occupied".to_string());
+            }
         }
         if let Some(allowed_area) = definition.allowed_area {
             if tile.area.as_deref() != Some(allowed_area) {
@@ -117,13 +127,45 @@ pub fn place_building(
     );
 
     next.budget -= definition.cost;
+    let mut transit_node_id = None;
+
+    if matches!(definition.effect, "busStop" | "busTerminal") {
+        let stop_id = next_entity_id(
+            "stop",
+            next.transit.stops.iter().map(|stop| stop.id.clone()),
+        );
+        next.transit.stops.push(Stop {
+            id: stop_id.clone(),
+            kind: definition.effect.to_string(),
+            position: origin.clone(),
+            platforms: bus_platforms(&stop_id, definition.effect),
+        });
+        transit_node_id = Some(stop_id);
+    }
+
+    if definition.effect == "metroStation" {
+        let station_id = next_entity_id(
+            "station",
+            next.transit
+                .stations
+                .iter()
+                .map(|station| station.id.clone()),
+        );
+        next.transit.stations.push(Station {
+            id: station_id.clone(),
+            position: origin.clone(),
+            platforms: metro_platforms(&station_id),
+        });
+        transit_node_id = Some(station_id);
+    }
+
     next.buildings.push(PlacedBuilding {
         id: building_id,
         building_type: building_type.to_string(),
         origin: origin.clone(),
         rotation,
         occupied_tiles: occupied_tiles.clone(),
-        transit_node_id: None,
+        transit_node_id,
     });
 
     if definition.effect == "housing" {
@@ -140,6 +182,7 @@ pub fn place_building(
                 workplace: None,
                 commute_day: 0,
                 outbound_arrived_today: false,
+                returned_home_today: false,
             });
         }
     }

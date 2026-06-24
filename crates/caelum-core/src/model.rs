@@ -178,6 +178,8 @@ pub struct Sim {
     pub workplace: Option<Point>,
     pub commute_day: u32,
     pub outbound_arrived_today: bool,
+    #[serde(default)]
+    pub returned_home_today: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

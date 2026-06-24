@@ -163,10 +163,9 @@ fn best_candidate(candidates: Vec<RoutePlan>) -> Option<RoutePlan> {
     let mut best: Option<RoutePlan> = None;
 
     for candidate in candidates {
-        if best
-            .as_ref()
-            .map_or(true, |current| candidate.estimated_seconds < current.estimated_seconds)
-        {
+        if best.as_ref().map_or(true, |current| {
+            candidate.estimated_seconds < current.estimated_seconds
+        }) {
             best = Some(candidate);
         }
     }
