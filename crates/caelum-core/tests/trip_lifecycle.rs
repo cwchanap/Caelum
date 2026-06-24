@@ -1,7 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, Point, RouteLeg, RoutePlan, Sim, TransitNetwork, TripPosition, Vehicle,
+    ActiveTrip, Point, RouteLeg, RoutePlan, Sim, TransitNetwork, TripOutcome, TripPosition, Vehicle,
 };
-use caelum_core::{clock, commute, state::create_initial_snapshot, trips};
+use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, trips};
+use caelum_core::{GameEngine, GameIntent};
 
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
@@ -53,6 +54,34 @@ fn bus_plan(from: Point, to: Point, line_id: &str) -> RoutePlan {
             to,
             line_id: Some(line_id.to_string()),
         }],
+    }
+}
+
+fn bus_then_walk_plan(bus_from: Point, bus_to: Point, walk_to: Point, line_id: &str) -> RoutePlan {
+    RoutePlan {
+        estimated_seconds: 140.0,
+        legs: vec![
+            RouteLeg {
+                mode: "bus".to_string(),
+                from: bus_from,
+                to: bus_to.clone(),
+                line_id: Some(line_id.to_string()),
+            },
+            RouteLeg {
+                mode: "walk".to_string(),
+                from: bus_to,
+                to: walk_to,
+                line_id: None,
+            },
+        ],
+    }
+}
+
+fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
+    for x in from_x..=to_x {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (x, y).into(),
+        });
     }
 }
 
@@ -174,9 +203,17 @@ fn waiting_trips_lose_patience_and_update_wait_metrics() {
     assert_eq!(unserved.status, "unserved");
     assert_eq!(unserved.patience_remaining, 0.0);
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(next.metrics.total_wait_seconds, 2.0);
+    assert_eq!(next.metrics.total_wait_seconds, 1.0);
     assert_eq!(next.metrics.waiting_trip_count, 0);
     assert_eq!(next.metrics.average_wait_seconds, 0.0);
+    assert_eq!(
+        next.metrics.trip_outcomes,
+        vec![TripOutcome {
+            outcome: "unserved".to_string(),
+            wait_seconds: 240.0,
+            time: 1.0,
+        }]
+    );
 }
 
 #[test]
@@ -190,6 +227,14 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     assert_eq!(arrived.active_trips[0].status, "arrived");
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(arrived.metrics.late_trips, 0);
+    assert_eq!(
+        arrived.metrics.trip_outcomes,
+        vec![TripOutcome {
+            outcome: "arrived".to_string(),
+            wait_seconds: 0.0,
+            time: 20.0,
+        }]
+    );
     assert_eq!(
         arrived
             .sims
@@ -212,6 +257,14 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     assert_eq!(late_next.active_trips[0].status, "late");
     assert_eq!(late_next.metrics.completed_trips, 1);
     assert_eq!(late_next.metrics.late_trips, 1);
+    assert_eq!(
+        late_next.metrics.trip_outcomes,
+        vec![TripOutcome {
+            outcome: "late".to_string(),
+            wait_seconds: 0.0,
+            time: 1.0,
+        }]
+    );
 }
 
 #[test]
@@ -224,6 +277,168 @@ fn no_route_planning_marks_trip_unserved() {
     assert_eq!(next.active_trips[0].status, "unserved");
     assert!(next.active_trips[0].route_plan.is_none());
     assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(
+        next.metrics.trip_outcomes,
+        vec![TripOutcome {
+            outcome: "unserved".to_string(),
+            wait_seconds: 0.0,
+            time: 0.0,
+        }]
+    );
+}
+
+#[test]
+fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
+    let mut state = create_initial_snapshot();
+    state.time = 100.0;
+    state.day = clock::day_index(state.time);
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    let mut waiting = trip("trip-001", "waiting", (7, 8).into(), (22, 8).into());
+    waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    waiting.patience_remaining = 5.0;
+    state.active_trips = vec![waiting];
+
+    let next = trips::tick_trips(&state, 100.0);
+
+    assert_eq!(next.active_trips[0].status, "unserved");
+    assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(next.metrics.total_wait_seconds, 5.0);
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert_eq!(next.metrics.trip_outcomes[0].outcome, "unserved");
+    assert_eq!(next.metrics.trip_outcomes[0].wait_seconds, 240.0);
+    assert!((next.metrics.trip_outcomes[0].time - 105.0).abs() < 0.000_001);
+}
+
+#[test]
+fn stale_history_pruning_keeps_history_signal_for_empty_window() {
+    let mut state = create_initial_snapshot();
+    state.time = 1_000.0;
+    state.metrics.unserved_trips = 10;
+    state.metrics.trip_outcomes = (0..10)
+        .map(|index| TripOutcome {
+            outcome: "unserved".to_string(),
+            wait_seconds: 0.0,
+            time: 100.0 + f64::from(index),
+        })
+        .collect();
+
+    let next = trips::advance_active_trips(&state, 0.0);
+
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert_eq!(next.metrics.trip_outcomes[0].time, 109.0);
+    assert_eq!(
+        objectives::evaluate_objectives(&next).metrics.state,
+        "running"
+    );
+}
+
+#[test]
+fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = vehicle.snapshot;
+    state.paused = false;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: "commuteOutbound".to_string(),
+        origin: (2, 5).into(),
+        destination: (12, 5).into(),
+        position: (2, 5).into(),
+        status: "riding".to_string(),
+        deadline: 100.0,
+        route_plan: Some(bus_plan((2, 5).into(), (12, 5).into(), "route-001")),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+
+    let next = trips::tick_trips(&state, 20.0);
+
+    assert_eq!(next.active_trips[0].status, "arrived");
+    assert_eq!(next.metrics.completed_trips, 1);
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert_eq!(next.metrics.trip_outcomes[0].outcome, "arrived");
+    assert!((next.metrics.trip_outcomes[0].time - 12.5).abs() < 0.000_001);
+}
+
+#[test]
+fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = vehicle.snapshot;
+    state.paused = false;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: "commuteOutbound".to_string(),
+        origin: (2, 5).into(),
+        destination: (13, 5).into(),
+        position: (2, 5).into(),
+        status: "riding".to_string(),
+        deadline: 100.0,
+        route_plan: Some(bus_then_walk_plan(
+            (2, 5).into(),
+            (12, 5).into(),
+            (13, 5).into(),
+            "route-001",
+        )),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+
+    let disembarked = trips::tick_trips(&state, 12.5);
+    let walking = &disembarked.active_trips[0];
+
+    assert_eq!(walking.status, "walking");
+    assert_eq!(walking.current_leg_index, 1);
+    assert_eq!(walking.position, (12, 5).into());
+    assert_eq!(disembarked.metrics.completed_trips, 0);
+    assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    let arrived = trips::tick_trips(&disembarked, 20.0);
+    let finished = &arrived.active_trips[0];
+
+    assert_eq!(finished.status, "arrived");
+    assert_eq!(finished.position, (13, 5).into());
+    assert_eq!(arrived.metrics.completed_trips, 1);
+    assert_eq!(arrived.metrics.trip_outcomes.len(), 1);
+    assert_eq!(arrived.metrics.trip_outcomes[0].outcome, "arrived");
+    assert!((arrived.metrics.trip_outcomes[0].time - 32.5).abs() < 0.000_001);
 }
 
 #[test]

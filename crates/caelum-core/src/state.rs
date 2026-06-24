@@ -28,6 +28,7 @@ pub fn create_initial_snapshot() -> GameSnapshot {
             total_wait_seconds: 0.0,
             waiting_trip_count: 0,
             average_wait_seconds: 0.0,
+            trip_outcomes: Vec::new(),
             state: "running".to_string(),
             loss_reason: None,
         },

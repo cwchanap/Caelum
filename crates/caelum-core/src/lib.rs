@@ -8,6 +8,7 @@ pub mod ids;
 pub mod intent;
 pub mod model;
 pub mod network;
+pub mod objectives;
 pub mod platforms;
 pub mod router;
 pub mod scenario;
