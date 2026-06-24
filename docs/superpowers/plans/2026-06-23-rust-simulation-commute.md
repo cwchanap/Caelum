@@ -13,7 +13,8 @@
 ## File Structure
 
 - `Cargo.toml`
-  - Create a root workspace containing `src-tauri`, `crates/caelum-core`, and `crates/caelum-wasm`.
+  - Create a root workspace containing `src-tauri` and `crates/caelum-core`.
+  - `crates/caelum-wasm` is added to the workspace in Task 7 when that crate is created.
 - `crates/caelum-core/Cargo.toml`
   - New Rust simulation crate with serde-only dependencies.
 - `crates/caelum-core/src/lib.rs`
@@ -99,6 +100,7 @@
 - Create: `crates/caelum-core/tests/engine_smoke.rs`
 - Modify: `src-tauri/Cargo.toml`
 - Modify: `package.json`
+- Create/Modify: `Cargo.lock`
 
 - [ ] **Step 1: Write the failing Rust engine smoke test**
 
@@ -160,7 +162,6 @@ Create root `Cargo.toml`:
 members = [
   "src-tauri",
   "crates/caelum-core",
-  "crates/caelum-wasm",
 ]
 resolver = "2"
 ```
@@ -528,7 +529,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```sh
-git add Cargo.toml crates/caelum-core src-tauri/Cargo.toml package.json
+git add Cargo.toml Cargo.lock crates/caelum-core src-tauri/Cargo.toml package.json
 git commit -m "feat: scaffold rust simulation core"
 ```
 
@@ -2093,6 +2094,7 @@ git commit -m "feat: add rust metrics objectives"
 **Files:**
 - Create: `crates/caelum-wasm/Cargo.toml`
 - Create: `crates/caelum-wasm/src/lib.rs`
+- Modify: `Cargo.toml`
 - Modify: `package.json`
 - Create: `src/runtime/backend/types.ts`
 - Create: `src/runtime/backend/wasmBackend.ts`
@@ -2163,6 +2165,18 @@ bunx vitest run tests/runtime/backend.test.ts --project runtime
 Expected: FAIL because backend types do not exist.
 
 - [ ] **Step 3: Add WASM crate**
+
+Modify root `Cargo.toml` so the workspace includes the new WASM crate:
+
+```toml
+[workspace]
+members = [
+  "src-tauri",
+  "crates/caelum-core",
+  "crates/caelum-wasm",
+]
+resolver = "2"
+```
 
 Create `crates/caelum-wasm/Cargo.toml`:
 
