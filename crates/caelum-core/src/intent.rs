@@ -13,6 +13,51 @@ pub enum GameIntent {
         mode: String,
         line_id: String,
     },
+    LayRoad {
+        point: Point,
+    },
+    CycleRoadDirection {
+        point: Point,
+    },
+    LayTrack {
+        point: Point,
+    },
+    RemoveAtTile {
+        point: Point,
+    },
+    AddBusStop {
+        point: Point,
+        kind: String,
+    },
+    AddMetroStation {
+        point: Point,
+    },
+    AddBusRoute {
+        stop_ids: Vec<String>,
+    },
+    AddMetroLine {
+        station_ids: Vec<String>,
+    },
+    SetRouteActive {
+        route_id: String,
+        active: bool,
+    },
+    RenameRoute {
+        route_id: String,
+        name: String,
+    },
+    RecolorRoute {
+        route_id: String,
+        color: String,
+    },
+    DeleteRoute {
+        route_id: String,
+    },
+    AssignRouteToPlatform {
+        node_id: String,
+        route_id: String,
+        platform_id: String,
+    },
     PaintAreaRectangle {
         area: String,
         start: Point,

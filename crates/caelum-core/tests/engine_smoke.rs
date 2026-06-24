@@ -1,5 +1,13 @@
 use caelum_core::{GameEngine, GameIntent};
 
+fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
+    let decoded: GameIntent =
+        serde_json::from_value(json.clone()).expect("intent should deserialize");
+    assert_eq!(decoded, intent);
+    let serialized = serde_json::to_value(&decoded).expect("intent should serialize");
+    assert_eq!(serialized, json);
+}
+
 #[test]
 fn assign_vehicle_intent_uses_camel_case_json_fields() {
     let intent: GameIntent = serde_json::from_value(serde_json::json!({
@@ -29,6 +37,52 @@ fn assign_vehicle_intent_uses_camel_case_json_fields() {
         })
     );
     assert!(serialized.get("line_id").is_none());
+}
+
+#[test]
+fn transit_intents_use_camel_case_json_fields() {
+    assert_intent_json(
+        GameIntent::LayRoad {
+            point: (3, 4).into(),
+        },
+        serde_json::json!({
+            "type": "layRoad",
+            "point": { "x": 3, "y": 4 }
+        }),
+    );
+    assert_intent_json(
+        GameIntent::AddBusStop {
+            point: (5, 6).into(),
+            kind: "busStop".to_string(),
+        },
+        serde_json::json!({
+            "type": "addBusStop",
+            "point": { "x": 5, "y": 6 },
+            "kind": "busStop"
+        }),
+    );
+    assert_intent_json(
+        GameIntent::AddMetroLine {
+            station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        },
+        serde_json::json!({
+            "type": "addMetroLine",
+            "stationIds": ["station-001", "station-002"]
+        }),
+    );
+    assert_intent_json(
+        GameIntent::AssignRouteToPlatform {
+            node_id: "stop-001".to_string(),
+            route_id: "route-001".to_string(),
+            platform_id: "stop-001-p0".to_string(),
+        },
+        serde_json::json!({
+            "type": "assignRouteToPlatform",
+            "nodeId": "stop-001",
+            "routeId": "route-001",
+            "platformId": "stop-001-p0"
+        }),
+    );
 }
 
 #[test]

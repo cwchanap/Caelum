@@ -7,8 +7,12 @@ pub mod engine;
 pub mod ids;
 pub mod intent;
 pub mod model;
+pub mod network;
+pub mod platforms;
+pub mod router;
 pub mod scenario;
 pub mod state;
+pub mod transit;
 
 pub use engine::GameEngine;
 pub use intent::{DispatchResult, GameIntent};
