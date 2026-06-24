@@ -1,0 +1,32 @@
+codecov:
+  require_ci_to_pass: true
+
+comment:
+  layout: "condensed_files"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+ignore:
+  - "src-tauri/**"        # Rust host crate — no gameplay logic, covered by cargo test
+  - "crates/caelum-core/**" # Rust core — coverage reported separately if enabled later
+  - "**/*.test.ts"
+  - "**/*.spec.ts"
+  - "tests/**"
+  - "vite.config.ts"
+  - "svelte.config.js"
+  - "eslint.config.js"
