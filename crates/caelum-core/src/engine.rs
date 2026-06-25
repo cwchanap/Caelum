@@ -56,12 +56,9 @@ impl GameEngine {
     pub fn dispatch(&mut self, intent: GameIntent) -> DispatchResult {
         match intent {
             GameIntent::SetPaused { paused } => {
-                self.snapshot.paused = paused;
-                DispatchResult {
-                    snapshot: self.snapshot(),
-                    applied: true,
-                    rejection: None,
-                }
+                let mut next = self.snapshot.clone();
+                next.paused = paused;
+                self.commit_result(Ok(next))
             }
             GameIntent::SetSpeed { speed } => {
                 if !matches!(speed, 0 | 1 | 2 | 4) {
@@ -71,12 +68,9 @@ impl GameEngine {
                         rejection: Some(format!("invalid speed: {speed}")),
                     };
                 }
-                self.snapshot.speed = speed;
-                DispatchResult {
-                    snapshot: self.snapshot(),
-                    applied: true,
-                    rejection: None,
-                }
+                let mut next = self.snapshot.clone();
+                next.speed = speed;
+                self.commit_result(Ok(next))
             }
             GameIntent::AssignVehicle { mode, line_id } => {
                 self.commit_result(transit::assign_vehicle(&self.snapshot, &mode, &line_id))

@@ -49,7 +49,7 @@ The central rule: **`createGameRuntime()` (`src/runtime/createGameRuntime.ts`) i
 **Intent flow:** a Svelte component calls a `RuntimeController` method (e.g. `setTool`, `handleTileClick`, `togglePause`) → the runtime applies it via pure helpers (`src/ui/actions.ts`) or `tickSimulation` → `commit()` swaps in the new state, re-renders the canvas, and publishes a `RuntimeSnapshot` to subscribers. The runtime drives its own `requestAnimationFrame` loop and calls `tickSimulation(state, deltaSeconds)` each frame.
 
 **Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. The engine runs one tick as a fixed pipeline over an immutable `GameSnapshot`:
-`tick_trips` → `record_trip_outcome` (objectives/metrics). Every step takes a `GameSnapshot` and returns a new one; the engine publishes a new snapshot only when `next != current`. The legacy TypeScript simulation (`src/simulation/simulation.ts`, pipeline `applyDueGrowthWaves` → `tickVehicles` → `tickCitizens` → `evaluateObjectives`) is retained as the live runtime and parity oracle until plan Tasks 7–12 wire the Rust core into the frontend.
+`tick_trips` → `evaluate_objectives` (metrics/objectives). Trip outcomes are recorded inline by `tick_trips`; every step takes a `GameSnapshot` and returns a new one, and the engine publishes a new snapshot only when `next != current`. The legacy TypeScript simulation (`src/simulation/simulation.ts`, pipeline `applyDueGrowthWaves` → `tickVehicles` → `tickCitizens` → `evaluateObjectives`) is retained as the live runtime and parity oracle until plan Tasks 7–12 wire the Rust core into the frontend.
 
 **Layers (`src/`):**
 

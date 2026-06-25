@@ -2,50 +2,6 @@ use caelum_core::model::TripOutcome;
 use caelum_core::{objectives, state::create_initial_snapshot, GameEngine, GameIntent};
 
 #[test]
-fn completed_trips_increment_metrics() {
-    let state = create_initial_snapshot();
-
-    let next = objectives::record_trip_outcome(&state, "arrived", 30.0, 100.0).unwrap();
-
-    assert_eq!(next.metrics.completed_trips, 1);
-    assert_eq!(next.metrics.late_trips, 0);
-    assert_eq!(next.metrics.unserved_trips, 0);
-    assert_eq!(next.metrics.total_wait_seconds, 30.0);
-    assert_eq!(
-        next.metrics.trip_outcomes,
-        vec![TripOutcome {
-            outcome: "arrived".to_string(),
-            wait_seconds: 30.0,
-            time: 100.0,
-        }]
-    );
-}
-
-#[test]
-fn record_trip_outcome_clamps_negative_wait_seconds() {
-    let state = create_initial_snapshot();
-
-    let next = objectives::record_trip_outcome(&state, "late", -12.0, 100.0).unwrap();
-
-    assert_eq!(next.metrics.completed_trips, 1);
-    assert_eq!(next.metrics.late_trips, 1);
-    assert_eq!(next.metrics.total_wait_seconds, 0.0);
-    assert_eq!(next.metrics.trip_outcomes[0].wait_seconds, 0.0);
-}
-
-#[test]
-fn invalid_record_trip_outcome_is_rejected_without_mutating_metrics() {
-    let state = create_initial_snapshot();
-    let before = state.metrics.clone();
-
-    let result = objectives::record_trip_outcome(&state, "teleported", 30.0, 100.0);
-
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "invalid trip outcome: teleported");
-    assert_eq!(state.metrics, before);
-}
-
-#[test]
 fn survival_requires_served_demand() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::SetPaused { paused: false });
