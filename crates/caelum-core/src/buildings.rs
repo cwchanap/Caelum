@@ -189,7 +189,9 @@ pub fn place_building(
         }
     }
 
-    assign_workplaces(&mut next);
+    if matches!(definition.effect, "housing" | "destination") {
+        assign_workplaces(&mut next);
+    }
 
     Ok(next)
 }
