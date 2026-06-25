@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Caelum is a 2D city / public-transport simulation. The player places roads, bus stops/routes, metro stations/lines, and buildings to keep citizens commuting in a deterministic "Growing Suburb" scenario. It ships as both a browser app (Vite dev server) and a macOS desktop app (Tauri 2). All gameplay logic lives in TypeScript; Rust is only a thin Tauri host.
+Caelum is a 2D city / public-transport simulation. The player places roads, bus stops/routes, metro stations/lines, and buildings to keep citizens commuting in a deterministic "Growing Suburb" scenario. It ships as both a browser app (Vite dev server) and a macOS desktop app (Tauri 2).
+
+**The authoritative simulation core is the Rust crate `crates/caelum-core`.** It owns the tick pipeline, transit routing, trip/commute lifecycle, objectives, and metrics, and is gated by CI (fmt/clippy/test/build) and `lint-staged`. The TypeScript simulation under `src/simulation/` is the legacy implementation retained for parity verification and as the live runtime until the WASM/Tauri adapters (plan Tasks 7–12) wire the Rust core into the frontend. New gameplay logic belongs in `crates/caelum-core`; do not extend `src/simulation/` except to keep parity tests green.
 
 ## Commands
 
@@ -32,9 +34,10 @@ bunx vitest run tests/simulation/transit.test.ts   # one file
 bunx vitest run --project simulation                # one project
 bunx vitest run -t "vehicle advances"               # by test name
 
-# Rust (Tauri crate lives in src-tauri/)
-cargo test   --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+# Rust (workspace root is the repo root; members are src-tauri and crates/caelum-core)
+cargo test   --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt    --all --check
 ```
 
 CI (`.github/workflows/ci.yml`) gates on: TS check+lint+build, TS unit coverage, Playwright, Rust fmt+clippy+build, Rust test. `lint-staged` runs eslint/prettier and Rust fmt/clippy on commit.
@@ -45,8 +48,8 @@ The central rule: **`createGameRuntime()` (`src/runtime/createGameRuntime.ts`) i
 
 **Intent flow:** a Svelte component calls a `RuntimeController` method (e.g. `setTool`, `handleTileClick`, `togglePause`) → the runtime applies it via pure helpers (`src/ui/actions.ts`) or `tickSimulation` → `commit()` swaps in the new state, re-renders the canvas, and publishes a `RuntimeSnapshot` to subscribers. The runtime drives its own `requestAnimationFrame` loop and calls `tickSimulation(state, deltaSeconds)` each frame.
 
-**Simulation is pure TypeScript**, independent of Svelte and Tauri. `tickSimulation` (`src/simulation/simulation.ts`) orchestrates one tick as a fixed pipeline over an immutable `GameState`:
-`applyDueGrowthWaves` → `tickVehicles` → `tickCitizens` → `evaluateObjectives`. Every step takes a `GameState` and returns a new one.
+**Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. The engine runs one tick as a fixed pipeline over an immutable `GameSnapshot`:
+`tick_trips` → `record_trip_outcome` (objectives/metrics). Every step takes a `GameSnapshot` and returns a new one; the engine publishes a new snapshot only when `next != current`. The legacy TypeScript simulation (`src/simulation/simulation.ts`, pipeline `applyDueGrowthWaves` → `tickVehicles` → `tickCitizens` → `evaluateObjectives`) is retained as the live runtime and parity oracle until plan Tasks 7–12 wire the Rust core into the frontend.
 
 **Layers (`src/`):**
 
@@ -58,7 +61,9 @@ The central rule: **`createGameRuntime()` (`src/runtime/createGameRuntime.ts`) i
 - `render/` — imperative canvas drawing. `canvas.ts` owns board sizing, tile↔pixel mapping (`tileSize = 32`), and the render pass; it composes per-concern renderers (map/buildings/transit/citizens/overlays). The runtime creates the real `<canvas>` and attaches it to `GameCanvas.svelte`'s host element.
 - `components/` — `Topbar.svelte`, `ControlTower.svelte` (tools/overlays/brief), `GameCanvas.svelte`. `App.svelte` composes them and surfaces shell errors.
 
-**Tauri/Rust (`src-tauri/`)** is intentionally minimal: `lib.rs` just builds the Tauri app and wires the log plugin. No gameplay logic goes into Rust.
+**Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
+
+**Tauri host (`src-tauri/`)** is intentionally minimal for now: `lib.rs` just builds the Tauri app and wires the log plugin. Plan Tasks 7–8 will add a WASM facade and Tauri commands that delegate to `caelum-core::GameEngine`; until then the TypeScript runtime remains the live simulation.
 
 ## Conventions
 

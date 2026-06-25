@@ -307,7 +307,6 @@ dependencies = [
 name = "caelum"
 version = "0.1.0"
 dependencies = [
- "caelum-core",
  "log",
  "serde",
  "serde_json",

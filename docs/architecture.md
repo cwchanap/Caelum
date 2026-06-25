@@ -1,10 +1,24 @@
 # Architecture
 
-Caelum now runs as a shared browser + Tauri frontend with a Svelte shell around the existing TypeScript simulation and canvas renderer.
+Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a canvas renderer. The authoritative simulation core is the Rust crate `crates/caelum-core`; the TypeScript simulation under `src/simulation/` is the legacy implementation, retained as the live runtime and parity oracle until plan Tasks 7–12 wire the Rust core into the frontend via a WASM facade and Tauri commands.
 
-## Runtime boundary
+## Simulation core (Rust)
 
-`createGameRuntime()` is the single owner of mutable frontend state.
+`crates/caelum-core` owns the simulation. It is a Cargo workspace member gated by CI (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo build`) and by `lint-staged`.
+
+- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs the fixed tick pipeline (`tick_trips` → `record_trip_outcome`) over immutable snapshots. It publishes a new snapshot only when `next != current`, mirroring the TS runtime's reference-equality dispatch.
+- `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
+- `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
+- `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
+- `scenario.rs`, `clock.rs` — Growing Suburb scenario and deterministic clock.
+- `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde for the future WASM/Tauri boundary.
+- `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
+
+The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. Parity tests (`transit_parity`, `router_parity`, `network_parity`, `platforms_parity`) assert specific values against the TS implementation, not just shape.
+
+## Runtime boundary (TypeScript, legacy live runtime)
+
+`createGameRuntime()` is the single owner of mutable frontend state while the TS runtime remains live.
 
 - It creates and stores the current `GameState` and `UiState`.
 - It applies player intents such as tool changes, overlays, pause/speed toggles, selection, and UI reset.
@@ -12,7 +26,7 @@ Caelum now runs as a shared browser + Tauri frontend with a Svelte shell around 
 - It publishes runtime snapshots for the Svelte shell.
 - It mounts the imperative canvas host and keeps rendering tied to runtime-owned state.
 
-The simulation, routing, map growth, transit logic, and objective evaluation remain pure TypeScript and stay independent of Svelte and Tauri.
+The TypeScript simulation, routing, map growth, transit logic, and objective evaluation remain pure TypeScript and independent of Svelte and Tauri. They are the parity oracle for `crates/caelum-core`; new gameplay logic belongs in the Rust crate, not `src/simulation/` (except to keep parity tests green).
 
 ## Area zoning layer
 
@@ -45,9 +59,9 @@ Canvas rendering remains imperative for parity and performance.
 Both hosts start the same frontend:
 
 - **Browser host:** Vite serves the Svelte app for development, tests, and the web build.
-- **Tauri host:** packages the same frontend into a macOS desktop app without moving gameplay logic into Rust.
+- **Tauri host:** packages the same frontend into a macOS desktop app. The Tauri crate (`src-tauri/`) is intentionally minimal today (`lib.rs` builds the app and wires the log plugin). Plan Tasks 7–8 will add a WASM facade and Tauri commands that delegate to `crates/caelum-core::GameEngine`; until then the TS runtime drives the simulation on both hosts.
 
-Host bootstrap failures stay in the shell layer, while gameplay validation remains in the runtime and simulation code.
+Host bootstrap failures stay in the shell layer, while gameplay validation remains in the runtime and the Rust simulation core.
 
 ## Runtime flow
 
