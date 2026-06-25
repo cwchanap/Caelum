@@ -78,28 +78,6 @@ impl GameEngine {
                     rejection: None,
                 }
             }
-            GameIntent::RecordTripOutcome {
-                outcome,
-                wait_seconds,
-                time,
-            } => {
-                match objectives::record_trip_outcome(&self.snapshot, &outcome, wait_seconds, time)
-                {
-                    Ok(next) => {
-                        self.snapshot = next;
-                        DispatchResult {
-                            snapshot: self.snapshot(),
-                            applied: true,
-                            rejection: None,
-                        }
-                    }
-                    Err(rejection) => DispatchResult {
-                        snapshot: self.snapshot(),
-                        applied: false,
-                        rejection: Some(rejection),
-                    },
-                }
-            }
             GameIntent::AssignVehicle { mode, line_id } => {
                 self.commit_result(transit::assign_vehicle(&self.snapshot, &mode, &line_id))
             }

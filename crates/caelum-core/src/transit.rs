@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::building_catalog::building_definition;
 use crate::ids::next_entity_id;
 use crate::model::{
-    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLeg, Tile,
-    TripPosition, Vehicle,
+    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TripPosition,
+    Vehicle,
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
@@ -1372,13 +1372,4 @@ fn position_key(x: i32, y: i32) -> String {
 
 fn point_key(point: &Point) -> String {
     position_key(point.x, point.y)
-}
-
-#[allow(dead_code)]
-fn non_walk_line_id(leg: &RouteLeg) -> Option<&str> {
-    if leg.mode == "walk" {
-        None
-    } else {
-        leg.line_id.as_deref()
-    }
 }
