@@ -179,3 +179,45 @@ fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
         Some("line not found: missing-route")
     );
 }
+
+#[test]
+fn set_paused_applies_without_mutating_prior_snapshot() {
+    let mut engine = GameEngine::new();
+    let before = engine.snapshot();
+    assert!(before.paused);
+
+    let result = engine.dispatch(GameIntent::SetPaused { paused: false });
+
+    assert!(result.applied);
+    assert!(result.rejection.is_none());
+    assert!(!result.snapshot.paused);
+    // The previously published snapshot is unaffected (clone-on-read discipline).
+    assert!(before.paused);
+    assert_ne!(result.snapshot, before);
+}
+
+#[test]
+fn set_speed_accepts_valid_speeds_and_persists() {
+    let mut engine = GameEngine::new();
+
+    for speed in [1, 2, 4] {
+        let result = engine.dispatch(GameIntent::SetSpeed { speed });
+        assert!(result.applied);
+        assert!(result.rejection.is_none());
+        assert_eq!(result.snapshot.speed, speed);
+    }
+}
+
+#[test]
+fn set_speed_rejects_invalid_speed_without_changing_snapshot() {
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::SetSpeed { speed: 2 });
+    let before = engine.snapshot();
+
+    let result = engine.dispatch(GameIntent::SetSpeed { speed: 3 });
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(result.snapshot.speed, 2);
+    assert_eq!(result.rejection.as_deref(), Some("invalid speed: 3"));
+}

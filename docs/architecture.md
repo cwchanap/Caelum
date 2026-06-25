@@ -6,7 +6,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 
 `crates/caelum-core` owns the simulation. It is a Cargo workspace member gated by CI (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo build`) and by `lint-staged`.
 
-- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs the fixed tick pipeline (`tick_trips` → `record_trip_outcome`) over immutable snapshots. It publishes a new snapshot only when `next != current`, mirroring the TS runtime's reference-equality dispatch.
+- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs the fixed tick pipeline (`tick_trips` → `evaluate_objectives`) over immutable snapshots. Trip outcomes are recorded inline by `tick_trips` (via `update_metrics`); there is no separate `record_trip_outcome` step. It publishes a new snapshot only when `next != current`, mirroring the TS runtime's reference-equality dispatch.
 - `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
 - `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
 - `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
@@ -14,7 +14,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde for the future WASM/Tauri boundary.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 
-The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. Parity tests (`transit_parity`, `router_parity`, `network_parity`, `platforms_parity`) assert specific values against the TS implementation, not just shape.
+The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests: they pin the Rust core's behavior to specific values derived from the TS oracle at authoring time. They are not a live cross-implementation harness — that is deferred to plan Tasks 7–12, when the TS and Rust cores can be diffed end-to-end.
 
 ## Runtime boundary (TypeScript, legacy live runtime)
 

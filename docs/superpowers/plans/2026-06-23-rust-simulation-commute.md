@@ -1545,23 +1545,23 @@ cargo test -p caelum-core --test transit_router
 
 Expected: PASS.
 
-- [ ] **Step 7: Add parity tests from existing TypeScript tests**
+- [ ] **Step 7: Add golden/characterization tests from existing TypeScript tests**
 
 Translate the behavior asserted in these files into Rust tests under `crates/caelum-core/tests/`:
 
-- `tests/simulation/network.test.ts` -> `network_parity.rs`
-- `tests/simulation/router.test.ts` -> `router_parity.rs`
-- `tests/simulation/transit.test.ts` -> `transit_parity.rs`
-- `tests/simulation/platforms.test.ts` -> `platforms_parity.rs`
+- `tests/simulation/network.test.ts` -> `network_paths.rs`
+- `tests/simulation/router.test.ts` -> `router_planning.rs`
+- `tests/simulation/transit.test.ts` -> `transit_build.rs`
+- `tests/simulation/platforms.test.ts` -> `platforms.rs`
 
-Each Rust parity test should use `GameEngine` intents rather than private mutation helpers when the behavior is player-visible. Use module functions directly only for pure helper tests such as path segment computation.
+Each Rust test should use `GameEngine` intents rather than private mutation helpers when the behavior is player-visible. Use module functions directly only for pure helper tests such as path segment computation. These pin Rust behavior to values derived from the TS oracle at authoring time; a live cross-implementation harness is deferred to Tasks 7–12.
 
-- [ ] **Step 8: Run transit parity suite**
+- [ ] **Step 8: Run transit characterization suite**
 
 Run:
 
 ```sh
-cargo test -p caelum-core network_parity router_parity transit_parity platforms_parity
+cargo test -p caelum-core --test network_paths --test router_planning --test transit_build --test platforms
 ```
 
 Expected: PASS.
