@@ -345,18 +345,29 @@ fn track_active_trip_boundary(
     } else {
         trip.current_leg_index
     };
-    let Some(leg) = route_plan.legs.get(current_leg_index) else {
-        return;
-    };
-    if leg.mode != TransitMode::Walk {
-        track_waiting_terminal_boundaries(next, state, trip, after);
-        return;
+    // Walk the plan forward past any leading zero-length walk legs (a no-op
+    // boarding/transfer walk where the trip is already at `leg.to`). This mirrors
+    // the collapse in `tick_trip`: `seconds_to_next_walk_boundary` returns `None`
+    // for such legs, and without skipping them the tracker would miss the boundary
+    // of the transit leg waiting behind the no-op walk (e.g. its patience/deadline
+    // terminal), leaving the substep machinery blind to the trip's effective state.
+    let mut leg_index = current_leg_index;
+    loop {
+        let Some(leg) = route_plan.legs.get(leg_index) else {
+            return;
+        };
+        if leg.mode != TransitMode::Walk {
+            track_waiting_terminal_boundaries(next, state, trip, after);
+            return;
+        }
+        match seconds_to_next_walk_boundary(&trip.position, &leg.to) {
+            Some(seconds) => {
+                track_next_boundary(next, state.time + seconds, after);
+                return;
+            }
+            None => leg_index += 1,
+        }
     }
-
-    let Some(seconds) = seconds_to_next_walk_boundary(&trip.position, &leg.to) else {
-        return;
-    };
-    track_next_boundary(next, state.time + seconds, after);
 }
 
 fn track_waiting_terminal_boundaries(
@@ -520,11 +531,35 @@ fn tick_trip(
         };
     }
 
+    // Collapse any leading zero-length walk legs — a no-op walk (boarding at the
+    // trip's current tile, or transferring between two lines at the same stop)
+    // where the trip is already at `leg.to`. Non-zero walks are boundary-protected
+    // via `next_boundary_after`, but a zero-length walk produces no boundary, so
+    // without this collapse a large tick consumes the whole substep on the no-op
+    // walk and returns without accruing wait time for the following transit leg or
+    // allowing boarding. Collapsing lets the trip fall through to the wait/ride
+    // processing in the same substep, preserving large-tick vs stepped-tick
+    // equivalence.
+    let original_leg_index = next_trip.current_leg_index;
+    while route_plan
+        .legs
+        .get(next_trip.current_leg_index)
+        .is_some_and(|leg| {
+            leg.mode == TransitMode::Walk && same_position_and_point(&next_trip.position, &leg.to)
+        })
+    {
+        next_trip.current_leg_index += 1;
+    }
+    if next_trip.current_leg_index != original_leg_index {
+        next_trip.status = status_after_leg(&route_plan, next_trip.current_leg_index);
+    }
+
     let Some(leg) = route_plan.legs.get(next_trip.current_leg_index) else {
-        // No remaining leg. The legitimate case is a zero-leg plan with the trip already
-        // at its destination (origin == destination). If instead the position is not at the
-        // destination, a routing regression produced an empty plan mid-trip — surface that
-        // as unserved rather than recording a phantom arrival.
+        // No remaining leg. The legitimate case is a zero-leg plan (or a plan whose
+        // legs were all collapsed zero-length walks) with the trip already at its
+        // destination. If instead the position is not at the destination, a routing
+        // regression produced an empty plan mid-trip — surface that as unserved
+        // rather than recording a phantom arrival.
         if same_position_and_point(&next_trip.position, &next_trip.destination) {
             return score_arrival(next_trip, state.time);
         }
