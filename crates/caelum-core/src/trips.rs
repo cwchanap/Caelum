@@ -521,7 +521,25 @@ fn tick_trip(
     }
 
     let Some(leg) = route_plan.legs.get(next_trip.current_leg_index) else {
-        return score_arrival(next_trip, state.time);
+        // No remaining leg. The legitimate case is a zero-leg plan with the trip already
+        // at its destination (origin == destination). If instead the position is not at the
+        // destination, a routing regression produced an empty plan mid-trip — surface that
+        // as unserved rather than recording a phantom arrival.
+        if same_position_and_point(&next_trip.position, &next_trip.destination) {
+            return score_arrival(next_trip, state.time);
+        }
+        return TripTickResult {
+            trip: mark_unserved(next_trip),
+            completed_trips: 0,
+            late_trips: 0,
+            unserved_trips: 1,
+            wait_seconds: 0.0,
+            outcome: Some(trip_outcome(
+                TripOutcomeKind::Unserved,
+                0.0,
+                tick_start_time,
+            )),
+        };
     };
 
     if leg.mode == TransitMode::Walk {

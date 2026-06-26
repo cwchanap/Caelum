@@ -315,6 +315,39 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
 }
 
 #[test]
+fn empty_route_plan_not_at_destination_is_unserved_not_phantom_arrival() {
+    // Defensive guard (trips.rs): a trip whose plan has no remaining leg must only count as
+    // arrived when it is actually at its destination. An empty plan with the sim still
+    // mid-route is a routing regression and must surface as unserved, never a phantom
+    // completion.
+    let mut state = create_initial_snapshot();
+    state.time = 1.0;
+    let mut stranded = trip(
+        "trip-001",
+        TripStatus::Walking,
+        TripPosition { x: 5.0, y: 8.0 },
+        (23, 8).into(),
+    );
+    stranded.deadline = 1_000.0;
+    stranded.route_plan = Some(RoutePlan {
+        legs: Vec::new(),
+        estimated_seconds: 0.0,
+    });
+    stranded.current_leg_index = 0;
+    state.active_trips = vec![stranded];
+
+    let next = trips::advance_active_trips(&state, 1.0);
+
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.completed_trips, 0);
+    assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(
+        next.metrics.trip_outcomes[0].outcome,
+        TripOutcomeKind::Unserved
+    );
+}
+
+#[test]
 fn no_route_planning_marks_trip_unserved() {
     let mut state = create_initial_snapshot();
     state.active_trips = vec![trip(
