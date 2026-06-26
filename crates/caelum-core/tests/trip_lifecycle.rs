@@ -857,3 +857,253 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
     assert!(ids.contains(&"trip-day-0-trip-003"));
     assert_eq!(next.next_trip_sequence, 4);
 }
+
+/// A zero-length walk leg (boarding at the trip's current tile, or transferring
+/// between two lines at the same stop) completes instantly and produces no
+/// substep boundary. Without collapsing it, a large tick consumes the whole
+/// substep on the no-op walk without accruing wait time for the following
+/// transit leg, breaking the large-tick vs stepped-tick equivalence.
+fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
+    let mut state = create_initial_snapshot();
+    state.time = 100.0;
+    state.day = clock::day_index(state.time);
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    // No transit vehicles: the trip just waits at the boarding point so we can
+    // isolate wait-time accrual without depending on vehicle movement.
+    state.transit = TransitNetwork {
+        stops: Vec::new(),
+        stations: Vec::new(),
+        routes: Vec::new(),
+        metro_lines: Vec::new(),
+        vehicles: Vec::new(),
+    };
+    // Route plan: Walk (5,3)->(5,3) [zero-length], then Bus (5,3)->(22,3).
+    // The trip is already at the boarding tile, so the first walk leg is a no-op.
+    let plan = RoutePlan {
+        estimated_seconds: 120.0,
+        legs: vec![
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (5, 3).into(),
+                to: (5, 3).into(),
+                line_id: None,
+            },
+            RouteLeg {
+                mode: TransitMode::Bus,
+                from: (5, 3).into(),
+                to: (22, 3).into(),
+                line_id: Some("route-001".to_string()),
+            },
+        ],
+    };
+    let mut trip = trip(
+        "trip-001",
+        TripStatus::Walking,
+        (5, 3).into(),
+        (22, 3).into(),
+    );
+    trip.route_plan = Some(plan);
+    trip.deadline = 1_000.0;
+    state.active_trips = vec![trip];
+    state
+}
+
+#[test]
+fn zero_length_walk_leg_accrues_wait_time_under_large_tick() {
+    let state = state_with_zero_length_walk_then_bus();
+
+    let next = trips::tick_trips(&state, 60.0);
+
+    // The zero-length walk must be collapsed so the following bus leg's wait
+    // time is accrued for the full substep, not dropped to zero.
+    assert_eq!(next.active_trips.len(), 1);
+    assert_eq!(next.active_trips[0].status, TripStatus::Waiting);
+    assert_eq!(next.active_trips[0].current_leg_index, 1);
+    assert!(
+        (next.metrics.total_wait_seconds - 60.0).abs() < 0.000_001,
+        "expected 60s of wait accrued, got {}",
+        next.metrics.total_wait_seconds
+    );
+}
+
+#[test]
+fn zero_length_walk_leg_preserves_large_tick_vs_stepped_tick_equivalence() {
+    let large_snapshot = trips::tick_trips(&state_with_zero_length_walk_then_bus(), 60.0);
+
+    let mut stepped_snapshot = state_with_zero_length_walk_then_bus();
+    for _ in 0..60 {
+        stepped_snapshot = trips::tick_trips(&stepped_snapshot, 1.0);
+    }
+
+    assert!(
+        (large_snapshot.metrics.total_wait_seconds - stepped_snapshot.metrics.total_wait_seconds)
+            .abs()
+            < 0.001,
+        "large tick wait {}s != stepped tick wait {}s",
+        large_snapshot.metrics.total_wait_seconds,
+        stepped_snapshot.metrics.total_wait_seconds
+    );
+}
+
+/// When every walk leg in the plan is zero-length and the trip is already at its
+/// destination (e.g. origin == destination, or a transit drop-off at the exact
+/// destination tile), collapsing all of them must walk past the final leg and
+/// score an immediate arrival — not strand the trip Walking forever.
+#[test]
+fn all_zero_length_walks_collapses_to_immediate_arrival() {
+    let mut state = create_initial_snapshot();
+    state.time = 100.0;
+    state.day = clock::day_index(state.time);
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    let mut trip = trip(
+        "trip-001",
+        TripStatus::Walking,
+        (5, 3).into(),
+        (5, 3).into(),
+    );
+    trip.route_plan = Some(RoutePlan {
+        estimated_seconds: 0.0,
+        legs: vec![
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (5, 3).into(),
+                to: (5, 3).into(),
+                line_id: None,
+            },
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (5, 3).into(),
+                to: (5, 3).into(),
+                line_id: None,
+            },
+        ],
+    });
+    trip.deadline = 1_000.0;
+    state.active_trips = vec![trip];
+
+    let next = trips::tick_trips(&state, 1.0);
+
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.completed_trips, 1);
+    assert_eq!(next.metrics.trip_outcomes.len(), 1);
+    assert_eq!(
+        next.metrics.trip_outcomes[0].outcome,
+        TripOutcomeKind::Arrived
+    );
+}
+
+/// A zero-length transfer walk between two transit legs (two lines sharing the
+/// same transfer anchor) must collapse so the trip moves straight from one wait
+/// leg to the next without burning a substep on the no-op walk.
+#[test]
+fn zero_length_transfer_walk_collapses_between_transit_legs() {
+    let mut state = create_initial_snapshot();
+    state.time = 100.0;
+    state.day = clock::day_index(state.time);
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    state.transit = TransitNetwork {
+        stops: Vec::new(),
+        stations: Vec::new(),
+        routes: Vec::new(),
+        metro_lines: Vec::new(),
+        vehicles: Vec::new(),
+    };
+    // Plan: Bus to (8,3), zero-length walk transfer at (8,3), then Bus onward.
+    let mut trip = trip(
+        "trip-001",
+        TripStatus::Walking,
+        (8, 3).into(),
+        (22, 3).into(),
+    );
+    trip.position = (8, 3).into();
+    trip.route_plan = Some(RoutePlan {
+        estimated_seconds: 240.0,
+        legs: vec![
+            RouteLeg {
+                mode: TransitMode::Bus,
+                from: (5, 3).into(),
+                to: (8, 3).into(),
+                line_id: Some("route-001".to_string()),
+            },
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (8, 3).into(),
+                to: (8, 3).into(),
+                line_id: None,
+            },
+            RouteLeg {
+                mode: TransitMode::Bus,
+                from: (8, 3).into(),
+                to: (22, 3).into(),
+                line_id: Some("route-002".to_string()),
+            },
+        ],
+    });
+    trip.current_leg_index = 1;
+    trip.deadline = 1_000.0;
+    state.active_trips = vec![trip];
+
+    let next = trips::tick_trips(&state, 30.0);
+
+    // The zero-length transfer walk at leg index 1 must collapse, advancing
+    // straight to the second bus leg (index 2) and accruing its wait time.
+    assert_eq!(next.active_trips.len(), 1);
+    assert_eq!(next.active_trips[0].status, TripStatus::Waiting);
+    assert_eq!(next.active_trips[0].current_leg_index, 2);
+    assert!(
+        (next.metrics.total_wait_seconds - 30.0).abs() < 0.000_001,
+        "expected 30s wait for the second bus leg, got {}",
+        next.metrics.total_wait_seconds
+    );
+}
+
+/// A trip stuck behind a zero-length walk that then waits for a vehicle must time
+/// out at exactly the patience boundary under both a large tick and stepped ticks.
+/// This exercises the boundary tracker's patience tracking for the transit leg
+/// hidden behind the no-op walk: the substep must break at patience so the
+/// unserved outcome is recorded at the same instant regardless of tick granularity.
+#[test]
+fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
+    fn build() -> caelum_core::model::GameSnapshot {
+        let mut state = state_with_zero_length_walk_then_bus();
+        // Drain patience so the trip times out 30s into the wait, well inside a
+        // 100s large tick — this is the window where boundary tracking matters.
+        state.active_trips[0].patience_remaining = 30.0;
+        state
+    }
+
+    let large = trips::tick_trips(&build(), 100.0);
+
+    let mut stepped = build();
+    for _ in 0..100 {
+        stepped = trips::tick_trips(&stepped, 1.0);
+    }
+
+    assert_eq!(large.metrics.unserved_trips, stepped.metrics.unserved_trips);
+    assert!(
+        (large.metrics.total_wait_seconds - stepped.metrics.total_wait_seconds).abs() < 0.001,
+        "large wait {}s != stepped wait {}s",
+        large.metrics.total_wait_seconds,
+        stepped.metrics.total_wait_seconds
+    );
+    assert_eq!(large.metrics.trip_outcomes.len(), 1);
+    assert_eq!(
+        large.metrics.trip_outcomes[0].outcome,
+        TripOutcomeKind::Unserved
+    );
+    // The trip drained 30s of patience this tick (patience_remaining was 30s).
+    assert!(
+        (large.metrics.total_wait_seconds - 30.0).abs() < 0.001,
+        "expected 30s accrued wait, got {}",
+        large.metrics.total_wait_seconds
+    );
+    // Outcome fires at patience boundary: start (100s) + 30s drained.
+    assert!(
+        (large.metrics.trip_outcomes[0].time - 130.0).abs() < 0.001,
+        "expected outcome at t=130, got {}",
+        large.metrics.trip_outcomes[0].time
+    );
+}
