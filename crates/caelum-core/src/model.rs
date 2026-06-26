@@ -1,5 +1,57 @@
 use serde::{Deserialize, Serialize};
 
+/// How a transit leg is travelled. Serialized as the lowercase TS-parity strings
+/// `walk` / `bus` / `metro` (see `tests/model_wire_format.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransitMode {
+    Walk,
+    Bus,
+    Metro,
+}
+
+/// Lifecycle state of an active trip. Serialized as the lowercase TS-parity strings
+/// `idle` / `walking` / `waiting` / `riding` / `arrived` / `late` / `unserved`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TripStatus {
+    Idle,
+    Walking,
+    Waiting,
+    Riding,
+    Arrived,
+    Late,
+    Unserved,
+}
+
+/// Why a trip exists. Serialized as the camelCase TS-parity strings
+/// `commuteOutbound` / `commuteReturn`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TripPurpose {
+    CommuteOutbound,
+    CommuteReturn,
+}
+
+/// Overall game state. Serialized as the lowercase TS-parity strings
+/// `running` / `won` / `lost`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetricsState {
+    Running,
+    Won,
+    Lost,
+}
+
+/// A sim's work status. Serialized as the camelCase TS-parity strings
+/// `worker` / `nonWorker`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkerProfile {
+    Worker,
+    NonWorker,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameSnapshot {
@@ -161,7 +213,7 @@ pub struct MetroLine {
 #[serde(rename_all = "camelCase")]
 pub struct Vehicle {
     pub id: String,
-    pub mode: String,
+    pub mode: TransitMode,
     pub line_id: String,
     pub capacity: u16,
     pub passenger_ids: Vec<String>,
@@ -175,7 +227,7 @@ pub struct Sim {
     pub id: String,
     pub home: Point,
     pub position: Point,
-    pub worker_profile: String,
+    pub worker_profile: WorkerProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shift_template: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,11 +247,11 @@ pub struct Sim {
 pub struct ActiveTrip {
     pub id: String,
     pub sim_id: String,
-    pub purpose: String,
+    pub purpose: TripPurpose,
     pub origin: Point,
     pub destination: Point,
     pub position: TripPosition,
-    pub status: String,
+    pub status: TripStatus,
     pub deadline: f64,
     pub route_plan: Option<RoutePlan>,
     pub current_leg_index: usize,
@@ -216,17 +268,27 @@ pub struct RoutePlan {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteLeg {
-    pub mode: String,
+    pub mode: TransitMode,
     pub from: Point,
     pub to: Point,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_id: Option<String>,
 }
 
+/// Terminal outcome of a completed/failed trip. Serialized as the lowercase TS-parity
+/// strings `arrived` / `late` / `unserved`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TripOutcomeKind {
+    Arrived,
+    Late,
+    Unserved,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TripOutcome {
-    pub outcome: String,
+    pub outcome: TripOutcomeKind,
     pub wait_seconds: f64,
     pub time: f64,
 }
@@ -242,6 +304,6 @@ pub struct Metrics {
     pub average_wait_seconds: f64,
     #[serde(default)]
     pub trip_outcomes: Vec<TripOutcome>,
-    pub state: String,
+    pub state: MetricsState,
     pub loss_reason: Option<String>,
 }

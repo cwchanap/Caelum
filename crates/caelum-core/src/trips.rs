@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
 use crate::model::{
-    ActiveTrip, GameSnapshot, Metrics, Point, RoutePlan, Sim, TripOutcome, TripPosition,
+    ActiveTrip, GameSnapshot, Metrics, MetricsState, Point, RoutePlan, Sim, TransitMode,
+    TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, WorkerProfile,
 };
 use crate::objectives;
 use crate::router;
@@ -32,7 +33,7 @@ struct TripMetricDelta {
 }
 
 pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    if state.paused || state.metrics.state != "running" || state.speed == 0 {
+    if state.paused || state.metrics.state != MetricsState::Running || state.speed == 0 {
         return state.clone();
     }
 
@@ -65,6 +66,17 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     next
 }
 
+/// Upper bound on the number of fixed-size substeps a single tick may take.
+///
+/// A tick from `state.time` to `final_time` is broken at every meaningful boundary
+/// (day rollover and each sim's scheduled outbound/return departure) so spawn logic and
+/// day-rollover resets fire at exactly the right instant. The cap is the sum of:
+/// - `day_count * events_per_day` — one boundary per sim shift event (`6` covers the
+///   outbound/return spawn + resolution boundaries) plus `2` for the day boundary,
+///   across every day the tick spans; and
+/// - `time_step_cap` — a 1-second-granularity safety net over the elapsed time,
+///
+/// then `+1`. All terms are saturating, so an enormous delta cannot overflow.
 fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let start_day = clock::day_index(state.time);
     let end_day = clock::day_index(final_time);
@@ -132,13 +144,13 @@ fn advance_active_trips_with_zero_delta_ids(
     let mut next = state.clone();
     next.active_trips = Vec::with_capacity(results.len());
     for result in results {
-        if is_terminal_status(&result.trip.status) {
+        if is_terminal_status(result.trip.status) {
             apply_commute_resolution_to_sim(&mut next, &result.trip);
         }
         if result.completed_trips > 0 {
             apply_arrival_to_sim(&mut next, &result.trip);
         }
-        if !is_terminal_status(&result.trip.status) {
+        if !is_terminal_status(result.trip.status) {
             next.active_trips.push(result.trip);
         }
     }
@@ -160,8 +172,8 @@ fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> Has
                 return false;
             };
 
-            previous.status == "riding"
-                && trip.status == "walking"
+            previous.status == TripStatus::Riding
+                && trip.status == TripStatus::Walking
                 && trip.current_leg_index > previous.current_leg_index
                 && !is_trip_on_vehicle(after, &trip.id)
         })
@@ -190,7 +202,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
     let sims = state.sims.clone();
 
     for sim in sims {
-        if sim.worker_profile != "worker" {
+        if sim.worker_profile != WorkerProfile::Worker {
             continue;
         }
         let Some(template) = sim.shift_template.as_deref() else {
@@ -201,19 +213,21 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             && !sim.outbound_arrived_today
             && has_valid_workplace_destination(state, &sim)
         {
-            let workplace = sim
-                .workplace
-                .clone()
-                .expect("valid workplace destination requires a workplace");
+            // `has_valid_workplace_destination` above guarantees a workplace, but
+            // prefer a defensive `continue` over `.expect()` so a future regression
+            // in that guard surfaces as a skipped sim rather than a panic.
+            let Some(workplace) = sim.workplace.clone() else {
+                continue;
+            };
             let departure = departure_minute_for_sim(&sim.id, template, "outbound");
             let scheduled_time = scheduled_time_seconds(state.day, departure);
             if state.time + EPSILON >= scheduled_time
-                && !has_trip_for_sim_day(state, &sim.id, "commuteOutbound", state.day)
+                && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteOutbound, state.day)
             {
                 let trip = build_trip(
                     state,
                     &sim.id,
-                    "commuteOutbound",
+                    TripPurpose::CommuteOutbound,
                     sim.home.clone(),
                     workplace,
                     sim.position.clone().into(),
@@ -232,12 +246,12 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
         let return_departure = departure_minute_for_sim(&sim.id, template, "return");
         let scheduled_time = scheduled_time_seconds(state.day, return_departure);
         if state.time + EPSILON >= scheduled_time
-            && !has_trip_for_sim_day(state, &sim.id, "commuteReturn", state.day)
+            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
         {
             let trip = build_trip(
                 state,
                 &sim.id,
-                "commuteReturn",
+                TripPurpose::CommuteReturn,
                 sim.position.clone(),
                 sim.home.clone(),
                 sim.position.into(),
@@ -257,7 +271,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     }
 
     for sim in &state.sims {
-        if sim.worker_profile != "worker" {
+        if sim.worker_profile != WorkerProfile::Worker {
             continue;
         }
         let Some(template) = sim.shift_template.as_deref() else {
@@ -267,7 +281,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         if !sim.outbound_resolved_today
             && !sim.outbound_arrived_today
             && has_valid_workplace_destination(state, sim)
-            && !has_trip_for_sim_day(state, &sim.id, "commuteOutbound", state.day)
+            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteOutbound, state.day)
         {
             let departure = departure_minute_for_sim(&sim.id, template, "outbound");
             track_next_boundary(
@@ -279,7 +293,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
 
         if !sim.return_resolved_today
             && !sim.returned_home_today
-            && !has_trip_for_sim_day(state, &sim.id, "commuteReturn", state.day)
+            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
         {
             let return_departure = departure_minute_for_sim(&sim.id, template, "return");
             track_next_boundary(
@@ -309,14 +323,14 @@ fn track_active_trip_boundary(
     trip: &ActiveTrip,
     after: f64,
 ) {
-    if matches!(trip.status.as_str(), "arrived" | "late" | "unserved")
+    if is_terminal_status(trip.status)
         || is_home_fallback_trip(state, trip)
-        || (trip.status == "riding" && is_trip_on_vehicle(state, &trip.id))
+        || (trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id))
     {
         return;
     }
 
-    let route_plan = if trip.route_plan.is_none() || trip.status == "riding" {
+    let route_plan = if trip.route_plan.is_none() || trip.status == TripStatus::Riding {
         let snapped_origin = snap_position_to_point(&trip.position);
         router::find_route_plan(state, &snapped_origin, &trip.destination)
     } else {
@@ -326,7 +340,7 @@ fn track_active_trip_boundary(
         return;
     };
 
-    let current_leg_index = if trip.route_plan.is_none() || trip.status == "riding" {
+    let current_leg_index = if trip.route_plan.is_none() || trip.status == TripStatus::Riding {
         0
     } else {
         trip.current_leg_index
@@ -334,7 +348,7 @@ fn track_active_trip_boundary(
     let Some(leg) = route_plan.legs.get(current_leg_index) else {
         return;
     };
-    if leg.mode != "walk" {
+    if leg.mode != TransitMode::Walk {
         track_waiting_terminal_boundaries(next, state, trip, after);
         return;
     }
@@ -388,7 +402,7 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, after: f64) {
 fn build_trip(
     state: &mut GameSnapshot,
     sim_id: &str,
-    purpose: &str,
+    purpose: TripPurpose,
     origin: Point,
     destination: Point,
     position: TripPosition,
@@ -397,11 +411,11 @@ fn build_trip(
     ActiveTrip {
         id: next_trip_id_for_day(state),
         sim_id: sim_id.to_string(),
-        purpose: purpose.to_string(),
+        purpose,
         origin,
         destination,
         position,
-        status: "idle".to_string(),
+        status: TripStatus::Idle,
         deadline: trip_deadline_seconds(scheduled_time),
         route_plan: None,
         current_leg_index: 0,
@@ -421,7 +435,12 @@ fn next_trip_id_for_day(state: &mut GameSnapshot) -> String {
     format!("{prefix}{next_number:03}")
 }
 
-fn has_trip_for_sim_day(state: &GameSnapshot, sim_id: &str, purpose: &str, day: u32) -> bool {
+fn has_trip_for_sim_day(
+    state: &GameSnapshot,
+    sim_id: &str,
+    purpose: TripPurpose,
+    day: u32,
+) -> bool {
     let prefix = format!("trip-day-{day}-trip-");
     state.active_trips.iter().any(|trip| {
         trip.id.starts_with(&prefix) && trip.sim_id == sim_id && trip.purpose == purpose
@@ -439,19 +458,19 @@ fn tick_trip(
     delta_seconds: f64,
     tick_start_time: f64,
 ) -> TripTickResult {
-    if is_terminal_status(&trip.status) || is_home_fallback_trip(state, trip) {
+    if is_terminal_status(trip.status) || is_home_fallback_trip(state, trip) {
         return unchanged(trip);
     }
 
-    if trip.status == "riding" && is_trip_on_vehicle(state, &trip.id) {
+    if trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id) {
         return unchanged(trip);
     }
 
     let mut next_trip = trip.clone();
     let mut route_plan = next_trip.route_plan.clone();
 
-    if next_trip.status == "riding" {
-        next_trip.status = "idle".to_string();
+    if next_trip.status == TripStatus::Riding {
+        next_trip.status = TripStatus::Idle;
         next_trip.route_plan = None;
         next_trip.current_leg_index = 0;
         route_plan = None;
@@ -468,13 +487,17 @@ fn tick_trip(
                 late_trips: 0,
                 unserved_trips: 1,
                 wait_seconds: 0.0,
-                outcome: Some(trip_outcome("unserved", 0.0, tick_start_time)),
+                outcome: Some(trip_outcome(
+                    TripOutcomeKind::Unserved,
+                    0.0,
+                    tick_start_time,
+                )),
             };
         };
 
         next_trip.route_plan = Some(planned_route.clone());
         next_trip.current_leg_index = 0;
-        next_trip.status = status_after_leg(&planned_route, 0).to_string();
+        next_trip.status = status_after_leg(&planned_route, 0);
         route_plan = Some(planned_route);
     }
 
@@ -489,7 +512,11 @@ fn tick_trip(
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds: 0.0,
-            outcome: Some(trip_outcome("unserved", 0.0, tick_start_time)),
+            outcome: Some(trip_outcome(
+                TripOutcomeKind::Unserved,
+                0.0,
+                tick_start_time,
+            )),
         };
     }
 
@@ -497,7 +524,7 @@ fn tick_trip(
         return score_arrival(next_trip, state.time);
     };
 
-    if leg.mode == "walk" {
+    if leg.mode == TransitMode::Walk {
         next_trip.position = move_toward(
             &next_trip.position,
             &leg.to,
@@ -505,13 +532,12 @@ fn tick_trip(
         );
         if same_position_and_point(&next_trip.position, &leg.to) {
             next_trip.current_leg_index += 1;
-            next_trip.status =
-                status_after_leg(&route_plan, next_trip.current_leg_index).to_string();
+            next_trip.status = status_after_leg(&route_plan, next_trip.current_leg_index);
         } else {
-            next_trip.status = "walking".to_string();
+            next_trip.status = TripStatus::Walking;
         }
 
-        if next_trip.status == "arrived" {
+        if next_trip.status == TripStatus::Arrived {
             return score_arrival(next_trip, state.time);
         }
 
@@ -528,7 +554,7 @@ fn tick_trip(
     let terminal_wait_seconds =
         waiting_terminal_elapsed_seconds(&next_trip, delta_seconds, tick_start_time, state.time);
     let elapsed_wait_seconds = terminal_wait_seconds.unwrap_or(delta_seconds);
-    next_trip.status = "waiting".to_string();
+    next_trip.status = TripStatus::Waiting;
     next_trip.patience_remaining = (next_trip.patience_remaining - elapsed_wait_seconds).max(0.0);
 
     if terminal_wait_seconds.is_some() {
@@ -540,7 +566,7 @@ fn tick_trip(
             unserved_trips: 1,
             wait_seconds: elapsed_wait_seconds,
             outcome: Some(trip_outcome(
-                "unserved",
+                TripOutcomeKind::Unserved,
                 outcome_wait_seconds,
                 tick_start_time + elapsed_wait_seconds,
             )),
@@ -597,7 +623,11 @@ fn unchanged(trip: &ActiveTrip) -> TripTickResult {
 
 fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
     let late = time > trip.deadline;
-    trip.status = if late { "late" } else { "arrived" }.to_string();
+    trip.status = if late {
+        TripStatus::Late
+    } else {
+        TripStatus::Arrived
+    };
     TripTickResult {
         trip,
         completed_trips: 1,
@@ -605,23 +635,27 @@ fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
         unserved_trips: 0,
         wait_seconds: 0.0,
         outcome: Some(trip_outcome(
-            if late { "late" } else { "arrived" },
+            if late {
+                TripOutcomeKind::Late
+            } else {
+                TripOutcomeKind::Arrived
+            },
             0.0,
             time,
         )),
     }
 }
 
-fn trip_outcome(outcome: &str, wait_seconds: f64, time: f64) -> TripOutcome {
+fn trip_outcome(outcome: TripOutcomeKind, wait_seconds: f64, time: f64) -> TripOutcome {
     TripOutcome {
-        outcome: outcome.to_string(),
+        outcome,
         wait_seconds: wait_seconds.max(0.0),
         time,
     }
 }
 
 fn mark_unserved(mut trip: ActiveTrip) -> ActiveTrip {
-    trip.status = "unserved".to_string();
+    trip.status = TripStatus::Unserved;
     trip.patience_remaining = trip.patience_remaining.max(0.0);
     trip
 }
@@ -633,10 +667,13 @@ fn update_metrics(
     current_time: f64,
 ) -> Metrics {
     let total_wait_seconds = metrics.total_wait_seconds + metric_delta.wait_seconds;
-    let waiting_trip_count = trips.iter().filter(|trip| trip.status == "waiting").count() as u32;
+    let waiting_trip_count = trips
+        .iter()
+        .filter(|trip| trip.status == TripStatus::Waiting)
+        .count() as u32;
     let current_wait_seconds: f64 = trips
         .iter()
-        .filter(|trip| trip.status == "waiting")
+        .filter(|trip| trip.status == TripStatus::Waiting)
         .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
         .sum();
 
@@ -660,7 +697,7 @@ fn update_metrics(
             0.0
         },
         trip_outcomes,
-        state: metrics.state.clone(),
+        state: metrics.state,
         loss_reason: metrics.loss_reason.clone(),
     }
 }
@@ -670,20 +707,19 @@ fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
         return;
     };
 
-    match trip.purpose.as_str() {
-        "commuteOutbound" => {
+    match trip.purpose {
+        TripPurpose::CommuteOutbound => {
             sim.position = trip.destination.clone();
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.outbound_arrived_today = true;
             }
         }
-        "commuteReturn" => {
+        TripPurpose::CommuteReturn => {
             sim.position = sim.home.clone();
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.returned_home_today = true;
             }
         }
-        _ => {}
     }
 }
 
@@ -696,19 +732,21 @@ fn apply_commute_resolution_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) 
         return;
     };
 
-    match trip.purpose.as_str() {
-        "commuteOutbound" => {
+    match trip.purpose {
+        TripPurpose::CommuteOutbound => {
             sim.outbound_resolved_today = true;
         }
-        "commuteReturn" => {
+        TripPurpose::CommuteReturn => {
             sim.return_resolved_today = true;
         }
-        _ => {}
     }
 }
 
-fn is_terminal_status(status: &str) -> bool {
-    matches!(status, "arrived" | "late" | "unserved")
+fn is_terminal_status(status: TripStatus) -> bool {
+    matches!(
+        status,
+        TripStatus::Arrived | TripStatus::Late | TripStatus::Unserved
+    )
 }
 
 fn trip_service_day(trip: &ActiveTrip) -> Option<u32> {
@@ -717,16 +755,19 @@ fn trip_service_day(trip: &ActiveTrip) -> Option<u32> {
     day.parse().ok()
 }
 
-fn status_after_leg(route_plan: &RoutePlan, next_leg_index: usize) -> &'static str {
+fn status_after_leg(route_plan: &RoutePlan, next_leg_index: usize) -> TripStatus {
     match route_plan.legs.get(next_leg_index) {
-        None => "arrived",
-        Some(leg) if leg.mode == "walk" => "walking",
-        Some(_) => "waiting",
+        None => TripStatus::Arrived,
+        Some(leg) if leg.mode == TransitMode::Walk => TripStatus::Walking,
+        Some(_) => TripStatus::Waiting,
     }
 }
 
 fn is_walking_only(route_plan: &RoutePlan) -> bool {
-    route_plan.legs.iter().all(|leg| leg.mode == "walk")
+    route_plan
+        .legs
+        .iter()
+        .all(|leg| leg.mode == TransitMode::Walk)
 }
 
 fn is_trip_on_vehicle(state: &GameSnapshot, trip_id: &str) -> bool {
@@ -742,11 +783,12 @@ fn is_home_fallback_trip(state: &GameSnapshot, trip: &ActiveTrip) -> bool {
         return false;
     };
 
-    if trip.destination != sim.home || trip.purpose == "commuteReturn" {
+    if trip.destination != sim.home || trip.purpose == TripPurpose::CommuteReturn {
         return false;
     }
 
-    if trip.purpose == "commuteOutbound" && !has_valid_workplace_destination(state, sim) {
+    if trip.purpose == TripPurpose::CommuteOutbound && !has_valid_workplace_destination(state, sim)
+    {
         return true;
     }
 

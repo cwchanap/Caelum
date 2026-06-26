@@ -1,5 +1,5 @@
 use crate::clock::{clock_minutes, day_index};
-use crate::model::{GameSnapshot, Metrics, TransitNetwork};
+use crate::model::{GameSnapshot, Metrics, MetricsState, TransitNetwork};
 use crate::scenario::create_growing_suburb_map;
 
 pub fn create_initial_snapshot() -> GameSnapshot {
@@ -31,7 +31,7 @@ pub fn create_initial_snapshot() -> GameSnapshot {
             waiting_trip_count: 0,
             average_wait_seconds: 0.0,
             trip_outcomes: Vec::new(),
-            state: "running".to_string(),
+            state: MetricsState::Running,
             loss_reason: None,
         },
     }

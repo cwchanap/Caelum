@@ -1,7 +1,7 @@
 use crate::building_catalog::{building_definition, BuildingDefinition};
 use crate::commute::{shift_template_for_id, worker_profile_for_id};
 use crate::ids::next_entity_id;
-use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop};
+use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, WorkerProfile};
 use crate::platforms::{bus_platforms, metro_platforms};
 
 pub fn footprint(definition: &BuildingDefinition, origin: &Point, rotation: u16) -> Vec<Point> {
@@ -172,7 +172,7 @@ pub fn place_building(
         for index in 0..usize::from(definition.citizen_count) {
             let sim_id = next_entity_id("sim", next.sims.iter().map(|sim| sim.id.clone()));
             let home = occupied_tiles[index % occupied_tiles.len()].clone();
-            let worker_profile = worker_profile_for_id(&sim_id).to_string();
+            let worker_profile = worker_profile_for_id(&sim_id);
             next.sims.push(Sim {
                 id: sim_id.clone(),
                 home: home.clone(),
@@ -204,7 +204,7 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
 
     let mut destination_index = 0;
     for sim in &mut state.sims {
-        if sim.worker_profile != "worker" || sim.workplace.is_some() {
+        if sim.worker_profile != WorkerProfile::Worker || sim.workplace.is_some() {
             continue;
         }
 

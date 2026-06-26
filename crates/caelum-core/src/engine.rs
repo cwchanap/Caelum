@@ -34,6 +34,11 @@ impl GameEngine {
         self.snapshot()
     }
 
+    /// Advance the simulation by `delta_seconds` of game time (scaled by the current
+    /// speed) and run objective evaluation. Returns the resulting snapshot. If the tick
+    /// produced no change (e.g. paused, speed 0, or a zero-delta substep), the previous
+    /// snapshot is returned unchanged with `applied == false` — this reference-equality
+    /// dispatch is the engine's commit discipline.
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
         let next =
             objectives::evaluate_objectives(&trips::tick_trips(&self.snapshot, delta_seconds));
@@ -53,6 +58,9 @@ impl GameEngine {
         }
     }
 
+    /// Apply a single player [`GameIntent`] (build, paint, transit edit, speed/pause,
+    /// etc.) to the current snapshot. Returns the resulting snapshot plus an `applied`
+    /// flag and a rejection reason when the intent was invalid.
     pub fn dispatch(&mut self, intent: GameIntent) -> DispatchResult {
         match intent {
             GameIntent::SetPaused { paused } => {

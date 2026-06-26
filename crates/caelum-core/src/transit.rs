@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::building_catalog::building_definition;
 use crate::ids::next_entity_id;
 use crate::model::{
-    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TripPosition,
-    Vehicle,
+    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
+    TripPosition, TripStatus, Vehicle,
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
@@ -204,8 +204,12 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> Result<Game
         .iter()
         .map(|stop| (stop.id.clone(), stop.position.clone()))
         .collect();
-    let (_, segments, ids_missing) =
-        resolve_line_segments(&state.map, &stop_ids, &stop_position_by_id, "bus");
+    let (_, segments, ids_missing) = resolve_line_segments(
+        &state.map,
+        &stop_ids,
+        &stop_position_by_id,
+        TransitMode::Bus,
+    );
 
     if active {
         next.transit.stops =
@@ -244,8 +248,12 @@ pub fn add_metro_line(
         .iter()
         .map(|station| (station.id.clone(), station.position.clone()))
         .collect();
-    let (_, segments, ids_missing) =
-        resolve_line_segments(&state.map, &station_ids, &station_position_by_id, "metro");
+    let (_, segments, ids_missing) = resolve_line_segments(
+        &state.map,
+        &station_ids,
+        &station_position_by_id,
+        TransitMode::Metro,
+    );
 
     if active {
         next.transit.stations =
@@ -271,10 +279,17 @@ pub fn assign_vehicle(
     mode: &str,
     line_id: &str,
 ) -> Result<GameSnapshot, String> {
-    let cost = match mode {
-        "bus" => BUS_COST,
-        "metro" => METRO_COST,
+    // `mode` arrives as a string from `GameIntent::AssignVehicle`; validate and lift it to
+    // the typed enum once at this boundary so everything downstream is compiler-checked.
+    let transit_mode = match mode {
+        "bus" => TransitMode::Bus,
+        "metro" => TransitMode::Metro,
         _ => return Err(format!("unknown mode: {mode}")),
+    };
+    let cost = if transit_mode == TransitMode::Bus {
+        BUS_COST
+    } else {
+        METRO_COST
     };
     if state.budget < cost {
         return Err("insufficient budget".to_string());
@@ -289,16 +304,20 @@ pub fn assign_vehicle(
                 .iter()
                 .map(|vehicle| vehicle.id.clone()),
         ),
-        mode: mode.to_string(),
+        mode: transit_mode,
         line_id: line_id.to_string(),
-        capacity: if mode == "bus" { 18 } else { 90 },
+        capacity: if transit_mode == TransitMode::Bus {
+            18
+        } else {
+            90
+        },
         passenger_ids: Vec::new(),
         segment_index: 0,
         progress: 0.0,
     };
     let mut next = state.clone();
 
-    if mode == "bus" {
+    if transit_mode == TransitMode::Bus {
         let Some(route) = next
             .transit
             .routes
@@ -337,6 +356,14 @@ pub fn assign_vehicle(
     Ok(next)
 }
 
+/// Advance every vehicle along its assigned line, boarding/disembarking passengers.
+///
+/// Intentional divergence from the TS oracle: when no vehicle actually moved on a
+/// substep (e.g. a zero-delta substep), this returns the unchanged snapshot via the
+/// `changed` flag instead of always emitting a new state. This is the engine's
+/// "commit only when changed" discipline and is a deliberate "more correct" choice;
+/// a WASM/Tauri consumer must not assume `tick_vehicles` yields a fresh allocation
+/// every call.
 pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     let mut active_trips = state.active_trips.clone();
     let mut occupied_passenger_ids: HashSet<String> = state
@@ -387,7 +414,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         let segment = segments.get(vehicle.segment_index % segments.len().max(1));
         let steps = segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
         let progress = next_vehicle.progress
-            + (tiles_per_second(&next_vehicle.mode) * delta_seconds) / steps as f64;
+            + (tiles_per_second(next_vehicle.mode) * delta_seconds) / steps as f64;
 
         if progress < 1.0 {
             if progress != next_vehicle.progress {
@@ -433,7 +460,7 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
     let segment = segments.get(vehicle.segment_index % segments.len().max(1));
     let steps = segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
     let remaining_progress = (1.0 - vehicle.progress).max(0.0);
-    Some((remaining_progress * steps as f64) / tiles_per_second(&vehicle.mode))
+    Some((remaining_progress * steps as f64) / tiles_per_second(vehicle.mode))
 }
 
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
@@ -457,6 +484,19 @@ pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> Result<GameS
     Ok(recompute_route_paths(&next))
 }
 
+/// Toggle a route or metro line's `active` flag.
+///
+/// Platform assignment (which platform serves which route) is established only at
+/// creation time in `add_bus_route`/`add_metro_line`, gated on `active`. This
+/// function intentionally mirrors the TS oracle (`src/simulation/transit.ts`
+/// `setRouteActive`): it flips only the flag and does **not** reassign platforms.
+///
+/// Consequence: a route created `active=false` (fewer than two valid stops) that is
+/// later activated will still carry no platform mapping. In practice this is guarded
+/// by `path_broken` (the router skips broken routes), but degenerate inputs such as
+/// duplicate stop ids can produce an active, non-broken route with no platform. This
+/// is parity-faithful behaviour, not a Rust-specific defect — routes intended for
+/// service must be created with two or more valid stops so they are active at birth.
 pub fn set_route_active(
     state: &GameSnapshot,
     route_id: &str,
@@ -622,8 +662,12 @@ pub fn recompute_route_paths(state: &GameSnapshot) -> GameSnapshot {
 
     for route_index in 0..next.transit.routes.len() {
         let route = next.transit.routes[route_index].clone();
-        let (positions, segments, ids_missing) =
-            resolve_line_segments(&state.map, &route.stop_ids, &stop_position_by_id, "bus");
+        let (positions, segments, ids_missing) = resolve_line_segments(
+            &state.map,
+            &route.stop_ids,
+            &stop_position_by_id,
+            TransitMode::Bus,
+        );
         let path_broken = ids_missing || has_broken_segment(&segments);
         if path_broken && !route.path_broken {
             park_vehicles_and_invalidate_trips(&mut next, &route.id, &positions);
@@ -638,7 +682,7 @@ pub fn recompute_route_paths(state: &GameSnapshot) -> GameSnapshot {
             &state.map,
             &line.station_ids,
             &station_position_by_id,
-            "metro",
+            TransitMode::Metro,
         );
         let path_broken = ids_missing || has_broken_segment(&segments);
         if path_broken && !line.path_broken {
@@ -719,7 +763,7 @@ fn cleanup_removed_destination_references(
         }
 
         invalidated_trip_ids.insert(trip.id.clone());
-        trip.status = "idle".to_string();
+        trip.status = TripStatus::Idle;
         trip.route_plan = None;
         trip.current_leg_index = 0;
         trip.destination = workplace_by_sim_id
@@ -776,7 +820,7 @@ fn resolve_line_segments(
     map: &GameMap,
     ids: &[String],
     position_by_id: &HashMap<String, Point>,
-    mode: &str,
+    mode: TransitMode,
 ) -> (Vec<Point>, Vec<Vec<Point>>, bool) {
     let positions: Vec<Point> = ids
         .iter()
@@ -977,7 +1021,7 @@ fn invalidate_trips_for_line(
         if !plan_references_line(&trip.route_plan, line_id) {
             continue;
         }
-        trip.status = "idle".to_string();
+        trip.status = TripStatus::Idle;
         trip.route_plan = None;
         trip.current_leg_index = 0;
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
@@ -990,7 +1034,7 @@ fn plan_references_line(plan: &Option<crate::model::RoutePlan>, line_id: &str) -
     plan.as_ref().is_some_and(|plan| {
         plan.legs
             .iter()
-            .any(|leg| leg.mode != "walk" && leg.line_id.as_deref() == Some(line_id))
+            .any(|leg| leg.mode != TransitMode::Walk && leg.line_id.as_deref() == Some(line_id))
     })
 }
 
@@ -998,7 +1042,7 @@ fn assigned_line_data(
     state: &GameSnapshot,
     vehicle: &Vehicle,
 ) -> Option<(Vec<Point>, Vec<Vec<Point>>)> {
-    if vehicle.mode == "bus" {
+    if vehicle.mode == TransitMode::Bus {
         let route = state
             .transit
             .routes
@@ -1097,7 +1141,7 @@ fn board_vehicle(
     let boarding_set: HashSet<&str> = boarding_trip_ids.iter().map(String::as_str).collect();
     for trip in active_trips {
         if boarding_set.contains(trip.id.as_str()) {
-            trip.status = "riding".to_string();
+            trip.status = TripStatus::Riding;
         }
     }
     passenger_ids.extend(boarding_trip_ids);
@@ -1139,7 +1183,7 @@ fn disembark_vehicle(
     for trip in active_trips {
         if disembarking_ids.contains(&trip.id) {
             trip.position = reached_position.clone().into();
-            trip.status = "walking".to_string();
+            trip.status = TripStatus::Walking;
             trip.current_leg_index += 1;
         }
     }
@@ -1165,7 +1209,7 @@ fn trip_can_board(
     occupied_passenger_ids: &HashSet<String>,
     on_platform: &HashSet<String>,
 ) -> bool {
-    if trip.status != "waiting"
+    if trip.status != TripStatus::Waiting
         || occupied_passenger_ids.contains(&trip.id)
         || !on_platform.contains(&trip.id)
     {
@@ -1358,8 +1402,8 @@ fn final_route_name(kind: &str, id: &str, name: &str) -> String {
     }
 }
 
-fn tiles_per_second(mode: &str) -> f64 {
-    if mode == "bus" {
+fn tiles_per_second(mode: TransitMode) -> f64 {
+    if mode == TransitMode::Bus {
         BUS_TILES_PER_SECOND
     } else {
         METRO_TILES_PER_SECOND

@@ -1,14 +1,16 @@
+use crate::model::WorkerProfile;
+
 pub fn numeric_id_suffix(id: &str) -> usize {
     id.rsplit_once('-')
         .and_then(|(_, suffix)| suffix.parse::<usize>().ok())
         .unwrap_or(1)
 }
 
-pub fn worker_profile_for_id(id: &str) -> &'static str {
+pub fn worker_profile_for_id(id: &str) -> WorkerProfile {
     if numeric_id_suffix(id) % 10 == 0 {
-        "nonWorker"
+        WorkerProfile::NonWorker
     } else {
-        "worker"
+        WorkerProfile::Worker
     }
 }
 

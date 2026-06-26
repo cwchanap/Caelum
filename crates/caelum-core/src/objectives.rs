@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::model::{GameSnapshot, TripOutcome};
+use crate::model::{GameSnapshot, MetricsState, TripOutcome, TripOutcomeKind};
 
 pub const MAX_LATE_RATIO: f64 = 0.25;
 pub const MAX_UNSERVED_RATIO: f64 = 0.20;
@@ -8,6 +8,14 @@ pub const MAX_AVERAGE_WAIT_SECONDS: f64 = 180.0;
 pub const ROLLING_WINDOW_SECONDS: f64 = 300.0;
 pub const SURVIVAL_TIME_SECONDS: f64 = 1_200.0;
 
+/// Drop trip outcomes older than the rolling evaluation window, keeping at least the
+/// most recent outcome so objective gates never see an empty sample.
+///
+/// Intentional divergence from the TS oracle: TS keeps the full outcome history, while
+/// the Rust core trims to a [`ROLLING_WINDOW_SECONDS`] window each evaluation. This makes
+/// late/unserved ratios responsive to recent demand rather than lifetime totals, and is a
+/// deliberate "more correct" choice. A WASM/Tauri consumer expecting the TS snapshot shape
+/// must account for the trimmed `trip_outcomes` vector.
 pub fn prune_trip_outcomes(outcomes: &mut Vec<TripOutcome>, current_time: f64) {
     if outcomes.is_empty() {
         return;
@@ -29,7 +37,7 @@ pub fn prune_trip_outcomes(outcomes: &mut Vec<TripOutcome>, current_time: f64) {
 }
 
 pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
-    if state.metrics.state != "running" {
+    if state.metrics.state != MetricsState::Running {
         return state.clone();
     }
 
@@ -56,7 +64,7 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
 
     if state.time >= SURVIVAL_TIME_SECONDS && state.metrics.completed_trips > 0 {
         let mut next = state.clone();
-        next.metrics.state = "won".to_string();
+        next.metrics.state = MetricsState::Won;
         next.metrics.loss_reason = None;
         return next;
     }
@@ -66,7 +74,7 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
 
 fn lose(state: &GameSnapshot, reason: &str) -> GameSnapshot {
     let mut next = state.clone();
-    next.metrics.state = "lost".to_string();
+    next.metrics.state = MetricsState::Lost;
     next.metrics.loss_reason = Some(reason.to_string());
     next
 }
@@ -97,14 +105,13 @@ fn objective_counts(state: &GameSnapshot) -> ObjectiveCounts {
         .iter()
         .filter(|outcome| outcome.time >= window_start)
     {
-        match outcome.outcome.as_str() {
-            "arrived" => completed_trips += 1,
-            "late" => {
+        match outcome.outcome {
+            TripOutcomeKind::Arrived => completed_trips += 1,
+            TripOutcomeKind::Late => {
                 completed_trips += 1;
                 late_trips += 1;
             }
-            "unserved" => unserved_trips += 1,
-            _ => {}
+            TripOutcomeKind::Unserved => unserved_trips += 1,
         }
     }
 

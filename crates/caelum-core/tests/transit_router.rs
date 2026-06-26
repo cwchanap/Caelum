@@ -1,4 +1,4 @@
-use caelum_core::model::{ActiveTrip, RouteLeg, RoutePlan};
+use caelum_core::model::{ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus};
 use caelum_core::{transit, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -39,15 +39,15 @@ fn bus_route_vehicle_carries_commute_trip() {
     snapshot.active_trips.push(ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
-        purpose: "commute".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
         origin: (2, 5).into(),
         destination: (12, 5).into(),
         position: (2, 5).into(),
-        status: "waiting".to_string(),
+        status: TripStatus::Waiting,
         deadline: 3_600.0,
         route_plan: Some(RoutePlan {
             legs: vec![RouteLeg {
-                mode: "bus".to_string(),
+                mode: TransitMode::Bus,
                 from: (2, 5).into(),
                 to: (12, 5).into(),
                 line_id: Some("route-001".to_string()),
@@ -67,7 +67,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         .iter()
         .find(|trip| trip.id == "trip-001")
         .expect("trip should remain after boarding");
-    assert_eq!(boarded_trip.status, "riding");
+    assert_eq!(boarded_trip.status, TripStatus::Riding);
 
     let arrived = transit::tick_vehicles(&boarded, 20.0);
     assert!(!arrived.transit.vehicles[0]
@@ -78,7 +78,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         .iter()
         .find(|trip| trip.id == "trip-001")
         .expect("trip should remain after disembark");
-    assert_eq!(arrived_trip.status, "walking");
+    assert_eq!(arrived_trip.status, TripStatus::Walking);
     assert_eq!(arrived_trip.position, (12, 5).into());
     assert_eq!(arrived_trip.current_leg_index, 1);
 }

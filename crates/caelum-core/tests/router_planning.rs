@@ -1,3 +1,4 @@
+use caelum_core::model::TransitMode;
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -42,7 +43,7 @@ fn creates_walking_route_for_nearby_destinations() {
 
     assert_eq!(plan.estimated_seconds, 40.0);
     assert_eq!(plan.legs.len(), 1);
-    assert_eq!(plan.legs[0].mode, "walk");
+    assert_eq!(plan.legs[0].mode, TransitMode::Walk);
 }
 
 #[test]
@@ -63,11 +64,8 @@ fn creates_bus_route_plan_from_connected_stops() {
 
     assert_eq!(plan.estimated_seconds, 142.5);
     assert_eq!(
-        plan.legs
-            .iter()
-            .map(|leg| leg.mode.as_str())
-            .collect::<Vec<_>>(),
-        vec!["walk", "bus", "walk"]
+        plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>(),
+        vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk]
     );
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("route-001"));
     assert_eq!(plan.legs[1].from, (2, 5).into());
@@ -93,11 +91,8 @@ fn creates_metro_route_plan_from_connected_stations() {
 
     assert_eq!(plan.estimated_seconds, 166.25);
     assert_eq!(
-        plan.legs
-            .iter()
-            .map(|leg| leg.mode.as_str())
-            .collect::<Vec<_>>(),
-        vec!["walk", "metro", "walk"]
+        plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>(),
+        vec![TransitMode::Walk, TransitMode::Metro, TransitMode::Walk]
     );
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("metro-001"));
 }
@@ -112,7 +107,7 @@ fn ignores_inactive_and_path_broken_routes() {
     let inactive_plan =
         router::find_route_plan(&inactive.snapshot(), &(1, 5).into(), &(13, 5).into()).unwrap();
     assert_eq!(inactive_plan.legs.len(), 1);
-    assert_eq!(inactive_plan.legs[0].mode, "walk");
+    assert_eq!(inactive_plan.legs[0].mode, TransitMode::Walk);
 
     let mut broken = bus_route_state();
     broken.dispatch(GameIntent::RemoveAtTile {
@@ -122,5 +117,5 @@ fn ignores_inactive_and_path_broken_routes() {
     let broken_plan =
         router::find_route_plan(&broken.snapshot(), &(1, 5).into(), &(13, 5).into()).unwrap();
     assert_eq!(broken_plan.legs.len(), 1);
-    assert_eq!(broken_plan.legs[0].mode, "walk");
+    assert_eq!(broken_plan.legs[0].mode, TransitMode::Walk);
 }
