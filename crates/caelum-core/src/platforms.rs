@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::{ActiveTrip, GameSnapshot, Platform, RouteLeg};
+use crate::model::{ActiveTrip, GameSnapshot, Platform, RouteLeg, TransitMode, TripStatus};
 
 pub const BUS_PLATFORM_CAPACITY: u16 = 50;
 pub const METRO_PLATFORM_CAPACITY: u16 = 300;
@@ -39,7 +39,7 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
     let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
 
     for trip in &state.active_trips {
-        if trip.status != "waiting" {
+        if trip.status != TripStatus::Waiting {
             continue;
         }
 
@@ -95,7 +95,7 @@ fn waiting_line_id(trip: &ActiveTrip) -> Option<&str> {
 }
 
 fn non_walk_line_id(leg: &RouteLeg) -> Option<&str> {
-    if leg.mode == "walk" {
+    if leg.mode == TransitMode::Walk {
         None
     } else {
         leg.line_id.as_deref()

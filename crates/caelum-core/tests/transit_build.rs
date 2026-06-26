@@ -1,4 +1,7 @@
-use caelum_core::model::{ActiveTrip, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, Vehicle};
+use caelum_core::model::{
+    ActiveTrip, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
+};
 use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -37,7 +40,7 @@ fn worker_sim(id: &str, position: Point, workplace: Point) -> Sim {
         id: id.to_string(),
         home: position.clone(),
         position,
-        worker_profile: "worker".to_string(),
+        worker_profile: WorkerProfile::Worker,
         shift_template: None,
         workplace: Some(workplace),
         commute_day: 0,
@@ -425,15 +428,15 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
-        purpose: "commute".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 2, y: 5 },
         destination: removed_tiles[0].clone(),
         position: Point { x: 3, y: 5 }.into(),
-        status: "riding".to_string(),
+        status: TripStatus::Riding,
         deadline: 3_600.0,
         route_plan: Some(RoutePlan {
             legs: vec![RouteLeg {
-                mode: "bus".to_string(),
+                mode: TransitMode::Bus,
                 from: Point { x: 2, y: 5 },
                 to: removed_tiles[0].clone(),
                 line_id: Some("route-001".to_string()),
@@ -445,7 +448,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
     }];
     state.transit.vehicles = vec![Vehicle {
         id: "vehicle-001".to_string(),
-        mode: "bus".to_string(),
+        mode: TransitMode::Bus,
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string(), "trip-other".to_string()],
@@ -465,7 +468,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         .find(|trip| trip.id == "trip-001")
         .expect("trip remains");
 
-    assert_eq!(trip.status, "idle");
+    assert_eq!(trip.status, TripStatus::Idle);
     assert!(trip.route_plan.is_none());
     assert_eq!(trip.current_leg_index, 0);
     assert_eq!(Some(&trip.destination), sim.workplace.as_ref());

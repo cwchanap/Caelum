@@ -1,4 +1,4 @@
-use caelum_core::model::TripOutcome;
+use caelum_core::model::{MetricsState, TripOutcome, TripOutcomeKind};
 use caelum_core::{objectives, state::create_initial_snapshot, GameEngine, GameIntent};
 
 #[test]
@@ -8,7 +8,7 @@ fn survival_requires_served_demand() {
 
     let result = engine.tick(1_201.0);
 
-    assert_eq!(result.snapshot.metrics.state, "running");
+    assert_eq!(result.snapshot.metrics.state, MetricsState::Running);
 }
 
 #[test]
@@ -19,7 +19,7 @@ fn survival_wins_after_served_demand() {
 
     let evaluated = objectives::evaluate_objectives(&state);
 
-    assert_eq!(evaluated.metrics.state, "won");
+    assert_eq!(evaluated.metrics.state, MetricsState::Won);
     assert_eq!(evaluated.metrics.loss_reason, None);
 }
 
@@ -29,14 +29,14 @@ fn loss_gates_use_trip_totals_and_minimum_sample_sizes() {
     below_gate.metrics.unserved_trips = 9;
     assert_eq!(
         objectives::evaluate_objectives(&below_gate).metrics.state,
-        "running"
+        MetricsState::Running
     );
 
     let mut unserved = create_initial_snapshot();
     unserved.metrics.completed_trips = 7;
     unserved.metrics.unserved_trips = 3;
     let evaluated_unserved = objectives::evaluate_objectives(&unserved);
-    assert_eq!(evaluated_unserved.metrics.state, "lost");
+    assert_eq!(evaluated_unserved.metrics.state, MetricsState::Lost);
     assert_eq!(
         evaluated_unserved.metrics.loss_reason.as_deref(),
         Some("Too many unserved citizens")
@@ -46,7 +46,7 @@ fn loss_gates_use_trip_totals_and_minimum_sample_sizes() {
     late.metrics.completed_trips = 10;
     late.metrics.late_trips = 3;
     let evaluated_late = objectives::evaluate_objectives(&late);
-    assert_eq!(evaluated_late.metrics.state, "lost");
+    assert_eq!(evaluated_late.metrics.state, MetricsState::Lost);
     assert_eq!(
         evaluated_late.metrics.loss_reason.as_deref(),
         Some("Too many late arrivals")
@@ -59,14 +59,14 @@ fn average_wait_loss_requires_waiting_trips() {
     no_waiters.metrics.average_wait_seconds = 181.0;
     assert_eq!(
         objectives::evaluate_objectives(&no_waiters).metrics.state,
-        "running"
+        MetricsState::Running
     );
 
     let mut waiting = no_waiters;
     waiting.metrics.waiting_trip_count = 1;
     let evaluated = objectives::evaluate_objectives(&waiting);
 
-    assert_eq!(evaluated.metrics.state, "lost");
+    assert_eq!(evaluated.metrics.state, MetricsState::Lost);
     assert_eq!(
         evaluated.metrics.loss_reason.as_deref(),
         Some("Average wait time is too high")
@@ -81,17 +81,17 @@ fn rolling_window_outcomes_override_aggregate_trip_ratios() {
     state.metrics.late_trips = 8;
     state.metrics.trip_outcomes = (0..6)
         .map(|index| TripOutcome {
-            outcome: "late".to_string(),
+            outcome: TripOutcomeKind::Late,
             wait_seconds: 0.0,
             time: 100.0 + f64::from(index),
         })
         .chain((0..2).map(|index| TripOutcome {
-            outcome: "late".to_string(),
+            outcome: TripOutcomeKind::Late,
             wait_seconds: 0.0,
             time: 990.0 + f64::from(index),
         }))
         .chain((0..8).map(|index| TripOutcome {
-            outcome: "arrived".to_string(),
+            outcome: TripOutcomeKind::Arrived,
             wait_seconds: 0.0,
             time: 980.0 + f64::from(index),
         }))
@@ -99,7 +99,7 @@ fn rolling_window_outcomes_override_aggregate_trip_ratios() {
 
     let evaluated = objectives::evaluate_objectives(&state);
 
-    assert_eq!(evaluated.metrics.state, "running");
+    assert_eq!(evaluated.metrics.state, MetricsState::Running);
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn stale_rolling_window_unserved_failures_do_not_cause_loss() {
     state.metrics.unserved_trips = 10;
     state.metrics.trip_outcomes = (0..10)
         .map(|index| TripOutcome {
-            outcome: "unserved".to_string(),
+            outcome: TripOutcomeKind::Unserved,
             wait_seconds: 0.0,
             time: 100.0 + f64::from(index),
         })
@@ -117,18 +117,18 @@ fn stale_rolling_window_unserved_failures_do_not_cause_loss() {
 
     let evaluated = objectives::evaluate_objectives(&state);
 
-    assert_eq!(evaluated.metrics.state, "running");
+    assert_eq!(evaluated.metrics.state, MetricsState::Running);
 }
 
 #[test]
 fn already_finished_objective_states_are_preserved() {
     let mut won = create_initial_snapshot();
-    won.metrics.state = "won".to_string();
+    won.metrics.state = MetricsState::Won;
     won.metrics.completed_trips = 10;
     won.metrics.late_trips = 10;
 
     let mut lost = create_initial_snapshot();
-    lost.metrics.state = "lost".to_string();
+    lost.metrics.state = MetricsState::Lost;
     lost.metrics.loss_reason = Some("Existing loss".to_string());
     lost.time = 1_201.0;
     lost.metrics.completed_trips = 1;

@@ -1,20 +1,22 @@
-use caelum_core::model::{ActiveTrip, Point, RouteLeg, RoutePlan};
+use caelum_core::model::{
+    ActiveTrip, Point, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus,
+};
 use caelum_core::{platforms, GameEngine};
 
 fn waiting_trip(id: &str, position: Point, line_id: &str, patience_remaining: f64) -> ActiveTrip {
     ActiveTrip {
         id: id.to_string(),
         sim_id: format!("sim-{id}"),
-        purpose: "commute".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
         origin: position.clone(),
         destination: (0, 0).into(),
         position: position.clone().into(),
-        status: "waiting".to_string(),
+        status: TripStatus::Waiting,
         deadline: 9_999.0,
         route_plan: Some(RoutePlan {
             estimated_seconds: 100.0,
             legs: vec![RouteLeg {
-                mode: "bus".to_string(),
+                mode: TransitMode::Bus,
                 from: position,
                 to: (0, 0).into(),
                 line_id: Some(line_id.to_string()),
@@ -100,7 +102,7 @@ fn station_platforms_participate_in_the_same_position_line_index() {
     trip.route_plan = Some(RoutePlan {
         estimated_seconds: 100.0,
         legs: vec![RouteLeg {
-            mode: "metro".to_string(),
+            mode: TransitMode::Metro,
             from: (9, 9).into(),
             to: (0, 0).into(),
             line_id: Some("metro-001".to_string()),

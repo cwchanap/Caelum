@@ -1,3 +1,4 @@
+use caelum_core::model::TransitMode;
 use caelum_core::{network, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -25,7 +26,7 @@ fn finds_straight_shortest_bus_path() {
         &engine.snapshot().map,
         &(2, 5).into(),
         &(6, 5).into(),
-        "bus",
+        TransitMode::Bus,
     )
     .expect("road line should be pathable");
 
@@ -49,7 +50,7 @@ fn deterministic_equal_shortest_paths_use_north_east_south_west_order() {
         &engine.snapshot().map,
         &(5, 2).into(),
         &(7, 4).into(),
-        "metro",
+        TransitMode::Metro,
     )
     .expect("track ring should be pathable");
 
@@ -66,7 +67,7 @@ fn rejects_adjacent_off_network_endpoints_then_finds_network_path() {
         &engine.snapshot().map,
         &(8, 4).into(),
         &(9, 4).into(),
-        "bus",
+        TransitMode::Bus,
     )
     .expect("adjacent off-road stops should connect through road");
 
@@ -95,13 +96,25 @@ fn one_way_roads_constrain_buses_but_not_metro() {
     });
     let snapshot = engine.snapshot();
 
-    assert!(
-        network::find_tile_path(&snapshot.map, &(7, 5).into(), &(9, 5).into(), "bus").is_some()
-    );
-    assert!(
-        network::find_tile_path(&snapshot.map, &(9, 5).into(), &(7, 5).into(), "bus").is_none()
-    );
-    assert!(
-        network::find_tile_path(&snapshot.map, &(9, 5).into(), &(7, 5).into(), "metro").is_some()
-    );
+    assert!(network::find_tile_path(
+        &snapshot.map,
+        &(7, 5).into(),
+        &(9, 5).into(),
+        TransitMode::Bus
+    )
+    .is_some());
+    assert!(network::find_tile_path(
+        &snapshot.map,
+        &(9, 5).into(),
+        &(7, 5).into(),
+        TransitMode::Bus
+    )
+    .is_none());
+    assert!(network::find_tile_path(
+        &snapshot.map,
+        &(9, 5).into(),
+        &(7, 5).into(),
+        TransitMode::Metro
+    )
+    .is_some());
 }

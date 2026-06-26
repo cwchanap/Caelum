@@ -1,9 +1,9 @@
-use crate::model::{GameSnapshot, Point, RouteLeg, RoutePlan};
+use crate::model::{GameSnapshot, Point, RouteLeg, RoutePlan, TransitMode};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 
 #[derive(Clone)]
 struct TransitService {
-    mode: &'static str,
+    mode: TransitMode,
     line_id: String,
     anchors: Vec<Point>,
     segments: Vec<Vec<Point>>,
@@ -120,7 +120,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
 
         if anchors.len() >= 2 && anchors.len() == route.stop_ids.len() {
             services.push(TransitService {
-                mode: "bus",
+                mode: TransitMode::Bus,
                 line_id: route.id.clone(),
                 anchors,
                 segments: route.segments.clone(),
@@ -148,7 +148,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
 
         if anchors.len() >= 2 && anchors.len() == line.station_ids.len() {
             services.push(TransitService {
-                mode: "metro",
+                mode: TransitMode::Metro,
                 line_id: line.id.clone(),
                 anchors,
                 segments: line.segments.clone(),
@@ -225,13 +225,17 @@ fn ride_steps(segments: &[Vec<Point>], from_index: usize, to_index: usize) -> us
     steps
 }
 
-fn ride_seconds(mode: &str, steps: usize) -> f64 {
-    let speed = if mode == "bus" {
+fn ride_seconds(mode: TransitMode, steps: usize) -> f64 {
+    let speed = if mode == TransitMode::Bus {
         BUS_TILES_PER_SECOND
     } else {
         METRO_TILES_PER_SECOND
     };
-    let boarding = if mode == "bus" { 90.0 } else { 120.0 };
+    let boarding = if mode == TransitMode::Bus {
+        90.0
+    } else {
+        120.0
+    };
     boarding + steps as f64 / speed
 }
 
@@ -245,16 +249,16 @@ fn manhattan_distance(from: &Point, to: &Point) -> i32 {
 
 fn walk_leg(from: &Point, to: &Point) -> RouteLeg {
     RouteLeg {
-        mode: "walk".to_string(),
+        mode: TransitMode::Walk,
         from: from.clone(),
         to: to.clone(),
         line_id: None,
     }
 }
 
-fn transit_leg(mode: &str, from: &Point, to: &Point, line_id: &str) -> RouteLeg {
+fn transit_leg(mode: TransitMode, from: &Point, to: &Point, line_id: &str) -> RouteLeg {
     RouteLeg {
-        mode: mode.to_string(),
+        mode,
         from: from.clone(),
         to: to.clone(),
         line_id: Some(line_id.to_string()),

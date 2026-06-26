@@ -1,8 +1,13 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::model::{GameMap, Point, Tile};
+use crate::model::{GameMap, Point, Tile, TransitMode};
 
-pub fn find_tile_path(map: &GameMap, from: &Point, to: &Point, mode: &str) -> Option<Vec<Point>> {
+pub fn find_tile_path(
+    map: &GameMap,
+    from: &Point,
+    to: &Point,
+    mode: TransitMode,
+) -> Option<Vec<Point>> {
     let tile_by_key: HashMap<(i32, i32), &Tile> = map
         .tiles
         .iter()
@@ -37,7 +42,7 @@ pub fn find_tile_path(map: &GameMap, from: &Point, to: &Point, mode: &str) -> Op
             let is_final_hop_to_off_network_stop =
                 next_key == to_key && !is_traversable(next_tile, mode);
             if !is_final_hop_to_off_network_stop
-                && mode == "bus"
+                && mode == TransitMode::Bus
                 && current_tile.is_some_and(|tile| tile.kind == "road" && tile.one_way.is_some())
             {
                 let allowed = road_direction_offset(
@@ -78,7 +83,11 @@ pub fn find_tile_path(map: &GameMap, from: &Point, to: &Point, mode: &str) -> Op
     None
 }
 
-pub fn compute_route_segments(map: &GameMap, anchors: &[Point], mode: &str) -> Vec<Vec<Point>> {
+pub fn compute_route_segments(
+    map: &GameMap,
+    anchors: &[Point],
+    mode: TransitMode,
+) -> Vec<Vec<Point>> {
     if anchors.len() < 2 {
         return Vec::new();
     }
@@ -108,11 +117,11 @@ fn build_path(parents: &HashMap<(i32, i32), Option<(i32, i32)>>, to_key: (i32, i
     path
 }
 
-fn is_traversable(tile: &Tile, mode: &str) -> bool {
+fn is_traversable(tile: &Tile, mode: TransitMode) -> bool {
     match mode {
-        "bus" => tile.kind == "road",
-        "metro" => tile.has_track,
-        _ => false,
+        TransitMode::Bus => tile.kind == "road",
+        TransitMode::Metro => tile.has_track,
+        TransitMode::Walk => false,
     }
 }
 

@@ -1,6 +1,7 @@
 use caelum_core::commute::{
     departure_minute_for_sim, shift_template_for_id, worker_profile_for_id,
 };
+use caelum_core::model::{TripPurpose, TripStatus, WorkerProfile};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn assigned_worker_engine() -> GameEngine {
@@ -88,8 +89,8 @@ fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
 
 #[test]
 fn deterministic_worker_and_shift_distribution() {
-    assert_eq!(worker_profile_for_id("sim-001"), "worker");
-    assert_eq!(worker_profile_for_id("sim-010"), "nonWorker");
+    assert_eq!(worker_profile_for_id("sim-001"), WorkerProfile::Worker);
+    assert_eq!(worker_profile_for_id("sim-010"), WorkerProfile::NonWorker);
     assert_eq!(shift_template_for_id("sim-001"), Some("standard"));
     assert_eq!(shift_template_for_id("sim-008"), Some("early"));
     assert_eq!(shift_template_for_id("sim-009"), Some("late"));
@@ -116,7 +117,7 @@ fn outbound_requirement_spawns_for_assigned_workers() {
         .snapshot
         .active_trips
         .iter()
-        .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == "commuteOutbound" }));
+        .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound }));
 }
 
 #[test]
@@ -130,11 +131,11 @@ fn large_tick_only_advances_outbound_after_scheduled_departure() {
         .snapshot
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteOutbound")
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
         .unwrap();
 
     let expected_x = 2.0 + ((360.0 - scheduled) / 20.0);
-    assert_eq!(trip.status, "walking");
+    assert_eq!(trip.status, TripStatus::Walking);
     assert!((trip.position.x - expected_x).abs() < 0.000_001);
     assert!((trip.position.y - 3.0).abs() < 0.000_001);
 }
@@ -150,10 +151,10 @@ fn ticking_exactly_to_scheduled_departure_spawns_outbound_without_moving() {
         .snapshot
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteOutbound")
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
         .unwrap();
 
-    assert_eq!(trip.status, "idle");
+    assert_eq!(trip.status, TripStatus::Idle);
     assert_eq!(trip.route_plan, None);
     assert!((trip.position.x - 2.0).abs() < 0.000_001);
     assert!((trip.position.y - 3.0).abs() < 0.000_001);
@@ -171,10 +172,10 @@ fn large_tick_stops_at_return_boundary_after_outbound_arrives_same_tick() {
         .snapshot
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn")
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
         .unwrap();
 
-    assert_eq!(trip.status, "walking");
+    assert_eq!(trip.status, TripStatus::Walking);
     assert!((trip.position.x - (4.0 - post_return_elapsed / 20.0)).abs() < 0.000_001);
     assert!((trip.position.y - 3.0).abs() < 0.000_001);
 }
@@ -196,14 +197,14 @@ fn large_tick_crossing_midnight_preserves_outbound_arrival_before_day_boundary()
         .snapshot
         .active_trips
         .iter()
-        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn"));
+        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn));
 
     let mut stepped_snapshot = after_return_boundary.snapshot;
     while stepped_snapshot.time < clock::GAME_DAY_SECONDS
         && !stepped_snapshot
             .active_trips
             .iter()
-            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn")
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
     {
         stepped_snapshot = stepped_tick.tick(1.0).snapshot;
     }
@@ -214,13 +215,13 @@ fn large_tick_crossing_midnight_preserves_outbound_arrival_before_day_boundary()
         .snapshot
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn")
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
         .unwrap();
     let large_return = large_result
         .snapshot
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == "commuteReturn")
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
         .expect("large tick should match stepped tick and spawn a same-day return");
 
     assert!(large_return.id.starts_with("trip-day-0-trip-"));

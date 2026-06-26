@@ -1,5 +1,6 @@
 use caelum_core::{
     commute::{shift_template_for_id, worker_profile_for_id},
+    model::WorkerProfile,
     GameEngine, GameIntent,
 };
 
@@ -62,8 +63,14 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
     assert_eq!(placed.snapshot.sims.len(), 10);
     assert_eq!(placed.snapshot.sims[0].id, "sim-001");
     assert_eq!(placed.snapshot.sims[0].home.x, 2);
-    assert_eq!(placed.snapshot.sims[0].worker_profile, "worker");
-    assert_eq!(placed.snapshot.sims[9].worker_profile, "nonWorker");
+    assert_eq!(
+        placed.snapshot.sims[0].worker_profile,
+        WorkerProfile::Worker
+    );
+    assert_eq!(
+        placed.snapshot.sims[9].worker_profile,
+        WorkerProfile::NonWorker
+    );
 }
 
 #[test]
@@ -95,7 +102,7 @@ fn destination_assigns_workplaces_to_unassigned_workers() {
         .snapshot
         .sims
         .iter()
-        .filter(|sim| sim.worker_profile == "worker" && sim.workplace.is_some())
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
         .count();
     assert_eq!(assigned, 9);
 }
@@ -132,20 +139,20 @@ fn destination_placed_before_housing_assigns_new_workers() {
         .snapshot
         .sims
         .iter()
-        .filter(|sim| sim.worker_profile == "worker" && sim.workplace.is_some())
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
         .count();
     assert_eq!(assigned, 9);
 }
 
 #[test]
 fn shift_templates_use_worker_ordinal_after_non_worker_ids() {
-    assert_eq!(worker_profile_for_id("sim-001"), "worker");
+    assert_eq!(worker_profile_for_id("sim-001"), WorkerProfile::Worker);
     assert_eq!(shift_template_for_id("sim-001"), Some("standard"));
     assert_eq!(shift_template_for_id("sim-008"), Some("early"));
     assert_eq!(shift_template_for_id("sim-009"), Some("late"));
-    assert_eq!(worker_profile_for_id("sim-010"), "nonWorker");
+    assert_eq!(worker_profile_for_id("sim-010"), WorkerProfile::NonWorker);
     assert_eq!(shift_template_for_id("sim-010"), None);
-    assert_eq!(worker_profile_for_id("sim-011"), "worker");
+    assert_eq!(worker_profile_for_id("sim-011"), WorkerProfile::Worker);
     assert_eq!(shift_template_for_id("sim-011"), Some("offPeak"));
 }
 
