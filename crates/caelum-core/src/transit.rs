@@ -4,7 +4,7 @@ use crate::building_catalog::building_definition;
 use crate::ids::next_entity_id;
 use crate::model::{
     ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
-    TripPosition, TripStatus, Vehicle,
+    TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
@@ -755,29 +755,59 @@ fn cleanup_removed_destination_references(
         })
         .collect();
     let mut invalidated_trip_ids = HashSet::new();
+    let mut removed_trip_ids = HashSet::new();
     for trip in &mut state.active_trips {
         let destination_removed = removed_destination_tiles.contains(&point_key(&trip.destination));
-        let sim_workplace_was_cleared = cleared_sim_ids.contains(&trip.sim_id);
-        if !destination_removed && !sim_workplace_was_cleared {
+        // Only outbound trips target a workplace; a return trip's destination is the
+        // sim's home (a residential tile, never present in `removed_destination_tiles`).
+        // A cleared workplace must therefore never retarget an in-flight return trip:
+        // `apply_arrival_to_sim` resolves `CommuteReturn` at home regardless of
+        // `trip.destination`, so rewriting it toward a replacement workplace would
+        // route the passenger away from home for nothing.
+        let workplace_retarget_needed =
+            trip.purpose == TripPurpose::CommuteOutbound && cleared_sim_ids.contains(&trip.sim_id);
+        if !destination_removed && !workplace_retarget_needed {
             continue;
         }
+
+        let replacement_workplace = workplace_by_sim_id
+            .get(&trip.sim_id)
+            .filter(|workplace| !removed_destination_tiles.contains(&point_key(workplace)))
+            .cloned();
+
+        // An outbound trip whose destination was bulldozed with no replacement
+        // workplace cannot be retargeted. Drop it outright instead of rewriting its
+        // destination to home: that produces a dormant home-fallback trip which
+        // `is_home_fallback_trip` keeps alive forever, and whose id lets
+        // `has_trip_for_sim_day` block any same-day retry once a new destination is
+        // placed. Removing it leaves the sim unassigned and free to spawn a fresh
+        // outbound trip when a workplace reappears.
+        if trip.purpose == TripPurpose::CommuteOutbound
+            && destination_removed
+            && replacement_workplace.is_none()
+        {
+            removed_trip_ids.insert(trip.id.clone());
+            invalidated_trip_ids.insert(trip.id.clone());
+            continue;
+        }
+
+        // No replacement to retarget to (e.g. a stale trip whose own destination is
+        // still standing): leave it on its current heading rather than rewriting it.
+        let Some(replacement) = replacement_workplace else {
+            continue;
+        };
 
         invalidated_trip_ids.insert(trip.id.clone());
         trip.status = TripStatus::Idle;
         trip.route_plan = None;
         trip.current_leg_index = 0;
-        trip.destination = workplace_by_sim_id
-            .get(&trip.sim_id)
-            .filter(|workplace| !removed_destination_tiles.contains(&point_key(workplace)))
-            .cloned()
-            .unwrap_or_else(|| {
-                safe_trip_destination(
-                    &state.map,
-                    removed_destination_tiles,
-                    &trip.origin,
-                    &trip.position,
-                )
-            });
+        trip.destination = replacement;
+    }
+
+    if !removed_trip_ids.is_empty() {
+        state
+            .active_trips
+            .retain(|trip| !removed_trip_ids.contains(&trip.id));
     }
 
     if invalidated_trip_ids.is_empty() {
@@ -788,32 +818,6 @@ fn cleanup_removed_destination_references(
             .passenger_ids
             .retain(|passenger_id| !invalidated_trip_ids.contains(passenger_id));
     }
-}
-
-fn safe_trip_destination(
-    map: &GameMap,
-    removed_destination_tiles: &HashSet<String>,
-    origin: &Point,
-    position: &TripPosition,
-) -> Point {
-    if !removed_destination_tiles.contains(&point_key(origin)) {
-        return origin.clone();
-    }
-    let rounded_position = Point {
-        x: position.x.round() as i32,
-        y: position.y.round() as i32,
-    };
-    if !removed_destination_tiles.contains(&point_key(&rounded_position)) {
-        return rounded_position;
-    }
-    map.tiles
-        .iter()
-        .find(|tile| !removed_destination_tiles.contains(&position_key(tile.x, tile.y)))
-        .map(|tile| Point {
-            x: tile.x,
-            y: tile.y,
-        })
-        .unwrap_or_else(|| origin.clone())
 }
 
 fn resolve_line_segments(

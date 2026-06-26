@@ -483,6 +483,162 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
 }
 
 #[test]
+fn removing_destination_keeps_return_trip_targeting_home() {
+    let removed_tiles = vec![
+        Point { x: 5, y: 5 },
+        Point { x: 6, y: 5 },
+        Point { x: 5, y: 6 },
+        Point { x: 6, y: 6 },
+    ];
+    let remaining_tiles = vec![
+        Point { x: 12, y: 5 },
+        Point { x: 13, y: 5 },
+        Point { x: 12, y: 6 },
+        Point { x: 13, y: 6 },
+    ];
+    let home = Point { x: 2, y: 5 };
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![
+        destination_building("building-001", "supermarket", removed_tiles.clone()),
+        destination_building("building-002", "factory", remaining_tiles.clone()),
+    ];
+    // Worker is mid-return: origin is the (about to be removed) workplace, but the
+    // trip's destination is home. Clearing the workplace must not retarget this
+    // return trip toward a replacement workplace.
+    let mut sim = worker_sim("sim-001", home.clone(), removed_tiles[0].clone());
+    sim.outbound_resolved_today = true;
+    sim.outbound_arrived_today = true;
+    state.sims = vec![sim];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: removed_tiles[0].clone(),
+        destination: home.clone(),
+        position: Point { x: 4, y: 5 }.into(),
+        status: TripStatus::Walking,
+        deadline: 3_600.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Walk,
+                from: Point { x: 4, y: 5 },
+                to: home.clone(),
+                line_id: None,
+            }],
+            estimated_seconds: 60.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
+
+    let sim = next
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-001")
+        .expect("sim remains");
+    // Workplace was cleared and reassigned to a still-standing destination...
+    let reassigned = sim
+        .workplace
+        .clone()
+        .expect("worker reassigned to a replacement workplace");
+    assert!(remaining_tiles.contains(&reassigned));
+
+    // ...but the in-flight return trip must still head home, not to the new
+    // workplace. apply_arrival_to_sim resolves CommuteReturn at home, so routing
+    // it elsewhere would be wasted movement and wrong visuals.
+    let trip = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "trip-day-0-trip-001")
+        .expect("return trip remains");
+    assert_eq!(trip.destination, home);
+    assert!(!remaining_tiles.contains(&trip.destination));
+    assert_eq!(trip.status, TripStatus::Walking);
+    assert!(trip.route_plan.is_some());
+}
+
+#[test]
+fn removing_last_destination_drops_orphaned_outbound_trip() {
+    let removed_tiles = vec![
+        Point { x: 5, y: 5 },
+        Point { x: 6, y: 5 },
+        Point { x: 5, y: 6 },
+        Point { x: 6, y: 6 },
+    ];
+    let home = Point { x: 2, y: 5 };
+    let mut state = create_initial_snapshot();
+    // Only one destination building exists, so bulldozing it leaves no replacement.
+    state.buildings = vec![destination_building(
+        "building-001",
+        "supermarket",
+        removed_tiles.clone(),
+    )];
+    state.sims = vec![worker_sim(
+        "sim-001",
+        home.clone(),
+        removed_tiles[0].clone(),
+    )];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: home.clone(),
+        destination: removed_tiles[0].clone(),
+        position: Point { x: 3, y: 5 }.into(),
+        status: TripStatus::Walking,
+        deadline: 3_600.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Walk,
+                from: Point { x: 3, y: 5 },
+                to: removed_tiles[0].clone(),
+                line_id: None,
+            }],
+            estimated_seconds: 60.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles = vec![Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-001".to_string(),
+        capacity: 18,
+        passenger_ids: vec!["trip-day-0-trip-001".to_string()],
+        segment_index: 0,
+        progress: 0.25,
+    }];
+
+    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
+
+    // The sim is left without a workplace...
+    let sim = next
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-001")
+        .expect("sim remains");
+    assert!(sim.workplace.is_none());
+
+    // ...and the orphaned outbound trip is gone entirely — not converted into a
+    // dormant home-fallback trip (destination == home, purpose CommuteOutbound)
+    // that would live forever and block same-day retries via has_trip_for_sim_day.
+    assert!(next
+        .active_trips
+        .iter()
+        .all(|trip| trip.id != "trip-day-0-trip-001"));
+    assert!(!next
+        .active_trips
+        .iter()
+        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound));
+    assert!(next.transit.vehicles[0]
+        .passenger_ids
+        .iter()
+        .all(|id| id != "trip-day-0-trip-001"));
+}
+
+#[test]
 fn connected_metro_line_creates_vehicle() {
     let mut engine = GameEngine::new();
     track_line(&mut engine, 4, 2, 12);
