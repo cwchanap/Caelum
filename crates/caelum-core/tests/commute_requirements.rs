@@ -108,6 +108,23 @@ fn departure_jitter_is_stable_and_inside_window() {
 }
 
 #[test]
+fn departure_jitter_uses_full_suffix_modulo_not_truncated_u16() {
+    // A sim ordinal larger than u16::MAX must jitter from the full suffix. The modulo is
+    // taken on usize before narrowing: 70_000 % 121 == 62, giving 420 + 62 == 482. The old
+    // `as u16`-before-`%` path truncated 70_000 to 4464 and yielded 528 instead. This locks
+    // the fix so the distribution can't silently shift for large ordinals.
+    assert_eq!(
+        departure_minute_for_sim("sim-70000", "standard", "outbound"),
+        482,
+    );
+    assert!((420..=540).contains(&departure_minute_for_sim(
+        "sim-70000",
+        "standard",
+        "outbound"
+    )));
+}
+
+#[test]
 fn outbound_requirement_spawns_for_assigned_workers() {
     let mut engine = assigned_worker_engine();
 

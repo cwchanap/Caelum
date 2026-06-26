@@ -42,7 +42,11 @@ pub fn departure_minute_for_sim(sim_id: &str, template: &str, direction: &str) -
         _ => (420, 540),
     };
     let span = end - start;
-    let jitter = numeric_id_suffix(sim_id) as u16 % (span + 1);
+    // Take the modulo on the full `usize` suffix, then narrow. Casting to `u16` first
+    // would truncate suffixes > u16::MAX before the modulo, silently shifting the jitter
+    // distribution for very large sim ordinals. The modulo result is always <= span
+    // (<= 120), so the final `as u16` cannot truncate.
+    let jitter = (numeric_id_suffix(sim_id) % usize::from(span + 1)) as u16;
     start + jitter
 }
 
