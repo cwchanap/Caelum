@@ -54,12 +54,10 @@ fn transit_intents_use_camel_case_json_fields() {
     assert_intent_json(
         GameIntent::AddBusStop {
             point: (5, 6).into(),
-            kind: "busStop".to_string(),
         },
         serde_json::json!({
             "type": "addBusStop",
-            "point": { "x": 5, "y": 6 },
-            "kind": "busStop"
+            "point": { "x": 5, "y": 6 }
         }),
     );
     assert_intent_json(

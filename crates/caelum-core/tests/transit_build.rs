@@ -69,11 +69,9 @@ fn two_stop_bus_engine() -> GameEngine {
     road_line(&mut engine, 5, 2, 10);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -94,7 +92,6 @@ fn adds_bus_stop_on_road_and_charges_budget() {
 
     let result = engine.dispatch(GameIntent::AddBusStop {
         point: (4, 4).into(),
-        kind: "busStop".to_string(),
     });
 
     assert!(result.applied);
@@ -131,7 +128,6 @@ fn duplicate_stop_route_stays_inactive_and_unassigned() {
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (3, 4).into(),
-        kind: "busStop".to_string(),
     });
 
     let result = engine.dispatch(GameIntent::AddBusRoute {
@@ -222,13 +218,17 @@ fn route_mutators_apply_to_bus_and_delete_route_scrubs_vehicle_and_platforms() {
 fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 3, 2, 12);
-    engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 3).into(),
-        kind: "busTerminal".to_string(),
+    // Bus terminals are placed as buildings (3x2 footprint, 12,000 cost) via
+    // PlaceBuilding, not via AddBusStop. The terminal sits on empty tiles at
+    // y=4..5, just south of the road at y=3; its stop anchor is the building
+    // origin (2,4) and is reachable as an off-network final hop.
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 3).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -258,11 +258,9 @@ fn cycling_road_direction_breaks_and_restores_route() {
     road_line(&mut engine, 5, 2, 10);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],

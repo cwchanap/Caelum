@@ -22,11 +22,9 @@ fn bus_route_state() -> GameEngine {
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],

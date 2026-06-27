@@ -95,8 +95,8 @@ impl GameEngine {
             GameIntent::RemoveAtTile { point } => {
                 self.commit_result(transit::remove_at_tile(&self.snapshot, &point))
             }
-            GameIntent::AddBusStop { point, kind } => {
-                self.commit_result(transit::add_bus_stop(&self.snapshot, &point, &kind))
+            GameIntent::AddBusStop { point } => {
+                self.commit_result(transit::add_bus_stop(&self.snapshot, &point))
             }
             GameIntent::AddMetroStation { point } => {
                 self.commit_result(transit::add_metro_station(&self.snapshot, &point))
