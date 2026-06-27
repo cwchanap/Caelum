@@ -625,7 +625,12 @@ pub fn delete_route(state: &GameSnapshot, route_id: &str) -> Result<GameSnapshot
     next.transit
         .vehicles
         .retain(|vehicle| vehicle.line_id != route_id);
-    invalidate_trips_for_line(&mut next.active_trips, route_id, &HashMap::new());
+    invalidate_trips_for_line(
+        &mut next.active_trips,
+        &mut next.transit.vehicles,
+        route_id,
+        &HashMap::new(),
+    );
     Ok(next)
 }
 
@@ -1011,6 +1016,7 @@ fn park_vehicles_and_invalidate_trips(
 
     invalidate_trips_for_line(
         &mut state.active_trips,
+        &mut state.transit.vehicles,
         line_id,
         &parked_position_by_trip_id,
     );
@@ -1018,11 +1024,17 @@ fn park_vehicles_and_invalidate_trips(
 
 fn invalidate_trips_for_line(
     active_trips: &mut [ActiveTrip],
+    vehicles: &mut [Vehicle],
     line_id: &str,
     parked_position_by_trip_id: &HashMap<String, Point>,
 ) {
+    let mut invalidated_trip_ids: Vec<String> = Vec::new();
     for trip in active_trips {
-        if !plan_references_line(&trip.route_plan, line_id) {
+        // Only invalidate when the deleted line is part of the trip's current or
+        // remaining legs. A trip that already transferred off this line is
+        // physically aboard another vehicle and must be left alone; resetting it
+        // would orphan a ghost passenger on that other vehicle.
+        if !plan_references_line_from(&trip.route_plan, line_id, trip.current_leg_index) {
             continue;
         }
         trip.status = TripStatus::Idle;
@@ -1031,14 +1043,37 @@ fn invalidate_trips_for_line(
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
             trip.position = parked_at.clone().into();
         }
+        invalidated_trip_ids.push(trip.id.clone());
+    }
+
+    // Drop ghost passengers: an invalidated trip must not keep occupying a seat
+    // on any surviving vehicle. The deleted line's own vehicles are already
+    // cleared by the caller (or removed entirely by `delete_route`), but a trip
+    // can also be riding a different line when a *future* leg's line is deleted.
+    // Without this scrub the reset trip can never re-board (its id lingers in
+    // occupied_passenger_ids) while a phantom passenger consumes capacity.
+    if !invalidated_trip_ids.is_empty() {
+        let invalidated_set: HashSet<&str> =
+            invalidated_trip_ids.iter().map(String::as_str).collect();
+        for vehicle in vehicles {
+            vehicle
+                .passenger_ids
+                .retain(|id| !invalidated_set.contains(id.as_str()));
+        }
     }
 }
 
-fn plan_references_line(plan: &Option<crate::model::RoutePlan>, line_id: &str) -> bool {
+fn plan_references_line_from(
+    plan: &Option<crate::model::RoutePlan>,
+    line_id: &str,
+    start_leg_index: usize,
+) -> bool {
     plan.as_ref().is_some_and(|plan| {
-        plan.legs
-            .iter()
-            .any(|leg| leg.mode != TransitMode::Walk && leg.line_id.as_deref() == Some(line_id))
+        plan.legs.iter().enumerate().any(|(index, leg)| {
+            index >= start_leg_index
+                && leg.mode != TransitMode::Walk
+                && leg.line_id.as_deref() == Some(line_id)
+        })
     })
 }
 
