@@ -9,13 +9,25 @@ pub const ROLLING_WINDOW_SECONDS: f64 = 300.0;
 pub const SURVIVAL_TIME_SECONDS: f64 = 1_200.0;
 
 /// Drop trip outcomes older than the rolling evaluation window, keeping at least the
-/// most recent outcome so objective gates never see an empty sample.
+/// most recent outcome so the `trip_outcomes` vector is never empty (e.g. for
+/// serialization/inspection of a non-empty sample).
+///
+/// Note: the retained fallback does **not** influence scoring. `objective_counts`
+/// re-filters `trip_outcomes` by the same [`ROLLING_WINDOW_SECONDS`] window before
+/// counting, and the fallback is, by construction, older than the window — it was pruned
+/// precisely because it fell outside it, and `state.time` only advances, so the window
+/// start only moves forward. The scoring filter can therefore still yield zero in-range
+/// outcomes; in that case the loss gates see all-zero rolling counts and (requiring at
+/// least 10 trips) do not fire from the window, while the win gate consults the lifetime
+/// `completed_trips` counter rather than the rolling window.
 ///
 /// Intentional divergence from the TS oracle: TS keeps the full outcome history, while
 /// the Rust core trims to a [`ROLLING_WINDOW_SECONDS`] window each evaluation. This makes
 /// late/unserved ratios responsive to recent demand rather than lifetime totals, and is a
-/// deliberate "more correct" choice. A WASM/Tauri consumer expecting the TS snapshot shape
-/// must account for the trimmed `trip_outcomes` vector.
+/// deliberate "more correct" choice. The in-range counts still match TS, which filters
+/// its full history by the same window; only the pruned fallback is Rust-specific and is
+/// not scored. A WASM/Tauri consumer expecting the TS snapshot shape must account for the
+/// trimmed `trip_outcomes` vector.
 pub fn prune_trip_outcomes(outcomes: &mut Vec<TripOutcome>, current_time: f64) {
     if outcomes.is_empty() {
         return;

@@ -22,7 +22,10 @@ coverage:
         informational: true
 
 ignore:
-  - "src-tauri/**"        # Rust host crate — no gameplay logic, covered by cargo test
+  # crates/caelum-core/** is deliberately NOT ignored: its coverage is uploaded by the
+  # separate cargo-llvm-cov job (see .github/workflows/ci.yml `Run Rust tests with
+  # coverage`), so gameplay-core changes count toward project/patch coverage here.
+  - "src-tauri/**" # Rust host crate — no gameplay logic, covered by cargo test
   - "**/*.test.ts"
   - "**/*.spec.ts"
   - "tests/**"
