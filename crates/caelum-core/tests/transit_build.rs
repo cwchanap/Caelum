@@ -1,8 +1,21 @@
 use caelum_core::model::{
-    ActiveTrip, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
+    ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
     TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent};
+
+fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
+    Route {
+        id: id.to_string(),
+        name: id.to_string(),
+        color: "#000000".to_string(),
+        stop_ids: stop_ids.iter().map(|s| s.to_string()).collect(),
+        vehicle_ids: Vec::new(),
+        active: true,
+        segments: Vec::new(),
+        path_broken: false,
+    }
+}
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -663,4 +676,162 @@ fn connected_metro_line_creates_vehicle() {
         vec!["vehicle-001"]
     );
     assert_eq!(vehicle.snapshot.transit.vehicles[0].capacity, 90);
+}
+
+#[test]
+fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
+    // Regression: a trip that already transferred off route-A (leg 0) onto
+    // route-B (leg 1) must not be invalidated when route-A is deleted. The old
+    // logic matched route-A anywhere in the plan, reset the trip to Idle, and
+    // left its id aboard route-B's vehicle — a ghost passenger that consumed a
+    // seat forever and blocked re-boarding via occupied_passenger_ids.
+    let mut state = create_initial_snapshot();
+    state.transit.routes = vec![
+        simple_route("route-A", &["a1", "a2"]),
+        simple_route("route-B", &["b1", "b2"]),
+    ];
+    state.transit.vehicles = vec![
+        Vehicle {
+            id: "veh-A".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-A".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            segment_index: 0,
+            progress: 0.0,
+        },
+        Vehicle {
+            id: "veh-B".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-B".to_string(),
+            capacity: 18,
+            passenger_ids: vec!["trip-001".to_string()],
+            segment_index: 0,
+            progress: 0.4,
+        },
+    ];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: Point { x: 2, y: 5 },
+        destination: Point { x: 20, y: 5 },
+        position: Point { x: 12, y: 5 }.into(),
+        status: TripStatus::Riding,
+        deadline: 3_600.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![
+                RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: Point { x: 2, y: 5 },
+                    to: Point { x: 12, y: 5 },
+                    line_id: Some("route-A".to_string()),
+                },
+                RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: Point { x: 12, y: 5 },
+                    to: Point { x: 20, y: 5 },
+                    line_id: Some("route-B".to_string()),
+                },
+            ],
+            estimated_seconds: 240.0,
+        }),
+        current_leg_index: 1,
+        patience_remaining: 240.0,
+    }];
+
+    let next = transit::delete_route(&state, "route-A").expect("route-A deletes");
+
+    let trip = next
+        .active_trips
+        .iter()
+        .find(|t| t.id == "trip-001")
+        .expect("trip remains");
+    // The trip already left route-A, so it must keep riding route-B unchanged.
+    assert_eq!(trip.status, TripStatus::Riding);
+    assert!(trip.route_plan.is_some());
+    assert_eq!(trip.current_leg_index, 1);
+
+    let vehicle_b = next
+        .transit
+        .vehicles
+        .iter()
+        .find(|v| v.line_id == "route-B")
+        .expect("route-B vehicle survives");
+    // The legit passenger stays aboard — this is a real rider, not a ghost.
+    assert!(vehicle_b.passenger_ids.contains(&"trip-001".to_string()));
+}
+
+#[test]
+fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
+    // A trip riding route-A (leg 0) whose plan still depends on route-B as a
+    // future transfer (leg 1) must be invalidated when route-B is deleted, AND
+    // its id must be removed from route-A's vehicle. Otherwise the reset trip
+    // cannot re-board (its id lingers in occupied_passenger_ids) while route-A's
+    // vehicle carries a phantom passenger that never disembarks.
+    let mut state = create_initial_snapshot();
+    state.transit.routes = vec![
+        simple_route("route-A", &["a1", "a2"]),
+        simple_route("route-B", &["b1", "b2"]),
+    ];
+    state.transit.vehicles = vec![Vehicle {
+        id: "veh-A".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-A".to_string(),
+        capacity: 18,
+        passenger_ids: vec!["trip-001".to_string()],
+        segment_index: 0,
+        progress: 0.4,
+    }];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: Point { x: 2, y: 5 },
+        destination: Point { x: 20, y: 5 },
+        position: Point { x: 6, y: 5 }.into(),
+        status: TripStatus::Riding,
+        deadline: 3_600.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![
+                RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: Point { x: 2, y: 5 },
+                    to: Point { x: 12, y: 5 },
+                    line_id: Some("route-A".to_string()),
+                },
+                RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: Point { x: 12, y: 5 },
+                    to: Point { x: 20, y: 5 },
+                    line_id: Some("route-B".to_string()),
+                },
+            ],
+            estimated_seconds: 240.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let next = transit::delete_route(&state, "route-B").expect("route-B deletes");
+
+    let trip = next
+        .active_trips
+        .iter()
+        .find(|t| t.id == "trip-001")
+        .expect("trip remains");
+    // Future leg is gone, so the trip is eagerly reset to replan.
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
+    assert_eq!(trip.current_leg_index, 0);
+
+    // No ghost: the id is scrubbed from route-A's surviving vehicle, so the
+    // reset trip is free to re-board once it has a fresh plan.
+    let vehicle_a = next
+        .transit
+        .vehicles
+        .iter()
+        .find(|v| v.line_id == "route-A")
+        .expect("route-A vehicle survives");
+    assert!(!vehicle_a.passenger_ids.iter().any(|id| id == "trip-001"));
 }
