@@ -267,3 +267,138 @@ fn return_requirement_requires_successful_outbound() {
     assert_eq!(evening.snapshot.active_trips.len(), 0);
     assert_eq!(evening.snapshot.metrics.unserved_trips, 0);
 }
+
+#[test]
+fn worker_assigned_workplace_after_scheduled_departure_skips_today_outbound() {
+    // Regression: when housing exists with no destinations and a destination is
+    // built mid-day (after the worker's scheduled outbound departure has already
+    // passed), spawning a retroactive trip anchored to the past `scheduled_time`
+    // gives it a shortened or already-expired deadline (`scheduled_time + 900`).
+    // The worker had no commute requirement at the departure boundary, so
+    // today's outbound commute should be skipped — the worker commutes normally
+    // on the next day when the scheduled departure is in the future.
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: (2, 3).into(),
+        end: (3, 3).into(),
+    });
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "smallHouse".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+
+    // sim-001 is a "standard" worker. Tick past its scheduled outbound departure
+    // with no destination built yet — no trip should spawn (no workplace).
+    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    let scheduled = scheduled_time_seconds(0, departure);
+    let past_departure = scheduled + 50.0;
+    engine.tick(past_departure);
+    let before_destination = engine.snapshot();
+    assert!(
+        !before_destination
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001"),
+        "no trip should spawn before a workplace exists"
+    );
+    assert_eq!(before_destination.metrics.unserved_trips, 0);
+
+    // Build a destination mid-day — assign_workplaces assigns sim-001 a workplace
+    // after its scheduled departure has already passed.
+    engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "commercial".to_string(),
+        start: (8, 3).into(),
+        end: (9, 4).into(),
+    });
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "supermarket".to_string(),
+        origin: (8, 3).into(),
+        rotation: 0,
+    });
+
+    // Tick forward. Without the fix, this spawns a retroactive outbound trip
+    // anchored to the past `scheduled_time`, producing a shortened SLA.
+    engine.tick(60.0);
+
+    let after = engine.snapshot();
+    assert!(
+        !after
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound),
+        "worker assigned after departure should not spawn a retroactive outbound trip"
+    );
+    assert_eq!(after.metrics.unserved_trips, 0);
+    assert_eq!(after.metrics.late_trips, 0);
+}
+
+#[test]
+fn worker_skipped_today_commutes_normally_next_day() {
+    // Companion to the skip test: a worker whose day-0 outbound was skipped
+    // because their workplace was assigned after the departure must still
+    // commute normally on day 1, when the scheduled departure is in the
+    // future relative to `state.time`. This confirms the skip doesn't strand
+    // the worker permanently.
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: (2, 3).into(),
+        end: (3, 3).into(),
+    });
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "smallHouse".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+
+    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    let day0_scheduled = scheduled_time_seconds(0, departure);
+    engine.tick(day0_scheduled + 50.0);
+
+    engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "commercial".to_string(),
+        start: (8, 3).into(),
+        end: (9, 4).into(),
+    });
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "supermarket".to_string(),
+        origin: (8, 3).into(),
+        rotation: 0,
+    });
+
+    // Day 0 outbound is skipped (workplace assigned after departure).
+    engine.tick(60.0);
+    assert!(!engine
+        .snapshot()
+        .active_trips
+        .iter()
+        .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound }));
+
+    // Tick into day 1, past the day-1 scheduled departure. The day rollover
+    // resets `outbound_resolved_today`, so the outbound should spawn at the
+    // day-1 departure boundary with a fresh deadline.
+    let day1_scheduled = scheduled_time_seconds(1, departure);
+    let elapsed_since_last = day1_scheduled + 50.0 - engine.snapshot().time;
+    engine.tick(elapsed_since_last);
+
+    let next_day = engine.snapshot();
+    assert!(
+        next_day
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound),
+        "worker should commute normally on the day after the skip"
+    );
+    let trip = next_day
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
+        .unwrap();
+    // The day-1 trip's deadline must be anchored to the day-1 scheduled
+    // departure, not the skipped day-0 departure.
+    assert!((trip.deadline - (day1_scheduled + 900.0)).abs() < 0.000_001);
+}

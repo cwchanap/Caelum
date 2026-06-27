@@ -224,6 +224,30 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             if state.time + EPSILON >= scheduled_time
                 && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteOutbound, state.day)
             {
+                // Late-assignment guard: when `state.time` is already past the
+                // scheduled departure, the workplace was assigned after the
+                // departure boundary (e.g., housing existed with no destinations
+                // and a destination was built mid-day). The substep machinery
+                // breaks at the departure only when a workplace already exists,
+                // so a spawn meaningfully past `scheduled_time` can only arise
+                // from a mid-day assignment. Spawning now would anchor the trip
+                // to the past `scheduled_time`, giving it a shortened or
+                // already-expired deadline (`scheduled_time + 900`) and
+                // recording spurious late/unserved demand even though no commute
+                // requirement existed at the departure boundary. Skip today's
+                // outbound; the worker commutes normally on the next day when
+                // the scheduled departure is in the future relative to
+                // `state.time`.
+                if state.time > scheduled_time + EPSILON {
+                    if let Some(sim) = state
+                        .sims
+                        .iter_mut()
+                        .find(|candidate| candidate.id == sim.id)
+                    {
+                        sim.outbound_resolved_today = true;
+                    }
+                    continue;
+                }
                 let trip = build_trip(
                     state,
                     &sim.id,
