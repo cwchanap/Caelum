@@ -1005,6 +1005,69 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
 }
 
 #[test]
+fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
+    // Regression: when a previous day's return trip was unserved, the sim is
+    // stranded at the workplace. The midnight reset clears the daily commute
+    // flags, so at the next day's outbound departure the spawn condition still
+    // passes (valid workplace, flags cleared). `build_trip` then uses
+    // `sim.position` (the workplace) as the trip position while the destination
+    // is that same workplace, producing a zero-distance phantom outbound that
+    // `tick_trip` immediately scores as arrived — inflating `completed_trips`
+    // and masking the stranded state. The outbound spawn must be gated on the
+    // sim actually being at home.
+    let mut state = create_initial_snapshot();
+    let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
+    let day1_departure = clock::GAME_DAY_SECONDS
+        + (f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY))
+            * clock::GAME_DAY_SECONDS;
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 8, y: 3 };
+    state.time = day1_departure;
+    state.day = 1;
+    state.clock_minutes = departure_minute;
+    state.paused = false;
+    state.buildings = vec![destination_building(workplace.clone())];
+    // Sim stranded at the workplace after day-0 return was unserved. Day-0
+    // flags are set as they would be after the unserved return resolved;
+    // `commute_day` is still 0 so the day-1 reset clears them.
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: home.clone(),
+        position: workplace.clone(),
+        worker_profile: WorkerProfile::Worker,
+        shift_template: Some("standard".to_string()),
+        workplace: Some(workplace.clone()),
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: true,
+        returned_home_today: false,
+    }];
+    state.active_trips = Vec::new();
+
+    let next = trips::tick_trips(&state, 1.0);
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+
+    assert!(
+        !next
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound),
+        "stranded sim should not spawn a phantom outbound from the workplace"
+    );
+    assert_eq!(
+        next.metrics.completed_trips, 0,
+        "phantom outbound must not be counted as a completed trip"
+    );
+    assert_eq!(next.metrics.unserved_trips, 0);
+    // The sim is already at work, so the outbound is resolved and the return
+    // trip is unlocked to bring them home.
+    assert!(sim.outbound_resolved_today);
+    assert!(sim.outbound_arrived_today);
+    assert_eq!(sim.position, workplace);
+}
+
+#[test]
 fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
     let mut state = create_initial_snapshot();
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
