@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
+use crate::commute::trip_deadline_seconds;
 use crate::ids::next_entity_id;
 use crate::model::{
     ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
@@ -8,6 +9,7 @@ use crate::model::{
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
+use crate::trips::WAIT_PATIENCE_SECONDS;
 
 pub const BUS_STOP_COST: i32 = 2_000;
 pub const METRO_STATION_COST: i32 = 25_000;
@@ -807,6 +809,16 @@ fn cleanup_removed_destination_references(
         trip.route_plan = None;
         trip.current_leg_index = 0;
         trip.destination = replacement;
+        // Refresh the trip timers: retargeting starts a fresh trip (plan nulled,
+        // status reset to idle), so the patience/deadline window must reset too.
+        // Otherwise a trip that already consumed most of its patience, or whose
+        // deadline has elapsed, would be marked unserved on the next tick even
+        // though it was validly retargeted. Mirrors the legacy `retargetCitizens`
+        // flow (buildingSelectors.ts) and the values used at trip creation
+        // (`build_trip`: `trip_deadline_seconds(scheduled) = t + 900`,
+        // `WAIT_PATIENCE_SECONDS = 240`).
+        trip.deadline = trip_deadline_seconds(state.time);
+        trip.patience_remaining = WAIT_PATIENCE_SECONDS;
     }
 
     if !removed_trip_ids.is_empty() {
