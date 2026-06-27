@@ -431,11 +431,9 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -480,11 +478,9 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -550,11 +546,9 @@ fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk(
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -627,11 +621,9 @@ fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
     road_line(&mut engine, 5, 2, 5);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (5, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
@@ -693,11 +685,9 @@ fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_vi
     road_line(&mut engine, 5, 2, 7);
     engine.dispatch(GameIntent::AddBusStop {
         point: (2, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusStop {
         point: (7, 5).into(),
-        kind: "busStop".to_string(),
     });
     engine.dispatch(GameIntent::AddBusRoute {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],

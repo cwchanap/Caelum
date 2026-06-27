@@ -147,11 +147,10 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> Result<GameSnapsho
     Ok(next)
 }
 
-pub fn add_bus_stop(
-    state: &GameSnapshot,
-    point: &Point,
-    kind: &str,
-) -> Result<GameSnapshot, String> {
+pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+    // `AddBusStop` is the lightweight road-tile bus stop path. Bus terminals
+    // are multi-platform buildings with their own cost (12,000) and 3x2
+    // footprint validation, placed via `PlaceBuilding` -> `place_building`.
     if state.budget < BUS_STOP_COST {
         return Err("insufficient budget".to_string());
     }
@@ -167,9 +166,9 @@ pub fn add_bus_stop(
     next.budget -= BUS_STOP_COST;
     next.transit.stops.push(crate::model::Stop {
         id: stop_id.clone(),
-        kind: kind.to_string(),
+        kind: "busStop".to_string(),
         position: point.clone(),
-        platforms: bus_platforms(&stop_id, kind),
+        platforms: bus_platforms(&stop_id, "busStop"),
     });
 
     Ok(next)

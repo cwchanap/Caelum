@@ -33,7 +33,6 @@ pub enum GameIntent {
     },
     AddBusStop {
         point: Point,
-        kind: String,
     },
     AddMetroStation {
         point: Point,
