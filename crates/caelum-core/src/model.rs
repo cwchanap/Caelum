@@ -100,6 +100,7 @@ pub struct Tile {
 #[serde(rename_all = "camelCase")]
 pub struct PlacedBuilding {
     pub id: String,
+    #[serde(rename = "type")]
     pub building_type: String,
     pub origin: Point,
     pub rotation: u16,
