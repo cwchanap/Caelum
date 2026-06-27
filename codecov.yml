@@ -23,7 +23,6 @@ coverage:
 
 ignore:
   - "src-tauri/**"        # Rust host crate — no gameplay logic, covered by cargo test
-  - "crates/caelum-core/**" # Rust core — coverage reported separately if enabled later
   - "**/*.test.ts"
   - "**/*.spec.ts"
   - "tests/**"
