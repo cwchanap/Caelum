@@ -1,6 +1,8 @@
 use caelum_core::{
+    buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::WorkerProfile,
+    model::{PlacedBuilding, Point, Sim, WorkerProfile},
+    state::create_initial_snapshot,
     GameEngine, GameIntent,
 };
 
@@ -271,4 +273,75 @@ fn place_metro_station_building_requires_track_and_creates_linked_station() {
     assert_eq!(station.position, building.origin);
     assert_eq!(station.platforms.len(), 2);
     assert_eq!(station.platforms[1].id, "station-001-p1");
+}
+
+fn unassigned_worker(id: &str, home: Point) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home: home.clone(),
+        position: home,
+        worker_profile: WorkerProfile::Worker,
+        shift_template: None,
+        workplace: None,
+        commute_day: 0,
+        outbound_resolved_today: false,
+        outbound_arrived_today: false,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }
+}
+
+fn destination_on(id: &str, building_type: &str, tiles: Vec<Point>) -> PlacedBuilding {
+    PlacedBuilding {
+        id: id.to_string(),
+        building_type: building_type.to_string(),
+        origin: tiles[0].clone(),
+        rotation: 0,
+        occupied_tiles: tiles,
+        transit_node_id: None,
+    }
+}
+
+// Regression: when a worker's home tile is also a valid destination tile (which
+// happens after housing is bulldozed and the footprint is rezoned as a
+// destination), assign_workplaces must NOT route the worker to their own home —
+// a zero-distance commute would complete instantly and inflate served metrics
+// without any real travel. Mirrors `src/simulation/buildingSelectors.ts`
+// `retargetCitizens`, which filters same-home destinations per citizen.
+#[test]
+fn assign_workplaces_skips_a_workers_home_tile_when_alternatives_exist() {
+    let home = Point { x: 2, y: 3 };
+    let other = Point { x: 9, y: 4 };
+    let mut state = create_initial_snapshot();
+    // Destinations are enumerated in building order, so `home` is index 0:
+    // without the home filter, round-robin would assign the first worker home.
+    state.buildings = vec![
+        destination_on("building-001", "supermarket", vec![home.clone()]),
+        destination_on("building-002", "factory", vec![other.clone()]),
+    ];
+    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+
+    assign_workplaces(&mut state);
+
+    assert_eq!(state.sims[0].workplace, Some(other));
+}
+
+// Degenerate contract: when the worker's home is the ONLY remaining destination,
+// assign_workplaces must still assign it (rather than leaving the worker
+// unemployed), matching the TS fallback (`eligible.length > 0 ? eligible :
+// destinations`).
+#[test]
+fn assign_workplaces_falls_back_to_home_when_home_is_the_only_destination() {
+    let home = Point { x: 2, y: 3 };
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![destination_on(
+        "building-001",
+        "supermarket",
+        vec![home.clone()],
+    )];
+    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+
+    assign_workplaces(&mut state);
+
+    assert_eq!(state.sims[0].workplace, Some(home));
 }
