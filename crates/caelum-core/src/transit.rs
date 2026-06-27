@@ -20,6 +20,16 @@ pub const TRACK_COST: i32 = 500;
 pub const BUS_TILES_PER_SECOND: f64 = 0.8;
 pub const METRO_TILES_PER_SECOND: f64 = 1.6;
 
+/// Tolerance for stop-boundary comparisons. A substep scheduled via
+/// [`seconds_until_next_vehicle_stop`] to land exactly on the next stop can, via
+/// floating-point round-off, compute a progress of `0.9999999999999999` or
+/// `1.0000000000000002` instead of `1.0`. Comparisons against `1.0` use this
+/// epsilon so proximity is treated as a stop arrival and the carried progress
+/// on the next segment is clamped to zero (see [`tick_vehicles`] and
+/// [`disembark_vehicle`]); legitimate overshoot (≥ `EPSILON` of a segment) is
+/// preserved.
+const EPSILON: f64 = 0.000_001;
+
 pub fn lay_road(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
     if state.budget < ROAD_COST {
         return Err("insufficient budget".to_string());
@@ -418,7 +428,16 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         let progress = next_vehicle.progress
             + (tiles_per_second(next_vehicle.mode) * delta_seconds) / steps as f64;
 
-        if progress < 1.0 {
+        // FP guard: a substep scheduled to land on the next stop (via
+        // `seconds_until_next_vehicle_stop`) should reach it exactly, but
+        // rounded arithmetic can leave `progress` a hair under 1.0. A strict
+        // `< 1.0` check would keep the vehicle on the old segment, and the
+        // next-stop boundary (a hair after `state.time`) would be skipped by
+        // `track_next_boundary` (it filters candidates `<= state.time +
+        // EPSILON`), delaying the arrival until some later substep. Treat
+        // proximity within `EPSILON` as a stop arrival. Legitimate partial
+        // progress (`< 1.0 - EPSILON`) still stays on the segment.
+        if progress < 1.0 - EPSILON {
             if progress != next_vehicle.progress {
                 changed = true;
             }
@@ -1246,7 +1265,24 @@ fn disembark_vehicle(
         .collect();
     next.segment_index = (vehicle.segment_index + 1) % stop_count;
     next.progress = if next_steps > 0 {
-        ((vehicle.progress - 1.0) * current_steps as f64) / next_steps as f64
+        // Convert overshoot from the current segment's units to the next
+        // segment's units so the carried distance (in tiles) is preserved
+        // across segments of different lengths. FP round-off at the stop
+        // boundary can leave `vehicle.progress` a hair above or below 1.0;
+        // clamp a sub-`EPSILON` carryover to 0.0 so the vehicle is ready to
+        // board at the stop (boarding fires only when `progress == 0.0`).
+        // Legitimate overshoot (≥ `EPSILON` of a segment) is preserved.
+        let carried = ((vehicle.progress - 1.0) * current_steps as f64) / next_steps as f64;
+        let carried = if carried.abs() < EPSILON {
+            0.0
+        } else {
+            carried
+        };
+        // A vehicle that just reached a stop cannot be "behind" it; drop any
+        // negative residual so the next boarding (which fires only when
+        // `progress == 0.0`) is not blocked. Legitimate overshoot is positive
+        // and preserved.
+        carried.max(0.0)
     } else {
         0.0
     };

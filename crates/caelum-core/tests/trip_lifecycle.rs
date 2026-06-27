@@ -3,7 +3,7 @@ use caelum_core::model::{
     TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
     WorkerProfile,
 };
-use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, trips};
+use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
 use caelum_core::{GameEngine, GameIntent};
 
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
@@ -535,6 +535,213 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         TripOutcomeKind::Arrived
     );
     assert!((arrived.metrics.trip_outcomes[0].time - 32.5).abs() < 0.000_001);
+}
+
+#[test]
+fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk() {
+    // A trip that is `Waiting` at a stop, boards at the start of a substep, and
+    // reaches its alighting stop in that same substep goes `Waiting → Riding →
+    // Walking` inside `tick_vehicles`. The ride consumes the whole substep, so
+    // the following walk leg must start at the alighting stop with zero elapsed
+    // time this substep. `just_disembarked_trip_ids` must treat this as a
+    // zero-delta disembark; otherwise `advance_active_trips` spends the full
+    // substep delta on the walk leg and the commute arrives early.
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = vehicle.snapshot;
+    state.paused = false;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (2, 5).into(),
+        destination: (13, 5).into(),
+        position: (2, 5).into(),
+        status: TripStatus::Waiting,
+        deadline: 100.0,
+        route_plan: Some(bus_then_walk_plan(
+            (2, 5).into(),
+            (12, 5).into(),
+            (13, 5).into(),
+            "route-001",
+        )),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    // Vehicle starts at the boarding stop (progress 0) with a free seat; it
+    // boards the waiting trip and reaches stop-002 in the same substep.
+    assert_eq!(state.transit.vehicles[0].progress, 0.0);
+    assert!(state.transit.vehicles[0].passenger_ids.is_empty());
+
+    let disembarked = trips::tick_trips(&state, 12.5);
+    let walking = &disembarked.active_trips[0];
+
+    assert_eq!(walking.status, TripStatus::Walking);
+    assert_eq!(walking.current_leg_index, 1);
+    assert_eq!(walking.position, (12, 5).into());
+    assert_eq!(disembarked.metrics.completed_trips, 0);
+    assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    let arrived = trips::tick_trips(&disembarked, 20.0);
+
+    assert!(arrived.active_trips.is_empty());
+    assert_eq!(arrived.metrics.completed_trips, 1);
+    assert_eq!(arrived.metrics.trip_outcomes.len(), 1);
+    assert_eq!(
+        arrived.metrics.trip_outcomes[0].outcome,
+        TripOutcomeKind::Arrived
+    );
+    assert!((arrived.metrics.trip_outcomes[0].time - 32.5).abs() < 0.000_001);
+}
+
+#[test]
+fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
+    // FP under-shoot: a substep scheduled via `seconds_until_next_vehicle_stop`
+    // to land exactly on the next stop can compute a progress of
+    // 0.9999999999999999 instead of 1.0. The strict `progress < 1.0` check then
+    // leaves the vehicle on the old segment, so riders do not disembark and the
+    // next-stop boundary (a hair after `state.time`) is skipped by
+    // `track_next_boundary`, delaying the arrival until some later substep. An
+    // epsilon clamp at the stop boundary must treat proximity as a reach.
+    //
+    // A 4-tile segment gives `steps = 3`; a prior 0.25s advance leaves progress
+    // at `(0.8 * 0.25) / 3`, whose exact-to-stop round-trip lands a hair under
+    // 1.0 for this step count.
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 5);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (5, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = vehicle.snapshot;
+    state.paused = false;
+    state.transit.vehicles[0].progress = (transit::BUS_TILES_PER_SECOND * 0.25) / 3.0;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (2, 5).into(),
+        destination: (5, 5).into(),
+        position: (2, 5).into(),
+        status: TripStatus::Riding,
+        deadline: 100.0,
+        route_plan: Some(bus_plan((2, 5).into(), (5, 5).into(), "route-001")),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+
+    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
+        .expect("vehicle has a next stop");
+    // Sanity: the unscaled round-trip is inexact and lands a hair under 1.0, so
+    // this setup actually exercises the under-shoot path.
+    let raw_progress =
+        state.transit.vehicles[0].progress + (transit::BUS_TILES_PER_SECOND * seconds) / 3.0;
+    assert!(
+        raw_progress < 1.0,
+        "test setup must trigger the FP under-shoot, got raw_progress = {raw_progress}"
+    );
+
+    let next = trips::tick_trips(&state, seconds);
+
+    // The trip must disembark and arrive despite the FP under-shoot; without
+    // the clamp it stays `Riding` (the arrival is delayed to a later substep).
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.completed_trips, 1);
+}
+
+#[test]
+fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_via_fp() {
+    // FP over-shoot: the same round-trip can land at 1.0000000000000002 instead
+    // of 1.0. The vehicle reaches the stop (>= 1.0) and disembarks, but the
+    // carried progress on the next segment is a tiny positive residual
+    // (≈ 2e-16). Because boarding fires only when `vehicle.progress == 0.0`,
+    // that residual silently blocks the next boarding. `disembark_vehicle` must
+    // clamp a sub-epsilon carryover to 0.0.
+    //
+    // A 6-tile segment gives `steps = 5`; progress `(0.8 * 0.5) / 5 = 0.08`
+    // whose exact-to-stop round-trip lands a hair over 1.0 for this step count.
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 7);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (7, 5).into(),
+        kind: "busStop".to_string(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = vehicle.snapshot;
+    state.paused = false;
+    state.transit.vehicles[0].progress = (transit::BUS_TILES_PER_SECOND * 0.5) / 5.0;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (2, 5).into(),
+        destination: (7, 5).into(),
+        position: (2, 5).into(),
+        status: TripStatus::Riding,
+        deadline: 100.0,
+        route_plan: Some(bus_plan((2, 5).into(), (7, 5).into(), "route-001")),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+
+    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
+        .expect("vehicle has a next stop");
+    let raw_progress =
+        state.transit.vehicles[0].progress + (transit::BUS_TILES_PER_SECOND * seconds) / 5.0;
+    assert!(
+        raw_progress > 1.0,
+        "test setup must trigger the FP over-shoot, got raw_progress = {raw_progress}"
+    );
+
+    let next = trips::tick_trips(&state, seconds);
+
+    // The trip alights/arrives; the vehicle is back at a stop and ready to
+    // board (progress exactly 0.0). Without the clamp the carryover is a tiny
+    // positive residual that blocks the next boarding.
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.completed_trips, 1);
+    assert_eq!(next.transit.vehicles[0].progress, 0.0);
 }
 
 #[test]
