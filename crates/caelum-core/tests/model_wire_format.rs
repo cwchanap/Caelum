@@ -8,8 +8,9 @@
 //! wire contract changed.
 
 use caelum_core::model::{
-    ActiveTrip, Metrics, MetricsState, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TripOutcome,
-    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, Metrics, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, Tile,
+    TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
+    WorkerProfile,
 };
 use serde_json::json;
 
@@ -224,4 +225,46 @@ fn snapshot_round_trips_through_json() {
     };
     let value = serde_json::to_value(&tile).expect("tile should serialize");
     assert_eq!(value["kind"], json!("road"));
+}
+
+#[test]
+fn placed_building_serializes_type_to_legacy_field() {
+    // TS `PlacedBuilding` exposes `type` (src/domain/types.ts), and every
+    // selector/renderer reads `building.type` (buildingSelectors.ts,
+    // buildingRenderer.ts, actions.ts). The Rust field `building_type` must
+    // serialize as `type` so the WASM/Tauri snapshot is byte-identical to the
+    // legacy TS GameState — not `buildingType`, which the container
+    // `rename_all = "camelCase"` would produce.
+    let building = PlacedBuilding {
+        id: "building-001".to_string(),
+        building_type: "largeHouse".to_string(),
+        origin: Point { x: 2, y: 3 },
+        rotation: 90,
+        occupied_tiles: vec![Point { x: 2, y: 3 }],
+        transit_node_id: None,
+    };
+    let value = serde_json::to_value(&building).expect("building should serialize");
+    assert_eq!(
+        value["type"],
+        json!("largeHouse"),
+        "PlacedBuilding.building_type must serialize as `type` for TS parity"
+    );
+    assert!(
+        value.get("buildingType").is_none(),
+        "PlacedBuilding must not serialize `buildingType`; TS reads `building.type`"
+    );
+    assert_eq!(value["occupiedTiles"], json!([{ "x": 2, "y": 3 }]));
+    assert_eq!(value["rotation"], json!(90));
+
+    // Round-trip: a TS-shaped JSON object must deserialize back into the struct,
+    // proving the rename applies to both directions of the wire contract.
+    let back: PlacedBuilding = serde_json::from_value(json!({
+        "id": "building-001",
+        "type": "largeHouse",
+        "origin": { "x": 2, "y": 3 },
+        "rotation": 90,
+        "occupiedTiles": [{ "x": 2, "y": 3 }]
+    }))
+    .expect("TS-shaped building JSON should deserialize");
+    assert_eq!(back, building);
 }
