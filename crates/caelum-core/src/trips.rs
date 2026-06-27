@@ -237,6 +237,30 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             let Some(workplace) = sim.workplace.clone() else {
                 continue;
             };
+
+            // Stranded-sim guard: the only way a worker is not at home at the
+            // start of a day's outbound window is that the previous day's return
+            // trip was unserved, leaving them stranded at (or near) the
+            // workplace. The midnight reset cleared the daily flags, so without
+            // this guard the spawn condition below would fire and `build_trip`
+            // would use `sim.position` (the workplace) as the trip position
+            // while the destination is that same workplace — a zero-distance
+            // phantom outbound that `tick_trip` immediately scores as arrived,
+            // inflating `completed_trips` and masking the stranded state. The
+            // sim is already at work, so resolve the outbound and unlock the
+            // return trip to bring them home.
+            if sim.position != sim.home {
+                if let Some(sim) = state
+                    .sims
+                    .iter_mut()
+                    .find(|candidate| candidate.id == sim.id)
+                {
+                    sim.outbound_resolved_today = true;
+                    sim.outbound_arrived_today = true;
+                }
+                continue;
+            }
+
             let departure = departure_minute_for_sim(&sim.id, template, "outbound");
             let scheduled_time = scheduled_time_seconds(state.day, departure);
             if state.time + EPSILON >= scheduled_time
