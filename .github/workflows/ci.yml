@@ -155,7 +155,9 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Run Rust tests with coverage
-        run: cargo +stable llvm-cov --workspace --locked --lcov --output-path coverage/rust-lcov.info
+        run: |
+          mkdir -p coverage
+          cargo +stable llvm-cov --workspace --locked --lcov --output-path coverage/rust-lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
