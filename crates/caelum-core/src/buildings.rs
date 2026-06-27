@@ -208,7 +208,28 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
             continue;
         }
 
-        sim.workplace = Some(destinations[destination_index % destinations.len()].clone());
+        // Avoid assigning a workplace that equals the sim's home when any
+        // alternative destination exists. A same-home workplace would produce a
+        // zero-distance commute that completes instantly, inflating served
+        // metrics (and survival wins) without any actual travel. This arises
+        // after housing is bulldozed (sims retain `home` on the now-empty
+        // tiles) and the same footprint is later rezoned as a destination,
+        // breaking the "housing and destinations cannot overlap" assumption.
+        // Mirrors the per-citizen filter in
+        // `src/simulation/buildingSelectors.ts` `retargetCitizens`; if every
+        // remaining destination equals home (degenerate: the only destination
+        // IS home), fall through to the home destination rather than leaving
+        // the sim unassigned.
+        let eligible: Vec<&Point> = destinations
+            .iter()
+            .filter(|destination| *destination != &sim.home)
+            .collect();
+        let workplace = if eligible.is_empty() {
+            &destinations[destination_index % destinations.len()]
+        } else {
+            eligible[destination_index % eligible.len()]
+        };
+        sim.workplace = Some(workplace.clone());
         destination_index += 1;
     }
 }

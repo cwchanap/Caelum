@@ -214,7 +214,7 @@ fn snapshot_round_trips_through_json() {
     // Tile.kind stays a string (not in the enum-refactor scope) but confirm it still
     // serializes plainly so a later TileKind change would be caught here too.
     let tile = Tile {
-        id: "0,0".to_string(),
+        id: "tile-0-0".to_string(),
         x: 0,
         y: 0,
         kind: "road".to_string(),
