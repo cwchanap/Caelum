@@ -11,7 +11,7 @@ use crate::router;
 use crate::transit;
 
 const WALK_SECONDS_PER_TILE: f64 = 20.0;
-const WAIT_PATIENCE_SECONDS: f64 = 240.0;
+pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 

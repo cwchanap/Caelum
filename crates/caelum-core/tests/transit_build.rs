@@ -487,12 +487,89 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
     assert_eq!(Some(&trip.destination), sim.workplace.as_ref());
     assert!(!removed_tiles.contains(&trip.destination));
     assert!(remaining_tiles.contains(&trip.destination));
+    // Retargeting starts a fresh trip, so the patience/deadline window must
+    // refresh (legacy `retargetCitizens` parity). The pre-retarget trip had
+    // patience_remaining 30.0 and deadline 3_600.0; with state.time == 0.0 the
+    // fresh window is deadline 900.0 / patience 240.0.
+    assert_eq!(trip.patience_remaining, 240.0);
+    assert_eq!(trip.deadline, 900.0);
     assert!(!next.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
     assert!(next.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-other".to_string()));
+}
+
+#[test]
+fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
+    // Regression: a trip whose destination is bulldozed late in its commute has
+    // already consumed most of its patience and its deadline may have elapsed.
+    // Retargeting to a replacement workplace must start a fresh trip with
+    // refreshed timers; otherwise `tick_trips` would mark the validly retargeted
+    // trip unserved on the next tick (deadline grace elapsed, patience <= 0).
+    // Mirrors legacy `retargetCitizens` (buildingSelectors.ts deadline = t + 900,
+    // patienceRemaining = 240).
+    let removed_tiles = vec![
+        Point { x: 5, y: 5 },
+        Point { x: 6, y: 5 },
+        Point { x: 5, y: 6 },
+        Point { x: 6, y: 6 },
+    ];
+    let remaining_tiles = vec![
+        Point { x: 12, y: 5 },
+        Point { x: 13, y: 5 },
+        Point { x: 12, y: 6 },
+        Point { x: 13, y: 6 },
+    ];
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![
+        destination_building("building-001", "supermarket", removed_tiles.clone()),
+        destination_building("building-002", "factory", remaining_tiles.clone()),
+    ];
+    state.sims = vec![worker_sim(
+        "sim-001",
+        Point { x: 2, y: 5 },
+        removed_tiles[0].clone(),
+    )];
+    // Mid-commute: deadline long elapsed (well past the 300s grace), patience
+    // almost gone. Without the timer refresh this trip is doomed on the next
+    // tick regardless of the retarget.
+    state.time = 5_000.0;
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: Point { x: 2, y: 5 },
+        destination: removed_tiles[0].clone(),
+        position: Point { x: 3, y: 5 }.into(),
+        status: TripStatus::Riding,
+        deadline: 1_000.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Bus,
+                from: Point { x: 2, y: 5 },
+                to: removed_tiles[0].clone(),
+                line_id: Some("route-001".to_string()),
+            }],
+            estimated_seconds: 120.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 2.0,
+    }];
+
+    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
+    let trip = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "trip-001")
+        .expect("trip remains retargeted");
+
+    // Fresh trip window: deadline = state.time + 900, patience fully restored.
+    assert_eq!(trip.deadline, 5_000.0 + 900.0);
+    assert_eq!(trip.patience_remaining, 240.0);
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
 }
 
 #[test]
