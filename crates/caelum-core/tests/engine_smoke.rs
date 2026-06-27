@@ -201,7 +201,9 @@ fn set_paused_applies_without_mutating_prior_snapshot() {
 fn set_speed_accepts_valid_speeds_and_persists() {
     let mut engine = GameEngine::new();
 
-    for speed in [1, 2, 4] {
+    // 0 is the special no-op speed (accepted by dispatch, freezes the tick pipeline);
+    // 1/2/4 are the real speed multipliers. Each must apply and persist.
+    for speed in [0, 1, 2, 4] {
         let result = engine.dispatch(GameIntent::SetSpeed { speed });
         assert!(result.applied);
         assert!(result.rejection.is_none());
