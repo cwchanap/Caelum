@@ -172,7 +172,25 @@ fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> Has
                 return false;
             };
 
-            previous.status == TripStatus::Riding
+            // A trip that alighted during `tick_vehicles` must not be advanced
+            // again by `advance_active_trips` in the same substep: the ride
+            // already consumed the substep delta, so the following walk leg
+            // should start at the alighting stop with zero elapsed time. This
+            // covers two transitions:
+            //   - `Riding → Walking`: the trip was already aboard and rode to
+            //     its alighting stop;
+            //   - `Waiting → Walking`: the trip boarded at the start of the
+            //     substep (vehicle at progress 0) and reached its alighting
+            //     stop in that same substep. `tick_vehicles` folds the board
+            //     and the disembark into one pass, so the `before` snapshot
+            //     still shows `Waiting`. Without including it here, the walk
+            //     leg would be advanced by the full substep delta and the
+            //     commute would arrive early (short segments / high speed /
+            //     large ticks).
+            // A `Waiting` trip can only become `Walking` inside `tick_vehicles`
+            // via board-then-disembark, so the leg-advance + off-vehicle guards
+            // keep this precise.
+            matches!(previous.status, TripStatus::Riding | TripStatus::Waiting)
                 && trip.status == TripStatus::Walking
                 && trip.current_leg_index > previous.current_leg_index
                 && !is_trip_on_vehicle(after, &trip.id)
