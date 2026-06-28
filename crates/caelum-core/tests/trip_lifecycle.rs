@@ -829,6 +829,68 @@ fn retarget_home_fallback_trips_repoints_stale_dormant_outbound_onto_promoted_wo
     // Timers refreshed so the retargeted commute gets a fresh window.
     assert_eq!(trip.deadline, commute::trip_deadline_seconds(state.time));
     assert_eq!(trip.patience_remaining, trips::WAIT_PATIENCE_SECONDS);
+    // The id is regenerated for the current day. The day-encoded prefix
+    // (`trip-day-{day}-trip-`) is exactly what the internal spawn-block +
+    // arrival/resolution checks key on, so a fresh current-day id keeps the
+    // retargeted trip consistent with `state.day`. Default snapshot is day 0.
+    assert_eq!(trip.id, "trip-day-0-trip-001");
+}
+
+// Regression: a dormant home-fallback trip can survive across day boundaries
+// (it is non-terminal and `tick_trip` returns it unchanged). If it is retargeted
+// on a LATER day than the one encoded in its id, the retarget must regenerate
+// the id for the current day. Otherwise the stale `trip-day-{old}-` prefix makes
+// the spawn-block miss it (allowing a duplicate same-day outbound) and makes
+// `trip_service_day` disagree with `state.day` (so the arrival/resolution can't
+// set today's commute flags). This pins the cross-day case the same-day test
+// above cannot exercise.
+#[test]
+fn retarget_home_fallback_trips_refreshes_stale_cross_day_trip_id() {
+    let mut state = create_initial_snapshot();
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 9, y: 4 };
+    state.buildings = vec![
+        destination_building(home.clone()),
+        PlacedBuilding {
+            id: "building-002".to_string(),
+            building_type: "factory".to_string(),
+            origin: workplace.clone(),
+            rotation: 0,
+            occupied_tiles: vec![workplace.clone()],
+            transit_node_id: None,
+        },
+    ];
+    // Advance to day 1 (the dormant trip below was spawned on day 0).
+    state.time = clock::GAME_DAY_SECONDS;
+    state.day = clock::day_index(state.time);
+    // Leave trip_sequence_day on day 0 so the first regenerated id is the first
+    // sequence of day 1 after the day-rollover reset.
+    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: home.clone(),
+        destination: home.clone(),
+        position: TripPosition { x: 2.0, y: 3.0 },
+        status: TripStatus::Idle,
+        deadline: 500.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 60.0,
+    }];
+
+    trips::retarget_home_fallback_trips(&mut state);
+
+    let trip = &state.active_trips[0];
+    assert_eq!(trip.destination, workplace);
+    // The id is regenerated for the current day (1), not the stale spawn day (0).
+    assert_eq!(trip.id, "trip-day-1-trip-001");
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
+    assert_eq!(trip.current_leg_index, 0);
+    assert_eq!(trip.deadline, commute::trip_deadline_seconds(state.time));
+    assert_eq!(trip.patience_remaining, trips::WAIT_PATIENCE_SECONDS);
 }
 
 // Contract: a home-fallback worker with NO valid workplace (the only
