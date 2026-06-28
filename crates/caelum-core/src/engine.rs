@@ -2,7 +2,6 @@ use crate::areas;
 use crate::buildings;
 use crate::intent::{DispatchResult, GameIntent};
 use crate::model::GameSnapshot;
-use crate::objectives;
 use crate::state::create_initial_snapshot;
 use crate::transit;
 use crate::trips;
@@ -40,8 +39,7 @@ impl GameEngine {
     /// snapshot is returned unchanged with `applied == false` — this reference-equality
     /// dispatch is the engine's commit discipline.
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
-        let next =
-            objectives::evaluate_objectives(&trips::tick_trips(&self.snapshot, delta_seconds));
+        let next = trips::tick_trips_with_objectives(&self.snapshot, delta_seconds);
         if next == self.snapshot {
             return DispatchResult {
                 snapshot: self.snapshot(),

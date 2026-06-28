@@ -33,6 +33,34 @@ struct TripMetricDelta {
 }
 
 pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    tick_trips_substepped(state, delta_seconds, |_| false)
+}
+
+/// Like [`tick_trips`] but evaluates objectives after every substep and stops the
+/// tick as soon as a loss or win condition is reached.
+///
+/// A coarse tick (e.g. resuming from a suspended browser tab) can span a waiting
+/// trip past the 180s average-wait loss threshold and then to its 240s patience
+/// expiry, or generate bad outcomes that fall outside the 300s rolling window by
+/// the time the final substep completes. Evaluating objectives only once on the
+/// final snapshot misses those loss conditions — the expired trip is gone from
+/// `waiting_trip_count`, and the stale outcomes are pruned. Per-substep
+/// evaluation makes a coarse tick equivalent to a sequence of stepped ticks for
+/// objective detection, preserving the determinism/granularity-independence
+/// invariant.
+pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    tick_trips_substepped(state, delta_seconds, |next| {
+        let evaluated = objectives::evaluate_objectives(next);
+        *next = evaluated;
+        next.metrics.state != MetricsState::Running
+    })
+}
+
+fn tick_trips_substepped(
+    state: &GameSnapshot,
+    delta_seconds: f64,
+    mut on_substep: impl FnMut(&mut GameSnapshot) -> bool,
+) -> GameSnapshot {
     if state.paused || state.metrics.state != MetricsState::Running || state.speed == 0 {
         return state.clone();
     }
@@ -42,6 +70,7 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     let final_time = next.time + scaled_delta;
     sync_clock(&mut next);
 
+    let mut early_termination = false;
     for _ in 0..max_tick_substeps(&next, final_time) {
         if final_time - next.time <= EPSILON {
             break;
@@ -59,23 +88,30 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         }
 
         next = advance_tick_substep(&next, substep_delta);
+        if on_substep(&mut next) {
+            early_termination = true;
+            break;
+        }
     }
 
-    // The substep cap is an upper bound on legitimate boundary events (see
-    // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
-    // source is denser than the budget — a correctness regression that would
-    // otherwise silently drop the tail of the tick. Surface it in debug/test
-    // builds rather than returning a truncated snapshot.
-    debug_assert!(
-        final_time - next.time <= EPSILON,
-        "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
-        next.time,
-        final_time,
-        final_time - next.time
-    );
+    if !early_termination {
+        // The substep cap is an upper bound on legitimate boundary events (see
+        // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
+        // source is denser than the budget — a correctness regression that would
+        // otherwise silently drop the tail of the tick. Surface it in debug/test
+        // builds rather than returning a truncated snapshot.
+        debug_assert!(
+            final_time - next.time <= EPSILON,
+            "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
+            next.time,
+            final_time,
+            final_time - next.time
+        );
 
-    reset_daily_commute_flags(&mut next);
-    spawn_due_commute_trips(&mut next);
+        reset_daily_commute_flags(&mut next);
+        spawn_due_commute_trips(&mut next);
+    }
+
     next
 }
 
@@ -475,6 +511,20 @@ fn track_waiting_terminal_boundaries(
     trip: &ActiveTrip,
     after: f64,
 ) {
+    // Break at the average-wait loss threshold so a coarse substep doesn't span
+    // from below `MAX_AVERAGE_WAIT_SECONDS` of wait all the way to patience
+    // expiry without sampling the metric. A trip that has waited
+    // `WAIT_PATIENCE_SECONDS - patience_remaining` seconds crosses the threshold
+    // after `patience_remaining - (WAIT_PATIENCE_SECONDS - MAX_AVERAGE_WAIT_SECONDS)`
+    // more seconds. A tiny `EPSILON` offset lands the sample strictly above the
+    // threshold because the loss gate uses `>` not `>=`.
+    let wait_threshold_remaining = trip.patience_remaining
+        - (WAIT_PATIENCE_SECONDS - objectives::MAX_AVERAGE_WAIT_SECONDS)
+        + EPSILON;
+    if wait_threshold_remaining > EPSILON {
+        track_next_boundary(next, state.time + wait_threshold_remaining, after);
+    }
+
     if trip.patience_remaining > EPSILON {
         track_next_boundary(next, state.time + trip.patience_remaining, after);
     }
