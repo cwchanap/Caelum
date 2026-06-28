@@ -3,6 +3,7 @@ docs/superpowers
 .devin
 node_modules
 playwright-report
+src/generated
 src-tauri/gen
 src-tauri/target
 target
