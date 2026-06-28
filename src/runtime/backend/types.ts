@@ -1,0 +1,77 @@
+import type {
+  ActiveTrip,
+  AreaKind,
+  BuildingRotation,
+  BuildingType,
+  GameMap,
+  Metrics,
+  PlacedBuilding,
+  Point,
+  Sim,
+  TransitNetwork,
+} from "../../domain/types";
+
+export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
+
+export interface RustGameSnapshot {
+  time: number;
+  day: number;
+  clockMinutes: number;
+  speed: 0 | 1 | 2 | 4;
+  paused: boolean;
+  budget: number;
+  map: GameMap;
+  buildings: PlacedBuilding[];
+  transit: TransitNetwork;
+  sims: Sim[];
+  activeTrips: ActiveTrip[];
+  tripSequenceDay: number;
+  nextTripSequence: number;
+  metrics: Metrics;
+}
+
+export type GameIntent =
+  | { type: "setPaused"; paused: boolean }
+  | { type: "setSpeed"; speed: 0 | 1 | 2 | 4 }
+  | { type: "assignVehicle"; mode: "bus" | "metro"; lineId: string }
+  | { type: "layRoad"; point: Point }
+  | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
+  | { type: "cycleRoadDirection"; point: Point }
+  | { type: "layTrack"; point: Point }
+  | { type: "layTrackLine"; points: Point[] }
+  | { type: "removeAtTile"; point: Point }
+  | { type: "removeAtTiles"; points: Point[] }
+  | { type: "addBusStop"; point: Point }
+  | { type: "addMetroStation"; point: Point }
+  | { type: "addBusRoute"; stopIds: string[] }
+  | { type: "addMetroLine"; stationIds: string[] }
+  | { type: "setRouteActive"; routeId: string; active: boolean }
+  | { type: "renameRoute"; routeId: string; name: string }
+  | { type: "recolorRoute"; routeId: string; color: string }
+  | { type: "deleteRoute"; routeId: string }
+  | { type: "assignRouteToPlatform"; nodeId: string; routeId: string; platformId: string }
+  | {
+      type: "paintAreaRectangle";
+      area: AreaKind;
+      start: Point;
+      end: Point;
+    }
+  | {
+      type: "placeBuilding";
+      buildingType: BuildingType;
+      origin: Point;
+      rotation: BuildingRotation;
+    };
+
+export interface DispatchResult {
+  snapshot: RustGameSnapshot;
+  applied: boolean;
+  rejection: string | null;
+}
+
+export interface GameBackend {
+  snapshot(): Promise<RustGameSnapshot>;
+  dispatch(intent: GameIntent): Promise<DispatchResult>;
+  tick(deltaSeconds: number): Promise<DispatchResult>;
+  reset(): Promise<RustGameSnapshot>;
+}
