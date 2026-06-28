@@ -1,5 +1,5 @@
 use caelum_core::model::{MetricsState, WorkerProfile};
-use caelum_core::{clock, trips, GameEngine, GameIntent};
+use caelum_core::{clock, transit, trips, GameEngine, GameIntent};
 
 #[test]
 fn zone_build_and_route_sequence_has_stable_counts() {
@@ -178,4 +178,111 @@ fn commute_respawns_across_day_boundary() {
         .active_trips
         .iter()
         .all(|trip| !trip.id.starts_with("trip-day-0-trip-")));
+}
+
+/// Regression: a large tick advanced while a metro runs on a short segment must
+/// progress the full `delta`, not truncate at the substep cap.
+///
+/// `next_boundary_after` breaks every substep at each vehicle's next stop arrival.
+/// A 1-tile metro segment yields a stop boundary every `1 / METRO_TILES_PER_SECOND`
+/// = 0.625s — denser than the old per-second substep budget. Before the fix, a 600s
+/// tick with such a vehicle exhausted the cap at ~377s and silently dropped the
+/// remaining ~223s, violating the tick's advance-by-delta contract (and the
+/// determinism/granularity-independence invariant the rest of this file pins).
+#[test]
+fn large_tick_with_short_metro_segment_advances_full_delta() {
+    let mut engine = GameEngine::new();
+    // Two adjacent metro stations -> a single 1-tile segment between them.
+    for x in 2..=3 {
+        engine.dispatch(GameIntent::LayTrack {
+            point: (x, 4).into(),
+        });
+    }
+    engine.dispatch(GameIntent::AddMetroStation {
+        point: (2, 4).into(),
+    });
+    engine.dispatch(GameIntent::AddMetroStation {
+        point: (3, 4).into(),
+    });
+    engine.dispatch(GameIntent::AddMetroLine {
+        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "vehicle should assign on a connected line"
+    );
+
+    let mut state = assigned.snapshot;
+    state.paused = false;
+
+    // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
+    // this setup genuinely exercises the failure mode.
+    let boundary = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
+        .expect("vehicle has a next stop");
+    assert!(
+        (boundary - 1.0 / transit::METRO_TILES_PER_SECOND).abs() < 1e-9,
+        "expected a 0.625s stop boundary, got {boundary}"
+    );
+
+    let delta = 600.0_f64;
+    let advanced = trips::tick_trips(&state, delta);
+
+    assert!(
+        (advanced.time - state.time - delta).abs() < 1e-6,
+        "tick must advance the full {delta}s; only progressed {}s",
+        advanced.time - state.time
+    );
+}
+
+/// Regression companion to the above: a single large tick and many small ticks must
+/// land the vehicle at the same place, since the substep pipeline is granularity
+/// independent. This pins the fix against the opposite failure (the cap masking a
+/// real divergence between coarse and fine stepping).
+#[test]
+fn short_metro_segment_large_tick_matches_stepped_tick() {
+    let build = || -> caelum_core::GameSnapshot {
+        let mut engine = GameEngine::new();
+        for x in 2..=3 {
+            engine.dispatch(GameIntent::LayTrack {
+                point: (x, 4).into(),
+            });
+        }
+        engine.dispatch(GameIntent::AddMetroStation {
+            point: (2, 4).into(),
+        });
+        engine.dispatch(GameIntent::AddMetroStation {
+            point: (3, 4).into(),
+        });
+        engine.dispatch(GameIntent::AddMetroLine {
+            station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        });
+        let assigned = engine.dispatch(GameIntent::AssignVehicle {
+            mode: "metro".to_string(),
+            line_id: "metro-001".to_string(),
+        });
+        let mut state = assigned.snapshot;
+        state.paused = false;
+        state
+    };
+
+    let large = trips::tick_trips(&build(), 200.0);
+
+    let mut stepped = build();
+    for _ in 0..200 {
+        stepped = trips::tick_trips(&stepped, 1.0);
+    }
+
+    assert!(
+        (large.time - stepped.time).abs() < 1e-6,
+        "large and stepped ticks must agree on time: large={} stepped={}",
+        large.time,
+        stepped.time
+    );
+    let (lv, sv) = (&large.transit.vehicles[0], &stepped.transit.vehicles[0]);
+    assert_eq!(lv.segment_index % 2, sv.segment_index % 2);
+    assert!((lv.progress - sv.progress).abs() < 1e-9);
 }
