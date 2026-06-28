@@ -61,6 +61,19 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         next = advance_tick_substep(&next, substep_delta);
     }
 
+    // The substep cap is an upper bound on legitimate boundary events (see
+    // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
+    // source is denser than the budget — a correctness regression that would
+    // otherwise silently drop the tail of the tick. Surface it in debug/test
+    // builds rather than returning a truncated snapshot.
+    debug_assert!(
+        final_time - next.time <= EPSILON,
+        "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
+        next.time,
+        final_time,
+        final_time - next.time
+    );
+
     reset_daily_commute_flags(&mut next);
     spawn_due_commute_trips(&mut next);
     next
@@ -69,23 +82,43 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 /// Upper bound on the number of fixed-size substeps a single tick may take.
 ///
 /// A tick from `state.time` to `final_time` is broken at every meaningful boundary
-/// (day rollover and each sim's scheduled outbound/return departure) so spawn logic and
-/// day-rollover resets fire at exactly the right instant. The cap is the sum of:
+/// (day rollover, each sim's scheduled outbound/return departure, each active trip's
+/// next walk/patience/deadline event, and each transit vehicle's next stop arrival)
+/// so spawn, boarding, and day-rollover logic fire at exactly the right instant. The
+/// cap is the sum of three independent upper bounds on the number of such events:
 /// - `day_count * events_per_day` — one boundary per sim shift event (`6` covers the
 ///   outbound/return spawn + resolution boundaries) plus `2` for the day boundary,
-///   across every day the tick spans; and
-/// - `time_step_cap` — a 1-second-granularity safety net over the elapsed time,
+///   across every day the tick spans;
+/// - `per_second_net` — a 1-second-granularity safety net over the elapsed time,
+///   which covers the sparse walk-leg / sim-departure / day boundaries; and
+/// - `vehicle_bound` — one substep per transit stop arrival, the densest source. A
+///   vehicle on the shortest possible segment (1 tile) reaches its next stop every
+///   `1 / METRO_TILES_PER_SECOND` seconds, and metro is the fastest mode so it
+///   upper-bounds bus arrivals too. Each vehicle contributes independently, so the
+///   union of arrival events over the tick is at most
+///   `duration * METRO_TILES_PER_SECOND * vehicle_count`.
 ///
-/// then `+1`. All terms are saturating, so an enormous delta cannot overflow.
+/// then `+1`. Without `vehicle_bound`, a large delta advanced while a metro runs on
+/// short segments exhausts the per-second budget before reaching `final_time` and
+/// silently returns a snapshot hundreds of seconds early (a one-tile metro segment
+/// yields a stop boundary every 0.625s, faster than one per second). All terms are
+/// saturating, so an enormous delta cannot overflow.
 fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let start_day = clock::day_index(state.time);
     let end_day = clock::day_index(final_time);
     let day_count = end_day.saturating_sub(start_day) as usize + 1;
     let events_per_day = state.sims.len().saturating_mul(6).saturating_add(2);
-    let time_step_cap = (final_time - state.time).max(0.0).ceil() as usize;
+
+    let duration = (final_time - state.time).max(0.0);
+    let per_second_net = duration.ceil() as usize;
+    let vehicle_bound =
+        (duration * transit::METRO_TILES_PER_SECOND * state.transit.vehicles.len() as f64).ceil()
+            as usize;
+
     day_count
         .saturating_mul(events_per_day)
-        .saturating_add(time_step_cap)
+        .saturating_add(per_second_net)
+        .saturating_add(vehicle_bound)
         .saturating_add(1)
 }
 
