@@ -34,5 +34,5 @@ pub mod transit;
 pub mod trips;
 
 pub use engine::GameEngine;
-pub use intent::{DispatchResult, GameIntent};
+pub use intent::{DispatchResult, GameIntent, RoadPreset};
 pub use model::GameSnapshot;

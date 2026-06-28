@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::building_catalog::building_definition;
 use crate::commute::trip_deadline_seconds;
 use crate::ids::next_entity_id;
+use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
     TripPosition, TripPurpose, TripStatus, Vehicle,
@@ -56,6 +57,86 @@ pub fn lay_track(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, St
     next.budget -= TRACK_COST;
     set_tile_track(&mut next.map, point, true);
     Ok(recompute_route_paths(&next))
+}
+
+pub fn lay_road_line(
+    state: &GameSnapshot,
+    points: &[Point],
+    preset: RoadPreset,
+) -> Result<GameSnapshot, String> {
+    if points.is_empty() {
+        return Err("empty road line".to_string());
+    }
+
+    let forward = line_direction(points);
+    let mut next = state.clone();
+    let mut changed = false;
+
+    for point in points {
+        let direction = match preset {
+            RoadPreset::TwoWay => None,
+            RoadPreset::OneWay | RoadPreset::DualBidirectional => forward,
+        };
+        changed |= lay_lane(&mut next, state, point, direction)?;
+    }
+
+    if preset == RoadPreset::DualBidirectional {
+        if let Some(forward_direction) = forward {
+            let reverse_direction = opposite_direction(forward_direction);
+            for point in reverse_lane_points(points, forward_direction) {
+                changed |= lay_reverse_lane(&mut next, state, &point, reverse_direction)?;
+            }
+        }
+    }
+
+    if !changed {
+        return Err("road line unchanged".to_string());
+    }
+    Ok(recompute_route_paths(&next))
+}
+
+pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> Result<GameSnapshot, String> {
+    if points.is_empty() {
+        return Err("empty track line".to_string());
+    }
+
+    let mut next = state.clone();
+    let mut changed = false;
+    for point in points {
+        if next.budget < TRACK_COST || !is_valid_track_placement(&next, point) {
+            continue;
+        }
+        next.budget -= TRACK_COST;
+        set_tile_track(&mut next.map, point, true);
+        changed = true;
+    }
+
+    if !changed {
+        return Err("track line unchanged".to_string());
+    }
+    Ok(recompute_route_paths(&next))
+}
+
+pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> Result<GameSnapshot, String> {
+    if points.is_empty() {
+        return Err("empty remove line".to_string());
+    }
+
+    let mut next = state.clone();
+    let mut changed = false;
+    for point in points {
+        if let Ok(candidate) = remove_at_tile(&next, point) {
+            if candidate != next {
+                next = candidate;
+                changed = true;
+            }
+        }
+    }
+
+    if !changed {
+        return Err("remove line unchanged".to_string());
+    }
+    Ok(next)
 }
 
 pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
@@ -1400,6 +1481,56 @@ fn is_valid_metro_station_placement(state: &GameSnapshot, point: &Point) -> bool
     })
 }
 
+fn line_direction(points: &[Point]) -> Option<&'static str> {
+    if points.len() < 2 {
+        return None;
+    }
+    let dx = points[1].x - points[0].x;
+    let dy = points[1].y - points[0].y;
+    if dx > 0 {
+        Some("east")
+    } else if dx < 0 {
+        Some("west")
+    } else if dy > 0 {
+        Some("south")
+    } else if dy < 0 {
+        Some("north")
+    } else {
+        None
+    }
+}
+
+fn opposite_direction(direction: &str) -> &'static str {
+    match direction {
+        "north" => "south",
+        "east" => "west",
+        "south" => "north",
+        "west" => "east",
+        _ => "north",
+    }
+}
+
+fn left_of_direction(direction: &str) -> (i32, i32) {
+    match direction {
+        "north" => (-1, 0),
+        "east" => (0, -1),
+        "south" => (1, 0),
+        "west" => (0, 1),
+        _ => (0, 0),
+    }
+}
+
+fn reverse_lane_points(points: &[Point], direction: &str) -> Vec<Point> {
+    let (offset_x, offset_y) = left_of_direction(direction);
+    points
+        .iter()
+        .map(|point| Point {
+            x: point.x + offset_x,
+            y: point.y + offset_y,
+        })
+        .collect()
+}
+
 fn is_valid_road_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         tile.kind == "empty"
@@ -1435,6 +1566,48 @@ fn is_transit_node_at(state: &GameSnapshot, point: &Point) -> bool {
             .stations
             .iter()
             .any(|station| station.position == *point)
+}
+
+fn lay_lane(
+    next: &mut GameSnapshot,
+    original: &GameSnapshot,
+    point: &Point,
+    direction: Option<&str>,
+) -> Result<bool, String> {
+    let existing = get_tile(&next.map, point).cloned();
+    if existing.as_ref().is_some_and(|tile| tile.kind == "road") {
+        if existing.and_then(|tile| tile.one_way) != direction.map(str::to_string) {
+            set_tile_one_way(&mut next.map, point, direction);
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+
+    if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
+        return Ok(false);
+    }
+    next.budget -= ROAD_COST;
+    set_tile_kind(&mut next.map, point, "road");
+    set_tile_one_way(&mut next.map, point, direction);
+    Ok(true)
+}
+
+fn lay_reverse_lane(
+    next: &mut GameSnapshot,
+    original: &GameSnapshot,
+    point: &Point,
+    direction: &str,
+) -> Result<bool, String> {
+    if get_tile(&next.map, point).is_some_and(|tile| tile.kind != "empty") {
+        return Ok(false);
+    }
+    if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
+        return Ok(false);
+    }
+    next.budget -= ROAD_COST;
+    set_tile_kind(&mut next.map, point, "road");
+    set_tile_one_way(&mut next.map, point, Some(direction));
+    Ok(true)
 }
 
 fn get_tile<'a>(map: &'a GameMap, point: &Point) -> Option<&'a Tile> {
