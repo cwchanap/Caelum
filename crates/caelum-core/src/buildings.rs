@@ -4,21 +4,39 @@ use crate::ids::next_entity_id;
 use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, WorkerProfile};
 use crate::platforms::{bus_platforms, metro_platforms};
 
-pub fn footprint(definition: &BuildingDefinition, origin: &Point, rotation: u16) -> Vec<Point> {
+// Compute the occupied tiles for a building of `definition` placed at `origin`
+// with `rotation`. Returns `None` when the footprint cannot be constructed
+// safely: non-positive dimensions or `origin + extent` overflow. `PlaceBuilding`
+// intents are deserialized from the host/JS boundary, so `origin` can carry
+// i32::MAX; without checked arithmetic `origin.x + width` would panic in debug
+// and wrap into an empty/off-map footprint in release. Callers must reject
+// `None` before any map validation runs.
+pub fn footprint(
+    definition: &BuildingDefinition,
+    origin: &Point,
+    rotation: u16,
+) -> Option<Vec<Point>> {
     let (width, height) = if matches!(rotation, 90 | 270) {
         (definition.height, definition.width)
     } else {
         (definition.width, definition.height)
     };
 
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let end_x = origin.x.checked_add(width)?;
+    let end_y = origin.y.checked_add(height)?;
+
     let mut points = Vec::new();
-    for y in origin.y..origin.y + height {
-        for x in origin.x..origin.x + width {
+    for y in origin.y..end_y {
+        for x in origin.x..end_x {
             points.push(Point { x, y });
         }
     }
 
-    points
+    Some(points)
 }
 
 pub fn destination_points(state: &GameSnapshot) -> Vec<Point> {
@@ -46,7 +64,8 @@ pub fn can_place_building(
         return Err("invalid rotation".to_string());
     }
 
-    let occupied_tiles = footprint(definition, origin, rotation);
+    let occupied_tiles =
+        footprint(definition, origin, rotation).ok_or_else(|| "invalid footprint".to_string())?;
 
     for point in &occupied_tiles {
         let Some(tile) = state
