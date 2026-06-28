@@ -318,7 +318,25 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             // inflating `completed_trips` and masking the stranded state. The
             // sim is already at work, so resolve the outbound and unlock the
             // return trip to bring them home.
+            //
+            // Active-trip exception: if the sim still has an in-progress trip
+            // (e.g., a return trip from the previous day that has not yet
+            // arrived across the midnight boundary), `sim.position` is still
+            // the workplace even though the sim is in transit, not stranded.
+            // Applying the stranded guard here would set
+            // `outbound_resolved_today`/`outbound_arrived_today`, unlocking the
+            // return spawn; once the in-progress return arrives home (setting
+            // `sim.position = home` but, due to the day mismatch in
+            // `apply_arrival_to_sim`, NOT setting `returned_home_today`/
+            // `return_resolved_today`), the current day's return departure
+            // would spawn a home→home phantom return trip and count a phantom
+            // completion. Skip the sim entirely and let the active trip
+            // resolve naturally; the normal spawn logic handles the next
+            // outbound once the sim is back at home.
             if sim.position != sim.home {
+                if has_active_trip_for_sim(state, &sim.id) {
+                    continue;
+                }
                 if let Some(sim) = state
                     .sims
                     .iter_mut()
@@ -605,6 +623,17 @@ fn has_trip_for_sim_day(
     state.active_trips.iter().any(|trip| {
         trip.id.starts_with(&prefix) && trip.sim_id == sim_id && trip.purpose == purpose
     })
+}
+
+/// Whether the sim has any non-terminal active trip (regardless of service
+/// day). Used by the stranded-sim guard to distinguish a sim genuinely
+/// stranded at the workplace from one still in transit on a cross-midnight
+/// return trip.
+fn has_active_trip_for_sim(state: &GameSnapshot, sim_id: &str) -> bool {
+    state
+        .active_trips
+        .iter()
+        .any(|trip| trip.sim_id == sim_id && !is_terminal_status(trip.status))
 }
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
