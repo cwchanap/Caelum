@@ -402,3 +402,61 @@ fn assign_workplaces_falls_back_to_home_when_home_is_the_only_destination() {
 
     assert_eq!(state.sims[0].workplace, Some(home));
 }
+
+// Regression: a worker previously assigned to their own home (the degenerate
+// fallback when home was the only destination) must be promoted to a real
+// non-home destination once one becomes available, instead of being skipped
+// because they already hold a workplace. Without this the worker's outbound
+// trip stays dormant forever (`is_home_fallback_trip`) even though a valid
+// workplace now exists. Mirrors the TS `retargetCitizens(...,
+// isHomeFallbackCitizen)` flow invoked when a destination is placed
+// (src/simulation/buildings.ts).
+#[test]
+fn assign_workplaces_promotes_home_fallback_worker_when_a_real_destination_appears() {
+    let home = Point { x: 2, y: 3 };
+    let other = Point { x: 9, y: 4 };
+    let mut state = create_initial_snapshot();
+
+    // First pass: the only destination is the worker's home tile, so the
+    // worker falls back to a home workplace.
+    state.buildings = vec![destination_on(
+        "building-001",
+        "supermarket",
+        vec![home.clone()],
+    )];
+    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+    assign_workplaces(&mut state);
+    assert_eq!(state.sims[0].workplace, Some(home));
+
+    // A real non-home destination is built later; the worker must be promoted.
+    state.buildings.push(destination_on(
+        "building-002",
+        "factory",
+        vec![other.clone()],
+    ));
+    assign_workplaces(&mut state);
+
+    assert_eq!(state.sims[0].workplace, Some(other));
+}
+
+// Contract: a worker already holding a real (non-home) workplace must not be
+// reshuffled by a later assign_workplaces call (no load-balancing churn). This
+// guards the promotion guard against over-reassignment.
+#[test]
+fn assign_workplaces_leaves_an_existing_real_workplace_unchanged() {
+    let home = Point { x: 2, y: 3 };
+    let first = Point { x: 9, y: 4 };
+    let second = Point { x: 7, y: 8 };
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![
+        destination_on("building-001", "supermarket", vec![first.clone()]),
+        destination_on("building-002", "factory", vec![second.clone()]),
+    ];
+    let mut worker = unassigned_worker("sim-001", home.clone());
+    worker.workplace = Some(first.clone());
+    state.sims = vec![worker];
+
+    assign_workplaces(&mut state);
+
+    assert_eq!(state.sims[0].workplace, Some(first));
+}
