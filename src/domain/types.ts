@@ -250,8 +250,9 @@ export interface Scenario {
 export type TripOutcomeKind = "arrived" | "late" | "unserved";
 
 export interface TripOutcome {
-  time: number;
   outcome: TripOutcomeKind;
+  waitSeconds: number;
+  time: number;
 }
 
 export interface Metrics {
@@ -259,7 +260,7 @@ export interface Metrics {
   completedTrips: number;
   unservedTrips: number;
   totalWaitSeconds: number;
-  waitingCitizenCount: number;
+  waitingTripCount: number;
   averageWaitSeconds: number;
   tripOutcomes: TripOutcome[];
   state: "running" | "won" | "lost";

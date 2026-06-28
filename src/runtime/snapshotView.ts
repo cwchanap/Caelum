@@ -23,10 +23,17 @@ const scenario: Scenario = {
 
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
   const nextGrowth: GrowthWave[] =
-    snapshot.metrics.state === "running" ? scenario.growthWaves : [];
+    snapshot.metrics.state === "running"
+      ? scenario.growthWaves.map((wave) => ({
+          ...wave,
+          tiles: [...wave.tiles],
+        }))
+      : [];
 
   return {
     ...snapshot,
+    // Rust snapshots do not ship scenario metadata yet; this shim exists only
+    // to keep the existing shell selectors readable during host cutover work.
     scenario: {
       ...scenario,
       growthWaves: nextGrowth,
