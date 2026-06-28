@@ -461,6 +461,8 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         track_active_trip_boundary(&mut next, state, trip, after);
     }
 
+    track_aggregate_wait_boundary(&mut next, state, after);
+
     for vehicle in &state.transit.vehicles {
         if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
             track_next_boundary(&mut next, state.time + seconds, after);
@@ -468,6 +470,45 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     }
 
     next
+}
+
+/// Track a boundary at the instant the aggregate `average_wait_seconds` metric
+/// can cross `MAX_AVERAGE_WAIT_SECONDS`, so a coarse substep samples the loss
+/// gate there instead of skipping over the crossing.
+///
+/// The per-trip `wait_threshold_remaining` boundary in
+/// `track_waiting_terminal_boundaries` only fires when an *individual* trip's
+/// wait crosses the threshold. But the aggregate average can cross the
+/// threshold between two per-trip boundaries and then recede when a trip
+/// expires (patience reaches 0) — causing the loss to be missed entirely.
+///
+/// Between boundary events every waiting trip's wait grows at 1s/s, so the
+/// average also grows at 1s/s and crosses the threshold after
+/// `MAX_AVERAGE_WAIT_SECONDS - current_average` seconds. This is computed from
+/// the trips' `patience_remaining` (not `state.metrics.average_wait_seconds`,
+/// which is stale until the first `update_metrics` call). Patience expiries and
+/// vehicle boardings are already tracked as boundaries, so the substep ends
+/// there first and this boundary is recomputed from the new state — keeping the
+/// calculation correct as the waiting set changes.
+fn track_aggregate_wait_boundary(next: &mut Option<f64>, state: &GameSnapshot, after: f64) {
+    let waiting_trips: Vec<&ActiveTrip> = state
+        .active_trips
+        .iter()
+        .filter(|trip| trip.status == TripStatus::Waiting)
+        .collect();
+    if waiting_trips.is_empty() {
+        return;
+    }
+
+    let current_wait_seconds: f64 = waiting_trips
+        .iter()
+        .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
+        .sum();
+    let average_wait_seconds = current_wait_seconds / f64::from(waiting_trips.len() as u32);
+    let seconds_to_threshold = objectives::MAX_AVERAGE_WAIT_SECONDS - average_wait_seconds;
+    if seconds_to_threshold > EPSILON {
+        track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
+    }
 }
 
 fn track_active_trip_boundary(
