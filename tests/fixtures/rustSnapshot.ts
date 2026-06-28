@@ -28,7 +28,7 @@ export function createRustSnapshot(
       completedTrips: 0,
       unservedTrips: 0,
       totalWaitSeconds: 0,
-      waitingCitizenCount: 0,
+      waitingTripCount: 0,
       averageWaitSeconds: 0,
       tripOutcomes: [],
       state: "running",
