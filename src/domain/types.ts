@@ -251,7 +251,7 @@ export type TripOutcomeKind = "arrived" | "late" | "unserved";
 
 export interface TripOutcome {
   outcome: TripOutcomeKind;
-  waitSeconds: number;
+  waitSeconds?: number;
   time: number;
 }
 
@@ -260,7 +260,8 @@ export interface Metrics {
   completedTrips: number;
   unservedTrips: number;
   totalWaitSeconds: number;
-  waitingTripCount: number;
+  waitingCitizenCount: number;
+  waitingTripCount?: number;
   averageWaitSeconds: number;
   tripOutcomes: TripOutcome[];
   state: "running" | "won" | "lost";
@@ -277,8 +278,9 @@ export interface TransitNetwork {
 
 export interface GameState {
   time: number;
-  day: number;
-  clockMinutes: number;
+  citizens: Citizen[];
+  day?: number;
+  clockMinutes?: number;
   speed: 0 | 1 | 2 | 4;
   paused: boolean;
   budget: number;
@@ -286,9 +288,9 @@ export interface GameState {
   buildings: PlacedBuilding[];
   scenario: Scenario;
   transit: TransitNetwork;
-  sims: Sim[];
-  activeTrips: ActiveTrip[];
-  tripSequenceDay: number;
-  nextTripSequence: number;
+  sims?: Sim[];
+  activeTrips?: ActiveTrip[];
+  tripSequenceDay?: number;
+  nextTripSequence?: number;
   metrics: Metrics;
 }

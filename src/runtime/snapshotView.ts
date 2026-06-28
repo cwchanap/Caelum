@@ -32,6 +32,11 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
 
   return {
     ...snapshot,
+    citizens: [],
+    metrics: {
+      ...snapshot.metrics,
+      waitingCitizenCount: snapshot.metrics.waitingTripCount,
+    },
     // Rust snapshots do not ship scenario metadata yet; this shim exists only
     // to keep the existing shell selectors readable during host cutover work.
     scenario: {
