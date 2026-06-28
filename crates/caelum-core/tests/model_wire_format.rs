@@ -12,6 +12,7 @@ use caelum_core::model::{
     TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
     WorkerProfile,
 };
+use caelum_core::{GameIntent, RoadPreset};
 use serde_json::json;
 
 fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
@@ -179,6 +180,21 @@ fn sim_worker_profile_serializes_to_legacy_strings() {
             "worker_profile wire spelling changed: {wire}"
         );
     }
+}
+
+#[test]
+fn line_intents_use_camel_case_wire_names() {
+    let intent = GameIntent::LayRoadLine {
+        points: vec![(1, 2).into(), (3, 2).into()],
+        preset: RoadPreset::DualBidirectional,
+    };
+
+    let json = serde_json::to_value(intent).expect("intent serializes");
+
+    assert_eq!(json["type"], "layRoadLine");
+    assert_eq!(json["preset"], "dualBidirectional");
+    assert_eq!(json["points"][0]["x"], 1);
+    assert_eq!(json["points"][1]["y"], 2);
 }
 
 #[test]

@@ -2,7 +2,7 @@ use caelum_core::model::{
     ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
     TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent};
+use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent, RoadPreset};
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
     Route {
@@ -299,6 +299,96 @@ fn cycling_road_direction_breaks_and_restores_route() {
         .one_way
         .is_none());
     assert!(!engine.snapshot().transit.routes[0].path_broken);
+}
+
+#[test]
+fn lay_road_line_one_way_sets_axis_direction_and_charges_new_tiles() {
+    let mut engine = GameEngine::new();
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.rejection, None);
+    assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
+    let directions: Vec<Option<&str>> = result
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .filter(|tile| tile.y == 1 && (1..=3).contains(&tile.x))
+        .map(|tile| tile.one_way.as_deref())
+        .collect();
+    assert_eq!(directions, vec![Some("east"), Some("east"), Some("east")]);
+}
+
+#[test]
+fn lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads() {
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::LayRoad {
+        point: (1, 0).into(),
+    });
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+
+    assert!(result.applied);
+    let tile = |x: i32, y: i32| {
+        result
+            .snapshot
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .expect("tile exists")
+    };
+    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 0).one_way.as_deref(), None);
+    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+}
+
+#[test]
+fn lay_track_line_and_remove_at_tiles_skip_invalid_tiles_but_apply_valid_tiles() {
+    let mut engine = GameEngine::new();
+    let track = engine.dispatch(GameIntent::LayTrackLine {
+        points: vec![(4, 4).into(), (5, 4).into(), (100, 100).into()],
+    });
+
+    assert!(track.applied);
+    assert_eq!(track.snapshot.budget, 120_000 - 2 * 500);
+    assert!(
+        track
+            .snapshot
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == 4 && tile.y == 4)
+            .expect("tile exists")
+            .has_track
+    );
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTiles {
+        points: vec![(4, 4).into(), (5, 4).into(), (100, 100).into()],
+    });
+
+    assert!(removed.applied);
+    assert!(
+        !removed
+            .snapshot
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == 4 && tile.y == 4)
+            .expect("tile exists")
+            .has_track
+    );
 }
 
 #[test]

@@ -84,14 +84,23 @@ impl GameEngine {
             GameIntent::LayRoad { point } => {
                 self.commit_result(transit::lay_road(&self.snapshot, &point))
             }
+            GameIntent::LayRoadLine { points, preset } => {
+                self.commit_result(transit::lay_road_line(&self.snapshot, &points, preset))
+            }
             GameIntent::CycleRoadDirection { point } => {
                 self.commit_result(transit::cycle_road_direction(&self.snapshot, &point))
             }
             GameIntent::LayTrack { point } => {
                 self.commit_result(transit::lay_track(&self.snapshot, &point))
             }
+            GameIntent::LayTrackLine { points } => {
+                self.commit_result(transit::lay_track_line(&self.snapshot, &points))
+            }
             GameIntent::RemoveAtTile { point } => {
                 self.commit_result(transit::remove_at_tile(&self.snapshot, &point))
+            }
+            GameIntent::RemoveAtTiles { points } => {
+                self.commit_result(transit::remove_at_tiles(&self.snapshot, &points))
             }
             GameIntent::AddBusStop { point } => {
                 self.commit_result(transit::add_bus_stop(&self.snapshot, &point))

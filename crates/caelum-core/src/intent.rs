@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{GameSnapshot, Point};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoadPreset {
+    TwoWay,
+    OneWay,
+    DualBidirectional,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -22,14 +30,24 @@ pub enum GameIntent {
     LayRoad {
         point: Point,
     },
+    LayRoadLine {
+        points: Vec<Point>,
+        preset: RoadPreset,
+    },
     CycleRoadDirection {
         point: Point,
     },
     LayTrack {
         point: Point,
     },
+    LayTrackLine {
+        points: Vec<Point>,
+    },
     RemoveAtTile {
         point: Point,
+    },
+    RemoveAtTiles {
+        points: Vec<Point>,
     },
     AddBusStop {
         point: Point,
