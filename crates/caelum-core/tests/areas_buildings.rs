@@ -326,6 +326,63 @@ fn assign_workplaces_skips_a_workers_home_tile_when_alternatives_exist() {
     assert_eq!(state.sims[0].workplace, Some(other));
 }
 
+// Regression: a PaintAreaRectangle intent is deserialized from the host/JS
+// boundary, so `start`/`end` can carry arbitrary i32 values. The engine must
+// clip the rectangle to map bounds before enumerating points; an off-map
+// rectangle must reject without allocating billions of off-map coordinates.
+#[test]
+fn paint_area_rectangle_rejects_off_map_rectangle_without_hanging() {
+    let mut engine = GameEngine::new();
+
+    let result = engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: (1_000, 1_000).into(),
+        end: (2_000, 2_000).into(),
+    });
+
+    assert!(!result.applied);
+    assert_eq!(result.rejection.as_deref(), Some("no paintable tiles"));
+}
+
+// Regression: a PaintAreaRectangle spanning the entire i32 range must not hang
+// or OOM the engine; it should clip to the map and paint only in-bounds tiles.
+#[test]
+fn paint_area_rectangle_clips_i32_range_to_map_bounds() {
+    let mut engine = GameEngine::new();
+
+    let result = engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: (i32::MIN, i32::MIN).into(),
+        end: (i32::MAX, i32::MAX).into(),
+    });
+
+    // The map has empty (non-road) tiles, so clamping paints them residential.
+    assert!(result.applied);
+    assert!(result.snapshot.map.tiles.iter().any(|tile| tile
+        .area
+        .as_deref()
+        .is_some_and(|area| area == "residential")));
+}
+
+// Regression: a PlaceBuilding intent is deserialized from the host/JS boundary,
+// so `origin` can carry i32::MAX. `origin.x + width` would overflow before
+// off-map validation runs (panic in debug, wrap in release). The engine must
+// reject the footprint instead of constructing overflowing ranges.
+#[test]
+fn place_building_rejects_overflowing_origin_without_panicking() {
+    let mut engine = GameEngine::new();
+
+    let rejected = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "largeHouse".to_string(),
+        origin: (i32::MAX, i32::MAX).into(),
+        rotation: 0,
+    });
+
+    assert!(!rejected.applied);
+    assert_eq!(rejected.rejection.as_deref(), Some("invalid footprint"));
+    assert!(rejected.snapshot.buildings.is_empty());
+}
+
 // Degenerate contract: when the worker's home is the ONLY remaining destination,
 // assign_workplaces must still assign it (rather than leaving the worker
 // unemployed), matching the TS fallback (`eligible.length > 0 ? eligible :
