@@ -778,6 +778,95 @@ fn outbound_home_fallback_trip_stays_dormant_when_away_from_home() {
     assert_eq!(next.metrics, metrics);
 }
 
+// Regression: when a home-fallback worker (workplace == home) is promoted to a
+// real non-home workplace by `assign_workplaces`, the stale dormant outbound
+// trip — still targeting home — must be retargeted onto the new workplace.
+// Without this, `is_home_fallback_trip` keeps the trip dormant forever and its
+// id blocks any fresh outbound spawn, so the worker never commutes despite now
+// having a valid workplace. Mirrors the TS `retargetCitizens` destination/timer
+// reset (src/simulation/buildingSelectors.ts).
+#[test]
+fn retarget_home_fallback_trips_repoints_stale_dormant_outbound_onto_promoted_workplace() {
+    let mut state = create_initial_snapshot();
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 9, y: 4 };
+    state.buildings = vec![
+        destination_building(home.clone()),
+        PlacedBuilding {
+            id: "building-002".to_string(),
+            building_type: "factory".to_string(),
+            origin: workplace.clone(),
+            rotation: 0,
+            occupied_tiles: vec![workplace.clone()],
+            transit_node_id: None,
+        },
+    ];
+    // The sim has just been promoted to a real non-home workplace by
+    // `assign_workplaces`, but its previously-spawned outbound trip is still the
+    // dormant home-fallback (destination == home, sitting at home).
+    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: home.clone(),
+        destination: home.clone(),
+        position: TripPosition { x: 2.0, y: 3.0 },
+        status: TripStatus::Idle,
+        deadline: 500.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 60.0,
+    }];
+
+    trips::retarget_home_fallback_trips(&mut state);
+
+    let trip = &state.active_trips[0];
+    assert_eq!(trip.destination, workplace);
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
+    assert_eq!(trip.current_leg_index, 0);
+    // Timers refreshed so the retargeted commute gets a fresh window.
+    assert_eq!(trip.deadline, commute::trip_deadline_seconds(state.time));
+    assert_eq!(trip.patience_remaining, trips::WAIT_PATIENCE_SECONDS);
+}
+
+// Contract: a home-fallback worker with NO valid workplace (the only
+// destination is still home) must remain dormant — retarget_home_fallback_trips
+// must not repoint its trip away from home, otherwise a zero-distance commute
+// would inflate served metrics. Guards against over-eager retargeting.
+#[test]
+fn retarget_home_fallback_trips_leaves_genuine_home_fallback_dormant() {
+    let mut state = create_initial_snapshot();
+    let home = Point { x: 2, y: 3 };
+    // The only destination is the home tile itself; the sim's workplace is home.
+    state.buildings = vec![destination_building(home.clone())];
+    state.sims = vec![sim("sim-001", home.clone(), Some(home.clone()))];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: home.clone(),
+        destination: home.clone(),
+        position: TripPosition { x: 2.0, y: 3.0 },
+        status: TripStatus::Idle,
+        deadline: 500.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 60.0,
+    }];
+
+    trips::retarget_home_fallback_trips(&mut state);
+
+    let trip = &state.active_trips[0];
+    assert_eq!(trip.destination, home);
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
+    // Untouched: still dormant.
+    assert_eq!(trip.deadline, 500.0);
+    assert_eq!(trip.patience_remaining, 60.0);
+}
+
 #[test]
 fn return_home_trip_is_not_treated_as_home_fallback() {
     let mut state = create_initial_snapshot();

@@ -770,6 +770,15 @@ fn cleanup_removed_destination_references(
 
     crate::buildings::assign_workplaces(state);
 
+    // `assign_workplaces` may also promote a home-fallback worker (workplace ==
+    // home) to a real non-home workplace when a non-home destination survives
+    // the removal. Retarget any stale dormant trip left targeting home so the
+    // worker is not stuck dormant despite now having a valid workplace. Run
+    // before the bulldoze trip-retarget loop: it touches a disjoint trip set
+    // (outbound trips targeting home with a promoted workplace) that the
+    // bulldoze logic (removed-tile / cleared-workplace trips) does not cover.
+    crate::trips::retarget_home_fallback_trips(state);
+
     let workplace_by_sim_id: HashMap<String, Point> = state
         .sims
         .iter()

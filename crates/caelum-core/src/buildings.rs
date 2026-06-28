@@ -210,6 +210,14 @@ pub fn place_building(
 
     if matches!(definition.effect, "housing" | "destination") {
         assign_workplaces(&mut next);
+        // `assign_workplaces` may promote a home-fallback worker (workplace ==
+        // home) to a real non-home workplace when this placement adds one. The
+        // worker's stale dormant outbound trip still targets home, so retarget
+        // it onto the new workplace — otherwise `is_home_fallback_trip` keeps
+        // it dormant and its id blocks any fresh outbound spawn. Mirrors the TS
+        // `retargetCitizens(..., isHomeFallbackCitizen)` flow invoked when a
+        // destination is placed (src/simulation/buildings.ts).
+        crate::trips::retarget_home_fallback_trips(&mut next);
     }
 
     Ok(next)
@@ -223,7 +231,22 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
 
     let mut destination_index = 0;
     for sim in &mut state.sims {
-        if sim.worker_profile != WorkerProfile::Worker || sim.workplace.is_some() {
+        if sim.worker_profile != WorkerProfile::Worker {
+            continue;
+        }
+        // A workplace equal to home is the documented home-fallback (the only
+        // destination at assignment time was the home tile — e.g. housing was
+        // bulldozed and the footprint later rezoned as a destination). Revisit
+        // it so a later non-home destination can promote the worker out of the
+        // dormant fallback; otherwise the worker stays on a zero-distance home
+        // workplace forever; its outbound trips are held dormant by
+        // `is_home_fallback_trip` and it never commutes even after a real
+        // destination is built. Mirrors the TS
+        // `retargetCitizens(..., isHomeFallbackCitizen)` flow invoked when a
+        // destination is placed (src/simulation/buildings.ts). The companion
+        // `crate::trips::retarget_home_fallback_trips` rewrites the stale
+        // dormant trip onto the promoted workplace.
+        if sim.workplace.as_ref().is_some_and(|workplace| *workplace != sim.home) {
             continue;
         }
 
