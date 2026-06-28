@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "bun run wasm:build:release",
     "build": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit && vite build",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "lint": "bun run lint:svelte && bun run lint:rust",
@@ -19,6 +20,8 @@
     "test:unit": "vitest run --project ui --project runtime --project simulation",
     "test:unit:coverage": "vitest run --project ui --project runtime --project simulation --coverage --coverage.provider=v8 --coverage.reporter=lcov",
     "test:e2e": "playwright test",
+    "wasm:build": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --dev",
+    "wasm:build:release": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --release",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
