@@ -2,5 +2,6 @@
 members = [
   "src-tauri",
   "crates/caelum-core",
+  "crates/caelum-wasm",
 ]
 resolver = "2"
