@@ -1712,6 +1712,55 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
     );
 }
 
+/// Regression: a coarse tick can miss the aggregate `average_wait_seconds`
+/// crossing `MAX_AVERAGE_WAIT_SECONDS` even when no individual trip's wait
+/// threshold boundary fires at the right time. Two waiting trips with unequal
+/// wait times: Trip A (wait=179s, patience=61s) and Trip B (wait=119s,
+/// patience=121s). The aggregate average is 149s, crossing 180s at t=31s. But
+/// the per-trip wait-threshold boundary for Trip A fires at t=1s (when its own
+/// wait hits 180s, aggregate still 150s), and the next boundary is Trip A's
+/// patience expiry at t=61s — by which point Trip A leaves the waiting set and
+/// the average drops to exactly 180s (not strictly greater). Trip B then
+/// expires at t=121s. Without an aggregate-wait boundary, the loss between
+/// t=31s and t=61s is never sampled and the simulation incorrectly continues.
+#[test]
+fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
+    let mut state = create_initial_snapshot();
+    state.paused = false;
+    state.time = 0.0;
+
+    let mut trip_a = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    trip_a.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    trip_a.patience_remaining = 61.0; // waited 179s
+
+    let mut trip_b = trip(
+        "trip-002",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    trip_b.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    trip_b.patience_remaining = 121.0; // waited 119s
+
+    state.active_trips = vec![trip_a, trip_b];
+
+    // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
+    // before Trip A's patience expiry at t=61s. Without the aggregate boundary
+    // the crossing is missed and the loss is never detected.
+    let next = trips::tick_trips_with_objectives(&state, 200.0);
+
+    assert_eq!(next.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        next.metrics.loss_reason.as_deref(),
+        Some("Average wait time is too high")
+    );
+}
+
 /// Regression: a coarse tick that generates bad outcomes early and advances past
 /// the 300s rolling window must still detect the loss. Without per-substep
 /// objective evaluation, `prune_trip_outcomes` drops the stale outcomes by the
