@@ -26,4 +26,22 @@ describe("backend selection", () => {
     expect(createTauri).toHaveBeenCalledTimes(1);
     expect(createWasm).not.toHaveBeenCalled();
   });
+
+  it("uses WASM when the Tauri marker is absent", async () => {
+    const tauriBackend = {} as GameBackend;
+    const wasmBackend = {} as GameBackend;
+    const createTauri = vi.fn(async () => tauriBackend);
+    const createWasm = vi.fn(async () => wasmBackend);
+
+    await expect(
+      createBackend({
+        windowLike: {},
+        createTauri,
+        createWasm,
+      }),
+    ).resolves.toBe(wasmBackend);
+
+    expect(createTauri).not.toHaveBeenCalled();
+    expect(createWasm).toHaveBeenCalledTimes(1);
+  });
 });
