@@ -14,6 +14,7 @@ export default defineConfig(
       "dist/**",
       "node_modules/**",
       "playwright-report/**",
+      "src/generated/**",
       "src-tauri/target/**",
       "target/**",
       "test-results/**",
