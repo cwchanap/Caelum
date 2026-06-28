@@ -1,0 +1,43 @@
+import { createTauriBackend } from "./tauriBackend";
+import type { GameBackend } from "./types";
+import { createWasmBackend } from "./wasmBackend";
+
+export type {
+  DispatchResult,
+  GameBackend,
+  GameIntent,
+  RoadPresetIntent,
+  RustGameSnapshot,
+  RustMetrics,
+  RustTripOutcome,
+} from "./types";
+
+type TauriRuntimeSource = {
+  __TAURI_INTERNALS__?: unknown;
+};
+
+export interface CreateBackendOptions {
+  windowLike?: unknown;
+  createTauri?: () => Promise<GameBackend>;
+  createWasm?: () => Promise<GameBackend>;
+}
+
+export function isTauriRuntime(source: unknown = globalThis.window): boolean {
+  return (
+    typeof source === "object" &&
+    source !== null &&
+    "__TAURI_INTERNALS__" in (source as TauriRuntimeSource)
+  );
+}
+
+export async function createBackend({
+  windowLike = globalThis.window,
+  createTauri = createTauriBackend,
+  createWasm = createWasmBackend,
+}: CreateBackendOptions = {}): Promise<GameBackend> {
+  if (isTauriRuntime(windowLike)) {
+    return createTauri();
+  }
+
+  return createWasm();
+}
