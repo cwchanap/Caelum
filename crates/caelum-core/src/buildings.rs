@@ -246,7 +246,11 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
         // destination is placed (src/simulation/buildings.ts). The companion
         // `crate::trips::retarget_home_fallback_trips` rewrites the stale
         // dormant trip onto the promoted workplace.
-        if sim.workplace.as_ref().is_some_and(|workplace| *workplace != sim.home) {
+        if sim
+            .workplace
+            .as_ref()
+            .is_some_and(|workplace| *workplace != sim.home)
+        {
             continue;
         }
 
