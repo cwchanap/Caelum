@@ -166,6 +166,42 @@ export interface Citizen {
   currentLegIndex: number;
 }
 
+export type WorkerProfile = "worker" | "nonWorker";
+export type TripPurpose = "commuteOutbound" | "commuteReturn";
+
+export interface Sim {
+  id: string;
+  home: Point;
+  position: Point;
+  workerProfile: WorkerProfile;
+  shiftTemplate?: "standard" | "early" | "late" | "offPeak";
+  workplace?: Point;
+  commuteDay: number;
+  outboundResolvedToday: boolean;
+  outboundArrivedToday: boolean;
+  returnResolvedToday: boolean;
+  returnedHomeToday: boolean;
+}
+
+export interface TripPosition {
+  x: number;
+  y: number;
+}
+
+export interface ActiveTrip {
+  id: string;
+  simId: string;
+  purpose: TripPurpose;
+  origin: Point;
+  destination: Point;
+  position: TripPosition;
+  status: CitizenStatus;
+  deadline: number;
+  routePlan: RoutePlan | null;
+  currentLegIndex: number;
+  patienceRemaining: number;
+}
+
 export interface RouteLeg {
   mode: TransitMode;
   from: Point;
@@ -240,6 +276,8 @@ export interface TransitNetwork {
 
 export interface GameState {
   time: number;
+  day: number;
+  clockMinutes: number;
   speed: 0 | 1 | 2 | 4;
   paused: boolean;
   budget: number;
@@ -247,6 +285,9 @@ export interface GameState {
   buildings: PlacedBuilding[];
   scenario: Scenario;
   transit: TransitNetwork;
-  citizens: Citizen[];
+  sims: Sim[];
+  activeTrips: ActiveTrip[];
+  tripSequenceDay: number;
+  nextTripSequence: number;
   metrics: Metrics;
 }
