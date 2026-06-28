@@ -4,14 +4,32 @@ import type {
   BuildingRotation,
   BuildingType,
   GameMap,
-  Metrics,
   PlacedBuilding,
   Point,
   Sim,
+  TripOutcomeKind,
   TransitNetwork,
 } from "../../domain/types";
 
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
+
+export interface RustTripOutcome {
+  outcome: TripOutcomeKind;
+  waitSeconds: number;
+  time: number;
+}
+
+export interface RustMetrics {
+  lateTrips: number;
+  completedTrips: number;
+  unservedTrips: number;
+  totalWaitSeconds: number;
+  waitingTripCount: number;
+  averageWaitSeconds: number;
+  tripOutcomes: RustTripOutcome[];
+  state: "running" | "won" | "lost";
+  lossReason: string | null;
+}
 
 export interface RustGameSnapshot {
   time: number;
@@ -27,7 +45,7 @@ export interface RustGameSnapshot {
   activeTrips: ActiveTrip[];
   tripSequenceDay: number;
   nextTripSequence: number;
-  metrics: Metrics;
+  metrics: RustMetrics;
 }
 
 export type GameIntent =
