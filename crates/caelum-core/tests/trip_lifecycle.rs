@@ -1367,3 +1367,71 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
         large.metrics.trip_outcomes[0].time
     );
 }
+
+/// Regression: a coarse tick that spans a waiting trip past the 180s average-wait
+/// loss threshold and then to its 240s patience expiry must still detect the loss.
+/// Without per-substep objective evaluation and a boundary at the wait-threshold,
+/// the trip expires inside one substep and `waiting_trip_count` drops to 0 on the
+/// final snapshot, so `evaluate_objectives` sees no loss — even though stepped
+/// ticks (which sample metrics each tick) would lose.
+#[test]
+fn coarse_tick_detects_wait_loss_before_patience_expiry() {
+    let mut state = create_initial_snapshot();
+    state.paused = false;
+    let mut waiting = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    // Waited 170s so far (patience 70s remaining). A 70s coarse tick spans from
+    // 170s of wait past the 180s threshold to the 240s patience expiry.
+    waiting.patience_remaining = 70.0;
+    state.active_trips = vec![waiting];
+
+    let next = trips::tick_trips_with_objectives(&state, 70.0);
+
+    assert_eq!(next.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        next.metrics.loss_reason.as_deref(),
+        Some("Average wait time is too high")
+    );
+}
+
+/// Regression: a coarse tick that generates bad outcomes early and advances past
+/// the 300s rolling window must still detect the loss. Without per-substep
+/// objective evaluation, `prune_trip_outcomes` drops the stale outcomes by the
+/// final snapshot and `evaluate_objectives` sees an empty in-range window.
+#[test]
+fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
+    let mut state = create_initial_snapshot();
+    state.paused = false;
+    state.time = 0.0;
+    // Ten trips that will time out (unserved) at t=10s, each with 10s patience.
+    state.active_trips = (0..10)
+        .map(|index| {
+            let mut waiting = trip(
+                &format!("trip-{index:03}"),
+                TripStatus::Waiting,
+                (7, 8).into(),
+                (22, 8).into(),
+            );
+            waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+            waiting.patience_remaining = 10.0;
+            waiting
+        })
+        .collect();
+
+    // A 400s coarse tick: the trips expire at t=10s (generating 10 unserved
+    // outcomes), then the tick advances 390s past the 300s rolling window. By
+    // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
+    // start = 100s). Without per-substep evaluation, the loss is missed.
+    let next = trips::tick_trips_with_objectives(&state, 400.0);
+
+    assert_eq!(next.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        next.metrics.loss_reason.as_deref(),
+        Some("Too many unserved citizens")
+    );
+}
