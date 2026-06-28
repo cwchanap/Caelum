@@ -23,7 +23,7 @@
 - `src/runtime/snapshotView.ts` - read-only adaptation from Rust snapshot to frontend view state.
 - `src/runtime/createGameRuntime.ts` - runtime owner of UI state, subscriptions, canvas lifecycle, and Rust intent dispatch.
 - `src/runtime/runtimeSelectors.ts` - shell selectors over Rust-backed view state.
-- `src/domain/types.ts` - frontend read types for Rust snapshots, sims, active trips, and UI catalogs.
+- `src/domain/types.ts` - frontend read/compatibility types for Rust snapshots, sims, active trips, legacy citizens, and UI catalogs during cutover.
 - `src/ui/routeDraft.ts` - read-only route draft helpers formerly mixed into `src/ui/actions.ts`.
 - `src/ui/roadDrag.ts` - read-only drag geometry and preview helpers; no gameplay mutation.
 - `src/render/*.ts` - canvas renderers that consume Rust active trips and Rust snapshot fields.
@@ -445,6 +445,8 @@ git commit -m "feat: add rust line placement intents"
 - Create: `tests/fixtures/rustSnapshot.ts`
 - Test: `tests/runtime/backendContract.test.ts`
 
+**Transitional constraint:** Task 2 must not break the still-live TypeScript runtime. Keep `src/domain/types.ts` compatible with existing `citizens` and `waitingCitizenCount` callers while adding Rust-facing read fields. Define exact Rust wire-only metrics/snapshot types in `src/runtime/backend/types.ts`; normalize them into the frontend compatibility `GameState` in `src/runtime/snapshotView.ts`. Later tasks will remove the legacy compatibility fields once runtime/render no longer depend on them.
+
 - [ ] **Step 1: Add failing backend contract test**
 
 Create `tests/runtime/backendContract.test.ts`:
@@ -517,7 +519,7 @@ bunx vitest run tests/runtime/backendContract.test.ts --project runtime
 
 Expected: FAIL because backend types, fixture, and snapshot normalization do not exist.
 
-- [ ] **Step 3: Extend frontend domain types**
+- [ ] **Step 3: Extend frontend domain compatibility types**
 
 Modify `src/domain/types.ts` by adding these types after `Citizen`:
 
@@ -559,11 +561,12 @@ export interface ActiveTrip {
 }
 ```
 
-Replace `GameState` with:
+Extend `GameState` without removing the legacy live-runtime fields. The Rust-backed fields are required for new snapshots, while `citizens` remains required until Tasks 5-8 remove the TypeScript simulation/render dependency:
 
 ```ts
 export interface GameState {
   time: number;
+  citizens: Citizen[];
   day: number;
   clockMinutes: number;
   speed: 0 | 1 | 2 | 4;
@@ -581,6 +584,8 @@ export interface GameState {
 }
 ```
 
+Keep frontend `Metrics` compatible with both old and Rust-backed callers during this task: retain `waitingCitizenCount`, add `waitingTripCount`, and allow frontend `TripOutcome.waitSeconds` until the Rust-only contract in `src/runtime/backend/types.ts` can require it.
+
 - [ ] **Step 4: Add backend types**
 
 Create `src/runtime/backend/types.ts`:
@@ -592,14 +597,32 @@ import type {
   BuildingRotation,
   BuildingType,
   GameMap,
-  Metrics,
   PlacedBuilding,
   Point,
   Sim,
+  TripOutcomeKind,
   TransitNetwork,
 } from "../../domain/types";
 
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
+
+export interface RustTripOutcome {
+  outcome: TripOutcomeKind;
+  waitSeconds: number;
+  time: number;
+}
+
+export interface RustMetrics {
+  lateTrips: number;
+  completedTrips: number;
+  unservedTrips: number;
+  totalWaitSeconds: number;
+  waitingTripCount: number;
+  averageWaitSeconds: number;
+  tripOutcomes: RustTripOutcome[];
+  state: "running" | "won" | "lost";
+  lossReason: string | null;
+}
 
 export interface RustGameSnapshot {
   time: number;
@@ -615,7 +638,7 @@ export interface RustGameSnapshot {
   activeTrips: ActiveTrip[];
   tripSequenceDay: number;
   nextTripSequence: number;
-  metrics: Metrics;
+  metrics: RustMetrics;
 }
 
 export type GameIntent =
@@ -693,6 +716,11 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
     snapshot.metrics.state === "running" ? scenario.growthWaves : [];
   return {
     ...snapshot,
+    citizens: [],
+    metrics: {
+      ...snapshot.metrics,
+      waitingCitizenCount: snapshot.metrics.waitingTripCount,
+    },
     scenario: {
       ...scenario,
       growthWaves: nextGrowth,
@@ -736,7 +764,7 @@ export function createRustSnapshot(
       completedTrips: 0,
       unservedTrips: 0,
       totalWaitSeconds: 0,
-      waitingCitizenCount: 0,
+      waitingTripCount: 0,
       averageWaitSeconds: 0,
       tripOutcomes: [],
       state: "running",
