@@ -1020,9 +1020,19 @@ fn has_valid_workplace_destination(state: &GameSnapshot, sim: &Sim) -> bool {
 /// is therefore stuck non-commuting despite now holding a valid workplace.
 ///
 /// This rewrites each such trip onto the sim's current workplace, resetting the
-/// route plan, status, and patience/deadline window so the commute resumes from
-/// the sim's current position (home). Mirrors the legacy `retargetCitizens`
+/// route plan, status, patience/deadline window, and id so the commute resumes
+/// from the sim's current position (home). Mirrors the legacy `retargetCitizens`
 /// destination/timer reset in `src/simulation/buildingSelectors.ts`.
+///
+/// The id is regenerated for the current day because it encodes the service day
+/// (`trip-day-{day}-trip-{n}`), which `has_trip_for_sim_day`,
+/// `apply_arrival_to_sim`, and `apply_commute_resolution_to_sim` all parse back
+/// out. A dormant home-fallback trip can survive across day boundaries (it is
+/// non-terminal and `tick_trip` returns it unchanged), so a trip spawned on day
+/// N that is retargeted on day M would otherwise keep its day-N id: the stale
+/// prefix makes `has_trip_for_sim_day(_, _, M)` miss it and allow a duplicate
+/// same-day outbound spawn, and `trip_service_day != state.day` prevents the
+/// retargeted arrival/resolution from setting today's commute flags.
 ///
 /// Home-fallback trips are dormant at home and never aboard a vehicle, so no
 /// passenger-id cleanup is required (unlike the bulldoze retarget in
@@ -1047,7 +1057,13 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
         return;
     }
 
-    for trip in &mut state.active_trips {
+    // Collect the indices of stale home-fallback trips first. The retarget must
+    // regenerate each trip's id via `next_trip_id_for_day(state)`, which borrows
+    // the trip-sequence counters on `state`; doing that inside a `&mut
+    // state.active_trips` loop would alias the borrow. Index collection decouples
+    // the selection pass from the mutation pass.
+    let mut to_retarget: Vec<(usize, Point)> = Vec::new();
+    for (index, trip) in state.active_trips.iter().enumerate() {
         if trip.purpose != TripPurpose::CommuteOutbound || trip.status == TripStatus::Riding {
             continue;
         }
@@ -1059,11 +1075,20 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
         if trip.destination != *home {
             continue;
         }
+        to_retarget.push((index, workplace.clone()));
+    }
 
+    for (index, workplace) in to_retarget {
+        // Regenerate the id for the current day so the day-encoded prefix matches
+        // `state.day` (see function doc). This also advances `next_trip_sequence`
+        // exactly as a freshly-spawned trip would.
+        let new_id = next_trip_id_for_day(state);
+        let trip = &mut state.active_trips[index];
+        trip.id = new_id;
         trip.status = TripStatus::Idle;
         trip.route_plan = None;
         trip.current_leg_index = 0;
-        trip.destination = workplace.clone();
+        trip.destination = workplace;
         trip.deadline = trip_deadline_seconds(state.time);
         trip.patience_remaining = WAIT_PATIENCE_SECONDS;
     }
