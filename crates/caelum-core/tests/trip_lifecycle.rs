@@ -1219,6 +1219,168 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
 }
 
 #[test]
+fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
+    // Regression: when a return trip from the previous day is still in
+    // progress at the midnight rollover, `sim.position` is still the workplace
+    // (position is only updated on trip arrival). The stranded-sim guard at
+    // the outbound spawn must NOT fire — the sim is in transit, not stranded.
+    // If it did, it would set `outbound_resolved_today` and
+    // `outbound_arrived_today`, unlocking the return spawn. Once the
+    // in-progress return arrives home (setting `sim.position = home` but, due
+    // to the day mismatch in `apply_arrival_to_sim`, NOT setting
+    // `returned_home_today`/`return_resolved_today`), the current day's return
+    // departure would spawn a home→home phantom return trip and count a
+    // phantom completion.
+    let mut state = create_initial_snapshot();
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 8, y: 3 };
+    state.time = clock::GAME_DAY_SECONDS + 1.0;
+    state.day = 1;
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    state.buildings = vec![destination_building(workplace.clone())];
+    // Day-0 flags are set as they would be after the outbound completed and the
+    // return spawned; `commute_day` is still 0 so the day-1 reset clears them.
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: home.clone(),
+        position: workplace.clone(),
+        worker_profile: WorkerProfile::Worker,
+        shift_template: Some("standard".to_string()),
+        workplace: Some(workplace.clone()),
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }];
+    // Active return trip from day 0, walking home, 1 tile away from arrival.
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: workplace.clone(),
+        destination: home.clone(),
+        position: Point { x: 3, y: 3 }.into(),
+        status: TripStatus::Walking,
+        deadline: 2_000.0,
+        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home.clone(), 20.0)),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let next = trips::tick_trips(&state, 1.0);
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+
+    // The stranded guard must not fire while a return trip is in progress.
+    assert!(
+        !sim.outbound_resolved_today,
+        "stranded guard must not resolve outbound while a return trip is in progress"
+    );
+    assert!(
+        !sim.outbound_arrived_today,
+        "stranded guard must not mark outbound arrived while a return trip is in progress"
+    );
+    // No phantom outbound should spawn.
+    assert!(
+        !next
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound),
+        "no outbound should spawn while a return trip is in progress"
+    );
+    // The return trip should still be active.
+    assert!(
+        next.active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn),
+        "the in-progress return trip should still be active"
+    );
+}
+
+#[test]
+fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
+    // Full-scenario regression: a return trip from day 0 that crosses midnight
+    // must not cause a phantom home→home return trip on day 1. The stranded
+    // guard must skip the sim (it is in transit), the return trip arrives home
+    // normally, and the day-1 commute proceeds as a legitimate
+    // outbound-then-return cycle — not a phantom home→home return.
+    let mut state = create_initial_snapshot();
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 8, y: 3 };
+    state.time = clock::GAME_DAY_SECONDS + 1.0;
+    state.day = 1;
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+    state.buildings = vec![destination_building(workplace.clone())];
+    state.sims = vec![Sim {
+        id: "sim-001".to_string(),
+        home: home.clone(),
+        position: workplace.clone(),
+        worker_profile: WorkerProfile::Worker,
+        shift_template: Some("standard".to_string()),
+        workplace: Some(workplace.clone()),
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }];
+    // Active return trip from day 0, walking home, 1 tile away from arrival.
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: workplace.clone(),
+        destination: home.clone(),
+        position: Point { x: 3, y: 3 }.into(),
+        status: TripStatus::Walking,
+        deadline: 2_000.0,
+        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home.clone(), 20.0)),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    // Drive the tick to just past the day-1 return departure so the return
+    // trip has spawned but has not yet completed (1s of a 120s walk).
+    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let day1_return_time = clock::GAME_DAY_SECONDS
+        + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    let next = trips::tick_trips(&state, day1_return_time - state.time + 1.0);
+
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+
+    // The day-1 outbound should have spawned and arrived (the sim was at home
+    // after the cross-midnight return arrived, before the outbound departure).
+    // Without the fix, the stranded guard suppresses the outbound, leaving
+    // `outbound_arrived_today` set only by the guard itself — but no actual
+    // outbound trip runs, so the sim never reaches the workplace and the
+    // return spawns from home instead.
+    assert!(
+        sim.outbound_arrived_today,
+        "day-1 outbound should have arrived after the cross-midnight return brought the sim home"
+    );
+
+    // A legitimate day-1 return originates at the workplace (after the
+    // outbound arrives) and is still in progress. A phantom home→home return
+    // would have completed instantly and set `return_resolved_today`.
+    assert!(
+        !sim.return_resolved_today,
+        "day-1 return should still be in progress, not resolved by a phantom home→home completion"
+    );
+    let active_return = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn);
+    let active_return =
+        active_return.expect("a day-1 return trip should be active and in progress");
+    assert_eq!(
+        active_return.origin, workplace,
+        "day-1 return should originate from the workplace, not home (phantom)"
+    );
+}
+
+#[test]
 fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
     let mut state = create_initial_snapshot();
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
