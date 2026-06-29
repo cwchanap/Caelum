@@ -55,5 +55,9 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
 
   await page.getByRole("button", { name: "Resume" }).click();
-  await expect(clockReadout.locator(".readout-value")).toHaveText(/Day 1/);
+  const clockValue = clockReadout.locator(".readout-value");
+  await expect
+    .poll(async () => (await clockValue.textContent())?.trim())
+    .not.toBe("Day 1 00:00");
+  await expect(clockValue).toHaveText(/^Day 1 \d{2}:\d{2}$/);
 });

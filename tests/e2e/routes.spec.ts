@@ -36,13 +36,12 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("routes-panel")).toBeVisible();
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
-  await expect(
-    topbar.locator(".readout", { hasText: "Avg Wait" }),
-  ).toBeVisible();
-  await expect(
-    topbar.locator(".readout", { hasText: "Unserved" }),
-  ).toBeVisible();
-  await expect(topbar.locator(".readout", { hasText: "Late" })).toBeVisible();
+  const avgWaitReadout = topbar.locator(".readout", { hasText: "Avg Wait" });
+  const unservedReadout = topbar.locator(".readout", { hasText: "Unserved" });
+  const lateReadout = topbar.locator(".readout", { hasText: "Late" });
+  await expect(avgWaitReadout.locator(".readout-value")).toHaveText(/^\d+s$/);
+  await expect(unservedReadout.locator(".readout-value")).toHaveText(/^\d+$/);
+  await expect(lateReadout.locator(".readout-value")).toHaveText(/^\d+$/);
 
   // Toggle inactive, then delete (two clicks for confirm).
   await page.getByTestId("route-toggle-route-001").click();
