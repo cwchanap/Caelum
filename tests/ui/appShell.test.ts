@@ -39,7 +39,7 @@ function createRuntimeHarness(
 ): { runtime: RuntimeController } {
   let state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
-  let backendError = options.backendError ?? null;
+  const backendError = options.backendError ?? null;
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
