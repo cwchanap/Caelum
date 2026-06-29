@@ -28,13 +28,8 @@ async function initWithRuntimeWasmSource(): Promise<unknown> {
   }
 
   if (typeof window === "undefined") {
-    const dynamicImport = new Function(
-      "specifier",
-      "return import(specifier)",
-    ) as (specifier: string) => Promise<unknown>;
-    const { readFile } = (await dynamicImport("node:fs/promises")) as {
-      readFile(path: URL): Promise<Uint8Array>;
-    };
+    // @ts-expect-error - node:fs/promises is only available in Node/Vitest, not browser
+    const { readFile } = await import(/* @vite-ignore */ "node:fs/promises");
     return init({ module_or_path: await readFile(wasmUrl) });
   }
 
