@@ -15,7 +15,7 @@
 ## File Structure
 
 **Modify:**
-- `src/simulation/transit.ts` — add `renameRoute`, `setRouteColor`, `setRouteActive`, `deleteRoute` pure mutators.
+- `legacy-ts-simulation/transit.ts` — add `renameRoute`, `setRouteColor`, `setRouteActive`, `deleteRoute` pure mutators.
 - `src/ui/actions.ts` — change route/line branches to accumulate (no auto-commit); add `removeDraftStop`, `finishDraftRoute`, `cancelDraftRoute`; refactor `removeAtTile` to call shared `deleteRoute`.
 - `src/ui/uiState.ts` — add `selectedRouteId: string | null`.
 - `src/runtime/createGameRuntime.ts` — new controller methods; reset `selectedRouteId` in tool/building transitions.
@@ -41,7 +41,7 @@
 ## Task 1: Pure route mutators (rename / color / active)
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
@@ -53,7 +53,7 @@ import {
   renameRoute,
   setRouteColor,
   setRouteActive,
-} from "../../src/simulation/transit";
+} from "../../legacy-ts-simulation/transit";
 
 describe("route mutators", () => {
   it("renames a bus route and leaves others untouched", () => {
@@ -113,7 +113,7 @@ Expected: FAIL — `renameRoute`/`setRouteColor`/`setRouteActive` are not export
 
 - [ ] **Step 3: Implement the mutators**
 
-Add to `src/simulation/transit.ts` (after `addMetroLine`). They resolve the id against both `routes` and `metroLines`, and reuse the existing `entityNumberFromId` for the auto-name fallback:
+Add to `legacy-ts-simulation/transit.ts` (after `addMetroLine`). They resolve the id against both `routes` and `metroLines`, and reuse the existing `entityNumberFromId` for the auto-name fallback:
 
 ```typescript
 function autoName(prefix: "Bus" | "Metro", idPrefix: string, id: string): string {
@@ -245,7 +245,7 @@ Expected: PASS (all cases).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: pure route rename/color/active mutators"
 ```
 
@@ -254,7 +254,7 @@ git commit -m "feat: pure route rename/color/active mutators"
 ## Task 2: Extract `deleteRoute` and refactor `removeAtTile`
 
 **Files:**
-- Modify: `src/simulation/transit.ts` (add `deleteRoute`)
+- Modify: `legacy-ts-simulation/transit.ts` (add `deleteRoute`)
 - Modify: `src/ui/actions.ts` (use it in `removeAtTile`)
 - Test: `tests/simulation/transit.test.ts`
 
@@ -263,7 +263,7 @@ git commit -m "feat: pure route rename/color/active mutators"
 Append to `tests/simulation/transit.test.ts`:
 
 ```typescript
-import { deleteRoute } from "../../src/simulation/transit";
+import { deleteRoute } from "../../legacy-ts-simulation/transit";
 
 describe("deleteRoute", () => {
   it("removes a bus route, its vehicles, and its platform assignments", () => {
@@ -316,7 +316,7 @@ Expected: FAIL — `deleteRoute` is not exported.
 
 - [ ] **Step 3: Implement `deleteRoute`**
 
-Add to `src/simulation/transit.ts`. It strips the id from every platform on both stops and stations, removes its vehicles, and removes the route/line. Reuse the existing local `stripRoutesFromPlatforms` pattern — but that helper currently lives in `actions.ts`. Add a local copy here scoped to transit (the two files do not import each other's privates):
+Add to `legacy-ts-simulation/transit.ts`. It strips the id from every platform on both stops and stations, removes its vehicles, and removes the route/line. Reuse the existing local `stripRoutesFromPlatforms` pattern — but that helper currently lives in `actions.ts`. Add a local copy here scoped to transit (the two files do not import each other's privates):
 
 ```typescript
 function stripRouteFromPlatforms<
@@ -423,7 +423,7 @@ import {
   addMetroStation,
   assignVehicle,
   deleteRoute,
-} from "../simulation/transit";
+} from "../legacy-ts-simulation/transit";
 ```
 
 The now-unused local `stripRoutesFromPlatforms` in `actions.ts` should be deleted (eslint will flag it). The `removedRouteIds` / `removedMetroLineIds` computations above this block stay as-is.
@@ -436,7 +436,7 @@ Expected: PASS — existing "removes stops and dependent routes", "removes stati
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/simulation/transit.ts src/ui/actions.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts src/ui/actions.ts tests/simulation/transit.test.ts
 git commit -m "refactor: shared deleteRoute used by removeAtTile"
 ```
 
@@ -924,7 +924,7 @@ import {
   renameRoute as applyRenameRoute,
   setRouteActive as applySetRouteActive,
   setRouteColor as applySetRouteColor,
-} from "../simulation/transit";
+} from "../legacy-ts-simulation/transit";
 import {
   cancelDraftRoute,
   finishDraftRoute,
@@ -1077,7 +1077,7 @@ export interface ShellState {
 Append to `tests/runtime/runtimeSelectors.test.ts` (mirror the imports already in that file; it imports `selectShellState`, `createInitialGameState`, `createUiState`, and transit helpers — add any missing):
 
 ```typescript
-import { addBusRoute, addBusStop, addMetroStation, addMetroLine } from "../../src/simulation/transit";
+import { addBusRoute, addBusStop, addMetroStation, addMetroLine } from "../../legacy-ts-simulation/transit";
 
 describe("route selectors", () => {
   function twoStops() {
@@ -1724,13 +1724,13 @@ Create `tests/render/transitRenderer.test.ts` (jsdom project):
 ```typescript
 import { describe, expect, it } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import {
   addBusRoute,
   addBusStop,
   assignVehicle,
-} from "../../src/simulation/transit";
+} from "../../legacy-ts-simulation/transit";
 
 function ctx(): CanvasRenderingContext2D {
   const canvas = document.createElement("canvas");
@@ -1875,7 +1875,7 @@ Note: `tests/simulation/router.test.ts` already has `"ignores inactive routes an
 Append inside the `describe("route planning", ...)` block in `tests/simulation/router.test.ts`. The file already imports `findRoutePlan`, `createInitialGameState`, and `addBusStop`/`addBusRoute`; add `setRouteActive` to the transit import:
 
 ```typescript
-import { setRouteActive } from "../../src/simulation/transit";
+import { setRouteActive } from "../../legacy-ts-simulation/transit";
 
 it("drops the bus leg once the route is toggled inactive via setRouteActive", () => {
   let state = createInitialGameState();

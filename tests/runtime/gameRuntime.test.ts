@@ -18,8 +18,8 @@ import type {
   RuntimeController,
   RuntimeSnapshot,
 } from "../../src/runtime/types";
-import { createInitialGameState } from "../../src/simulation/gameState";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import { createTestGameState } from "../helpers/gameState";
 
 type BackendSpy = GameBackend & {
   intents: GameIntent[];
@@ -34,7 +34,7 @@ type DeferredDispatchBackend = BackendSpy & {
 function fullRustSnapshot(
   overrides: Partial<RustGameSnapshot> = {},
 ): RustGameSnapshot {
-  const initial = createInitialGameState();
+  const initial = createTestGameState();
   return createRustSnapshot({
     map: initial.map,
     budget: initial.budget,
@@ -737,8 +737,23 @@ describe("runtime road preset", () => {
 });
 
 describe("route creation and management", () => {
+  function routeMap(): GameMap {
+    return [
+      { x: 14, y: 7 },
+      { x: 14, y: 8 },
+    ].reduce(
+      (map, point) =>
+        updateTile(map, point, (tile) => ({
+          ...tile,
+          kind: "road",
+        })),
+      fullRustSnapshot().map,
+    );
+  }
+
   function routeSnapshot(): RustGameSnapshot {
     return fullRustSnapshot({
+      map: routeMap(),
       transit: {
         stops: [
           createStop("stop-001", { x: 14, y: 7 }),
@@ -754,6 +769,7 @@ describe("route creation and management", () => {
 
   function routeSnapshotWithRoute(active = true): RustGameSnapshot {
     return fullRustSnapshot({
+      map: routeMap(),
       transit: {
         stops: [
           createStop("stop-001", { x: 14, y: 7 }),

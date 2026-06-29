@@ -4,7 +4,7 @@
 
 **Goal:** Migrate Caelum to a shared browser + Tauri desktop app with a Svelte shell while preserving the existing TypeScript simulation and canvas engine.
 
-**Architecture:** Keep `src/simulation`, `src/domain`, and most of `src/render` host-agnostic. Introduce a `createGameRuntime` controller as the single owner of mutable game/UI state, then rebuild the current DOM shell as Svelte components that consume runtime selectors while the canvas remains imperative.
+**Architecture:** Keep `legacy-ts-simulation`, `src/domain`, and most of `src/render` host-agnostic. Introduce a `createGameRuntime` controller as the single owner of mutable game/UI state, then rebuild the current DOM shell as Svelte components that consume runtime selectors while the canvas remains imperative.
 
 **Tech Stack:** Bun, TypeScript, Vite, Svelte, Tauri, HTML canvas, Vitest, Testing Library for Svelte, Playwright
 
@@ -60,7 +60,7 @@ This spec is narrow enough for one implementation plan. It covers one migration 
 
 ### Keep Unchanged Unless Forced
 
-- `src/simulation/**/*.ts`
+- `legacy-ts-simulation/**/*.ts`
 - `src/domain/**/*.ts`
 - `src/scenario/**/*.ts`
 - `src/render/colors.ts`
@@ -372,8 +372,8 @@ Create `src/runtime/createGameRuntime.ts` around existing helpers:
 
 ```ts
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
-import { createInitialGameState } from "../simulation/gameState";
-import { tickSimulation } from "../simulation/simulation";
+import { createInitialGameState } from "../legacy-ts-simulation/gameState";
+import { tickSimulation } from "../legacy-ts-simulation/simulation";
 import { handleTileClick as handleGameTileClick } from "../ui/actions";
 import { createUiState } from "../ui/uiState";
 import { createShellSnapshot } from "./runtimeSelectors";

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderOverlays } from "../../src/render/overlayRenderer";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type { ActiveTrip, Citizen, Stop } from "../../src/domain/types";
 import { axisLockedLine } from "../../src/ui/roadDrag";
@@ -56,7 +56,7 @@ function waiter(): Citizen {
 
 function crowdingState(citizens: Citizen[]) {
   return {
-    ...createInitialGameState(),
+    ...createTestGameState(),
     transit: {
       stops: [stop],
       stations: [],
@@ -69,7 +69,7 @@ function crowdingState(citizens: Citizen[]) {
 }
 
 function withBuildingAt(
-  state: ReturnType<typeof createInitialGameState>,
+  state: ReturnType<typeof createTestGameState>,
   points: Array<{ x: number; y: number }>,
 ) {
   return {
@@ -137,7 +137,7 @@ function activeTrip(
 describe("Rust trip overlays", () => {
   it("renders demand from active trip destinations when citizens are absent", () => {
     const state = {
-      ...createInitialGameState(),
+      ...createTestGameState(),
       citizens: [],
       activeTrips: [activeTrip("walking", { x: 2, y: 2 }, { x: 9, y: 4 })],
     };
@@ -156,7 +156,7 @@ describe("Rust trip overlays", () => {
 
   it("renders lateness from late and unserved active trips when citizens are absent", () => {
     const state = {
-      ...createInitialGameState(),
+      ...createTestGameState(),
       citizens: [],
       activeTrips: [
         activeTrip("late", { x: 2, y: 2 }, { x: 9, y: 4 }),
@@ -328,7 +328,7 @@ describe("renderOverlays drag preview", () => {
 
   it("fills each tile of a road drag line with the build (green) tint", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -346,7 +346,7 @@ describe("renderOverlays drag preview", () => {
 
   it("uses the delete (red) tint for a remove drag line", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "remove" as const,
@@ -358,7 +358,7 @@ describe("renderOverlays drag preview", () => {
 
   it("previews an area drag as a full rectangle", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
@@ -396,7 +396,7 @@ describe("renderOverlays drag preview", () => {
 
   it("tints area preview tiles by paintability", () => {
     const { ctx, fillStyles } = recordingFillCtx();
-    const state = withRoads(createInitialGameState(), [{ x: 2, y: 2 }]);
+    const state = withRoads(createTestGameState(), [{ x: 2, y: 2 }]);
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
@@ -412,7 +412,7 @@ describe("renderOverlays drag preview", () => {
 
   it("previews both lanes for the dual-bidirectional preset", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -428,7 +428,7 @@ describe("renderOverlays drag preview", () => {
 
   it("tints per-tile: valid where placeable, invalid where blocked", () => {
     const { ctx, fillStyles } = recordingFillCtx();
-    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
+    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -442,7 +442,7 @@ describe("renderOverlays drag preview", () => {
 
   it("draws one-way arrows pointing along the drag axis (east)", () => {
     const { ctx, tokens } = pathRecorderCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -461,7 +461,7 @@ describe("renderOverlays drag preview", () => {
 
   it("draws opposing arrows on both lanes of a dual-bidirectional drag", () => {
     const { ctx, tokens } = pathRecorderCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -481,7 +481,7 @@ describe("renderOverlays drag preview", () => {
 
   it("draws no direction arrows for a two-way road drag", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -494,7 +494,7 @@ describe("renderOverlays drag preview", () => {
 
   it("draws no direction arrows for a remove drag", () => {
     const ctx = dragCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "remove" as const,
@@ -506,7 +506,7 @@ describe("renderOverlays drag preview", () => {
 
   it("renders one-way arrows in the stable arrow color even when the line's last tile is invalid", () => {
     const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
+    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
     // The last forward tile is invalid, so without an explicit strokeStyle the
     // arrows would inherit the red previewInvalidStroke from the per-tile loop.
     const ui = {
@@ -524,7 +524,7 @@ describe("renderOverlays drag preview", () => {
 
   it("renders dual-bidirectional arrows in the stable arrow color even when the line's last tile is invalid", () => {
     const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = withBuildingAt(createInitialGameState(), [{ x: 3, y: 3 }]);
+    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,

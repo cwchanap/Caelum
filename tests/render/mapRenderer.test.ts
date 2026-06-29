@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderMap } from "../../src/render/mapRenderer";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import type { GameState, Point } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
 import { withTracks } from "../helpers/mapFixtures";
@@ -97,7 +97,7 @@ function withOnlyRoads(state: GameState, points: Point[]): GameState {
 
 describe("renderMap area layer", () => {
   it("fills empty area tiles with area colors while preserving road tiles", () => {
-    const initialState = createInitialGameState();
+    const initialState = createTestGameState();
     const areaTile = initialState.map.tiles.find(
       (tile) => tile.kind === "empty",
     );
@@ -141,7 +141,7 @@ describe("renderMap area layer", () => {
 describe("renderMap track layer", () => {
   it("draws spokes between adjacent track tiles and a dot for an isolated tile", () => {
     // (2,2) and (3,2) are adjacent (connected); (10,10) has no track neighbors.
-    const state = withTracks(createInitialGameState(), [
+    const state = withTracks(createTestGameState(), [
       { x: 2, y: 2 },
       { x: 3, y: 2 },
       { x: 10, y: 10 },
@@ -169,7 +169,7 @@ describe("renderMap track layer", () => {
 
 describe("renderMap one-way arrows", () => {
   it("draws a direction arrow shaft for a one-way road tile", () => {
-    const state = withOneWay(createInitialGameState(), { x: 8, y: 8 }, "east");
+    const state = withOneWay(createTestGameState(), { x: 8, y: 8 }, "east");
 
     const context = ctx();
     renderMap(context, state);
@@ -184,7 +184,7 @@ describe("renderMap one-way arrows", () => {
     // The chevron head is the most error-prone perp/sign math: two barbs
     // angled back from the tip along the perpendicular axis. Verify both
     // barbs start at the tip and land symmetrically about the arrow axis.
-    const state = withOneWay(createInitialGameState(), { x: 8, y: 8 }, "east");
+    const state = withOneWay(createTestGameState(), { x: 8, y: 8 }, "east");
 
     const context = ctx();
     renderMap(context, state);
@@ -199,7 +199,7 @@ describe("renderMap one-way arrows", () => {
   });
 
   it("draws no arrow for two-way road tiles", () => {
-    const state = withOnlyRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
+    const state = withOnlyRoads(createTestGameState(), [{ x: 8, y: 8 }]);
 
     const context = ctx();
     renderMap(context, state);

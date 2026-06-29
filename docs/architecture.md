@@ -1,6 +1,6 @@
 # Architecture
 
-Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a canvas renderer. The authoritative simulation core is the Rust crate `crates/caelum-core`; the TypeScript simulation under `src/simulation/` is the legacy implementation, retained as the live runtime and parity oracle until plan Tasks 7–12 wire the Rust core into the frontend via a WASM facade and Tauri commands.
+Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a canvas renderer. The authoritative simulation core is the Rust crate `crates/caelum-core`; browser and Tauri gameplay both go through the Rust `GameEngine` facade.
 
 ## Simulation core (Rust)
 
@@ -14,23 +14,23 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde for the future WASM/Tauri boundary.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 
-The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests: they pin the Rust core's behavior to specific values derived from the TS oracle at authoring time. They are not a live cross-implementation harness — that is deferred to plan Tasks 7–12, when the TS and Rust cores can be diffed end-to-end.
+The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
-## Runtime boundary (TypeScript, legacy live runtime)
+## Runtime boundary (TypeScript host)
 
-`createGameRuntime()` is the single owner of mutable frontend state while the TS runtime remains live.
+Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, animation scheduling, host backend calls, canvas mounting, and snapshot publication.
 
-- It creates and stores the current `GameState` and `UiState`.
-- It applies player intents such as tool changes, overlays, pause/speed toggles, selection, and UI reset.
-- It advances the simulation through `tickSimulation`.
+- It stores the latest Rust-derived `GameState` snapshot and local `UiState`.
+- It applies local-only UI intents such as tool changes, overlays, selection, and UI reset.
+- It dispatches gameplay intents and ticks to the selected host backend.
 - It publishes runtime snapshots for the Svelte shell.
 - It mounts the imperative canvas host and keeps rendering tied to runtime-owned state.
 
-The TypeScript simulation, routing, map growth, transit logic, and objective evaluation remain pure TypeScript and independent of Svelte and Tauri. They are the parity oracle for `crates/caelum-core`; new gameplay logic belongs in the Rust crate, not `src/simulation/` (except to keep parity tests green).
+Browser builds use the WASM backend generated from `crates/caelum-wasm`. Tauri builds use command calls into managed Rust command state. Both backends share the same `caelum-core::GameEngine` facade. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
 ## Area zoning layer
 
-`Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; `src/simulation/areas.ts` owns the paintability gate and the immutable `paintAreaRectangle` writer. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea` (`src/simulation/buildings.ts` → `canPlaceBuilding`). Growth waves zone the `area` layer rather than overwriting the tile `kind`, so empty ground stays empty until the player builds on it. Shared tile-query helpers (`samePoint`, `isBuildingOccupied`, `isTransitNodeAt`) live in `src/simulation/tileQueries.ts`, and the building catalog (`BUILDING_CATALOG`) lives in `src/simulation/buildingCatalog.ts` to break the `buildings.ts ↔ buildingSelectors.ts ↔ map.ts` import cycle.
+`Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Growth waves zone the `area` layer rather than overwriting the tile `kind`, so empty ground stays empty until the player builds on it. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
 The Growing Suburb scenario ships as a sandbox: the map starts empty (no pre-seeded districts, no timed growth waves, no starting citizens), and growth is entirely player-driven through area painting and building placement. The growth-wave mechanism remains in place and tested for future scenarios.
 
@@ -58,16 +58,16 @@ Canvas rendering remains imperative for parity and performance.
 
 Both hosts start the same frontend:
 
-- **Browser host:** Vite serves the Svelte app for development, tests, and the web build.
-- **Tauri host:** packages the same frontend into a macOS desktop app. The Tauri crate (`src-tauri/`) is intentionally minimal today (`lib.rs` builds the app and wires the log plugin). Plan Tasks 7–8 will add a WASM facade and Tauri commands that delegate to `crates/caelum-core::GameEngine`; until then the TS runtime drives the simulation on both hosts.
+- **Browser host:** Vite serves the Svelte app for development, tests, and the web build. Gameplay uses WASM generated from `crates/caelum-wasm`.
+- **Tauri host:** packages the same frontend into a macOS desktop app. Gameplay uses Tauri commands backed by managed Rust state.
 
 Host bootstrap failures stay in the shell layer, while gameplay validation remains in the runtime and the Rust simulation core.
 
 ## Runtime flow
 
 1. Svelte components emit user intents to the runtime.
-2. The runtime validates and applies those intents through existing action helpers.
-3. `tickSimulation` advances suburb growth, transit movement, and objectives.
+2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
+3. The Rust `GameEngine` advances suburb growth, transit movement, and objectives.
 4. The imperative canvas renderer draws from runtime-owned state.
 5. Svelte rerenders from the latest runtime snapshot.
 

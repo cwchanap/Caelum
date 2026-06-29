@@ -9,7 +9,7 @@ import type {
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/canvas";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 // jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
@@ -168,7 +168,7 @@ function applyIntent(
 }
 
 function backendSpy(): GameBackend {
-  const initial = createInitialGameState();
+  const initial = createTestGameState();
   let snapshot = createRustSnapshot({
     map: initial.map,
     budget: initial.budget,

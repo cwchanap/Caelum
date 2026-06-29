@@ -4,7 +4,7 @@
 
 **Goal:** Give each transit node a fixed set of platforms (bus stop 1, metro station 2, bus terminal 3), each with a hard waiting capacity (bus 50 / metro 300), let routes be assigned to platforms (auto on create, rebalanced via an Inspect panel), and enforce the cap at boarding so overflow citizens queue off-platform.
 
-**Architecture:** Platforms are logical slots stored on `Stop`/`Station` as `platforms: Platform[]` (each with `routeIds` + `capacity`). The *only* new persistent state is the route→platform assignment; on/off-platform occupancy is derived each tick from citizens (single source of truth). A new pure module `src/simulation/platforms.ts` owns platform construction and all derivations. The trip router is unchanged; the hard cap is enforced solely in `tickVehicles` via a board-eligibility snapshot computed once per tick (deterministic, iteration-order-independent).
+**Architecture:** Platforms are logical slots stored on `Stop`/`Station` as `platforms: Platform[]` (each with `routeIds` + `capacity`). The *only* new persistent state is the route→platform assignment; on/off-platform occupancy is derived each tick from citizens (single source of truth). A new pure module `legacy-ts-simulation/platforms.ts` owns platform construction and all derivations. The trip router is unchanged; the hard cap is enforced solely in `tickVehicles` via a board-eligibility snapshot computed once per tick (deterministic, iteration-order-independent).
 
 **Tech Stack:** TypeScript (pure simulation), Svelte 5 runes (UI), Vitest (`bun run test`), `bun run check` for types. Package manager: **Bun** (never npm/yarn).
 
@@ -15,13 +15,13 @@
 ## File Structure
 
 **Create:**
-- `src/simulation/platforms.ts` — platform constants, builders, and all derivations (waiter grouping, occupancy, on-platform set).
+- `legacy-ts-simulation/platforms.ts` — platform constants, builders, and all derivations (waiter grouping, occupancy, on-platform set).
 - `tests/simulation/platforms.test.ts` — unit tests for the new module.
 
 **Modify:**
 - `src/domain/types.ts` — add `Platform`; replace `queueCitizenIds` with `platforms` on `Stop` and `Station`.
-- `src/simulation/transit.ts` — init platforms in `addBusStop`/`addMetroStation`; auto-assign routes in `addBusRoute`/`addMetroLine`; `assignRouteToPlatform` helper; on-platform gate in `tickVehicles`/`citizenCanBoard`/`boardVehicle`.
-- `src/simulation/buildings.ts` — init platforms in `placeBuilding`.
+- `legacy-ts-simulation/transit.ts` — init platforms in `addBusStop`/`addMetroStation`; auto-assign routes in `addBusRoute`/`addMetroLine`; `assignRouteToPlatform` helper; on-platform gate in `tickVehicles`/`citizenCanBoard`/`boardVehicle`.
+- `legacy-ts-simulation/buildings.ts` — init platforms in `placeBuilding`.
 - `src/ui/actions.ts` — `resolveNodeAtTile`; strip removed route ids from surviving platforms in `removeAtTile`.
 - `src/render/overlayRenderer.ts` — rewrite crowding branch using `selectPlatformOccupancy`.
 - `src/runtime/types.ts` — inspector view-model types; `assignRouteToPlatform` on `RuntimeController`.
@@ -38,8 +38,8 @@
 This task introduces the `Platform` type, the `platforms.ts` module, initializes platforms at every node-creation site, rewrites the crowding overlay to use derived occupancy, and migrates all fixtures — ending with a green type-check and test suite.
 
 **Files:**
-- Create: `src/simulation/platforms.ts`, `tests/simulation/platforms.test.ts`
-- Modify: `src/domain/types.ts`, `src/simulation/transit.ts`, `src/simulation/buildings.ts`, `src/render/overlayRenderer.ts`, and all test fixtures listed in Step 12.
+- Create: `legacy-ts-simulation/platforms.ts`, `tests/simulation/platforms.test.ts`
+- Modify: `src/domain/types.ts`, `legacy-ts-simulation/transit.ts`, `legacy-ts-simulation/buildings.ts`, `src/render/overlayRenderer.ts`, and all test fixtures listed in Step 12.
 
 - [ ] **Step 1: Write the failing test for platform builders**
 
@@ -47,7 +47,7 @@ Create `tests/simulation/platforms.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { busPlatforms, metroPlatforms } from "../../src/simulation/platforms";
+import { busPlatforms, metroPlatforms } from "../../legacy-ts-simulation/platforms";
 
 describe("platform builders", () => {
   it("creates one capacity-50 platform for a bus stop", () => {
@@ -79,7 +79,7 @@ describe("platform builders", () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `bunx vitest run tests/simulation/platforms.test.ts`
-Expected: FAIL — cannot resolve `../../src/simulation/platforms`.
+Expected: FAIL — cannot resolve `../../legacy-ts-simulation/platforms`.
 
 - [ ] **Step 3: Add the `Platform` type and update `Stop`/`Station`**
 
@@ -111,7 +111,7 @@ export interface Station {
 }
 ```
 
-- [ ] **Step 4: Create `src/simulation/platforms.ts` with builders**
+- [ ] **Step 4: Create `legacy-ts-simulation/platforms.ts` with builders**
 
 ```ts
 import type { GameState, Platform, StopKind } from "../domain/types";
@@ -153,7 +153,7 @@ Expected: PASS (3 tests).
 
 - [ ] **Step 6: Initialize platforms in `transit.ts` creation paths**
 
-In `src/simulation/transit.ts`, add the import near the other simulation imports:
+In `legacy-ts-simulation/transit.ts`, add the import near the other simulation imports:
 
 ```ts
 import { busPlatforms, metroPlatforms } from "./platforms";
@@ -225,7 +225,7 @@ In `addMetroStation`, do the same — compute `stationId` first, then:
 
 - [ ] **Step 7: Initialize platforms in `buildings.ts`**
 
-In `src/simulation/buildings.ts`, add the import:
+In `legacy-ts-simulation/buildings.ts`, add the import:
 
 ```ts
 import { busPlatforms, metroPlatforms } from "./platforms";
@@ -284,7 +284,7 @@ Append to `tests/simulation/platforms.test.ts`:
 import {
   onPlatformCitizenIds,
   selectPlatformOccupancy,
-} from "../../src/simulation/platforms";
+} from "../../legacy-ts-simulation/platforms";
 import type { Citizen, GameState, Stop } from "../../src/domain/types";
 
 function waitingCitizen(
@@ -393,7 +393,7 @@ Expected: FAIL — `selectPlatformOccupancy`/`onPlatformCitizenIds` are not expo
 
 - [ ] **Step 10: Implement the derivations in `platforms.ts`**
 
-Append to `src/simulation/platforms.ts`:
+Append to `legacy-ts-simulation/platforms.ts`:
 
 ```ts
 import type { Citizen } from "../domain/types";
@@ -530,7 +530,7 @@ Expected: PASS (5 tests).
 In `src/render/overlayRenderer.ts`, add the import:
 
 ```ts
-import { selectPlatformOccupancy } from "../simulation/platforms";
+import { selectPlatformOccupancy } from "../legacy-ts-simulation/platforms";
 ```
 
 Replace the entire `if (ui.activeOverlay === "crowding") { ... }` block (the one iterating `state.transit.stops`/`stations` and reading `queueCitizenIds`) with:
@@ -584,7 +584,7 @@ Expected: type-check passes; all vitest projects pass.
 - [ ] **Step 14: Commit**
 
 ```bash
-git add src/domain/types.ts src/simulation/platforms.ts src/simulation/transit.ts src/simulation/buildings.ts src/render/overlayRenderer.ts tests/simulation/platforms.test.ts tests/simulation/buildings.test.ts tests/ui/actions.test.ts tests/render/canvas.test.ts tests/simulation/router.test.ts tests/simulation/map.test.ts tests/simulation/transit.test.ts
+git add src/domain/types.ts legacy-ts-simulation/platforms.ts legacy-ts-simulation/transit.ts legacy-ts-simulation/buildings.ts src/render/overlayRenderer.ts tests/simulation/platforms.test.ts tests/simulation/buildings.test.ts tests/ui/actions.test.ts tests/render/canvas.test.ts tests/simulation/router.test.ts tests/simulation/map.test.ts tests/simulation/transit.test.ts
 git commit -m "feat: add platform data model, builders, and occupancy derivations"
 ```
 
@@ -595,7 +595,7 @@ git commit -m "feat: add platform data model, builders, and occupancy derivation
 When a route/line is created, register its id on the least-loaded platform of each distinct node it serves.
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -603,7 +603,7 @@ When a route/line is created, register its id on the least-loaded platform of ea
 Add to `tests/simulation/transit.test.ts` (import `addBusRoute`, `addBusStop` if not already imported at top):
 
 ```ts
-import { addBusRoute, addBusStop } from "../../src/simulation/transit";
+import { addBusRoute, addBusStop } from "../../legacy-ts-simulation/transit";
 
 describe("auto-assign routes to platforms", () => {
   it("registers a new bus route on each served stop's least-loaded platform", () => {
@@ -654,7 +654,7 @@ Expected: FAIL — routes are not registered on any platform.
 
 - [ ] **Step 3: Implement auto-assignment in `transit.ts`**
 
-Add this helper near the top of `src/simulation/transit.ts` (below the existing small helpers):
+Add this helper near the top of `legacy-ts-simulation/transit.ts` (below the existing small helpers):
 
 ```ts
 function assignRouteToLeastLoaded<T extends { id: string; platforms: Platform[] }>(
@@ -737,7 +737,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: auto-assign routes to least-loaded platform on create"
 ```
 
@@ -949,7 +949,7 @@ git commit -m "feat: resolveNodeAtTile and scrub removed routes from platforms"
 `tickVehicles` computes the on-platform snapshot once per tick; `citizenCanBoard` requires membership.
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -957,7 +957,7 @@ git commit -m "feat: resolveNodeAtTile and scrub removed routes from platforms"
 Add to `tests/simulation/transit.test.ts`. This builds a stop with a capacity-1 platform, two waiting citizens for the same line, and one bus at the stop; only the lower-patience citizen should board.
 
 ```ts
-import { tickVehicles } from "../../src/simulation/transit";
+import { tickVehicles } from "../../legacy-ts-simulation/transit";
 import type { Citizen, Stop, Vehicle } from "../../src/domain/types";
 
 describe("on-platform boarding gate", () => {
@@ -1046,7 +1046,7 @@ Expected: FAIL — both citizens board (no cap enforced), so `boarded` contains 
 
 - [ ] **Step 3: Implement the gate**
 
-In `src/simulation/transit.ts`, import the snapshot helper:
+In `legacy-ts-simulation/transit.ts`, import the snapshot helper:
 
 ```ts
 import { onPlatformCitizenIds } from "./platforms";
@@ -1141,7 +1141,7 @@ Expected: PASS. (If any pre-existing boarding test now fails because its fixture
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: enforce platform waiting cap at boarding"
 ```
 
@@ -1152,7 +1152,7 @@ git commit -m "feat: enforce platform waiting cap at boarding"
 A pure helper to move a route between platforms on a node.
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing test**
@@ -1160,7 +1160,7 @@ A pure helper to move a route between platforms on a node.
 Add to `tests/simulation/transit.test.ts`:
 
 ```ts
-import { assignRouteToPlatform } from "../../src/simulation/transit";
+import { assignRouteToPlatform } from "../../legacy-ts-simulation/transit";
 
 describe("assignRouteToPlatform", () => {
   function terminalState() {
@@ -1220,7 +1220,7 @@ Expected: FAIL — `assignRouteToPlatform` is not exported.
 
 - [ ] **Step 3: Implement the helper**
 
-Add to `src/simulation/transit.ts`:
+Add to `legacy-ts-simulation/transit.ts`:
 
 ```ts
 function reassignWithinNode<
@@ -1297,7 +1297,7 @@ Expected: PASS (3 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: add assignRouteToPlatform reassignment helper"
 ```
 
@@ -1363,8 +1363,8 @@ import { describe, expect, it } from "vitest";
 import {
   addBusRoute,
   addBusStop,
-} from "../../src/simulation/transit";
-import { createInitialGameState } from "../../src/simulation/gameState";
+} from "../../legacy-ts-simulation/transit";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { createUiState } from "../../src/ui/uiState";
 
@@ -1413,7 +1413,7 @@ In `src/runtime/runtimeSelectors.ts`, add imports:
 
 ```ts
 import { resolveNodeAtTile } from "../ui/actions";
-import { selectPlatformOccupancy } from "../simulation/platforms";
+import { selectPlatformOccupancy } from "../legacy-ts-simulation/platforms";
 import type {
   ShellInspectorState,
   ShellPlatform,
@@ -1577,7 +1577,7 @@ Expected: FAIL — `runtime.assignRouteToPlatform` is not a function.
 In `src/runtime/createGameRuntime.ts`, add the import:
 
 ```ts
-import { assignRouteToPlatform as applyAssignRouteToPlatform } from "../simulation/transit";
+import { assignRouteToPlatform as applyAssignRouteToPlatform } from "../legacy-ts-simulation/transit";
 ```
 
 Add the method inside the `api: RuntimeController` object (after `handleTileClick`):
@@ -1847,7 +1847,7 @@ Create `tests/render/overlayRenderer.test.ts`:
 ```ts
 import { describe, expect, it, vi } from "vitest";
 import { renderOverlays } from "../../src/render/overlayRenderer";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type { Citizen, Stop } from "../../src/domain/types";
 

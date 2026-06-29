@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import {
   axisLockedLine,
@@ -81,7 +81,7 @@ describe("planDragPreview", () => {
   });
 
   it("marks every tile of an affordable two-way line as buildable", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
     const plan = planDragPreview(state, roadUi("twoWay"), line);
 
@@ -90,7 +90,7 @@ describe("planDragPreview", () => {
   });
 
   it("marks zoned empty tiles buildable for roads", () => {
-    const state = withAreas(createInitialGameState(), "residential", [
+    const state = withAreas(createTestGameState(), "residential", [
       { x: 2, y: 3 },
       { x: 3, y: 3 },
     ]);
@@ -106,14 +106,14 @@ describe("planDragPreview", () => {
   });
 
   it("treats an existing forward-lane road as a free redirect", () => {
-    const state = withRoads(createInitialGameState(), [{ x: 8, y: 8 }]);
+    const state = withRoads(createTestGameState(), [{ x: 8, y: 8 }]);
     const plan = planDragPreview(state, roadUi("twoWay"), [{ x: 8, y: 8 }]);
 
     expect(plan[0].buildable).toBe(true);
   });
 
   it("marks trailing tiles not buildable once budget is exhausted", () => {
-    const state = { ...createInitialGameState(), budget: 250 };
+    const state = { ...createTestGameState(), budget: 250 };
     const line = axisLockedLine({ x: 1, y: 0 }, { x: 4, y: 0 });
     const plan = planDragPreview(state, roadUi("twoWay"), line);
 
@@ -121,7 +121,7 @@ describe("planDragPreview", () => {
   });
 
   it("never marks a reverse lane on an existing road as buildable", () => {
-    const state = withRoads(createInitialGameState(), pointsOnRow(4, 24, 26));
+    const state = withRoads(createTestGameState(), pointsOnRow(4, 24, 26));
     const line = axisLockedLine({ x: 24, y: 5 }, { x: 26, y: 5 });
     const plan = planDragPreview(state, roadUi("dualBidirectional"), line);
     const forward = plan.filter((t) => t.point.y === 5);
@@ -132,7 +132,7 @@ describe("planDragPreview", () => {
   });
 
   it("returns no tiles for the remove tool", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = { ...createUiState(), activeTool: "remove" as const };
     const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
 
@@ -140,7 +140,7 @@ describe("planDragPreview", () => {
   });
 
   it("marks track tiles buildable where track placement is valid", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = { ...createUiState(), activeTool: "track" as const };
     const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
     const plan = planDragPreview(state, ui, line);

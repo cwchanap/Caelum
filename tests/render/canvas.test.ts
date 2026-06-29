@@ -2,13 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { renderBuildings } from "../../src/render/buildingRenderer";
 import { canvasToTile, syncCanvasSize } from "../../src/render/canvas";
 import { renderOverlays } from "../../src/render/overlayRenderer";
-import {
-  getBuildingFootprint,
-  placeBuilding,
-} from "../../src/simulation/buildings";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { stopCoverageRadius } from "../../src/simulation/transit";
+import { getBuildingFootprint } from "../../src/domain/catalog/buildings";
+import { stopCoverageRadius } from "../../src/domain/catalog/transit";
 import { createUiState } from "../../src/ui/uiState";
+import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
 import { withAreas } from "../helpers/mapFixtures";
 
 const tileSize = 32;
@@ -114,7 +111,7 @@ describe("canvas helpers", () => {
 
   it("maps client coordinates to map tiles", () => {
     const canvas = document.createElement("canvas");
-    const map = createInitialGameState().map;
+    const map = createTestGameState().map;
 
     canvas.width = map.width * 32;
     canvas.height = map.height * 32;
@@ -158,8 +155,8 @@ describe("canvas helpers", () => {
 
   it("renders every occupied building tile with the building type color", () => {
     const { ctx, calls } = createContextRecorder();
-    const state = placeBuilding(
-      createInitialGameState(),
+    const state = placeTestBuilding(
+      createTestGameState(),
       "busTerminal",
       { x: 0, y: 0 },
       90,
@@ -217,9 +214,9 @@ describe("canvas helpers", () => {
   it("renders coverage overlays with terminal coverage radius", () => {
     const { ctx, calls } = createContextRecorder();
     const state = {
-      ...createInitialGameState(),
+      ...createTestGameState(),
       transit: {
-        ...createInitialGameState().transit,
+        ...createTestGameState().transit,
         stops: [
           {
             id: "stop-001",
@@ -245,7 +242,7 @@ describe("canvas helpers", () => {
 
   it("renders selected building preview over the full footprint", () => {
     const { ctx, calls } = createContextRecorder();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       hoverTile: { x: 0, y: 0 },
@@ -315,8 +312,8 @@ describe("canvas helpers", () => {
 
   it("renders invalid selected building preview colors when placement overlaps", () => {
     const { ctx, calls } = createContextRecorder();
-    const state = placeBuilding(
-      withAreas(createInitialGameState(), "residential", [
+    const state = placeTestBuilding(
+      withAreas(createTestGameState(), "residential", [
         { x: 0, y: 0 },
         { x: 1, y: 0 },
       ]),
@@ -395,7 +392,7 @@ describe("canvas helpers", () => {
   it("renders invalid selected building preview colors when unaffordable", () => {
     const { ctx, calls } = createContextRecorder();
     const state = {
-      ...createInitialGameState(),
+      ...createTestGameState(),
       budget: 3_999,
     };
     const ui = {

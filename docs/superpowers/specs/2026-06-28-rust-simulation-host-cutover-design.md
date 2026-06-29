@@ -141,7 +141,7 @@ shell backend errors.
 ### Task 11: Retire TypeScript Simulation Authority
 
 Search every runtime, UI, render, component, and test import path for
-`src/simulation`. Delete mutation modules once no live code imports them. If a
+`legacy-ts-simulation`. Delete mutation modules once no live code imports them. If a
 file is still needed for labels, costs, or catalogs, move it to an explicit
 read-only location such as `src/ui/catalog` or `src/domain/catalog` and remove
 simulation naming.
@@ -198,7 +198,7 @@ back to TypeScript simulation.
   objective, budget, building, zoning, or transit mutation behavior.
 - Legacy TS simulation files are deleted when unnecessary.
 - Any retained read-only catalog/fixture files are moved out of
-  `src/simulation` and named according to their actual frontend purpose.
+  `legacy-ts-simulation` and named according to their actual frontend purpose.
 
 ## Testing
 

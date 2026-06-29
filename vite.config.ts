@@ -33,14 +33,6 @@ export default defineConfig({
           environment: "node",
         },
       },
-      {
-        extends: true,
-        test: {
-          name: "simulation",
-          include: ["tests/simulation/**/*.test.ts"],
-          environment: "node",
-        },
-      },
     ],
   },
 });

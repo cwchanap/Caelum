@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { GameState, Point } from "../../src/domain/types";
-import { placeBuilding } from "../../src/simulation/buildings";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { addBusStop, addMetroStation } from "../../src/simulation/transit";
 import {
   applyUiTileClick,
   cancelDraftRoute,
@@ -12,6 +9,12 @@ import {
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import {
+  addTestBusStop,
+  addTestMetroStation,
+  createTestGameState,
+  placeTestBuilding,
+} from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function withColocatedStopAndStation(
@@ -50,9 +53,9 @@ function withColocatedStopAndStation(
 
 describe("resolveNodeAtTile", () => {
   it("resolves a bus stop at its exact tile", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 2 }]);
-    state = addBusStop(state, { x: 7, y: 2 });
+    state = addTestBusStop(state, { x: 7, y: 2 });
 
     const resolved = resolveNodeAtTile(state, { x: 7, y: 2 });
 
@@ -61,9 +64,9 @@ describe("resolveNodeAtTile", () => {
   });
 
   it("resolves a metro station at its exact tile", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withTracks(state, [{ x: 22, y: 2 }]);
-    state = addMetroStation(state, { x: 22, y: 2 });
+    state = addTestMetroStation(state, { x: 22, y: 2 });
 
     const resolved = resolveNodeAtTile(state, { x: 22, y: 2 });
 
@@ -72,8 +75,8 @@ describe("resolveNodeAtTile", () => {
   });
 
   it("resolves a building-backed transit node via a non-origin occupied tile", () => {
-    let state = createInitialGameState();
-    state = placeBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "busTerminal", { x: 0, y: 0 }, 0);
 
     const building = state.buildings[0];
     const nodePosition = state.transit.stops.find(
@@ -90,13 +93,11 @@ describe("resolveNodeAtTile", () => {
   });
 
   it("returns null on an empty tile", () => {
-    expect(
-      resolveNodeAtTile(createInitialGameState(), { x: 0, y: 0 }),
-    ).toBeNull();
+    expect(resolveNodeAtTile(createTestGameState(), { x: 0, y: 0 })).toBeNull();
   });
 
   it("honors the preferred node kind on a co-located tile", () => {
-    const state = withColocatedStopAndStation(createInitialGameState(), {
+    const state = withColocatedStopAndStation(createTestGameState(), {
       x: 7,
       y: 2,
     });
@@ -110,7 +111,7 @@ describe("resolveNodeAtTile", () => {
 
 describe("resolveNodesAtTile", () => {
   it("returns both nodes when a stop and station share a tile", () => {
-    const state = withColocatedStopAndStation(createInitialGameState(), {
+    const state = withColocatedStopAndStation(createTestGameState(), {
       x: 7,
       y: 2,
     });
@@ -124,9 +125,9 @@ describe("resolveNodesAtTile", () => {
 
 describe("applyUiTileClick inspect", () => {
   it("opens the inspect drawer when a node is clicked", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 7 }]);
-    state = addBusStop(state, { x: 7, y: 7 });
+    state = addTestBusStop(state, { x: 7, y: 7 });
     const ui = { ...createUiState(), activeTool: "inspect" as const };
 
     const result = applyUiTileClick(state, ui, { x: 7, y: 7 });
@@ -138,7 +139,7 @@ describe("applyUiTileClick inspect", () => {
   });
 
   it("selects empty tiles and closes an open inspect drawer", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "inspect" as const,
@@ -154,7 +155,7 @@ describe("applyUiTileClick inspect", () => {
   });
 
   it("cycles co-located node kinds on repeated clicks", () => {
-    const state = withColocatedStopAndStation(createInitialGameState(), {
+    const state = withColocatedStopAndStation(createTestGameState(), {
       x: 7,
       y: 2,
     });
@@ -173,10 +174,10 @@ describe("applyUiTileClick inspect", () => {
 
 describe("applyUiTileClick route drafts", () => {
   function busDraftState(): { state: GameState; ui: UiState } {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
     return {
       state,
       ui: { ...createUiState(), activeTool: "busRoute" as const },
@@ -207,13 +208,13 @@ describe("applyUiTileClick route drafts", () => {
   });
 
   it("does not append a stop without a path from the previous stop", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, [
       { x: 1, y: 4 },
       { x: 9, y: 4 },
     ]);
-    state = addBusStop(state, { x: 1, y: 4 });
-    state = addBusStop(state, { x: 9, y: 4 });
+    state = addTestBusStop(state, { x: 1, y: 4 });
+    state = addTestBusStop(state, { x: 9, y: 4 });
     const ui = { ...createUiState(), activeTool: "busRoute" as const };
 
     let result = applyUiTileClick(state, ui, { x: 1, y: 4 });
@@ -225,10 +226,10 @@ describe("applyUiTileClick route drafts", () => {
   });
 
   it("accumulates metro line stations without mutating state", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withTracks(state, pointsOnRow(8, 7, 15));
-    state = addMetroStation(state, { x: 7, y: 8 });
-    state = addMetroStation(state, { x: 15, y: 8 });
+    state = addTestMetroStation(state, { x: 7, y: 8 });
+    state = addTestMetroStation(state, { x: 15, y: 8 });
     const ui = { ...createUiState(), activeTool: "metroLine" as const };
 
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
@@ -271,7 +272,7 @@ describe("applyUiTileClick route drafts", () => {
 
 describe("applyUiTileClick gameplay tools", () => {
   it("does not mutate state for Rust-authoritative gameplay tools", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,

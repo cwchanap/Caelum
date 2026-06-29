@@ -5,7 +5,7 @@ import type {
   Stop,
   TransitMode,
 } from "../domain/types";
-import { findTilePath } from "../simulation/network";
+import { findTilePath } from "./tilePath";
 import type { UiState } from "./uiState";
 
 function samePoint(left: Point, right: Point): boolean {

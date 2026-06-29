@@ -2376,7 +2376,7 @@ git commit -m "test: verify rust-backed browser flows"
 ### Task 8: Retire Legacy TypeScript Simulation
 
 **Files:**
-- Delete or move: `src/simulation/*.ts`
+- Delete or move: `legacy-ts-simulation/*.ts`
 - Modify: `vite.config.ts`
 - Modify: `tests/simulation/*.test.ts`
 - Modify: `tests/render/*.test.ts`
@@ -2385,12 +2385,12 @@ git commit -m "test: verify rust-backed browser flows"
 - Modify: `docs/architecture.md`
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Prove no live source path imports `src/simulation`**
+- [ ] **Step 1: Prove no live source path imports `legacy-ts-simulation`**
 
 Run:
 
 ```sh
-rg -n "from \"\\.\\./simulation|from \"\\.\\./\\.\\./src/simulation|src/simulation" src tests vite.config.ts
+rg -n "from \"\\.\\./simulation|from \"\\.\\./\\.\\./legacy-ts-simulation|legacy-ts-simulation" src tests vite.config.ts
 ```
 
 Expected before cleanup: output from tests and any remaining files that still need migration.
@@ -2440,20 +2440,20 @@ Modify `package.json` scripts:
 After live imports are gone, delete the legacy simulation directory:
 
 ```sh
-git rm src/simulation/areas.ts
-git rm src/simulation/buildingCatalog.ts
-git rm src/simulation/buildingSelectors.ts
-git rm src/simulation/buildings.ts
-git rm src/simulation/citizens.ts
-git rm src/simulation/gameState.ts
-git rm src/simulation/map.ts
-git rm src/simulation/network.ts
-git rm src/simulation/objectives.ts
-git rm src/simulation/platforms.ts
-git rm src/simulation/router.ts
-git rm src/simulation/simulation.ts
-git rm src/simulation/tileQueries.ts
-git rm src/simulation/transit.ts
+git rm legacy-ts-simulation/areas.ts
+git rm legacy-ts-simulation/buildingCatalog.ts
+git rm legacy-ts-simulation/buildingSelectors.ts
+git rm legacy-ts-simulation/buildings.ts
+git rm legacy-ts-simulation/citizens.ts
+git rm legacy-ts-simulation/gameState.ts
+git rm legacy-ts-simulation/map.ts
+git rm legacy-ts-simulation/network.ts
+git rm legacy-ts-simulation/objectives.ts
+git rm legacy-ts-simulation/platforms.ts
+git rm legacy-ts-simulation/router.ts
+git rm legacy-ts-simulation/simulation.ts
+git rm legacy-ts-simulation/tileQueries.ts
+git rm legacy-ts-simulation/transit.ts
 ```
 
 - [ ] **Step 5: Update architecture docs**
@@ -2478,7 +2478,7 @@ In `CLAUDE.md`, update the project overview so it no longer says the TypeScript 
 Run:
 
 ```sh
-rg -n "src/simulation|\\.\\./simulation|\\.\\./\\.\\./src/simulation" src tests vite.config.ts docs CLAUDE.md
+rg -n "legacy-ts-simulation|\\.\\./simulation|\\.\\./\\.\\./legacy-ts-simulation" src tests vite.config.ts docs CLAUDE.md
 ```
 
 Expected: no output.
@@ -2576,7 +2576,7 @@ Verify the same vertical slice as the browser smoke. Confirm Tauri uses `game_sn
 Run:
 
 ```sh
-rg -n "tickSimulation|createInitialGameState|src/simulation|\\.\\./simulation|GameBackend.*fallback|typescript simulation fallback" src tests docs CLAUDE.md
+rg -n "tickSimulation|createInitialGameState|legacy-ts-simulation|\\.\\./simulation|GameBackend.*fallback|typescript simulation fallback" src tests docs CLAUDE.md
 ```
 
 Expected: no live runtime/import path references TypeScript simulation. Documentation may mention the removed legacy simulation only in historical notes.

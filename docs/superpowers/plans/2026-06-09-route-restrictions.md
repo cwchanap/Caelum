@@ -4,7 +4,7 @@
 
 **Goal:** Buses may only run along connected roads and metros along player-laid track: routes are validated against the network, vehicles visibly follow the tile path, and travel time scales with path length.
 
-**Architecture:** Track is a boolean layer on tiles (`hasTrack`), so road+track tiles are level crossings with no new `TileKind`. A deterministic BFS (`src/simulation/network.ts`) computes each route's per-segment tile paths once at build time; the paths are stored on `Route`/`MetroLine` (`segments`, `pathBroken`) and recomputed only when the road/track network changes. Simulation, renderer, and router all read the stored paths.
+**Architecture:** Track is a boolean layer on tiles (`hasTrack`), so road+track tiles are level crossings with no new `TileKind`. A deterministic BFS (`legacy-ts-simulation/network.ts`) computes each route's per-segment tile paths once at build time; the paths are stored on `Route`/`MetroLine` (`segments`, `pathBroken`) and recomputed only when the road/track network changes. Simulation, renderer, and router all read the stored paths.
 
 **Tech Stack:** TypeScript (pure sim), Svelte 5 runes (UI), Vitest (`simulation`/`runtime` node projects, `ui`/`render` jsdom), Playwright (e2e). Bun for all commands.
 
@@ -23,11 +23,11 @@
 | File | Change |
 | --- | --- |
 | `src/domain/types.ts` | `Tile.hasTrack?`, `Tool` += `"road" \| "track"`, `Route`/`MetroLine` += `segments`, `pathBroken` |
-| `src/simulation/network.ts` | **New.** `findTilePath`, `computeRouteSegments`, `hasBrokenSegment` (pure pathfinding; imports only domain types) |
-| `src/simulation/map.ts` | `isValidRoadPlacement`, `isValidTrackPlacement`, `setTileKind`, `setTileTrack`, growth-wave skip, validator updates |
-| `src/simulation/transit.ts` | `COSTS.road/track`, `TILES_PER_SECOND`, `layRoad`, `layTrack`, `removeInfrastructureAtTile`, `recomputeRoutePaths`, segments in `addBusRoute`/`addMetroLine`, distance-based `tickVehicles` |
-| `src/simulation/buildings.ts` | `canPlaceBuilding` track rules |
-| `src/simulation/router.ts` | Path-length ride estimates, exclude `pathBroken` |
+| `legacy-ts-simulation/network.ts` | **New.** `findTilePath`, `computeRouteSegments`, `hasBrokenSegment` (pure pathfinding; imports only domain types) |
+| `legacy-ts-simulation/map.ts` | `isValidRoadPlacement`, `isValidTrackPlacement`, `setTileKind`, `setTileTrack`, growth-wave skip, validator updates |
+| `legacy-ts-simulation/transit.ts` | `COSTS.road/track`, `TILES_PER_SECOND`, `layRoad`, `layTrack`, `removeInfrastructureAtTile`, `recomputeRoutePaths`, segments in `addBusRoute`/`addMetroLine`, distance-based `tickVehicles` |
+| `legacy-ts-simulation/buildings.ts` | `canPlaceBuilding` track rules |
+| `legacy-ts-simulation/router.ts` | Path-length ride estimates, exclude `pathBroken` |
 | `src/ui/uiState.ts` | `draftStopPaths`, `draftStationPaths` |
 | `src/ui/actions.ts` | road/track tool branches, draft path validation, `removeDraftStop(state, ui, index)`, bulldoze infrastructure |
 | `src/runtime/createGameRuntime.ts` | clear draft paths in `nextToolUiState`/`nextBuildingUiState`, `removeDraftStop` call site |
@@ -68,7 +68,7 @@ function trackRow(y: number, fromX: number, toX: number): Point[] {
 
 **Files:**
 - Modify: `src/domain/types.ts` (Tile interface, ~line 45)
-- Create: `src/simulation/network.ts`
+- Create: `legacy-ts-simulation/network.ts`
 - Create: `tests/simulation/network.test.ts`
 
 - [ ] **Step 1: Add `hasTrack` to `Tile`**
@@ -92,8 +92,8 @@ Create `tests/simulation/network.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 import type { GameState, Point } from "../../src/domain/types";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { findTilePath } from "../../src/simulation/network";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { findTilePath } from "../../legacy-ts-simulation/network";
 
 function withTrack(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((p) => `${p.x},${p.y}`));
@@ -201,11 +201,11 @@ describe("findTilePath", () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 Run: `bunx vitest run tests/simulation/network.test.ts`
-Expected: FAIL — `Cannot find module '../../src/simulation/network'` (or similar).
+Expected: FAIL — `Cannot find module '../../legacy-ts-simulation/network'` (or similar).
 
 - [ ] **Step 4: Implement `findTilePath`**
 
-Create `src/simulation/network.ts`:
+Create `legacy-ts-simulation/network.ts`:
 
 ```ts
 import type { GameMap, Point, Tile } from "../domain/types";
@@ -303,7 +303,7 @@ Expected: PASS (7 tests).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/domain/types.ts src/simulation/network.ts tests/simulation/network.test.ts
+git add src/domain/types.ts legacy-ts-simulation/network.ts tests/simulation/network.test.ts
 git commit -m "feat: add hasTrack tile layer and deterministic findTilePath BFS"
 ```
 
@@ -312,7 +312,7 @@ git commit -m "feat: add hasTrack tile layer and deterministic findTilePath BFS"
 ### Task 2: `computeRouteSegments` + `hasBrokenSegment`
 
 **Files:**
-- Modify: `src/simulation/network.ts`
+- Modify: `legacy-ts-simulation/network.ts`
 - Modify: `tests/simulation/network.test.ts`
 
 - [ ] **Step 1: Write the failing tests** (append to the `network.test.ts` describe file, importing the new functions)
@@ -322,7 +322,7 @@ import {
   computeRouteSegments,
   findTilePath,
   hasBrokenSegment,
-} from "../../src/simulation/network";
+} from "../../legacy-ts-simulation/network";
 
 describe("computeRouteSegments", () => {
   it("returns one segment per consecutive pair plus the closing loop segment", () => {
@@ -370,7 +370,7 @@ describe("computeRouteSegments", () => {
 Run: `bunx vitest run tests/simulation/network.test.ts`
 Expected: FAIL — `computeRouteSegments` is not exported.
 
-- [ ] **Step 3: Implement** (append to `src/simulation/network.ts`)
+- [ ] **Step 3: Implement** (append to `legacy-ts-simulation/network.ts`)
 
 ```ts
 /**
@@ -406,7 +406,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/network.ts tests/simulation/network.test.ts
+git add legacy-ts-simulation/network.ts tests/simulation/network.test.ts
 git commit -m "feat: compute per-segment route paths with closing loop"
 ```
 
@@ -416,7 +416,7 @@ git commit -m "feat: compute per-segment route paths with closing loop"
 
 **Files:**
 - Modify: `src/domain/types.ts` (Route ~line 86, MetroLine ~line 95)
-- Modify: `src/simulation/transit.ts` (`addBusRoute`, `addMetroLine`, `assignedLinePositions`, `assignVehicle`)
+- Modify: `legacy-ts-simulation/transit.ts` (`addBusRoute`, `addMetroLine`, `assignedLinePositions`, `assignVehicle`)
 - Modify: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing tests** (add to `tests/simulation/transit.test.ts`; the file's existing `createBusState` helper places stops at (7,8) and (15,8))
@@ -500,7 +500,7 @@ export interface MetroLine {
 
 - [ ] **Step 4: Compute segments at creation and gate vehicles**
 
-In `src/simulation/transit.ts`:
+In `legacy-ts-simulation/transit.ts`:
 
 Add to the imports:
 
@@ -570,7 +570,7 @@ Expected: PASS (selectors and renderer don't touch the new fields yet; object sp
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/domain/types.ts src/simulation/transit.ts tests/simulation/transit.test.ts
+git add src/domain/types.ts legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: store route path segments and pathBroken on routes and metro lines"
 ```
 
@@ -579,13 +579,13 @@ git commit -m "feat: store route path segments and pathBroken on routes and metr
 ### Task 4: `recomputeRoutePaths` + break transition (park, disembark, replan)
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Modify: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-import { recomputeRoutePaths } from "../../src/simulation/transit";
+import { recomputeRoutePaths } from "../../legacy-ts-simulation/transit";
 
 function removeRoadAt(state: GameState, point: Point): GameState {
   return {
@@ -678,7 +678,7 @@ describe("recomputeRoutePaths", () => {
 Run: `bunx vitest run tests/simulation/transit.test.ts -t recomputeRoutePaths`
 Expected: FAIL — `recomputeRoutePaths` not exported.
 
-- [ ] **Step 3: Implement `recomputeRoutePaths`** (in `src/simulation/transit.ts`, after `invalidatePlansForLine`)
+- [ ] **Step 3: Implement `recomputeRoutePaths`** (in `legacy-ts-simulation/transit.ts`, after `invalidatePlansForLine`)
 
 ```ts
 /**
@@ -767,7 +767,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: recompute route paths on network change with break-transition handling"
 ```
 
@@ -777,8 +777,8 @@ git commit -m "feat: recompute route paths on network change with break-transiti
 
 **Files:**
 - Modify: `src/domain/types.ts` (Tool union, ~line 25)
-- Modify: `src/simulation/map.ts`
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/map.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Modify: `src/ui/actions.ts` (`removeAtTile`, `handleTileClick`)
 - Modify: `tests/simulation/map.test.ts`, `tests/simulation/transit.test.ts`, `tests/ui/actions.test.ts`
 
@@ -790,7 +790,7 @@ In `tests/simulation/map.test.ts` (uses the `withTrack` helper from the file-str
 import {
   isValidRoadPlacement,
   isValidTrackPlacement,
-} from "../../src/simulation/map";
+} from "../../legacy-ts-simulation/map";
 
 describe("road and track placement validation", () => {
   it("allows road only on bare empty tiles", () => {
@@ -838,7 +838,7 @@ describe("growth waves skip player infrastructure", () => {
 In `tests/simulation/transit.test.ts`:
 
 ```ts
-import { layRoad, layTrack, removeInfrastructureAtTile } from "../../src/simulation/transit";
+import { layRoad, layTrack, removeInfrastructureAtTile } from "../../legacy-ts-simulation/transit";
 
 describe("laying and removing infrastructure", () => {
   it("lays a road on an empty tile and charges $100", () => {
@@ -933,7 +933,7 @@ export type Tool =
   | "remove";
 ```
 
-`src/simulation/transit.ts`:
+`legacy-ts-simulation/transit.ts`:
 
 ```ts
 export const COSTS = {
@@ -946,7 +946,7 @@ export const COSTS = {
 } as const;
 ```
 
-- [ ] **Step 4: Validators and tile mutators in `src/simulation/map.ts`**
+- [ ] **Step 4: Validators and tile mutators in `legacy-ts-simulation/map.ts`**
 
 ```ts
 function isTransitNodeAt(state: GameState, point: Point): boolean {
@@ -1030,7 +1030,7 @@ And in the citizen-creation loop, extend the skip:
       // ... existing citizen creation unchanged
 ```
 
-- [ ] **Step 6: `layRoad`/`layTrack`/`removeInfrastructureAtTile` in `src/simulation/transit.ts`**
+- [ ] **Step 6: `layRoad`/`layTrack`/`removeInfrastructureAtTile` in `legacy-ts-simulation/transit.ts`**
 
 Extend the map.ts import line:
 
@@ -1128,7 +1128,7 @@ Expected: new tests PASS; fix any strict-equality fixtures still missing `segmen
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/domain/types.ts src/simulation/map.ts src/simulation/transit.ts src/ui/actions.ts tests/simulation/map.test.ts tests/simulation/transit.test.ts tests/ui/actions.test.ts
+git add src/domain/types.ts legacy-ts-simulation/map.ts legacy-ts-simulation/transit.ts src/ui/actions.ts tests/simulation/map.test.ts tests/simulation/transit.test.ts tests/ui/actions.test.ts
 git commit -m "feat: road and track tools with bulldoze and growth-wave protection"
 ```
 
@@ -1137,8 +1137,8 @@ git commit -m "feat: road and track tools with bulldoze and growth-wave protecti
 ### Task 6: Placement rule changes — stations need track, no nodes/buildings on conflicting tiles
 
 **Files:**
-- Modify: `src/simulation/map.ts` (`isValidBusStopPlacement`, `isValidMetroStationPlacement`)
-- Modify: `src/simulation/buildings.ts` (`canPlaceBuilding`)
+- Modify: `legacy-ts-simulation/map.ts` (`isValidBusStopPlacement`, `isValidMetroStationPlacement`)
+- Modify: `legacy-ts-simulation/buildings.ts` (`canPlaceBuilding`)
 - Modify: `tests/simulation/map.test.ts`, plus existing fixtures in `tests/simulation/{transit,router,citizens}.test.ts`, `tests/ui/actions.test.ts`, `tests/runtime/runtimeSelectors.test.ts`, `tests/render/transitRenderer.test.ts`
 
 - [ ] **Step 1: Write the failing tests** (in `tests/simulation/map.test.ts`)
@@ -1183,7 +1183,7 @@ Expected: FAIL on the new assertions.
 
 - [ ] **Step 3: Implement the rule changes**
 
-`src/simulation/map.ts`:
+`legacy-ts-simulation/map.ts`:
 
 ```ts
 export function isValidBusStopPlacement(state: GameState, point: Point): boolean {
@@ -1209,7 +1209,7 @@ export function isValidMetroStationPlacement(state: GameState, point: Point): bo
 }
 ```
 
-`src/simulation/buildings.ts`, inside the `footprint.every(...)` callback of `canPlaceBuilding`, change the return to:
+`legacy-ts-simulation/buildings.ts`, inside the `footprint.every(...)` callback of `canPlaceBuilding`, change the return to:
 
 ```ts
     // No building may sit on track, except the Metro Station building whose
@@ -1242,7 +1242,7 @@ Expected after fixes: `bunx vitest run` PASS (vehicle-timing tests are still on 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/map.ts src/simulation/buildings.ts tests/
+git add legacy-ts-simulation/map.ts legacy-ts-simulation/buildings.ts tests/
 git commit -m "feat: metro stations require track; no buildings or stops on conflicting tiles"
 ```
 
@@ -1344,7 +1344,7 @@ and to `createUiState()`:
 
 - [ ] **Step 4: Validate drafts in `handleTileClick`** (`src/ui/actions.ts`)
 
-Add `import { findTilePath } from "../simulation/network";` and replace the `busRoute` branch:
+Add `import { findTilePath } from "../legacy-ts-simulation/network";` and replace the `busRoute` branch:
 
 ```ts
   if (ui.activeTool === "busRoute") {
@@ -1467,7 +1467,7 @@ git commit -m "feat: validate draft route legs against the network and track dra
 ### Task 8: Distance-based vehicle movement
 
 **Files:**
-- Modify: `src/simulation/transit.ts` (`TILES_PER_SECOND`, `assignedLinePositions` → `assignedLineData`, `tickVehicles`)
+- Modify: `legacy-ts-simulation/transit.ts` (`TILES_PER_SECOND`, `assignedLinePositions` → `assignedLineData`, `tickVehicles`)
 - Modify: `tests/simulation/transit.test.ts`, `tests/simulation/citizens.test.ts` (timing expectations)
 
 - [ ] **Step 1: Write the failing test**
@@ -1496,7 +1496,7 @@ Expected: FAIL — progress is `0.08` (old fixed speed).
 
 - [ ] **Step 3: Implement**
 
-In `src/simulation/transit.ts` add near `COSTS`:
+In `legacy-ts-simulation/transit.ts` add near `COSTS`:
 
 ```ts
 /** Vehicle speeds in tiles per second; ride time = path steps / speed. */
@@ -1581,7 +1581,7 @@ Expected: PASS after updates.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/
+git add legacy-ts-simulation/transit.ts tests/simulation/
 git commit -m "feat: vehicles travel stored paths at tiles-per-second speeds"
 ```
 
@@ -1590,7 +1590,7 @@ git commit -m "feat: vehicles travel stored paths at tiles-per-second speeds"
 ### Task 9: Router uses real path lengths and skips broken routes
 
 **Files:**
-- Modify: `src/simulation/router.ts`
+- Modify: `legacy-ts-simulation/router.ts`
 - Modify: `tests/simulation/router.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1599,7 +1599,7 @@ git commit -m "feat: vehicles travel stored paths at tiles-per-second speeds"
 import {
   removeInfrastructureAtTile,
   TILES_PER_SECOND,
-} from "../../src/simulation/transit";
+} from "../../legacy-ts-simulation/transit";
 
 describe("path-length ride estimates", () => {
   it("estimates bus rides from stored segment steps, not Manhattan distance", () => {
@@ -1639,7 +1639,7 @@ Expected: FAIL — estimate is `90 + 15*12 = 270` (old Manhattan model) and brok
 
 - [ ] **Step 3: Implement**
 
-In `src/simulation/router.ts`:
+In `legacy-ts-simulation/router.ts`:
 
 Add the import:
 
@@ -1775,7 +1775,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/router.ts tests/simulation/
+git add legacy-ts-simulation/router.ts tests/simulation/
 git commit -m "feat: router estimates rides from stored path lengths and skips broken routes"
 ```
 

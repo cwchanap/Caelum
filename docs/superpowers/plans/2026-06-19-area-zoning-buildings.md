@@ -17,14 +17,14 @@
   - Add `area?: AreaKind` to `Tile`.
   - Extend `BuildingType`.
   - Add `"area"` to `Tool`.
-- `src/simulation/areas.ts`
+- `legacy-ts-simulation/areas.ts`
   - Own area constants, labels, rectangle geometry, paint preview planning, validity checks, and immutable area-paint commits.
-- `src/simulation/map.ts`
+- `legacy-ts-simulation/map.ts`
   - Keep infrastructure placement helpers area-aware without making areas a second map kind.
 - `src/scenario/growingSuburb.ts`
   - Replace prebuilt districts and road grid with an empty map plus a starter arterial cross.
   - Remove starting citizens and growth waves for this pass.
-- `src/simulation/buildings.ts`
+- `legacy-ts-simulation/buildings.ts`
   - Add area-gated catalog entries.
   - Add deterministic destination-building selection.
   - Retain transit buildings as infrastructure entries.
@@ -55,8 +55,8 @@
 
 **Files:**
 - Modify: `src/domain/types.ts`
-- Create: `src/simulation/areas.ts`
-- Modify: `src/simulation/map.ts`
+- Create: `legacy-ts-simulation/areas.ts`
+- Modify: `legacy-ts-simulation/map.ts`
 - Test: `tests/simulation/areas.test.ts`
 
 - [ ] **Step 1: Write the failing area helper tests**
@@ -66,14 +66,14 @@ Create `tests/simulation/areas.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 import type { GameState, Point } from "../../src/domain/types";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 import {
   AREA_KINDS,
   isAreaPaintable,
   paintAreaRectangle,
   planAreaPaintPreview,
   rectanglePoints,
-} from "../../src/simulation/areas";
+} from "../../legacy-ts-simulation/areas";
 
 function withRoad(state: GameState, points: Point[]): GameState {
   const keys = new Set(points.map((point) => `${point.x},${point.y}`));
@@ -188,7 +188,7 @@ Run:
 bunx vitest run tests/simulation/areas.test.ts --project simulation
 ```
 
-Expected: FAIL because `src/simulation/areas.ts` and `Tile.area` do not exist.
+Expected: FAIL because `legacy-ts-simulation/areas.ts` and `Tile.area` do not exist.
 
 - [ ] **Step 3: Add the area domain types**
 
@@ -221,9 +221,9 @@ export interface Tile extends Point {
 
 Keep legacy `TileKind` values for this task so existing code still compiles. The scenario migration later stops producing `residential`, `jobs`, `civic`, and `park` tile kinds.
 
-- [ ] **Step 4: Implement `src/simulation/areas.ts`**
+- [ ] **Step 4: Implement `legacy-ts-simulation/areas.ts`**
 
-Create `src/simulation/areas.ts`:
+Create `legacy-ts-simulation/areas.ts`:
 
 ```ts
 import type { AreaKind, GameState, Point } from "../domain/types";
@@ -338,7 +338,7 @@ export function paintAreaRectangle(
 
 - [ ] **Step 5: Preserve area state when infrastructure changes**
 
-In `src/simulation/map.ts`, keep `setTileKind` from deleting `area`. The relevant body should be:
+In `legacy-ts-simulation/map.ts`, keep `setTileKind` from deleting `area`. The relevant body should be:
 
 ```ts
 export function setTileKind(
@@ -375,7 +375,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```sh
-git add src/domain/types.ts src/simulation/areas.ts src/simulation/map.ts tests/simulation/areas.test.ts
+git add src/domain/types.ts legacy-ts-simulation/areas.ts legacy-ts-simulation/map.ts tests/simulation/areas.test.ts
 git commit -m "feat(simulation): add area painting model"
 ```
 
@@ -541,7 +541,7 @@ git commit -m "feat(scenario): start from empty zonable map"
 
 **Files:**
 - Modify: `src/domain/types.ts`
-- Modify: `src/simulation/buildings.ts`
+- Modify: `legacy-ts-simulation/buildings.ts`
 - Modify: `src/render/colors.ts`
 - Modify: `src/render/buildingRenderer.ts`
 - Test: `tests/simulation/buildings.test.ts`
@@ -690,7 +690,7 @@ export type BuildingType =
 
 - [ ] **Step 4: Extend the catalog and placement definitions**
 
-In `src/simulation/buildings.ts`, change definitions:
+In `legacy-ts-simulation/buildings.ts`, change definitions:
 
 ```ts
 export type BuildingEffect =
@@ -822,7 +822,7 @@ Do not add `allowedArea` to `busStop`, `busTerminal`, or `metroStation`; those r
 
 - [ ] **Step 5: Add destination selection**
 
-Replace the old `destinationTiles` helper in `src/simulation/buildings.ts` with:
+Replace the old `destinationTiles` helper in `legacy-ts-simulation/buildings.ts` with:
 
 ```ts
 export function destinationPoints(state: GameState): Point[] {
@@ -931,7 +931,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```sh
-git add src/domain/types.ts src/simulation/buildings.ts src/render/colors.ts src/render/buildingRenderer.ts tests/simulation/buildings.test.ts
+git add src/domain/types.ts legacy-ts-simulation/buildings.ts src/render/colors.ts src/render/buildingRenderer.ts tests/simulation/buildings.test.ts
 git commit -m "feat(simulation): gate buildings by area"
 ```
 

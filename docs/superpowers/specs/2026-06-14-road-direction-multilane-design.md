@@ -19,7 +19,7 @@ The current road model (verified against the code):
 
 - **Roads are a single binary tile layer.** A tile is either `kind: "road"` or
   not. There is no width, direction, or per-road cost.
-- **Bus pathfinding** (`findTilePath` in `src/simulation/network.ts`) is a
+- **Bus pathfinding** (`findTilePath` in `legacy-ts-simulation/network.ts`) is a
   deterministic 4-connected BFS over road tiles (fixed N, E, S, W expansion
   order — a scenario contract). Metro pathfinding traverses `hasTrack === true`
   tiles instead.
@@ -94,7 +94,7 @@ palette.
 
 ### 3. Routing semantics
 
-`findTilePath` (`src/simulation/network.ts`) gains a one-way **exit
+`findTilePath` (`legacy-ts-simulation/network.ts`) gains a one-way **exit
 constraint**, bus mode only: when BFS expands from a road tile whose `oneWay`
 is set, the only legal next step is the neighbor in the arrow direction.
 
@@ -155,9 +155,9 @@ rendering needed to use it.
 ## Affected files
 
 - `src/domain/types.ts` — `RoadDirection` type, `oneWay?` on `Tile`.
-- `src/simulation/network.ts` — one-way exit constraint in `findTilePath`.
-- `src/simulation/map.ts` — helper to set/clear `oneWay`; clear on road removal.
-- `src/simulation/transit.ts` — direction-cycle action; ensure
+- `legacy-ts-simulation/network.ts` — one-way exit constraint in `findTilePath`.
+- `legacy-ts-simulation/map.ts` — helper to set/clear `oneWay`; clear on road removal.
+- `legacy-ts-simulation/transit.ts` — direction-cycle action; ensure
   `recomputeRoutePaths` runs; clear `oneWay` in `removeInfrastructureAtTile`.
 - `src/ui/actions.ts` — Road tool: empty → lay, existing road → cycle direction.
 - `src/render/mapRenderer.ts` — one-way arrow rendering pass.

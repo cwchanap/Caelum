@@ -1,24 +1,23 @@
 import { describe, expect, it } from "vitest";
-import {
-  addBusRoute,
-  addBusStop,
-  addMetroLine,
-  addMetroStation,
-  COSTS as SIMULATION_COSTS,
-} from "../../src/simulation/transit";
 import { COSTS } from "../../src/domain/catalog/transit";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import type { Citizen } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
-import type { Citizen } from "../../src/domain/types";
+import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  addTestBusRoute,
+  addTestBusStop,
+  addTestMetroLine,
+  addTestMetroStation,
+  createTestGameState,
+} from "../helpers/gameState";
 import {
   pointsOnColumn,
   pointsOnRow,
   withRoads,
   withTracks,
 } from "../helpers/mapFixtures";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 function waitingBusCitizen(
   id: string,
@@ -43,11 +42,11 @@ function waitingBusCitizen(
 
 describe("selectShellState inspector", () => {
   it("emits an inspector block for a selected terminal with route chips", () => {
-    let state = { ...createInitialGameState(), budget: 1_000_000 };
+    let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withRoads(state, pointsOnColumn(14, 7, 8));
-    state = addBusStop(state, { x: 14, y: 7 }, "busTerminal");
-    state = addBusStop(state, { x: 14, y: 8 });
-    state = addBusRoute(
+    state = addTestBusStop(state, { x: 14, y: 7 }, "busTerminal");
+    state = addTestBusStop(state, { x: 14, y: 8 });
+    state = addTestBusRoute(
       state,
       state.transit.stops.map((s) => s.id),
     );
@@ -78,11 +77,11 @@ describe("selectShellState inspector", () => {
   });
 
   it("reports platform occupancy from waiting citizens", () => {
-    let state = { ...createInitialGameState(), budget: 1_000_000 };
+    let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withRoads(state, pointsOnColumn(14, 7, 8));
-    state = addBusStop(state, { x: 14, y: 7 }, "busTerminal");
-    state = addBusStop(state, { x: 14, y: 8 });
-    state = addBusRoute(
+    state = addTestBusStop(state, { x: 14, y: 7 }, "busTerminal");
+    state = addTestBusStop(state, { x: 14, y: 8 });
+    state = addTestBusRoute(
       state,
       state.transit.stops.map((s) => s.id),
     );
@@ -109,11 +108,11 @@ describe("selectShellState inspector", () => {
   });
 
   it("emits a metro-station inspector with line route chips", () => {
-    let state = { ...createInitialGameState(), budget: 1_000_000 };
+    let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withTracks(state, pointsOnRow(2, 7, 22));
-    state = addMetroStation(state, { x: 7, y: 2 });
-    state = addMetroStation(state, { x: 22, y: 2 });
-    state = addMetroLine(
+    state = addTestMetroStation(state, { x: 7, y: 2 });
+    state = addTestMetroStation(state, { x: 22, y: 2 });
+    state = addTestMetroLine(
       state,
       state.transit.stations.map((s) => s.id),
     );
@@ -146,7 +145,7 @@ describe("selectShellState inspector", () => {
   });
 
   it("emits null inspector for an empty tile", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = { ...createUiState(), selectedId: "0,0" };
     expect(selectShellState(state, ui).inspector).toBeNull();
   });
@@ -154,15 +153,15 @@ describe("selectShellState inspector", () => {
 
 describe("route selectors", () => {
   function twoStops() {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
     return state;
   }
 
   it("returns null draft when not drafting", () => {
-    const shell = selectShellState(createInitialGameState(), createUiState());
+    const shell = selectShellState(createTestGameState(), createUiState());
     expect(shell.routeDraft).toBe(null);
   });
 
@@ -206,11 +205,11 @@ describe("route selectors", () => {
 
   it("lists routes and metro lines with selection state", () => {
     let state = twoStops();
-    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
     state = withTracks(state, pointsOnRow(0, 3, 9));
-    state = addMetroStation(state, { x: 3, y: 0 });
-    state = addMetroStation(state, { x: 9, y: 0 });
-    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = addTestMetroStation(state, { x: 3, y: 0 });
+    state = addTestMetroStation(state, { x: 9, y: 0 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
     const ui = { ...createUiState(), selectedRouteId: "route-001" };
     const shell = selectShellState(state, ui);
     expect(shell.routes).toEqual([
@@ -239,7 +238,6 @@ describe("route selectors", () => {
 describe("ShellHudState", () => {
   it("exposes bus terminal cost from the shared transit catalog", () => {
     expect(COSTS.busTerminal).toBe(12_000);
-    expect(SIMULATION_COSTS.busTerminal).toBe(12_000);
   });
 
   it("formats Rust snapshot clock and population from sims", () => {
@@ -283,7 +281,7 @@ describe("ShellHudState", () => {
   });
 
   it("derives the active tool chip and default cancel state", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = createUiState();
     const shell = selectShellState(state, ui);
 
@@ -301,7 +299,7 @@ describe("ShellHudState", () => {
     // arm Cancel/Escape so the player can clear the overlay without diving
     // back into the Data drawer. resetUi() clears activeOverlay, so the gate
     // must let it through.
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = { ...createUiState(), activeOverlay: "coverage" as const };
     const shell = selectShellState(state, ui);
 
@@ -310,7 +308,7 @@ describe("ShellHudState", () => {
   });
 
   it("flags cancellable state and overlay label", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
@@ -335,7 +333,7 @@ describe("ShellHudState", () => {
   ] as const)(
     "derives the badge label for the %s overlay",
     (overlay, label) => {
-      const state = createInitialGameState();
+      const state = createTestGameState();
       const ui = { ...createUiState(), activeOverlay: overlay };
       const shell = selectShellState(state, ui);
 
@@ -348,7 +346,7 @@ describe("ShellHudState", () => {
     // tool === "inspect" — the player must still be able to dismiss the route
     // halo via Cancel/Escape. resetUi() clears selectedRouteId, so the gate
     // must let it through.
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = { ...createUiState(), selectedRouteId: "route-001" };
     const shell = selectShellState(state, ui);
 
@@ -356,7 +354,7 @@ describe("ShellHudState", () => {
   });
 
   it("formats a selected area as the active tool and allows cancel", () => {
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
@@ -369,16 +367,16 @@ describe("ShellHudState", () => {
   });
 
   it("counts routes and metro lines together", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, pointsOnRow(2, 7, 15));
-    state = addBusStop(state, { x: 7, y: 2 });
-    state = addBusStop(state, { x: 15, y: 2 });
+    state = addTestBusStop(state, { x: 7, y: 2 });
+    state = addTestBusStop(state, { x: 15, y: 2 });
     const stopIds = state.transit.stops.map((s) => s.id);
-    state = addBusRoute(state, stopIds);
+    state = addTestBusRoute(state, stopIds);
     state = withTracks(state, pointsOnRow(0, 3, 9));
-    state = addMetroStation(state, { x: 3, y: 0 });
-    state = addMetroStation(state, { x: 9, y: 0 });
-    state = addMetroLine(state, ["station-001", "station-002"]);
+    state = addTestMetroStation(state, { x: 3, y: 0 });
+    state = addTestMetroStation(state, { x: 9, y: 0 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
     const shell = selectShellState(state, createUiState());
 
     expect(shell.hud.badges.routeCount).toBe(2);
