@@ -2,7 +2,7 @@ import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
-  handleTileClick as applyTileClick,
+  applyUiTileClick,
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
 import { axisLockedLine } from "../ui/roadDrag";
@@ -656,7 +656,7 @@ export async function createGameRuntime({
         ui.activeTool === "busRoute" ||
         ui.activeTool === "metroLine"
       ) {
-        const result = applyTileClick(state, ui, point);
+        const result = applyUiTileClick(state, ui, point);
         return commit(state, result.ui);
       }
 

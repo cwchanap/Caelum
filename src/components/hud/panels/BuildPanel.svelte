@@ -6,8 +6,8 @@
     RoadPreset,
     Tool,
   } from "../../../domain/types";
-  import { AREA_KINDS, AREA_LABELS } from "../../../simulation/areas";
-  import { BUILDING_CATALOG } from "../../../simulation/buildings";
+  import { AREA_KINDS, AREA_LABELS } from "../../../domain/catalog/areas";
+  import { BUILDING_CATALOG } from "../../../domain/catalog/buildings";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
   type NetworkTool = Extract<Tool, "road" | "track">;

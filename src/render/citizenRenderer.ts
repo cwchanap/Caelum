@@ -1,4 +1,9 @@
-import type { CitizenStatus, GameState } from "../domain/types";
+import type {
+  ActiveTrip,
+  Citizen,
+  CitizenStatus,
+  GameState,
+} from "../domain/types";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 
@@ -26,16 +31,19 @@ export function renderCitizens(
   ctx: CanvasRenderingContext2D,
   state: GameState,
 ): void {
-  for (const citizen of state.citizens) {
-    if (citizen.status === "arrived") {
+  const entities: Array<Citizen | ActiveTrip> =
+    state.activeTrips !== undefined ? state.activeTrips : state.citizens;
+
+  for (const entity of entities) {
+    if (entity.status === "arrived") {
       continue;
     }
 
-    ctx.fillStyle = statusColor(citizen.status);
+    ctx.fillStyle = statusColor(entity.status);
     ctx.beginPath();
     ctx.arc(
-      citizen.position.x * tileSize + 10,
-      citizen.position.y * tileSize + 10,
+      entity.position.x * tileSize + 10,
+      entity.position.y * tileSize + 10,
       3,
       0,
       Math.PI * 2,

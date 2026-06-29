@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderOverlays } from "../../src/render/overlayRenderer";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import type { Citizen, Stop } from "../../src/domain/types";
+import type { ActiveTrip, Citizen, Stop } from "../../src/domain/types";
 import { axisLockedLine } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
@@ -111,6 +111,82 @@ describe("crowding overlay", () => {
     renderOverlays(ctx, state, ui);
 
     expect(ctx.fillRect as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+});
+
+function activeTrip(
+  status: ActiveTrip["status"],
+  position: { x: number; y: number },
+  destination: { x: number; y: number },
+): ActiveTrip {
+  return {
+    id: `trip-${status}`,
+    simId: "sim-001",
+    purpose: "commuteOutbound",
+    origin: { x: 0, y: 0 },
+    destination,
+    position,
+    status,
+    deadline: 9_999,
+    routePlan: null,
+    currentLegIndex: 0,
+    patienceRemaining: 100,
+  };
+}
+
+describe("Rust trip overlays", () => {
+  it("renders demand from active trip destinations when citizens are absent", () => {
+    const state = {
+      ...createInitialGameState(),
+      citizens: [],
+      activeTrips: [activeTrip("walking", { x: 2, y: 2 }, { x: 9, y: 4 })],
+    };
+    const ui = { ...createUiState(), activeOverlay: "demand" as const };
+
+    const ctx = fakeCtx();
+    renderOverlays(ctx, state, ui);
+
+    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      9 * tileSize,
+      4 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("renders lateness from late and unserved active trips when citizens are absent", () => {
+    const state = {
+      ...createInitialGameState(),
+      citizens: [],
+      activeTrips: [
+        activeTrip("late", { x: 2, y: 2 }, { x: 9, y: 4 }),
+        activeTrip("unserved", { x: 3, y: 2 }, { x: 10, y: 4 }),
+        activeTrip("walking", { x: 4, y: 2 }, { x: 11, y: 4 }),
+      ],
+    };
+    const ui = { ...createUiState(), activeOverlay: "lateness" as const };
+
+    const ctx = fakeCtx();
+    renderOverlays(ctx, state, ui);
+
+    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      2 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      3 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect as ReturnType<typeof vi.fn>).not.toHaveBeenCalledWith(
+      4 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
   });
 });
 

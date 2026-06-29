@@ -8,10 +8,9 @@ import {
   addBusRoute,
   addBusStop,
   assignVehicle,
+  deleteRoute,
   tickVehicles,
 } from "../../src/simulation/transit";
-import { handleTileClick } from "../../src/ui/actions";
-import { createUiState } from "../../src/ui/uiState";
 import { pointsOnRow, withAreas, withRoads } from "../helpers/mapFixtures";
 
 function testCitizen(overrides: Partial<Citizen> = {}): Citizen {
@@ -192,11 +191,7 @@ describe("citizen lifecycle", () => {
     state = tickVehicles(state, 0);
     expect(state.citizens[0]?.status).toBe("riding");
 
-    const removed = handleTileClick(
-      state,
-      { ...createUiState(), activeTool: "remove" },
-      { x: 7, y: 8 },
-    ).state;
+    const removed = deleteRoute(state, "route-001");
     const recovered = tickCitizens(removed, 1);
 
     expect(recovered.transit.vehicles).toHaveLength(0);
