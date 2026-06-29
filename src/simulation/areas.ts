@@ -1,24 +1,9 @@
 import type { AreaKind, GameState, Point } from "../domain/types";
+import { AREA_KINDS, AREA_LABELS } from "../domain/catalog/areas";
 import { getTile } from "./map";
 import { isBuildingOccupied, isTransitNodeAt } from "./tileQueries";
 
-export const AREA_KINDS = [
-  "residential",
-  "commercial",
-  "industrial",
-  "office",
-  "civic",
-  "park",
-] as const satisfies AreaKind[];
-
-export const AREA_LABELS: Record<AreaKind, string> = {
-  residential: "Residential",
-  commercial: "Commercial",
-  industrial: "Industrial",
-  office: "Office",
-  civic: "Civic",
-  park: "Park",
-};
+export { AREA_KINDS, AREA_LABELS } from "../domain/catalog/areas";
 
 export interface AreaPreviewTile {
   point: Point;

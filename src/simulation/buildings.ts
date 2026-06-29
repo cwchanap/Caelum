@@ -7,7 +7,10 @@ import type {
   PlacedBuilding,
   Point,
 } from "../domain/types";
-import { BUILDING_CATALOG } from "./buildingCatalog";
+import {
+  BUILDING_CATALOG,
+  getBuildingFootprint,
+} from "../domain/catalog/buildings";
 import {
   destinationPoints,
   isHomeFallbackCitizen,
@@ -23,38 +26,13 @@ import { busPlatforms, metroPlatforms } from "./platforms";
 // destinationPoints from buildingSelectors.ts).
 export {
   BUILDING_CATALOG,
+  getBuildingFootprint,
+  getRotatedFootprintSize,
   type BuildingDefinition,
   type BuildingEffect,
-} from "./buildingCatalog";
+} from "../domain/catalog/buildings";
 export { retargetCitizens } from "./buildingSelectors";
 export { destinationIsOnTile } from "./buildingSelectors";
-
-export function getRotatedFootprintSize(
-  type: BuildingType,
-  rotation: BuildingRotation,
-): { width: number; height: number } {
-  const definition = BUILDING_CATALOG[type];
-  return rotation === 90 || rotation === 270
-    ? { width: definition.height, height: definition.width }
-    : { width: definition.width, height: definition.height };
-}
-
-export function getBuildingFootprint(
-  type: BuildingType,
-  origin: Point,
-  rotation: BuildingRotation,
-): Point[] {
-  const size = getRotatedFootprintSize(type, rotation);
-  const points: Point[] = [];
-
-  for (let y = 0; y < size.height; y += 1) {
-    for (let x = 0; x < size.width; x += 1) {
-      points.push({ x: origin.x + x, y: origin.y + y });
-    }
-  }
-
-  return points;
-}
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;

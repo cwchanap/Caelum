@@ -1,21 +1,62 @@
-import type { GameState, Point, RoadDirection } from "../domain/types";
-import {
-  getTile,
-  isValidRoadPlacement,
-  isValidTrackPlacement,
-  setTileOneWay,
-} from "../simulation/map";
-import {
-  COSTS,
-  layRoadNoRecompute,
-  layTrackNoRecompute,
-  recomputeRoutePaths,
-} from "../simulation/transit";
+import type {
+  GameMap,
+  GameState,
+  Point,
+  RoadDirection,
+  Tile,
+} from "../domain/types";
+import { COSTS } from "../domain/catalog/transit";
 import type { UiState } from "./uiState";
 
-/** Compile-time exhaustiveness check for closed unions. */
-function assertNever(value: never): never {
-  throw new Error(`Unhandled value: ${JSON.stringify(value)}`);
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function getTile(map: GameMap, point: Point): Tile | null {
+  if (
+    point.x < 0 ||
+    point.x >= map.width ||
+    point.y < 0 ||
+    point.y >= map.height
+  ) {
+    return null;
+  }
+
+  return map.tiles.find((tile) => samePoint(tile, point)) ?? null;
+}
+
+function isBuildingOccupied(state: GameState, point: Point): boolean {
+  return state.buildings.some((building) =>
+    building.occupiedTiles.some((occupiedTile) =>
+      samePoint(occupiedTile, point),
+    ),
+  );
+}
+
+function isTransitNodeAt(state: GameState, point: Point): boolean {
+  return (
+    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
+    state.transit.stations.some((station) => samePoint(station.position, point))
+  );
+}
+
+function isValidRoadPlacement(state: GameState, point: Point): boolean {
+  const tile = getTile(state.map, point);
+  return (
+    tile?.kind === "empty" &&
+    !isBuildingOccupied(state, point) &&
+    !isTransitNodeAt(state, point)
+  );
+}
+
+function isValidTrackPlacement(state: GameState, point: Point): boolean {
+  const tile = getTile(state.map, point);
+  return (
+    (tile?.kind === "empty" || tile?.kind === "road") &&
+    tile?.hasTrack !== true &&
+    !isBuildingOccupied(state, point) &&
+    !isTransitNodeAt(state, point)
+  );
 }
 
 /** Inclusive straight tile line from `start`, locked to the dominant axis.
@@ -47,23 +88,6 @@ export function lineDirection(line: Point[]): RoadDirection | null {
   return "north";
 }
 
-/** Lay/keep a road at `point` and set its direction (undefined = two-way).
- *  Existing roads are redirected (free); empty tiles are laid (charged);
- *  off-map / occupied / unaffordable tiles are skipped (no-op). */
-function layLane(
-  state: GameState,
-  point: Point,
-  direction: RoadDirection | undefined,
-): GameState {
-  const existing = getTile(state.map, point);
-  const withRoad =
-    existing?.kind === "road" ? state : layRoadNoRecompute(state, point);
-  if (getTile(withRoad.map, point)?.kind !== "road") {
-    return withRoad;
-  }
-  return { ...withRoad, map: setTileOneWay(withRoad.map, point, direction) };
-}
-
 const REVERSE_OF: Record<RoadDirection, RoadDirection> = {
   north: "south",
   east: "west",
@@ -71,13 +95,10 @@ const REVERSE_OF: Record<RoadDirection, RoadDirection> = {
   west: "east",
 };
 
-/** The direction opposing `direction` (north↔south, east↔west). Shared by the
- *  gesture (reverse-lane commit) and the drag preview (opposing arrows). */
 export function oppositeDirection(direction: RoadDirection): RoadDirection {
   return REVERSE_OF[direction];
 }
 
-/** Unit offset to the left of travel (right-hand-traffic 2nd-lane placement). */
 const LEFT_OF: Record<RoadDirection, Point> = {
   north: { x: -1, y: 0 },
   east: { x: 0, y: -1 },
@@ -85,9 +106,6 @@ const LEFT_OF: Record<RoadDirection, Point> = {
   west: { x: 0, y: 1 },
 };
 
-/** The reverse-lane tiles for a dual-lane drag (left-of-travel offset of every
- *  tile in `line`). Empty when the line has no axis. Shared by the gesture and
- *  the drag preview so both agree on the 2-lane footprint. */
 export function reverseLanePoints(line: Point[]): Point[] {
   const forward = lineDirection(line);
   if (forward === null) {
@@ -100,109 +118,11 @@ export function reverseLanePoints(line: Point[]): Point[] {
   }));
 }
 
-/** Lay a *new* reverse lane only on an empty, placeable tile — never hijacks an
- *  existing road and never runs off the map. */
-function layReverseLane(
-  state: GameState,
-  point: Point,
-  direction: RoadDirection,
-): GameState {
-  if (getTile(state.map, point)?.kind !== "empty") {
-    return state;
-  }
-  const withRoad = layRoadNoRecompute(state, point);
-  if (getTile(withRoad.map, point)?.kind !== "road") {
-    return withRoad;
-  }
-  return { ...withRoad, map: setTileOneWay(withRoad.map, point, direction) };
-}
-
-function applyDualLane(state: GameState, line: Point[]): GameState {
-  const forward = lineDirection(line);
-  if (forward === null) {
-    return line.reduce((acc, point) => layLane(acc, point, undefined), state);
-  }
-  const reverse = oppositeDirection(forward);
-  const withForward = line.reduce(
-    (acc, point) => layLane(acc, point, forward),
-    state,
-  );
-  return reverseLanePoints(line).reduce(
-    (acc, point) => layReverseLane(acc, point, reverse),
-    withForward,
-  );
-}
-
-/** Apply a >=2-tile road/track drag line. Routes by tool + road preset and
- *  composes existing pure helpers. Single-tile taps and the remove tool are
- *  handled by the runtime via the legacy click path, not here.
- *
- *  Recompute discipline: layLane/layReverseLane/track-laying all use the
- *  *NoRecompute placement helpers, so a K-tile drag pays exactly one
- *  recomputeRoutePaths at the end instead of K (track) or K+1 (road). A no-op
- *  drag (nothing placed) returns the same `state` reference so the runtime's
- *  commit can skip a spurious re-render. */
-export function applyDragGesture(
-  state: GameState,
-  ui: UiState,
-  line: Point[],
-): GameState {
-  if (line.length === 0) {
-    return state;
-  }
-  if (ui.activeTool === "track") {
-    const built = line.reduce(
-      (acc, point) => layTrackNoRecompute(acc, point),
-      state,
-    );
-    return built === state ? state : recomputeRoutePaths(built);
-  }
-  if (ui.activeTool === "road") {
-    // Exhaustive over RoadPreset so a future preset is a compile error here
-    // instead of silently falling through to two-way.
-    let built: GameState;
-    switch (ui.roadPreset) {
-      case "dualBidirectional":
-        built = applyDualLane(state, line);
-        break;
-      case "oneWay": {
-        const direction = lineDirection(line) ?? undefined;
-        built = line.reduce(
-          (acc, point) => layLane(acc, point, direction),
-          state,
-        );
-        break;
-      }
-      case "twoWay":
-        built = line.reduce(
-          (acc, point) => layLane(acc, point, undefined),
-          state,
-        );
-        break;
-      default:
-        return assertNever(ui.roadPreset);
-    }
-    return built === state ? state : recomputeRoutePaths(built);
-  }
-  return state;
-}
-
 export interface DragPreviewTile {
   point: Point;
-  /** Whether commit would actually lay infrastructure on this tile. */
   buildable: boolean;
 }
 
-/** Per-tile buildability of a road/track drag footprint, mirroring
- *  applyDragGesture's commit semantics so the preview can't tint green where
- *  nothing will land:
- *  - forward lane: an existing road is a free redirect (always buildable); an
- *    empty tile needs valid placement + remaining budget.
- *  - reverse lane (dual only): only an empty, placeable, affordable tile is
- *    laid (matches layReverseLane).
- *  Budget is consumed in commit order (forward tiles, then reverse tiles) so a
- *    mid-drag shortfall shows up as invalid tiles rather than a silent trunc.
- *  The remove tool returns [] — the renderer tints the whole line red. */
 export function planDragPreview(
   state: GameState,
   ui: UiState,
@@ -233,10 +153,9 @@ export function planDragPreview(
   }
 
   if (ui.activeTool !== "road") {
-    return tiles; // remove/other: renderer handles the tint directly.
+    return tiles;
   }
 
-  // Forward lane: existing roads redirect for free; empty tiles are charged.
   for (const point of line) {
     const existing = getTile(state.map, point);
     const buildable =
@@ -246,7 +165,6 @@ export function planDragPreview(
     tiles.push({ point, buildable });
   }
 
-  // Reverse lane (dual only), laid after the forward lane in commit order.
   if (ui.roadPreset === "dualBidirectional") {
     for (const point of reverseLanePoints(line)) {
       const existing = getTile(state.map, point);

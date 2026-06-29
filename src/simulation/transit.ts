@@ -8,10 +8,10 @@ import type {
   RoadDirection,
   Route,
   MetroLine,
-  Stop,
   StopKind,
   Vehicle,
 } from "../domain/types";
+import { COSTS } from "../domain/catalog/transit";
 import {
   isValidBusStopPlacement,
   isValidMetroStationPlacement,
@@ -30,14 +30,7 @@ import {
   platformWaiterIds,
 } from "./platforms";
 
-export const COSTS = {
-  busStop: 2_000,
-  metroStation: 25_000,
-  bus: 8_000,
-  metro: 50_000,
-  road: 100,
-  track: 500,
-} as const;
+export { COSTS, stopCoverageRadius } from "../domain/catalog/transit";
 
 /** Vehicle speeds in tiles per second; ride time = path steps / speed. */
 export const TILES_PER_SECOND = { bus: 0.8, metro: 1.6 } as const;
@@ -186,10 +179,6 @@ export function assignRouteToPlatform(
 function entityNumberFromId(prefix: string, id: string): number {
   const match = new RegExp(`^${prefix}-(\\d+)$`).exec(id);
   return match === null ? 1 : Number(match[1]);
-}
-
-export function stopCoverageRadius(stop: Stop): number {
-  return stop.kind === "busTerminal" ? 4 : 2;
 }
 
 function assignedLineData(

@@ -7,6 +7,7 @@ import {
 } from "../../src/simulation/transit";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
+import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
 import type { Citizen } from "../../src/domain/types";
 import {
@@ -15,6 +16,7 @@ import {
   withRoads,
   withTracks,
 } from "../helpers/mapFixtures";
+import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 function waitingBusCitizen(
   id: string,
@@ -233,6 +235,46 @@ describe("route selectors", () => {
 });
 
 describe("ShellHudState", () => {
+  it("formats Rust snapshot clock and population from sims", () => {
+    const state = normalizeRustSnapshot(
+      createRustSnapshot({
+        day: 1,
+        clockMinutes: 9 * 60 + 5,
+        sims: [
+          {
+            id: "sim-001",
+            home: { x: 1, y: 1 },
+            position: { x: 1, y: 1 },
+            workerProfile: "worker",
+            shiftTemplate: "standard",
+            workplace: { x: 8, y: 2 },
+            commuteDay: 1,
+            outboundResolvedToday: false,
+            outboundArrivedToday: false,
+            returnResolvedToday: false,
+            returnedHomeToday: false,
+          },
+          {
+            id: "sim-002",
+            home: { x: 2, y: 1 },
+            position: { x: 2, y: 1 },
+            workerProfile: "nonWorker",
+            commuteDay: 1,
+            outboundResolvedToday: false,
+            outboundArrivedToday: false,
+            returnResolvedToday: false,
+            returnedHomeToday: false,
+          },
+        ],
+      }),
+    );
+
+    const shell = selectShellState(state, createUiState());
+
+    expect(shell.topbar.time).toBe("Day 2 09:05");
+    expect(shell.topbar.population).toBe("2");
+  });
+
   it("derives the active tool chip and default cancel state", () => {
     const state = createInitialGameState();
     const ui = createUiState();

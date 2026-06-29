@@ -1,8 +1,7 @@
-import type { GameState, Overlay } from "../domain/types";
-import { AREA_LABELS } from "../simulation/areas";
-import { BUILDING_CATALOG } from "../simulation/buildings";
-import { selectPlatformOccupancy } from "../simulation/platforms";
-import { COSTS } from "../simulation/transit";
+import type { ActiveTrip, Citizen, GameState, Overlay } from "../domain/types";
+import { AREA_LABELS } from "../domain/catalog/areas";
+import { BUILDING_CATALOG } from "../domain/catalog/buildings";
+import { COSTS } from "../domain/catalog/transit";
 import { resolveNodeAtTile } from "../ui/actions";
 import type { UiState } from "../ui/uiState";
 import type {
@@ -36,6 +35,75 @@ export function formatTime(seconds: number): string {
   const secs = total % 60;
 
   return `T+${pad2(mins)}:${pad2(secs)}`;
+}
+
+function formatSnapshotClock(state: GameState): string {
+  if (state.day === undefined || state.clockMinutes === undefined) {
+    return formatTime(state.time);
+  }
+
+  const hours = Math.floor(state.clockMinutes / 60) % 24;
+  const minutes = state.clockMinutes % 60;
+  return `Day ${state.day + 1} ${pad2(hours)}:${pad2(minutes)}`;
+}
+
+function positionKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+function waitingLineId(entity: Citizen | ActiveTrip): string | undefined {
+  const leg = entity.routePlan?.legs[entity.currentLegIndex];
+  return leg !== undefined && leg.mode !== "walk" ? leg.lineId : undefined;
+}
+
+function platformIndex(state: GameState): Map<string, string> {
+  const index = new Map<string, string>();
+  const nodes = [...state.transit.stops, ...state.transit.stations];
+
+  for (const node of nodes) {
+    const posKey = positionKey(node.position.x, node.position.y);
+    for (const platform of node.platforms) {
+      for (const routeId of platform.routeIds) {
+        index.set(`${posKey}|${routeId}`, platform.id);
+      }
+    }
+  }
+
+  return index;
+}
+
+function selectPlatformOccupancy(
+  state: GameState,
+): Map<string, { count: number; capacity: number }> {
+  const occupancy = new Map<string, { count: number; capacity: number }>();
+  const index = platformIndex(state);
+  const nodes = [...state.transit.stops, ...state.transit.stations];
+
+  for (const node of nodes) {
+    for (const platform of node.platforms) {
+      occupancy.set(platform.id, { count: 0, capacity: platform.capacity });
+    }
+  }
+
+  for (const entity of [...state.citizens, ...(state.activeTrips ?? [])]) {
+    if (entity.status !== "waiting") {
+      continue;
+    }
+    const lineId = waitingLineId(entity);
+    if (lineId === undefined) {
+      continue;
+    }
+    const platformId = index.get(
+      `${positionKey(entity.position.x, entity.position.y)}|${lineId}`,
+    );
+    const entry =
+      platformId === undefined ? undefined : occupancy.get(platformId);
+    if (entry !== undefined) {
+      entry.count += 1;
+    }
+  }
+
+  return occupancy;
 }
 
 export function formatObjective(state: GameState): string {
@@ -247,8 +315,8 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
     topbar: {
       budget: formatBudget(state.budget),
       signalState: state.paused ? "Hold" : "Live",
-      time: formatTime(state.time),
-      population: `${state.citizens.length}`,
+      time: formatSnapshotClock(state),
+      population: `${state.sims?.length ?? state.citizens.length}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
