@@ -1,6 +1,7 @@
 import "./styles.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { createBackend } from "./runtime/backend";
 import { createGameRuntime } from "./runtime/createGameRuntime";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -11,19 +12,25 @@ if (!app) {
 
 const target = app;
 
-function mountApp(error?: string): void {
+async function mountApp(): Promise<void> {
+  const backend = await createBackend();
+  const runtime = await createGameRuntime({ backend });
   mount(App, {
     target,
     props: {
-      runtime: createGameRuntime(),
-      error,
+      runtime,
+      error: null,
     },
   });
 }
 
-try {
-  mountApp();
-} catch (err) {
+mountApp().catch((err: unknown) => {
   target.innerHTML = "";
-  mountApp(err instanceof Error ? err.message : "Bootstrap failed");
-}
+  mount(App, {
+    target,
+    props: {
+      runtime: null,
+      error: err instanceof Error ? err.message : "Bootstrap failed",
+    },
+  });
+});

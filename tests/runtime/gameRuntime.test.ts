@@ -1,29 +1,316 @@
 import { describe, expect, it, vi } from "vitest";
+import type {
+  GameMap,
+  GameState,
+  Point,
+  RoadDirection,
+  Route,
+  Stop,
+} from "../../src/domain/types";
+import type {
+  DispatchResult,
+  GameBackend,
+  GameIntent,
+  RustGameSnapshot,
+} from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import type { RuntimeSnapshot } from "../../src/runtime/types";
+import type {
+  RuntimeController,
+  RuntimeSnapshot,
+} from "../../src/runtime/types";
+import { createInitialGameState } from "../../src/simulation/gameState";
+import { createRustSnapshot } from "../fixtures/rustSnapshot";
+
+type BackendSpy = GameBackend & {
+  intents: GameIntent[];
+  rejectNextDispatch(): void;
+  setSnapshot(next: RustGameSnapshot): void;
+};
+
+function fullRustSnapshot(
+  overrides: Partial<RustGameSnapshot> = {},
+): RustGameSnapshot {
+  const initial = createInitialGameState();
+  return createRustSnapshot({
+    map: initial.map,
+    budget: initial.budget,
+    ...overrides,
+  });
+}
+
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function updateTile(
+  map: GameMap,
+  point: Point,
+  update: (tile: GameMap["tiles"][number]) => GameMap["tiles"][number],
+): GameMap {
+  return {
+    ...map,
+    tiles: map.tiles.map((tile) =>
+      samePoint(tile, point) ? update(tile) : tile,
+    ),
+  };
+}
+
+function roadDirectionForPreset(
+  preset: "twoWay" | "oneWay" | "dualBidirectional",
+): RoadDirection | undefined {
+  return preset === "twoWay" ? undefined : "east";
+}
+
+function createStop(id: string, position: Point): Stop {
+  return {
+    id,
+    kind: "busStop",
+    position,
+    platforms: [
+      {
+        id: `${id}-p1`,
+        label: "A",
+        capacity: 30,
+        routeIds: [],
+      },
+    ],
+  };
+}
+
+function applyIntent(
+  snapshot: RustGameSnapshot,
+  intent: GameIntent,
+): RustGameSnapshot {
+  if (intent.type === "setPaused") {
+    return { ...snapshot, paused: intent.paused };
+  }
+  if (intent.type === "setSpeed") {
+    return { ...snapshot, speed: intent.speed };
+  }
+  if (intent.type === "layRoad") {
+    return {
+      ...snapshot,
+      map: updateTile(snapshot.map, intent.point, (tile) => ({
+        ...tile,
+        kind: "road",
+      })),
+    };
+  }
+  if (intent.type === "cycleRoadDirection") {
+    return {
+      ...snapshot,
+      map: updateTile(snapshot.map, intent.point, (tile) => ({
+        ...tile,
+        oneWay: tile.oneWay === undefined ? "north" : undefined,
+      })),
+    };
+  }
+  if (intent.type === "layRoadLine") {
+    const oneWay = roadDirectionForPreset(intent.preset);
+    return {
+      ...snapshot,
+      map: intent.points.reduce(
+        (map, point) =>
+          updateTile(map, point, (tile) => ({
+            ...tile,
+            kind: "road",
+            oneWay,
+          })),
+        snapshot.map,
+      ),
+    };
+  }
+  if (intent.type === "layTrackLine") {
+    return {
+      ...snapshot,
+      map: intent.points.reduce(
+        (map, point) =>
+          updateTile(map, point, (tile) => ({
+            ...tile,
+            hasTrack: true,
+          })),
+        snapshot.map,
+      ),
+    };
+  }
+  if (intent.type === "removeAtTiles") {
+    return {
+      ...snapshot,
+      map: intent.points.reduce(
+        (map, point) =>
+          updateTile(map, point, (tile) => {
+            const { oneWay: _oneWay, ...rest } = tile;
+            return { ...rest, kind: "empty", hasTrack: false };
+          }),
+        snapshot.map,
+      ),
+    };
+  }
+  if (intent.type === "paintAreaRectangle") {
+    const minX = Math.min(intent.start.x, intent.end.x);
+    const maxX = Math.max(intent.start.x, intent.end.x);
+    const minY = Math.min(intent.start.y, intent.end.y);
+    const maxY = Math.max(intent.start.y, intent.end.y);
+    return {
+      ...snapshot,
+      map: {
+        ...snapshot.map,
+        tiles: snapshot.map.tiles.map((tile) =>
+          tile.x >= minX && tile.x <= maxX && tile.y >= minY && tile.y <= maxY
+            ? { ...tile, area: intent.area }
+            : tile,
+        ),
+      },
+    };
+  }
+  if (intent.type === "addBusStop") {
+    const id = `stop-${(snapshot.transit.stops.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        stops: [...snapshot.transit.stops, createStop(id, intent.point)],
+      },
+    };
+  }
+  if (intent.type === "addBusRoute") {
+    const id = `route-${(snapshot.transit.routes.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    const route: Route = {
+      id,
+      name: `Bus ${snapshot.transit.routes.length + 1}`,
+      color: "#2563eb",
+      stopIds: intent.stopIds,
+      vehicleIds: [],
+      active: true,
+      segments: [],
+      pathBroken: false,
+    };
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: [...snapshot.transit.routes, route],
+      },
+    };
+  }
+  if (intent.type === "renameRoute") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((route) =>
+          route.id === intent.routeId ? { ...route, name: intent.name } : route,
+        ),
+      },
+    };
+  }
+  if (intent.type === "recolorRoute") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((route) =>
+          route.id === intent.routeId
+            ? { ...route, color: intent.color }
+            : route,
+        ),
+      },
+    };
+  }
+  if (intent.type === "setRouteActive") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((route) =>
+          route.id === intent.routeId
+            ? { ...route, active: intent.active }
+            : route,
+        ),
+      },
+    };
+  }
+  if (intent.type === "deleteRoute") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.filter(
+          (route) => route.id !== intent.routeId,
+        ),
+      },
+    };
+  }
+  return snapshot;
+}
+
+function backendSpy(
+  initial: RustGameSnapshot = fullRustSnapshot(),
+): BackendSpy {
+  const intents: GameIntent[] = [];
+  let snapshot = initial;
+  let rejectNext = false;
+
+  return {
+    intents,
+    rejectNextDispatch() {
+      rejectNext = true;
+    },
+    setSnapshot(next) {
+      snapshot = next;
+    },
+    async snapshot() {
+      return snapshot;
+    },
+    async dispatch(intent): Promise<DispatchResult> {
+      intents.push(intent);
+      if (rejectNext) {
+        rejectNext = false;
+        return { snapshot, applied: false, rejection: "rejected by test" };
+      }
+      snapshot = applyIntent(snapshot, intent);
+      return { snapshot, applied: true, rejection: null };
+    },
+    async tick(deltaSeconds): Promise<DispatchResult> {
+      const before = snapshot;
+      snapshot =
+        snapshot.paused || snapshot.speed === 0
+          ? snapshot
+          : {
+              ...snapshot,
+              time: snapshot.time + deltaSeconds * snapshot.speed,
+            };
+      return { snapshot, applied: snapshot !== before, rejection: null };
+    },
+    async reset() {
+      snapshot = fullRustSnapshot();
+      return snapshot;
+    },
+  };
+}
 
 describe("Game Runtime", () => {
-  it("manages game and UI state with shell-friendly selectors", () => {
-    const runtime = createGameRuntime();
+  it("manages game and UI state with shell-friendly selectors", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
-    // Set a tool and unpause
     runtime.setTool("busStop");
-    runtime.togglePause();
-    runtime.tick(1);
+    await runtime.togglePause();
+    await runtime.tick(1);
 
     const snapshot = runtime.getSnapshot();
 
-    // Verify internal state is correctly managed
     expect(snapshot.ui.activeTool).toBe("busStop");
     expect(snapshot.state.paused).toBe(false);
-
-    // Verify shell-friendly selectors
     expect(snapshot.shell.topbar.budget).toBe("$120,000");
     expect(snapshot.shell.brief.title).toBe("Growing Suburb");
   });
 
-  it("publishes state changes to subscribers", () => {
-    const runtime = createGameRuntime();
+  it("publishes state changes to subscribers", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     const snapshots: RuntimeSnapshot[] = [];
 
     const unsubscribe = runtime.subscribe((snapshot) => {
@@ -31,7 +318,7 @@ describe("Game Runtime", () => {
     });
 
     runtime.setTool("busStop");
-    runtime.togglePause();
+    await runtime.togglePause();
 
     expect(snapshots.length).toBeGreaterThan(0);
     expect(snapshots[snapshots.length - 1].ui.activeTool).toBe("busStop");
@@ -39,14 +326,15 @@ describe("Game Runtime", () => {
     unsubscribe();
   });
 
-  it("resets to initial state", () => {
-    const runtime = createGameRuntime();
+  it("resets through the backend and resets UI state", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
 
     runtime.setTool("busRoute");
-    runtime.togglePause();
-    runtime.setSpeed(2);
+    await runtime.togglePause();
+    await runtime.setSpeed(2);
 
-    runtime.reset();
+    await runtime.reset();
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.ui.activeTool).toBe("inspect");
@@ -54,20 +342,15 @@ describe("Game Runtime", () => {
     expect(snapshot.state.speed).toBe(1);
   });
 
-  it("resets transient UI state without changing simulation state", () => {
-    const runtime = createGameRuntime();
+  it("resets transient UI state without changing simulation state", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
-    runtime.togglePause();
-    runtime.setSpeed(4);
-    runtime.tick(1);
+    await runtime.togglePause();
+    await runtime.setSpeed(4);
+    await runtime.tick(1);
     runtime.setOverlay("growth");
     runtime.handleTileClick({ x: 5, y: 5 });
-    runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
     runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
     runtime.setHudCategory("manage");
 
     const beforeReset = runtime.getSnapshot();
@@ -77,8 +360,6 @@ describe("Game Runtime", () => {
     expect(beforeReset.ui.activeTool).toBe("busRoute");
     expect(beforeReset.ui.activeOverlay).toBe("growth");
     expect(beforeReset.ui.selectedId).toBe("5,5");
-    expect(beforeReset.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
-    expect(beforeReset.ui.draftStopPaths).toHaveLength(1);
     expect(beforeReset.ui.activeHudCategory).toBe("manage");
 
     runtime.resetUi();
@@ -90,15 +371,11 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.ui.activeOverlay).toBe(null);
     expect(snapshot.ui.selectedId).toBe(null);
-    expect(snapshot.ui.draftStopIds).toEqual([]);
-    expect(snapshot.ui.draftStationIds).toEqual([]);
-    expect(snapshot.ui.draftStopPaths).toEqual([]);
-    expect(snapshot.ui.draftStationPaths).toEqual([]);
     expect(snapshot.ui.activeHudCategory).toBe("brief");
   });
 
-  it("manages simulation lifecycle", () => {
-    const runtime = createGameRuntime();
+  it("manages simulation lifecycle", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.start();
     expect(runtime.isRunning()).toBe(true);
@@ -107,18 +384,18 @@ describe("Game Runtime", () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
-  it("does not schedule animation frames while paused", () => {
+  it("does not schedule animation frames while paused", async () => {
     const requestAnimationFrame = vi.fn(() => 1);
     const cancelAnimationFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
 
-    const runtime = createGameRuntime();
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.start();
     expect(requestAnimationFrame).not.toHaveBeenCalled();
 
-    runtime.togglePause();
+    await runtime.togglePause();
     expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
 
     runtime.stop();
@@ -127,7 +404,7 @@ describe("Game Runtime", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not fast-forward after resuming from a paused gap", () => {
+  it("does not fast-forward after resuming from a paused gap", async () => {
     const callbacks: Array<(timestamp: number) => void> = [];
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -138,24 +415,26 @@ describe("Game Runtime", () => {
     );
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
-    const runtime = createGameRuntime();
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.start();
-    runtime.togglePause();
+    await runtime.togglePause();
 
     callbacks.shift()?.(1_000);
+    await Promise.resolve();
     expect(runtime.getSnapshot().state.time).toBe(0);
 
-    runtime.togglePause();
-    runtime.togglePause();
+    await runtime.togglePause();
+    await runtime.togglePause();
 
     callbacks.shift()?.(5_000);
+    await Promise.resolve();
     expect(runtime.getSnapshot().state.time).toBe(0);
 
     vi.unstubAllGlobals();
   });
 
-  it("handles tool changes", () => {
-    const runtime = createGameRuntime();
+  it("handles tool changes", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.setTool("metroStation");
     expect(runtime.getSnapshot().ui.activeTool).toBe("metroStation");
@@ -164,8 +443,8 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.activeTool).toBe("inspect");
   });
 
-  it("selects buildings separately from route tools and rotates them", () => {
-    const runtime = createGameRuntime();
+  it("selects buildings separately from route tools and rotates them", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.setBuilding("busTerminal");
     runtime.rotateBuilding();
@@ -180,8 +459,8 @@ describe("Game Runtime", () => {
 
   it.each(["busRoute", "remove", "inspect"] as const)(
     "clears building selection when switching to %s",
-    (tool) => {
-      const runtime = createGameRuntime();
+    async (tool) => {
+      const runtime = await createGameRuntime({ backend: backendSpy() });
 
       runtime.setBuilding("largeHouse");
       runtime.rotateBuilding();
@@ -195,8 +474,8 @@ describe("Game Runtime", () => {
     },
   );
 
-  it("handles overlay changes", () => {
-    const runtime = createGameRuntime();
+  it("handles overlay changes", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.setOverlay("coverage");
     expect(runtime.getSnapshot().ui.activeOverlay).toBe("coverage");
@@ -205,49 +484,70 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.activeOverlay).toBe(null);
   });
 
-  it("handles speed changes", () => {
-    const runtime = createGameRuntime();
+  it("dispatches pause and speed through the Rust backend", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
 
-    runtime.setSpeed(2);
-    expect(runtime.getSnapshot().state.speed).toBe(2);
+    await runtime.togglePause();
+    await runtime.setSpeed(4);
 
-    runtime.setSpeed(4);
+    expect(backend.intents).toContainEqual({
+      type: "setPaused",
+      paused: false,
+    });
+    expect(backend.intents).toContainEqual({ type: "setSpeed", speed: 4 });
+    expect(runtime.getSnapshot().state.paused).toBe(false);
     expect(runtime.getSnapshot().state.speed).toBe(4);
   });
 
-  it("advances simulation time when ticking and unpaused", () => {
-    const runtime = createGameRuntime();
+  it("advances simulation time when ticking and unpaused", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     const beforeTime = runtime.getSnapshot().state.time;
-    runtime.togglePause(); // unpause
-    runtime.tick(1);
+    await runtime.togglePause();
+    await runtime.tick(1);
     const afterTime = runtime.getSnapshot().state.time;
 
     expect(afterTime).toBeGreaterThan(beforeTime);
   });
 
-  it("does not advance time when paused", () => {
-    const runtime = createGameRuntime();
+  it("does not advance time when paused", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     const beforeTime = runtime.getSnapshot().state.time;
-    // starts paused by default
-    runtime.tick(1);
+    await runtime.tick(1);
     const afterTime = runtime.getSnapshot().state.time;
 
     expect(afterTime).toBe(beforeTime);
   });
 
-  it("handles tile clicks", () => {
-    const runtime = createGameRuntime();
+  it("captures backend errors and stops the runtime", async () => {
+    const backend = backendSpy();
+    backend.tick = vi.fn(async () => {
+      throw new Error("backend unavailable");
+    });
+    const runtime = await createGameRuntime({ backend });
 
-    runtime.setTool("inspect");
-    runtime.handleTileClick({ x: 5, y: 5 });
+    runtime.start();
+    const snapshot = await runtime.tick(1);
 
-    expect(runtime.getSnapshot().ui.selectedId).toBe("5,5");
+    expect(snapshot.backendError).toBe("backend unavailable");
+    expect(runtime.isRunning()).toBe(false);
   });
 
-  it("sets HUD category to data", () => {
-    const runtime = createGameRuntime();
+  it("handles inspect tile clicks without backend dispatch", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("inspect");
+    const snapshot = await runtime.handleTileClick({ x: 5, y: 5 });
+
+    expect(snapshot.ui.selectedId).toBe("5,5");
+    expect(backend.intents).toEqual([]);
+  });
+
+  it("sets HUD category to data", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     const before = runtime.getSnapshot().ui.activeHudCategory;
     runtime.setHudCategory("data");
@@ -257,50 +557,60 @@ describe("Game Runtime", () => {
     expect(after).toBe("data");
   });
 
-  it("collapses the drawer when setHudCategory(null) is dispatched", () => {
-    const runtime = createGameRuntime();
+  it("collapses the drawer when setHudCategory(null) is dispatched", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setHudCategory("build");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
     runtime.setHudCategory(null);
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
   });
 
-  it("auto-opens the inspect drawer when a node is clicked, and collapses it on empty tiles", () => {
-    const runtime = createGameRuntime();
-
-    // Place a bus stop at a known tile, then inspect it through the real runtime.
-    runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 7, y: 8 });
+  it("auto-opens the inspect drawer when a node is clicked, and collapses it on empty tiles", async () => {
+    const runtime = await createGameRuntime({
+      backend: backendSpy(
+        fullRustSnapshot({
+          transit: {
+            stops: [createStop("stop-001", { x: 7, y: 8 })],
+            stations: [],
+            routes: [],
+            metroLines: [],
+            vehicles: [],
+          },
+        }),
+      ),
+    });
 
     runtime.setTool("inspect");
-    const onNode = runtime.handleTileClick({ x: 7, y: 8 });
+    const onNode = await runtime.handleTileClick({ x: 7, y: 8 });
 
     expect(onNode.ui.activeHudCategory).toBe("inspect");
     expect(onNode.shell.inspector).not.toBeNull();
     expect(onNode.ui.selectedId).toBe("7,8");
 
-    // Clicking an empty tile while the inspect drawer is open collapses it.
-    const onEmpty = runtime.handleTileClick({ x: 20, y: 20 });
+    const onEmpty = await runtime.handleTileClick({ x: 20, y: 20 });
     expect(onEmpty.ui.activeHudCategory).toBeNull();
   });
 });
 
 describe("runtime assignRouteToPlatform", () => {
-  it("returns unchanged state when the node does not exist", () => {
-    const runtime = createGameRuntime();
-    const before = runtime.getSnapshot();
-    const after = runtime.assignRouteToPlatform(
-      "stop-001",
-      "route-001",
-      "stop-001-p1",
-    );
-    expect(after.state).toBe(before.state); // no such node -> same state reference
+  it("dispatches route platform reassignment through the backend", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    await runtime.assignRouteToPlatform("stop-001", "route-001", "stop-001-p1");
+
+    expect(backend.intents).toContainEqual({
+      type: "assignRouteToPlatform",
+      nodeId: "stop-001",
+      routeId: "route-001",
+      platformId: "stop-001-p1",
+    });
   });
 });
 
 describe("runtime road preset", () => {
-  it("sets the road preset and preserves it across tool switches", () => {
-    const runtime = createGameRuntime();
+  it("sets the road preset and preserves it across tool switches", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setRoadPreset("oneWay");
     expect(runtime.getSnapshot().ui.roadPreset).toBe("oneWay");
     runtime.setTool("track");
@@ -311,29 +621,55 @@ describe("runtime road preset", () => {
 });
 
 describe("route creation and management", () => {
-  function withTwoStops() {
-    const runtime = createGameRuntime();
-    runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
-    runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
-    return runtime;
+  function routeSnapshot(): RustGameSnapshot {
+    return fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-001", { x: 14, y: 7 }),
+          createStop("stop-002", { x: 14, y: 8 }),
+        ],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
   }
 
-  it("finishes a drafted route and clears the draft", () => {
-    const runtime = withTwoStops();
-    expect(runtime.getSnapshot().ui.draftStopIds).toHaveLength(2);
+  async function withTwoStops(backend = backendSpy(routeSnapshot())) {
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    return { runtime, backend };
+  }
 
-    const snapshot = runtime.finishRoute();
+  it("dispatches route finish and clears the draft only after Rust accepts it", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
 
-    expect(snapshot.state.transit.routes).toHaveLength(1);
-    expect(snapshot.ui.draftStopIds).toEqual([]);
+    backend.rejectNextDispatch();
+    await runtime.finishRoute();
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
+
+    await runtime.finishRoute();
+
+    expect(backend.intents).toContainEqual({
+      type: "addBusRoute",
+      stopIds: ["stop-001", "stop-002"],
+    });
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([]);
   });
 
-  it("removes a draft stop and cancels a draft", () => {
-    const runtime = withTwoStops();
+  it("removes a draft stop and cancels a draft", async () => {
+    const { runtime } = await withTwoStops();
     const afterRemove = runtime.removeDraftStop(0);
     expect(afterRemove.ui.draftStopIds).toEqual(["stop-002"]);
     expect(afterRemove.ui.draftStopPaths).toEqual([]);
@@ -343,103 +679,125 @@ describe("route creation and management", () => {
     expect(afterCancel.ui.draftStopPaths).toEqual([]);
   });
 
-  it("renames, recolors, toggles, selects, and deletes a route", () => {
-    const runtime = withTwoStops();
-    runtime.finishRoute();
+  it("renames, recolors, toggles, selects, and deletes a route", async () => {
+    const { runtime } = await withTwoStops();
+    await runtime.finishRoute();
 
     expect(
-      runtime.renameRoute("route-001", "Loop").state.transit.routes[0].name,
+      (await runtime.renameRoute("route-001", "Loop")).state.transit.routes[0]
+        .name,
     ).toBe("Loop");
     expect(
-      runtime.recolorRoute("route-001", "#abcdef").state.transit.routes[0]
-        .color,
+      (await runtime.recolorRoute("route-001", "#abcdef")).state.transit
+        .routes[0].color,
     ).toBe("#abcdef");
     expect(
-      runtime.toggleRouteActive("route-001").state.transit.routes[0].active,
+      (await runtime.toggleRouteActive("route-001")).state.transit.routes[0]
+        .active,
     ).toBe(false);
     expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(
       "route-001",
     );
     expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(null);
-    expect(runtime.deleteRoute("route-001").state.transit.routes).toEqual([]);
+    expect(
+      (await runtime.deleteRoute("route-001")).state.transit.routes,
+    ).toEqual([]);
   });
 
-  it("clears the selected route when switching tools", () => {
-    const runtime = withTwoStops();
-    runtime.finishRoute();
+  it("clears the selected route when switching tools", async () => {
+    const { runtime } = await withTwoStops();
+    await runtime.finishRoute();
     runtime.selectRoute("route-001");
     expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
   });
 
-  it("clears the selected route when it is deleted", () => {
-    const runtime = withTwoStops();
-    runtime.finishRoute();
+  it("clears the selected route when it is deleted", async () => {
+    const { runtime } = await withTwoStops();
+    await runtime.finishRoute();
     runtime.selectRoute("route-001");
-    const snapshot = runtime.deleteRoute("route-001");
+    const snapshot = await runtime.deleteRoute("route-001");
     expect(snapshot.ui.selectedRouteId).toBe(null);
     expect(snapshot.state.transit.routes).toEqual([]);
   });
 });
 
 describe("runtime road drag", () => {
-  function tileKind(
-    runtime: ReturnType<typeof createGameRuntime>,
-    x: number,
-    y: number,
-  ) {
+  function tileKind(runtime: RuntimeController, x: number, y: number) {
     return runtime
       .getSnapshot()
       .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;
   }
 
-  it("builds a road line from startDrag -> move -> commitDrag", () => {
-    const runtime = createGameRuntime();
+  it("commits road drag as one Rust layRoadLine intent", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    await runtime.commitDrag();
+
+    expect(backend.intents).toContainEqual({
+      type: "layRoadLine",
+      points: [
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 3, y: 0 },
+      ],
+      preset: "oneWay",
+    });
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+  });
+
+  it("builds a road line from startDrag -> move -> commitDrag", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 4, y: 0 });
-    const snap = runtime.commitDrag();
+    const snap = await runtime.commitDrag();
     for (const x of [1, 2, 3, 4]) {
       expect(tileKind(runtime, x, 0)).toBe("road");
     }
     expect(snap.ui.drag).toBeNull();
   });
 
-  it("treats a zero-length drag as a tap (cycles an existing road's direction)", () => {
-    const runtime = createGameRuntime();
+  it("treats a zero-length drag as a tap (cycles an existing road's direction)", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 2, y: 0 });
-    runtime.commitDrag();
+    await runtime.commitDrag();
 
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 1, y: 0 });
-    runtime.commitDrag();
+    await runtime.commitDrag();
     expect(
       runtime.getSnapshot().state.map.tiles.find((t) => t.x === 1 && t.y === 0)
         ?.oneWay,
-    ).toBe("north"); // first cycle: undefined -> north
+    ).toBe("north");
   });
 
-  it("bulldozes a line with the remove tool drag", () => {
-    const runtime = createGameRuntime();
+  it("bulldozes a line with the remove tool drag", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 3, y: 0 });
-    runtime.commitDrag();
+    await runtime.commitDrag();
     runtime.setTool("remove");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 3, y: 0 });
-    runtime.commitDrag();
+    await runtime.commitDrag();
     for (const x of [1, 2, 3]) {
       expect(tileKind(runtime, x, 0)).toBe("empty");
     }
   });
 
-  it("cancelDrag clears the drag without building", () => {
-    const runtime = createGameRuntime();
+  it("cancelDrag clears the drag without building", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 4, y: 0 });
@@ -448,56 +806,46 @@ describe("runtime road drag", () => {
     expect(tileKind(runtime, 4, 0)).toBe("empty");
   });
 
-  it("startDrag captures the tool and ignores a non-drag tool", () => {
-    const runtime = createGameRuntime();
+  it("startDrag captures the tool and ignores a non-drag tool", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("inspect");
-    // inspect is not a drag tool, so no gesture opens.
     runtime.startDrag({ x: 1, y: 0 });
     expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
-  it("startDrag on the area tool without a selected area is a no-op", () => {
-    // setTool("area") (vs setArea) leaves selectedArea null; startDrag must
-    // return the unchanged state so handlePointerDown's conditional capture
-    // also skips. A regression here would either open a drag with an undefined
-    // area kind or assert at render time.
-    const runtime = createGameRuntime();
+  it("startDrag on the area tool without a selected area is a no-op", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("area");
 
     const before = runtime.getSnapshot();
     const after = runtime.startDrag({ x: 1, y: 1 });
 
     expect(after.ui.drag).toBeNull();
-    // State and ui references are unchanged (commit short-circuits on no-op).
     expect(after.state).toBe(before.state);
     expect(after.ui).toBe(before.ui);
   });
 
-  it("setDragCurrent ignores an off-map (null) move so the preview holds", () => {
-    const runtime = createGameRuntime();
+  it("setDragCurrent ignores an off-map (null) move so the preview holds", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 4, y: 0 });
-    runtime.setDragCurrent(null); // pointer wanders off-map mid-drag
+    runtime.setDragCurrent(null);
     const gesture = runtime.getSnapshot().ui.drag;
     expect(gesture).not.toBeNull();
-    expect(gesture?.current).toEqual({ x: 4, y: 0 }); // unchanged
+    expect(gesture?.current).toEqual({ x: 4, y: 0 });
   });
 });
 
 describe("runtime area drag", () => {
-  function areaAt(
-    runtime: ReturnType<typeof createGameRuntime>,
-    x: number,
-    y: number,
-  ) {
+  function areaAt(runtime: RuntimeController, x: number, y: number) {
     return runtime
       .getSnapshot()
       .state.map.tiles.find((tile) => tile.x === x && tile.y === y)?.area;
   }
 
-  it("selects an area independently from buildings and tools", () => {
-    const runtime = createGameRuntime();
+  it("selects an area independently from buildings and tools", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
 
     runtime.setArea("residential");
 
@@ -512,13 +860,13 @@ describe("runtime area drag", () => {
     );
   });
 
-  it("paints an area rectangle from startDrag -> move -> commitDrag", () => {
-    const runtime = createGameRuntime();
+  it("paints an area rectangle from startDrag -> move -> commitDrag", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setArea("commercial");
     runtime.startDrag({ x: 1, y: 1 });
     runtime.setDragCurrent({ x: 2, y: 2 });
 
-    const snap = runtime.commitDrag();
+    const snap = await runtime.commitDrag();
 
     expect(areaAt(runtime, 1, 1)).toBe("commercial");
     expect(areaAt(runtime, 2, 1)).toBe("commercial");
@@ -528,18 +876,18 @@ describe("runtime area drag", () => {
     expect(snap.ui.drag).toBeNull();
   });
 
-  it("paints a single tile area drag", () => {
-    const runtime = createGameRuntime();
+  it("paints a single tile area drag", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setArea("office");
     runtime.startDrag({ x: 1, y: 1 });
 
-    runtime.commitDrag();
+    await runtime.commitDrag();
 
     expect(areaAt(runtime, 1, 1)).toBe("office");
   });
 
-  it("clears area selection when a building is selected", () => {
-    const runtime = createGameRuntime();
+  it("clears area selection when a building is selected", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setArea("residential");
     runtime.setBuilding("smallHouse");
 
@@ -548,8 +896,8 @@ describe("runtime area drag", () => {
 });
 
 describe("build drawer auto-hide", () => {
-  it("closes the drawer when a tool, building, or area is selected, but not on preset change", () => {
-    const runtime = createGameRuntime();
+  it("closes the drawer when a tool, building, or area is selected, but not on preset change", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setHudCategory("build");
     runtime.setTool("road");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();

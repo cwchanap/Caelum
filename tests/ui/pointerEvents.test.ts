@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GameMap, Point } from "../../src/domain/types";
+import type {
+  DispatchResult,
+  GameBackend,
+  GameIntent,
+  RustGameSnapshot,
+} from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/canvas";
+import { createInitialGameState } from "../../src/simulation/gameState";
+import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 // jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
 // returns null. The runtime guards all of those, but to exercise the real
@@ -120,9 +130,79 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+function samePoint(left: Point, right: Point): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
+function updateTile(
+  map: GameMap,
+  point: Point,
+  update: (tile: GameMap["tiles"][number]) => GameMap["tiles"][number],
+): GameMap {
+  return {
+    ...map,
+    tiles: map.tiles.map((tile) =>
+      samePoint(tile, point) ? update(tile) : tile,
+    ),
+  };
+}
+
+function applyIntent(
+  snapshot: RustGameSnapshot,
+  intent: GameIntent,
+): RustGameSnapshot {
+  if (intent.type !== "layRoadLine") {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    map: intent.points.reduce(
+      (map, point) =>
+        updateTile(map, point, (tile) => ({
+          ...tile,
+          kind: "road",
+        })),
+      snapshot.map,
+    ),
+  };
+}
+
+function backendSpy(): GameBackend {
+  const initial = createInitialGameState();
+  let snapshot = createRustSnapshot({
+    map: initial.map,
+    budget: initial.budget,
+  });
+
+  return {
+    async snapshot() {
+      return snapshot;
+    },
+    async dispatch(intent): Promise<DispatchResult> {
+      snapshot = applyIntent(snapshot, intent);
+      return { snapshot, applied: true, rejection: null };
+    },
+    async tick(): Promise<DispatchResult> {
+      return { snapshot, applied: false, rejection: null };
+    },
+    async reset() {
+      snapshot = createRustSnapshot({
+        map: initial.map,
+        budget: initial.budget,
+      });
+      return snapshot;
+    },
+  };
+}
+
+async function flushRuntime(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 /** Mount the runtime canvas against the real board size and return it. */
-function mount() {
-  const runtime = createGameRuntime();
+async function mount() {
+  const runtime = await createGameRuntime({ backend: backendSpy() });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;
   const boardHeight = map.height * tileSize;
@@ -164,25 +244,22 @@ function dispatch(canvas: HTMLCanvasElement, type: string, init: object) {
   canvas.dispatchEvent(new FakePointerEvent(type, init));
 }
 
-function tileKind(
-  runtime: ReturnType<typeof createGameRuntime>,
-  x: number,
-  y: number,
-) {
+function tileKind(runtime: RuntimeController, x: number, y: number) {
   return runtime
     .getSnapshot()
     .state.map.tiles.find((t) => t.x === x && t.y === y)?.kind;
 }
 
 describe("runtime canvas pointer wiring", () => {
-  it("builds a road line from a real pointerdown -> move -> pointerup", () => {
-    const { runtime, canvas } = mount();
+  it("builds a road line from a real pointerdown -> move -> pointerup", async () => {
+    const { runtime, canvas } = await mount();
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
 
     dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
     dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
     dispatch(canvas, "pointerup", center({ x: 4, y: 0 }));
+    await flushRuntime();
 
     // The release tile snaps the final hover, so the line covers 1..4 (not 1..3).
     for (const x of [1, 2, 3, 4]) {
@@ -191,11 +268,11 @@ describe("runtime canvas pointer wiring", () => {
     expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
-  it("requests pointer capture on drag start so an edge release still commits", () => {
+  it("requests pointer capture on drag start so an edge release still commits", async () => {
     const setCapture = Element.prototype.setPointerCapture as unknown as {
       mock: { calls: number[][] };
     };
-    const { runtime, canvas } = mount();
+    const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", {
@@ -208,10 +285,11 @@ describe("runtime canvas pointer wiring", () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
     dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), pointerId: 7 });
+    await flushRuntime();
     expect(releaseCapture.mock.calls).toContainEqual([7]);
   });
 
-  it("does not capture the pointer when startDrag is a no-op", () => {
+  it("does not capture the pointer when startDrag is a no-op", async () => {
     // Guards the conditional-capture branch in handlePointerDown: a regression
     // to unconditional setPointerCapture would capture a pointer with no drag
     // to commit, leaking capture state across tool switches. The trigger is
@@ -220,7 +298,7 @@ describe("runtime canvas pointer wiring", () => {
     const setCapture = Element.prototype.setPointerCapture as unknown as {
       mock: { calls: number[][] };
     };
-    const { runtime, canvas } = mount();
+    const { runtime, canvas } = await mount();
     runtime.setTool("area");
 
     expect(runtime.getSnapshot().ui.selectedArea).toBeNull();
@@ -234,8 +312,8 @@ describe("runtime canvas pointer wiring", () => {
     expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
-  it("ignores a non-primary (right) button press so no drag starts", () => {
-    const { runtime, canvas } = mount();
+  it("ignores a non-primary (right) button press so no drag starts", async () => {
+    const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), button: 2 });
@@ -246,8 +324,8 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 3, 0)).toBe("empty");
   });
 
-  it("does not commit on a non-primary button release mid-drag", () => {
-    const { runtime, canvas } = mount();
+  it("does not commit on a non-primary button release mid-drag", async () => {
+    const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
@@ -260,13 +338,14 @@ describe("runtime canvas pointer wiring", () => {
 
     // The primary release then commits normally.
     dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
+    await flushRuntime();
     expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
-  it("tears the drag down on pointercancel and releases capture", () => {
+  it("tears the drag down on pointercancel and releases capture", async () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
-    const { runtime, canvas } = mount();
+    const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
     dispatch(canvas, "pointerdown", {
