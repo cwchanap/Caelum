@@ -1,13 +1,10 @@
 import { expect, test } from "@playwright/test";
-import {
-  clickMapTile,
-  dragMapTiles,
-  openHudCategory,
-} from "./helpers";
+import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
 test("create, manage, and delete a bus route", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
+  const topbar = page.getByTestId("topbar");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
@@ -39,6 +36,13 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("routes-panel")).toBeVisible();
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect(
+    topbar.locator(".readout", { hasText: "Avg Wait" }),
+  ).toBeVisible();
+  await expect(
+    topbar.locator(".readout", { hasText: "Unserved" }),
+  ).toBeVisible();
+  await expect(topbar.locator(".readout", { hasText: "Late" })).toBeVisible();
 
   // Toggle inactive, then delete (two clicks for confirm).
   await page.getByTestId("route-toggle-route-001").click();

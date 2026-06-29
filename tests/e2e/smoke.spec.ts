@@ -1,9 +1,5 @@
 import { expect, test } from "@playwright/test";
-import {
-  clickMapTile,
-  dragMapTiles,
-  openHudCategory,
-} from "./helpers";
+import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
   page,
@@ -12,11 +8,15 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
+  const clockReadout = topbar.locator(".readout", {
+    hasText: "Clock",
+  });
   const populationReadout = topbar.locator(".readout", {
     hasText: "Population",
   });
   await expect(topbar).toBeVisible();
   await expect(topbar.getByText("$120,000")).toBeVisible();
+  await expect(clockReadout.getByText("Day 1 00:00")).toBeVisible();
   await expect(populationReadout.getByText("0")).toBeVisible();
   await expect(page.getByText("Growing Suburb")).toBeVisible();
 
@@ -53,4 +53,7 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await page.getByRole("button", { name: "Bus Terminal" }).click();
   await page.keyboard.press("r");
   await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
+
+  await page.getByRole("button", { name: "Resume" }).click();
+  await expect(clockReadout.locator(".readout-value")).toHaveText(/Day 1/);
 });
