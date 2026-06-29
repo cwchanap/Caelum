@@ -7,7 +7,8 @@ const scenario: Scenario = {
     {
       id: "intro",
       triggerTime: 0,
-      message: "First residents arrive — build destinations so they can commute.",
+      message:
+        "First residents arrive — build destinations so they can commute.",
       applied: false,
       tiles: [],
     },

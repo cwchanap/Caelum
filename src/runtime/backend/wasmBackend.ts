@@ -54,7 +54,9 @@ export async function createWasmBackend(): Promise<GameBackend> {
       return normalizeDispatchResult(engine.dispatch(intent) as DispatchResult);
     },
     async tick(deltaSeconds: number) {
-      return normalizeDispatchResult(engine.tick(deltaSeconds) as DispatchResult);
+      return normalizeDispatchResult(
+        engine.tick(deltaSeconds) as DispatchResult,
+      );
     },
     async reset() {
       return engine.reset() as RustGameSnapshot;

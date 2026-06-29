@@ -67,7 +67,12 @@ export type GameIntent =
   | { type: "renameRoute"; routeId: string; name: string }
   | { type: "recolorRoute"; routeId: string; color: string }
   | { type: "deleteRoute"; routeId: string }
-  | { type: "assignRouteToPlatform"; nodeId: string; routeId: string; platformId: string }
+  | {
+      type: "assignRouteToPlatform";
+      nodeId: string;
+      routeId: string;
+      platformId: string;
+    }
   | {
       type: "paintAreaRectangle";
       area: AreaKind;
