@@ -27,6 +27,10 @@ type BackendSpy = GameBackend & {
   setSnapshot(next: RustGameSnapshot): void;
 };
 
+type DeferredDispatchBackend = BackendSpy & {
+  resolveNext(): Promise<void>;
+};
+
 function fullRustSnapshot(
   overrides: Partial<RustGameSnapshot> = {},
 ): RustGameSnapshot {
@@ -175,6 +179,23 @@ function applyIntent(
       },
     };
   }
+  if (intent.type === "placeBuilding") {
+    return {
+      ...snapshot,
+      buildings: [
+        ...snapshot.buildings,
+        {
+          id: `building-${(snapshot.buildings.length + 1)
+            .toString()
+            .padStart(3, "0")}`,
+          type: intent.buildingType,
+          origin: intent.origin,
+          rotation: intent.rotation,
+          occupiedTiles: [intent.origin],
+        },
+      ],
+    };
+  }
   if (intent.type === "addBusRoute") {
     const id = `route-${(snapshot.transit.routes.length + 1)
       .toString()
@@ -246,6 +267,63 @@ function applyIntent(
     };
   }
   return snapshot;
+}
+
+function deferredDispatchBackend(
+  initial: RustGameSnapshot = fullRustSnapshot(),
+): DeferredDispatchBackend {
+  const intents: GameIntent[] = [];
+  const pending: Array<() => void> = [];
+  let snapshot = initial;
+  let rejectNext = false;
+
+  return {
+    intents,
+    rejectNextDispatch() {
+      rejectNext = true;
+    },
+    setSnapshot(next) {
+      snapshot = next;
+    },
+    async snapshot() {
+      return snapshot;
+    },
+    async dispatch(intent): Promise<DispatchResult> {
+      intents.push(intent);
+      await new Promise<void>((resolve) => {
+        pending.push(resolve);
+      });
+      if (rejectNext) {
+        rejectNext = false;
+        return { snapshot, applied: false, rejection: "rejected by test" };
+      }
+      snapshot = applyIntent(snapshot, intent);
+      return { snapshot, applied: true, rejection: null };
+    },
+    async tick(deltaSeconds): Promise<DispatchResult> {
+      const before = snapshot;
+      snapshot =
+        snapshot.paused || snapshot.speed === 0
+          ? snapshot
+          : {
+              ...snapshot,
+              time: snapshot.time + deltaSeconds * snapshot.speed,
+            };
+      return { snapshot, applied: snapshot !== before, rejection: null };
+    },
+    async reset() {
+      snapshot = fullRustSnapshot();
+      return snapshot;
+    },
+    async resolveNext() {
+      const resolve = pending.shift();
+      if (resolve === undefined) {
+        throw new Error("No pending dispatch");
+      }
+      resolve();
+      await Promise.resolve();
+    },
+  };
 }
 
 function backendSpy(
@@ -457,6 +535,27 @@ describe("Game Runtime", () => {
     expect(snapshot.shell.brief.activeTool).toBe("BUS TERMINAL 180");
   });
 
+  it("dispatches selected building placement through the backend on tile click", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setBuilding("smallHouse");
+    runtime.rotateBuilding();
+    const snapshot = await runtime.handleTileClick({ x: 2, y: 3 });
+
+    expect(backend.intents).toContainEqual({
+      type: "placeBuilding",
+      buildingType: "smallHouse",
+      origin: { x: 2, y: 3 },
+      rotation: 90,
+    });
+    expect(snapshot.state.buildings[0]).toMatchObject({
+      type: "smallHouse",
+      origin: { x: 2, y: 3 },
+      rotation: 90,
+    });
+  });
+
   it.each(["busRoute", "remove", "inspect"] as const)(
     "clears building selection when switching to %s",
     async (tool) => {
@@ -498,6 +597,23 @@ describe("Game Runtime", () => {
     expect(backend.intents).toContainEqual({ type: "setSpeed", speed: 4 });
     expect(runtime.getSnapshot().state.paused).toBe(false);
     expect(runtime.getSnapshot().state.speed).toBe(4);
+  });
+
+  it("derives rapid pause toggles from the latest queued state", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    const first = runtime.togglePause();
+    const second = runtime.togglePause();
+    await Promise.all([first, second]);
+
+    expect(
+      backend.intents.filter((intent) => intent.type === "setPaused"),
+    ).toEqual([
+      { type: "setPaused", paused: false },
+      { type: "setPaused", paused: true },
+    ]);
+    expect(runtime.getSnapshot().state.paused).toBe(true);
   });
 
   it("advances simulation time when ticking and unpaused", async () => {
@@ -636,6 +752,32 @@ describe("route creation and management", () => {
     });
   }
 
+  function routeSnapshotWithRoute(active = true): RustGameSnapshot {
+    return fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-001", { x: 14, y: 7 }),
+          createStop("stop-002", { x: 14, y: 8 }),
+        ],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#2563eb",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: [],
+            active,
+            segments: [],
+            pathBroken: false,
+          },
+        ],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+  }
+
   async function withTwoStops(backend = backendSpy(routeSnapshot())) {
     const runtime = await createGameRuntime({ backend });
     runtime.setTool("busRoute");
@@ -666,6 +808,30 @@ describe("route creation and management", () => {
       stopIds: ["stop-001", "stop-002"],
     });
     expect(runtime.getSnapshot().ui.draftStopIds).toEqual([]);
+  });
+
+  it("does not let a slow route finish clear a newer draft", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    const firstFinish = runtime.finishRoute();
+    await Promise.resolve();
+
+    runtime.cancelRoute();
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
+
+    await backend.resolveNext();
+    await firstFinish;
+
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
   });
 
   it("removes a draft stop and cancels a draft", async () => {
@@ -702,6 +868,23 @@ describe("route creation and management", () => {
     expect(
       (await runtime.deleteRoute("route-001")).state.transit.routes,
     ).toEqual([]);
+  });
+
+  it("derives rapid route active toggles from the latest queued state", async () => {
+    const backend = backendSpy(routeSnapshotWithRoute(true));
+    const runtime = await createGameRuntime({ backend });
+
+    const first = runtime.toggleRouteActive("route-001");
+    const second = runtime.toggleRouteActive("route-001");
+    await Promise.all([first, second]);
+
+    expect(
+      backend.intents.filter((intent) => intent.type === "setRouteActive"),
+    ).toEqual([
+      { type: "setRouteActive", routeId: "route-001", active: false },
+      { type: "setRouteActive", routeId: "route-001", active: true },
+    ]);
+    expect(runtime.getSnapshot().state.transit.routes[0].active).toBe(true);
   });
 
   it("clears the selected route when switching tools", async () => {
@@ -748,6 +931,29 @@ describe("runtime road drag", () => {
       preset: "oneWay",
     });
     expect(runtime.getSnapshot().ui.drag).toBeNull();
+  });
+
+  it("does not let a slow drag completion clear a newer drag", async () => {
+    const backend = deferredDispatchBackend();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("road");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    const firstCommit = runtime.commitDrag();
+
+    runtime.startDrag({ x: 5, y: 0 });
+    runtime.setDragCurrent({ x: 7, y: 0 });
+
+    await Promise.resolve();
+    await backend.resolveNext();
+    await firstCommit;
+
+    expect(runtime.getSnapshot().ui.drag).toEqual({
+      tool: "road",
+      start: { x: 5, y: 0 },
+      current: { x: 7, y: 0 },
+    });
   });
 
   it("builds a road line from startDrag -> move -> commitDrag", async () => {

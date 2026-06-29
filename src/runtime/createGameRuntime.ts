@@ -432,6 +432,24 @@ export async function createGameRuntime({
       return commit(normalizeRustSnapshot(result.snapshot), resolvedUi);
     });
 
+  const enqueueComputedDispatch = (
+    getIntent: () => GameIntent | null,
+    nextUi?: UiState | ((applied: boolean, currentUi: UiState) => UiState),
+  ): Promise<RuntimeSnapshot> =>
+    queueBackend(async () => {
+      const intent = getIntent();
+      if (intent === null) {
+        return commit(state, ui);
+      }
+      const result = await backend.dispatch(intent);
+      backendError = null;
+      const resolvedUi =
+        typeof nextUi === "function"
+          ? nextUi(result.applied, ui)
+          : (nextUi ?? ui);
+      return commit(normalizeRustSnapshot(result.snapshot), resolvedUi);
+    });
+
   const enqueueTick = (deltaSeconds: number): Promise<RuntimeSnapshot> =>
     queueBackend(async () => {
       const result = await backend.tick(deltaSeconds);
@@ -470,6 +488,13 @@ export async function createGameRuntime({
     }
     return null;
   };
+
+  const clearSubmittedDrag =
+    (submittedDrag: UiState["drag"]) =>
+    (_applied: boolean, currentUi: UiState): UiState =>
+      currentUi.drag === submittedDrag
+        ? { ...currentUi, drag: null }
+        : currentUi;
 
   const api: RuntimeController = {
     getSnapshot,
@@ -567,7 +592,7 @@ export async function createGameRuntime({
             start: gesture.start,
             end: gesture.current,
           },
-          (_applied, currentUi) => ({ ...currentUi, drag: null }),
+          clearSubmittedDrag(gesture),
         );
       }
       const line = axisLockedLine(gesture.start, gesture.current);
@@ -575,26 +600,23 @@ export async function createGameRuntime({
         const intent = intentForToolClick(line[0]);
         return intent === null
           ? commit(state, { ...ui, drag: null })
-          : enqueueDispatch(intent, (_applied, currentUi) => ({
-              ...currentUi,
-              drag: null,
-            }));
+          : enqueueDispatch(intent, clearSubmittedDrag(gesture));
       }
       if (gesture.tool === "remove") {
         return enqueueDispatch(
           { type: "removeAtTiles", points: line },
-          (_applied, currentUi) => ({ ...currentUi, drag: null }),
+          clearSubmittedDrag(gesture),
         );
       }
       if (gesture.tool === "track") {
         return enqueueDispatch(
           { type: "layTrackLine", points: line },
-          (_applied, currentUi) => ({ ...currentUi, drag: null }),
+          clearSubmittedDrag(gesture),
         );
       }
       return enqueueDispatch(
         { type: "layRoadLine", points: line, preset: ui.roadPreset },
-        (_applied, currentUi) => ({ ...currentUi, drag: null }),
+        clearSubmittedDrag(gesture),
       );
     },
     rotateBuilding() {
@@ -612,7 +634,10 @@ export async function createGameRuntime({
       );
     },
     togglePause() {
-      return enqueueDispatch({ type: "setPaused", paused: !state.paused });
+      return enqueueComputedDispatch(() => ({
+        type: "setPaused",
+        paused: !state.paused,
+      }));
     },
     setSpeed(speed) {
       return enqueueDispatch({ type: "setSpeed", speed });
@@ -627,7 +652,7 @@ export async function createGameRuntime({
     },
     handleTileClick(point) {
       if (
-        ui.activeTool === "inspect" ||
+        (ui.activeTool === "inspect" && ui.selectedBuilding === null) ||
         ui.activeTool === "busRoute" ||
         ui.activeTool === "metroLine"
       ) {
@@ -651,19 +676,27 @@ export async function createGameRuntime({
     },
     finishRoute() {
       if (ui.activeTool === "busRoute") {
+        const submittedStopIds = ui.draftStopIds;
+        const submittedStopPaths = ui.draftStopPaths;
         return enqueueDispatch(
-          { type: "addBusRoute", stopIds: ui.draftStopIds },
+          { type: "addBusRoute", stopIds: submittedStopIds },
           (applied, currentUi) =>
-            applied
+            applied &&
+            currentUi.draftStopIds === submittedStopIds &&
+            currentUi.draftStopPaths === submittedStopPaths
               ? { ...currentUi, draftStopIds: [], draftStopPaths: [] }
               : currentUi,
         );
       }
       if (ui.activeTool === "metroLine") {
+        const submittedStationIds = ui.draftStationIds;
+        const submittedStationPaths = ui.draftStationPaths;
         return enqueueDispatch(
-          { type: "addMetroLine", stationIds: ui.draftStationIds },
+          { type: "addMetroLine", stationIds: submittedStationIds },
           (applied, currentUi) =>
-            applied
+            applied &&
+            currentUi.draftStationIds === submittedStationIds &&
+            currentUi.draftStationPaths === submittedStationPaths
               ? { ...currentUi, draftStationIds: [], draftStationPaths: [] }
               : currentUi,
         );
@@ -686,10 +719,17 @@ export async function createGameRuntime({
       if (route === undefined) {
         return commit(state, ui);
       }
-      return enqueueDispatch({
-        type: "setRouteActive",
-        routeId,
-        active: !route.active,
+      return enqueueComputedDispatch(() => {
+        const queuedRoute =
+          state.transit.routes.find((r) => r.id === routeId) ??
+          state.transit.metroLines.find((l) => l.id === routeId);
+        return queuedRoute === undefined
+          ? null
+          : {
+              type: "setRouteActive",
+              routeId,
+              active: !queuedRoute.active,
+            };
       });
     },
     deleteRoute(routeId) {
