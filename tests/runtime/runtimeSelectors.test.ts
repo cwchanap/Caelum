@@ -4,7 +4,9 @@ import {
   addBusStop,
   addMetroLine,
   addMetroStation,
+  COSTS as SIMULATION_COSTS,
 } from "../../src/simulation/transit";
+import { COSTS } from "../../src/domain/catalog/transit";
 import { createInitialGameState } from "../../src/simulation/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
@@ -235,6 +237,11 @@ describe("route selectors", () => {
 });
 
 describe("ShellHudState", () => {
+  it("exposes bus terminal cost from the shared transit catalog", () => {
+    expect(COSTS.busTerminal).toBe(12_000);
+    expect(SIMULATION_COSTS.busTerminal).toBe(12_000);
+  });
+
   it("formats Rust snapshot clock and population from sims", () => {
     const state = normalizeRustSnapshot(
       createRustSnapshot({
