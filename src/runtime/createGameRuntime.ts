@@ -1,24 +1,15 @@
 import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
-import { paintAreaRectangle } from "../simulation/areas";
-import { createInitialGameState } from "../simulation/gameState";
-import { tickSimulation } from "../simulation/simulation";
-import {
-  assignRouteToPlatform as applyAssignRouteToPlatform,
-  deleteRoute as applyDeleteRoute,
-  renameRoute as applyRenameRoute,
-  setRouteActive as applySetRouteActive,
-  setRouteColor as applySetRouteColor,
-} from "../simulation/transit";
 import {
   cancelDraftRoute,
-  finishDraftRoute,
   handleTileClick as applyTileClick,
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
-import { applyDragGesture, axisLockedLine } from "../ui/roadDrag";
-import { createUiState } from "../ui/uiState";
+import { axisLockedLine } from "../ui/roadDrag";
+import { createUiState, type UiState } from "../ui/uiState";
+import type { GameBackend, GameIntent } from "./backend";
 import { selectShellState } from "./runtimeSelectors";
+import { normalizeRustSnapshot } from "./snapshotView";
 import type {
   RuntimeController,
   RuntimeListener,
@@ -32,6 +23,10 @@ function samePoint(left: Point | null, right: Point | null): boolean {
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
 
 const rotations = [0, 90, 180, 270] as const;
+
+interface CreateGameRuntimeOptions {
+  backend: GameBackend;
+}
 
 function nextToolUiState(activeTool: Tool, current = createUiState()) {
   return {
@@ -96,9 +91,13 @@ function nextBuildingUiState(
   };
 }
 
-export function createGameRuntime(): RuntimeController {
-  let state = createInitialGameState();
+export async function createGameRuntime({
+  backend,
+}: CreateGameRuntimeOptions): Promise<RuntimeController> {
+  let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
+  let backendError: string | null = null;
+  let gameplayQueue: Promise<void> = Promise.resolve();
   let running = false;
   let animationFrameId: number | null = null;
   let lastFrameTime: number | null = null;
@@ -111,6 +110,7 @@ export function createGameRuntime(): RuntimeController {
     state,
     ui,
     shell: selectShellState(state, ui),
+    backendError,
   });
 
   const canAnimate = (): boolean =>
@@ -195,12 +195,11 @@ export function createGameRuntime(): RuntimeController {
     const deltaSeconds = Math.max(0, (timestamp - previousTimestamp) / 1_000);
 
     if (deltaSeconds > 0) {
-      commit(tickSimulation(state, deltaSeconds), ui);
+      void api.tick(deltaSeconds);
     } else {
       render();
+      syncAnimationLoop();
     }
-
-    syncAnimationLoop();
   };
 
   const start = (): void => {
@@ -402,6 +401,76 @@ export function createGameRuntime(): RuntimeController {
     };
   };
 
+  const failBackend = (error: unknown): RuntimeSnapshot => {
+    backendError = error instanceof Error ? error.message : String(error);
+    stop();
+    return publish();
+  };
+
+  const queueBackend = (
+    operation: () => Promise<RuntimeSnapshot>,
+  ): Promise<RuntimeSnapshot> => {
+    const run = gameplayQueue.then(operation);
+    gameplayQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.catch(failBackend);
+  };
+
+  const enqueueDispatch = (
+    intent: GameIntent,
+    nextUi?: UiState | ((applied: boolean, currentUi: UiState) => UiState),
+  ): Promise<RuntimeSnapshot> =>
+    queueBackend(async () => {
+      const result = await backend.dispatch(intent);
+      backendError = null;
+      const resolvedUi =
+        typeof nextUi === "function"
+          ? nextUi(result.applied, ui)
+          : (nextUi ?? ui);
+      return commit(normalizeRustSnapshot(result.snapshot), resolvedUi);
+    });
+
+  const enqueueTick = (deltaSeconds: number): Promise<RuntimeSnapshot> =>
+    queueBackend(async () => {
+      const result = await backend.tick(deltaSeconds);
+      backendError = null;
+      return commit(normalizeRustSnapshot(result.snapshot), ui);
+    });
+
+  const intentForToolClick = (point: Point): GameIntent | null => {
+    if (ui.selectedBuilding !== null) {
+      return {
+        type: "placeBuilding",
+        buildingType: ui.selectedBuilding,
+        origin: point,
+        rotation: ui.buildingRotation,
+      };
+    }
+    if (ui.activeTool === "busStop") {
+      return { type: "addBusStop", point };
+    }
+    if (ui.activeTool === "metroStation") {
+      return { type: "addMetroStation", point };
+    }
+    if (ui.activeTool === "track") {
+      return { type: "layTrack", point };
+    }
+    if (ui.activeTool === "remove") {
+      return { type: "removeAtTile", point };
+    }
+    if (ui.activeTool === "road") {
+      const tile = state.map.tiles.find(
+        (candidate) => candidate.x === point.x && candidate.y === point.y,
+      );
+      return tile?.kind === "road"
+        ? { type: "cycleRoadDirection", point }
+        : { type: "layRoad", point };
+    }
+    return null;
+  };
+
   const api: RuntimeController = {
     getSnapshot,
     subscribe(listener) {
@@ -417,12 +486,16 @@ export function createGameRuntime(): RuntimeController {
       return running;
     },
     tick(deltaSeconds) {
-      return commit(tickSimulation(state, deltaSeconds), ui);
+      return enqueueTick(deltaSeconds);
     },
     reset() {
-      state = createInitialGameState();
-      ui = createUiState();
-      return publish();
+      return queueBackend(async () => {
+        const snapshot = await backend.reset();
+        backendError = null;
+        state = normalizeRustSnapshot(snapshot);
+        ui = createUiState();
+        return publish();
+      });
     },
     resetUi() {
       return commit(state, createUiState());
@@ -487,39 +560,42 @@ export function createGameRuntime(): RuntimeController {
         return commit(state, ui);
       }
       if (gesture.tool === "area") {
-        return commit(
-          paintAreaRectangle(
-            state,
-            gesture.area,
-            gesture.start,
-            gesture.current,
-          ),
-          { ...ui, drag: null },
+        return enqueueDispatch(
+          {
+            type: "paintAreaRectangle",
+            area: gesture.area,
+            start: gesture.start,
+            end: gesture.current,
+          },
+          (_applied, currentUi) => ({ ...currentUi, drag: null }),
         );
       }
       const line = axisLockedLine(gesture.start, gesture.current);
-      // A tap (single tile) reuses the legacy click path so road cycling and
-      // the full remove (buildings/nodes/routes + UI cleanup) are preserved.
       if (line.length <= 1) {
-        const result = applyTileClick(state, ui, line[0]);
-        return commit(result.state, { ...result.ui, drag: null });
+        const intent = intentForToolClick(line[0]);
+        return intent === null
+          ? commit(state, { ...ui, drag: null })
+          : enqueueDispatch(intent, (_applied, currentUi) => ({
+              ...currentUi,
+              drag: null,
+            }));
       }
-      // A remove drag deletes every tile via the same full per-tile removal.
       if (gesture.tool === "remove") {
-        let nextState = state;
-        let nextUi = ui;
-        for (const point of line) {
-          const result = applyTileClick(nextState, nextUi, point);
-          nextState = result.state;
-          nextUi = result.ui;
-        }
-        return commit(nextState, { ...nextUi, drag: null });
+        return enqueueDispatch(
+          { type: "removeAtTiles", points: line },
+          (_applied, currentUi) => ({ ...currentUi, drag: null }),
+        );
       }
-      // A road/track build drag uses the preset-aware line painter.
-      return commit(applyDragGesture(state, ui, line), {
-        ...ui,
-        drag: null,
-      });
+      if (gesture.tool === "track") {
+        return enqueueDispatch(
+          { type: "layTrackLine", points: line },
+          (_applied, currentUi) => ({ ...currentUi, drag: null }),
+        );
+      }
+      return enqueueDispatch(
+        { type: "layRoadLine", points: line, preset: ui.roadPreset },
+        (_applied, currentUi) => ({ ...currentUi, drag: null }),
+      );
     },
     rotateBuilding() {
       const currentIndex = rotations.indexOf(ui.buildingRotation);
@@ -536,10 +612,10 @@ export function createGameRuntime(): RuntimeController {
       );
     },
     togglePause() {
-      return commit({ ...state, paused: !state.paused }, ui);
+      return enqueueDispatch({ type: "setPaused", paused: !state.paused });
     },
     setSpeed(speed) {
-      return commit(speed === state.speed ? state : { ...state, speed }, ui);
+      return enqueueDispatch({ type: "setSpeed", speed });
     },
     setHudCategory(category) {
       return commit(
@@ -550,30 +626,58 @@ export function createGameRuntime(): RuntimeController {
       );
     },
     handleTileClick(point) {
-      const result = applyTileClick(state, ui, point);
-      return commit(result.state, result.ui);
+      if (
+        ui.activeTool === "inspect" ||
+        ui.activeTool === "busRoute" ||
+        ui.activeTool === "metroLine"
+      ) {
+        const result = applyTileClick(state, ui, point);
+        return commit(state, result.ui);
+      }
+
+      const intent = intentForToolClick(point);
+      return intent === null ? commit(state, ui) : enqueueDispatch(intent);
     },
     assignRouteToPlatform(nodeId, routeId, platformId) {
-      return commit(
-        applyAssignRouteToPlatform(state, nodeId, routeId, platformId),
-        ui,
-      );
+      return enqueueDispatch({
+        type: "assignRouteToPlatform",
+        nodeId,
+        routeId,
+        platformId,
+      });
     },
     removeDraftStop(index) {
       return commit(state, applyRemoveDraftNode(state, ui, index));
     },
     finishRoute() {
-      const result = finishDraftRoute(state, ui);
-      return commit(result.state, result.ui);
+      if (ui.activeTool === "busRoute") {
+        return enqueueDispatch(
+          { type: "addBusRoute", stopIds: ui.draftStopIds },
+          (applied, currentUi) =>
+            applied
+              ? { ...currentUi, draftStopIds: [], draftStopPaths: [] }
+              : currentUi,
+        );
+      }
+      if (ui.activeTool === "metroLine") {
+        return enqueueDispatch(
+          { type: "addMetroLine", stationIds: ui.draftStationIds },
+          (applied, currentUi) =>
+            applied
+              ? { ...currentUi, draftStationIds: [], draftStationPaths: [] }
+              : currentUi,
+        );
+      }
+      return commit(state, ui);
     },
     cancelRoute() {
       return commit(state, cancelDraftRoute(ui));
     },
     renameRoute(routeId, name) {
-      return commit(applyRenameRoute(state, routeId, name), ui);
+      return enqueueDispatch({ type: "renameRoute", routeId, name });
     },
     recolorRoute(routeId, color) {
-      return commit(applySetRouteColor(state, routeId, color), ui);
+      return enqueueDispatch({ type: "recolorRoute", routeId, color });
     },
     toggleRouteActive(routeId) {
       const route =
@@ -582,12 +686,20 @@ export function createGameRuntime(): RuntimeController {
       if (route === undefined) {
         return commit(state, ui);
       }
-      return commit(applySetRouteActive(state, routeId, !route.active), ui);
+      return enqueueDispatch({
+        type: "setRouteActive",
+        routeId,
+        active: !route.active,
+      });
     },
     deleteRoute(routeId) {
-      const nextUi =
-        ui.selectedRouteId === routeId ? { ...ui, selectedRouteId: null } : ui;
-      return commit(applyDeleteRoute(state, routeId), nextUi);
+      return enqueueDispatch(
+        { type: "deleteRoute", routeId },
+        (_applied, currentUi) =>
+          currentUi.selectedRouteId === routeId
+            ? { ...currentUi, selectedRouteId: null }
+            : currentUi,
+      );
     },
     selectRoute(routeId) {
       const nextId = ui.selectedRouteId === routeId ? null : routeId;

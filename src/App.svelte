@@ -11,11 +11,15 @@
     RoadPreset,
     Tool,
   } from "./domain/types";
-  import type { RuntimeController, RuntimeSnapshot } from "./runtime/types";
+  import type {
+    RuntimeCommandResult,
+    RuntimeController,
+    RuntimeSnapshot,
+  } from "./runtime/types";
   import type { HudCategory } from "./ui/uiState";
 
   interface Props {
-    runtime: RuntimeController;
+    runtime: RuntimeController | null;
     error?: string | null;
   }
 
@@ -25,42 +29,74 @@
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
+    if (nextSnapshot.backendError !== null) {
+      shellError = nextSnapshot.backendError;
+    }
+  }
+
+  async function applyRuntimeResult(
+    result: RuntimeCommandResult,
+  ): Promise<void> {
+    try {
+      setSnapshot(await result);
+    } catch (err) {
+      shellError =
+        err instanceof Error ? err.message : "Runtime command failed";
+    }
   }
 
   function handleSetHudCategory(category: HudCategory | null): void {
-    setSnapshot(runtime.setHudCategory(category));
+    if (runtime !== null) {
+      setSnapshot(runtime.setHudCategory(category));
+    }
   }
 
   function handleTogglePause(): void {
-    setSnapshot(runtime.togglePause());
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.togglePause());
+    }
   }
 
   function handleSetSpeed(speed: 1 | 2 | 4): void {
-    setSnapshot(runtime.setSpeed(speed));
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.setSpeed(speed));
+    }
   }
 
   function handleSetTool(tool: Tool): void {
-    setSnapshot(runtime.setTool(tool));
+    if (runtime !== null) {
+      setSnapshot(runtime.setTool(tool));
+    }
   }
 
   function handleSetArea(area: AreaKind): void {
-    setSnapshot(runtime.setArea(area));
+    if (runtime !== null) {
+      setSnapshot(runtime.setArea(area));
+    }
   }
 
   function handleSetBuilding(building: BuildingType): void {
-    setSnapshot(runtime.setBuilding(building));
+    if (runtime !== null) {
+      setSnapshot(runtime.setBuilding(building));
+    }
   }
 
   function handleRotateBuilding(): void {
-    setSnapshot(runtime.rotateBuilding());
+    if (runtime !== null) {
+      setSnapshot(runtime.rotateBuilding());
+    }
   }
 
   function handleSetRoadPreset(preset: RoadPreset): void {
-    setSnapshot(runtime.setRoadPreset(preset));
+    if (runtime !== null) {
+      setSnapshot(runtime.setRoadPreset(preset));
+    }
   }
 
   function handleSetOverlay(overlay: Overlay | null): void {
-    setSnapshot(runtime.setOverlay(overlay));
+    if (runtime !== null) {
+      setSnapshot(runtime.setOverlay(overlay));
+    }
   }
 
   function handleAssignRouteToPlatform(
@@ -68,39 +104,59 @@
     routeId: string,
     platformId: string,
   ): void {
-    setSnapshot(runtime.assignRouteToPlatform(nodeId, routeId, platformId));
+    if (runtime !== null) {
+      void applyRuntimeResult(
+        runtime.assignRouteToPlatform(nodeId, routeId, platformId),
+      );
+    }
   }
 
   function handleRemoveDraftStop(index: number): void {
-    setSnapshot(runtime.removeDraftStop(index));
+    if (runtime !== null) {
+      setSnapshot(runtime.removeDraftStop(index));
+    }
   }
 
   function handleFinishRoute(): void {
-    setSnapshot(runtime.finishRoute());
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.finishRoute());
+    }
   }
 
   function handleCancelRoute(): void {
-    setSnapshot(runtime.cancelRoute());
+    if (runtime !== null) {
+      setSnapshot(runtime.cancelRoute());
+    }
   }
 
   function handleRenameRoute(routeId: string, name: string): void {
-    setSnapshot(runtime.renameRoute(routeId, name));
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.renameRoute(routeId, name));
+    }
   }
 
   function handleRecolorRoute(routeId: string, color: string): void {
-    setSnapshot(runtime.recolorRoute(routeId, color));
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.recolorRoute(routeId, color));
+    }
   }
 
   function handleToggleRouteActive(routeId: string): void {
-    setSnapshot(runtime.toggleRouteActive(routeId));
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.toggleRouteActive(routeId));
+    }
   }
 
   function handleDeleteRoute(routeId: string): void {
-    setSnapshot(runtime.deleteRoute(routeId));
+    if (runtime !== null) {
+      void applyRuntimeResult(runtime.deleteRoute(routeId));
+    }
   }
 
   function handleSelectRoute(routeId: string | null): void {
-    setSnapshot(runtime.selectRoute(routeId));
+    if (runtime !== null) {
+      setSnapshot(runtime.selectRoute(routeId));
+    }
   }
 
   function handleShellError(message: string): void {
@@ -117,7 +173,7 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (shellError) {
+    if (shellError || runtime === null) {
       return;
     }
 
@@ -188,7 +244,7 @@
   }
 
   $effect(() => {
-    snapshot = runtime.getSnapshot();
+    snapshot = runtime?.getSnapshot() ?? null;
   });
 
   $effect(() => {
@@ -198,15 +254,15 @@
   });
 
   $effect(() => {
-    if (shellError !== null) {
+    if (shellError !== null && runtime !== null) {
       runtime.stop();
     }
   });
 
   onMount(() => {
-    if (!shellError) {
+    if (!shellError && runtime !== null) {
       const unsubscribe = runtime.subscribe((nextSnapshot: RuntimeSnapshot) => {
-        snapshot = nextSnapshot;
+        setSnapshot(nextSnapshot);
       });
 
       runtime.start();
@@ -221,11 +277,11 @@
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
-{#if shellError}
+{#if shellError || runtime === null}
   <main class="shell" data-testid="game-shell">
     <div class="shell-error" role="alert">
       <strong>Shell Error:</strong>
-      {shellError}
+      {shellError ?? "Runtime unavailable"}
     </div>
   </main>
 {:else}

@@ -110,7 +110,10 @@ export interface RuntimeSnapshot {
   state: GameState;
   ui: UiState;
   shell: ShellState;
+  backendError: string | null;
 }
+
+export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
 
@@ -120,8 +123,8 @@ export interface RuntimeController {
   start: () => void;
   stop: () => void;
   isRunning: () => boolean;
-  tick: (deltaSeconds: number) => RuntimeSnapshot;
-  reset: () => RuntimeSnapshot;
+  tick: (deltaSeconds: number) => RuntimeCommandResult;
+  reset: () => RuntimeCommandResult;
   resetUi: () => RuntimeSnapshot;
   setTool: (tool: Tool) => RuntimeSnapshot;
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
@@ -129,26 +132,26 @@ export interface RuntimeController {
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
   setDragCurrent: (point: Point | null) => RuntimeSnapshot;
-  commitDrag: () => RuntimeSnapshot;
+  commitDrag: () => RuntimeCommandResult;
   cancelDrag: () => RuntimeSnapshot;
   rotateBuilding: () => RuntimeSnapshot;
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
-  togglePause: () => RuntimeSnapshot;
-  setSpeed: (speed: GameState["speed"]) => RuntimeSnapshot;
+  togglePause: () => RuntimeCommandResult;
+  setSpeed: (speed: GameState["speed"]) => RuntimeCommandResult;
   setHudCategory: (category: HudCategory | null) => RuntimeSnapshot;
-  handleTileClick: (point: Point) => RuntimeSnapshot;
+  handleTileClick: (point: Point) => RuntimeCommandResult;
   assignRouteToPlatform: (
     nodeId: string,
     routeId: string,
     platformId: string,
-  ) => RuntimeSnapshot;
+  ) => RuntimeCommandResult;
   removeDraftStop: (index: number) => RuntimeSnapshot;
-  finishRoute: () => RuntimeSnapshot;
+  finishRoute: () => RuntimeCommandResult;
   cancelRoute: () => RuntimeSnapshot;
-  renameRoute: (routeId: string, name: string) => RuntimeSnapshot;
-  recolorRoute: (routeId: string, color: string) => RuntimeSnapshot;
-  toggleRouteActive: (routeId: string) => RuntimeSnapshot;
-  deleteRoute: (routeId: string) => RuntimeSnapshot;
+  renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
+  recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
+  toggleRouteActive: (routeId: string) => RuntimeCommandResult;
+  deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;

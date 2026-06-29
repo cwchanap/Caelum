@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
 import type {
@@ -15,6 +21,7 @@ import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import type {
   RuntimeController,
   RuntimeListener,
+  RuntimeCommandResult,
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
@@ -24,16 +31,22 @@ async function openCategory(name: string): Promise<void> {
 }
 
 function createRuntimeHarness(
-  options: { state?: GameState; ui?: UiState } = {},
+  options: {
+    state?: GameState;
+    ui?: UiState;
+    backendError?: string | null;
+  } = {},
 ): { runtime: RuntimeController } {
   let state = options.state ?? createInitialGameState();
   let ui = options.ui ?? createUiState();
+  let backendError = options.backendError ?? null;
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
     state,
     ui,
     shell: selectShellState(state, ui),
+    backendError,
   });
 
   const publish = (): RuntimeSnapshot => {
@@ -192,6 +205,17 @@ function createRuntimeHarness(
   return { runtime };
 }
 
+function deferredRuntimeResult(): {
+  promise: Promise<RuntimeSnapshot>;
+  resolve: (snapshot: RuntimeSnapshot) => void;
+} {
+  let resolve!: (snapshot: RuntimeSnapshot) => void;
+  const promise = new Promise<RuntimeSnapshot>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("App shell bootstrap", () => {
   it("renders runtime-driven topbar, canvas host, and bottom HUD", async () => {
     const baseState = createInitialGameState();
@@ -278,6 +302,39 @@ describe("App shell bootstrap", () => {
     expect(screen.getByRole("button", { name: "4x" })).toHaveAttribute(
       "aria-pressed",
       "true",
+    );
+  });
+
+  it("applies promise-based runtime command results when they resolve", async () => {
+    const { runtime } = createRuntimeHarness();
+    const deferred = deferredRuntimeResult();
+    runtime.setSpeed = vi.fn(
+      (_speed: GameState["speed"]): RuntimeCommandResult => deferred.promise,
+    );
+
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByRole("button", { name: "4x" }));
+    expect(runtime.setSpeed).toHaveBeenCalledWith(4);
+    expect(screen.getByRole("button", { name: "4x" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    const nextState: GameState = { ...createInitialGameState(), speed: 4 };
+    const nextUi = createUiState();
+    deferred.resolve({
+      state: nextState,
+      ui: nextUi,
+      shell: selectShellState(nextState, nextUi),
+      backendError: null,
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "4x" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
     );
   });
 
@@ -556,7 +613,7 @@ describe("App shell bootstrap", () => {
   it("renders error state when bootstrap fails", () => {
     render(App, {
       props: {
-        runtime: createRuntimeHarness().runtime,
+        runtime: null,
         error: "Bootstrap failed",
       },
     });
@@ -569,6 +626,22 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("topbar")).toBeNull();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
     expect(screen.queryByTestId("bottom-hud")).toBeNull();
+  });
+
+  it("surfaces backendError from resolved runtime commands", async () => {
+    const { runtime } = createRuntimeHarness();
+    const deferred = deferredRuntimeResult();
+    runtime.togglePause = vi.fn((): RuntimeCommandResult => deferred.promise);
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    const current = runtime.getSnapshot();
+    deferred.resolve({ ...current, backendError: "Rust backend failed" });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Rust backend failed");
+    expect(runtime.stop).toHaveBeenCalled();
   });
 });
 
