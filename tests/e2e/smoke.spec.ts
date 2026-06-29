@@ -56,8 +56,12 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
 
   await page.getByRole("button", { name: "Resume" }).click();
   const clockValue = clockReadout.locator(".readout-value");
+  // Poll for a real advance: the value must match the clock format AND must not
+  // be the initial "Day 1 00:00" (the `(?!00:00$)` lookahead). Without the
+  // lookahead an empty/transient text or the initial value could satisfy a
+  // loose `.not.toBe`, false-passing the test.
   await expect
-    .poll(async () => (await clockValue.textContent())?.trim())
-    .not.toBe("Day 1 00:00");
+    .poll(async () => (await clockValue.textContent())?.trim() ?? "")
+    .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
   await expect(clockValue).toHaveText(/^Day 1 \d{2}:\d{2}$/);
 });

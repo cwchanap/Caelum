@@ -1,31 +1,19 @@
-import type { GameState, GrowthWave, Scenario } from "../domain/types";
+import { createGrowingSuburbWaves } from "../scenario/growingSuburb";
+import type { GameState, GrowthWave } from "../domain/types";
 import type { RustGameSnapshot } from "./backend/types";
 
-const scenario: Scenario = {
-  name: "Growing Suburb",
-  growthWaves: [
-    {
-      id: "intro",
-      triggerTime: 0,
-      message:
-        "First residents arrive — build destinations so they can commute.",
-      applied: false,
-      tiles: [],
-    },
-  ],
-  objectives: {
-    maxLateRatio: 0.25,
-    maxUnservedRatio: 0.2,
-    maxAverageWait: 180,
-    rollingWindowSeconds: 600,
-    survivalTime: 1_200,
-  },
-};
+// Growth waves are a TS-side gameplay concept (zoning + citizen spawning +
+// intro copy) that the Rust core does not model yet. Source them from the
+// canonical TS scenario module rather than a drifted inline copy. The scenario
+// name and objective thresholds come from the authoritative Rust snapshot (see
+// `normalizeRustSnapshot`), so the shell can never drift from the values the
+// core's `evaluate_objectives` actually enforces.
+const GROWTH_WAVES = createGrowingSuburbWaves();
 
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
   const nextGrowth: GrowthWave[] =
     snapshot.metrics.state === "running"
-      ? scenario.growthWaves.map((wave) => ({
+      ? GROWTH_WAVES.map((wave) => ({
           ...wave,
           tiles: [...wave.tiles],
         }))
@@ -38,10 +26,9 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
       ...snapshot.metrics,
       waitingCitizenCount: snapshot.metrics.waitingTripCount,
     },
-    // Rust snapshots do not ship scenario metadata yet; this shim exists only
-    // to keep the existing shell selectors readable during host cutover work.
     scenario: {
-      ...scenario,
+      name: snapshot.scenario.name,
+      objectives: snapshot.scenario.objectives,
       growthWaves: nextGrowth,
     },
   };

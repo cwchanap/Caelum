@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   GameMap,
+  MetroLine,
   Point,
   RoadDirection,
   Route,
@@ -78,6 +79,26 @@ function createStop(id: string, position: Point): Stop {
       },
     ],
   };
+}
+
+function reassignRouteToPlatform<
+  T extends { id: string; platforms: Stop["platforms"] },
+>(nodes: T[], nodeId: string, routeId: string, platformId: string): T[] {
+  return nodes.map((node) => {
+    if (node.id !== nodeId) {
+      return node;
+    }
+    return {
+      ...node,
+      platforms: node.platforms.map((platform) => ({
+        ...platform,
+        routeIds:
+          platform.id === platformId
+            ? [...platform.routeIds, routeId]
+            : platform.routeIds.filter((id) => id !== routeId),
+      })),
+    };
+  });
 }
 
 function applyIntent(
@@ -261,6 +282,88 @@ function applyIntent(
         ...snapshot.transit,
         routes: snapshot.transit.routes.filter(
           (route) => route.id !== intent.routeId,
+        ),
+      },
+    };
+  }
+  if (intent.type === "layTrack") {
+    return {
+      ...snapshot,
+      map: updateTile(snapshot.map, intent.point, (tile) => ({
+        ...tile,
+        hasTrack: true,
+      })),
+    };
+  }
+  if (intent.type === "removeAtTile") {
+    return {
+      ...snapshot,
+      map: updateTile(snapshot.map, intent.point, (tile) => {
+        const { oneWay: _oneWay, ...rest } = tile;
+        return { ...rest, kind: "empty", hasTrack: false };
+      }),
+    };
+  }
+  if (intent.type === "addMetroStation") {
+    const id = `station-${(snapshot.transit.stations.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        stations: [
+          ...snapshot.transit.stations,
+          {
+            id,
+            position: intent.point,
+            platforms: [
+              { id: `${id}-p0`, label: "A", capacity: 300, routeIds: [] },
+              { id: `${id}-p1`, label: "B", capacity: 300, routeIds: [] },
+            ],
+          },
+        ],
+      },
+    };
+  }
+  if (intent.type === "addMetroLine") {
+    const id = `metro-${(snapshot.transit.metroLines.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    const line: MetroLine = {
+      id,
+      name: `Metro ${snapshot.transit.metroLines.length + 1}`,
+      color: "#2867b2",
+      stationIds: intent.stationIds,
+      vehicleIds: [],
+      active: true,
+      segments: [],
+      pathBroken: false,
+    };
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        metroLines: [...snapshot.transit.metroLines, line],
+      },
+    };
+  }
+  if (intent.type === "assignRouteToPlatform") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        stops: reassignRouteToPlatform(
+          snapshot.transit.stops,
+          intent.nodeId,
+          intent.routeId,
+          intent.platformId,
+        ),
+        stations: reassignRouteToPlatform(
+          snapshot.transit.stations,
+          intent.nodeId,
+          intent.routeId,
+          intent.platformId,
         ),
       },
     };
@@ -917,6 +1020,22 @@ describe("route creation and management", () => {
     expect(snapshot.ui.selectedRouteId).toBe(null);
     expect(snapshot.state.transit.routes).toEqual([]);
   });
+
+  it("keeps the selected route when the backend rejects the delete", async () => {
+    const backend = backendSpy(routeSnapshotWithRoute(true));
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.selectRoute("route-001");
+    expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
+
+    backend.rejectNextDispatch();
+    const snapshot = await runtime.deleteRoute("route-001");
+
+    // The route still exists after a rejected delete, so its selection must
+    // survive (the clear is gated on `applied`).
+    expect(snapshot.ui.selectedRouteId).toBe("route-001");
+    expect(snapshot.state.transit.routes).toHaveLength(1);
+  });
 });
 
 describe("runtime road drag", () => {
@@ -969,6 +1088,25 @@ describe("runtime road drag", () => {
       start: { x: 5, y: 0 },
       current: { x: 7, y: 0 },
     });
+  });
+
+  it("clears the drag synchronously when committing, before the backend resolves", async () => {
+    const backend = deferredDispatchBackend();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("road");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    runtime.commitDrag();
+    await Promise.resolve();
+
+    // The gesture is gone immediately — no lingering stale drag during the
+    // dispatch window that a stray pointermove could resurrect by identity
+    // mismatch with a deferred clear.
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+
+    await backend.resolveNext();
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
   it("builds a road line from startDrag -> move -> commitDrag", async () => {
@@ -1134,5 +1272,69 @@ describe("build drawer auto-hide", () => {
     runtime.setHudCategory("build");
     runtime.setArea("commercial");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+  });
+});
+
+describe("fake backend applyIntent coverage", () => {
+  function tileAt(snapshot: RustGameSnapshot, x: number, y: number) {
+    return snapshot.map.tiles.find((tile) => tile.x === x && tile.y === y);
+  }
+
+  // Guards against regressions where a GameIntent silently falls through the
+  // reducer and no-ops while the spy still reports `applied: true`.
+  it("applies layTrack and removeAtTile to the map", async () => {
+    const backend = backendSpy();
+
+    const laid = await backend.dispatch({
+      type: "layTrack",
+      point: { x: 2, y: 3 },
+    });
+    expect(laid.applied).toBe(true);
+    expect(tileAt(laid.snapshot, 2, 3)?.hasTrack).toBe(true);
+
+    const removed = await backend.dispatch({
+      type: "removeAtTile",
+      point: { x: 2, y: 3 },
+    });
+    expect(removed.applied).toBe(true);
+    expect(tileAt(removed.snapshot, 2, 3)?.kind).toBe("empty");
+    expect(tileAt(removed.snapshot, 2, 3)?.hasTrack).toBe(false);
+  });
+
+  it("applies addMetroStation and addMetroLine to transit", async () => {
+    const backend = backendSpy();
+
+    const station = await backend.dispatch({
+      type: "addMetroStation",
+      point: { x: 4, y: 5 },
+    });
+    expect(station.snapshot.transit.stations).toHaveLength(1);
+    expect(station.snapshot.transit.stations[0].platforms).toHaveLength(2);
+
+    const line = await backend.dispatch({
+      type: "addMetroLine",
+      stationIds: ["station-001"],
+    });
+    expect(line.snapshot.transit.metroLines).toHaveLength(1);
+    expect(line.snapshot.transit.metroLines[0].stationIds).toEqual([
+      "station-001",
+    ]);
+  });
+
+  it("applies assignRouteToPlatform to the targeted platform", async () => {
+    const backend = backendSpy();
+    await backend.dispatch({ type: "addBusStop", point: { x: 1, y: 1 } });
+    await backend.dispatch({ type: "addBusRoute", stopIds: ["stop-001"] });
+
+    const reassigned = await backend.dispatch({
+      type: "assignRouteToPlatform",
+      nodeId: "stop-001",
+      routeId: "route-001",
+      platformId: "stop-001-p1",
+    });
+    const platform = reassigned.snapshot.transit.stops[0].platforms.find(
+      (candidate) => candidate.id === "stop-001-p1",
+    );
+    expect(platform?.routeIds).toContain("route-001");
   });
 });

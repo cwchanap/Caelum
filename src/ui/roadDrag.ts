@@ -88,6 +88,24 @@ export function lineDirection(line: Point[]): RoadDirection | null {
   return "north";
 }
 
+/**
+ * Drag-order-independent axis direction: horizontal lines are "east", vertical
+ * lines are "south". Used for the dual-bidirectional reverse carriageway so the
+ * preview places the second lane on the same physical side of the corridor
+ * whether the drag runs start→current or current→start — matching the
+ * authoritative `transit::lay_road_line` canonical placement.
+ */
+export function canonicalLineDirection(line: Point[]): RoadDirection | null {
+  if (line.length < 2) {
+    return null;
+  }
+  const dx = line[1].x - line[0].x;
+  const dy = line[1].y - line[0].y;
+  if (dx !== 0) return "east";
+  if (dy !== 0) return "south";
+  return null;
+}
+
 const REVERSE_OF: Record<RoadDirection, RoadDirection> = {
   north: "south",
   east: "west",
@@ -107,7 +125,9 @@ const LEFT_OF: Record<RoadDirection, Point> = {
 };
 
 export function reverseLanePoints(line: Point[]): Point[] {
-  const forward = lineDirection(line);
+  // Canonical (not drag-order) so the preview side is invariant under drag
+  // direction, consistent with the Rust dual-bidirectional placement.
+  const forward = canonicalLineDirection(line);
   if (forward === null) {
     return [];
   }
