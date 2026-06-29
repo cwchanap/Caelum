@@ -198,6 +198,27 @@ fn line_intents_use_camel_case_wire_names() {
 }
 
 #[test]
+fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
+    // The shell reads these threshold names verbatim (runtimeSelectors formats
+    // the objective copy from them), and they must match the TS domain
+    // `Scenario.objectives` shape exactly — including `rollingWindowSeconds`,
+    // which a previous TS shim had drifted to 600 while the core evaluates 300.
+    use caelum_core::state::create_initial_snapshot;
+
+    let snapshot = create_initial_snapshot();
+    let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
+    assert_eq!(value["name"], json!("Growing Suburb"));
+    assert_eq!(value["objectives"]["maxLateRatio"], json!(0.25));
+    assert_eq!(value["objectives"]["maxUnservedRatio"], json!(0.2));
+    assert_eq!(value["objectives"]["maxAverageWait"], json!(180.0));
+    assert_eq!(value["objectives"]["rollingWindowSeconds"], json!(300.0));
+    assert_eq!(value["objectives"]["survivalTime"], json!(1_200.0));
+    // No leaked snake_case keys from the Rust field names.
+    assert!(value.get("rolling_window_seconds").is_none());
+    assert!(value.get("survival_time").is_none());
+}
+
+#[test]
 fn snapshot_round_trips_through_json() {
     // A representative vehicle + leg must deserialize back to an equal value, proving
     // the enum rename round-trips (not just serializes one way).

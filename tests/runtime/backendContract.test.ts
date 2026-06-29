@@ -74,6 +74,49 @@ describe("Rust backend contract", () => {
     );
   });
 
+  it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
+    // Guards against the drift that motivated this contract: a previous TS shim
+    // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.
+    const withThresholds = createRustSnapshot({
+      scenario: {
+        name: "Growing Suburb",
+        objectives: {
+          maxLateRatio: 0.25,
+          maxUnservedRatio: 0.2,
+          maxAverageWait: 180,
+          rollingWindowSeconds: 300,
+          survivalTime: 1_200,
+        },
+      },
+    });
+    const normalized = normalizeRustSnapshot(withThresholds);
+
+    expect(normalized.scenario.objectives).toEqual(
+      withThresholds.scenario.objectives,
+    );
+    expect(normalized.scenario.objectives.rollingWindowSeconds).toBe(300);
+
+    // And a custom threshold round-trips through unchanged (proving the value
+    // is read from the snapshot, not overwritten by a constant).
+    const custom = normalizeRustSnapshot(
+      createRustSnapshot({
+        scenario: {
+          name: "Tight Suburb",
+          objectives: {
+            maxLateRatio: 0.1,
+            maxUnservedRatio: 0.05,
+            maxAverageWait: 90,
+            rollingWindowSeconds: 150,
+            survivalTime: 600,
+          },
+        },
+      }),
+    );
+    expect(custom.scenario.name).toBe("Tight Suburb");
+    expect(custom.scenario.objectives.maxLateRatio).toBe(0.1);
+    expect(custom.scenario.objectives.rollingWindowSeconds).toBe(150);
+  });
+
   it("backend methods return promises so browser and Tauri share one runtime contract", async () => {
     const intent: GameIntent = { type: "setPaused", paused: false };
     const snapshot = createRustSnapshot();

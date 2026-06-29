@@ -71,6 +71,36 @@ pub struct GameSnapshot {
     #[serde(default)]
     pub next_trip_sequence: u32,
     pub metrics: Metrics,
+    /// Static scenario identity + objective thresholds. The thresholds are the
+    /// authoritative source for the shell's objective copy so the TS host cannot
+    /// drift from the values `objectives::evaluate_objectives` actually enforces.
+    /// (Growth waves stay a TS-side concept until the core models spawning.)
+    #[serde(default = "default_scenario")]
+    pub scenario: ScenarioConfig,
+}
+
+/// Objective thresholds the engine enforces in `objectives::evaluate_objectives`.
+/// Serialized with TS-parity camelCase names so the shell can render the exact
+/// contract the Rust core evaluates against.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveThresholds {
+    pub max_late_ratio: f64,
+    pub max_unserved_ratio: f64,
+    pub max_average_wait: f64,
+    pub rolling_window_seconds: f64,
+    pub survival_time: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScenarioConfig {
+    pub name: String,
+    pub objectives: ObjectiveThresholds,
+}
+
+fn default_scenario() -> ScenarioConfig {
+    crate::scenario::growing_suburb_scenario()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

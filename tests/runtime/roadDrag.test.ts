@@ -71,6 +71,44 @@ describe("road drag direction helpers", () => {
       { x: 3, y: 0 },
     ]);
   });
+
+  it("places the dual-bidirectional reverse lane on a drag-order-invariant side", () => {
+    // The reverse carriageway must sit on the same physical side of the
+    // corridor whether the drag runs low→high or high→low, matching the
+    // authoritative Rust `lay_road_line` canonical placement. A westward drag
+    // must not flip the reverse lane to the opposite side. (The x-order mirrors
+    // the input line order; only the side and tile set are required to match.)
+    const eastDrag = axisLockedLine({ x: 1, y: 5 }, { x: 3, y: 5 });
+    const westDrag = axisLockedLine({ x: 3, y: 5 }, { x: 1, y: 5 });
+
+    const eastReverse = reverseLanePoints(eastDrag);
+    const westReverse = reverseLanePoints(westDrag);
+
+    expect(eastReverse).toEqual([
+      { x: 1, y: 4 },
+      { x: 2, y: 4 },
+      { x: 3, y: 4 },
+    ]);
+    // Same tiles, north side (y=4) — not flipped to the south side (y=6).
+    expect(westReverse).toEqual([
+      { x: 3, y: 4 },
+      { x: 2, y: 4 },
+      { x: 1, y: 4 },
+    ]);
+    expect(new Set(eastReverse.map((p) => `${p.x},${p.y}`))).toEqual(
+      new Set(westReverse.map((p) => `${p.x},${p.y}`)),
+    );
+
+    // Vertical corridors canonicalize to "south", whose left is +x (east).
+    const southDrag = axisLockedLine({ x: 5, y: 1 }, { x: 5, y: 3 });
+    const northDrag = axisLockedLine({ x: 5, y: 3 }, { x: 5, y: 1 });
+    expect(
+      new Set(reverseLanePoints(southDrag).map((p) => `${p.x},${p.y}`)),
+    ).toEqual(new Set(["6,1", "6,2", "6,3"]));
+    expect(
+      new Set(reverseLanePoints(northDrag).map((p) => `${p.x},${p.y}`)),
+    ).toEqual(new Set(["6,1", "6,2", "6,3"]));
+  });
 });
 
 describe("planDragPreview", () => {

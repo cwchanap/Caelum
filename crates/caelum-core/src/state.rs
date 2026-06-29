@@ -1,6 +1,6 @@
 use crate::clock::{clock_minutes, day_index};
 use crate::model::{GameSnapshot, Metrics, MetricsState, TransitNetwork};
-use crate::scenario::create_growing_suburb_map;
+use crate::scenario::{create_growing_suburb_map, growing_suburb_scenario};
 
 pub fn create_initial_snapshot() -> GameSnapshot {
     GameSnapshot {
@@ -34,5 +34,6 @@ pub fn create_initial_snapshot() -> GameSnapshot {
             state: MetricsState::Running,
             loss_reason: None,
         },
+        scenario: growing_suburb_scenario(),
     }
 }

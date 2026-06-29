@@ -355,6 +355,68 @@ fn lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_exi
 }
 
 #[test]
+fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
+    // The same physical corridor must place the reverse carriageway on the same
+    // side whether the drag runs low→high (east) or high→low (west). Before the
+    // canonical-direction fix, a westward drag offset the reverse lane to the
+    // opposite side (south) of an eastward drag (north), so extending a
+    // corridor with an opposite-direction drag flipped the carriageway mid-line.
+    let east = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(1, 5).into(), (2, 5).into(), (3, 5).into()],
+            preset: RoadPreset::DualBidirectional,
+        })
+    };
+    let west = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(3, 5).into(), (2, 5).into(), (1, 5).into()],
+            preset: RoadPreset::DualBidirectional,
+        })
+    };
+
+    let one_way_at = |snap: &caelum_core::GameSnapshot, x: i32, y: i32| {
+        snap.map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .and_then(|tile| tile.one_way.clone())
+    };
+
+    // Forward carriageway (y=5) and reverse carriageway (y=4, north/left of
+    // east) carry the same directions in both drag orders.
+    for x in 1..=3 {
+        assert_eq!(
+            one_way_at(&east.snapshot, x, 5).as_deref(),
+            Some("east"),
+            "eastward forward lane at ({x},5)"
+        );
+        assert_eq!(
+            one_way_at(&west.snapshot, x, 5).as_deref(),
+            Some("east"),
+            "westward drag must still place east forward lane at ({x},5)"
+        );
+        assert_eq!(
+            one_way_at(&east.snapshot, x, 4).as_deref(),
+            Some("west"),
+            "eastward reverse lane at ({x},4)"
+        );
+        assert_eq!(
+            one_way_at(&west.snapshot, x, 4).as_deref(),
+            Some("west"),
+            "westward drag must place the reverse lane on the SAME side (north) at ({x},4)"
+        );
+        // The opposite side (y=6, south) must stay empty in both cases.
+        assert!(
+            one_way_at(&east.snapshot, x, 6).is_none()
+                && one_way_at(&west.snapshot, x, 6).is_none(),
+            "no reverse lane should leak to the south side at ({x},6)"
+        );
+    }
+}
+
+#[test]
 fn lay_track_line_and_remove_at_tiles_skip_invalid_tiles_but_apply_valid_tiles() {
     let mut engine = GameEngine::new();
     let track = engine.dispatch(GameIntent::LayTrackLine {

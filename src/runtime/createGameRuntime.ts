@@ -489,13 +489,6 @@ export async function createGameRuntime({
     return null;
   };
 
-  const clearSubmittedDrag =
-    (submittedDrag: UiState["drag"]) =>
-    (_applied: boolean, currentUi: UiState): UiState =>
-      currentUi.drag === submittedDrag
-        ? { ...currentUi, drag: null }
-        : currentUi;
-
   const api: RuntimeController = {
     getSnapshot,
     subscribe(listener) {
@@ -584,40 +577,38 @@ export async function createGameRuntime({
       if (gesture === null) {
         return commit(state, ui);
       }
+      // Clear the drag synchronously *before* the async backend dispatch. The
+      // dispatch resolves later against the latest `ui`; if a new gesture has
+      // started in the window it is preserved, and — critically — a stray
+      // pointermove during the window finds `ui.drag === null` and updates the
+      // hover instead of resurrecting a stale drag that the deferred clear
+      // could no longer match by identity.
+      const roadPreset = ui.roadPreset;
+      commit(state, { ...ui, drag: null });
       if (gesture.tool === "area") {
-        return enqueueDispatch(
-          {
-            type: "paintAreaRectangle",
-            area: gesture.area,
-            start: gesture.start,
-            end: gesture.current,
-          },
-          clearSubmittedDrag(gesture),
-        );
+        return enqueueDispatch({
+          type: "paintAreaRectangle",
+          area: gesture.area,
+          start: gesture.start,
+          end: gesture.current,
+        });
       }
       const line = axisLockedLine(gesture.start, gesture.current);
       if (line.length <= 1) {
         const intent = intentForToolClick(line[0]);
-        return intent === null
-          ? commit(state, { ...ui, drag: null })
-          : enqueueDispatch(intent, clearSubmittedDrag(gesture));
+        return intent === null ? commit(state, ui) : enqueueDispatch(intent);
       }
       if (gesture.tool === "remove") {
-        return enqueueDispatch(
-          { type: "removeAtTiles", points: line },
-          clearSubmittedDrag(gesture),
-        );
+        return enqueueDispatch({ type: "removeAtTiles", points: line });
       }
       if (gesture.tool === "track") {
-        return enqueueDispatch(
-          { type: "layTrackLine", points: line },
-          clearSubmittedDrag(gesture),
-        );
+        return enqueueDispatch({ type: "layTrackLine", points: line });
       }
-      return enqueueDispatch(
-        { type: "layRoadLine", points: line, preset: ui.roadPreset },
-        clearSubmittedDrag(gesture),
-      );
+      return enqueueDispatch({
+        type: "layRoadLine",
+        points: line,
+        preset: roadPreset,
+      });
     },
     rotateBuilding() {
       const currentIndex = rotations.indexOf(ui.buildingRotation);
@@ -733,10 +724,13 @@ export async function createGameRuntime({
       });
     },
     deleteRoute(routeId) {
+      // Only clear the selection when the backend actually applied the delete;
+      // a rejected delete leaves the route in place, so its selection must
+      // survive (parity with `finishRoute`'s `applied` gate).
       return enqueueDispatch(
         { type: "deleteRoute", routeId },
-        (_applied, currentUi) =>
-          currentUi.selectedRouteId === routeId
+        (applied, currentUi) =>
+          applied && currentUi.selectedRouteId === routeId
             ? { ...currentUi, selectedRouteId: null }
             : currentUi,
       );

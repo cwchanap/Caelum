@@ -68,22 +68,30 @@ pub fn lay_road_line(
         return Err("empty road line".to_string());
     }
 
+    // OneWay follows the drag direction (start→current) so the arrow points the
+    // way the player dragged. DualBidirectional instead uses a canonical axis
+    // direction (east for horizontal, south for vertical) so the reverse
+    // carriageway always lands on the same physical side of the corridor
+    // regardless of drag order — otherwise dragging start→current vs
+    // current→start would flip the second carriageway to opposite sides.
     let forward = line_direction(points);
+    let dual_direction = canonical_line_direction(points);
     let mut next = state.clone();
     let mut changed = false;
 
     for point in points {
         let direction = match preset {
             RoadPreset::TwoWay => None,
-            RoadPreset::OneWay | RoadPreset::DualBidirectional => forward,
+            RoadPreset::OneWay => forward,
+            RoadPreset::DualBidirectional => dual_direction,
         };
         changed |= lay_lane(&mut next, state, point, direction)?;
     }
 
     if preset == RoadPreset::DualBidirectional {
-        if let Some(forward_direction) = forward {
-            let reverse_direction = opposite_direction(forward_direction);
-            for point in reverse_lane_points(points, forward_direction) {
+        if let Some(canonical) = dual_direction {
+            let reverse_direction = opposite_direction(canonical);
+            for point in reverse_lane_points(points, canonical) {
                 changed |= lay_reverse_lane(&mut next, state, &point, reverse_direction)?;
             }
         }
@@ -1495,6 +1503,25 @@ fn line_direction(points: &[Point]) -> Option<&'static str> {
         Some("south")
     } else if dy < 0 {
         Some("north")
+    } else {
+        None
+    }
+}
+
+/// Drag-order-independent axis direction: horizontal lines are "east", vertical
+/// lines are "south". Used by `DualBidirectional` so the reverse carriageway is
+/// offset to a consistent physical side for the same corridor whether the drag
+/// runs start→current or current→start.
+fn canonical_line_direction(points: &[Point]) -> Option<&'static str> {
+    if points.len() < 2 {
+        return None;
+    }
+    let dx = points[1].x - points[0].x;
+    let dy = points[1].y - points[0].y;
+    if dx != 0 {
+        Some("east")
+    } else if dy != 0 {
+        Some("south")
     } else {
         None
     }
