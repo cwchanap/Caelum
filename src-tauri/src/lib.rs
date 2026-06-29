@@ -21,10 +21,7 @@ fn game_dispatch(
 }
 
 #[tauri::command]
-fn game_tick(
-    state: State<'_, EngineState>,
-    delta_seconds: f64,
-) -> Result<DispatchResult, String> {
+fn game_tick(state: State<'_, EngineState>, delta_seconds: f64) -> Result<DispatchResult, String> {
     let mut engine = state.lock().map_err(|error| error.to_string())?;
     Ok(engine.tick(delta_seconds))
 }
