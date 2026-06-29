@@ -86,7 +86,7 @@ playthroughs are unaffected.
 
 ### Pathfinder
 
-New module `src/simulation/network.ts`:
+New module `legacy-ts-simulation/network.ts`:
 
 - `findTilePath(map, from, to, mode): Point[] | null` — BFS on the
   4-connected grid. Traversable tiles: `kind === "road"` for bus,

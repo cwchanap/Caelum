@@ -23,7 +23,7 @@
 
 Safe-empty spans used by tests below: row `y=0` (`x 0..6` empty), row `y=1` (`x 1..4` empty), `y=0` above it; columns `x=24` and `x=25` and `x=23` (`y 0..4` empty); row `y=9` `x 24..26` empty with road row `y=8` directly above.
 
-Costs (`src/simulation/transit.ts`): `COSTS.road = 100`, `COSTS.track = 500`.
+Costs (`legacy-ts-simulation/transit.ts`): `COSTS.road = 100`, `COSTS.track = 500`.
 
 ---
 
@@ -178,8 +178,8 @@ Create `src/ui/roadDrag.ts`:
 
 ```ts
 import type { GameState, Point, RoadDirection } from "../domain/types";
-import { getTile, setTileOneWay } from "../simulation/map";
-import { layRoad, layTrack } from "../simulation/transit";
+import { getTile, setTileOneWay } from "../legacy-ts-simulation/map";
+import { layRoad, layTrack } from "../legacy-ts-simulation/transit";
 import type { UiState } from "./uiState";
 
 /** Inclusive straight tile line from `start`, locked to the dominant axis.
@@ -225,9 +225,9 @@ Append to `tests/runtime/roadDrag.test.ts`:
 
 ```ts
 import type { GameState } from "../../src/domain/types";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { getTile } from "../../src/simulation/map";
-import { COSTS } from "../../src/simulation/transit";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { getTile } from "../../legacy-ts-simulation/map";
+import { COSTS } from "../../legacy-ts-simulation/transit";
 import { createUiState } from "../../src/ui/uiState";
 import { applyDragGesture } from "../../src/ui/roadDrag";
 
@@ -1370,7 +1370,7 @@ Create `tests/render/cursorBadge.test.ts`:
 import { describe, expect, it, vi } from "vitest";
 import { renderCursorBadge } from "../../src/render/cursorBadge";
 import { getBoardTransform } from "../../src/render/canvas";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
 
 function badgeCtx() {
@@ -1440,12 +1440,12 @@ import type { GameState } from "../domain/types";
 import {
   BUILDING_CATALOG,
   canPlaceBuilding,
-} from "../simulation/buildings";
+} from "../legacy-ts-simulation/buildings";
 import {
   getTile,
   isValidRoadPlacement,
   isValidTrackPlacement,
-} from "../simulation/map";
+} from "../legacy-ts-simulation/map";
 import type { UiState } from "../ui/uiState";
 import type { BoardTransform } from "./canvas";
 import { tileSize } from "./canvas";

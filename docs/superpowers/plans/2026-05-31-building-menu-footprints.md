@@ -12,13 +12,13 @@
 
 ## File Structure
 
-- Create `src/simulation/buildings.ts`: building catalog, rotated footprint calculation, placement validation, deterministic citizen creation, and building placement.
+- Create `legacy-ts-simulation/buildings.ts`: building catalog, rotated footprint calculation, placement validation, deterministic citizen creation, and building placement.
 - Create `src/render/buildingRenderer.ts`: placed building drawing and hover footprint preview drawing.
 - Modify `src/domain/types.ts`: add `BuildingType`, `BuildingRotation`, `PlacedBuilding`, extend `Stop`, narrow `Tool`, and add `GameState.buildings`.
 - Modify `src/domain/ids.ts`: add a helper for next numeric entity id so building and transit ids remain unique after removal.
-- Modify `src/simulation/gameState.ts`: initialize `buildings: []`.
-- Modify `src/simulation/transit.ts`: add stop kind support, expose coverage radius, and keep legacy stop/station helper behavior for existing simulation tests.
-- Modify `src/simulation/map.ts`: keep current map helpers; no ownership move is needed.
+- Modify `legacy-ts-simulation/gameState.ts`: initialize `buildings: []`.
+- Modify `legacy-ts-simulation/transit.ts`: add stop kind support, expose coverage radius, and keep legacy stop/station helper behavior for existing simulation tests.
+- Modify `legacy-ts-simulation/map.ts`: keep current map helpers; no ownership move is needed.
 - Modify `src/ui/uiState.ts`: add selected building and building rotation.
 - Modify `src/ui/actions.ts`: route tile clicks through building placement first, keep route planning behavior, and remove full building footprints.
 - Modify `src/runtime/createGameRuntime.ts`: add building selection and rotation intents, clear drafts when switching modes.
@@ -37,8 +37,8 @@
 **Files:**
 - Modify: `src/domain/types.ts`
 - Modify: `src/domain/ids.ts`
-- Create: `src/simulation/buildings.ts`
-- Modify: `src/simulation/gameState.ts`
+- Create: `legacy-ts-simulation/buildings.ts`
+- Modify: `legacy-ts-simulation/gameState.ts`
 - Test: `tests/simulation/buildings.test.ts`
 
 - [ ] **Step 1: Write failing tests for catalog and rotated footprints**
@@ -52,7 +52,7 @@ import {
   BUILDING_CATALOG,
   getBuildingFootprint,
   getRotatedFootprintSize,
-} from "../../src/simulation/buildings";
+} from "../../legacy-ts-simulation/buildings";
 
 describe("building catalog and footprints", () => {
   it("defines the first Build menu catalog", () => {
@@ -105,7 +105,7 @@ describe("building catalog and footprints", () => {
 
 Run: `bunx vitest run tests/simulation/buildings.test.ts`
 
-Expected: FAIL with import errors for `../../src/simulation/buildings` and missing domain types.
+Expected: FAIL with import errors for `../../legacy-ts-simulation/buildings` and missing domain types.
 
 - [ ] **Step 3: Add domain types and initialized state**
 
@@ -152,7 +152,7 @@ export interface GameState {
 }
 ```
 
-Modify `src/simulation/gameState.ts` so `createInitialGameState()` includes:
+Modify `legacy-ts-simulation/gameState.ts` so `createInitialGameState()` includes:
 
 ```ts
 export function createInitialGameState(): GameState {
@@ -197,7 +197,7 @@ export function nextEntityId(prefix: string, existingIds: string[]): string {
 
 - [ ] **Step 5: Add the catalog and footprint helpers**
 
-Create `src/simulation/buildings.ts`:
+Create `legacy-ts-simulation/buildings.ts`:
 
 ```ts
 import type {
@@ -316,15 +316,15 @@ Expected: PASS for the catalog and footprint tests.
 - [ ] **Step 7: Commit Task 1**
 
 ```bash
-git add src/domain/types.ts src/domain/ids.ts src/simulation/buildings.ts src/simulation/gameState.ts tests/simulation/buildings.test.ts
+git add src/domain/types.ts src/domain/ids.ts legacy-ts-simulation/buildings.ts legacy-ts-simulation/gameState.ts tests/simulation/buildings.test.ts
 git commit -m "feat: add building catalog footprints"
 ```
 
 ## Task 2: Placement Validation, Effects, And Removal
 
 **Files:**
-- Modify: `src/simulation/buildings.ts`
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/buildings.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Modify: `src/ui/actions.ts`
 - Modify: `tests/simulation/buildings.test.ts`
 - Modify: `tests/ui/actions.test.ts`
@@ -334,8 +334,8 @@ git commit -m "feat: add building catalog footprints"
 Append to `tests/simulation/buildings.test.ts`:
 
 ```ts
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { canPlaceBuilding, placeBuilding } from "../../src/simulation/buildings";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { canPlaceBuilding, placeBuilding } from "../../legacy-ts-simulation/buildings";
 
 describe("building placement", () => {
   it("allows a full footprint on empty in-bounds tiles", () => {
@@ -517,7 +517,7 @@ Expected: FAIL because `placeBuilding`, real placement validation, `selectedBuil
 
 - [ ] **Step 4: Implement placement validation and effects**
 
-Replace `src/simulation/buildings.ts` with:
+Replace `legacy-ts-simulation/buildings.ts` with:
 
 ```ts
 import { nextEntityId } from "../domain/ids";
@@ -794,7 +794,7 @@ This keeps ids deterministic for the current numeric id format and avoids broad 
 
 - [ ] **Step 5: Add stop kind and coverage radius support**
 
-Modify `src/simulation/transit.ts`:
+Modify `legacy-ts-simulation/transit.ts`:
 
 ```ts
 import type {
@@ -855,12 +855,12 @@ Modify `src/ui/actions.ts`:
 
 ```ts
 import type { GameState, Point } from "../domain/types";
-import { placeBuilding } from "../simulation/buildings";
+import { placeBuilding } from "../legacy-ts-simulation/buildings";
 import {
   addBusRoute,
   addMetroLine,
   assignVehicle,
-} from "../simulation/transit";
+} from "../legacy-ts-simulation/transit";
 import type { UiState } from "./uiState";
 ```
 
@@ -978,7 +978,7 @@ Expected: PASS after stop fixtures include `kind: "busStop"` and old Civic Ancho
 - [ ] **Step 8: Commit Task 2**
 
 ```bash
-git add src/simulation/buildings.ts src/simulation/transit.ts src/ui/actions.ts tests/simulation/buildings.test.ts tests/ui/actions.test.ts tests/simulation/transit.test.ts tests/simulation/router.test.ts
+git add legacy-ts-simulation/buildings.ts legacy-ts-simulation/transit.ts src/ui/actions.ts tests/simulation/buildings.test.ts tests/ui/actions.test.ts tests/simulation/transit.test.ts tests/simulation/router.test.ts
 git commit -m "feat: place active buildings"
 ```
 
@@ -1158,7 +1158,7 @@ rotateBuilding() {
 Modify `src/runtime/runtimeSelectors.ts`:
 
 ```ts
-import { BUILDING_CATALOG } from "../simulation/buildings";
+import { BUILDING_CATALOG } from "../legacy-ts-simulation/buildings";
 
 function formatActiveTool(ui: UiState): string {
   if (ui.selectedBuilding !== null) {
@@ -1198,8 +1198,8 @@ git commit -m "feat: add building selection runtime state"
 Append to `tests/render/canvas.test.ts`:
 
 ```ts
-import { getBuildingFootprint } from "../../src/simulation/buildings";
-import { stopCoverageRadius } from "../../src/simulation/transit";
+import { getBuildingFootprint } from "../../legacy-ts-simulation/buildings";
+import { stopCoverageRadius } from "../../legacy-ts-simulation/transit";
 
 it("uses the building footprint helper for preview geometry", () => {
   expect(getBuildingFootprint("busTerminal", { x: 1, y: 2 }, 270)).toEqual([
@@ -1350,8 +1350,8 @@ Modify `src/render/overlayRenderer.ts`:
 import {
   canPlaceBuilding,
   getBuildingFootprint,
-} from "../simulation/buildings";
-import { stopCoverageRadius } from "../simulation/transit";
+} from "../legacy-ts-simulation/buildings";
+import { stopCoverageRadius } from "../legacy-ts-simulation/transit";
 ```
 
 Use terminal coverage:
@@ -1532,7 +1532,7 @@ Modify `src/components/ControlTower.svelte` script:
 
 ```svelte
 <script lang="ts">
-  import { BUILDING_CATALOG } from "../simulation/buildings";
+  import { BUILDING_CATALOG } from "../legacy-ts-simulation/buildings";
   import type {
     BuildingRotation,
     BuildingType,

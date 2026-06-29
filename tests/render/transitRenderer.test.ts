@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
-import { createInitialGameState } from "../../src/simulation/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import {
-  addBusRoute,
-  addBusStop,
-  addMetroLine,
-  addMetroStation,
-  assignVehicle,
-  removeInfrastructureAtTile,
-} from "../../src/simulation/transit";
+  addTestBusRoute,
+  addTestBusStop,
+  addTestMetroLine,
+  addTestMetroStation,
+  assignTestVehicle,
+  createTestGameState,
+  removeTestInfrastructureAtTile,
+} from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 
 // jsdom does not implement HTMLCanvasElement.getContext without the optional
@@ -38,12 +38,12 @@ function ctx(): CanvasRenderingContext2D {
 
 describe("renderTransit highlight", () => {
   function busState() {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 8 });
-    state = addBusRoute(state, ["stop-001", "stop-002"]);
-    return assignVehicle(state, "bus", "route-001");
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    return assignTestVehicle(state, "bus", "route-001");
   }
 
   it("renders without a selection or draft", () => {
@@ -80,7 +80,7 @@ describe("renderTransit highlight", () => {
   it("draws the route line through the road path tiles, not stop-to-stop", () => {
     // Stops at (7,8) and (15,4): the path runs along y=8 then up x=15, so the
     // polyline must include the corner tile (15,8) — a straight line would not.
-    let state = createInitialGameState();
+    let state = createTestGameState();
     state = withRoads(state, [
       ...pointsOnRow(8, 7, 15),
       { x: 15, y: 4 },
@@ -88,9 +88,9 @@ describe("renderTransit highlight", () => {
       { x: 15, y: 6 },
       { x: 15, y: 7 },
     ]);
-    state = addBusStop(state, { x: 7, y: 8 });
-    state = addBusStop(state, { x: 15, y: 4 });
-    state = addBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 4 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
 
     const context = ctx();
     renderTransit(context, state, createUiState());
@@ -104,7 +104,7 @@ describe("renderTransit highlight", () => {
 
     // Sever the road at (11,8), the midpoint of the (7,8)<->(15,8) route, so
     // both segments become unpathable and the route is marked pathBroken.
-    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    state = removeTestInfrastructureAtTile(state, { x: 11, y: 8 });
     expect(state.transit.routes[0].pathBroken).toBe(true);
 
     const context = ctx();
@@ -140,16 +140,16 @@ describe("renderTransit highlight", () => {
   });
 
   it("parks a metro vehicle at the segment-start station when its line is broken", () => {
-    let state = createInitialGameState();
+    let state = createTestGameState();
     // Track under stations (7,8) and (15,8) with a connecting track run.
     state = withTracks(state, pointsOnRow(8, 7, 15));
-    state = addMetroStation(state, { x: 7, y: 8 });
-    state = addMetroStation(state, { x: 15, y: 8 });
-    state = addMetroLine(state, ["station-001", "station-002"]);
-    state = assignVehicle(state, "metro", "metro-001");
+    state = addTestMetroStation(state, { x: 7, y: 8 });
+    state = addTestMetroStation(state, { x: 15, y: 8 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = assignTestVehicle(state, "metro", "metro-001");
 
     // Sever the connecting track at (11,8) so the line becomes broken.
-    state = removeInfrastructureAtTile(state, { x: 11, y: 8 });
+    state = removeTestInfrastructureAtTile(state, { x: 11, y: 8 });
     expect(state.transit.metroLines[0].pathBroken).toBe(true);
 
     const context = ctx();

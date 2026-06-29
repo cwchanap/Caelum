@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderCursorBadge } from "../../src/render/cursorBadge";
 import { getBoardTransform } from "../../src/render/canvas";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import { withRoads } from "../helpers/mapFixtures";
 
@@ -25,7 +25,7 @@ function badgeCtx() {
 describe("renderCursorBadge", () => {
   it("draws nothing when there is no hover tile", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     renderCursorBadge(
       ctx,
       state,
@@ -37,7 +37,7 @@ describe("renderCursorBadge", () => {
 
   it("labels the one-way road preset with a direction glyph", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -51,7 +51,7 @@ describe("renderCursorBadge", () => {
 
   it("labels the 2-lane bidirectional preset with the ⇄ glyph", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -67,7 +67,7 @@ describe("renderCursorBadge", () => {
 
   it("labels the remove tool as Demolish", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "remove" as const,
@@ -79,7 +79,7 @@ describe("renderCursorBadge", () => {
 
   it("labels a valid area paint target without the blocked marker", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
     if (emptyTile === undefined) {
       throw new Error("expected the scenario to have at least one empty tile");
@@ -98,7 +98,7 @@ describe("renderCursorBadge", () => {
 
   it("marks area paint blocked over a road tile", () => {
     const { ctx, calls } = badgeCtx();
-    const state = withRoads(createInitialGameState(), [{ x: 7, y: 8 }]);
+    const state = withRoads(createTestGameState(), [{ x: 7, y: 8 }]);
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
@@ -111,7 +111,7 @@ describe("renderCursorBadge", () => {
 
   it("draws nothing in area mode when no area is selected", () => {
     const { ctx, calls } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
@@ -127,7 +127,7 @@ describe("renderCursorBadge", () => {
 
   it("flips the badge below the tile on the top row so it does not clip", () => {
     const { ctx } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -142,7 +142,7 @@ describe("renderCursorBadge", () => {
 
   it("draws the badge above the tile when there is room", () => {
     const { ctx } = badgeCtx();
-    const state = createInitialGameState();
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
@@ -162,7 +162,7 @@ describe("renderCursorBadge", () => {
     vi.stubGlobal("devicePixelRatio", 2);
     try {
       const { ctx } = badgeCtx();
-      const state = createInitialGameState();
+      const state = createTestGameState();
       const ui = {
         ...createUiState(),
         activeTool: "road" as const,

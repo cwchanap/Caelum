@@ -56,7 +56,7 @@ export interface Platform {
 
 Occupancy is **not stored**. On/off-platform counts are derived each tick from `state.citizens`, keeping citizens the single source of truth and avoiding desync.
 
-## Constants (`src/simulation/transit.ts`)
+## Constants (`legacy-ts-simulation/transit.ts`)
 
 ```ts
 const PLATFORM_CAPACITY = { bus: 50, metro: 300 } as const;
@@ -86,7 +86,7 @@ The initial game state seeds no transit nodes, so there is no scenario data to m
 
 **Removal cleanup.** When a route/line is removed, or a node removal cascades to route removals (`removeAtTile`), strip the dead route id from **all** platforms across all remaining nodes. Removing a node drops its platforms with it.
 
-## Simulation — On-Platform Gating (`src/simulation/transit.ts`)
+## Simulation — On-Platform Gating (`legacy-ts-simulation/transit.ts`)
 
 The hard cap is enforced only at boarding. At the **start of `tickVehicles`**, compute one snapshot set of board-eligible citizen ids:
 
@@ -110,7 +110,7 @@ Computing the snapshot **once at tick start** (from tick-start state) makes boar
 
 **Overflow behavior falls out for free:** citizens beyond a platform's capacity are absent from the set, cannot board this tick, but remain `waiting` and keep losing patience through the existing `tickCitizens` path (no new status, no new state). As on-platform riders board and leave, overflow citizens' rank improves and they become eligible. Severe jams time out via the existing patience → unserved mechanic, feeding existing metrics/objectives.
 
-## Router (`src/simulation/router.ts`)
+## Router (`legacy-ts-simulation/router.ts`)
 
 Unchanged. Confirmed by the chosen overflow rule (queue off-platform, not plan-around).
 

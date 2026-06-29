@@ -68,7 +68,7 @@ No changes to `src/domain/types.ts` — `Route` and `MetroLine` already carry
   management panel. Added to `createUiState()` as `null`. Cleared on tool
   change / remove / reset like other selection fields.
 
-### Pure functions (`src/simulation/transit.ts`)
+### Pure functions (`legacy-ts-simulation/transit.ts`)
 
 Each takes `GameState`, returns a new `GameState`, and **preserves reference
 equality when nothing changes** (per the determinism / reference-equality
@@ -188,7 +188,7 @@ involvement.
 
 ### Open item to verify during implementation
 
-Confirm `src/simulation/router.ts` trip planning already excludes **inactive**
+Confirm `legacy-ts-simulation/router.ts` trip planning already excludes **inactive**
 routes/lines from new trip plans. If it does not, `setRouteActive(…, false)`
 must also exclude the line from routing so "pause" truly pauses. Include the
 fix if needed.

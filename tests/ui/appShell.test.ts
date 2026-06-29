@@ -16,7 +16,7 @@ import type {
   RoadPreset,
   Tool,
 } from "../../src/domain/types";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createTestGameState } from "../helpers/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import type {
   RuntimeController,
@@ -37,7 +37,7 @@ function createRuntimeHarness(
     backendError?: string | null;
   } = {},
 ): { runtime: RuntimeController } {
-  let state = options.state ?? createInitialGameState();
+  let state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
   let backendError = options.backendError ?? null;
   const listeners = new Set<RuntimeListener>();
@@ -72,7 +72,7 @@ function createRuntimeHarness(
     isRunning: vi.fn(() => false),
     tick: vi.fn((_deltaSeconds: number) => publish()),
     reset: vi.fn(() => {
-      state = createInitialGameState();
+      state = createTestGameState();
       ui = createUiState();
       return publish();
     }),
@@ -218,12 +218,13 @@ function deferredRuntimeResult(): {
 
 describe("App shell bootstrap", () => {
   it("renders runtime-driven topbar, canvas host, and bottom HUD", async () => {
-    const baseState = createInitialGameState();
+    const baseState = createTestGameState();
     const { runtime } = createRuntimeHarness({
       state: {
         ...baseState,
         budget: 123_456,
         time: 125,
+        clockMinutes: 125,
         paused: false,
         speed: 2,
         metrics: {
@@ -252,7 +253,7 @@ describe("App shell bootstrap", () => {
     expect(screen.getByText("CAELUM")).toBeVisible();
     expect(screen.getByText("Transit Ops")).toBeVisible();
     expect(screen.getByText("$123,456")).toBeVisible();
-    expect(screen.getByText("T+02:05")).toBeVisible();
+    expect(screen.getByText("Day 1 02:05")).toBeVisible();
     expect(screen.getByText("Growing Suburb")).toBeVisible();
     expect(
       screen.getByText(
@@ -321,7 +322,7 @@ describe("App shell bootstrap", () => {
       "false",
     );
 
-    const nextState: GameState = { ...createInitialGameState(), speed: 4 };
+    const nextState: GameState = { ...createTestGameState(), speed: 4 };
     const nextUi = createUiState();
     deferred.resolve({
       state: nextState,
@@ -340,7 +341,7 @@ describe("App shell bootstrap", () => {
 
   it("keeps the selected speed visually active while paused", () => {
     const { runtime } = createRuntimeHarness({
-      state: { ...createInitialGameState(), paused: true, speed: 2 },
+      state: { ...createTestGameState(), paused: true, speed: 2 },
     });
 
     render(App, { props: { runtime } });

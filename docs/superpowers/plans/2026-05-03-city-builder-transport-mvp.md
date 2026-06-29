@@ -28,13 +28,13 @@ Create these files:
 - `src/domain/types.ts` - shared domain types and constants.
 - `src/domain/ids.ts` - deterministic id helpers.
 - `src/scenario/growingSuburb.ts` - seeded map, growth waves, starting budget, objectives.
-- `src/simulation/gameState.ts` - create initial game state and selectors.
-- `src/simulation/map.ts` - tile lookup, placement validation, growth application.
-- `src/simulation/transit.ts` - stops, stations, routes, lines, vehicles, actions, stats.
-- `src/simulation/router.ts` - deterministic multimodal path finding.
-- `src/simulation/citizens.ts` - citizen spawning, trip lifecycle, waiting, transfer, arrival.
-- `src/simulation/objectives.ts` - rolling metrics, win/loss state.
-- `src/simulation/simulation.ts` - tick orchestration.
+- `legacy-ts-simulation/gameState.ts` - create initial game state and selectors.
+- `legacy-ts-simulation/map.ts` - tile lookup, placement validation, growth application.
+- `legacy-ts-simulation/transit.ts` - stops, stations, routes, lines, vehicles, actions, stats.
+- `legacy-ts-simulation/router.ts` - deterministic multimodal path finding.
+- `legacy-ts-simulation/citizens.ts` - citizen spawning, trip lifecycle, waiting, transfer, arrival.
+- `legacy-ts-simulation/objectives.ts` - rolling metrics, win/loss state.
+- `legacy-ts-simulation/simulation.ts` - tick orchestration.
 - `src/ui/uiState.ts` - active tool, selection, overlays, pointer previews.
 - `src/ui/actions.ts` - translate UI intents into validated game actions.
 - `src/render/colors.ts` - fixed visual palette for tiles, overlays, routes, entities.
@@ -289,7 +289,7 @@ git commit -m "chore: scaffold browser game project"
 - Create: `src/domain/types.ts`
 - Create: `src/domain/ids.ts`
 - Create: `src/scenario/growingSuburb.ts`
-- Create: `src/simulation/gameState.ts`
+- Create: `legacy-ts-simulation/gameState.ts`
 - Test: `tests/simulation/scenario.test.ts`
 
 - [ ] **Step 1: Write failing scenario tests**
@@ -298,7 +298,7 @@ Create `tests/simulation/scenario.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
 
 describe("Growing Suburb scenario", () => {
   it("creates a deterministic starting city", () => {
@@ -328,7 +328,7 @@ describe("Growing Suburb scenario", () => {
 
 Run: `bun run test:unit -- scenario.test.ts`
 
-Expected: FAIL because `src/simulation/gameState.ts` does not exist.
+Expected: FAIL because `legacy-ts-simulation/gameState.ts` does not exist.
 
 - [ ] **Step 3: Create shared domain types**
 
@@ -600,7 +600,7 @@ export function createGrowingSuburbScenario(): Scenario {
 
 - [ ] **Step 5: Create initial game state**
 
-Create `src/simulation/gameState.ts`:
+Create `legacy-ts-simulation/gameState.ts`:
 
 ```ts
 import type { GameState, Metrics, TransitNetwork } from "../domain/types";
@@ -653,15 +653,15 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/domain/types.ts src/domain/ids.ts src/scenario/growingSuburb.ts src/simulation/gameState.ts tests/simulation/scenario.test.ts
+git add src/domain/types.ts src/domain/ids.ts src/scenario/growingSuburb.ts legacy-ts-simulation/gameState.ts tests/simulation/scenario.test.ts
 git commit -m "feat: add deterministic growing suburb scenario"
 ```
 
 ## Task 3: Map Rules, Growth Waves, And Placement Validation
 
 **Files:**
-- Modify: `src/simulation/map.ts`
-- Modify: `src/simulation/gameState.ts`
+- Modify: `legacy-ts-simulation/map.ts`
+- Modify: `legacy-ts-simulation/gameState.ts`
 - Test: `tests/simulation/map.test.ts`
 
 - [ ] **Step 1: Write failing map tests**
@@ -670,8 +670,8 @@ Create `tests/simulation/map.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { applyDueGrowthWaves, getTile, isValidBusStopPlacement, isValidCivicAnchorPlacement, isValidMetroStationPlacement } from "../../src/simulation/map";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { applyDueGrowthWaves, getTile, isValidBusStopPlacement, isValidCivicAnchorPlacement, isValidMetroStationPlacement } from "../../legacy-ts-simulation/map";
 
 describe("map rules", () => {
   it("finds tiles by coordinate", () => {
@@ -715,11 +715,11 @@ describe("map rules", () => {
 
 Run: `bun run test:unit -- map.test.ts`
 
-Expected: FAIL because `src/simulation/map.ts` does not exist.
+Expected: FAIL because `legacy-ts-simulation/map.ts` does not exist.
 
 - [ ] **Step 3: Implement map helpers**
 
-Create `src/simulation/map.ts`:
+Create `legacy-ts-simulation/map.ts`:
 
 ```ts
 import { entityId } from "../domain/ids";
@@ -812,14 +812,14 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/map.ts tests/simulation/map.test.ts
+git add legacy-ts-simulation/map.ts tests/simulation/map.test.ts
 git commit -m "feat: add map placement and growth rules"
 ```
 
 ## Task 4: Transit Network Actions
 
 **Files:**
-- Create: `src/simulation/transit.ts`
+- Create: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write failing transit tests**
@@ -828,8 +828,8 @@ Create `tests/simulation/transit.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle } from "../../src/simulation/transit";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle } from "../../legacy-ts-simulation/transit";
 
 describe("transit actions", () => {
   it("adds bus stops and spends budget", () => {
@@ -874,11 +874,11 @@ describe("transit actions", () => {
 
 Run: `bun run test:unit -- transit.test.ts`
 
-Expected: FAIL because `src/simulation/transit.ts` does not exist.
+Expected: FAIL because `legacy-ts-simulation/transit.ts` does not exist.
 
 - [ ] **Step 3: Implement transit actions**
 
-Create `src/simulation/transit.ts`:
+Create `legacy-ts-simulation/transit.ts`:
 
 ```ts
 import { entityId } from "../domain/ids";
@@ -994,14 +994,14 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: add transit network actions"
 ```
 
 ## Task 5: Multimodal Router
 
 **Files:**
-- Create: `src/simulation/router.ts`
+- Create: `legacy-ts-simulation/router.ts`
 - Test: `tests/simulation/router.test.ts`
 
 - [ ] **Step 1: Write failing router tests**
@@ -1010,9 +1010,9 @@ Create `tests/simulation/router.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { findRoutePlan } from "../../src/simulation/router";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation } from "../../src/simulation/transit";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { findRoutePlan } from "../../legacy-ts-simulation/router";
+import { addBusRoute, addBusStop, addMetroLine, addMetroStation } from "../../legacy-ts-simulation/transit";
 
 describe("router", () => {
   it("returns a walking route for nearby destinations", () => {
@@ -1056,7 +1056,7 @@ Expected: FAIL because `findRoutePlan` is not defined.
 
 - [ ] **Step 3: Implement deterministic routing**
 
-Create `src/simulation/router.ts`:
+Create `legacy-ts-simulation/router.ts`:
 
 ```ts
 import type { GameState, Point, RouteLeg, RoutePlan, TransitMode } from "../domain/types";
@@ -1137,14 +1137,14 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/router.ts tests/simulation/router.test.ts
+git add legacy-ts-simulation/router.ts tests/simulation/router.test.ts
 git commit -m "feat: add deterministic multimodal routing"
 ```
 
 ## Task 6: Citizen Trip Lifecycle
 
 **Files:**
-- Create: `src/simulation/citizens.ts`
+- Create: `legacy-ts-simulation/citizens.ts`
 - Test: `tests/simulation/citizens.test.ts`
 
 - [ ] **Step 1: Write failing citizen tests**
@@ -1153,8 +1153,8 @@ Create `tests/simulation/citizens.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { tickCitizens } from "../../src/simulation/citizens";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { tickCitizens } from "../../legacy-ts-simulation/citizens";
 
 describe("citizen lifecycle", () => {
   it("plans a route and starts walking from idle", () => {
@@ -1189,7 +1189,7 @@ Expected: FAIL because `tickCitizens` is not defined.
 
 - [ ] **Step 3: Implement citizen lifecycle**
 
-Create `src/simulation/citizens.ts`:
+Create `legacy-ts-simulation/citizens.ts`:
 
 ```ts
 import type { Citizen, GameState, Point } from "../domain/types";
@@ -1288,15 +1288,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/citizens.ts tests/simulation/citizens.test.ts
+git add legacy-ts-simulation/citizens.ts tests/simulation/citizens.test.ts
 git commit -m "feat: add citizen trip lifecycle"
 ```
 
 ## Task 7: Vehicle Movement, Boarding, And Transfers
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
-- Modify: `src/simulation/citizens.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
+- Modify: `legacy-ts-simulation/citizens.ts`
 - Test: `tests/simulation/transit.test.ts`
 - Test: `tests/simulation/citizens.test.ts`
 
@@ -1305,7 +1305,7 @@ git commit -m "feat: add citizen trip lifecycle"
 Append to `tests/simulation/transit.test.ts`:
 
 ```ts
-import { tickVehicles } from "../../src/simulation/transit";
+import { tickVehicles } from "../../legacy-ts-simulation/transit";
 
 describe("vehicle movement", () => {
   it("moves vehicles along their assigned line", () => {
@@ -1364,7 +1364,7 @@ Expected: FAIL because `tickVehicles` is not defined.
 
 - [ ] **Step 3: Implement vehicle tick and boarding**
 
-Append to `src/simulation/transit.ts`:
+Append to `legacy-ts-simulation/transit.ts`:
 
 ```ts
 import type { Citizen, RouteLeg } from "../domain/types";
@@ -1446,15 +1446,15 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/simulation/transit.ts src/simulation/citizens.ts tests/simulation/transit.test.ts tests/simulation/citizens.test.ts
+git add legacy-ts-simulation/transit.ts legacy-ts-simulation/citizens.ts tests/simulation/transit.test.ts tests/simulation/citizens.test.ts
 git commit -m "feat: move vehicles and board passengers"
 ```
 
 ## Task 8: Objectives And Simulation Tick
 
 **Files:**
-- Create: `src/simulation/objectives.ts`
-- Create: `src/simulation/simulation.ts`
+- Create: `legacy-ts-simulation/objectives.ts`
+- Create: `legacy-ts-simulation/simulation.ts`
 - Test: `tests/simulation/objectives.test.ts`
 - Modify: `tests/simulation/scenario.test.ts`
 
@@ -1464,8 +1464,8 @@ Create `tests/simulation/objectives.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { createInitialGameState } from "../../src/simulation/gameState";
-import { evaluateObjectives } from "../../src/simulation/objectives";
+import { createInitialGameState } from "../../legacy-ts-simulation/gameState";
+import { evaluateObjectives } from "../../legacy-ts-simulation/objectives";
 
 describe("objectives", () => {
   it("wins after survival time when thresholds are healthy", () => {
@@ -1491,7 +1491,7 @@ describe("objectives", () => {
 Append to `tests/simulation/scenario.test.ts`:
 
 ```ts
-import { tickSimulation } from "../../src/simulation/simulation";
+import { tickSimulation } from "../../legacy-ts-simulation/simulation";
 
 describe("simulation tick", () => {
   it("advances time and applies growth", () => {
@@ -1512,7 +1512,7 @@ Expected: FAIL because `objectives.ts` and `simulation.ts` do not exist.
 
 - [ ] **Step 3: Implement objectives**
 
-Create `src/simulation/objectives.ts`:
+Create `legacy-ts-simulation/objectives.ts`:
 
 ```ts
 import type { GameState } from "../domain/types";
@@ -1561,7 +1561,7 @@ export function evaluateObjectives(state: GameState): GameState {
 
 - [ ] **Step 4: Implement simulation tick**
 
-Create `src/simulation/simulation.ts`:
+Create `legacy-ts-simulation/simulation.ts`:
 
 ```ts
 import type { GameState } from "../domain/types";
@@ -1599,7 +1599,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/simulation/objectives.ts src/simulation/simulation.ts tests/simulation/objectives.test.ts tests/simulation/scenario.test.ts
+git add legacy-ts-simulation/objectives.ts legacy-ts-simulation/simulation.ts tests/simulation/objectives.test.ts tests/simulation/scenario.test.ts
 git commit -m "feat: add simulation tick and objectives"
 ```
 
@@ -1871,8 +1871,8 @@ Create `src/ui/actions.ts`:
 ```ts
 import type { GameState, Point } from "../domain/types";
 import type { UiState } from "./uiState";
-import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle } from "../simulation/transit";
-import { isValidCivicAnchorPlacement } from "../simulation/map";
+import { addBusRoute, addBusStop, addMetroLine, addMetroStation, assignVehicle } from "../legacy-ts-simulation/transit";
+import { isValidCivicAnchorPlacement } from "../legacy-ts-simulation/map";
 
 export function handleTileClick(state: GameState, ui: UiState, point: Point): { state: GameState; ui: UiState } {
   if (ui.activeTool === "busStop") {

@@ -17,9 +17,9 @@
 Files created/modified, each with one responsibility:
 
 - **`src/domain/types.ts`** (modify) — `RoadDirection` union, `oneWay?` on `Tile`, and the `ROAD_DIRECTION_OFFSET` cardinal→`Point` mapping (the single source of truth for direction vectors, shared by pathfinding and rendering).
-- **`src/simulation/network.ts`** (modify) — `findTilePath` honours the one-way exit constraint for bus mode.
-- **`src/simulation/map.ts`** (modify) — `setTileOneWay` helper; `setTileKind` clears `oneWay` whenever a tile stops being a road.
-- **`src/simulation/transit.ts`** (modify) — `cycleRoadDirection` action (cycles `oneWay`, runs `recomputeRoutePaths`).
+- **`legacy-ts-simulation/network.ts`** (modify) — `findTilePath` honours the one-way exit constraint for bus mode.
+- **`legacy-ts-simulation/map.ts`** (modify) — `setTileOneWay` helper; `setTileKind` clears `oneWay` whenever a tile stops being a road.
+- **`legacy-ts-simulation/transit.ts`** (modify) — `cycleRoadDirection` action (cycles `oneWay`, runs `recomputeRoutePaths`).
 - **`src/ui/actions.ts`** (modify) — Road tool branch: empty tile → lay, existing road → cycle direction.
 - **`src/render/colors.ts`** (modify) — `oneWayArrow` colour.
 - **`src/render/mapRenderer.ts`** (modify) — one-way arrow render pass.
@@ -33,7 +33,7 @@ Map facts used by tests (from `src/scenario/growingSuburb.ts`): map is 28×18. R
 
 **Files:**
 - Modify: `src/domain/types.ts` (add `RoadDirection`, `oneWay?`, `ROAD_DIRECTION_OFFSET`)
-- Modify: `src/simulation/network.ts` (exit constraint)
+- Modify: `legacy-ts-simulation/network.ts` (exit constraint)
 - Test: `tests/simulation/network.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
@@ -175,7 +175,7 @@ export const ROAD_DIRECTION_OFFSET: Record<RoadDirection, Point> = {
 };
 ```
 
-- [ ] **Step 4: Add the exit constraint to `src/simulation/network.ts`**
+- [ ] **Step 4: Add the exit constraint to `legacy-ts-simulation/network.ts`**
 
 Import the offset map (add to the existing type import on line 1):
 
@@ -219,7 +219,7 @@ Expected: PASS (all `findTilePath` tests, new and existing).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/domain/types.ts src/simulation/network.ts tests/simulation/network.test.ts
+git add src/domain/types.ts legacy-ts-simulation/network.ts tests/simulation/network.test.ts
 git commit -m "feat: one-way road exit constraint in bus pathfinding"
 ```
 
@@ -228,7 +228,7 @@ git commit -m "feat: one-way road exit constraint in bus pathfinding"
 ## Task 2: Map helpers — `setTileOneWay` and `oneWay` clearing
 
 **Files:**
-- Modify: `src/simulation/map.ts`
+- Modify: `legacy-ts-simulation/map.ts`
 - Test: `tests/simulation/map.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
@@ -246,7 +246,7 @@ import {
   isValidTrackPlacement,
   setTileKind,
   setTileOneWay,
-} from "../../src/simulation/map";
+} from "../../legacy-ts-simulation/map";
 ```
 
 ```ts
@@ -289,7 +289,7 @@ describe("road direction helpers", () => {
 Run: `bunx vitest run tests/simulation/map.test.ts`
 Expected: FAIL — `setTileOneWay` is not exported, and `setTileKind` does not yet drop `oneWay`.
 
-- [ ] **Step 3: Update `setTileKind` and add `setTileOneWay` in `src/simulation/map.ts`**
+- [ ] **Step 3: Update `setTileKind` and add `setTileOneWay` in `legacy-ts-simulation/map.ts`**
 
 Add `RoadDirection` to the type import (lines 2–9). Replace the existing `setTileKind` so non-road kinds drop `oneWay`, and add `setTileOneWay` after it:
 
@@ -344,7 +344,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/map.ts tests/simulation/map.test.ts
+git add legacy-ts-simulation/map.ts tests/simulation/map.test.ts
 git commit -m "feat: setTileOneWay helper and oneWay clearing on kind change"
 ```
 
@@ -353,16 +353,16 @@ git commit -m "feat: setTileOneWay helper and oneWay clearing on kind change"
 ## Task 3: `cycleRoadDirection` action + route revalidation
 
 **Files:**
-- Modify: `src/simulation/transit.ts`
+- Modify: `legacy-ts-simulation/transit.ts`
 - Test: `tests/simulation/transit.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/simulation/transit.test.ts`. Ensure the import from `../../src/simulation/transit` includes `addBusRoute`, `addBusStop`, and `cycleRoadDirection`, and import `getTile`:
+Add to `tests/simulation/transit.test.ts`. Ensure the import from `../../legacy-ts-simulation/transit` includes `addBusRoute`, `addBusStop`, and `cycleRoadDirection`, and import `getTile`:
 
 ```ts
-import { getTile } from "../../src/simulation/map";
-import { cycleRoadDirection } from "../../src/simulation/transit";
+import { getTile } from "../../legacy-ts-simulation/map";
+import { cycleRoadDirection } from "../../legacy-ts-simulation/transit";
 ```
 
 ```ts
@@ -413,7 +413,7 @@ describe("cycleRoadDirection", () => {
 Run: `bunx vitest run tests/simulation/transit.test.ts`
 Expected: FAIL — `cycleRoadDirection` is not exported.
 
-- [ ] **Step 3: Implement `cycleRoadDirection` in `src/simulation/transit.ts`**
+- [ ] **Step 3: Implement `cycleRoadDirection` in `legacy-ts-simulation/transit.ts`**
 
 Add `RoadDirection` to the type import (lines 2–13), add `setTileOneWay` to the map import (lines 14–22). Add the function next to `layRoad` (after the `layTrack` function, near line 728):
 
@@ -450,7 +450,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/simulation/transit.ts tests/simulation/transit.test.ts
+git add legacy-ts-simulation/transit.ts tests/simulation/transit.test.ts
 git commit -m "feat: cycleRoadDirection action with route revalidation"
 ```
 
@@ -509,10 +509,10 @@ Expected: FAIL — clicking an existing road currently no-ops (`layRoad` rejects
 Add `getTile` to imports (it is not currently imported here):
 
 ```ts
-import { getTile } from "../simulation/map";
+import { getTile } from "../legacy-ts-simulation/map";
 ```
 
-Add `cycleRoadDirection` to the existing `../simulation/transit` import list (alongside `layRoad`, `layTrack`, etc.).
+Add `cycleRoadDirection` to the existing `../legacy-ts-simulation/transit` import list (alongside `layRoad`, `layTrack`, etc.).
 
 Replace the `road` tool branch in `handleTileClick`:
 

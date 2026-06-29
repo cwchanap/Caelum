@@ -83,7 +83,7 @@
   - Backend/runtime adapter tests.
 - `tests/e2e/smoke.spec.ts`, `tests/e2e/routes.spec.ts`
   - Rust-backed playable smoke coverage.
-- Existing `src/simulation/*.ts` and `tests/simulation/*.test.ts`
+- Existing `legacy-ts-simulation/*.ts` and `tests/simulation/*.test.ts`
   - Keep as reference during migration, then delete or isolate after Rust parity tests cover the behavior.
 
 ---
@@ -1070,7 +1070,7 @@ pub fn shift_template_for_id(id: &str) -> Option<String> {
 
 - [ ] **Step 6: Add building catalog and placement**
 
-Create `crates/caelum-core/src/building_catalog.rs` with catalog entries matching `src/simulation/buildingCatalog.ts`. Use this structure:
+Create `crates/caelum-core/src/building_catalog.rs` with catalog entries matching `legacy-ts-simulation/buildingCatalog.ts`. Use this structure:
 
 ```rust
 #[derive(Clone, Debug, PartialEq)]
@@ -1115,7 +1115,7 @@ pub fn building_definition(building_type: &str) -> Option<&'static BuildingDefin
 }
 ```
 
-Add the remaining existing catalog entries in the same file before running full tests: `largeHouse`, `cinema`, `factory`, `warehouse`, `officeTower`, `businessPark`, `clinic`, `school`, `parkPlaza`, `busStop`, `busTerminal`, and `metroStation`, using the costs, dimensions, and effects from `src/simulation/buildingCatalog.ts`.
+Add the remaining existing catalog entries in the same file before running full tests: `largeHouse`, `cinema`, `factory`, `warehouse`, `officeTower`, `businessPark`, `clinic`, `school`, `parkPlaza`, `busStop`, `busTerminal`, and `metroStation`, using the costs, dimensions, and effects from `legacy-ts-simulation/buildingCatalog.ts`.
 
 Create `crates/caelum-core/src/buildings.rs`:
 
@@ -1481,11 +1481,11 @@ AssignRouteToPlatform {
 
 Create `crates/caelum-core/src/network.rs`, `platforms.rs`, `router.rs`, and `transit.rs` by translating these current TypeScript modules:
 
-- `src/simulation/network.ts` -> `network.rs`
-- `src/simulation/platforms.ts` -> `platforms.rs`
-- `src/simulation/router.ts` -> `router.rs`
-- `src/simulation/transit.ts` -> `transit.rs`
-- `src/simulation/tileQueries.ts` helper behavior -> small private helpers in the modules that need them
+- `legacy-ts-simulation/network.ts` -> `network.rs`
+- `legacy-ts-simulation/platforms.ts` -> `platforms.rs`
+- `legacy-ts-simulation/router.ts` -> `router.rs`
+- `legacy-ts-simulation/transit.ts` -> `transit.rs`
+- `legacy-ts-simulation/tileQueries.ts` helper behavior -> small private helpers in the modules that need them
 
 Use these public Rust function signatures:
 
@@ -1822,7 +1822,7 @@ fn advance_active_trips(state: &mut GameSnapshot, _delta_seconds: f64) {
 }
 ```
 
-After adding this skeleton, complete `advance_active_trips` by moving the existing walking/waiting/riding advancement from TypeScript `src/simulation/citizens.ts` into Rust, using `ActiveTrip` instead of `Citizen`. Preserve these constants:
+After adding this skeleton, complete `advance_active_trips` by moving the existing walking/waiting/riding advancement from TypeScript `legacy-ts-simulation/citizens.ts` into Rust, using `ActiveTrip` instead of `Citizen`. Preserve these constants:
 
 ```rust
 const WALK_SECONDS_PER_TILE: f64 = 20.0;
@@ -2872,7 +2872,7 @@ git commit -m "feat: render rust trip snapshots"
 ### Task 11: Retire TypeScript Simulation Authority
 
 **Files:**
-- Modify/Delete: `src/simulation/*.ts`
+- Modify/Delete: `legacy-ts-simulation/*.ts`
 - Modify/Delete: `tests/simulation/*.test.ts`
 - Modify: `vite.config.ts`
 - Modify: `docs/architecture.md`
@@ -2912,7 +2912,7 @@ Then delete migrated tests under `tests/simulation` when their Rust equivalent e
 Run:
 
 ```sh
-rg "src/simulation|\\.\\./simulation|\\.\\./\\.\\./src/simulation" src tests
+rg "legacy-ts-simulation|\\.\\./simulation|\\.\\./\\.\\./legacy-ts-simulation" src tests
 ```
 
 Expected: output only from render/selectors that still import read-only constants, or no output.
@@ -2920,10 +2920,10 @@ Expected: output only from render/selectors that still import read-only constant
 Delete mutation modules no longer imported:
 
 ```sh
-git rm src/simulation/citizens.ts src/simulation/simulation.ts src/simulation/transit.ts src/simulation/router.ts src/simulation/network.ts src/simulation/objectives.ts
+git rm legacy-ts-simulation/citizens.ts legacy-ts-simulation/simulation.ts legacy-ts-simulation/transit.ts legacy-ts-simulation/router.ts legacy-ts-simulation/network.ts legacy-ts-simulation/objectives.ts
 ```
 
-Keep `src/simulation/areas.ts`, `buildingCatalog.ts`, and read-only UI constants only if TypeScript UI still imports labels/catalog display data. If they remain, rename them to `src/ui/catalogLabels.ts` and `src/ui/areaLabels.ts` so they are not confused with simulation authority.
+Keep `legacy-ts-simulation/areas.ts`, `buildingCatalog.ts`, and read-only UI constants only if TypeScript UI still imports labels/catalog display data. If they remain, rename them to `src/ui/catalogLabels.ts` and `src/ui/areaLabels.ts` so they are not confused with simulation authority.
 
 - [ ] **Step 4: Update architecture docs**
 

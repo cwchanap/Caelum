@@ -156,7 +156,7 @@ describe("inspect drawer auto-open", () => {
 });
 ```
 
-Ensure the file imports `addBusStop`. If not already imported, add it to the existing import from `"../../src/simulation/transit"`.
+Ensure the file imports `addBusStop`. If not already imported, add it to the existing import from `"../../legacy-ts-simulation/transit"`.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -491,7 +491,7 @@ git commit -m "feat: derive ShellHudState (tool chip, badges, cancel flag)"
 ```svelte
 <script lang="ts">
   import type { BuildingRotation, BuildingType, Tool } from "../../../domain/types";
-  import { BUILDING_CATALOG } from "../../../simulation/buildings";
+  import { BUILDING_CATALOG } from "../../../legacy-ts-simulation/buildings";
 
   type GlobalTool = Extract<Tool, "inspect" | "remove">;
 
