@@ -69,6 +69,11 @@ export function createStartingCitizens(): Citizen[] {
 // player must build destinations and actually serve at least one trip before
 // the scenario can be won. Tiles are bare ground off the starter arterial
 // cross (y=8,9 / x=14,15) so the wave can claim them.
+//
+// TODO(HPA-118): this is the one remaining piece of gameplay state that lives
+// on the TS side rather than in `crates/caelum-core`. Once the core owns
+// citizen spawning + zoning, this function should be removed and the waves
+// sourced from the Rust snapshot. https://linear.app/cwchanap/issue/HPA-118
 export function createGrowingSuburbWaves(): GrowthWave[] {
   return [
     {
