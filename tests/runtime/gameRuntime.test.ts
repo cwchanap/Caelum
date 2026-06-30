@@ -348,6 +348,43 @@ function applyIntent(
       },
     };
   }
+  if (intent.type === "assignVehicle") {
+    // Mirrors `caelum-core::transit::assign_vehicle`: append a vehicle and
+    // link it back onto the matching route/metroLine `vehicleIds`.
+    const id = `vehicle-${(snapshot.transit.vehicles.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    const vehicle = {
+      id,
+      mode: intent.mode,
+      lineId: intent.lineId,
+      capacity: intent.mode === "bus" ? 30 : 120,
+      passengerIds: [],
+      segmentIndex: 0,
+      progress: 0,
+    };
+    const transit =
+      intent.mode === "bus"
+        ? {
+            ...snapshot.transit,
+            vehicles: [...snapshot.transit.vehicles, vehicle],
+            routes: snapshot.transit.routes.map((route) =>
+              route.id === intent.lineId
+                ? { ...route, vehicleIds: [...route.vehicleIds, id] }
+                : route,
+            ),
+          }
+        : {
+            ...snapshot.transit,
+            vehicles: [...snapshot.transit.vehicles, vehicle],
+            metroLines: snapshot.transit.metroLines.map((line) =>
+              line.id === intent.lineId
+                ? { ...line, vehicleIds: [...line.vehicleIds, id] }
+                : line,
+            ),
+          };
+    return { ...snapshot, transit };
+  }
   if (intent.type === "assignRouteToPlatform") {
     return {
       ...snapshot,
@@ -928,6 +965,47 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().ui.draftStopIds).toEqual([]);
   });
 
+  it("chains assignVehicle after route creation so the line gets a vehicle", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    await runtime.finishRoute();
+
+    // The create intent is followed by an assignVehicle intent for the new
+    // line id, in order — mirroring the old atomic TS finishDraftRoute.
+    const createIndex = backend.intents.findIndex(
+      (intent) => intent.type === "addBusRoute",
+    );
+    const assignIndex = backend.intents.findIndex(
+      (intent) => intent.type === "assignVehicle",
+    );
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(assignIndex).toBeGreaterThan(createIndex);
+    expect(backend.intents[assignIndex]).toEqual({
+      type: "assignVehicle",
+      mode: "bus",
+      lineId: "route-001",
+    });
+
+    const route = runtime.getSnapshot().state.transit.routes[0];
+    expect(route.vehicleIds).toEqual(["vehicle-001"]);
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
+    expect(runtime.getSnapshot().state.transit.vehicles[0].lineId).toBe(
+      "route-001",
+    );
+  });
+
+  it("does not dispatch assignVehicle when the backend rejects the route", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    backend.rejectNextDispatch();
+    await runtime.finishRoute();
+
+    expect(backend.intents.some((i) => i.type === "assignVehicle")).toBe(false);
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
+  });
+
   it("does not let a slow route finish clear a newer draft", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
@@ -943,6 +1021,9 @@ describe("route creation and management", () => {
       "stop-002",
     ]);
 
+    await backend.resolveNext();
+    // `finishRoute` chains `addBusRoute` → `assignVehicle`; resolve the
+    // vehicle-assignment dispatch too so the queued operation completes.
     await backend.resolveNext();
     await firstFinish;
 

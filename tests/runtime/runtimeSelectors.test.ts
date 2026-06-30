@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
-import type { Citizen } from "../../src/domain/types";
+import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
@@ -19,24 +19,29 @@ import {
   withTracks,
 } from "../helpers/mapFixtures";
 
-function waitingBusCitizen(
+// Waiting commuters live in `state.activeTrips` in the Rust-backed runtime
+// (`normalizeRustSnapshot` always empties the legacy `citizens` array), so the
+// occupancy selector reads `activeTrips`. Build a waiting trip, not a citizen.
+function waitingBusTrip(
   id: string,
   position: { x: number; y: number },
   lineId: string,
-): Citizen {
+): ActiveTrip {
   return {
     id,
-    home: position,
+    simId: `sim-${id}`,
+    purpose: "commuteOutbound",
+    origin: position,
     destination: { x: 0, y: 0 },
     position,
     status: "waiting",
-    patienceRemaining: 100,
     deadline: 9_999,
     routePlan: {
       estimatedSeconds: 100,
       legs: [{ mode: "bus", from: position, to: { x: 0, y: 0 }, lineId }],
     },
     currentLegIndex: 0,
+    patienceRemaining: 100,
   };
 }
 
@@ -76,7 +81,7 @@ describe("selectShellState inspector", () => {
     ]);
   });
 
-  it("reports platform occupancy from waiting citizens", () => {
+  it("reports platform occupancy from waiting trips", () => {
     let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withRoads(state, pointsOnColumn(14, 7, 8));
     state = addTestBusStop(state, { x: 14, y: 7 }, "busTerminal");
@@ -88,8 +93,11 @@ describe("selectShellState inspector", () => {
     const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
     const routeId = state.transit.routes[0].id;
 
-    const waiter = waitingBusCitizen("c-wait", terminal.position, routeId);
-    state = { ...state, citizens: [...state.citizens, waiter] };
+    const waiter = waitingBusTrip("c-wait", terminal.position, routeId);
+    state = {
+      ...state,
+      activeTrips: [...(state.activeTrips ?? []), waiter],
+    };
 
     const ui = {
       ...createUiState(),

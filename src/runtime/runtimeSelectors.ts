@@ -85,7 +85,11 @@ function selectPlatformOccupancy(
     }
   }
 
-  for (const entity of [...state.citizens, ...(state.activeTrips ?? [])]) {
+  // Waiting occupancy is driven by active trips only. `state.citizens` is a
+  // legacy field that the Rust snapshot always empties (`normalizeRustSnapshot`
+  // hardcodes `citizens: []`); sims/active trips are the live data, so do not
+  // spread the dead `citizens` array here.
+  for (const entity of state.activeTrips ?? []) {
     if (entity.status !== "waiting") {
       continue;
     }
@@ -316,7 +320,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       budget: formatBudget(state.budget),
       signalState: state.paused ? "Hold" : "Live",
       time: formatSnapshotClock(state),
-      population: `${state.sims?.length ?? state.citizens.length}`,
+      population: `${state.sims?.length ?? 0}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,

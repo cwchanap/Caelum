@@ -666,33 +666,82 @@ export async function createGameRuntime({
       return commit(state, applyRemoveDraftNode(state, ui, index));
     },
     finishRoute() {
-      if (ui.activeTool === "busRoute") {
-        const submittedStopIds = ui.draftStopIds;
-        const submittedStopPaths = ui.draftStopPaths;
-        return enqueueDispatch(
-          { type: "addBusRoute", stopIds: submittedStopIds },
-          (applied, currentUi) =>
-            applied &&
-            currentUi.draftStopIds === submittedStopIds &&
-            currentUi.draftStopPaths === submittedStopPaths
-              ? { ...currentUi, draftStopIds: [], draftStopPaths: [] }
-              : currentUi,
-        );
+      // Finishing a draft is a two-step backend transaction: create the line,
+      // then assign a vehicle to it. The old TS `finishDraftRoute` performed
+      // both atomically; the Rust core exposes them as separate intents
+      // (`addBusRoute`/`addMetroLine` then `assignVehicle`), so chain them
+      // inside one queued operation. Without the `assignVehicle` step the new
+      // line has `vehicleIds: []` forever and no transit trip can ever board —
+      // the survival win-gate becomes unwinnable except by walking.
+      const isBus = ui.activeTool === "busRoute";
+      const isMetro = ui.activeTool === "metroLine";
+      if (!isBus && !isMetro) {
+        return commit(state, ui);
       }
-      if (ui.activeTool === "metroLine") {
-        const submittedStationIds = ui.draftStationIds;
-        const submittedStationPaths = ui.draftStationPaths;
-        return enqueueDispatch(
-          { type: "addMetroLine", stationIds: submittedStationIds },
-          (applied, currentUi) =>
-            applied &&
-            currentUi.draftStationIds === submittedStationIds &&
-            currentUi.draftStationPaths === submittedStationPaths
-              ? { ...currentUi, draftStationIds: [], draftStationPaths: [] }
-              : currentUi,
+
+      const mode: "bus" | "metro" = isBus ? "bus" : "metro";
+      const createIntent: GameIntent = isBus
+        ? { type: "addBusRoute", stopIds: ui.draftStopIds }
+        : { type: "addMetroLine", stationIds: ui.draftStationIds };
+      const submittedDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
+      const submittedDraftPaths = isBus
+        ? ui.draftStopPaths
+        : ui.draftStationPaths;
+
+      return queueBackend(async () => {
+        const beforeIds = new Set(
+          (isBus ? state.transit.routes : state.transit.metroLines).map(
+            (entry) => entry.id,
+          ),
         );
-      }
-      return commit(state, ui);
+        const createResult = await backend.dispatch(createIntent);
+        backendError = null;
+        const afterCreate = normalizeRustSnapshot(createResult.snapshot);
+
+        // Clear the submitted draft only when the backend accepted the line
+        // and the draft has not been mutated while the dispatch was in flight
+        // (parity with the previous single-dispatch `applied` gate). Read `ui`
+        // after the dispatch resolves so a newer draft survives a slow finish.
+        const draftUnchanged = isBus
+          ? ui.draftStopIds === submittedDraftIds &&
+            ui.draftStopPaths === submittedDraftPaths
+          : ui.draftStationIds === submittedDraftIds &&
+            ui.draftStationPaths === submittedDraftPaths;
+        const nextUi =
+          createResult.applied && draftUnchanged
+            ? isBus
+              ? { ...ui, draftStopIds: [], draftStopPaths: [] }
+              : {
+                  ...ui,
+                  draftStationIds: [],
+                  draftStationPaths: [],
+                }
+            : ui;
+
+        if (!createResult.applied) {
+          return commit(afterCreate, nextUi);
+        }
+
+        // Identify the freshly created line by diffing ids, then assign a
+        // vehicle. If the line cannot be resolved (e.g. the backend accepted
+        // but did not surface a new id), keep the accepted snapshot rather
+        // than silently dropping the route.
+        const afterRoutes = isBus
+          ? afterCreate.transit.routes
+          : afterCreate.transit.metroLines;
+        const newLine = afterRoutes.find((entry) => !beforeIds.has(entry.id));
+        if (newLine === undefined) {
+          return commit(afterCreate, nextUi);
+        }
+
+        const vehicleResult = await backend.dispatch({
+          type: "assignVehicle",
+          mode,
+          lineId: newLine.id,
+        });
+        backendError = null;
+        return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
+      });
     },
     cancelRoute() {
       return commit(state, cancelDraftRoute(ui));

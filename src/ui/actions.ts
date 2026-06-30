@@ -3,7 +3,6 @@ import {
   appendDraftStation,
   appendDraftStop,
   cancelDraftRoute,
-  finishDraftRoute,
   removeDraftNode,
   resolveStationAtTile,
   resolveStopAtTile,
@@ -121,7 +120,6 @@ export function applyUiTileClick(
 
 export {
   cancelDraftRoute,
-  finishDraftRoute,
   removeDraftNode,
   resolveStationAtTile,
   resolveStopAtTile,
