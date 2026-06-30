@@ -3,7 +3,6 @@ import type { GameState, Point } from "../../src/domain/types";
 import {
   applyUiTileClick,
   cancelDraftRoute,
-  handleTileClick,
   removeDraftNode,
   resolveNodeAtTile,
   resolveNodesAtTile,
@@ -166,7 +165,7 @@ describe("applyUiTileClick inspect", () => {
       selectedNodeKind: "stop" as const,
     };
 
-    const result = handleTileClick(state, ui, { x: 7, y: 2 });
+    const result = applyUiTileClick(state, ui, { x: 7, y: 2 });
 
     expect(result.ui.selectedNodeKind).toBe("station");
   });

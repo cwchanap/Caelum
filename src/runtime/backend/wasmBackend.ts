@@ -1,4 +1,5 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
+import { normalizeDispatchResult } from "./shared";
 import type {
   DispatchResult,
   GameBackend,
@@ -57,8 +58,4 @@ export async function createWasmBackend(): Promise<GameBackend> {
       return engine.reset() as RustGameSnapshot;
     },
   };
-}
-
-function normalizeDispatchResult(result: DispatchResult): DispatchResult {
-  return { ...result, rejection: result.rejection ?? null };
 }

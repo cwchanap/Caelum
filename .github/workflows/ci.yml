@@ -35,6 +35,9 @@ jobs:
       - name: Install wasm-pack
         run: cargo +stable install wasm-pack --version 0.13.0 --locked
 
+      - name: Build WASM artifacts
+        run: bun run wasm:build:release
+
       - name: Type check
         run: bun run check
 
@@ -62,6 +65,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Rust WASM toolchain
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+
+      - name: Build WASM artifacts
+        run: bun run wasm:build:release
+
       - name: Run unit tests with coverage
         run: bun run test:unit:coverage
 
@@ -88,6 +100,15 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Install Rust WASM toolchain
+        run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+
+      - name: Build WASM artifacts
+        run: bun run wasm:build:release
 
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium

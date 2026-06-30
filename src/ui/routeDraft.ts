@@ -1,10 +1,4 @@
-import type {
-  GameState,
-  Point,
-  Station,
-  Stop,
-  TransitMode,
-} from "../domain/types";
+import type { GameState, Point, Station, Stop } from "../domain/types";
 import { findTilePath } from "./tilePath";
 import type { UiState } from "./uiState";
 
@@ -59,15 +53,6 @@ export function resolveStationAtTile(
     : state.transit.stations.find(
         (station) => station.id === building.transitNodeId,
       );
-}
-
-export function tilePathExists(
-  state: GameState,
-  from: Point,
-  to: Point,
-  mode: Extract<TransitMode, "bus" | "metro">,
-): boolean {
-  return findTilePath(state.map, from, to, mode) !== null;
 }
 
 function appendDraftNode(

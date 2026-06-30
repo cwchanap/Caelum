@@ -9,6 +9,7 @@ import type {
   ShellInspectorState,
   ShellPlatform,
   ShellRouteDraftState,
+  ShellRouteListItem,
   ShellRouteListState,
   ShellState,
 } from "./types";
@@ -29,19 +30,7 @@ export function formatBudget(budget: number): string {
   return `$${budget.toLocaleString()}`;
 }
 
-export function formatTime(seconds: number): string {
-  const total = Math.floor(seconds);
-  const mins = Math.floor(total / 60);
-  const secs = total % 60;
-
-  return `T+${pad2(mins)}:${pad2(secs)}`;
-}
-
 function formatSnapshotClock(state: GameState): string {
-  if (state.day === undefined || state.clockMinutes === undefined) {
-    return formatTime(state.time);
-  }
-
   const hours = Math.floor(state.clockMinutes / 60) % 24;
   const minutes = state.clockMinutes % 60;
   return `Day ${state.day + 1} ${pad2(hours)}:${pad2(minutes)}`;
@@ -267,7 +256,7 @@ function buildRouteDraft(
 }
 
 function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
-  const buses: ShellRouteListState = state.transit.routes.map((route) => ({
+  const buses: ShellRouteListItem[] = state.transit.routes.map((route) => ({
     id: route.id,
     name: route.name,
     color: route.color,
@@ -276,7 +265,7 @@ function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
     active: route.active,
     selected: ui.selectedRouteId === route.id,
   }));
-  const metros: ShellRouteListState = state.transit.metroLines.map((line) => ({
+  const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) => ({
     id: line.id,
     name: line.name,
     color: line.color,
