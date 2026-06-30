@@ -8,6 +8,12 @@ import type { RustGameSnapshot } from "./backend/types";
 // name and objective thresholds come from the authoritative Rust snapshot (see
 // `normalizeRustSnapshot`), so the shell can never drift from the values the
 // core's `evaluate_objectives` actually enforces.
+//
+// TODO(HPA-118): move growth waves (scheduling, zoning, citizen spawning) into
+// `crates/caelum-core` so browser and Tauri hosts stay symmetric and the wave
+// schedule is deterministic end-to-end. Once landed, this file should read
+// waves from `snapshot.scenario.growthWaves` and this TS-side constant goes
+// away. https://linear.app/cwchanap/issue/HPA-118
 const GROWTH_WAVES = createGrowingSuburbWaves();
 
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
