@@ -1,30 +1,19 @@
-import { createGrowingSuburbWaves } from "../scenario/growingSuburb";
-import type { GameState, GrowthWave } from "../domain/types";
+import type { GameState } from "../domain/types";
 import type { RustGameSnapshot } from "./backend/types";
 
-// Growth waves are a TS-side gameplay concept (zoning + citizen spawning +
-// intro copy) that the Rust core does not model yet. Source them from the
-// canonical TS scenario module rather than a drifted inline copy. The scenario
-// name and objective thresholds come from the authoritative Rust snapshot (see
-// `normalizeRustSnapshot`), so the shell can never drift from the values the
-// core's `evaluate_objectives` actually enforces.
+// The Growing Suburb scenario ships as a sandbox (see docs/architecture.md):
+// the map starts empty, there are no timed growth waves, and growth is entirely
+// player-driven through area painting and building placement. The Rust core
+// therefore never produces growth waves, and the shell must not synthesize them
+// either — doing so would make the Brief panel promise "First residents
+// arrive" and the growth overlay paint tiles that Rust will never auto-apply.
 //
-// TODO(HPA-118): move growth waves (scheduling, zoning, citizen spawning) into
-// `crates/caelum-core` so browser and Tauri hosts stay symmetric and the wave
-// schedule is deterministic end-to-end. Once landed, this file should read
-// waves from `snapshot.scenario.growthWaves` and this TS-side constant goes
-// away. https://linear.app/cwchanap/issue/HPA-118
-const GROWTH_WAVES = createGrowingSuburbWaves();
-
+// TODO(HPA-118): if timed growth waves return as a real scenario mechanic, move
+// the scheduling, zoning, and citizen spawning into `crates/caelum-core` so
+// browser and Tauri hosts stay symmetric and the wave schedule is deterministic
+// end-to-end. At that point this file should read waves from
+// `snapshot.scenario.growthWaves`. https://linear.app/cwchanap/issue/HPA-118
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
-  const nextGrowth: GrowthWave[] =
-    snapshot.metrics.state === "running"
-      ? GROWTH_WAVES.map((wave) => ({
-          ...wave,
-          tiles: [...wave.tiles],
-        }))
-      : [];
-
   return {
     ...snapshot,
     citizens: [],
@@ -35,7 +24,7 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
     scenario: {
       name: snapshot.scenario.name,
       objectives: snapshot.scenario.objectives,
-      growthWaves: nextGrowth,
+      growthWaves: [],
     },
   };
 }
