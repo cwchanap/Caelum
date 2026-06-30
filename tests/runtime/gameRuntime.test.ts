@@ -1071,6 +1071,26 @@ describe("route creation and management", () => {
     ]);
   });
 
+  it("does not duplicate a route on a concurrent double-finishRoute", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    // Two synchronous calls (double-click) both enqueue before either
+    // resolves. The second closure must bail when it sees the draft was
+    // cleared by the first — no duplicate route, no double-charge, no second
+    // vehicle.
+    const first = runtime.finishRoute();
+    const second = runtime.finishRoute();
+    await Promise.all([first, second]);
+
+    const addBusRouteCount = backend.intents.filter(
+      (intent) => intent.type === "addBusRoute",
+    ).length;
+    expect(addBusRouteCount).toBe(1);
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
+  });
+
   it("removes a draft stop and cancels a draft", async () => {
     const { runtime } = await withTwoStops();
     const afterRemove = runtime.removeDraftStop(0);
@@ -1169,6 +1189,26 @@ describe("route creation and management", () => {
     // A subsequent successful dispatch auto-clears the rejection.
     const next = await runtime.setSpeed(4);
     expect(next.rejection).toBeNull();
+  });
+
+  it("preserves a placement rejection across a tick (not cleared ~16ms later)", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    await runtime.togglePause();
+
+    // Surface a rejection via a rejected dispatch.
+    backend.rejectNextDispatch();
+    const rejected = await runtime.setSpeed(2);
+    expect(rejected.rejection).toBe("rejected by test");
+
+    // A tick must NOT overwrite the rejection — the Rust engine never returns
+    // a rejection from tick(), so the banner should persist until dismissed.
+    await runtime.tick(1);
+    expect(runtime.getSnapshot().rejection).toBe("rejected by test");
+
+    // Dismissing still works after a tick.
+    runtime.dismissRejection();
+    expect(runtime.getSnapshot().rejection).toBeNull();
   });
 });
 

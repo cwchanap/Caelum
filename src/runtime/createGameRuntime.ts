@@ -458,7 +458,18 @@ export async function createGameRuntime({
     queueBackend(async () => {
       const result = await backend.tick(deltaSeconds);
       backendError = null;
-      rejection = result.rejection;
+      // Ticks never produce gameplay rejections (the Rust engine only rejects
+      // dispatch intents, not ticks), so overwriting `rejection` here would
+      // clear a placement rejection ~16ms after it was surfaced. Leave
+      // `rejection` untouched — it persists until the player dismisses it or a
+      // subsequent dispatch sets a new one.
+      if (!result.applied) {
+        // The engine returned the same snapshot (paused, speed 0, zero-delta).
+        // Skip normalizeRustSnapshot so commit's reference-equality check
+        // short-circuits — otherwise the fresh spread object forces a publish
+        // to every subscriber on every animation frame even when nothing moved.
+        return commit(state, ui);
+      }
       return commit(normalizeRustSnapshot(result.snapshot), ui);
     });
 
@@ -695,6 +706,17 @@ export async function createGameRuntime({
         : ui.draftStationPaths;
 
       return queueBackend(async () => {
+        // Re-read the draft at closure entry: a prior queued finish (e.g. a
+        // double-click that enqueued twice synchronously) will have cleared
+        // the draft after its successful dispatch, so this closure must bail
+        // rather than re-dispatch the same addBusRoute/addMetroLine intent
+        // (which would duplicate the route, double-charge, and mint a second
+        // vehicle). Mirrors commitDrag's synchronous clear-before-dispatch.
+        const currentDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
+        if (currentDraftIds.length === 0) {
+          return commit(state, ui);
+        }
+
         const beforeIds = new Set(
           (isBus ? state.transit.routes : state.transit.metroLines).map(
             (entry) => entry.id,
