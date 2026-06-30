@@ -3,6 +3,13 @@ import { ROAD_DIRECTION_OFFSET } from "../domain/types";
 
 export type TilePathMode = "bus" | "metro";
 
+// TS-side pathfinding used only for live route-draft previews (stop-to-stop
+// segment hints). It is NOT an authority: the Rust core re-validates and
+// rebuilds the real segments on `addBusRoute`/`addMetroLine`. If one-way road
+// handling or traversal rules diverge here, the preview may briefly mismatch
+// the committed route, but the core's segments are what gameplay uses. Keep
+// this in sync with `crates/caelum-core::router` where practical.
+
 function positionKey(point: Point): string {
   return `${point.x},${point.y}`;
 }

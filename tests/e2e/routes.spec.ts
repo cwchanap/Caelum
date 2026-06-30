@@ -1,6 +1,38 @@
 import { expect, test } from "@playwright/test";
 import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
+// Read the live Rust-derived transit state exposed on `window` in dev mode
+// (see `src/main.ts`). Used to assert gameplay facts the DOM does not surface
+// — here, that finishing a route actually assigned a vehicle in the core.
+async function readRuntimeTransit(
+  page: import("@playwright/test").Page,
+): Promise<{
+  vehicles: { id: string; lineId: string; mode: string }[];
+  routes: { id: string; vehicleIds: string[] }[];
+}> {
+  return page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          getSnapshot: () => {
+            state: {
+              transit: {
+                vehicles: { id: string; lineId: string; mode: string }[];
+                routes: { id: string; vehicleIds: string[] }[];
+              };
+            };
+          };
+        };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("runtime not exposed on window (dev-only hook missing)");
+    }
+    const transit = runtime.getSnapshot().state.transit;
+    return { vehicles: transit.vehicles, routes: transit.routes };
+  });
+}
+
 test("create, manage, and delete a bus route", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
@@ -83,4 +115,59 @@ test("create a metro line on laid track", async ({ page }) => {
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("routes-panel")).toBeVisible();
   await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
+});
+
+test("finishing a bus route assigns a vehicle and runs live transit", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const topbar = page.getByTestId("topbar");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // Road + three bus stops beside it.
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
+
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: "Bus Stop" }).click();
+  await clickMapTile(canvas, { x: 3, y: 5 });
+  await clickMapTile(canvas, { x: 7, y: 5 });
+  await clickMapTile(canvas, { x: 11, y: 5 });
+
+  // Draft + finish a route over all three stops.
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Bus Route" }).click();
+  await clickMapTile(canvas, { x: 3, y: 5 });
+  await clickMapTile(canvas, { x: 7, y: 5 });
+  await clickMapTile(canvas, { x: 11, y: 5 });
+  await openHudCategory(page, "routes");
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await page.getByRole("button", { name: /finish route/i }).click();
+
+  // The route must appear AND the core must have assigned a vehicle to it.
+  // This is the regression guard for the dropped `assignVehicle` step: without
+  // it the route would have `vehicleIds: []` forever and transit could never
+  // move a single citizen.
+  await openHudCategory(page, "manage");
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+
+  const transit = await readRuntimeTransit(page);
+  expect(transit.vehicles).toHaveLength(1);
+  expect(transit.vehicles[0].lineId).toBe("route-001");
+  expect(transit.vehicles[0].mode).toBe("bus");
+  const route = transit.routes.find((r) => r.id === "route-001");
+  expect(route?.vehicleIds).toHaveLength(1);
+
+  // Unpause into a live tick and confirm the clock advances — the vehicle is
+  // now part of the running simulation, not a dead route-creation artifact.
+  await page.getByRole("button", { name: "Resume" }).click();
+  const clockValue = topbar
+    .locator(".readout", { hasText: "Clock" })
+    .locator(".readout-value");
+  await expect
+    .poll(async () => (await clockValue.textContent())?.trim() ?? "")
+    .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
 });

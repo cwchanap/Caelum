@@ -195,10 +195,3 @@ export function cancelDraftRoute(ui: UiState): UiState {
     draftStationPaths: [],
   };
 }
-
-export function finishDraftRoute(
-  state: GameState,
-  ui: UiState,
-): { state: GameState; ui: UiState } {
-  return { state, ui };
-}
