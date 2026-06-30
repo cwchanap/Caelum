@@ -124,5 +124,3 @@ export {
   resolveStationAtTile,
   resolveStopAtTile,
 };
-
-export const handleTileClick = applyUiTileClick;

@@ -739,6 +739,13 @@ export async function createGameRuntime({
           mode,
           lineId: newLine.id,
         });
+        if (!vehicleResult.applied) {
+          // The line was created but no vehicle could be assigned to it. The
+          // route is left in place (the player can delete it); surface the
+          // rejection so the player understands why the line has no service.
+          backendError = vehicleResult.rejection ?? "assignVehicle rejected";
+          return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
+        }
         backendError = null;
         return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
       });

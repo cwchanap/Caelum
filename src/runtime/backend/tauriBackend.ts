@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { normalizeDispatchResult } from "./shared";
 import type {
   DispatchResult,
   GameBackend,
@@ -26,8 +27,4 @@ export async function createTauriBackend(): Promise<GameBackend> {
       return invoke<RustGameSnapshot>("game_reset");
     },
   };
-}
-
-function normalizeDispatchResult(result: DispatchResult): DispatchResult {
-  return { ...result, rejection: result.rejection ?? null };
 }

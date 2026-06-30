@@ -279,8 +279,8 @@ export interface TransitNetwork {
 export interface GameState {
   time: number;
   citizens: Citizen[];
-  day?: number;
-  clockMinutes?: number;
+  day: number;
+  clockMinutes: number;
   speed: 0 | 1 | 2 | 4;
   paused: boolean;
   budget: number;
