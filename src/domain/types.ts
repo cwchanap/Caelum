@@ -174,7 +174,7 @@ export interface Sim {
   home: Point;
   position: Point;
   workerProfile: WorkerProfile;
-  shiftTemplate?: "standard" | "early" | "late" | "offPeak";
+  shiftTemplate?: "standard" | "early" | "late" | "offPeak" | null;
   workplace?: Point;
   commuteDay: number;
   outboundResolvedToday: boolean;

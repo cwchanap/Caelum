@@ -35,11 +35,13 @@ function createRuntimeHarness(
     state?: GameState;
     ui?: UiState;
     backendError?: string | null;
+    rejection?: string | null;
   } = {},
 ): { runtime: RuntimeController } {
   let state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
   const backendError = options.backendError ?? null;
+  let rejection = options.rejection ?? null;
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
@@ -47,6 +49,7 @@ function createRuntimeHarness(
     ui,
     shell: selectShellState(state, ui),
     backendError,
+    rejection,
   });
 
   const publish = (): RuntimeSnapshot => {
@@ -199,6 +202,10 @@ function createRuntimeHarness(
       ui = { ...ui, hoverTile: point };
       return publish();
     }),
+    dismissRejection: vi.fn(() => {
+      rejection = null;
+      return publish();
+    }),
     mountCanvas: vi.fn(() => () => {}),
   };
 
@@ -328,6 +335,7 @@ describe("App shell bootstrap", () => {
       ui: nextUi,
       shell: selectShellState(nextState, nextUi),
       backendError: null,
+      rejection: null,
     });
 
     await waitFor(() =>
@@ -637,11 +645,34 @@ describe("App shell bootstrap", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 
     const current = runtime.getSnapshot();
-    deferred.resolve({ ...current, backendError: "Rust backend failed" });
+    deferred.resolve({
+      ...current,
+      backendError: "Rust backend failed",
+      rejection: null,
+    });
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Rust backend failed");
     expect(runtime.stop).toHaveBeenCalled();
+  });
+
+  it("surfaces gameplay rejection as a dismissible banner without stopping the runtime", async () => {
+    const { runtime } = createRuntimeHarness({
+      rejection: "Cannot afford vehicle",
+    });
+
+    render(App, { props: { runtime } });
+
+    const banner = await screen.findByTestId("rejection-banner");
+    expect(banner).toHaveTextContent("Cannot afford vehicle");
+    expect(banner).toHaveAttribute("role", "status");
+    // A rejection must not stop the runtime (unlike a fatal backendError).
+    expect(runtime.stop).not.toHaveBeenCalled();
+    // The shell should still render the game, not the fatal error overlay.
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await fireEvent.click(screen.getByLabelText("Dismiss"));
+    expect(runtime.dismissRejection).toHaveBeenCalled();
   });
 });
 

@@ -1006,6 +1006,44 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
+  it("surfaces assignVehicle rejection as a recoverable rejection, not a fatal backendError", async () => {
+    const base = backendSpy(routeSnapshot());
+    // Wrap the spy so assignVehicle is rejected but other intents succeed.
+    const rejectAssignVehicle = "insufficient budget for vehicle";
+    const backend: BackendSpy = {
+      ...base,
+      async dispatch(intent) {
+        if (intent.type === "assignVehicle") {
+          return {
+            snapshot: await base.snapshot(),
+            applied: false,
+            rejection: rejectAssignVehicle,
+          };
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    runtime.start();
+
+    await runtime.finishRoute();
+
+    const snapshot = runtime.getSnapshot();
+    // The rejection must surface as a recoverable rejection, not a fatal
+    // backendError that halts the runtime.
+    expect(snapshot.rejection).toBe(rejectAssignVehicle);
+    expect(snapshot.backendError).toBeNull();
+    expect(runtime.isRunning()).toBe(true);
+    // The route was created (addBusRoute succeeded) even though the vehicle
+    // assignment was rejected.
+    expect(snapshot.state.transit.routes).toHaveLength(1);
+    expect(snapshot.state.transit.vehicles).toHaveLength(0);
+
+    // Dismissing clears the rejection.
+    runtime.dismissRejection();
+    expect(runtime.getSnapshot().rejection).toBeNull();
+  });
+
   it("does not let a slow route finish clear a newer draft", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
@@ -1116,6 +1154,21 @@ describe("route creation and management", () => {
     // survive (the clear is gated on `applied`).
     expect(snapshot.ui.selectedRouteId).toBe("route-001");
     expect(snapshot.state.transit.routes).toHaveLength(1);
+  });
+
+  it("surfaces gameplay rejections from regular dispatches on the snapshot", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+
+    backend.rejectNextDispatch();
+    const snapshot = await runtime.setSpeed(2);
+
+    expect(snapshot.rejection).toBe("rejected by test");
+    expect(snapshot.backendError).toBeNull();
+
+    // A subsequent successful dispatch auto-clears the rejection.
+    const next = await runtime.setSpeed(4);
+    expect(next.rejection).toBeNull();
   });
 });
 

@@ -85,14 +85,14 @@ pub fn lay_road_line(
             RoadPreset::OneWay => forward,
             RoadPreset::DualBidirectional => dual_direction,
         };
-        changed |= lay_lane(&mut next, state, point, direction)?;
+        changed |= lay_lane(&mut next, state, point, direction);
     }
 
     if preset == RoadPreset::DualBidirectional {
         if let Some(canonical) = dual_direction {
             let reverse_direction = opposite_direction(canonical);
             for point in reverse_lane_points(points, canonical) {
-                changed |= lay_reverse_lane(&mut next, state, &point, reverse_direction)?;
+                changed |= lay_reverse_lane(&mut next, state, &point, reverse_direction);
             }
         }
     }
@@ -1600,23 +1600,23 @@ fn lay_lane(
     original: &GameSnapshot,
     point: &Point,
     direction: Option<&str>,
-) -> Result<bool, String> {
+) -> bool {
     let existing = get_tile(&next.map, point).cloned();
     if existing.as_ref().is_some_and(|tile| tile.kind == "road") {
         if existing.and_then(|tile| tile.one_way) != direction.map(str::to_string) {
             set_tile_one_way(&mut next.map, point, direction);
-            return Ok(true);
+            return true;
         }
-        return Ok(false);
+        return false;
     }
 
     if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
-        return Ok(false);
+        return false;
     }
     next.budget -= ROAD_COST;
     set_tile_kind(&mut next.map, point, "road");
     set_tile_one_way(&mut next.map, point, direction);
-    Ok(true)
+    true
 }
 
 fn lay_reverse_lane(
@@ -1624,17 +1624,17 @@ fn lay_reverse_lane(
     original: &GameSnapshot,
     point: &Point,
     direction: &str,
-) -> Result<bool, String> {
+) -> bool {
     if get_tile(&next.map, point).is_some_and(|tile| tile.kind != "empty") {
-        return Ok(false);
+        return false;
     }
     if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
-        return Ok(false);
+        return false;
     }
     next.budget -= ROAD_COST;
     set_tile_kind(&mut next.map, point, "road");
     set_tile_one_way(&mut next.map, point, Some(direction));
-    Ok(true)
+    true
 }
 
 fn get_tile<'a>(map: &'a GameMap, point: &Point) -> Option<&'a Tile> {
