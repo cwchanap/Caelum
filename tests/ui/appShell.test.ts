@@ -260,11 +260,10 @@ describe("App shell bootstrap", () => {
         /Hold late trips below 25%, unserved below 20%, average wait under 180s\./,
       ),
     ).toBeVisible();
-    expect(
-      screen.getByText(
-        "First residents arrive — build destinations so they can commute.",
-      ),
-    ).toBeVisible();
+    // The Growing Suburb sandbox has no timed growth waves (see
+    // docs/architecture.md), so the Brief falls through to the sandbox prompt
+    // instead of promising residents that Rust will never auto-spawn.
+    expect(screen.getByText("Sandbox: paint areas to grow.")).toBeVisible();
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("BUSROUTE");
     expect(screen.getByText("route-001")).toBeVisible();
     expect(screen.getByText("Live")).toBeVisible();

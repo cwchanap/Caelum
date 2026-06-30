@@ -1,15 +1,14 @@
 import { tileId } from "../../src/domain/ids";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import type { RustGameSnapshot } from "../../src/runtime/backend/types";
-
-const DEFAULT_MAP_WIDTH = 28;
-const DEFAULT_MAP_HEIGHT = 18;
 
 // Build a full in-bounds empty grid so the default snapshot is valid on its
 // own (matching what the Rust backend returns), instead of an empty `tiles`
-// array that every downstream helper had to patch.
+// array that every downstream helper had to patch. Dimensions come from the
+// single TS mirror of `crates/caelum-core/src/scenario.rs`.
 function createEmptyTiles(
-  width = DEFAULT_MAP_WIDTH,
-  height = DEFAULT_MAP_HEIGHT,
+  width = MAP_WIDTH,
+  height = MAP_HEIGHT,
 ): RustGameSnapshot["map"]["tiles"] {
   const tiles: RustGameSnapshot["map"]["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
@@ -31,8 +30,8 @@ export function createRustSnapshot(
     paused: true,
     budget: 120_000,
     map: {
-      width: DEFAULT_MAP_WIDTH,
-      height: DEFAULT_MAP_HEIGHT,
+      width: MAP_WIDTH,
+      height: MAP_HEIGHT,
       tiles: createEmptyTiles(),
     },
     buildings: [],

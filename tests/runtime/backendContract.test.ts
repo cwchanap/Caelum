@@ -66,12 +66,12 @@ describe("Rust backend contract", () => {
         time: 555,
       },
     ]);
-    expect(snapshot.scenario.growthWaves).not.toBe(
-      anotherSnapshot.scenario.growthWaves,
-    );
-    expect(snapshot.scenario.growthWaves[0]).not.toBe(
-      anotherSnapshot.scenario.growthWaves[0],
-    );
+    // The Growing Suburb sandbox has no timed growth waves (see
+    // docs/architecture.md). The shell must not synthesize TS-side waves that
+    // Rust will never auto-apply, so normalization always emits an empty list
+    // regardless of metrics state.
+    expect(snapshot.scenario.growthWaves).toEqual([]);
+    expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
 
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
