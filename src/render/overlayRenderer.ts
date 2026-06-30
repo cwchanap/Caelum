@@ -11,6 +11,13 @@ import {
   getBuildingFootprint,
 } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
+// NOTE: The geometry helpers below (axisLockedLine, lineDirection,
+// oppositeDirection, reverseLanePoints) mirror the authoritative Rust road
+// geometry in `crates/caelum-core/src/transit.rs` (`lay_road_line`,
+// `line_direction`, `opposite_direction`, `reverse_lane_points`). They are
+// read-only preview helpers here — the Rust core is the sole authority for
+// actual tile placement. If the Rust geometry changes, update these to match
+// or the drag preview will drift from what the backend actually places.
 import {
   axisLockedLine,
   lineDirection,

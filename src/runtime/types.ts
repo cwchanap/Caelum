@@ -111,6 +111,11 @@ export interface RuntimeSnapshot {
   ui: UiState;
   shell: ShellState;
   backendError: string | null;
+  // Recoverable gameplay rejection (e.g. unaffordable placement, rejected
+  // vehicle assignment). Distinct from `backendError` (fatal host failure):
+  // a rejection does not stop the runtime and is dismissible by the player.
+  // Auto-clears on the next successful dispatch.
+  rejection: string | null;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
@@ -154,5 +159,6 @@ export interface RuntimeController {
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
+  dismissRejection: () => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;
 }

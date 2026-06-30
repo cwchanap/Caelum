@@ -97,6 +97,7 @@ export async function createGameRuntime({
   let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
   let backendError: string | null = null;
+  let rejection: string | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
   let running = false;
   let animationFrameId: number | null = null;
@@ -111,6 +112,7 @@ export async function createGameRuntime({
     ui,
     shell: selectShellState(state, ui),
     backendError,
+    rejection,
   });
 
   const canAnimate = (): boolean =>
@@ -425,6 +427,7 @@ export async function createGameRuntime({
     queueBackend(async () => {
       const result = await backend.dispatch(intent);
       backendError = null;
+      rejection = result.rejection;
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
@@ -443,6 +446,7 @@ export async function createGameRuntime({
       }
       const result = await backend.dispatch(intent);
       backendError = null;
+      rejection = result.rejection;
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
@@ -454,6 +458,7 @@ export async function createGameRuntime({
     queueBackend(async () => {
       const result = await backend.tick(deltaSeconds);
       backendError = null;
+      rejection = result.rejection;
       return commit(normalizeRustSnapshot(result.snapshot), ui);
     });
 
@@ -510,6 +515,7 @@ export async function createGameRuntime({
       return queueBackend(async () => {
         const snapshot = await backend.reset();
         backendError = null;
+        rejection = null;
         state = normalizeRustSnapshot(snapshot);
         ui = createUiState();
         return publish();
@@ -696,6 +702,7 @@ export async function createGameRuntime({
         );
         const createResult = await backend.dispatch(createIntent);
         backendError = null;
+        rejection = createResult.rejection;
         const afterCreate = normalizeRustSnapshot(createResult.snapshot);
 
         // Clear the submitted draft only when the backend accepted the line
@@ -742,11 +749,13 @@ export async function createGameRuntime({
         if (!vehicleResult.applied) {
           // The line was created but no vehicle could be assigned to it. The
           // route is left in place (the player can delete it); surface the
-          // rejection so the player understands why the line has no service.
-          backendError = vehicleResult.rejection ?? "assignVehicle rejected";
+          // rejection as a recoverable status (not a fatal backendError) so
+          // the player understands why the line has no service without the
+          // runtime halting.
+          rejection = vehicleResult.rejection ?? "assignVehicle rejected";
           return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
         }
-        backendError = null;
+        rejection = null;
         return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
       });
     },
@@ -803,6 +812,13 @@ export async function createGameRuntime({
         state,
         samePoint(point, ui.hoverTile) ? ui : { ...ui, hoverTile: point },
       );
+    },
+    dismissRejection() {
+      if (rejection === null) {
+        return commit(state, ui);
+      }
+      rejection = null;
+      return publish();
     },
     mountCanvas,
   };

@@ -34,6 +34,12 @@
     }
   }
 
+  function handleDismissRejection(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.dismissRejection());
+    }
+  }
+
   async function applyRuntimeResult(
     result: RuntimeCommandResult,
   ): Promise<void> {
@@ -298,6 +304,24 @@
         onTogglePause={handleTogglePause}
         onSetSpeed={handleSetSpeed}
       />
+
+      {#if snapshot.rejection !== null}
+        <div
+          class="rejection-banner"
+          data-testid="rejection-banner"
+          role="status"
+        >
+          <span>{snapshot.rejection}</span>
+          <button
+            type="button"
+            class="rejection-dismiss"
+            aria-label="Dismiss"
+            onclick={handleDismissRejection}
+          >
+            &times;
+          </button>
+        </div>
+      {/if}
 
       <GameCanvas {runtime} onShellError={handleShellError} />
 
