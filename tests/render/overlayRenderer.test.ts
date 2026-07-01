@@ -3,7 +3,7 @@ import { renderOverlays } from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type { ActiveTrip, Stop } from "../../src/domain/types";
-import { axisLockedLine } from "../../src/ui/roadDrag";
+import { axisLockedLine, reverseLanePoints } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
 import { withRoads } from "../helpers/mapFixtures";
@@ -281,6 +281,35 @@ function shaftDeltas(
   return out;
 }
 
+// Like shaftDeltas but also records the tile each shaft is centered on, so a
+// test can assert which lane carries which direction — not just that both
+// directions appear somewhere on the canvas.
+function shaftsByTile(
+  tokens: Array<{ t: "M" | "L"; x: number; y: number }>,
+): Array<{ tile: { x: number; y: number }; dx: number; dy: number }> {
+  const out: Array<{ tile: { x: number; y: number }; dx: number; dy: number }> =
+    [];
+  for (let i = 1; i < tokens.length; i += 1) {
+    if (tokens[i].t === "L" && tokens[i - 1].t === "M") {
+      const dx = tokens[i].x - tokens[i - 1].x;
+      const dy = tokens[i].y - tokens[i - 1].y;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) >= 10) {
+        const midX = (tokens[i].x + tokens[i - 1].x) / 2;
+        const midY = (tokens[i].y + tokens[i - 1].y) / 2;
+        out.push({
+          tile: {
+            x: Math.round((midX - tileSize / 2) / tileSize),
+            y: Math.round((midY - tileSize / 2) / tileSize),
+          },
+          dx,
+          dy,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 // Captures the strokeStyle value in effect at each stroke() call. Only
 // drawDirectionArrow calls stroke() (the per-tile loop uses strokeRect), so
 // this records exactly the colors used for arrow shafts + chevron barbs.
@@ -477,6 +506,65 @@ describe("renderOverlays drag preview", () => {
     const westbound = shafts.filter((s) => s.dx < 0);
     expect(eastbound).toHaveLength(line.length);
     expect(westbound).toHaveLength(line.length);
+  });
+
+  it("uses canonical (east/south) arrows for dual-bidirectional regardless of drag direction", () => {
+    // The Rust `lay_road_line` commits the primary lane with the canonical
+    // axis direction (east for horizontal, south for vertical) and the reverse
+    // lane with its opposite — independent of drag order. The preview arrows
+    // must match the commit, so a westward or northward drag must still show
+    // eastbound/southbound primary arrows on the drag-line tiles and the
+    // opposing arrows on the reverse-lane tiles. Dragging the wrong way
+    // previously flipped both carriageways' arrow directions.
+    const state = createTestGameState();
+
+    const westUi = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      drag: drag("road", { x: 4, y: 0 }, { x: 1, y: 0 }),
+    };
+    const westCtx = pathRecorderCtx();
+    renderOverlays(westCtx.ctx, state, westUi);
+    const westLine = axisLockedLine(westUi.drag.start, westUi.drag.current);
+    const westReverse = reverseLanePoints(westLine);
+    const westShafts = shaftsByTile(westCtx.tokens);
+    expect(westShafts).toHaveLength(2 * westLine.length);
+    // Primary lane tiles (y=0) carry eastbound arrows (canonical east).
+    const westPrimary = westShafts.filter((s) => s.tile.y === 0);
+    expect(westPrimary).toHaveLength(westLine.length);
+    expect(westPrimary.every((s) => s.dx > 0 && Math.abs(s.dy) < 1)).toBe(true);
+    // Reverse lane tiles (y=-1) carry westbound arrows (opposite of canonical).
+    const westReverseShafts = westShafts.filter((s) => s.tile.y === -1);
+    expect(westReverseShafts).toHaveLength(westReverse.length);
+    expect(westReverseShafts.every((s) => s.dx < 0 && Math.abs(s.dy) < 1)).toBe(
+      true,
+    );
+
+    const northUi = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      drag: drag("road", { x: 0, y: 4 }, { x: 0, y: 1 }),
+    };
+    const northCtx = pathRecorderCtx();
+    renderOverlays(northCtx.ctx, state, northUi);
+    const northLine = axisLockedLine(northUi.drag.start, northUi.drag.current);
+    const northReverse = reverseLanePoints(northLine);
+    const northShafts = shaftsByTile(northCtx.tokens);
+    expect(northShafts).toHaveLength(2 * northLine.length);
+    // Primary lane (x=0) carries southbound arrows (canonical south).
+    const northPrimary = northShafts.filter((s) => s.tile.x === 0);
+    expect(northPrimary).toHaveLength(northLine.length);
+    expect(northPrimary.every((s) => s.dy > 0 && Math.abs(s.dx) < 1)).toBe(
+      true,
+    );
+    // Reverse lane (x=1) carries northbound arrows (opposite of canonical).
+    const northReverseShafts = northShafts.filter((s) => s.tile.x === 1);
+    expect(northReverseShafts).toHaveLength(northReverse.length);
+    expect(
+      northReverseShafts.every((s) => s.dy < 0 && Math.abs(s.dx) < 1),
+    ).toBe(true);
   });
 
   it("draws no direction arrows for a two-way road drag", () => {
