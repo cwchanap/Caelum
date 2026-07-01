@@ -206,7 +206,13 @@ export function closingLoopIsPathable(state: GameState, ui: UiState): boolean {
   const first = nodes.find((node) => node.id === ids[0]);
   const last = nodes.find((node) => node.id === ids.at(-1));
   if (first === undefined || last === undefined) {
-    return true;
+    // A missing first/last draft node (e.g. the stop was demolished while the
+    // draft was open) means the closing loop cannot be verified, so reject it
+    // here rather than deferring to finishRoute(). Returning true would let the
+    // UI's `canFinish` gate read "Ready" for a draft whose endpoints no longer
+    // exist, surfacing a misleading hint and only catching the problem at the
+    // finish dispatch.
+    return false;
   }
   return (
     findTilePath(

@@ -10,6 +10,7 @@ import {
   getBuildingFootprint,
 } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
+import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 // NOTE: The geometry helpers below (axisLockedLine, lineDirection,
 // oppositeDirection, reverseLanePoints) mirror the authoritative Rust road
 // geometry in `crates/caelum-core/src/transit.rs` (`lay_road_line`,
@@ -132,53 +133,6 @@ function planAreaPaintPreview(
     point,
     paintable: isAreaPaintable(state, point),
   }));
-}
-
-function positionKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
-
-function waitingLineId(entity: ActiveTrip): string | undefined {
-  const leg = entity.routePlan?.legs[entity.currentLegIndex];
-  return leg !== undefined && leg.mode !== "walk" ? leg.lineId : undefined;
-}
-
-function selectPlatformOccupancy(
-  state: GameState,
-): Map<string, { count: number; capacity: number }> {
-  const occupancy = new Map<string, { count: number; capacity: number }>();
-  const platformByPositionAndRoute = new Map<string, string>();
-  const nodes = [...state.transit.stops, ...state.transit.stations];
-
-  for (const node of nodes) {
-    const posKey = positionKey(node.position.x, node.position.y);
-    for (const platform of node.platforms) {
-      occupancy.set(platform.id, { count: 0, capacity: platform.capacity });
-      for (const routeId of platform.routeIds) {
-        platformByPositionAndRoute.set(`${posKey}|${routeId}`, platform.id);
-      }
-    }
-  }
-
-  for (const entity of state.activeTrips ?? []) {
-    if (entity.status !== "waiting") {
-      continue;
-    }
-    const lineId = waitingLineId(entity);
-    if (lineId === undefined) {
-      continue;
-    }
-    const platformId = platformByPositionAndRoute.get(
-      `${positionKey(entity.position.x, entity.position.y)}|${lineId}`,
-    );
-    const entry =
-      platformId === undefined ? undefined : occupancy.get(platformId);
-    if (entry !== undefined) {
-      entry.count += 1;
-    }
-  }
-
-  return occupancy;
 }
 
 function overlayTrips(state: GameState): ActiveTrip[] {

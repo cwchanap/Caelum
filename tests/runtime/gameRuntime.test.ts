@@ -1537,6 +1537,48 @@ describe("runtime road drag", () => {
     ).toBe("north");
   });
 
+  it("defers a road click's lay-vs-cycle decision until queued road updates drain", async () => {
+    // A road click enqueued behind a pending road drag must re-read the tile
+    // kind at execution time. Without the deferral the click would capture
+    // `layRoad` at enqueue time (tile still empty) and lay a road on a tile
+    // the draining drag had just turned into a road, instead of cycling that
+    // road's direction.
+    const backend = deferredDispatchBackend();
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    const dragCommit = runtime.commitDrag(); // enqueues layRoadLine, suspends
+
+    // Enqueue a road click on a tile the drag is about to turn into a road.
+    const clickPromise = runtime.handleTileClick({ x: 2, y: 0 });
+    await Promise.resolve(); // let the drag dispatch start and suspend
+
+    // Resolve the drag: tiles (1,0)-(3,0) become road.
+    await backend.resolveNext();
+    await dragCommit;
+
+    // The click's computed intent now runs against the drained state, sees
+    // (2,0) is a road, and dispatches cycleRoadDirection (not layRoad).
+    await backend.resolveNext();
+    await clickPromise;
+
+    expect(backend.intents).toContainEqual({
+      type: "cycleRoadDirection",
+      point: { x: 2, y: 0 },
+    });
+    expect(
+      backend.intents.some(
+        (intent) =>
+          intent.type === "layRoad" &&
+          intent.point.x === 2 &&
+          intent.point.y === 0,
+      ),
+    ).toBe(false);
+  });
+
   it("bulldozes a line with the remove tool drag", async () => {
     const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("road");

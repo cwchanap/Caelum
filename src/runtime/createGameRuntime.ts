@@ -495,6 +495,22 @@ export async function createGameRuntime({
       return commit(normalizeRustSnapshot(result.snapshot), ui);
     });
 
+  // Road clicks defer the lay-vs-cycle decision to execution time. An earlier
+  // queued dispatch (e.g. a road drag still draining, or a prior click) may
+  // have turned the clicked tile into a road by the time this closure runs, so
+  // re-read `state.map` inside the queued handler rather than capturing the
+  // tile kind up front. The point is captured from the click; only the kind
+  // lookup is deferred, so a tile that has become road routes to
+  // cycleRoadDirection instead of layRoad.
+  const roadClickIntent = (point: Point): GameIntent => {
+    const tile = state.map.tiles.find(
+      (candidate) => candidate.x === point.x && candidate.y === point.y,
+    );
+    return tile?.kind === "road"
+      ? { type: "cycleRoadDirection", point }
+      : { type: "layRoad", point };
+  };
+
   const intentForToolClick = (point: Point): GameIntent | null => {
     if (ui.selectedBuilding !== null) {
       return {
@@ -516,14 +532,8 @@ export async function createGameRuntime({
     if (ui.activeTool === "remove") {
       return { type: "removeAtTile", point };
     }
-    if (ui.activeTool === "road") {
-      const tile = state.map.tiles.find(
-        (candidate) => candidate.x === point.x && candidate.y === point.y,
-      );
-      return tile?.kind === "road"
-        ? { type: "cycleRoadDirection", point }
-        : { type: "layRoad", point };
-    }
+    // Road is handled by `roadClickIntent` via `enqueueComputedDispatch` at the
+    // call sites, so it is intentionally absent from this synchronous lookup.
     return null;
   };
 
@@ -634,6 +644,11 @@ export async function createGameRuntime({
       }
       const line = axisLockedLine(gesture.start, gesture.current);
       if (line.length <= 1) {
+        if (gesture.tool === "road") {
+          // A zero-length road drag is a tap: defer the lay-vs-cycle decision
+          // to execution time so the tile kind reflects drained queued updates.
+          return enqueueComputedDispatch(() => roadClickIntent(line[0]));
+        }
         const intent = intentForToolClick(line[0]);
         return intent === null ? commit(state, ui) : enqueueDispatch(intent);
       }
@@ -688,6 +703,13 @@ export async function createGameRuntime({
       ) {
         const result = applyUiTileClick(state, ui, point);
         return commit(state, result.ui);
+      }
+
+      if (ui.activeTool === "road") {
+        // Defer the lay-vs-cycle decision to execution time so the tile kind is
+        // re-read against the latest map state after earlier queued updates
+        // drain (see `roadClickIntent`).
+        return enqueueComputedDispatch(() => roadClickIntent(point));
       }
 
       const intent = intentForToolClick(point);
