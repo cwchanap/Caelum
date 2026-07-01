@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderOverlays } from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import type { ActiveTrip, Citizen, Stop } from "../../src/domain/types";
+import type { ActiveTrip, Stop } from "../../src/domain/types";
 import { axisLockedLine } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
@@ -30,10 +30,12 @@ const stop: Stop = {
   ],
 };
 
-function waiter(): Citizen {
+function waiter(): ActiveTrip {
   return {
     id: "c1",
-    home: { x: 3, y: 3 },
+    simId: "sim-c1",
+    purpose: "commuteOutbound",
+    origin: { x: 3, y: 3 },
     destination: { x: 9, y: 9 },
     position: { x: 3, y: 3 },
     status: "waiting",
@@ -54,7 +56,7 @@ function waiter(): Citizen {
   };
 }
 
-function crowdingState(citizens: Citizen[]) {
+function crowdingState(activeTrips: ActiveTrip[]) {
   return {
     ...createTestGameState(),
     transit: {
@@ -64,7 +66,7 @@ function crowdingState(citizens: Citizen[]) {
       metroLines: [],
       vehicles: [],
     },
-    citizens,
+    activeTrips,
   };
 }
 
@@ -103,7 +105,7 @@ describe("crowding overlay", () => {
     );
   });
 
-  it("does not fill a node tile when no citizens are waiting", () => {
+  it("does not fill a node tile when no trips are waiting", () => {
     const state = crowdingState([]);
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };
 
@@ -138,7 +140,6 @@ describe("Rust trip overlays", () => {
   it("renders demand from active trip destinations when citizens are absent", () => {
     const state = {
       ...createTestGameState(),
-      citizens: [],
       activeTrips: [activeTrip("walking", { x: 2, y: 2 }, { x: 9, y: 4 })],
     };
     const ui = { ...createUiState(), activeOverlay: "demand" as const };
@@ -157,7 +158,6 @@ describe("Rust trip overlays", () => {
   it("renders lateness from late and unserved active trips when citizens are absent", () => {
     const state = {
       ...createTestGameState(),
-      citizens: [],
       activeTrips: [
         activeTrip("late", { x: 2, y: 2 }, { x: 9, y: 4 }),
         activeTrip("unserved", { x: 3, y: 2 }, { x: 10, y: 4 }),

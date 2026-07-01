@@ -154,18 +154,6 @@ export interface Vehicle {
   progress: number;
 }
 
-export interface Citizen {
-  id: string;
-  home: Point;
-  destination: Point;
-  position: Point;
-  status: CitizenStatus;
-  patienceRemaining: number;
-  deadline: number;
-  routePlan: RoutePlan | null;
-  currentLegIndex: number;
-}
-
 export type WorkerProfile = "worker" | "nonWorker";
 export type TripPurpose = "commuteOutbound" | "commuteReturn";
 
@@ -278,7 +266,6 @@ export interface TransitNetwork {
 
 export interface GameState {
   time: number;
-  citizens: Citizen[];
   day: number;
   clockMinutes: number;
   speed: 0 | 1 | 2 | 4;

@@ -1,4 +1,4 @@
-import type { ActiveTrip, Citizen, GameState, Overlay } from "../domain/types";
+import type { ActiveTrip, GameState, Overlay } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
@@ -40,7 +40,7 @@ function positionKey(x: number, y: number): string {
   return `${x},${y}`;
 }
 
-function waitingLineId(entity: Citizen | ActiveTrip): string | undefined {
+function waitingLineId(entity: ActiveTrip): string | undefined {
   const leg = entity.routePlan?.legs[entity.currentLegIndex];
   return leg !== undefined && leg.mode !== "walk" ? leg.lineId : undefined;
 }
@@ -74,10 +74,8 @@ function selectPlatformOccupancy(
     }
   }
 
-  // Waiting occupancy is driven by active trips only. `state.citizens` is a
-  // legacy field that the Rust snapshot always empties (`normalizeRustSnapshot`
-  // hardcodes `citizens: []`); sims/active trips are the live data, so do not
-  // spread the dead `citizens` array here.
+  // Waiting occupancy is driven by active trips only — sims/active trips are
+  // the live data the Rust snapshot publishes.
   for (const entity of state.activeTrips ?? []) {
     if (entity.status !== "waiting") {
       continue;

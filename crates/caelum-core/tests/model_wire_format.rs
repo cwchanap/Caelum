@@ -12,7 +12,7 @@ use caelum_core::model::{
     TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
     WorkerProfile,
 };
-use caelum_core::{GameIntent, RoadPreset};
+use caelum_core::{DispatchResult, GameIntent, RoadPreset};
 use serde_json::json;
 
 fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
@@ -552,4 +552,69 @@ fn placed_building_serializes_type_to_legacy_field() {
     }))
     .expect("TS-shaped building JSON should deserialize");
     assert_eq!(back, building);
+}
+
+#[test]
+fn dispatch_result_round_trips_through_serde_json() {
+    // The Tauri host (`src-tauri/src/lib.rs`) returns `DispatchResult` from
+    // `game_dispatch` / `game_tick` through Tauri's IPC, which serializes via
+    // `serde_json`. The WASM host instead uses `serde-wasm-bindgen`. The two
+    // serializers differ on `Option<T>` (`None` -> `null` in JSON vs `undefined`
+    // in JS, which is why `normalizeDispatchResult` exists on the TS side). This
+    // test pins the `serde_json` path specifically: a `DispatchResult` produced
+    // by the Rust core must round-trip through `serde_json::to_value` ->
+    // `serde_json::from_value` byte-for-byte, proving the Tauri IPC serializer
+    // cannot silently drop or rename a field that the WASM path handles.
+    //
+    // Both the applied (rejection = None) and rejected (rejection = Some) cases
+    // are covered, since `Option<String>` is the field most likely to diverge
+    // between serializers.
+    use caelum_core::state::create_initial_snapshot;
+
+    let snapshot = create_initial_snapshot();
+
+    // Applied case: rejection is None -> serializes to JSON `null`.
+    let applied = DispatchResult {
+        snapshot: snapshot.clone(),
+        applied: true,
+        rejection: None,
+    };
+    let value = serde_json::to_value(&applied).expect("applied result should serialize");
+    assert_eq!(value["applied"], json!(true));
+    assert_eq!(value["rejection"], json!(null));
+    assert_eq!(value["snapshot"]["paused"], json!(true));
+    let back: DispatchResult =
+        serde_json::from_value(value).expect("applied result should deserialize back");
+    assert_eq!(back, applied);
+
+    // Rejected case: rejection is Some -> serializes to a JSON string.
+    let rejected = DispatchResult {
+        snapshot: snapshot.clone(),
+        applied: false,
+        rejection: Some("invalid speed: 3".to_string()),
+    };
+    let value = serde_json::to_value(&rejected).expect("rejected result should serialize");
+    assert_eq!(value["applied"], json!(false));
+    assert_eq!(value["rejection"], json!("invalid speed: 3"));
+    let back: DispatchResult =
+        serde_json::from_value(value.clone()).expect("rejected result should deserialize back");
+    assert_eq!(back, rejected);
+
+    // Cross-check: the serialized JSON shape matches what the TS `DispatchResult`
+    // interface expects (`{ snapshot, applied, rejection }`), so a Tauri IPC
+    // response is structurally identical to a WASM `engine.dispatch()` return.
+    let keys: std::collections::HashSet<String> = value
+        .as_object()
+        .expect("serialized result is a JSON object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(
+        keys,
+        ["snapshot", "applied", "rejection"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        "DispatchResult must serialize exactly the TS-contract keys"
+    );
 }

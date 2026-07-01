@@ -1,6 +1,5 @@
 import type {
   ActiveTrip,
-  Citizen,
   CitizenStatus,
   GameState,
 } from "../domain/types";
@@ -31,8 +30,7 @@ export function renderCitizens(
   ctx: CanvasRenderingContext2D,
   state: GameState,
 ): void {
-  const entities: Array<Citizen | ActiveTrip> =
-    state.activeTrips !== undefined ? state.activeTrips : state.citizens;
+  const entities: ActiveTrip[] = state.activeTrips ?? [];
 
   for (const entity of entities) {
     if (entity.status === "arrived") {
