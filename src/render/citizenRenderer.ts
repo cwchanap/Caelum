@@ -1,8 +1,4 @@
-import type {
-  ActiveTrip,
-  CitizenStatus,
-  GameState,
-} from "../domain/types";
+import type { ActiveTrip, CitizenStatus, GameState } from "../domain/types";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 
