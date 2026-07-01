@@ -828,6 +828,44 @@ describe("Game Runtime", () => {
     expect(tickSnapshot.backendError).toBe("backend unavailable");
   });
 
+  it("short-circuits a queued dispatch at execution time when a prior queued op fails fatally", async () => {
+    // The enqueue-time `dead` guard is not enough: a dispatch enqueued behind
+    // a pending one may reach its closure after the first dispatch fails
+    // fatally. The execution-time re-check inside the queued closure must bail
+    // so the second dispatch never reaches the dead backend.
+    const backend = deferredDispatchBackend();
+    let dispatchCalls = 0;
+    const realDispatch = backend.dispatch.bind(backend);
+    let firstDispatch = true;
+    backend.dispatch = vi.fn(async (intent) => {
+      dispatchCalls += 1;
+      const result = await realDispatch(intent);
+      if (firstDispatch) {
+        firstDispatch = false;
+        throw new Error("backend unavailable");
+      }
+      return result;
+    });
+    const runtime = await createGameRuntime({ backend });
+
+    // Enqueue dispatch A (will suspend, then throw when resolved).
+    runtime.setTool("busStop");
+    const dispatchA = runtime.handleTileClick({ x: 5, y: 5 });
+    // Enqueue dispatch B behind A (should be short-circuited at execution time).
+    const dispatchB = runtime.handleTileClick({ x: 6, y: 6 });
+    await Promise.resolve(); // let dispatch A start and suspend
+
+    // Resolve dispatch A — it throws, failBackend sets dead = true.
+    await backend.resolveNext();
+    await dispatchA;
+    expect(runtime.getSnapshot().backendError).toBe("backend unavailable");
+
+    // Dispatch B's closure runs but bails at the execution-time dead check.
+    await dispatchB;
+    expect(dispatchCalls).toBe(1); // only dispatch A reached the backend
+    expect(runtime.getSnapshot().backendError).toBe("backend unavailable");
+  });
+
   it("handles inspect tile clicks without backend dispatch", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({ backend });
@@ -1147,6 +1185,114 @@ describe("route creation and management", () => {
       "stop-002",
     ]);
     expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+  });
+
+  it("revalidates that submitted stops still exist before dispatching", async () => {
+    // A prior queued dispatch removes one of the submitted stops between
+    // enqueue and closure entry; the finish must bail with "Route no longer
+    // valid" rather than dispatch addBusRoute with a dangling stop id.
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 20, y: 20 });
+    await Promise.resolve();
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
+    const finishPromise = runtime.finishRoute();
+
+    // Simulate the prior dispatch resolving with a snapshot where stop-001
+    // was removed (e.g. a demolish that ran while the finish was pending).
+    const removedStopSnapshot = {
+      ...routeSnapshot(),
+      transit: {
+        ...routeSnapshot().transit,
+        stops: routeSnapshot().transit.stops.filter(
+          (stop) => stop.id !== "stop-001",
+        ),
+      },
+    };
+    backend.setSnapshot(removedStopSnapshot);
+    await backend.resolveNext();
+    await finishPromise;
+
+    expect(
+      backend.intents.some((intent) => intent.type === "addBusRoute"),
+    ).toBe(false);
+    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+  });
+
+  it("revalidates that the closing loop still closes before dispatching", async () => {
+    // A prior queued dispatch removes the road tiles connecting the two stops,
+    // breaking the closing loop. The finish must bail rather than create a
+    // pathBroken line that rejects assignVehicle. Both road tiles must be
+    // removed because adjacent stops always have a pathable 2-tile hop unless
+    // both endpoints are non-traversable.
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 20, y: 20 });
+    await Promise.resolve();
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
+    const finishPromise = runtime.finishRoute();
+
+    // Remove both road tiles so the closing loop 002->001 cannot path.
+    let brokenMap = updateTile(
+      routeSnapshot().map,
+      { x: 14, y: 7 },
+      (tile) => ({
+        ...tile,
+        kind: "empty" as const,
+      }),
+    );
+    brokenMap = updateTile(brokenMap, { x: 14, y: 8 }, (tile) => ({
+      ...tile,
+      kind: "empty" as const,
+    }));
+    backend.setSnapshot({ ...routeSnapshot(), map: brokenMap });
+    await backend.resolveNext();
+    await finishPromise;
+
+    expect(
+      backend.intents.some((intent) => intent.type === "addBusRoute"),
+    ).toBe(false);
+    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+  });
+
+  it("keeps the accepted snapshot when the backend creates a route but surfaces no new id", async () => {
+    // If the backend accepts addBusRoute but returns a snapshot with no new
+    // route id (an edge case), finishRoute must keep the accepted snapshot
+    // rather than crash trying to assign a vehicle to a missing line.
+    const base = backendSpy(routeSnapshot());
+    const backend: BackendSpy = {
+      ...base,
+      async dispatch(intent) {
+        if (intent.type === "addBusRoute") {
+          // Accept but return the unchanged snapshot (no new route id).
+          return {
+            snapshot: await base.snapshot(),
+            applied: true,
+            rejection: null,
+          };
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+
+    await runtime.finishRoute();
+
+    // No vehicle was assigned (no new line id to target).
+    expect(
+      backend.intents.some((intent) => intent.type === "assignVehicle"),
+    ).toBe(false);
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
   it("does not duplicate a route on a concurrent double-finishRoute", async () => {

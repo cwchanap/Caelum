@@ -15,6 +15,23 @@ export default defineConfig({
   test: {
     globals: true,
     exclude: ["tests/e2e/**", "node_modules/**", "dist/**"],
+    coverage: {
+      provider: "v8",
+      // Mirror codecov.yml `ignore`: build/entry side-effect modules that are
+      // not unit-testable without contorting mocks around process spawns and
+      // Svelte mounting. Excluding them here keeps local coverage reports
+      // consistent with the Codecov patch status.
+      exclude: [
+        "scripts/ensure-wasm.mjs",
+        "src/main.ts",
+        "src-tauri/**",
+        "crates/**",
+        "tests/**",
+        "vite.config.ts",
+        "svelte.config.js",
+        "eslint.config.js",
+      ],
+    },
     projects: [
       {
         extends: true,

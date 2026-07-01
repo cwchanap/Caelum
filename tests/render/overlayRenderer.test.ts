@@ -6,7 +6,7 @@ import type { ActiveTrip, Stop } from "../../src/domain/types";
 import { axisLockedLine, reverseLanePoints } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
-import { withRoads } from "../helpers/mapFixtures";
+import { withAreas, withRoads } from "../helpers/mapFixtures";
 
 function fakeCtx() {
   return {
@@ -623,6 +623,332 @@ describe("renderOverlays drag preview", () => {
     expect(strokeStylesAtStroke.length).toBeGreaterThan(0);
     expect(strokeStylesAtStroke.every((c) => c === colors.oneWayArrow)).toBe(
       true,
+    );
+  });
+});
+
+describe("coverage overlay", () => {
+  it("fills coverage areas for stops and stations", () => {
+    const ctx = fakeCtx();
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        stops: [
+          {
+            id: "stop-001",
+            kind: "busStop" as const,
+            position: { x: 5, y: 5 },
+            platforms: [],
+          },
+          {
+            id: "stop-002",
+            kind: "busTerminal" as const,
+            position: { x: 10, y: 10 },
+            platforms: [],
+          },
+        ],
+        stations: [
+          {
+            id: "station-001",
+            position: { x: 15, y: 15 },
+            platforms: [],
+          },
+        ],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "coverage" as const };
+    renderOverlays(ctx, state, ui);
+    // busStop radius 2 -> (5-2, 5-2) origin, 5x5 box.
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      (5 - 2) * tileSize,
+      (5 - 2) * tileSize,
+      tileSize * 5,
+      tileSize * 5,
+    );
+    // busTerminal radius 4 -> (10-4, 10-4) origin, 9x9 box.
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      (10 - 4) * tileSize,
+      (10 - 4) * tileSize,
+      tileSize * 9,
+      tileSize * 9,
+    );
+    // station radius 4 -> (15-4, 15-4) origin, 9x9 box.
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      (15 - 4) * tileSize,
+      (15 - 4) * tileSize,
+      tileSize * 9,
+      tileSize * 9,
+    );
+  });
+});
+
+describe("growth overlay", () => {
+  it("fills tiles for unapplied growth waves and skips applied ones", () => {
+    const ctx = fakeCtx();
+    const state = {
+      ...createTestGameState(),
+      scenario: {
+        ...createTestGameState().scenario,
+        growthWaves: [
+          {
+            id: "wave-001",
+            triggerTime: 100,
+            message: "Wave 1",
+            applied: false,
+            tiles: [
+              {
+                id: "5,5",
+                x: 5,
+                y: 5,
+                area: "residential" as const,
+                createsCitizens: 0,
+              },
+              {
+                id: "6,5",
+                x: 6,
+                y: 5,
+                area: "residential" as const,
+                createsCitizens: 0,
+              },
+            ],
+          },
+          {
+            id: "wave-002",
+            triggerTime: 200,
+            message: "Wave 2",
+            applied: true,
+            tiles: [
+              {
+                id: "7,5",
+                x: 7,
+                y: 5,
+                area: "commercial" as const,
+                createsCitizens: 0,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "growth" as const };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      5 * tileSize,
+      5 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      6 * tileSize,
+      5 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    // The applied wave's tile must not be filled.
+    expect(ctx.fillRect).not.toHaveBeenCalledWith(
+      7 * tileSize,
+      5 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+});
+
+describe("building preview", () => {
+  it("renders a valid placement in the valid tint over an empty residential tile", () => {
+    const { ctx, fillStyles } = recordingFillCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    // smallHouse is 2x1; paint the footprint residential.
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x + 1, y: emptyTile.y },
+    ]);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(fillStyles).toContain(colors.previewValid);
+  });
+
+  it("renders an invalid placement in the invalid tint when budget is insufficient", () => {
+    const { ctx, fillStyles } = recordingFillCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x + 1, y: emptyTile.y },
+    ]);
+    state = { ...state, budget: 0 };
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(fillStyles).toContain(colors.previewInvalid);
+  });
+
+  it("renders an invalid placement when the tile is occupied by a building", () => {
+    const { ctx, fillStyles } = recordingFillCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x + 1, y: emptyTile.y },
+    ]);
+    state = withBuildingAt(state, [emptyTile]);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(fillStyles).toContain(colors.previewInvalid);
+  });
+});
+
+describe("crowding overlay ratios", () => {
+  it("uses the lower globalAlpha (0.3) when crowding is between 50% and 100%", () => {
+    // capacity 4, 3 waiters -> 75% -> maxRatio in (0.5, 1) -> globalAlpha 0.3.
+    const crowdedStop: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 3, y: 3 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
+      ],
+    };
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        stops: [crowdedStop],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+      activeTrips: [waiter(), waiter(), waiter()],
+    };
+    const ui = { ...createUiState(), activeOverlay: "crowding" as const };
+    const ctx = fakeCtx();
+    renderOverlays(ctx, state, ui);
+    expect(ctx.globalAlpha).toBe(0.3);
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      3 * tileSize,
+      3 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("uses the higher globalAlpha (0.55) when crowding is at or above 100%", () => {
+    // capacity 1, 2 waiters -> 200% -> maxRatio >= 1 -> globalAlpha 0.55.
+    const ctx = fakeCtx();
+    const state = crowdingState([waiter(), waiter()]);
+    const ui = { ...createUiState(), activeOverlay: "crowding" as const };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.globalAlpha).toBe(0.55);
+  });
+
+  it("does not fill when crowding is at or below 50%", () => {
+    // capacity 4, 2 waiters -> 50% -> maxRatio <= 0.5 -> skip.
+    const quietStop: Stop = {
+      id: "stop-001",
+      kind: "busStop",
+      position: { x: 3, y: 3 },
+      platforms: [
+        { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
+      ],
+    };
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        stops: [quietStop],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+      activeTrips: [waiter(), waiter()],
+    };
+    const ui = { ...createUiState(), activeOverlay: "crowding" as const };
+    const ctx = fakeCtx();
+    renderOverlays(ctx, state, ui);
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+  });
+
+  it("uses the max ratio across multiple platforms on a single node", () => {
+    // Two platforms: p0 (cap 10, 3 waiters = 30%) and p1 (cap 10, 6 waiters = 60%).
+    // maxRatio = 0.6 -> globalAlpha 0.3.
+    const multiStop: Stop = {
+      id: "stop-001",
+      kind: "busTerminal",
+      position: { x: 3, y: 3 },
+      platforms: [
+        {
+          id: "stop-001-p0",
+          label: "A",
+          capacity: 10,
+          routeIds: ["route-001"],
+        },
+        {
+          id: "stop-001-p1",
+          label: "B",
+          capacity: 10,
+          routeIds: ["route-002"],
+        },
+      ],
+    };
+    const waiterOn = (lineId: string): ActiveTrip => ({
+      ...waiter(),
+      routePlan: {
+        estimatedSeconds: 100,
+        legs: [
+          { mode: "bus", from: { x: 3, y: 3 }, to: { x: 9, y: 9 }, lineId },
+        ],
+      },
+    });
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        stops: [multiStop],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+      activeTrips: [
+        ...Array.from({ length: 3 }, () => waiterOn("route-001")),
+        ...Array.from({ length: 6 }, () => waiterOn("route-002")),
+      ],
+    };
+    const ui = { ...createUiState(), activeOverlay: "crowding" as const };
+    const ctx = fakeCtx();
+    renderOverlays(ctx, state, ui);
+    expect(ctx.globalAlpha).toBe(0.3);
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      3 * tileSize,
+      3 * tileSize,
+      tileSize,
+      tileSize,
     );
   });
 });

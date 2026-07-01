@@ -737,4 +737,95 @@ describe("App hotkeys", () => {
     expect(runtime.setTool).not.toHaveBeenCalledWith("road");
     input.remove();
   });
+
+  it("selects the track tool on 't'", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "t" });
+    expect(runtime.setTool).toHaveBeenCalledWith("track");
+  });
+
+  it("selects the remove tool on 'x'", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "x" });
+    expect(runtime.setTool).toHaveBeenCalledWith("remove");
+  });
+
+  it("selects the inspect tool on 'v'", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "v" });
+    expect(runtime.setTool).toHaveBeenCalledWith("inspect");
+  });
+
+  it("selects the twoWay road preset on '1' while the road tool is active", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "1" });
+    expect(runtime.setRoadPreset).toHaveBeenCalledWith("twoWay");
+  });
+
+  it("selects the dualBidirectional road preset on '3' while the road tool is active", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "3" });
+    expect(runtime.setRoadPreset).toHaveBeenCalledWith("dualBidirectional");
+  });
+
+  it("closes the build drawer on 'b' when it is already open", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeHudCategory: "build" },
+    });
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "b" });
+    expect(runtime.setHudCategory).toHaveBeenCalledWith(null);
+  });
+
+  it("ignores 'b' when a meta modifier is held", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "b", metaKey: true });
+    expect(runtime.setHudCategory).not.toHaveBeenCalled();
+  });
+
+  it("ignores 'b' when a ctrl modifier is held", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(runtime.setHudCategory).not.toHaveBeenCalled();
+  });
+
+  it("ignores 'b' when an alt modifier is held", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.keyDown(window, { key: "b", altKey: true });
+    expect(runtime.setHudCategory).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a non-Error throw from a runtime command as a generic shell error", async () => {
+    // applyRuntimeResult falls back to "Runtime command failed" when the
+    // thrown value is not an Error instance (e.g. a string or plain object).
+    const { runtime } = createRuntimeHarness();
+    runtime.togglePause = vi.fn((): RuntimeCommandResult => {
+      throw "string error";
+    });
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Runtime command failed");
+  });
+
+  it("subscribes to the runtime and starts it on mount", () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    expect(runtime.subscribe).toHaveBeenCalled();
+    expect(runtime.start).toHaveBeenCalled();
+  });
 });

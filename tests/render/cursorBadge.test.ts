@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderCursorBadge } from "../../src/render/cursorBadge";
 import { getBoardTransform } from "../../src/render/canvas";
-import { createTestGameState } from "../helpers/gameState";
+import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import { withRoads } from "../helpers/mapFixtures";
+import { withAreas, withRoads } from "../helpers/mapFixtures";
 
 function badgeCtx() {
   const calls: string[] = [];
@@ -186,5 +186,162 @@ describe("renderCursorBadge", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("labels the track tool and marks blocked placement over an occupied tile", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = withRoads(createTestGameState(), [{ x: 1, y: 0 }]);
+    const ui = {
+      ...createUiState(),
+      activeTool: "track" as const,
+      hoverTile: { x: 1, y: 0 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    // Track may be placed on a road tile, so this is a valid placement.
+    expect(calls.join("")).toContain("Track");
+    expect(calls.join("")).not.toContain("⊘");
+
+    // But a track over an existing track tile is blocked.
+    const { calls: blockedCalls } = badgeCtx();
+    const blockedCtx = {
+      canvas: { width: 896, height: 576 },
+      save: vi.fn(),
+      restore: vi.fn(),
+      fillRect: vi.fn(),
+      fillText: vi.fn((text: string) => blockedCalls.push(text)),
+      measureText: vi.fn((text: string) => ({ width: text.length * 7 })),
+      fillStyle: "",
+      font: "",
+      textAlign: "",
+      textBaseline: "",
+    } as unknown as CanvasRenderingContext2D;
+    const trackState = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 2 && tile.y === 0 ? { ...tile, hasTrack: true } : tile,
+        ),
+      },
+    };
+    renderCursorBadge(
+      blockedCtx,
+      trackState,
+      { ...ui, hoverTile: { x: 2, y: 0 } },
+      getBoardTransform(blockedCtx.canvas, trackState.map),
+    );
+    expect(blockedCalls.join("")).toContain("⊘");
+  });
+
+  it("labels a selected building with its label and rotation", () => {
+    const { ctx, calls } = badgeCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    // smallHouse is 2x1 (rotation 90 -> 1x2); paint the full footprint residential.
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x, y: emptyTile.y + 1 },
+    ]);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 90 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("Small House");
+    expect(text).toContain("90°");
+    // A valid, affordable placement shows no blocked marker.
+    expect(text).not.toContain("⊘");
+  });
+
+  it("marks a building placement blocked when the budget is insufficient", () => {
+    const { ctx, calls } = badgeCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x + 1, y: emptyTile.y },
+    ]);
+    state = { ...state, budget: 0 };
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("⊘");
+  });
+
+  it("marks a building placement blocked over an occupied tile", () => {
+    const { ctx, calls } = badgeCtx();
+    let state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    state = withAreas(state, "residential", [
+      emptyTile,
+      { x: emptyTile.x + 1, y: emptyTile.y },
+    ]);
+    // Place a building on the target tile so the footprint collides.
+    state = placeTestBuilding(state, "smallHouse", emptyTile, 0);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "smallHouse" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("⊘");
+  });
+
+  it("draws nothing for the inspect tool with no building selected", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      hoverTile: { x: 1, y: 1 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls).toHaveLength(0);
+    expect(ctx.save).not.toHaveBeenCalled();
+  });
+
+  it("uses the drag current tile as the cursor while a gesture is active", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 5 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 1, y: 0 },
+        current: { x: 3, y: 0 },
+      },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    // The badge should still render (road tool) — the cursor tile is the drag
+    // current, not the idle hover. Assert the badge draws and positions over
+    // the drag current tile (x=3).
+    expect(calls.join("")).toContain("Road");
+    // boxX = centerX - width/2; centerX = offsetX + (3 + 0.5) * 32 * scale.
+    // With a default transform offsetX=0, scale=1: centerX = 112.
+    // width = text.length*7 + 12 (padding 6*2). Just assert the box is centered
+    // near x=3's tile center by checking the fillText x coordinate instead.
+    const fillTextCalls = (
+      ctx.fillText as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls;
+    expect(fillTextCalls[0][1]).toBe(112); // (3 + 0.5) * 32
   });
 });

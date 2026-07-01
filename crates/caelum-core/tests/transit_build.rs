@@ -1062,3 +1062,200 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
         .expect("route-A vehicle survives");
     assert!(!vehicle_a.passenger_ids.iter().any(|id| id == "trip-001"));
 }
+
+#[test]
+fn lay_road_line_one_way_is_idempotent_when_direction_already_matches() {
+    // lay_lane returns false (no charge, no change) when the existing road's
+    // one_way already equals the requested direction. Re-laying the same
+    // one-way line over itself must not double-charge or change the snapshot.
+    let mut engine = GameEngine::new();
+    let first = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
+    assert!(first.applied);
+    let budget_after_first = first.snapshot.budget;
+
+    let second = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
+    // No tile changed (all already one-way east), so the line is "unchanged".
+    assert!(!second.applied);
+    assert_eq!(second.snapshot.budget, budget_after_first);
+}
+
+#[test]
+fn lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied() {
+    // lay_reverse_lane returns false when the reverse-lane tile is not empty.
+    // Pre-place a road on the reverse-lane tile (north of the forward lane);
+    // the forward lane still lands, but the reverse lane is skipped rather
+    // than hijacking the existing road.
+    let mut engine = GameEngine::new();
+    // Pre-place a two-way road at (2, 0) — the reverse-lane tile for a
+    // dual-bidirectional line at y=1 (reverse lane is at y=0, north/left of
+    // the canonical east forward lane).
+    engine.dispatch(GameIntent::LayRoad {
+        point: (2, 0).into(),
+    });
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(result.applied);
+
+    let tile = |x: i32, y: i32| {
+        result
+            .snapshot
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .expect("tile exists")
+    };
+    // Forward lane (y=1) is one-way east.
+    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    // The pre-existing road at (2,0) keeps its two-way (None) direction — the
+    // reverse lane did not overwrite it. (1,0) and (3,0) get the reverse lane.
+    assert_eq!(tile(2, 0).one_way.as_deref(), None);
+    assert_eq!(tile(1, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+}
+
+#[test]
+fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
+    // A vertical dual-bidirectional line must canonicalize the forward lane
+    // to "south" (and the reverse to "north") regardless of drag order,
+    // mirroring the horizontal canonical-east behavior.
+    let south = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
+            preset: RoadPreset::DualBidirectional,
+        })
+    };
+    let north = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
+            preset: RoadPreset::DualBidirectional,
+        })
+    };
+
+    let one_way_at = |snap: &caelum_core::GameSnapshot, x: i32, y: i32| {
+        snap.map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .and_then(|tile| tile.one_way.clone())
+    };
+
+    for y in 1..=3 {
+        // Forward lane (x=5) is south in both drag orders.
+        assert_eq!(
+            one_way_at(&south.snapshot, 5, y).as_deref(),
+            Some("south"),
+            "southward forward lane at (5,{y})"
+        );
+        assert_eq!(
+            one_way_at(&north.snapshot, 5, y).as_deref(),
+            Some("south"),
+            "northward drag must still place south forward lane at (5,{y})"
+        );
+        // Reverse lane (x=6, east/right of south) is north in both drag orders.
+        assert_eq!(
+            one_way_at(&south.snapshot, 6, y).as_deref(),
+            Some("north"),
+            "southward reverse lane at (6,{y})"
+        );
+        assert_eq!(
+            one_way_at(&north.snapshot, 6, y).as_deref(),
+            Some("north"),
+            "northward drag must place the reverse lane on the SAME side at (6,{y})"
+        );
+        // The opposite side (x=4, west) must stay empty.
+        assert!(
+            one_way_at(&south.snapshot, 4, y).is_none()
+                && one_way_at(&north.snapshot, 4, y).is_none(),
+            "no reverse lane should leak to the west side at (4,{y})"
+        );
+    }
+}
+
+#[test]
+fn lay_road_line_one_way_vertical_uses_drag_direction() {
+    // OneWay follows the drag direction (not canonical), so a southward drag
+    // sets "south" and a northward drag sets "north".
+    let south = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
+            preset: RoadPreset::OneWay,
+        })
+    };
+    assert!(south.applied);
+    for y in 1..=3 {
+        assert_eq!(
+            south
+                .snapshot
+                .map
+                .tiles
+                .iter()
+                .find(|tile| tile.x == 5 && tile.y == y)
+                .and_then(|tile| tile.one_way.clone())
+                .as_deref(),
+            Some("south")
+        );
+    }
+
+    let north = {
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
+            preset: RoadPreset::OneWay,
+        })
+    };
+    assert!(north.applied);
+    for y in 1..=3 {
+        assert_eq!(
+            north
+                .snapshot
+                .map
+                .tiles
+                .iter()
+                .find(|tile| tile.x == 5 && tile.y == y)
+                .and_then(|tile| tile.one_way.clone())
+                .as_deref(),
+            Some("north")
+        );
+    }
+}
+
+#[test]
+fn lay_road_line_empty_points_is_rejected() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_some());
+}
+
+#[test]
+fn lay_road_line_single_point_is_a_no_op_unchanged() {
+    // A single-point line has no direction (line_direction returns None) and
+    // lay_lane on an empty tile would place one road, but a one-point drag is
+    // treated as a tap by the runtime. At the transit layer a single-point
+    // line that places one road is still a valid change.
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into()],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied);
+    assert_eq!(result.snapshot.budget, 120_000 - 100);
+}

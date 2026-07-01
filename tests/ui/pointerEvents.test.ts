@@ -362,4 +362,33 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 1, 0)).toBe("empty");
     expect(releaseCapture.mock.calls).toContainEqual([5]);
   });
+
+  it("cancels an in-flight drag and clears hover on pointerleave", async () => {
+    const { runtime, canvas } = await mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
+    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+
+    expect(runtime.getSnapshot().ui.drag).not.toBeNull();
+
+    dispatch(canvas, "pointerleave", center({ x: 5, y: 0 }));
+
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    expect(runtime.getSnapshot().ui.hoverTile).toBeNull();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+  });
+
+  it("clears the hover tile on pointerleave when no drag is active", async () => {
+    const { runtime, canvas } = await mount();
+    runtime.setTool("inspect");
+
+    dispatch(canvas, "pointermove", center({ x: 5, y: 5 }));
+
+    expect(runtime.getSnapshot().ui.hoverTile).toEqual({ x: 5, y: 5 });
+
+    dispatch(canvas, "pointerleave", center({ x: 10, y: 10 }));
+
+    expect(runtime.getSnapshot().ui.hoverTile).toBeNull();
+  });
 });
