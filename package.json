@@ -8,6 +8,7 @@
     "predev": "bun run ensure-wasm",
     "prebuild": "bun run wasm:build:release",
     "build": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit && vite build",
+    "precheck": "bun run ensure-wasm",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "lint": "bun run lint:svelte && bun run lint:rust",
     "lint:svelte": "eslint .",

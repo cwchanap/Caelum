@@ -5,6 +5,7 @@ import {
   applyUiTileClick,
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
+import { closingLoopIsPathable } from "../ui/routeDraft";
 import { axisLockedLine } from "../ui/roadDrag";
 import { createUiState, type UiState } from "../ui/uiState";
 import type { GameBackend, GameIntent } from "./backend";
@@ -422,7 +423,17 @@ export async function createGameRuntime({
       // Return the last published snapshot so callers still resolve.
       return Promise.resolve(getSnapshot());
     }
-    const run = gameplayQueue.then(operation);
+    const run = gameplayQueue.then(() => {
+      // Re-check `dead` at execution time: a prior queued operation may have
+      // failed fatally between enqueue and run, setting `dead` after this call
+      // passed its enqueue-time guard. Without this, the later operation would
+      // still hit the backend and, on success, clear `backendError` even though
+      // the runtime was stopped as fatal.
+      if (dead) {
+        return getSnapshot();
+      }
+      return operation();
+    });
     gameplayQueue = run.then(
       () => undefined,
       () => undefined,
@@ -707,6 +718,15 @@ export async function createGameRuntime({
       }
 
       const mode: "bus" | "metro" = isBus ? "bus" : "metro";
+      // Guard the closing loop before dispatching: under one-way roads a
+      // forward-pathable draft can still fail to close, and the Rust core
+      // accepts the line with `path_broken` then rejects `assignVehicle` —
+      // leaving an unusable route and a cleared draft. `canFinish` already
+      // gates the UI button, but `finishRoute` is also callable directly, so
+      // bail here for parity with the legacy `finishDraftRoute` guard.
+      if (!closingLoopIsPathable(state, ui)) {
+        return commit(state, ui);
+      }
       const createIntent: GameIntent = isBus
         ? { type: "addBusRoute", stopIds: ui.draftStopIds }
         : { type: "addMetroLine", stationIds: ui.draftStationIds };
@@ -737,28 +757,33 @@ export async function createGameRuntime({
         rejection = createResult.rejection;
         const afterCreate = normalizeRustSnapshot(createResult.snapshot);
 
-        // Clear the submitted draft only when the backend accepted the line
-        // and the draft has not been mutated while the dispatch was in flight
-        // (parity with the previous single-dispatch `applied` gate). Read `ui`
-        // after the dispatch resolves so a newer draft survives a slow finish.
-        const draftUnchanged = isBus
-          ? ui.draftStopIds === submittedDraftIds &&
-            ui.draftStopPaths === submittedDraftPaths
-          : ui.draftStationIds === submittedDraftIds &&
-            ui.draftStationPaths === submittedDraftPaths;
-        const nextUi =
-          createResult.applied && draftUnchanged
-            ? isBus
-              ? { ...ui, draftStopIds: [], draftStopPaths: [] }
-              : {
-                  ...ui,
-                  draftStationIds: [],
-                  draftStationPaths: [],
-                }
-            : ui;
+        // Compute the UI to commit by reading the latest `ui` at commit time
+        // and clearing only the submitted draft fields when the backend
+        // accepted the line and the draft has not been mutated while the
+        // dispatch was in flight. Reading `ui` at commit time (rather than
+        // snapshotting a full `nextUi` before the `assignVehicle` await)
+        // preserves any UI interactions — tool switches, panel changes, hover
+        // updates — that happen while the vehicle assignment is pending.
+        const commitUi = (current: UiState): UiState => {
+          const stillSubmitted = isBus
+            ? current.draftStopIds === submittedDraftIds &&
+              current.draftStopPaths === submittedDraftPaths
+            : current.draftStationIds === submittedDraftIds &&
+              current.draftStationPaths === submittedDraftPaths;
+          if (!(createResult.applied && stillSubmitted)) {
+            return current;
+          }
+          return isBus
+            ? { ...current, draftStopIds: [], draftStopPaths: [] }
+            : {
+                ...current,
+                draftStationIds: [],
+                draftStationPaths: [],
+              };
+        };
 
         if (!createResult.applied) {
-          return commit(afterCreate, nextUi);
+          return commit(afterCreate, commitUi(ui));
         }
 
         // Identify the freshly created line by diffing ids, then assign a
@@ -770,7 +795,7 @@ export async function createGameRuntime({
           : afterCreate.transit.metroLines;
         const newLine = afterRoutes.find((entry) => !beforeIds.has(entry.id));
         if (newLine === undefined) {
-          return commit(afterCreate, nextUi);
+          return commit(afterCreate, commitUi(ui));
         }
 
         const vehicleResult = await backend.dispatch({
@@ -785,10 +810,16 @@ export async function createGameRuntime({
           // the player understands why the line has no service without the
           // runtime halting.
           rejection = vehicleResult.rejection ?? "assignVehicle rejected";
-          return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
+          return commit(
+            normalizeRustSnapshot(vehicleResult.snapshot),
+            commitUi(ui),
+          );
         }
         rejection = null;
-        return commit(normalizeRustSnapshot(vehicleResult.snapshot), nextUi);
+        return commit(
+          normalizeRustSnapshot(vehicleResult.snapshot),
+          commitUi(ui),
+        );
       });
     },
     cancelRoute() {

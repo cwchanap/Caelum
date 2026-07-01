@@ -3,6 +3,7 @@ import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
 import { resolveNodeAtTile } from "../ui/actions";
+import { closingLoopIsPathable } from "../ui/routeDraft";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
@@ -232,13 +233,19 @@ function buildRouteDraft(
   const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
   const distinct = new Set(ids).size;
   const affordable = state.budget >= vehicleCost;
-  const canFinish = distinct >= 2 && affordable;
+  // The closing loop (last -> first) must be pathable under directed roads;
+  // otherwise finishing creates a `pathBroken` route whose `assignVehicle`
+  // rejects, leaving an unusable line with no vehicle and a cleared draft.
+  const loopCloses = closingLoopIsPathable(state, ui);
+  const canFinish = distinct >= 2 && affordable && loopCloses;
   const finishHint =
     distinct < 2
       ? "Add another stop"
-      : affordable
-        ? "Ready"
-        : `Need ${formatBudget(vehicleCost)}`;
+      : !loopCloses
+        ? "Loop cannot close"
+        : affordable
+          ? "Ready"
+          : `Need ${formatBudget(vehicleCost)}`;
 
   return {
     mode: isBus ? "bus" : "metro",
