@@ -54,7 +54,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 **Layers (`src/`):**
 
 - `domain/` — `types.ts` is the shared data model (`GameState`, `Citizen`, `TransitNetwork`, `Tool`, etc.); `ids.ts` generates stable IDs (`tileId`, zero-padded `entityId`, `nextEntityId`).
-- `scenario/growingSuburb.ts` — TS-side scenario helpers (map layout, seed-wave definition for the future HPA-118 Rust port). The authoritative scenario, objectives, and clock live in `crates/caelum-core`; the Growing Suburb sandbox ships with no timed growth waves and no starting citizens (see `docs/architecture.md`).
+- `scenario/growingSuburb.ts` — authoritative Growing Suburb map dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/scenario.rs`, exported so e2e helpers and tests reference the source of truth. The authoritative map layout, scenario, objectives, and clock all live in `crates/caelum-core`; the Growing Suburb sandbox ships with no timed growth waves and no starting citizens (see `docs/architecture.md`).
 - `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`).
 - `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts`/`tilePath.ts` (read-only draft helpers), `uiState.ts` (`UiState` + factory).
 - `domain/catalog/` — read-only TypeScript catalogs shared by UI and render code.
