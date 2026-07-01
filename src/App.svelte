@@ -41,10 +41,14 @@
   }
 
   async function applyRuntimeResult(
-    result: RuntimeCommandResult,
+    getResult: () => RuntimeCommandResult,
   ): Promise<void> {
+    // Accept a thunk (not the already-invoked result) so a synchronous throw
+    // from the controller method (e.g. a guard firing before it returns a
+    // promise) is caught here and surfaced as `shellError`, instead of
+    // escaping unhandled. The call happens inside the try block.
     try {
-      setSnapshot(await result);
+      setSnapshot(await getResult());
     } catch (err) {
       shellError =
         err instanceof Error ? err.message : "Runtime command failed";
@@ -59,13 +63,13 @@
 
   function handleTogglePause(): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.togglePause());
+      void applyRuntimeResult(() => runtime.togglePause());
     }
   }
 
   function handleSetSpeed(speed: 1 | 2 | 4): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.setSpeed(speed));
+      void applyRuntimeResult(() => runtime.setSpeed(speed));
     }
   }
 
@@ -111,7 +115,7 @@
     platformId: string,
   ): void {
     if (runtime !== null) {
-      void applyRuntimeResult(
+      void applyRuntimeResult(() =>
         runtime.assignRouteToPlatform(nodeId, routeId, platformId),
       );
     }
@@ -125,7 +129,7 @@
 
   function handleFinishRoute(): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.finishRoute());
+      void applyRuntimeResult(() => runtime.finishRoute());
     }
   }
 
@@ -137,25 +141,25 @@
 
   function handleRenameRoute(routeId: string, name: string): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.renameRoute(routeId, name));
+      void applyRuntimeResult(() => runtime.renameRoute(routeId, name));
     }
   }
 
   function handleRecolorRoute(routeId: string, color: string): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.recolorRoute(routeId, color));
+      void applyRuntimeResult(() => runtime.recolorRoute(routeId, color));
     }
   }
 
   function handleToggleRouteActive(routeId: string): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.toggleRouteActive(routeId));
+      void applyRuntimeResult(() => runtime.toggleRouteActive(routeId));
     }
   }
 
   function handleDeleteRoute(routeId: string): void {
     if (runtime !== null) {
-      void applyRuntimeResult(runtime.deleteRoute(routeId));
+      void applyRuntimeResult(() => runtime.deleteRoute(routeId));
     }
   }
 

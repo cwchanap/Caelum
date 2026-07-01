@@ -656,6 +656,23 @@ describe("App shell bootstrap", () => {
     expect(runtime.stop).toHaveBeenCalled();
   });
 
+  it("surfaces a synchronous throw from a runtime command as a shell error", async () => {
+    // The command invocation must happen inside `applyRuntimeResult`'s
+    // try/catch (via a thunk), not at the call site — otherwise a guard that
+    // throws before returning a promise escapes unhandled and the shell keeps
+    // rendering as if nothing went wrong.
+    const { runtime } = createRuntimeHarness();
+    runtime.togglePause = vi.fn((): RuntimeCommandResult => {
+      throw new Error("Synchronous guard failure");
+    });
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Synchronous guard failure");
+  });
+
   it("surfaces gameplay rejection as a dismissible banner without stopping the runtime", async () => {
     const { runtime } = createRuntimeHarness({
       rejection: "Cannot afford vehicle",
