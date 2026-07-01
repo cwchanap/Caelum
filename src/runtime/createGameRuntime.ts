@@ -100,6 +100,10 @@ export async function createGameRuntime({
   let rejection: string | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
   let running = false;
+  // Once the backend has failed fatally, no further dispatches or ticks are
+  // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
+  // user-initiated intents after a fatal error do not reach a dead backend.
+  let dead = false;
   let animationFrameId: number | null = null;
   let lastFrameTime: number | null = null;
   let canvasHost: HTMLElement | null = null;
@@ -405,6 +409,7 @@ export async function createGameRuntime({
 
   const failBackend = (error: unknown): RuntimeSnapshot => {
     backendError = error instanceof Error ? error.message : String(error);
+    dead = true;
     stop();
     return publish();
   };
@@ -412,6 +417,11 @@ export async function createGameRuntime({
   const queueBackend = (
     operation: () => Promise<RuntimeSnapshot>,
   ): Promise<RuntimeSnapshot> => {
+    if (dead) {
+      // The backend is fatally failed; do not attempt further operations.
+      // Return the last published snapshot so callers still resolve.
+      return Promise.resolve(getSnapshot());
+    }
     const run = gameplayQueue.then(operation);
     gameplayQueue = run.then(
       () => undefined,

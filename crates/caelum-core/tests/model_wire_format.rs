@@ -155,6 +155,32 @@ fn trip_outcome_kind_serializes_to_legacy_strings() {
 }
 
 #[test]
+fn trip_outcome_field_names_serialize_to_camel_case_wire() {
+    let trip_outcome = TripOutcome {
+        outcome: TripOutcomeKind::Late,
+        wait_seconds: 42.5,
+        time: 7.25,
+    };
+    let value = serde_json::to_value(&trip_outcome).expect("outcome should serialize");
+    assert_eq!(
+        value["waitSeconds"],
+        json!(42.5),
+        "trip outcome wait_seconds must serialize as camelCase waitSeconds on the wire"
+    );
+    assert_eq!(
+        value["time"],
+        json!(7.25),
+        "trip outcome time must serialize as camelCase time on the wire"
+    );
+    // snake_case must NOT leak onto the wire — the TS host adapters read
+    // camelCase field names.
+    assert!(
+        value.get("wait_seconds").is_none(),
+        "trip outcome leaked snake_case wait_seconds onto the wire"
+    );
+}
+
+#[test]
 fn sim_worker_profile_serializes_to_legacy_strings() {
     for (profile, wire) in [
         (WorkerProfile::Worker, "worker"),

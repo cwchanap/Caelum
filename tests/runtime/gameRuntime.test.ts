@@ -790,6 +790,44 @@ describe("Game Runtime", () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
+  it("short-circuits dispatches after a fatal backend error", async () => {
+    const backend = backendSpy();
+    let tickCalls = 0;
+    let dispatchCalls = 0;
+    backend.tick = vi.fn(async () => {
+      tickCalls += 1;
+      if (tickCalls === 1) {
+        throw new Error("backend unavailable");
+      }
+      return {
+        snapshot: await backend.snapshot(),
+        applied: true,
+        rejection: null,
+      };
+    });
+    const baseDispatch = backend.dispatch;
+    backend.dispatch = vi.fn(async (intent) => {
+      dispatchCalls += 1;
+      return baseDispatch(intent);
+    });
+    const runtime = await createGameRuntime({ backend });
+
+    runtime.start();
+    await runtime.tick(1);
+    expect(runtime.getSnapshot().backendError).toBe("backend unavailable");
+
+    // Subsequent dispatches and ticks must NOT reach the dead backend.
+    runtime.setTool("busStop");
+    const dispatchSnapshot = await runtime.handleTileClick({ x: 5, y: 5 });
+    const tickSnapshot = await runtime.tick(1);
+
+    expect(dispatchCalls).toBe(0);
+    expect(tickCalls).toBe(1);
+    // The short-circuit returns the last published snapshot.
+    expect(dispatchSnapshot.backendError).toBe("backend unavailable");
+    expect(tickSnapshot.backendError).toBe("backend unavailable");
+  });
+
   it("handles inspect tile clicks without backend dispatch", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({ backend });
