@@ -180,3 +180,40 @@ export function cancelDraftRoute(ui: UiState): UiState {
     draftStationPaths: [],
   };
 }
+
+/**
+ * Check that the closing loop segment (last node -> first node) has a valid
+ * tile path. Forward draft validation already proves every consecutive pair
+ * connects, but under directed (one-way) graphs that does not guarantee the
+ * loop closes. Returns true when the closing path exists (or there are fewer
+ * than 2 nodes). Mirrors the guard the legacy TS `finishDraftRoute` applied
+ * before committing a draft, so the player is not left with a `pathBroken`
+ * route, no vehicle, and a cleared draft they cannot recover.
+ */
+export function closingLoopIsPathable(state: GameState, ui: UiState): boolean {
+  const isMetro = ui.activeTool === "metroLine";
+  const isBus = ui.activeTool === "busRoute";
+  if (!isBus && !isMetro) {
+    return true;
+  }
+  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
+  if (ids.length < 2) {
+    return true;
+  }
+  const nodes: Array<Stop | Station> = isMetro
+    ? state.transit.stations
+    : state.transit.stops;
+  const first = nodes.find((node) => node.id === ids[0]);
+  const last = nodes.find((node) => node.id === ids.at(-1));
+  if (first === undefined || last === undefined) {
+    return true;
+  }
+  return (
+    findTilePath(
+      state.map,
+      last.position,
+      first.position,
+      isMetro ? "metro" : "bus",
+    ) !== null
+  );
+}
