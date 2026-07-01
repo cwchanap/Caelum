@@ -1,6 +1,5 @@
 import type {
   ActiveTrip,
-  Citizen,
   GameMap,
   GameState,
   Point,
@@ -138,7 +137,7 @@ function positionKey(x: number, y: number): string {
   return `${x},${y}`;
 }
 
-function waitingLineId(entity: Citizen | ActiveTrip): string | undefined {
+function waitingLineId(entity: ActiveTrip): string | undefined {
   const leg = entity.routePlan?.legs[entity.currentLegIndex];
   return leg !== undefined && leg.mode !== "walk" ? leg.lineId : undefined;
 }
@@ -160,7 +159,7 @@ function selectPlatformOccupancy(
     }
   }
 
-  for (const entity of [...state.citizens, ...(state.activeTrips ?? [])]) {
+  for (const entity of state.activeTrips ?? []) {
     if (entity.status !== "waiting") {
       continue;
     }
@@ -181,8 +180,8 @@ function selectPlatformOccupancy(
   return occupancy;
 }
 
-function overlayTrips(state: GameState): Array<Citizen | ActiveTrip> {
-  return state.activeTrips !== undefined ? state.activeTrips : state.citizens;
+function overlayTrips(state: GameState): ActiveTrip[] {
+  return state.activeTrips ?? [];
 }
 
 function fillTile(ctx: CanvasRenderingContext2D, point: Point): void {

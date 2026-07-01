@@ -56,7 +56,6 @@ describe("Rust backend contract", () => {
     expect(snapshot.day).toBe(1);
     expect(snapshot.clockMinutes).toBe(555);
     expect(snapshot.sims).toHaveLength(1);
-    expect(snapshot.citizens).toEqual([]);
     expect(snapshot.metrics.waitingCitizenCount).toBe(4);
     expect(snapshot.metrics.waitingTripCount).toBe(4);
     expect(snapshot.metrics.tripOutcomes).toEqual([

@@ -19,9 +19,8 @@ import {
   withTracks,
 } from "../helpers/mapFixtures";
 
-// Waiting commuters live in `state.activeTrips` in the Rust-backed runtime
-// (`normalizeRustSnapshot` always empties the legacy `citizens` array), so the
-// occupancy selector reads `activeTrips`. Build a waiting trip, not a citizen.
+// Waiting commuters live in `state.activeTrips` in the Rust-backed runtime,
+// so the occupancy selector reads `activeTrips`. Build a waiting trip.
 function waitingBusTrip(
   id: string,
   position: { x: number; y: number },

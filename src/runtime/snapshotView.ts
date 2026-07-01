@@ -16,7 +16,6 @@ import type { RustGameSnapshot } from "./backend/types";
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
   return {
     ...snapshot,
-    citizens: [],
     metrics: {
       ...snapshot.metrics,
       waitingCitizenCount: snapshot.metrics.waitingTripCount,
