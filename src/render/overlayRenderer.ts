@@ -19,6 +19,7 @@ import { stopCoverageRadius } from "../domain/catalog/transit";
 // or the drag preview will drift from what the backend actually places.
 import {
   axisLockedLine,
+  canonicalLineDirection,
   lineDirection,
   oppositeDirection,
   planDragPreview,
@@ -309,7 +310,12 @@ function renderDragPreview(
   }
 
   // Dual preset direction arrows: the oneWay preset shows the drag-axis
-  // direction; dualBidirectional shows forward + opposing arrows.
+  // direction (Rust `lay_road_line` commits OneWay with the drag direction);
+  // dualBidirectional uses the canonical axis direction (east/south) and its
+  // opposite, matching the Rust commit which canonicalizes the primary lane
+  // so the reverse carriageway lands on a drag-order-invariant side. Using the
+  // drag direction here would flip both carriageways' arrows on west/north
+  // drags while the committed tiles keep canonical directions.
   // twoWay / track / remove carry no per-tile direction, so they draw none.
   if (gesture.tool === "road") {
     const forward = lineDirection(line);
@@ -327,13 +333,16 @@ function renderDragPreview(
           drawDirectionArrow(ctx, point, forward);
         }
       } else if (ui.roadPreset === "dualBidirectional") {
-        const reverse = reverseLanePoints(line);
-        const reverseDir = oppositeDirection(forward);
-        for (const point of line) {
-          drawDirectionArrow(ctx, point, forward);
-        }
-        for (const point of reverse) {
-          drawDirectionArrow(ctx, point, reverseDir);
+        const canonical = canonicalLineDirection(line);
+        if (canonical !== null) {
+          const reverse = reverseLanePoints(line);
+          const reverseDir = oppositeDirection(canonical);
+          for (const point of line) {
+            drawDirectionArrow(ctx, point, canonical);
+          }
+          for (const point of reverse) {
+            drawDirectionArrow(ctx, point, reverseDir);
+          }
         }
       }
       ctx.restore();
