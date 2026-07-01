@@ -198,6 +198,244 @@ fn line_intents_use_camel_case_wire_names() {
 }
 
 #[test]
+fn all_game_intent_variants_use_camel_case_wire_names() {
+    // Pin the `type` tag and the camelCase field names for every `GameIntent`
+    // variant. The wire contract is shared with the TS host adapters; a
+    // snake_case leak or a renamed tag would silently break gameplay dispatch
+    // in browser/WASM and Tauri builds. `LayRoadLine` is also covered by
+    // `line_intents_use_camel_case_wire_names` (which additionally pins every
+    // `RoadPreset`), but it is included here so this test enumerates the full
+    // enum and any newly added variant that is not wired up here will fail the
+    // exhaustiveness check below.
+    fn p(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    type FieldAssertions = Vec<(&'static str, serde_json::Value)>;
+    let cases: Vec<(GameIntent, &'static str, FieldAssertions)> = vec![
+        (
+            GameIntent::SetPaused { paused: true },
+            "setPaused",
+            vec![("paused", json!(true))],
+        ),
+        (
+            GameIntent::SetSpeed { speed: 3 },
+            "setSpeed",
+            vec![("speed", json!(3))],
+        ),
+        (
+            GameIntent::AssignVehicle {
+                mode: "bus".to_string(),
+                line_id: "route-001".to_string(),
+            },
+            "assignVehicle",
+            vec![("mode", json!("bus")), ("lineId", json!("route-001"))],
+        ),
+        (
+            GameIntent::LayRoad { point: p(1, 2) },
+            "layRoad",
+            vec![("point", json!({ "x": 1, "y": 2 }))],
+        ),
+        (
+            GameIntent::LayRoadLine {
+                points: vec![p(1, 2), p(3, 2)],
+                preset: RoadPreset::DualBidirectional,
+            },
+            "layRoadLine",
+            vec![
+                ("points", json!([{ "x": 1, "y": 2 }, { "x": 3, "y": 2 }])),
+                ("preset", json!("dualBidirectional")),
+            ],
+        ),
+        (
+            GameIntent::CycleRoadDirection { point: p(4, 5) },
+            "cycleRoadDirection",
+            vec![("point", json!({ "x": 4, "y": 5 }))],
+        ),
+        (
+            GameIntent::LayTrack { point: p(6, 7) },
+            "layTrack",
+            vec![("point", json!({ "x": 6, "y": 7 }))],
+        ),
+        (
+            GameIntent::LayTrackLine {
+                points: vec![p(0, 0), p(2, 0)],
+            },
+            "layTrackLine",
+            vec![("points", json!([{ "x": 0, "y": 0 }, { "x": 2, "y": 0 }]))],
+        ),
+        (
+            GameIntent::RemoveAtTile { point: p(8, 9) },
+            "removeAtTile",
+            vec![("point", json!({ "x": 8, "y": 9 }))],
+        ),
+        (
+            GameIntent::RemoveAtTiles {
+                points: vec![p(1, 1), p(2, 2)],
+            },
+            "removeAtTiles",
+            vec![("points", json!([{ "x": 1, "y": 1 }, { "x": 2, "y": 2 }]))],
+        ),
+        (
+            GameIntent::AddBusStop { point: p(3, 4) },
+            "addBusStop",
+            vec![("point", json!({ "x": 3, "y": 4 }))],
+        ),
+        (
+            GameIntent::AddMetroStation { point: p(5, 6) },
+            "addMetroStation",
+            vec![("point", json!({ "x": 5, "y": 6 }))],
+        ),
+        (
+            GameIntent::AddBusRoute {
+                stop_ids: vec!["stop-1".to_string(), "stop-2".to_string()],
+            },
+            "addBusRoute",
+            vec![("stopIds", json!(["stop-1", "stop-2"]))],
+        ),
+        (
+            GameIntent::AddMetroLine {
+                station_ids: vec!["station-1".to_string()],
+            },
+            "addMetroLine",
+            vec![("stationIds", json!(["station-1"]))],
+        ),
+        (
+            GameIntent::SetRouteActive {
+                route_id: "route-001".to_string(),
+                active: false,
+            },
+            "setRouteActive",
+            vec![("routeId", json!("route-001")), ("active", json!(false))],
+        ),
+        (
+            GameIntent::RenameRoute {
+                route_id: "route-001".to_string(),
+                name: "Main Line".to_string(),
+            },
+            "renameRoute",
+            vec![
+                ("routeId", json!("route-001")),
+                ("name", json!("Main Line")),
+            ],
+        ),
+        (
+            GameIntent::RecolorRoute {
+                route_id: "route-001".to_string(),
+                color: "#ff0000".to_string(),
+            },
+            "recolorRoute",
+            vec![("routeId", json!("route-001")), ("color", json!("#ff0000"))],
+        ),
+        (
+            GameIntent::DeleteRoute {
+                route_id: "route-001".to_string(),
+            },
+            "deleteRoute",
+            vec![("routeId", json!("route-001"))],
+        ),
+        (
+            GameIntent::AssignRouteToPlatform {
+                node_id: "node-1".to_string(),
+                route_id: "route-001".to_string(),
+                platform_id: "platform-2".to_string(),
+            },
+            "assignRouteToPlatform",
+            vec![
+                ("nodeId", json!("node-1")),
+                ("routeId", json!("route-001")),
+                ("platformId", json!("platform-2")),
+            ],
+        ),
+        (
+            GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: p(0, 0),
+                end: p(3, 3),
+            },
+            "paintAreaRectangle",
+            vec![
+                ("area", json!("residential")),
+                ("start", json!({ "x": 0, "y": 0 })),
+                ("end", json!({ "x": 3, "y": 3 })),
+            ],
+        ),
+        (
+            GameIntent::PlaceBuilding {
+                building_type: "largeHouse".to_string(),
+                origin: p(2, 3),
+                rotation: 90,
+            },
+            "placeBuilding",
+            vec![
+                ("buildingType", json!("largeHouse")),
+                ("origin", json!({ "x": 2, "y": 3 })),
+                ("rotation", json!(90)),
+            ],
+        ),
+    ];
+
+    // Exhaustiveness guard: every `GameIntent` variant must be wired up here.
+    // A new variant that is not added to `cases` will fail this match so the
+    // wire contract cannot silently regress when the enum grows.
+    fn expected_type_tag(intent: &GameIntent) -> &'static str {
+        match intent {
+            GameIntent::SetPaused { .. } => "setPaused",
+            GameIntent::SetSpeed { .. } => "setSpeed",
+            GameIntent::AssignVehicle { .. } => "assignVehicle",
+            GameIntent::LayRoad { .. } => "layRoad",
+            GameIntent::LayRoadLine { .. } => "layRoadLine",
+            GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
+            GameIntent::LayTrack { .. } => "layTrack",
+            GameIntent::LayTrackLine { .. } => "layTrackLine",
+            GameIntent::RemoveAtTile { .. } => "removeAtTile",
+            GameIntent::RemoveAtTiles { .. } => "removeAtTiles",
+            GameIntent::AddBusStop { .. } => "addBusStop",
+            GameIntent::AddMetroStation { .. } => "addMetroStation",
+            GameIntent::AddBusRoute { .. } => "addBusRoute",
+            GameIntent::AddMetroLine { .. } => "addMetroLine",
+            GameIntent::SetRouteActive { .. } => "setRouteActive",
+            GameIntent::RenameRoute { .. } => "renameRoute",
+            GameIntent::RecolorRoute { .. } => "recolorRoute",
+            GameIntent::DeleteRoute { .. } => "deleteRoute",
+            GameIntent::AssignRouteToPlatform { .. } => "assignRouteToPlatform",
+            GameIntent::PaintAreaRectangle { .. } => "paintAreaRectangle",
+            GameIntent::PlaceBuilding { .. } => "placeBuilding",
+        }
+    }
+
+    let covered_tags: std::collections::HashSet<&str> =
+        cases.iter().map(|(_, tag, _)| *tag).collect();
+    assert_eq!(
+        covered_tags.len(),
+        cases.len(),
+        "duplicate type tags in wire-format cases"
+    );
+
+    for (intent, type_tag, field_assertions) in &cases {
+        let value = serde_json::to_value(intent)
+            .unwrap_or_else(|_| panic!("intent {type_tag} should serialize"));
+        assert_eq!(
+            value["type"],
+            json!(type_tag),
+            "GameIntent type tag changed: {type_tag}"
+        );
+        assert_eq!(
+            expected_type_tag(intent),
+            *type_tag,
+            "case for {type_tag} is not reachable in the exhaustiveness match; \
+             a variant was likely added to GameIntent without wiring it here"
+        );
+        for (field, expected) in field_assertions {
+            assert_eq!(
+                value[field], *expected,
+                "GameIntent {type_tag} field `{field}` wire spelling changed"
+            );
+        }
+    }
+}
+
+#[test]
 fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
     // The shell reads these threshold names verbatim (runtimeSelectors formats
     // the objective copy from them), and they must match the TS domain

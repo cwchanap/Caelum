@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
-// Read the live Rust-derived transit state exposed on `window` in dev mode
-// (see `src/main.ts`). Used to assert gameplay facts the DOM does not surface
-// — here, that finishing a route actually assigned a vehicle in the core.
+// Read the live Rust-derived transit state exposed on `window` in dev mode.
+// `src/main.ts` only assigns `window.__caelumRuntime` under
+// `import.meta.env.DEV`, so this helper depends on the Playwright webServer
+// running the Vite dev server (`bun run dev` in `playwright.config.ts`).
+// Used to assert gameplay facts the DOM does not surface — here, that
+// finishing a route actually assigned a vehicle in the core.
 async function readRuntimeTransit(
   page: import("@playwright/test").Page,
 ): Promise<{
@@ -26,7 +29,11 @@ async function readRuntimeTransit(
       }
     ).__caelumRuntime;
     if (!runtime) {
-      throw new Error("runtime not exposed on window (dev-only hook missing)");
+      throw new Error(
+        "window.__caelumRuntime is not exposed — e2e must run against the Vite dev server " +
+          "(playwright.config.ts webServer.command === 'bun run dev') because " +
+          "src/main.ts only assigns the hook under import.meta.env.DEV",
+      );
     }
     const transit = runtime.getSnapshot().state.transit;
     return { vehicles: transit.vehicles, routes: transit.routes };

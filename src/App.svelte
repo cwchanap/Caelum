@@ -292,6 +292,14 @@
     <div class="shell-error" role="alert">
       <strong>Shell Error:</strong>
       {shellError ?? "Runtime unavailable"}
+      <button
+        type="button"
+        class="shell-error-reload"
+        data-testid="shell-error-reload"
+        onclick={() => window.location.reload()}
+      >
+        Reload
+      </button>
     </div>
   </main>
 {:else}

@@ -1264,6 +1264,24 @@ body {
   text-transform: uppercase;
 }
 
+.shell-error-reload {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.shell-error-reload:hover {
+  background: rgba(255, 91, 91, 0.2);
+}
+
 .rejection-banner {
   position: absolute;
   top: 72px;
