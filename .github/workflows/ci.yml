@@ -33,7 +33,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.0
 
       - name: Build WASM artifacts
         run: bun run wasm:build:release
@@ -69,7 +71,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.0
 
       - name: Build WASM artifacts
         run: bun run wasm:build:release
@@ -105,7 +109,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.0
 
       - name: Build WASM artifacts
         run: bun run wasm:build:release
@@ -228,7 +234,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: cargo +stable install wasm-pack --version 0.13.0 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.0
 
       - name: Build Tauri app
         # `tauri build` runs `beforeBuildCommand: bun run build`, whose
