@@ -213,9 +213,19 @@ fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
     assert_eq!(value["objectives"]["maxAverageWait"], json!(180.0));
     assert_eq!(value["objectives"]["rollingWindowSeconds"], json!(300.0));
     assert_eq!(value["objectives"]["survivalTime"], json!(1_200.0));
-    // No leaked snake_case keys from the Rust field names.
-    assert!(value.get("rolling_window_seconds").is_none());
-    assert!(value.get("survival_time").is_none());
+    // No leaked snake_case keys from the Rust field names. These fields live on
+    // the nested `ObjectiveThresholds` struct, so the leak check must inspect
+    // `value["objectives"]` — checking the scenario root would always pass and
+    // miss a regression in the `rename_all = "camelCase"` on that struct.
+    let objectives = &value["objectives"];
+    assert!(
+        objectives.get("rolling_window_seconds").is_none(),
+        "objectives must not leak the snake_case `rolling_window_seconds` field"
+    );
+    assert!(
+        objectives.get("survival_time").is_none(),
+        "objectives must not leak the snake_case `survival_time` field"
+    );
 }
 
 #[test]
