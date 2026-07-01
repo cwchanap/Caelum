@@ -1,4 +1,5 @@
 import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
+import { COSTS } from "../domain/catalog/transit";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
@@ -744,6 +745,51 @@ export async function createGameRuntime({
         // vehicle). Mirrors commitDrag's synchronous clear-before-dispatch.
         const currentDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
         if (currentDraftIds.length === 0) {
+          return commit(state, ui);
+        }
+
+        // Revalidate the full finish conditions against the current state/ui
+        // before dispatching. The synchronous `closingLoopIsPathable` guard
+        // above and the baked-in `createIntent` both captured the state at
+        // enqueue time; a prior queued operation (remove/build/deleteRoute)
+        // that ran between enqueue and this closure may have removed one of
+        // the submitted stops/stations, dropped `state.budget` below the
+        // vehicle cost, or broken the closing loop (e.g. a road tile was
+        // removed). Dispatching anyway leaves an accepted but inactive /
+        // `pathBroken` line that rejects `assignVehicle`, while `commitUi`
+        // below still clears the submitted draft — stranding the player with
+        // an unusable route and no recoverable draft. Mirror the `canFinish`
+        // selector (distinct >= 2, affordable, loop closes) plus submitted
+        // node existence, evaluated against the submitted draft ids (not the
+        // current draft, which the player may have mutated while the dispatch
+        // was pending). Surface a recoverable rejection and bail without
+        // clearing the draft so the player can adjust and retry.
+        const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
+        const submittedDistinct = new Set(submittedDraftIds).size;
+        const submittedNodes = isBus
+          ? state.transit.stops
+          : state.transit.stations;
+        const submittedNodesExist = submittedDraftIds.every((id) =>
+          submittedNodes.some((node) => node.id === id),
+        );
+        // `closingLoopIsPathable` reads `ui.activeTool` and the matching draft
+        // field, so evaluate it against a view that pins the queue-time mode
+        // and the submitted ids — not the current tool/draft, which may have
+        // switched or been mutated while the dispatch was pending.
+        const submittedUi: UiState = {
+          ...ui,
+          activeTool: isBus ? "busRoute" : "metroLine",
+          draftStopIds: isBus ? submittedDraftIds : ui.draftStopIds,
+          draftStationIds: isBus ? ui.draftStationIds : submittedDraftIds,
+        };
+        const loopStillCloses = closingLoopIsPathable(state, submittedUi);
+        if (
+          submittedDistinct < 2 ||
+          state.budget < vehicleCost ||
+          !submittedNodesExist ||
+          !loopStillCloses
+        ) {
+          rejection = "Route no longer valid";
           return commit(state, ui);
         }
 

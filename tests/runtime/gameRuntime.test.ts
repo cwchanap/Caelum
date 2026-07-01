@@ -1109,6 +1109,46 @@ describe("route creation and management", () => {
     ]);
   });
 
+  it("revalidates finish conditions against current state and bails when a prior queued dispatch drops budget", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const runtime = await createGameRuntime({ backend });
+
+    // Enqueue a slow prior dispatch (addBusStop) that will resolve before the
+    // finish closure runs, simulating a slow Tauri remove/build dispatch still
+    // in flight when the player drafts and clicks Finish.
+    runtime.setTool("busStop");
+    runtime.handleTileClick({ x: 20, y: 20 });
+    // Let the prior dispatch start and suspend at its await.
+    await Promise.resolve();
+
+    // Draft two stops and enqueue finish behind the prior dispatch.
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
+    const finishPromise = runtime.finishRoute();
+
+    // Simulate the prior dispatch resolving with a budget below the bus
+    // vehicle cost (8_000). The finish closure must revalidate against this
+    // state and bail rather than dispatch addBusRoute with insufficient
+    // budget — which would create an unusable line and clear the draft.
+    backend.setSnapshot({ ...routeSnapshot(), budget: 0 });
+    await backend.resolveNext();
+    await finishPromise;
+
+    expect(
+      backend.intents.some((intent) => intent.type === "addBusRoute"),
+    ).toBe(false);
+    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
+    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+  });
+
   it("does not duplicate a route on a concurrent double-finishRoute", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
