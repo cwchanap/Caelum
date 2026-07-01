@@ -347,9 +347,9 @@ describe("closingLoopIsPathable", () => {
     expect(closingLoopIsPathable(state, ui)).toBe(false);
   });
 
-  it("returns true when a drafted node id no longer exists", () => {
-    // A missing first/last node falls through to true (the caller revalidates
-    // elsewhere); the guard only blocks when both endpoints resolve.
+  it("returns false when a drafted node id no longer exists", () => {
+    // A missing first/last node means the closing loop cannot be verified, so
+    // the guard rejects early rather than deferring to finishRoute().
     let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
     const ui = {
@@ -357,7 +357,7 @@ describe("closingLoopIsPathable", () => {
       activeTool: "busRoute" as const,
       draftStopIds: ["stop-001", "stop-002"],
     };
-    expect(closingLoopIsPathable(state, ui)).toBe(true);
+    expect(closingLoopIsPathable(state, ui)).toBe(false);
   });
 
   it("validates a metro line closing loop over track", () => {

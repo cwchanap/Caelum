@@ -1,7 +1,8 @@
-import type { ActiveTrip, GameState, Overlay } from "../domain/types";
+import type { GameState, Overlay } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
+import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { closingLoopIsPathable } from "../ui/routeDraft";
 import type { UiState } from "../ui/uiState";
@@ -35,67 +36,6 @@ function formatSnapshotClock(state: GameState): string {
   const hours = Math.floor(state.clockMinutes / 60) % 24;
   const minutes = state.clockMinutes % 60;
   return `Day ${state.day + 1} ${pad2(hours)}:${pad2(minutes)}`;
-}
-
-function positionKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
-
-function waitingLineId(entity: ActiveTrip): string | undefined {
-  const leg = entity.routePlan?.legs[entity.currentLegIndex];
-  return leg !== undefined && leg.mode !== "walk" ? leg.lineId : undefined;
-}
-
-function platformIndex(state: GameState): Map<string, string> {
-  const index = new Map<string, string>();
-  const nodes = [...state.transit.stops, ...state.transit.stations];
-
-  for (const node of nodes) {
-    const posKey = positionKey(node.position.x, node.position.y);
-    for (const platform of node.platforms) {
-      for (const routeId of platform.routeIds) {
-        index.set(`${posKey}|${routeId}`, platform.id);
-      }
-    }
-  }
-
-  return index;
-}
-
-function selectPlatformOccupancy(
-  state: GameState,
-): Map<string, { count: number; capacity: number }> {
-  const occupancy = new Map<string, { count: number; capacity: number }>();
-  const index = platformIndex(state);
-  const nodes = [...state.transit.stops, ...state.transit.stations];
-
-  for (const node of nodes) {
-    for (const platform of node.platforms) {
-      occupancy.set(platform.id, { count: 0, capacity: platform.capacity });
-    }
-  }
-
-  // Waiting occupancy is driven by active trips only — sims/active trips are
-  // the live data the Rust snapshot publishes.
-  for (const entity of state.activeTrips ?? []) {
-    if (entity.status !== "waiting") {
-      continue;
-    }
-    const lineId = waitingLineId(entity);
-    if (lineId === undefined) {
-      continue;
-    }
-    const platformId = index.get(
-      `${positionKey(entity.position.x, entity.position.y)}|${lineId}`,
-    );
-    const entry =
-      platformId === undefined ? undefined : occupancy.get(platformId);
-    if (entry !== undefined) {
-      entry.count += 1;
-    }
-  }
-
-  return occupancy;
 }
 
 export function formatObjective(state: GameState): string {

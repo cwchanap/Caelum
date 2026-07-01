@@ -9,7 +9,17 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const OUTPUT = "src/generated/caelum_wasm/caelum_wasm.js";
+// The full wasm-pack output set for `--out-name caelum_wasm`. The freshness
+// check treats every generated artifact as a build output: previously it only
+// looked at `caelum_wasm.js`, so a stale or missing `caelum_wasm_bg.wasm` (or a
+// regenerated `.d.ts`) could slip through and leave `bun test` running against
+// a half-rebuilt output directory.
+const OUTPUTS = [
+  "src/generated/caelum_wasm/caelum_wasm.js",
+  "src/generated/caelum_wasm/caelum_wasm.d.ts",
+  "src/generated/caelum_wasm/caelum_wasm_bg.wasm",
+  "src/generated/caelum_wasm/caelum_wasm_bg.wasm.d.ts",
+];
 
 // Inputs whose modification invalidates the generated WASM. The two crate
 // sources, their manifests, and the workspace lockfile.
@@ -37,10 +47,17 @@ function walk(dir) {
 }
 
 function needsBuild() {
-  if (!existsSync(OUTPUT)) {
+  // Rebuild if any generated artifact is missing, or if any source is newer
+  // than the oldest output. Using the oldest output mtime as the gate means a
+  // partial regeneration (e.g. only `caelum_wasm.js` rewritten) still triggers
+  // a full rebuild rather than masking a stale `.wasm`/`.d.ts`.
+  const outputMtimes = OUTPUTS.map((file) =>
+    existsSync(file) ? statSync(file).mtimeMs : null,
+  );
+  if (outputMtimes.some((mtime) => mtime === null)) {
     return true;
   }
-  const outMtime = statSync(OUTPUT).mtimeMs;
+  const outMtime = Math.min(...outputMtimes);
   const sources = [
     ...SOURCE_ROOTS.flatMap((root) => walk(root)),
     ...SOURCE_FILES.filter(existsSync),

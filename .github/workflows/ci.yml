@@ -221,6 +221,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The Tauri artifact job bundles and uploads build outputs; do not
+          # leave the GitHub token persisted in the workspace metadata.
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
