@@ -3,7 +3,7 @@ import { renderCursorBadge } from "../../src/render/cursorBadge";
 import { getBoardTransform } from "../../src/render/canvas";
 import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import { withAreas, withRoads } from "../helpers/mapFixtures";
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function badgeCtx() {
   const calls: string[] = [];
@@ -343,5 +343,73 @@ describe("renderCursorBadge", () => {
       ctx.fillText as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls;
     expect(fillTextCalls[0][1]).toBe(112); // (3 + 0.5) * 32
+  });
+
+  it("labels a road cursor without the blocked marker over an existing road tile", () => {
+    // isValidRoadPlacement returns false over a road tile (kind !== "empty"),
+    // but the `|| kind === "road"` fallback marks it ok so the player can
+    // cycle the direction. This exercises the second operand of the `||`.
+    const { ctx, calls } = badgeCtx();
+    const state = withRoads(createTestGameState(), [{ x: 5, y: 5 }]);
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 5 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Road");
+    expect(calls.join("")).not.toContain("⊘");
+  });
+
+  it("marks the road cursor blocked over an out-of-bounds tile", () => {
+    // An off-map hover tile makes getTile return null (the out-of-bounds
+    // branch), so both isValidRoadPlacement and the road-kind fallback are
+    // false and the badge shows the blocked marker.
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: -1, y: 0 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Road");
+    expect(calls.join("")).toContain("⊘");
+  });
+
+  it("labels a metroStation building over a track tile as a valid placement", () => {
+    // metroStation placement allows kind empty-or-road and requires hasTrack;
+    // this exercises the metroStation branches of canPlaceBuilding.
+    const { ctx, calls } = badgeCtx();
+    let state = createTestGameState();
+    state = withTracks(state, [{ x: 4, y: 4 }]);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "metroStation" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: 4, y: 4 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("Metro Station");
+    expect(text).not.toContain("⊘");
+  });
+
+  it("marks a metroStation building blocked over a track-less empty tile", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
+    if (emptyTile === undefined) {
+      throw new Error("expected an empty tile");
+    }
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "metroStation" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: emptyTile.x, y: emptyTile.y },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Metro Station");
+    expect(calls.join("")).toContain("⊘");
   });
 });

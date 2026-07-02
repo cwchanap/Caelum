@@ -16,7 +16,11 @@ import type {
   RoadPreset,
   Tool,
 } from "../../src/domain/types";
-import { createTestGameState } from "../helpers/gameState";
+import {
+  createTestGameState,
+  addTestBusStop,
+  addTestBusRoute,
+} from "../helpers/gameState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import type {
   RuntimeController,
@@ -25,6 +29,7 @@ import type {
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 
 async function openCategory(name: string): Promise<void> {
   await fireEvent.click(screen.getByTestId(`hud-cat-${name}`));
@@ -827,5 +832,146 @@ describe("App hotkeys", () => {
     render(App, { props: { runtime } });
     expect(runtime.subscribe).toHaveBeenCalled();
     expect(runtime.start).toHaveBeenCalled();
+  });
+});
+
+describe("App manage-panel route handlers", () => {
+  function routeState() {
+    let state = createTestGameState();
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 12, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    return state;
+  }
+
+  it("wires renameRoute through the ManagePanel input blur", async () => {
+    const { runtime } = createRuntimeHarness({ state: routeState() });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    const input = screen.getByTestId("route-name-route-001");
+    await fireEvent.input(input, { target: { value: "Commuter Express" } });
+    await fireEvent.blur(input);
+
+    expect(runtime.renameRoute).toHaveBeenCalledWith(
+      "route-001",
+      "Commuter Express",
+    );
+  });
+
+  it("wires recolorRoute through the ManagePanel color swatch", async () => {
+    const { runtime } = createRuntimeHarness({ state: routeState() });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    const palette = ROUTE_COLOR_PALETTE;
+    const targetColor = palette[1] ?? palette[0];
+    const swatch = screen.getByTestId(`route-color-route-001-${targetColor}`);
+    await fireEvent.click(swatch);
+
+    expect(runtime.recolorRoute).toHaveBeenCalledWith("route-001", targetColor);
+  });
+
+  it("wires toggleRouteActive through the ManagePanel toggle button", async () => {
+    const { runtime } = createRuntimeHarness({ state: routeState() });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    await fireEvent.click(screen.getByTestId("route-toggle-route-001"));
+
+    expect(runtime.toggleRouteActive).toHaveBeenCalledWith("route-001");
+  });
+
+  it("wires selectRoute through the ManagePanel route select button", async () => {
+    const { runtime } = createRuntimeHarness({ state: routeState() });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    await fireEvent.click(screen.getByTestId("route-select-route-001"));
+
+    expect(runtime.selectRoute).toHaveBeenCalledWith("route-001");
+  });
+
+  it("wires deleteRoute through the ManagePanel two-click delete confirm", async () => {
+    const { runtime } = createRuntimeHarness({ state: routeState() });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    const deleteBtn = screen.getByTestId("route-delete-route-001");
+    // First click arms the confirm state.
+    await fireEvent.click(deleteBtn);
+    expect(deleteBtn).toHaveTextContent("Delete?");
+    expect(runtime.deleteRoute).not.toHaveBeenCalled();
+    // Second click confirms and dispatches.
+    await fireEvent.click(deleteBtn);
+    expect(runtime.deleteRoute).toHaveBeenCalledWith("route-001");
+  });
+
+  it("wires cancelRoute through the RoutesPanel draft-cancel button", async () => {
+    const { runtime } = createRuntimeHarness({
+      state: routeState(),
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        draftStopIds: ["stop-001"],
+        activeHudCategory: "routes",
+      },
+    });
+    render(App, { props: { runtime } });
+
+    // The drawer is already open on "routes" via the initial UI state. The
+    // draft-cancel button ("Cancel Route") lives inside the RoutesPanel.
+    const cancelBtn = screen.getByRole("button", { name: /Cancel Route/i });
+    await fireEvent.click(cancelBtn);
+    expect(runtime.cancelRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires finishRoute through the Finish Route button during a draft", async () => {
+    let state = routeState();
+    // Add roads so the closing loop is pathable.
+    state = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.y === 8 && tile.x >= 7 && tile.x <= 12
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    };
+    const { runtime } = createRuntimeHarness({
+      state,
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        draftStopIds: ["stop-001", "stop-002"],
+        activeHudCategory: "routes",
+      },
+    });
+    render(App, { props: { runtime } });
+
+    const finishBtn = screen.getByRole("button", { name: /Finish Route/i });
+    await fireEvent.click(finishBtn);
+    expect(runtime.finishRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires removeDraftStop through the draft stop list remove button", async () => {
+    const { runtime } = createRuntimeHarness({
+      state: routeState(),
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        draftStopIds: ["stop-001", "stop-002"],
+        activeHudCategory: "routes",
+      },
+    });
+    render(App, { props: { runtime } });
+
+    // The routes drawer renders the draft stop list with per-stop remove
+    // buttons. The test id is `remove-draft-stop-${index}`.
+    const removeBtn = screen.getByTestId("remove-draft-stop-1");
+    await fireEvent.click(removeBtn);
+    expect(runtime.removeDraftStop).toHaveBeenCalledWith(1);
   });
 });

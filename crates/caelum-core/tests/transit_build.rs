@@ -1259,3 +1259,209 @@ fn lay_road_line_single_point_is_a_no_op_unchanged() {
     assert!(result.applied);
     assert_eq!(result.snapshot.budget, 120_000 - 100);
 }
+
+#[test]
+fn lay_track_line_empty_points_is_rejected() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayTrackLine { points: vec![] });
+    assert!(!result.applied);
+    assert_eq!(result.rejection.as_deref(), Some("empty track line"));
+}
+
+#[test]
+fn lay_track_line_all_invalid_tiles_is_unchanged() {
+    // Every tile is out of bounds / invalid, so no track is laid and the line
+    // is rejected as "track line unchanged" rather than silently succeeding.
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayTrackLine {
+        points: vec![(100, 100).into()],
+    });
+    assert!(!result.applied);
+    assert_eq!(result.rejection.as_deref(), Some("track line unchanged"));
+    assert_eq!(result.snapshot.budget, 120_000);
+}
+
+#[test]
+fn remove_at_tiles_empty_points_is_rejected() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::RemoveAtTiles { points: vec![] });
+    assert!(!result.applied);
+    assert_eq!(result.rejection.as_deref(), Some("empty remove line"));
+}
+
+#[test]
+fn remove_at_tiles_all_unchanged_is_rejected() {
+    // Removing an out-of-bounds tile yields no change (remove_at_tile errors),
+    // so the whole batch is rejected as "remove line unchanged".
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::RemoveAtTiles {
+        points: vec![(100, 100).into()],
+    });
+    assert!(!result.applied);
+    assert_eq!(result.rejection.as_deref(), Some("remove line unchanged"));
+}
+
+#[test]
+fn lay_road_line_one_way_over_two_way_road_updates_direction() {
+    // lay_lane on an existing road whose one_way differs from the requested
+    // direction must flip the direction and report a change (return true),
+    // rather than skipping the tile as already-matching.
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::LayRoad {
+        point: (1, 1).into(),
+    });
+    // Pre-existing road is two-way (one_way == None).
+    assert_eq!(
+        engine
+            .snapshot()
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == 1 && tile.y == 1)
+            .unwrap()
+            .one_way,
+        None
+    );
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
+    assert!(result.applied);
+    let tile = |x: i32, y: i32| {
+        result
+            .snapshot
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .expect("tile exists")
+    };
+    // The pre-existing two-way road is flipped to one-way east.
+    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    // The initial LayRoad charged one tile; the line charges the two newly
+    // placed tiles (the flipped (1,1) tile is an update, not a new placement).
+    assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
+}
+
+#[test]
+fn lay_road_line_over_building_occupied_tiles_is_unchanged() {
+    // lay_lane on an empty-kind tile that is building-occupied fails
+    // is_valid_road_placement and returns false. When every requested tile is
+    // blocked this way, the line is rejected as "road line unchanged".
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![destination_building(
+        "building-001",
+        "supermarket",
+        vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
+    )];
+
+    let result = transit::lay_road_line(
+        &state,
+        &[(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        RoadPreset::OneWay,
+    );
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), "road line unchanged");
+    // No budget was consumed (the input state is untouched on the Err path).
+    assert_eq!(state.budget, 120_000);
+}
+
+#[test]
+fn lay_road_line_dual_bidirectional_skips_building_occupied_reverse_tile() {
+    // lay_reverse_lane on an empty-kind tile that is building-occupied passes
+    // the "not empty kind" guard but fails is_valid_road_placement, returning
+    // false. The forward lane and other reverse-lane tiles still land.
+    let mut state = create_initial_snapshot();
+    // Building occupies only the reverse-lane tile (1,0) — empty kind, but
+    // building-occupied so is_valid_road_placement is false.
+    state.buildings = vec![destination_building(
+        "building-001",
+        "supermarket",
+        vec![(1, 0).into()],
+    )];
+
+    let result = transit::lay_road_line(
+        &state,
+        &[(1, 1).into(), (2, 1).into(), (3, 1).into()],
+        RoadPreset::DualBidirectional,
+    )
+    .expect("forward lane lands");
+    let tile = |x: i32, y: i32| {
+        result
+            .map
+            .tiles
+            .iter()
+            .find(|tile| tile.x == x && tile.y == y)
+            .expect("tile exists")
+    };
+    // Forward lane (y=1) is one-way east.
+    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    // Reverse lane (y=0): (1,0) is skipped (building-occupied), (2,0)/(3,0)
+    // get the westbound reverse carriageway.
+    assert_ne!(tile(1, 0).kind.as_str(), "road");
+    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    // Three forward tiles + two reverse tiles charged.
+    assert_eq!(result.budget, 120_000 - 5 * 100);
+}
+
+#[test]
+fn lay_road_line_one_way_duplicate_points_yield_no_direction() {
+    // Two identical points: dx == 0 and dy == 0, so line_direction hits its
+    // final `else` arm and returns None. The line places a two-way road (no
+    // direction) rather than a one-way lane.
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (1, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
+    assert!(result.applied);
+    let tile = result
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == 1 && tile.y == 1)
+        .expect("tile exists");
+    assert_eq!(tile.kind, "road");
+    assert_eq!(tile.one_way, None);
+    // Only one tile placed (the second point is a no-op match).
+    assert_eq!(result.snapshot.budget, 120_000 - 100);
+}
+
+#[test]
+fn lay_road_line_dual_bidirectional_duplicate_points_yield_no_reverse_lane() {
+    // Two identical points: canonical_line_direction hits its final `else` arm
+    // and returns None, so DualBidirectional places no reverse carriageway —
+    // only a single two-way forward tile.
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (1, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(result.applied);
+    let forward = result
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == 1 && tile.y == 1)
+        .expect("forward tile exists");
+    assert_eq!(forward.kind, "road");
+    assert_eq!(forward.one_way, None);
+    // canonical_line_direction returned None, so no reverse carriageway was
+    // computed: the reverse-lane offset tile (1,0) is not a road.
+    let reverse_offset = result
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == 1 && tile.y == 0);
+    assert!(reverse_offset.is_none_or(|tile| tile.kind != "road"));
+    assert_eq!(result.snapshot.budget, 120_000 - 100);
+}
