@@ -256,6 +256,32 @@ describe("removeDraftNode", () => {
     expect(next.draftStationIds).toEqual(["station-001", "station-003"]);
     expect(next.draftStationPaths).toHaveLength(1);
   });
+
+  it("leaves the draft unchanged when a middle node's neighbor no longer exists", () => {
+    // When the before/after neighbors of a middle node can't be found in the
+    // transit stops, the merged path is null and removeDraftNode bails.
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 12, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    let ui: UiState = { ...createUiState(), activeTool: "busRoute" as const };
+    ui = appendDraftStop(state, ui, state.transit.stops[0]);
+    ui = appendDraftStop(state, ui, state.transit.stops[1]);
+    ui = appendDraftStop(state, ui, state.transit.stops[2]);
+    // Remove stop-001 from the state so the `before` neighbor lookup fails for
+    // index 1 (ids[0] === "stop-001" no longer exists in transit.stops).
+    const reducedState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.filter((s) => s.id !== "stop-001"),
+      },
+    };
+    const next = removeDraftNode(reducedState, ui, 1);
+    expect(next).toBe(ui);
+    expect(next.draftStopIds).toEqual(["stop-001", "stop-002", "stop-003"]);
+  });
 });
 
 describe("cancelDraftRoute", () => {

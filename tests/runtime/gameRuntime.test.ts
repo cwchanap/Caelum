@@ -1777,4 +1777,190 @@ describe("fake backend applyIntent coverage", () => {
     );
     expect(platform?.routeIds).toContain("route-001");
   });
+
+  it("dispatches addBusStop through handleTileClick with the busStop tool", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("busStop");
+    await runtime.handleTileClick({ x: 5, y: 5 });
+    expect(backend.intents).toContainEqual({
+      type: "addBusStop",
+      point: { x: 5, y: 5 },
+    });
+  });
+
+  it("dispatches addMetroStation through handleTileClick with the metroStation tool", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("metroStation");
+    await runtime.handleTileClick({ x: 4, y: 4 });
+    expect(backend.intents).toContainEqual({
+      type: "addMetroStation",
+      point: { x: 4, y: 4 },
+    });
+  });
+
+  it("dispatches layTrack through handleTileClick with the track tool", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("track");
+    await runtime.handleTileClick({ x: 2, y: 3 });
+    expect(backend.intents).toContainEqual({
+      type: "layTrack",
+      point: { x: 2, y: 3 },
+    });
+  });
+
+  it("dispatches removeAtTile through handleTileClick with the remove tool", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("remove");
+    await runtime.handleTileClick({ x: 2, y: 3 });
+    expect(backend.intents).toContainEqual({
+      type: "removeAtTile",
+      point: { x: 2, y: 3 },
+    });
+  });
+
+  it("commitDrag is a no-op when no drag gesture is active", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const before = runtime.getSnapshot();
+    await runtime.commitDrag();
+    const after = runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+  });
+
+  it("commits a zero-length track drag as a single layTrack intent", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("track");
+    runtime.startDrag({ x: 3, y: 3 });
+    await runtime.commitDrag();
+    expect(backend.intents).toContainEqual({
+      type: "layTrack",
+      point: { x: 3, y: 3 },
+    });
+  });
+
+  it("commits a multi-tile track drag as a layTrackLine intent", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    runtime.setTool("track");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    await runtime.commitDrag();
+    expect(backend.intents).toContainEqual({
+      type: "layTrackLine",
+      points: [
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 3, y: 0 },
+      ],
+    });
+  });
+
+  it("finishRoute is a no-op when the active tool is not a route tool", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setTool("inspect");
+    const before = runtime.getSnapshot();
+    await runtime.finishRoute();
+    const after = runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+  });
+
+  it("finishRoute bails when the closing loop is not pathable", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({ backend });
+    // Build a one-way road so the closing loop can't path back.
+    runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
+    runtime.startDrag({ x: 7, y: 8 });
+    runtime.setDragCurrent({ x: 15, y: 8 });
+    await runtime.commitDrag();
+    // Add two stops and draft a route.
+    runtime.setTool("busStop");
+    await runtime.handleTileClick({ x: 7, y: 8 });
+    await runtime.handleTileClick({ x: 15, y: 8 });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 7, y: 8 });
+    runtime.handleTileClick({ x: 15, y: 8 });
+    const before = runtime.getSnapshot();
+    await runtime.finishRoute();
+    const after = runtime.getSnapshot();
+    // The draft is preserved (not cleared) because the loop doesn't close.
+    expect(after.ui.draftStopIds).toEqual(before.ui.draftStopIds);
+  });
+
+  it("toggleRouteActive is a no-op when the route does not exist at call time", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const before = runtime.getSnapshot();
+    await runtime.toggleRouteActive("route-999");
+    const after = runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+  });
+
+  it("toggleRouteActive bails when the route is deleted between enqueue and execution", async () => {
+    // The route exists at call time (sync lookup passes), but a prior queued
+    // deleteRoute resolves before the toggle's closure runs, so the closure
+    // finds the route gone and returns null (no setRouteActive dispatched).
+    const snapshotWithRoute = fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-001", { x: 14, y: 7 }),
+          createStop("stop-002", { x: 14, y: 8 }),
+        ],
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#2563eb",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: [],
+            active: true,
+            segments: [],
+            pathBroken: false,
+          },
+        ],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const backend = deferredDispatchBackend(snapshotWithRoute);
+    const runtime = await createGameRuntime({ backend });
+
+    // Queue a deleteRoute (deferred — won't resolve until resolveNext).
+    const deletePromise = runtime.deleteRoute("route-001");
+    // The sync lookup in toggleRouteActive still sees the route (delete hasn't
+    // resolved yet), so it queues its closure behind the delete.
+    const togglePromise = runtime.toggleRouteActive("route-001");
+
+    // Yield so the deleteRoute's queued operation starts and pushes its
+    // deferred dispatch to the pending queue.
+    await Promise.resolve();
+    // Resolve the delete dispatch — the route is removed from state.
+    // The toggle's closure then runs automatically in the queue chain: it
+    // re-reads state, finds the route gone, returns null (no backend.dispatch),
+    // and commits without dispatching setRouteActive.
+    await backend.resolveNext();
+    await deletePromise;
+    await togglePromise;
+
+    expect(backend.intents.some((i) => i.type === "setRouteActive")).toBe(
+      false,
+    );
+  });
+
+  it("dismissRejection is a no-op when there is no active rejection", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const before = runtime.getSnapshot();
+    runtime.dismissRejection();
+    const after = runtime.getSnapshot();
+    expect(after.rejection).toBeNull();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+  });
 });

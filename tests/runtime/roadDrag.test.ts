@@ -3,6 +3,7 @@ import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import {
   axisLockedLine,
+  canonicalLineDirection,
   lineDirection,
   oppositeDirection,
   planDragPreview,
@@ -184,5 +185,71 @@ describe("planDragPreview", () => {
     const plan = planDragPreview(state, ui, line);
 
     expect(plan.map((t) => t.buildable)).toEqual([true, true, true]);
+  });
+
+  it("marks a track tile not buildable over an existing track", () => {
+    const state = withRoads(createTestGameState(), [{ x: 2, y: 0 }]);
+    const trackState = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 2 && tile.y === 0 ? { ...tile, hasTrack: true } : tile,
+        ),
+      },
+    };
+    const ui = { ...createUiState(), activeTool: "track" as const };
+    const line = axisLockedLine({ x: 1, y: 0 }, { x: 3, y: 0 });
+    const plan = planDragPreview(trackState, ui, line);
+
+    expect(plan.map((t) => t.buildable)).toEqual([true, false, true]);
+  });
+});
+
+describe("canonicalLineDirection", () => {
+  it("returns east for a horizontal line regardless of drag order", () => {
+    expect(
+      canonicalLineDirection(axisLockedLine({ x: 1, y: 1 }, { x: 3, y: 1 })),
+    ).toBe("east");
+    expect(
+      canonicalLineDirection(axisLockedLine({ x: 3, y: 1 }, { x: 1, y: 1 })),
+    ).toBe("east");
+  });
+
+  it("returns south for a vertical line regardless of drag order", () => {
+    expect(
+      canonicalLineDirection(axisLockedLine({ x: 1, y: 1 }, { x: 1, y: 3 })),
+    ).toBe("south");
+    expect(
+      canonicalLineDirection(axisLockedLine({ x: 1, y: 3 }, { x: 1, y: 1 })),
+    ).toBe("south");
+  });
+
+  it("returns null for a line shorter than two tiles", () => {
+    expect(canonicalLineDirection([{ x: 1, y: 1 }])).toBeNull();
+  });
+
+  it("returns null when the first two tiles are identical (no displacement)", () => {
+    expect(
+      canonicalLineDirection([
+        { x: 2, y: 2 },
+        { x: 2, y: 2 },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("reverseLanePoints edge cases", () => {
+  it("returns an empty array when the line has fewer than two tiles", () => {
+    expect(reverseLanePoints([{ x: 1, y: 1 }])).toEqual([]);
+    expect(reverseLanePoints([])).toEqual([]);
+  });
+});
+
+describe("planDragPreview edge cases", () => {
+  it("returns an empty array for a zero-length line", () => {
+    const state = createTestGameState();
+    const ui = { ...createUiState(), activeTool: "road" as const };
+    expect(planDragPreview(state, ui, [])).toEqual([]);
   });
 });

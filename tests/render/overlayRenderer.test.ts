@@ -6,7 +6,7 @@ import type { ActiveTrip, Stop } from "../../src/domain/types";
 import { axisLockedLine, reverseLanePoints } from "../../src/ui/roadDrag";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
-import { withAreas, withRoads } from "../helpers/mapFixtures";
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function fakeCtx() {
   return {
@@ -950,5 +950,58 @@ describe("crowding overlay ratios", () => {
       tileSize,
       tileSize,
     );
+  });
+});
+
+describe("renderOverlays building preview", () => {
+  it("previews a metroStation placement over a track tile as valid", () => {
+    // Exercises the metroStation branches of canPlaceBuilding (kind empty-or-
+    // road, hasTrack required) via the building preview path.
+    const ctx = dragCtx();
+    let state = createTestGameState();
+    state = withTracks(state, [{ x: 4, y: 4 }]);
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "metroStation" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: 4, y: 4 },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.fillStyle).toBe(colors.previewValid);
+  });
+
+  it("previews a metroStation placement over a track-less tile as invalid", () => {
+    const ctx = dragCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      selectedBuilding: "metroStation" as const,
+      buildingRotation: 0 as const,
+      hoverTile: { x: 4, y: 4 },
+    };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.fillStyle).toBe(colors.previewInvalid);
+  });
+});
+
+describe("renderOverlays drag preview off-map", () => {
+  it("marks tiles buildable false when the drag line extends off-map", () => {
+    // A drag whose line runs past the map edge exercises the out-of-bounds
+    // branch of getTile (returns null), so the off-map tiles are not buildable.
+    const { ctx, fillStyles } = recordingFillCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "twoWay" as const,
+      drag: {
+        tool: "road" as const,
+        start: { x: 0, y: 0 },
+        current: { x: -2, y: 0 },
+      },
+    };
+    renderOverlays(ctx, state, ui);
+    // The off-map tiles (x < 0) are not buildable -> previewInvalid tint.
+    expect(fillStyles).toContain(colors.previewInvalid);
   });
 });

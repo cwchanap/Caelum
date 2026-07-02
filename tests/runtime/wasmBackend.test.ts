@@ -142,4 +142,20 @@ describe("createWasmBackend", () => {
     await create();
     expect(wasm.init).toHaveBeenCalledTimes(1);
   });
+
+  it("dispatches tick intents through the engine and normalizes the result", async () => {
+    const backend = await createWasmBackend();
+    const result = await backend.tick(0.5);
+    expect(result.applied).toBe(true);
+    expect(result.rejection).toBeNull();
+    expect(result.snapshot).toBeDefined();
+  });
+
+  it("resets the engine and returns the fresh snapshot", async () => {
+    const backend = await createWasmBackend();
+    const resetSnapshot = await backend.reset();
+    expect(resetSnapshot).toBeDefined();
+    // The mock's reset() returns the current engine snapshot.
+    expect(resetSnapshot.day).toBe(0);
+  });
 });
