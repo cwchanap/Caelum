@@ -460,3 +460,37 @@ fn assign_workplaces_leaves_an_existing_real_workplace_unchanged() {
 
     assert_eq!(state.sims[0].workplace, Some(first));
 }
+
+#[test]
+fn place_building_core_is_budget_exempt_but_place_building_charges() {
+    use caelum_core::model::Point;
+    use caelum_core::state::create_initial_snapshot;
+    use caelum_core::{areas, buildings};
+
+    let base = create_initial_snapshot();
+    let zoned = areas::paint_area_rectangle(
+        &base,
+        "residential",
+        &Point { x: 2, y: 3 },
+        &Point { x: 3, y: 3 },
+    )
+    .expect("residential zone applied");
+    let budget = zoned.budget;
+
+    let core = buildings::place_building_core(&zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
+        .expect("core placement succeeds");
+    assert_eq!(
+        core.budget, budget,
+        "world growth must not charge the player"
+    );
+    assert_eq!(core.buildings.len(), 1);
+    assert_eq!(core.sims.len(), 4);
+
+    let charged = buildings::place_building(&zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
+        .expect("player placement succeeds");
+    assert_eq!(
+        charged.budget,
+        budget - 4_000,
+        "player placement deducts cost"
+    );
+}

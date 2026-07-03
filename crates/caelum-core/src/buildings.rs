@@ -133,10 +133,22 @@ pub fn place_building(
 ) -> Result<GameSnapshot, String> {
     let definition = building_definition(building_type)
         .ok_or_else(|| format!("unknown building: {building_type}"))?;
-
     if state.budget < definition.cost {
         return Err("insufficient budget".to_string());
     }
+    let mut next = place_building_core(state, building_type, origin, rotation)?;
+    next.budget -= definition.cost;
+    Ok(next)
+}
+
+pub fn place_building_core(
+    state: &GameSnapshot,
+    building_type: &str,
+    origin: &Point,
+    rotation: u16,
+) -> Result<GameSnapshot, String> {
+    let definition = building_definition(building_type)
+        .ok_or_else(|| format!("unknown building: {building_type}"))?;
 
     let occupied_tiles = can_place_building(state, building_type, origin, rotation)?;
     let mut next = state.clone();
@@ -145,7 +157,6 @@ pub fn place_building(
         next.buildings.iter().map(|building| building.id.clone()),
     );
 
-    next.budget -= definition.cost;
     let mut transit_node_id = None;
 
     if matches!(definition.effect, "busStop" | "busTerminal") {
