@@ -74,7 +74,8 @@ pub struct GameSnapshot {
     /// Static scenario identity + objective thresholds. The thresholds are the
     /// authoritative source for the shell's objective copy so the TS host cannot
     /// drift from the values `objectives::evaluate_objectives` actually enforces.
-    /// (Growth waves stay a TS-side concept until the core models spawning.)
+    /// `growth_waves` carries scenario-authored growth; entries' `applied` flag
+    /// mutates as the tick pipeline fires them (see `crate::growth`).
     #[serde(default = "default_scenario")]
     pub scenario: ScenarioConfig,
 }
@@ -97,10 +98,47 @@ pub struct ObjectiveThresholds {
 pub struct ScenarioConfig {
     pub name: String,
     pub objectives: ObjectiveThresholds,
+    #[serde(default)]
+    pub growth_waves: Vec<GrowthWave>,
 }
 
 fn default_scenario() -> ScenarioConfig {
     crate::scenario::growing_suburb_scenario()
+}
+
+/// A batch of scheduled scenario intents applied at `trigger_time` by
+/// `crate::growth::apply_due_growth_waves`. `applied` flips to `true` once the
+/// wave has fired (idempotent). Serialized as the TS `Scenario.growthWaves` wire
+/// shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthWave {
+    pub id: String,
+    pub trigger_time: f64,
+    pub message: String,
+    pub applied: bool,
+    pub actions: Vec<GrowthAction>,
+}
+
+/// A single growth mutation. Mirrors the corresponding `intent::GameIntent`
+/// variants and their wire spelling so a wave replays the player's own handlers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GrowthAction {
+    PaintAreaRectangle {
+        area: String,
+        start: Point,
+        end: Point,
+    },
+    PlaceBuilding {
+        building_type: String,
+        origin: Point,
+        rotation: u16,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -644,3 +644,42 @@ fn dispatch_result_round_trips_through_serde_json() {
         "DispatchResult must serialize exactly the TS-contract keys"
     );
 }
+
+#[test]
+fn growth_action_serializes_to_ts_parity_tagged_shape() {
+    use caelum_core::model::GrowthAction;
+
+    let place = GrowthAction::PlaceBuilding {
+        building_type: "smallHouse".to_string(),
+        origin: Point { x: 2, y: 3 },
+        rotation: 0,
+    };
+    let value = serde_json::to_value(&place).expect("placeBuilding serializes");
+    assert_eq!(value["type"], json!("placeBuilding"));
+    assert_eq!(value["buildingType"], json!("smallHouse"));
+    assert_eq!(value["origin"], json!({ "x": 2, "y": 3 }));
+    assert_eq!(value["rotation"], json!(0));
+    assert!(
+        value.get("building_type").is_none(),
+        "must not leak snake_case building_type"
+    );
+
+    let paint = GrowthAction::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: Point { x: 2, y: 3 },
+        end: Point { x: 11, y: 3 },
+    };
+    let value = serde_json::to_value(&paint).expect("paintAreaRectangle serializes");
+    assert_eq!(value["type"], json!("paintAreaRectangle"));
+    assert_eq!(value["area"], json!("residential"));
+    assert_eq!(value["end"], json!({ "x": 11, "y": 3 }));
+}
+
+#[test]
+fn shipped_scenario_growth_waves_serialize_to_empty_list() {
+    use caelum_core::state::create_initial_snapshot;
+
+    let snapshot = create_initial_snapshot();
+    let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
+    assert_eq!(value["growthWaves"], json!([]));
+}
