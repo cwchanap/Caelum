@@ -21,18 +21,34 @@ zone → build → spawn coupling. There is no parallel spawn path and no
 painted, housing appears, and that housing spawns sims exactly as a player's
 placement would).
 
-**Authoring model (grid-derived magnitude):** Growing Suburb ships a single
-**seed wave** whose *size* is deduced from the grid — the scenario places
-`f(MAP_WIDTH × MAP_HEIGHT)` housing units at authored anchor positions, rather than
-a magic hardcoded citizen count. Grid-scaling therefore lives entirely at
-**scenario-authoring time** (a pure function in `scenario.rs`); the runtime is
-unchanged and simply replays the authored intents. Bigger maps seed proportionally
-more housing without re-authoring coordinates.
+**Authoring model (grid-derived magnitude):** the scenario module provides a pure
+helper that computes a **seed wave** whose *size* is deduced from the grid — it
+places `f(MAP_WIDTH × MAP_HEIGHT)` housing units at authored anchor positions,
+rather than a magic hardcoded citizen count. Grid-scaling therefore lives entirely
+at **scenario-authoring time**; the runtime is unchanged and simply replays the
+authored intents.
 
-This **replaces** the previous "ship empty" decision: Growing Suburb now grows on
-its own again (a small residential seed on the first tick), but the schedule is
-authored and its magnitude is grid-derived. Browser (WASM) and Tauri hosts stay
-symmetric by construction, and the TS-side `growthWaves` shim is removed.
+**Scope — infra only; the seed is implemented and unit-tested but NOT wired into
+the shipped scenario.** Wiring the live seed wave would change what the shared base
+scenario (`GameEngine::new()` / `create_initial_snapshot()`) does on the first
+unpaused tick, and that base is the substrate for nearly the entire `caelum-core`
+test suite — including hand-captured **golden sequences** whose baked-in constants
+exist precisely to catch behavioural regressions. Auto-firing the seed would inject
+5 houses + 20 sims into all of them, forcing a large, low-value rebaseline. So:
+
+- The full mechanism (model, `tick_growth`, budget-exempt placement, substep-
+  boundary timing) is built and exercised with **synthetic** waves + the seed
+  helper's output.
+- The grid-scaled seed helper is implemented and **unit-tested** (formula + packing
+  + well-formedness).
+- `growing_suburb_scenario()` ships `growth_waves: vec![]` — **zero runtime
+  behavior change** for Growing Suburb, deterministic suite and golden traces
+  untouched.
+- Wiring the live seed (calling the helper from `growing_suburb_scenario()`) is a
+  small, deliberate follow-up that owns its own test-substrate migration.
+
+Browser (WASM) and Tauri hosts read `scenario.growthWaves` from the same core
+snapshot → symmetric by construction; the TS-side `growthWaves` shim is removed.
 
 ### Why "scheduled intents" and not the ticket's port
 
@@ -57,21 +73,28 @@ zoning and buildings.
 
 - No new scenarios beyond Growing Suburb.
 - No change to objective thresholds or win/loss logic.
+- **Not wiring the seed wave into the shipped scenario** (kept `[]` to avoid
+  rebaselining the golden/lifecycle suite); the grid-scaled helper is implemented +
+  tested and ready to wire in a follow-up.
 - No **runtime** procedural site-selection: waves apply authored actions; the core
-  does not decide *where* to grow based on live player state. (Grid-scaling is a
-  pure authoring-time computation.)
+  does not decide *where* to grow based on live player state.
 - No new gameplay mutation types — waves may only issue mutations the player can
   already perform.
 
 ## Current architecture (relevant pieces)
 
-- `crates/caelum-core/src/state.rs` — `create_initial_snapshot()`: empty `sims`,
-  empty map areas, `scenario = growing_suburb_scenario()`.
+- `crates/caelum-core/src/state.rs` — `create_initial_snapshot()`: `paused: true`,
+  empty `sims`, empty map areas, `scenario = growing_suburb_scenario()`.
 - `crates/caelum-core/src/scenario.rs` — `growing_suburb_scenario()` returns
   `ScenarioConfig { name, objectives }`; `MAP_WIDTH = 28`, `MAP_HEIGHT = 18`; the
   starter arterial cross occupies `y ∈ {8, 9}` and `x ∈ {14, 15}`.
 - `crates/caelum-core/src/model.rs` — `ScenarioConfig`, `GameSnapshot`, `Sim`,
-  `Point`.
+  `Point`. `ScenarioConfig` currently `{ name, objectives }`.
+- `crates/caelum-core/src/intent.rs` — `GameIntent` is a `#[serde(tag = "type",
+  rename_all = "camelCase", rename_all_fields = "camelCase")]` enum with variants
+  `PaintAreaRectangle { area, start, end }` and `PlaceBuilding { building_type,
+  origin, rotation }`. `GrowthAction` mirrors these two variants and their serde
+  attributes exactly.
 - `crates/caelum-core/src/areas.rs` — `paint_area_rectangle(state, area, start,
   end) -> Option<GameSnapshot>` (clips to map, zones bare tiles).
 - `crates/caelum-core/src/buildings.rs` — `place_building(...) -> Result<
@@ -79,20 +102,26 @@ zoning and buildings.
   `allowed_area`, occupancy, track rules), transit-node creation, housing spawns
   `Sim`s (worker profile / shift from `commute::*_for_id`), then
   `assign_workplaces` + `trips::retarget_home_fallback_trips`.
-- `crates/caelum-core/src/building_catalog.rs` — per building: `width`/`height`
-  footprint, `cost`, `allowed_area`, `effect`, `citizen_count`. Seed-relevant:
-  `smallHouse` (2×1, residential, housing, 4 citizens, cost 4 000);
-  `largeHouse` (3×2, residential, housing, 10 citizens).
-- `crates/caelum-core/src/trips.rs` — `tick_trips_substepped()` breaks each tick
-  at meaningful boundaries (`next_boundary_after`, bounded by `max_tick_substeps`)
-  and runs `spawn_due_commute_trips()` at each boundary.
-- `src/runtime/snapshotView.ts` — `normalizeRustSnapshot()` currently hardcodes
+- `crates/caelum-core/src/building_catalog.rs` — per building: `width`/`height`,
+  `cost`, `allowed_area`, `effect`, `citizen_count`. Seed-relevant: `smallHouse`
+  (2×1, residential, housing, 4 citizens, cost 4 000).
+- `crates/caelum-core/src/trips.rs` — `tick_trips_substepped()` returns early when
+  `paused`/won/lost/speed 0; otherwise loops substeps, each broken at
+  `next_boundary_after` (bounded by `max_tick_substeps`), running
+  `reset_daily_commute_flags` + `spawn_due_commute_trips` at the top of each and in
+  a final flush. `track_next_boundary(&mut opt, candidate, after)` records the
+  earliest future boundary.
+- `src/runtime/snapshotView.ts` — `normalizeRustSnapshot()` hardcodes
   `scenario.growthWaves = []`.
+- `src/runtime/backend/types.ts` — `RustScenarioConfig { name, objectives }`
+  (no waves).
 - `src/domain/types.ts` — `Scenario`, `GrowthWave`, `GrowthWaveTile` (wire types;
   reshaped below).
+- `tests/fixtures/rustSnapshot.ts` — `createRustSnapshot()` default `scenario`
+  (name + objectives, no waves).
 - Read-only wave consumers: `runtimeSelectors.ts:268` (Brief panel shows the first
   unapplied wave's `message`) and `overlayRenderer.ts:372` (growth overlay
-  telegraphs upcoming wave tiles).
+  telegraphs upcoming wave tiles from `wave.tiles`).
 
 ## Design
 
@@ -112,183 +141,167 @@ pub struct GrowthWave {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum GrowthAction {
     PaintAreaRectangle { area: String, start: Point, end: Point },
     PlaceBuilding { building_type: String, origin: Point, rotation: u16 },
 }
 ```
 
-`GrowthAction` mirrors the corresponding `GameIntent` variants and serializes as a
-`type`-tagged discriminated union (`{ "type": "paintAreaRectangle", ... }` /
-`{ "type": "placeBuilding", "buildingType": ..., "origin": ..., "rotation": ... }`)
-for a clean TS union.
+Serializes as a `type`-tagged union (`{ "type": "paintAreaRectangle", "area", "start",
+"end" }` / `{ "type": "placeBuilding", "buildingType", "origin", "rotation" }`),
+matching the `GameIntent` wire format.
 
 **Decision A — waves live in `ScenarioConfig`.** Add
-`growth_waves: Vec<GrowthWave>` (with `#[serde(default)]`) to `ScenarioConfig`. It
-serializes to `scenario.growthWaves`, exactly the TS `Scenario.growthWaves` wire
-shape, so `normalizeRustSnapshot` becomes a pure pass-through.
+`growth_waves: Vec<GrowthWave>` to `ScenarioConfig`, annotated `#[serde(default)]`
+(so older payloads deserialize) and **always serialized** (no `skip_serializing_if`)
+so the TS side always receives `growthWaves` — `[]` for the shipped scenario. This
+maps 1:1 to the TS `Scenario.growthWaves` wire shape, so `normalizeRustSnapshot`
+becomes a pure pass-through.
 
 - *Rejected alternative:* a separate top-level `GameSnapshot.growth_waves` field
-  (as the ticket literally phrases it) with TS reassembling `scenario.growthWaves`
-  — extra TS glue, no wire parity.
-- Update the `scenario`-field doc comment (currently "Static scenario identity +
-  objective thresholds") to note `growth_waves[].applied` mutates over the run.
+  (ticket phrasing) with TS reassembling `scenario.growthWaves` — extra glue, no
+  wire parity.
+- Update the `scenario`-field doc comment to note `growth_waves[].applied` mutates
+  over the run.
 
-### 2. Growing Suburb seed wave (grid-derived authoring)
+### 2. Grid-derived seed helper (implemented, unit-tested, NOT wired)
 
-In `scenario.rs`, `growing_suburb_scenario()` seeds `growth_waves` from a new pure
-helper `growing_suburb_growth_waves() -> Vec<GrowthWave>` that computes a single
-seed wave from the map dimensions:
+In `scenario.rs`, add a pure `pub fn growing_suburb_growth_waves() -> Vec<GrowthWave>`
+that computes a single seed wave from the map dimensions. `growing_suburb_scenario()`
+continues to ship `growth_waves: vec![]` and carries a doc comment explaining the
+helper is validated but intentionally unwired (see Scope).
 
 - **Unit count from grid:**
   `n_units = max(1, (MAP_WIDTH as i32 * MAP_HEIGHT as i32) / GRID_CELLS_PER_HOUSING_UNIT)`,
-  with `GRID_CELLS_PER_HOUSING_UNIT = 100` (tunable). For the shipped 28×18 map:
-  `504 / 100 = 5` units → `5 × 4 = 20` seed citizens.
-- **Seed unit:** `smallHouse` (2×1 footprint, 4 citizens) — the smallest housing
-  footprint, simplest to pack.
-- **Deterministic packing:** lay units row-major from `SEED_ANCHOR = (2, 3)`,
-  `SEED_UNITS_PER_ROW = 6` per row; unit *k* origin =
-  `(2 + (k % 6) * 2, 3 + (k / 6))`. The anchor/stride keep every footprint on bare
-  ground **west of the `x = 14` vertical arterial** and clear of the `y ∈ {8, 9}`
-  horizontal arterial and the map bounds. For the shipped map this is one row of 5
-  small houses occupying `x ∈ [2, 11]`, `y = 3`.
+  `GRID_CELLS_PER_HOUSING_UNIT = 100` (tunable). For 28×18: `504 / 100 = 5` units →
+  `5 × 4 = 20` seed citizens.
+- **Seed unit:** `smallHouse` (2×1 footprint, 4 citizens).
+- **Deterministic packing:** row-major from `SEED_ANCHOR = (2, 3)`,
+  `SEED_UNITS_PER_ROW = 6`; unit *k* origin = `(2 + (k % 6) * 2, 3 + (k / 6))`. Keeps
+  every footprint on bare ground west of the `x = 14` arterial and clear of the
+  `y ∈ {8, 9}` arterial and map bounds. For 28×18: one row of 5 houses, `x ∈ [2, 11]`,
+  `y = 3`.
 - **Actions (order matters — zone precedes build):**
   1. `PaintAreaRectangle { area: "residential", start: (2, 3), end: (max_x, max_y) }`
-     over the units' bounding rectangle, and
-  2. one `PlaceBuilding { building_type: "smallHouse", origin, rotation: 0 }` per
-     unit.
+     over the units' bounding rectangle, then
+  2. one `PlaceBuilding { building_type: "smallHouse", origin, rotation: 0 }` per unit.
 - **Wave:** `GrowthWave { id: "wave-seed-residential", trigger_time: 0.0,
   message: "First residents arrive — build destinations so they can commute.",
   applied: false, actions }`.
 
-`trigger_time = 0.0` fires on the first unpaused tick (matching the retired seed
-wave). With no destination buildings present, the spawned sims are dormant
-(`workplace == None`, held by `has_valid_workplace_destination`) until the player
-zones commercial/etc. and builds a destination — preserving the "must build
-destinations and serve a trip to win" gate. The `Vec` and trigger-time boundaries
-(§3) already support additional or later-triggering authored waves if the schedule
-is extended in future.
+The helper is public and validated by unit tests; wiring it into the shipped
+scenario is the deliberate follow-up.
 
 ### 3. `tick_growth` step & timing
 
 New module `crates/caelum-core/src/growth.rs` exposing
-`apply_due_growth_waves(&mut GameSnapshot)`.
+`pub fn apply_due_growth_waves(state: &mut GameSnapshot)`.
 
 Wire it into `trips::tick_trips_substepped`:
 
-- Call `apply_due_growth_waves(&mut next)` at the **top of each substep
-  iteration**, before `reset_daily_commute_flags` / `spawn_due_commute_trips`, and
-  again in the **final flush block**. This lets a wave that fires at time `T` seed
-  sims whose commute departures are then picked up by `spawn_due_commute_trips` in
-  the same tick.
-- Early-return guard when no wave is unapplied-and-due (cheap once the seed wave is
-  applied).
+- Call `apply_due_growth_waves(&mut next)` as the **first statement of each substep
+  iteration** (before `reset_daily_commute_flags` / `spawn_due_commute_trips`) and
+  again in the **final flush block**, so a wave firing at time `T` seeds sims whose
+  commute departures are picked up the same tick.
+- Early-return when no wave is unapplied-and-due (a no-op for the shipped empty
+  scenario, so untouched existing tests keep passing).
 
-**Decision B — trigger times are substep boundaries.** Add each unapplied wave's
-`trigger_time` (when `> state.time` and `<= final_time`) to the boundary set in
-`next_boundary_after`, and extend `max_tick_substeps` by
-`state.scenario.growth_waves.len()`. This preserves the **granularity-independence
-/ determinism contract**: one coarse tick and many fine ticks produce identical
-results because no substep straddles a trigger.
+**Decision B — trigger times are substep boundaries.** In `next_boundary_after`,
+for each unapplied wave call `track_next_boundary(&mut next, wave.trigger_time,
+after)`. Extend `max_tick_substeps` by `state.scenario.growth_waves.len()`. Preserves
+the **granularity-independence / determinism contract**: no substep straddles a
+trigger.
 
 - *Rejected alternative:* apply once at tick start (coarse) — a large resume-tick
-  could overshoot a trigger and desync timing/IDs relative to a stepped run.
+  could overshoot a trigger and desync timing/IDs.
 
 ### 4. Applying a wave (reuse the engine's own handlers)
 
-`apply_due_growth_waves` selects due waves (`!applied && trigger_time <=
-state.time`) and applies them **in declared order** (waves, then actions within a
-wave). Each action is threaded through the existing handler:
+`apply_due_growth_waves` selects due waves (`!applied && trigger_time <= state.time`)
+and applies them **in declared order** (waves, then actions within a wave), threading
+the snapshot through the existing handlers:
 
 - `PaintAreaRectangle` → `areas::paint_area_rectangle(&state, area, start, end)`;
-  take the returned snapshot when `Some`, else keep the current one (a no-op paint
-  is a deterministic skip).
+  adopt the returned snapshot when `Some`, else keep current (no-op paint = skip).
 - `PlaceBuilding` → `buildings::place_building_core(&state, building_type, origin,
-  rotation)`; take the returned snapshot when `Ok`, else keep the current one (an
-  invalid placement — wrong zone, occupied, off-map — is a deterministic skip, as a
+  rotation)`; adopt when `Ok`, else keep current (invalid placement = skip, as a
   player's invalid click is a no-op).
 
-Because these are the player's own handlers, everything follows automatically:
-zoning gates, footprint/occupancy validation, housing sim spawning with
-deterministic IDs (`next_entity_id`), and `assign_workplaces` +
-`retarget_home_fallback_trips`. After all actions apply, set `applied = true` on
-the snapshot's `scenario.growth_waves`.
+Then set `applied = true` on the snapshot's `scenario.growth_waves`. Because these
+are the player's own handlers, zoning gates, occupancy validation, housing sim
+spawning with deterministic IDs (`next_entity_id`), and `assign_workplaces` +
+`retarget_home_fallback_trips` all follow automatically.
 
 **Budget exemption (a wave is the world growing, not the player spending).** Factor
 `buildings::place_building` into:
 
-- `place_building_core(state, type, origin, rotation) -> Result<GameSnapshot,
-  String>` — everything except the budget check and `next.budget -= cost`.
-- `place_building(state, ...)` — budget check → `place_building_core` → deduct
-  `cost` (unchanged public behavior; the `PlaceBuilding` intent path is
-  byte-for-byte identical).
+- `place_building_core(state, type, origin, rotation) -> Result<GameSnapshot, String>`
+  — everything except the budget check and `next.budget -= cost`.
+- `place_building(state, ...)` — budget check → `place_building_core` → deduct `cost`
+  (public behavior unchanged; the `PlaceBuilding` intent path is byte-for-byte
+  identical).
 
-Waves call `place_building_core`, so world growth does not charge or gate on the
+Waves call `place_building_core`, so world growth neither charges nor gates on the
 player's budget. `paint_area_rectangle` has no budget dimension and is reused
 directly.
 
-Determinism: action order is fixed; grid-derived authoring is a pure function of
-map constants; all ID allocation is `next_entity_id` over existing IDs; no
-wall-clock or RNG. Identical map + tick counts produce identical snapshots.
+Determinism: action order is fixed; grid-derived authoring is a pure function of map
+constants; all ID allocation is `next_entity_id`; no wall-clock or RNG.
 
 ### 5. TS shim removal, consumers & host symmetry
 
-- `src/runtime/snapshotView.ts`: replace `growthWaves: []` with
-  `growthWaves: snapshot.scenario.growthWaves` (pass-through); drop the HPA-118
-  TODO block.
+- `src/runtime/backend/types.ts`: add `growthWaves: GrowthWave[]` to
+  `RustScenarioConfig` (import the reshaped `GrowthWave`/`GrowthAction` from
+  `domain/types`); update the doc comment.
 - `src/domain/types.ts`: reshape `GrowthWave` to `{ id, triggerTime, message,
   applied, actions: GrowthAction[] }` and add the `GrowthAction` union
   (`{ type: "paintAreaRectangle"; area; start; end }` |
-  `{ type: "placeBuilding"; buildingType; origin; rotation }`). Remove the now-unused
+  `{ type: "placeBuilding"; buildingType; origin; rotation }`). Remove the unused
   `GrowthWaveTile`.
-- `src/render/overlayRenderer.ts`: the growth overlay telegraphs upcoming growth by
-  deriving tiles from each unapplied wave's `paintAreaRectangle` actions (expand
-  each rectangle to its tiles, tint by `area`) instead of reading `wave.tiles`.
-- `src/runtime/runtimeSelectors.ts`: Brief panel is unchanged (still
-  `message` + `applied`); it now shows the seed wave's copy until the wave applies.
-- `src/scenario/growingSuburb.ts`: update the stale HPA-118 TODO comment (the file
-  already holds only `MAP_WIDTH`/`MAP_HEIGHT`).
-- Browser (WASM) and Tauri both serialize `scenario.growthWaves` from the same
-  `caelum-core` snapshot → symmetric by construction.
+- `src/runtime/snapshotView.ts`: replace `growthWaves: []` with
+  `growthWaves: snapshot.scenario.growthWaves` (pass-through); drop the HPA-118 TODO.
+- `src/render/overlayRenderer.ts`: the growth overlay derives telegraph tiles from
+  each unapplied wave's `paintAreaRectangle` actions (expand each rectangle to its
+  tiles) instead of reading `wave.tiles`.
+- `src/runtime/runtimeSelectors.ts`: unchanged (Brief still reads `message`).
+- `tests/fixtures/rustSnapshot.ts`: add `growthWaves: []` to the default scenario.
+- `src/scenario/growingSuburb.ts`: update the stale HPA-118 TODO comment.
+- Browser (WASM) and Tauri both serialize `scenario.growthWaves` from the same core
+  snapshot → symmetric by construction.
 
 ### 6. Testing
 
-**Rust** — scenario authoring (`scenario.rs` tests):
+**Rust — model wire format** (`tests/model_wire_format.rs`): a `GrowthAction`
+serializes to the tagged camelCase shape (`type: "placeBuilding"`, `buildingType`,
+…); the shipped `scenario.growthWaves` serializes to `[]`.
 
-- `n_units == grid_count / GRID_CELLS_PER_HOUSING_UNIT` (5 for 28×18), and scales
-  with dimensions (assert with a couple of synthetic sizes via the helper).
-- The seed wave is well-formed: first action is the residential
-  `PaintAreaRectangle`; the remaining are `n_units` `smallHouse` placements; every
-  footprint tile is on the map, bare (not on the arterial cross), and inside the
-  zoned rectangle (paint-before-build ordering holds).
+**Rust — scenario authoring** (`scenario.rs` unit tests): `growing_suburb_growth_waves()`
+returns one wave whose first action is the residential `PaintAreaRectangle` and whose
+remaining `n_units` actions are `smallHouse` placements; `n_units == grid_count / 100`
+(5 for 28×18); every placement footprint is on-map, off the arterial cross, and inside
+the zoned rectangle; and `growing_suburb_scenario().growth_waves` is empty (unwired).
 
-**Rust** — wave application (`growth.rs` tests) with the seed wave and synthetic
-waves:
+**Rust — wave application** (`growth.rs` unit tests + synthetic/seed waves):
 
-- **Application:** ticking Growing Suburb past `trigger_time` zones the block,
-  places the `n_units` houses, and spawns `n_units × 4` sims with deterministic
-  IDs; `applied == true`; **player budget unchanged** (exemption).
+- **Application:** a snapshot seeded with `growing_suburb_growth_waves()`, unpaused
+  and ticked past `trigger_time`, zones the block, places `n_units` houses, and spawns
+  `n_units × 4` sims with deterministic IDs; `applied == true`; **budget unchanged**.
 - **Zone→build coupling:** a synthetic `placeBuilding(housing)` whose tile the wave
-  did not zone is a deterministic skip (`"area mismatch"`); paint-before-build in
-  the same wave makes it succeed.
+  did not zone is skipped (`"area mismatch"`); paint-before-build makes it succeed.
 - **Idempotency:** a second tick does not re-apply (no duplicate houses/sims).
-- **Granularity determinism:** one coarse tick vs many fine ticks across the
-  trigger produce identical `map` (areas), `buildings`, and `sims`.
-- **Commute hand-off (light integration):** after the seed wave, placing a
-  destination (zone commercial + supermarket) assigns workplaces via
-  `assign_workplaces` and the seed sims commute deterministically.
+- **Granularity determinism:** one coarse tick vs many fine ticks across the trigger
+  produce identical `map` areas, `buildings`, and `sims`.
+- **Empty is a no-op:** ticking the shipped Growing Suburb scenario spawns no
+  wave houses/sims (guards the untouched suite).
 
-**TypeScript** (`tests/runtime/backendContract.test.ts`):
-
-- Replace the `toEqual([])` assertion: the Growing Suburb snapshot now carries the
-  seed wave (`id: "wave-seed-residential"`, `triggerTime: 0`, actions = one
-  `paintAreaRectangle` + `n_units` `placeBuilding`), and after ticking it reports
-  `applied: true` with sims present.
-- Add/keep a case proving `normalizeRustSnapshot` **passes through**
-  `scenario.growthWaves` from the Rust snapshot (no hardcoded value).
-- Update `tests/render/overlayRenderer.test.ts` to build waves in the new `actions`
-  shape and assert the telegraph derives tiles from `paintAreaRectangle` actions.
+**TypeScript** (`tests/runtime/backendContract.test.ts`): keep the `toEqual([])`
+assertions (now satisfied by Rust pass-through, not a hardcoded shim), and add a case
+where `createRustSnapshot` carries a non-empty `scenario.growthWaves` (one
+`paintAreaRectangle` + one `placeBuilding` action) and `normalizeRustSnapshot` passes
+it through unchanged. Update `tests/render/overlayRenderer.test.ts` to build waves in
+the `actions` shape and assert the telegraph derives tiles from `paintAreaRectangle`
+actions.
 
 ## Acceptance criteria (from HPA-118)
 
@@ -304,33 +317,34 @@ waves:
 - [x] New Rust + TS tests cover wave timing, application idempotency (`applied`),
       and the determinism contract. *(§6)*
 
-> Departures from the ticket's proposed approach (both to fit the current
-> codebase): (1) a wave is modelled as scheduled `PaintAreaRectangle`/
-> `PlaceBuilding` intents applied through the existing engine handlers, rather than
-> a bespoke zone-tiles-and-spawn-bodiless-citizens step, because zoning gates
-> placement and buildings are the sole sim source; (2) the Growing Suburb seed
-> wave's magnitude is **grid-derived** (`f(MAP_WIDTH × MAP_HEIGHT)` housing units)
-> at authoring time rather than a hardcoded citizen count, so it scales with map
-> size. This restores autonomous seed growth (superseding the earlier interim
-> "ship empty" decision).
+> Departures from the ticket's proposed approach, both to fit the current codebase:
+> (1) a wave is modelled as scheduled `PaintAreaRectangle`/`PlaceBuilding` intents
+> applied through the existing engine handlers, because zoning gates placement and
+> buildings are the sole sim source; (2) the seed wave's magnitude is grid-derived at
+> authoring time. Scope note: the mechanism + grid-scaled helper are implemented and
+> unit-tested, but the seed is **not wired** into the shipped scenario — that keeps
+> the deterministic core suite and golden traces untouched, and is a deliberate
+> follow-up.
 
 ## Files touched
 
 - `crates/caelum-core/src/model.rs` — `GrowthWave`, `GrowthAction`,
   `ScenarioConfig.growth_waves`; doc comment update.
 - `crates/caelum-core/src/scenario.rs` — `growing_suburb_growth_waves()` +
-  `GRID_CELLS_PER_HOUSING_UNIT` / packing constants; seed into
-  `growing_suburb_scenario()`.
+  `GRID_CELLS_PER_HOUSING_UNIT` / packing constants; `growing_suburb_scenario()`
+  ships `growth_waves: vec![]` with an explanatory comment.
 - `crates/caelum-core/src/growth.rs` — **new**: `apply_due_growth_waves`.
 - `crates/caelum-core/src/buildings.rs` — extract `place_building_core`
   (budget-exempt); `place_building` wraps it.
 - `crates/caelum-core/src/lib.rs` — register `growth` module.
 - `crates/caelum-core/src/trips.rs` — call `apply_due_growth_waves`; add trigger
   times to `next_boundary_after`; extend `max_tick_substeps`.
-- `src/runtime/snapshotView.ts` — pass-through waves.
+- `src/runtime/backend/types.ts` — add `growthWaves` to `RustScenarioConfig`.
 - `src/domain/types.ts` — reshape `GrowthWave`, add `GrowthAction`, remove
   `GrowthWaveTile`.
+- `src/runtime/snapshotView.ts` — pass-through waves.
 - `src/render/overlayRenderer.ts` — telegraph derives tiles from wave actions.
 - `src/scenario/growingSuburb.ts` — update stale TODO.
-- Tests: `crates/caelum-core` scenario + growth tests,
-  `tests/runtime/backendContract.test.ts`, `tests/render/overlayRenderer.test.ts`.
+- Tests: `crates/caelum-core/tests/model_wire_format.rs`, `scenario.rs` +
+  `growth.rs` unit tests, `tests/runtime/backendContract.test.ts`,
+  `tests/render/overlayRenderer.test.ts`, `tests/fixtures/rustSnapshot.ts`.
