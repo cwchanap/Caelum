@@ -76,6 +76,7 @@ fn tick_trips_substepped(
             break;
         }
 
+        crate::growth::apply_due_growth_waves(&mut next);
         reset_daily_commute_flags(&mut next);
         spawn_due_commute_trips(&mut next);
 
@@ -108,6 +109,7 @@ fn tick_trips_substepped(
             final_time - next.time
         );
 
+        crate::growth::apply_due_growth_waves(&mut next);
         reset_daily_commute_flags(&mut next);
         spawn_due_commute_trips(&mut next);
     }
@@ -155,6 +157,7 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
         .saturating_mul(events_per_day)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
+        .saturating_add(state.scenario.growth_waves.len())
         .saturating_add(1)
 }
 
@@ -466,6 +469,12 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     for vehicle in &state.transit.vehicles {
         if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
             track_next_boundary(&mut next, state.time + seconds, after);
+        }
+    }
+
+    for wave in &state.scenario.growth_waves {
+        if !wave.applied {
+            track_next_boundary(&mut next, wave.trigger_time, after);
         }
     }
 
