@@ -24,6 +24,11 @@ pub fn growing_suburb_scenario() -> ScenarioConfig {
             rolling_window_seconds: ROLLING_WINDOW_SECONDS,
             survival_time: SURVIVAL_TIME_SECONDS,
         },
+        // Growth waves are implemented and unit-tested (see
+        // `growing_suburb_growth_waves`) but intentionally NOT wired here: firing
+        // a seed wave on the first tick would perturb the deterministic core
+        // suite + golden traces. Wiring the live seed is a deliberate follow-up.
+        growth_waves: Vec::new(),
     }
 }
 
