@@ -132,4 +132,43 @@ mod tests {
         assert!(next.buildings.is_empty(), "unzoned placement skipped");
         assert!(next.scenario.growth_waves[0].applied);
     }
+
+    /// A wave whose `trigger_time` falls mid-tick (not at t=0) must fire at
+    /// exactly that instant regardless of tick granularity. This exercises
+    /// Decision B's boundary tracking in `next_boundary_after` — the substep
+    /// machinery breaks at `trigger_time`, applies the wave, then continues —
+    /// which none of the `trigger_time: 0.0` tests above cover.
+    #[test]
+    fn mid_tick_wave_fires_at_boundary_regardless_of_granularity() {
+        // Reuse the seed wave's actions but defer the trigger to t=120 so the
+        // wave fires inside a 300s coarse tick, not at its start.
+        let mut seed_waves = growing_suburb_growth_waves();
+        seed_waves[0].trigger_time = 120.0;
+
+        let mut start = create_initial_snapshot();
+        start.paused = false;
+        start.scenario.growth_waves = seed_waves;
+
+        // Coarse: one 300s tick spanning well past the 120s trigger.
+        let coarse = trips::tick_trips(&start, 300.0);
+
+        // Fine: 300 × 1s ticks; the wave fires on the 120th tick.
+        let mut fine = start.clone();
+        for _ in 0..300 {
+            fine = trips::tick_trips(&fine, 1.0);
+        }
+
+        assert!(
+            coarse.scenario.growth_waves[0].applied,
+            "coarse tick applied the mid-tick wave"
+        );
+        assert!(
+            fine.scenario.growth_waves[0].applied,
+            "fine ticks applied the mid-tick wave"
+        );
+        assert_eq!(coarse.buildings, fine.buildings, "buildings match");
+        assert_eq!(coarse.sims, fine.sims, "spawned sims match");
+        assert_eq!(coarse.map, fine.map, "map/zoning match");
+        assert_eq!(coarse.time, fine.time, "both reach the same simulated time");
+    }
 }

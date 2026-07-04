@@ -15,6 +15,13 @@ pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 
+/// Boundaries per sim per day: outbound spawn + outbound resolution + return
+/// spawn + return resolution, plus headroom for the walk-leg / patience /
+/// deadline boundaries a single commute can generate. Used both in
+/// `max_tick_substeps` (initial cap) and in the post-growth cap widening
+/// inside `tick_trips_substepped`.
+const SIM_SHIFT_BOUNDARIES_PER_DAY: usize = 6;
+
 struct TripTickResult {
     trip: ActiveTrip,
     completed_trips: u32,
@@ -92,7 +99,7 @@ fn tick_trips_substepped(
             let day_count = end_day.saturating_sub(start_day) as usize + 1;
             let additional = sim_count
                 .saturating_sub(last_sim_count)
-                .saturating_mul(6)
+                .saturating_mul(SIM_SHIFT_BOUNDARIES_PER_DAY)
                 .saturating_mul(day_count);
             cap = cap.saturating_add(additional);
             last_sim_count = sim_count;
@@ -147,9 +154,9 @@ fn tick_trips_substepped(
 /// each unapplied growth wave's trigger time) so spawn, boarding, growth, and
 /// day-rollover logic fire at exactly the right instant. The cap is the sum of four
 /// independent upper bounds on the number of such events:
-/// - `day_count * events_per_day` — one boundary per sim shift event (`6` covers the
-///   outbound/return spawn + resolution boundaries) plus `2` for the day boundary,
-///   across every day the tick spans;
+/// - `day_count * events_per_day` — one boundary per sim shift event
+///   (`SIM_SHIFT_BOUNDARIES_PER_DAY` covers the outbound/return spawn + resolution
+///   boundaries) plus `2` for the day boundary, across every day the tick spans;
 /// - `per_second_net` — a 1-second-granularity safety net over the elapsed time,
 ///   which covers the sparse walk-leg / sim-departure / day boundaries; and
 /// - `vehicle_bound` — one substep per transit stop arrival, the densest source. A
@@ -170,7 +177,11 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let start_day = clock::day_index(state.time);
     let end_day = clock::day_index(final_time);
     let day_count = end_day.saturating_sub(start_day) as usize + 1;
-    let events_per_day = state.sims.len().saturating_mul(6).saturating_add(2);
+    let events_per_day = state
+        .sims
+        .len()
+        .saturating_mul(SIM_SHIFT_BOUNDARIES_PER_DAY)
+        .saturating_add(2);
 
     let duration = (final_time - state.time).max(0.0);
     let per_second_net = duration.ceil() as usize;
