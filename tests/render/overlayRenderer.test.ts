@@ -698,20 +698,12 @@ describe("growth overlay", () => {
             triggerTime: 100,
             message: "Wave 1",
             applied: false,
-            tiles: [
+            actions: [
               {
-                id: "5,5",
-                x: 5,
-                y: 5,
+                type: "paintAreaRectangle" as const,
                 area: "residential" as const,
-                createsCitizens: 0,
-              },
-              {
-                id: "6,5",
-                x: 6,
-                y: 5,
-                area: "residential" as const,
-                createsCitizens: 0,
+                start: { x: 5, y: 5 },
+                end: { x: 6, y: 5 },
               },
             ],
           },
@@ -720,13 +712,12 @@ describe("growth overlay", () => {
             triggerTime: 200,
             message: "Wave 2",
             applied: true,
-            tiles: [
+            actions: [
               {
-                id: "7,5",
-                x: 7,
-                y: 5,
+                type: "paintAreaRectangle" as const,
                 area: "commercial" as const,
-                createsCitizens: 0,
+                start: { x: 7, y: 5 },
+                end: { x: 7, y: 5 },
               },
             ],
           },

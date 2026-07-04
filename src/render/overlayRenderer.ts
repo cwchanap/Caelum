@@ -370,9 +370,21 @@ export function renderOverlays(
     ctx.fillStyle = colors.growth;
 
     for (const wave of state.scenario.growthWaves) {
-      if (!wave.applied) {
-        for (const tile of wave.tiles) {
-          fillTile(ctx, tile);
+      if (wave.applied) {
+        continue;
+      }
+      for (const action of wave.actions) {
+        if (action.type !== "paintAreaRectangle") {
+          continue;
+        }
+        const minX = Math.min(action.start.x, action.end.x);
+        const maxX = Math.max(action.start.x, action.end.x);
+        const minY = Math.min(action.start.y, action.end.y);
+        const maxY = Math.max(action.start.y, action.end.y);
+        for (let y = minY; y <= maxY; y += 1) {
+          for (let x = minX; x <= maxX; x += 1) {
+            fillTile(ctx, { x, y });
+          }
         }
       }
     }

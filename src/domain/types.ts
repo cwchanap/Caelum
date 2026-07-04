@@ -202,25 +202,21 @@ export interface RoutePlan {
   estimatedSeconds: number;
 }
 
-/**
- * A tile seeded by a growth wave. Purpose-built (rather than intersecting
- * `Tile`) so authors cannot accidentally supply `kind`/`hasTrack`/`oneWay` —
- * applyDueGrowthWaves ignores them and zoned `area` only takes effect on
- * tiles that are still bare empty ground at trigger time.
- */
-export interface GrowthWaveTile extends Point {
-  id: string;
-  area: AreaKind;
-  /** Citizens spawned at this tile when the wave fires and the tile is bare. */
-  createsCitizens: number;
-}
+export type GrowthAction =
+  | { type: "paintAreaRectangle"; area: AreaKind; start: Point; end: Point }
+  | {
+      type: "placeBuilding";
+      buildingType: BuildingType;
+      origin: Point;
+      rotation: BuildingRotation;
+    };
 
 export interface GrowthWave {
   id: string;
   triggerTime: number;
-  tiles: GrowthWaveTile[];
   message: string;
   applied: boolean;
+  actions: GrowthAction[];
 }
 
 export interface Scenario {

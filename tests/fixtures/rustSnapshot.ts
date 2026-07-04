@@ -66,6 +66,7 @@ export function createRustSnapshot(
         rollingWindowSeconds: 300,
         survivalTime: 1_200,
       },
+      growthWaves: [],
     },
     ...overrides,
   };
