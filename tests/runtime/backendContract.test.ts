@@ -65,10 +65,8 @@ describe("Rust backend contract", () => {
         time: 555,
       },
     ]);
-    // The Growing Suburb sandbox has no timed growth waves (see
-    // docs/architecture.md). The shell must not synthesize TS-side waves that
-    // Rust will never auto-apply, so normalization always emits an empty list
-    // regardless of metrics state.
+    // Growth waves pass through from the Rust snapshot (empty for the shipped
+    // scenario).
     expect(snapshot.scenario.growthWaves).toEqual([]);
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
@@ -86,6 +84,7 @@ describe("Rust backend contract", () => {
           rollingWindowSeconds: 300,
           survivalTime: 1_200,
         },
+        growthWaves: [],
       },
     });
     const normalized = normalizeRustSnapshot(withThresholds);
@@ -108,6 +107,7 @@ describe("Rust backend contract", () => {
             rollingWindowSeconds: 150,
             survivalTime: 600,
           },
+          growthWaves: [],
         },
       }),
     );
@@ -137,6 +137,52 @@ describe("Rust backend contract", () => {
     await expect(backend.dispatch(intent)).resolves.toMatchObject({
       applied: true,
       snapshot: { paused: false },
+    });
+  });
+
+  it("passes growth waves through from the Rust snapshot", () => {
+    const withWave = createRustSnapshot({
+      scenario: {
+        name: "Growing Suburb",
+        objectives: {
+          maxLateRatio: 0.25,
+          maxUnservedRatio: 0.2,
+          maxAverageWait: 180,
+          rollingWindowSeconds: 300,
+          survivalTime: 1_200,
+        },
+        growthWaves: [
+          {
+            id: "wave-1",
+            triggerTime: 0,
+            message: "grow",
+            applied: false,
+            actions: [
+              {
+                type: "paintAreaRectangle",
+                area: "residential",
+                start: { x: 2, y: 3 },
+                end: { x: 3, y: 3 },
+              },
+              {
+                type: "placeBuilding",
+                buildingType: "smallHouse",
+                origin: { x: 2, y: 3 },
+                rotation: 0,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const normalized = normalizeRustSnapshot(withWave);
+    expect(normalized.scenario.growthWaves).toEqual(
+      withWave.scenario.growthWaves,
+    );
+    expect(normalized.scenario.growthWaves[0].actions[1]).toMatchObject({
+      type: "placeBuilding",
+      buildingType: "smallHouse",
     });
   });
 });

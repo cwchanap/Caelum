@@ -4,6 +4,7 @@ import type {
   BuildingRotation,
   BuildingType,
   GameMap,
+  GrowthWave,
   PlacedBuilding,
   Point,
   Sim,
@@ -43,11 +44,12 @@ export interface RustObjectiveThresholds {
 /// snapshot. The thresholds are the authoritative values the core's
 /// `evaluate_objectives` enforces; the shell must read them from here rather
 /// than hard-coding a local copy (which drifted: `rollingWindowSeconds` was 600
-/// in the TS shim while the core evaluates at 300). Growth waves are NOT
-/// included — they remain a TS-side concept until the core models spawning.
+/// in the TS shim while the core evaluates at 300). Growth waves ship here
+/// too (empty for Growing Suburb); the shell reads them read-only.
 export interface RustScenarioConfig {
   name: string;
   objectives: RustObjectiveThresholds;
+  growthWaves: GrowthWave[];
 }
 
 export interface RustGameSnapshot {
