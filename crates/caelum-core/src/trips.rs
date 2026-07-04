@@ -71,12 +71,33 @@ fn tick_trips_substepped(
     sync_clock(&mut next);
 
     let mut early_termination = false;
-    for _ in 0..max_tick_substeps(&next, final_time) {
-        if final_time - next.time <= EPSILON {
+    let mut steps = 0;
+    // The substep budget is computed from the current snapshot, but growth
+    // waves applied inside the loop can spawn new sims whose departure
+    // boundaries weren't counted in `events_per_day`. Widen the cap when the
+    // sim count grows so the post-growth event budget is always accounted for
+    // and the tick cannot be truncated in release builds.
+    let mut cap = max_tick_substeps(&next, final_time);
+    let mut last_sim_count = next.sims.len();
+    loop {
+        if steps >= cap || final_time - next.time <= EPSILON {
             break;
         }
 
         crate::growth::apply_due_growth_waves(&mut next);
+        let sim_count = next.sims.len();
+        if sim_count > last_sim_count {
+            let start_day = clock::day_index(next.time);
+            let end_day = clock::day_index(final_time);
+            let day_count = end_day.saturating_sub(start_day) as usize + 1;
+            let additional = sim_count
+                .saturating_sub(last_sim_count)
+                .saturating_mul(6)
+                .saturating_mul(day_count);
+            cap = cap.saturating_add(additional);
+            last_sim_count = sim_count;
+        }
+
         reset_daily_commute_flags(&mut next);
         spawn_due_commute_trips(&mut next);
 
@@ -89,6 +110,7 @@ fn tick_trips_substepped(
         }
 
         next = advance_tick_substep(&next, substep_delta);
+        steps += 1;
         if on_substep(&mut next) {
             early_termination = true;
             break;

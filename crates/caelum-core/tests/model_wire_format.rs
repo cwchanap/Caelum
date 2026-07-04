@@ -683,3 +683,22 @@ fn shipped_scenario_growth_waves_serialize_to_empty_list() {
     let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
     assert_eq!(value["growthWaves"], json!([]));
 }
+
+#[test]
+fn scenario_config_growth_waves_defaults_to_empty_when_omitted() {
+    use caelum_core::model::ScenarioConfig;
+
+    let value = json!({
+        "name": "Growing Suburb",
+        "objectives": {
+            "maxLateRatio": 0.1,
+            "maxUnservedRatio": 0.1,
+            "maxAverageWait": 180.0,
+            "rollingWindowSeconds": 300.0,
+            "survivalTime": 600.0
+        }
+    });
+    let config: ScenarioConfig =
+        serde_json::from_value(value).expect("scenario without growthWaves deserializes");
+    assert!(config.growth_waves.is_empty());
+}

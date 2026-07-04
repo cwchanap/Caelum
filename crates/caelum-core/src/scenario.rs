@@ -63,6 +63,28 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
         })
         .collect();
 
+    // Guard every unit footprint against the map bounds and the arterial
+    // cross (x in {14,15}, y in {8,9}) so future tuning of the anchor, row
+    // width, unit size, or grid ratio cannot produce invalid placements.
+    let map_w = i32::from(MAP_WIDTH);
+    let map_h = i32::from(MAP_HEIGHT);
+    for origin in &origins {
+        let x0 = origin.x;
+        let x1 = origin.x + UNIT_WIDTH - 1;
+        let y0 = origin.y;
+        let y1 = origin.y + UNIT_HEIGHT - 1;
+        assert!(
+            x0 >= 0 && x1 < map_w && y0 >= 0 && y1 < map_h,
+            "seed unit origin {origin:?} footprint exceeds map bounds ({MAP_WIDTH}x{MAP_HEIGHT})",
+        );
+        let overlaps_horizontal_road = y0 <= 9 && y1 >= 8;
+        let overlaps_vertical_road = x0 <= 15 && x1 >= 14;
+        assert!(
+            !overlaps_horizontal_road && !overlaps_vertical_road,
+            "seed unit origin {origin:?} footprint overlaps the arterial cross",
+        );
+    }
+
     let max_x = origins
         .iter()
         .map(|p| p.x + UNIT_WIDTH - 1)
