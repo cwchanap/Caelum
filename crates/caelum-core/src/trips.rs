@@ -121,9 +121,10 @@ fn tick_trips_substepped(
 ///
 /// A tick from `state.time` to `final_time` is broken at every meaningful boundary
 /// (day rollover, each sim's scheduled outbound/return departure, each active trip's
-/// next walk/patience/deadline event, and each transit vehicle's next stop arrival)
-/// so spawn, boarding, and day-rollover logic fire at exactly the right instant. The
-/// cap is the sum of three independent upper bounds on the number of such events:
+/// next walk/patience/deadline event, each transit vehicle's next stop arrival, and
+/// each unapplied growth wave's trigger time) so spawn, boarding, growth, and
+/// day-rollover logic fire at exactly the right instant. The cap is the sum of four
+/// independent upper bounds on the number of such events:
 /// - `day_count * events_per_day` — one boundary per sim shift event (`6` covers the
 ///   outbound/return spawn + resolution boundaries) plus `2` for the day boundary,
 ///   across every day the tick spans;
@@ -134,7 +135,9 @@ fn tick_trips_substepped(
 ///   `1 / METRO_TILES_PER_SECOND` seconds, and metro is the fastest mode so it
 ///   upper-bounds bus arrivals too. Each vehicle contributes independently, so the
 ///   union of arrival events over the tick is at most
-///   `duration * METRO_TILES_PER_SECOND * vehicle_count`.
+///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
+/// - `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
+///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`).
 ///
 /// then `+1`. Without `vehicle_bound`, a large delta advanced while a metro runs on
 /// short segments exhausts the per-second budget before reaching `final_time` and
