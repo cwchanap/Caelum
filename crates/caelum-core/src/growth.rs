@@ -133,6 +133,92 @@ mod tests {
         assert!(next.scenario.growth_waves[0].applied);
     }
 
+    /// Multiple waves can fall due within a single tick — either at distinct
+    /// trigger times or sharing the same trigger time. The cap math
+    /// (`growth_waves.len()` term in `max_tick_substeps`) and the ordered-due
+    /// collection in `apply_due_growth_waves` handle this, but it was previously
+    /// unverified. This test fires three waves (two sharing t=50, one at t=150)
+    /// in one 300s coarse tick and confirms all fire in declared order without
+    /// the substep cap truncating the tick.
+    #[test]
+    fn multiple_waves_in_one_tick_all_fire_in_declared_order() {
+        let mut start = create_initial_snapshot();
+        start.paused = false;
+        start.scenario.growth_waves = vec![
+            GrowthWave {
+                id: "wave-a".to_string(),
+                trigger_time: 50.0,
+                message: String::new(),
+                applied: false,
+                actions: vec![
+                    GrowthAction::PaintAreaRectangle {
+                        area: "residential".to_string(),
+                        start: Point { x: 2, y: 3 },
+                        end: Point { x: 3, y: 3 },
+                    },
+                    GrowthAction::PlaceBuilding {
+                        building_type: "smallHouse".to_string(),
+                        origin: Point { x: 2, y: 3 },
+                        rotation: 0,
+                    },
+                ],
+            },
+            GrowthWave {
+                id: "wave-b".to_string(),
+                trigger_time: 50.0,
+                message: String::new(),
+                applied: false,
+                actions: vec![
+                    GrowthAction::PaintAreaRectangle {
+                        area: "residential".to_string(),
+                        start: Point { x: 6, y: 3 },
+                        end: Point { x: 7, y: 3 },
+                    },
+                    GrowthAction::PlaceBuilding {
+                        building_type: "smallHouse".to_string(),
+                        origin: Point { x: 6, y: 3 },
+                        rotation: 0,
+                    },
+                ],
+            },
+            GrowthWave {
+                id: "wave-c".to_string(),
+                trigger_time: 150.0,
+                message: String::new(),
+                applied: false,
+                actions: vec![
+                    GrowthAction::PaintAreaRectangle {
+                        area: "residential".to_string(),
+                        start: Point { x: 2, y: 11 },
+                        end: Point { x: 3, y: 11 },
+                    },
+                    GrowthAction::PlaceBuilding {
+                        building_type: "smallHouse".to_string(),
+                        origin: Point { x: 2, y: 11 },
+                        rotation: 0,
+                    },
+                ],
+            },
+        ];
+
+        let next = trips::tick_trips(&start, 300.0);
+
+        // All three waves fired.
+        assert!(next.scenario.growth_waves[0].applied, "wave-a applied");
+        assert!(next.scenario.growth_waves[1].applied, "wave-b applied");
+        assert!(next.scenario.growth_waves[2].applied, "wave-c applied");
+
+        // Three buildings placed, 12 sims spawned (3 * 4 citizens per house).
+        assert_eq!(next.buildings.len(), 3, "3 smallHouse units placed");
+        assert_eq!(next.sims.len(), 12, "3 units * 4 citizens");
+
+        // The tick was not truncated — reached the full 300s.
+        assert_eq!(
+            next.time, 300.0,
+            "tick reached full duration without cap truncation"
+        );
+    }
+
     /// A wave whose `trigger_time` falls mid-tick (not at t=0) must fire at
     /// exactly that instant regardless of tick granularity. This exercises
     /// Decision B's boundary tracking in `next_boundary_after` — the substep

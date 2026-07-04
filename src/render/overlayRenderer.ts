@@ -374,16 +374,23 @@ export function renderOverlays(
         continue;
       }
       for (const action of wave.actions) {
-        if (action.type !== "paintAreaRectangle") {
-          continue;
-        }
-        const minX = Math.min(action.start.x, action.end.x);
-        const maxX = Math.max(action.start.x, action.end.x);
-        const minY = Math.min(action.start.y, action.end.y);
-        const maxY = Math.max(action.start.y, action.end.y);
-        for (let y = minY; y <= maxY; y += 1) {
-          for (let x = minX; x <= maxX; x += 1) {
-            fillTile(ctx, { x, y });
+        if (action.type === "paintAreaRectangle") {
+          const minX = Math.min(action.start.x, action.end.x);
+          const maxX = Math.max(action.start.x, action.end.x);
+          const minY = Math.min(action.start.y, action.end.y);
+          const maxY = Math.max(action.start.y, action.end.y);
+          for (let y = minY; y <= maxY; y += 1) {
+            for (let x = minX; x <= maxX; x += 1) {
+              fillTile(ctx, { x, y });
+            }
+          }
+        } else if (action.type === "placeBuilding") {
+          for (const tile of getBuildingFootprint(
+            action.buildingType,
+            action.origin,
+            action.rotation,
+          )) {
+            fillTile(ctx, tile);
           }
         }
       }
