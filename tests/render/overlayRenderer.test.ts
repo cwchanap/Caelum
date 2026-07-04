@@ -746,6 +746,47 @@ describe("growth overlay", () => {
       tileSize,
     );
   });
+
+  it("fills footprint tiles for placeBuilding actions in unapplied waves", () => {
+    const ctx = fakeCtx();
+    const state = {
+      ...createTestGameState(),
+      scenario: {
+        ...createTestGameState().scenario,
+        growthWaves: [
+          {
+            id: "wave-build",
+            triggerTime: 0,
+            message: "",
+            applied: false,
+            actions: [
+              {
+                type: "placeBuilding" as const,
+                buildingType: "smallHouse" as const,
+                origin: { x: 10, y: 5 },
+                rotation: 0 as const,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "growth" as const };
+    renderOverlays(ctx, state, ui);
+    // smallHouse is 2x1 at rotation 0 → tiles (10,5) and (11,5).
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      10 * tileSize,
+      5 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      11 * tileSize,
+      5 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
 });
 
 describe("building preview", () => {
