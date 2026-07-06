@@ -29,6 +29,8 @@ bun run test:e2e     # Playwright (tests/e2e), excluded from vitest
 
 Vitest is split into two projects by directory (`vite.config.ts`): `ui` (jsdom; `tests/ui` + `tests/render`) and `runtime` (node).
 
+**WASM prerequisite (browser build).** The browser backend loads `crates/caelum-wasm` compiled to `src/generated/caelum_wasm/` (generated, git-ignored). `dev`, `check`, `build`, and `test` each run a `pre*` hook (`ensure-wasm`, or `wasm:build:release` for `build`) that rebuilds the artifact whenever any `caelum-core`/`caelum-wasm` source is newer than the output — so **`wasm-pack` must be installed** (`cargo install wasm-pack`), and a local Rust change is automatically reflected on the next `bun run dev`/`check`/`test`. Rebuild manually with `bun run wasm:build` (dev) or `bun run wasm:build:release`. The Tauri host compiles `caelum-core` directly and needs no WASM artifact.
+
 ```sh
 bunx vitest run tests/runtime/gameRuntime.test.ts   # one file
 bunx vitest run --project runtime                   # one project
@@ -48,18 +50,18 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 
 **Intent flow:** a Svelte component calls a `RuntimeController` method (e.g. `setTool`, `handleTileClick`, `togglePause`) → the runtime applies local UI helpers or dispatches a gameplay intent/tick to the active backend → `commit()` swaps in the new snapshot/UI state, re-renders the canvas, and publishes a `RuntimeSnapshot` to subscribers. The runtime drives its own `requestAnimationFrame` loop and sends ticks to the backend when unpaused.
 
-**Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. The engine runs one tick as a fixed pipeline over an immutable `GameSnapshot`:
-`tick_trips` → `evaluate_objectives` (metrics/objectives). Trip outcomes are recorded inline by `tick_trips`; every step takes a `GameSnapshot` and returns a new one, and the engine publishes a new snapshot only when `next != current`. Browser and Tauri hosts both use the same `GameEngine` facade.
+**Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. `GameEngine` (`engine.rs`) is the facade both hosts drive: `tick(delta_seconds)` advances game time (real seconds scaled by the current speed), and `dispatch(GameIntent)` applies one player action (build / paint area / transit edit / speed / pause). A tick runs `trips::tick_trips_with_objectives`, which **substeps** the delta at growth-wave boundaries — firing due growth waves (`growth::apply_due_growth_waves`) and re-evaluating objectives/metrics after each substep — bounded by a `max_tick_substeps` cap. Every step takes an immutable `GameSnapshot` and returns a new one; the engine commits and returns `applied` only when `next != current`, otherwise `applied == false` (reference-equality dispatch). Browser and Tauri hosts both wrap this same `GameEngine`.
 
 **Layers (`src/`):**
 
 - `domain/` — `types.ts` is the shared data model (`GameState`, `Citizen`, `TransitNetwork`, `Tool`, etc.); `ids.ts` generates stable IDs (`tileId`, zero-padded `entityId`, `nextEntityId`).
 - `scenario/growingSuburb.ts` — authoritative Growing Suburb map dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/scenario.rs`, exported so e2e helpers and tests reference the source of truth. The authoritative map layout, scenario, objectives, and clock all live in `crates/caelum-core`; the Growing Suburb sandbox ships with no timed growth waves and no starting citizens (see `docs/architecture.md`).
-- `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`).
+- `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`), `snapshotView.ts` (read-only views over a snapshot).
+- `runtime/backend/` — the host boundary. `createBackend()` (`index.ts`) picks `wasmBackend.ts` or `tauriBackend.ts` via `isTauriRuntime()` (presence of `__TAURI_INTERNALS__`); both implement the `GameBackend` interface (`types.ts`) and forward ticks/intents to the Rust `GameEngine`. Wire types (`RustGameSnapshot`, `GameIntent`, `DispatchResult`) live here.
 - `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts`/`tilePath.ts` (read-only draft helpers), `uiState.ts` (`UiState` + factory).
 - `domain/catalog/` — read-only TypeScript catalogs shared by UI and render code.
 - `render/` — imperative canvas drawing. `canvas.ts` owns board sizing, tile↔pixel mapping (`tileSize = 32`), and the render pass; it composes per-concern renderers (map/buildings/transit/citizens/overlays). The runtime creates the real `<canvas>` and attaches it to `GameCanvas.svelte`'s host element.
-- `components/` — `Topbar.svelte`, `ControlTower.svelte` (tools/overlays/brief), `GameCanvas.svelte`. `App.svelte` composes them and surfaces shell errors.
+- `components/` — `Topbar.svelte` (stats), `GameCanvas.svelte`, and the bottom HUD: `hud/BottomHud.svelte` (slim always-docked bar) + `hud/HudDrawer.svelte` opening one of `hud/panels/*` (Build · Routes · Manage · Data · Brief, plus contextual Inspect). `App.svelte` composes them and surfaces shell errors. (The old monolithic `ControlTower.svelte` was split into these.)
 
 **Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
 
