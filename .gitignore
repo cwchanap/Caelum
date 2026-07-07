@@ -5,6 +5,7 @@ target/
 test-results/
 playwright-report/
 .worktrees/
+.superpowers/
 .env
 .env.*
 .claude/settings.local.json
