@@ -1,134 +1,102 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import BuildPanel from "../../src/components/hud/panels/BuildPanel.svelte";
+import type { BuildCategoryId } from "../../src/domain/catalog/buildMenu";
 
-function renderPanel(onSetTool = vi.fn()) {
-  render(BuildPanel, {
-    props: {
-      activeTool: "inspect" as const,
-      selectedArea: null,
-      selectedBuilding: null,
-      buildingRotation: 0 as const,
-      roadPreset: "twoWay" as const,
-      onSetTool,
-      onSetArea: vi.fn(),
-      onSetBuilding: vi.fn(),
-      onRotateBuilding: vi.fn(),
-      onSetRoadPreset: vi.fn(),
-    },
-  });
-  return onSetTool;
+type Overrides = Partial<{
+  buildCategory: BuildCategoryId | null;
+  activeTool: "inspect" | "road" | "track";
+  selectedBuilding: string | null;
+  roadPreset: "twoWay" | "oneWay" | "dualBidirectional";
+}>;
+
+function renderPanel(overrides: Overrides = {}) {
+  const props = {
+    buildCategory: null as BuildCategoryId | null,
+    activeTool: "inspect" as const,
+    selectedBuilding: null,
+    roadPreset: "twoWay" as const,
+    buildingRotation: 0 as const,
+    onSetBuildCategory: vi.fn(),
+    onSelectItem: vi.fn(),
+    onRotateBuilding: vi.fn(),
+    ...overrides,
+  };
+  render(BuildPanel, { props });
+  return props;
 }
 
-describe("BuildPanel road presets", () => {
-  it("renders the three road presets and reports selection", async () => {
-    const onSetRoadPreset = vi.fn();
-    render(BuildPanel, {
-      props: {
-        activeTool: "road" as const,
-        selectedArea: null,
-        selectedBuilding: null,
-        buildingRotation: 0 as const,
-        roadPreset: "twoWay" as const,
-        onSetTool: vi.fn(),
-        onSetArea: vi.fn(),
-        onSetBuilding: vi.fn(),
-        onRotateBuilding: vi.fn(),
-        onSetRoadPreset,
-      },
-    });
-    expect(screen.getByRole("button", { name: "1-Lane" })).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "1-Lane One-Way" }),
-    ).toBeVisible();
-    expect(screen.getByRole("button", { name: "2-Lane" })).toBeVisible();
+describe("BuildPanel root view", () => {
+  it("lists the ten categories and drills in on click", async () => {
+    const props = renderPanel();
+    for (const label of [
+      "Road", "Rail", "Bus", "Metro",
+      "Residential", "Commercial", "Industrial", "Office", "Civic", "Park",
+    ]) {
+      expect(screen.getByRole("button", { name: label })).toBeVisible();
+    }
+    await fireEvent.click(screen.getByRole("button", { name: "Bus" }));
+    expect(props.onSetBuildCategory).toHaveBeenCalledWith("bus");
+  });
 
-    await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
-    expect(onSetRoadPreset).toHaveBeenCalledWith("dualBidirectional");
+  it("disables Rotate when no building is selected", () => {
+    renderPanel();
+    expect(
+      screen.getByRole("button", { name: /Rotate building/i }),
+    ).toBeDisabled();
   });
 });
 
-describe("BuildPanel area tools", () => {
-  it("renders area buttons and reports selection", async () => {
-    const onSetArea = vi.fn();
-    render(BuildPanel, {
-      props: {
-        activeTool: "inspect" as const,
-        selectedArea: null,
-        selectedBuilding: null,
-        buildingRotation: 0 as const,
-        roadPreset: "twoWay" as const,
-        onSetTool: vi.fn(),
-        onSetArea,
-        onSetBuilding: vi.fn(),
-        onRotateBuilding: vi.fn(),
-        onSetRoadPreset: vi.fn(),
-      },
-    });
-
-    await fireEvent.click(screen.getByRole("button", { name: "Residential" }));
-
-    expect(screen.getByRole("button", { name: "Commercial" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Industrial" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Office" })).toBeVisible();
-    expect(onSetArea).toHaveBeenCalledWith("residential");
+describe("BuildPanel detail view", () => {
+  it("shows the category's items with a back control", async () => {
+    const props = renderPanel({ buildCategory: "bus" });
+    expect(screen.getByRole("button", { name: "Bus Stop" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Bus Terminal" })).toBeVisible();
+    await fireEvent.click(screen.getByRole("button", { name: /back/i }));
+    expect(props.onSetBuildCategory).toHaveBeenCalledWith(null);
   });
 
-  it("marks the selected area active", () => {
-    render(BuildPanel, {
-      props: {
-        activeTool: "area" as const,
-        selectedArea: "office" as const,
-        selectedBuilding: null,
-        buildingRotation: 0 as const,
-        roadPreset: "twoWay" as const,
-        onSetTool: vi.fn(),
-        onSetArea: vi.fn(),
-        onSetBuilding: vi.fn(),
-        onRotateBuilding: vi.fn(),
-        onSetRoadPreset: vi.fn(),
-      },
+  it("dispatches a building action for a building item", async () => {
+    const props = renderPanel({ buildCategory: "residential" });
+    await fireEvent.click(screen.getByRole("button", { name: "Small House" }));
+    expect(props.onSelectItem).toHaveBeenCalledWith({
+      kind: "building",
+      building: "smallHouse",
     });
+  });
 
-    expect(screen.getByRole("button", { name: "Office" })).toHaveAttribute(
+  it("dispatches a road action carrying the preset", async () => {
+    const props = renderPanel({ buildCategory: "road" });
+    await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
+    expect(props.onSelectItem).toHaveBeenCalledWith({
+      kind: "road",
+      roadPreset: "dualBidirectional",
+    });
+  });
+
+  it("dispatches a track action", async () => {
+    const props = renderPanel({ buildCategory: "rail" });
+    await fireEvent.click(screen.getByRole("button", { name: "Track" }));
+    expect(props.onSelectItem).toHaveBeenCalledWith({ kind: "track" });
+  });
+
+  it("marks the selected building active and enables Rotate", () => {
+    renderPanel({ buildCategory: "residential", selectedBuilding: "smallHouse" });
+    expect(screen.getByRole("button", { name: "Small House" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-  });
-});
-
-describe("BuildPanel network tools", () => {
-  it("renders Road and Track buttons", () => {
-    renderPanel();
-    expect(screen.getByRole("button", { name: "Road" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Track" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Rotate building/i })).toBeEnabled();
   });
 
-  it("activates the road and track tools on click", async () => {
-    const onSetTool = renderPanel();
-    await fireEvent.click(screen.getByRole("button", { name: "Road" }));
-    expect(onSetTool).toHaveBeenCalledWith("road");
-    await fireEvent.click(screen.getByRole("button", { name: "Track" }));
-    expect(onSetTool).toHaveBeenLastCalledWith("track");
-  });
-});
-
-describe("BuildPanel building catalog", () => {
-  it("exposes the destination building catalog entries", () => {
-    renderPanel();
-
-    [
-      "Supermarket",
-      "Cinema",
-      "Factory",
-      "Warehouse",
-      "Office Tower",
-      "Business Park",
-      "Clinic",
-      "School",
-      "Park Plaza",
-    ].forEach((label) => {
-      expect(screen.getByRole("button", { name: label })).toBeVisible();
+  it("marks the active road preset when the road tool is armed", () => {
+    renderPanel({
+      buildCategory: "road",
+      activeTool: "road",
+      roadPreset: "oneWay",
     });
+    expect(
+      screen.getByRole("button", { name: "1-Lane One-Way" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });
