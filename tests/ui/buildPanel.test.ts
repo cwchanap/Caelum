@@ -2,11 +2,12 @@ import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import BuildPanel from "../../src/components/hud/panels/BuildPanel.svelte";
 import type { BuildCategoryId } from "../../src/domain/catalog/buildMenu";
+import type { BuildingType } from "../../src/domain/types";
 
 type Overrides = Partial<{
   buildCategory: BuildCategoryId | null;
   activeTool: "inspect" | "road" | "track";
-  selectedBuilding: string | null;
+  selectedBuilding: BuildingType | null;
   roadPreset: "twoWay" | "oneWay" | "dualBidirectional";
 }>;
 
