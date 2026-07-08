@@ -7,6 +7,7 @@ import type {
   RoadPreset,
   Tool,
 } from "../domain/types";
+import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
 
 export interface ShellTopbarState {
@@ -135,6 +136,8 @@ export interface RuntimeController {
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
   setArea: (area: AreaKind) => RuntimeSnapshot;
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
+  setBuildCategory: (category: BuildCategoryId | null) => RuntimeSnapshot;
+  armRoad: (preset: RoadPreset) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
   setDragCurrent: (point: Point | null) => RuntimeSnapshot;
   commitDrag: () => RuntimeCommandResult;
