@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
+import {
+  buildItem,
+  clickMapTile,
+  dragMapTiles,
+  openHudCategory,
+} from "./helpers";
 
 // Read the live Rust-derived transit state exposed on `window` in dev mode.
 // `src/main.ts` only assigns `window.__caelumRuntime` under
@@ -48,12 +53,10 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await expect(canvas).toBeVisible();
 
   // Lay a two-way road and place three bus stops beside it.
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await buildItem(page, "Road", "1-Lane");
   await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Bus Stop" }).click();
+  await buildItem(page, "Bus", "Bus Stop");
   await clickMapTile(canvas, { x: 3, y: 5 });
   await clickMapTile(canvas, { x: 7, y: 5 });
   await clickMapTile(canvas, { x: 11, y: 5 });
@@ -96,16 +99,13 @@ test("create a metro line on laid track", async ({ page }) => {
   await expect(canvas).toBeVisible();
 
   // Lay a 5-tile track run on empty ground.
-  await openHudCategory(page, "build");
-  await page.locator("[data-tool='track']").click();
+  await buildItem(page, "Rail", "Track");
   for (let x = 8; x <= 12; x += 1) {
     await clickMapTile(canvas, { x, y: 2 });
   }
 
   // Stations on the track ends (Metro Station building requires track).
-  // The track tool auto-hides the build drawer; reopen it to reach buildings.
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Metro Station" }).click();
+  await buildItem(page, "Metro", "Metro Station");
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
 
@@ -134,12 +134,10 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await expect(canvas).toBeVisible();
 
   // Road + three bus stops beside it.
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await buildItem(page, "Road", "1-Lane");
   await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Bus Stop" }).click();
+  await buildItem(page, "Bus", "Bus Stop");
   await clickMapTile(canvas, { x: 3, y: 5 });
   await clickMapTile(canvas, { x: 7, y: 5 });
   await clickMapTile(canvas, { x: 11, y: 5 });

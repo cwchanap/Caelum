@@ -10,6 +10,20 @@ export async function openHudCategory(
   await page.getByTestId(`hud-cat-${category}`).click();
 }
 
+/**
+ * Open the Build drawer, drill into a category, then select an item —
+ * mirroring the category → item drill-down (BuildPanel.svelte).
+ */
+export async function buildItem(
+  page: Page,
+  category: string,
+  item: string,
+): Promise<void> {
+  await openHudCategory(page, "build");
+  await page.getByRole("button", { name: category, exact: true }).click();
+  await page.getByRole("button", { name: item, exact: true }).click();
+}
+
 export interface AppServer {
   server: ViteDevServer;
   url: string;
