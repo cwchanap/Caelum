@@ -41,6 +41,9 @@ export interface ShellHudState {
   activeCategory: HudCategory | null;
   activeToolChip: string;
   canCancel: boolean;
+  buildCategory: BuildCategoryId | null;
+  inspectToolActive: boolean;
+  removeToolActive: boolean;
   badges: ShellHudBadges;
 }
 
