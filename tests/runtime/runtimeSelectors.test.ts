@@ -412,6 +412,13 @@ describe("selectShellState build HUD fields", () => {
         selectedBuilding: "smallHouse",
       }).hud.inspectToolActive,
     ).toBe(false);
+    expect(
+      selectShellState(base, {
+        ...createUiState(),
+        activeTool: "inspect",
+        selectedArea: "residential",
+      }).hud.inspectToolActive,
+    ).toBe(false);
   });
 
   it("marks remove active when the remove tool is selected", () => {
