@@ -91,6 +91,7 @@ function createRuntimeHarness(
         selectedNodeKind: null,
         selectedBuilding: null,
         selectedArea: null,
+        buildCategory: null,
         buildingRotation: 0,
         draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
         draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
@@ -110,6 +111,7 @@ function createRuntimeHarness(
         selectedNodeKind: null,
         selectedBuilding: building,
         selectedArea: null,
+        buildCategory: null,
         buildingRotation: 0,
         draftStopIds: [],
         draftStationIds: [],
@@ -129,6 +131,7 @@ function createRuntimeHarness(
         selectedNodeKind: null,
         selectedBuilding: null,
         selectedArea: area,
+        buildCategory: null,
         buildingRotation: 0,
         draftStopIds: [],
         draftStationIds: [],
@@ -142,6 +145,22 @@ function createRuntimeHarness(
     }),
     setRoadPreset: vi.fn((preset: RoadPreset) => {
       ui = { ...ui, roadPreset: preset };
+      return publish();
+    }),
+    setBuildCategory: vi.fn((category) => {
+      ui = { ...ui, buildCategory: category };
+      return publish();
+    }),
+    armRoad: vi.fn((preset: RoadPreset) => {
+      ui = {
+        ...ui,
+        activeTool: "road",
+        selectedBuilding: null,
+        selectedArea: null,
+        buildCategory: null,
+        roadPreset: preset,
+        activeHudCategory: null,
+      };
       return publish();
     }),
     startDrag: vi.fn((point: Point) => {

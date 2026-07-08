@@ -1,4 +1,5 @@
 import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
+import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import { COSTS } from "../domain/catalog/transit";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
@@ -37,6 +38,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: null,
+    buildCategory: null,
     buildingRotation: 0 as const,
     draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
     draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
@@ -58,6 +60,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: area,
+    buildCategory: null,
     buildingRotation: 0 as const,
     draftStopIds: [],
     draftStationIds: [],
@@ -81,6 +84,7 @@ function nextBuildingUiState(
     selectedNodeKind: null,
     selectedBuilding,
     selectedArea: null,
+    buildCategory: null,
     buildingRotation: 0 as const,
     draftStopIds: [],
     draftStationIds: [],
@@ -581,6 +585,21 @@ export async function createGameRuntime({
         state,
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
+    },
+    setBuildCategory(category: BuildCategoryId | null) {
+      return commit(
+        state,
+        ui.buildCategory === category ? ui : { ...ui, buildCategory: category },
+      );
+    },
+    armRoad(preset) {
+      // Single commit: switch to the road tool (which clears building/area and
+      // closes the drawer via nextToolUiState) and set the preset together, so
+      // one click fully arms the tool with no intermediate render.
+      return commit(state, {
+        ...nextToolUiState("road", ui),
+        roadPreset: preset,
+      });
     },
     startDrag(point) {
       // Only drag tools open a gesture; capture the tool so the gesture stays

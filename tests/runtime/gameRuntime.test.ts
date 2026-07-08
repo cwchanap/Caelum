@@ -951,6 +951,43 @@ describe("runtime road preset", () => {
   });
 });
 
+describe("build category navigation", () => {
+  it("setBuildCategory changes buildCategory without closing the drawer", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setHudCategory("build");
+    const snap = runtime.setBuildCategory("bus");
+    expect(snap.ui.buildCategory).toBe("bus");
+    expect(snap.ui.activeHudCategory).toBe("build");
+  });
+
+  it("setBuildCategory(null) returns to the category root", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setBuildCategory("bus");
+    expect(runtime.setBuildCategory(null).ui.buildCategory).toBeNull();
+  });
+
+  it("selecting a tool/area/building resets buildCategory to null", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setBuildCategory("residential");
+    expect(runtime.setBuilding("smallHouse").ui.buildCategory).toBeNull();
+    runtime.setBuildCategory("road");
+    expect(runtime.setTool("track").ui.buildCategory).toBeNull();
+    runtime.setBuildCategory("residential");
+    expect(runtime.setArea("residential").ui.buildCategory).toBeNull();
+  });
+
+  it("armRoad selects the road tool with the given preset and closes the drawer", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setHudCategory("build");
+    const snap = runtime.armRoad("dualBidirectional");
+    expect(snap.ui.activeTool).toBe("road");
+    expect(snap.ui.roadPreset).toBe("dualBidirectional");
+    expect(snap.ui.selectedBuilding).toBeNull();
+    expect(snap.ui.activeHudCategory).toBeNull();
+    expect(snap.ui.buildCategory).toBeNull();
+  });
+});
+
 describe("route creation and management", () => {
   function routeMap(): GameMap {
     return [
