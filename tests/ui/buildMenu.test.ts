@@ -6,14 +6,24 @@ import type { BuildingType } from "../../src/domain/types";
 describe("BUILD_MENU", () => {
   it("orders the ten categories as specified", () => {
     expect(BUILD_MENU.map((c) => c.id)).toEqual([
-      "road", "rail", "bus", "metro",
-      "residential", "commercial", "industrial", "office", "civic", "park",
+      "road",
+      "rail",
+      "bus",
+      "metro",
+      "residential",
+      "commercial",
+      "industrial",
+      "office",
+      "civic",
+      "park",
     ]);
   });
 
   it("covers every building in BUILDING_CATALOG exactly once", () => {
     const placed = BUILD_MENU.flatMap((c) =>
-      c.items.flatMap((i) => (i.action.kind === "building" ? [i.action.building] : [])),
+      c.items.flatMap((i) =>
+        i.action.kind === "building" ? [i.action.building] : [],
+      ),
     );
     const catalogTypes = Object.keys(BUILDING_CATALOG) as BuildingType[];
     expect([...placed].sort()).toEqual([...catalogTypes].sort());
@@ -31,9 +41,11 @@ describe("BUILD_MENU", () => {
 
   it("maps the three road presets under the road category", () => {
     const road = BUILD_MENU.find((c) => c.id === "road");
-    expect(road?.items.map((i) => (i.action.kind === "road" ? i.action.roadPreset : null))).toEqual([
-      "twoWay", "oneWay", "dualBidirectional",
-    ]);
+    expect(
+      road?.items.map((i) =>
+        i.action.kind === "road" ? i.action.roadPreset : null,
+      ),
+    ).toEqual(["twoWay", "oneWay", "dualBidirectional"]);
   });
 
   it("puts a single track item under rail", () => {

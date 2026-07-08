@@ -30,8 +30,16 @@ describe("BuildPanel root view", () => {
   it("lists the ten categories and drills in on click", async () => {
     const props = renderPanel();
     for (const label of [
-      "Road", "Rail", "Bus", "Metro",
-      "Residential", "Commercial", "Industrial", "Office", "Civic", "Park",
+      "Road",
+      "Rail",
+      "Bus",
+      "Metro",
+      "Residential",
+      "Commercial",
+      "Industrial",
+      "Office",
+      "Civic",
+      "Park",
     ]) {
       expect(screen.getByRole("button", { name: label })).toBeVisible();
     }
@@ -81,12 +89,17 @@ describe("BuildPanel detail view", () => {
   });
 
   it("marks the selected building active and enables Rotate", () => {
-    renderPanel({ buildCategory: "residential", selectedBuilding: "smallHouse" });
+    renderPanel({
+      buildCategory: "residential",
+      selectedBuilding: "smallHouse",
+    });
     expect(screen.getByRole("button", { name: "Small House" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: /Rotate building/i })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /Rotate building/i }),
+    ).toBeEnabled();
   });
 
   it("marks the active road preset when the road tool is armed", () => {

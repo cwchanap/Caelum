@@ -11,7 +11,10 @@
     RuntimeSnapshot,
   } from "./runtime/types";
   import type { HudCategory } from "./ui/uiState";
-  import type { BuildCategoryId, BuildItemAction } from "./domain/catalog/buildMenu";
+  import type {
+    BuildCategoryId,
+    BuildItemAction,
+  } from "./domain/catalog/buildMenu";
 
   interface Props {
     runtime: RuntimeController | null;
