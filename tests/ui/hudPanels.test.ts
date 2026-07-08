@@ -50,15 +50,16 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     selectedBuilding: null,
     buildingRotation: 0 as const,
     roadPreset: "twoWay" as const,
+    buildCategory: null,
     inspector: null,
     routeDraft: null,
     routes: [] as ShellRouteListState,
     onCloseDrawer: vi.fn(),
     onSetTool: vi.fn(),
     onSetArea: vi.fn(),
-    onSetBuilding: vi.fn(),
     onRotateBuilding: vi.fn(),
-    onSetRoadPreset: vi.fn(),
+    onSetBuildCategory: vi.fn(),
+    onSelectBuildItem: vi.fn(),
     onSetOverlay: vi.fn(),
     onAssignRouteToPlatform: vi.fn(),
     onRemoveDraftStop: vi.fn(),
@@ -74,13 +75,33 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("HudDrawer panel routing", () => {
-  it("renders the build panel and wires set building", async () => {
-    const onSetBuilding = vi.fn();
-    render(HudDrawer, { props: drawerProps({ onSetBuilding }) });
+  it("renders the build panel and selects a building within a category", async () => {
+    const onSelectBuildItem = vi.fn();
+    render(HudDrawer, {
+      props: drawerProps({ buildCategory: "residential", onSelectBuildItem }),
+    });
 
     expect(screen.getByTestId("panel-build")).toBeVisible();
     await fireEvent.click(screen.getByRole("button", { name: "Small House" }));
-    expect(onSetBuilding).toHaveBeenCalledWith("smallHouse");
+    expect(onSelectBuildItem).toHaveBeenCalledWith({
+      kind: "building",
+      building: "smallHouse",
+    });
+  });
+
+  it("routes the area category to the AreaPanel", () => {
+    render(HudDrawer, { props: drawerProps({ category: "area" }) });
+    expect(screen.getByTestId("panel-area")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Residential" })).toBeVisible();
+  });
+
+  it("shows Build categories then drills in", async () => {
+    const onSetBuildCategory = vi.fn();
+    render(HudDrawer, {
+      props: drawerProps({ category: "build", onSetBuildCategory }),
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Bus" }));
+    expect(onSetBuildCategory).toHaveBeenCalledWith("bus");
   });
 
   it("renders the data panel toggles", async () => {

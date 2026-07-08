@@ -14,6 +14,11 @@
     ShellRouteListState,
   } from "../../runtime/types";
   import type { HudCategory } from "../../ui/uiState";
+  import type {
+    BuildCategoryId,
+    BuildItemAction,
+  } from "../../domain/catalog/buildMenu";
+  import AreaPanel from "./panels/AreaPanel.svelte";
   import BuildPanel from "./panels/BuildPanel.svelte";
   import RoutesPanel from "./panels/RoutesPanel.svelte";
   import ManagePanel from "./panels/ManagePanel.svelte";
@@ -30,15 +35,16 @@
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
     roadPreset: RoadPreset;
+    buildCategory: BuildCategoryId | null;
     inspector: ShellInspectorState | null;
     routeDraft: ShellRouteDraftState | null;
     routes: ShellRouteListState;
     onCloseDrawer: () => void;
     onSetTool: (tool: Tool) => void;
     onSetArea: (area: AreaKind) => void;
-    onSetBuilding: (building: BuildingType) => void;
     onRotateBuilding: () => void;
-    onSetRoadPreset: (preset: RoadPreset) => void;
+    onSetBuildCategory: (id: BuildCategoryId | null) => void;
+    onSelectBuildItem: (action: BuildItemAction) => void;
     onSetOverlay: (overlay: Overlay | null) => void;
     onAssignRouteToPlatform: (
       nodeId: string,
@@ -59,6 +65,7 @@
 
   const titles: Record<HudCategory, string> = {
     build: "Build",
+    area: "Area",
     routes: "Routes",
     manage: "Manage",
     data: "Data",
@@ -95,17 +102,17 @@
   <div class="hud-drawer-body">
     {#if p.category === "build"}
       <BuildPanel
+        buildCategory={p.buildCategory}
         activeTool={p.activeTool}
-        selectedArea={p.selectedArea}
         selectedBuilding={p.selectedBuilding}
-        buildingRotation={p.buildingRotation}
         roadPreset={p.roadPreset}
-        onSetTool={p.onSetTool}
-        onSetArea={p.onSetArea}
-        onSetBuilding={p.onSetBuilding}
+        buildingRotation={p.buildingRotation}
+        onSetBuildCategory={p.onSetBuildCategory}
+        onSelectItem={p.onSelectBuildItem}
         onRotateBuilding={p.onRotateBuilding}
-        onSetRoadPreset={p.onSetRoadPreset}
       />
+    {:else if p.category === "area"}
+      <AreaPanel selectedArea={p.selectedArea} onSetArea={p.onSetArea} />
     {:else if p.category === "routes"}
       <RoutesPanel
         activeTool={p.activeTool}
