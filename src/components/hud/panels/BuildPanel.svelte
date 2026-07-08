@@ -1,80 +1,57 @@
 <script lang="ts">
   import type {
-    AreaKind,
     BuildingRotation,
     BuildingType,
     RoadPreset,
     Tool,
   } from "../../../domain/types";
-  import { AREA_KINDS, AREA_LABELS } from "../../../domain/catalog/areas";
-  import { BUILDING_CATALOG } from "../../../domain/catalog/buildings";
-
-  type GlobalTool = Extract<Tool, "inspect" | "remove">;
-  type NetworkTool = Extract<Tool, "road" | "track">;
+  import type {
+    BuildCategoryId,
+    BuildItemAction,
+  } from "../../../domain/catalog/buildMenu";
+  import { BUILD_MENU, findBuildCategory } from "../../../domain/catalog/buildMenu";
 
   interface Props {
+    buildCategory: BuildCategoryId | null;
     activeTool: Tool;
-    selectedArea: AreaKind | null;
     selectedBuilding: BuildingType | null;
-    buildingRotation: BuildingRotation;
     roadPreset: RoadPreset;
-    onSetTool: (tool: Tool) => void;
-    onSetArea: (area: AreaKind) => void;
-    onSetBuilding: (building: BuildingType) => void;
+    buildingRotation: BuildingRotation;
+    onSetBuildCategory: (id: BuildCategoryId | null) => void;
+    onSelectItem: (action: BuildItemAction) => void;
     onRotateBuilding: () => void;
-    onSetRoadPreset: (preset: RoadPreset) => void;
   }
 
   let {
+    buildCategory,
     activeTool,
-    selectedArea,
     selectedBuilding,
-    buildingRotation,
     roadPreset,
-    onSetTool,
-    onSetArea,
-    onSetBuilding,
+    buildingRotation,
+    onSetBuildCategory,
+    onSelectItem,
     onRotateBuilding,
-    onSetRoadPreset,
   }: Props = $props();
 
-  const globalTools: Array<{ id: GlobalTool; label: string }> = [
-    { id: "inspect", label: "Inspect" },
-    { id: "remove", label: "Remove" },
-  ];
+  const activeCategory = $derived(findBuildCategory(buildCategory));
 
-  const networkTools: Array<{ id: NetworkTool; label: string }> = [
-    { id: "road", label: "Road" },
-    { id: "track", label: "Track" },
-  ];
+  function isItemActive(action: BuildItemAction): boolean {
+    if (action.kind === "building") {
+      return selectedBuilding === action.building;
+    }
+    if (action.kind === "road") {
+      return (
+        selectedBuilding === null &&
+        activeTool === "road" &&
+        roadPreset === action.roadPreset
+      );
+    }
+    return selectedBuilding === null && activeTool === "track";
+  }
 
-  const roadPresets: Array<{ id: RoadPreset; label: string }> = [
-    { id: "twoWay", label: "1-Lane" },
-    { id: "oneWay", label: "1-Lane One-Way" },
-    { id: "dualBidirectional", label: "2-Lane" },
-  ];
-
-  const buildToolIds: BuildingType[] = [
-    "busStop",
-    "busTerminal",
-    "metroStation",
-    "smallHouse",
-    "largeHouse",
-    "supermarket",
-    "cinema",
-    "factory",
-    "warehouse",
-    "officeTower",
-    "businessPark",
-    "clinic",
-    "school",
-    "parkPlaza",
-  ];
-
-  const buildTools = buildToolIds.map((id) => ({
-    id,
-    label: BUILDING_CATALOG[id].label,
-  }));
+  function itemBuilding(action: BuildItemAction): BuildingType | undefined {
+    return action.kind === "building" ? action.building : undefined;
+  }
 
   function pad2(value: number): string {
     return value.toString().padStart(2, "0");
@@ -82,105 +59,53 @@
 </script>
 
 <div class="hud-panel" data-testid="panel-build">
-  <section class="panel-section">
-    <h3 class="section-head"><span class="num">01</span> Global</h3>
-    <div class="toolbar toolbar--compact" aria-label="Global tools">
-      {#each globalTools as tool, index (tool.id)}
-        <button
-          type="button"
-          data-tool={tool.id}
-          aria-pressed={selectedArea === null &&
-            selectedBuilding === null &&
-            activeTool === tool.id}
-          aria-label={tool.label}
-          class:active={selectedArea === null &&
-            selectedBuilding === null &&
-            activeTool === tool.id}
-          onclick={() => onSetTool(tool.id)}
-        >
-          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
-          <span class="tool-label" aria-hidden="true">{tool.label}</span>
-        </button>
-      {/each}
-    </div>
-  </section>
-
-  <section class="panel-section">
-    <h3 class="section-head"><span class="num">02</span> Areas</h3>
-    <div class="toolbar toolbar--compact" aria-label="Area tools">
-      {#each AREA_KINDS as area, index (area)}
-        <button
-          type="button"
-          data-area={area}
-          aria-pressed={selectedArea === area}
-          aria-label={AREA_LABELS[area]}
-          class:active={selectedArea === area}
-          onclick={() => onSetArea(area)}
-        >
-          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
-          <span class="tool-label" aria-hidden="true">{AREA_LABELS[area]}</span>
-        </button>
-      {/each}
-    </div>
-  </section>
-
-  <section class="panel-section">
-    <h3 class="section-head"><span class="num">03</span> Network</h3>
-    <div class="toolbar toolbar--compact" aria-label="Network tools">
-      {#each networkTools as tool, index (tool.id)}
-        <button
-          type="button"
-          data-tool={tool.id}
-          aria-pressed={selectedArea === null &&
-            selectedBuilding === null &&
-            activeTool === tool.id}
-          aria-label={tool.label}
-          class:active={selectedArea === null &&
-            selectedBuilding === null &&
-            activeTool === tool.id}
-          onclick={() => onSetTool(tool.id)}
-        >
-          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
-          <span class="tool-label" aria-hidden="true">{tool.label}</span>
-        </button>
-      {/each}
-    </div>
-    {#if activeTool === "road"}
-      <div class="toolbar toolbar--compact" aria-label="Road presets">
-        {#each roadPresets as preset, index (preset.id)}
+  <section class="panel-section build-section">
+    {#if activeCategory === null}
+      <h3 class="section-head"><span class="num">01</span> Build</h3>
+      <div class="toolbar" aria-label="Build categories">
+        {#each BUILD_MENU as category, index (category.id)}
           <button
             type="button"
-            data-road-preset={preset.id}
-            aria-pressed={roadPreset === preset.id}
-            aria-label={preset.label}
-            class:active={roadPreset === preset.id}
-            onclick={() => onSetRoadPreset(preset.id)}
+            data-build-category={category.id}
+            aria-label={category.label}
+            onclick={() => onSetBuildCategory(category.id)}
           >
             <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
-            <span class="tool-label" aria-hidden="true">{preset.label}</span>
+            <span class="tool-label" aria-hidden="true">{category.label}</span>
+          </button>
+        {/each}
+      </div>
+    {:else}
+      <div class="build-nav">
+        <button
+          type="button"
+          class="build-back"
+          data-action="build-back"
+          aria-label="Back to build categories"
+          onclick={() => onSetBuildCategory(null)}
+        >
+          ‹ Back
+        </button>
+        <span class="build-crumb">Build › {activeCategory.label}</span>
+      </div>
+      <div class="toolbar" aria-label={`${activeCategory.label} items`}>
+        {#each activeCategory.items as item, index (item.id)}
+          <button
+            type="button"
+            data-build-item={item.id}
+            data-building={itemBuilding(item.action)}
+            aria-pressed={isItemActive(item.action)}
+            aria-label={item.label}
+            class:active={isItemActive(item.action)}
+            onclick={() => onSelectItem(item.action)}
+          >
+            <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
+            <span class="tool-label" aria-hidden="true">{item.label}</span>
           </button>
         {/each}
       </div>
     {/if}
-  </section>
 
-  <section class="panel-section build-section">
-    <h3 class="section-head"><span class="num">04</span> Build</h3>
-    <div class="toolbar" aria-label="Build tools">
-      {#each buildTools as building, index (building.id)}
-        <button
-          type="button"
-          data-building={building.id}
-          aria-pressed={selectedBuilding === building.id}
-          aria-label={building.label}
-          class:active={selectedBuilding === building.id}
-          onclick={() => onSetBuilding(building.id)}
-        >
-          <span class="tool-num" aria-hidden="true">{pad2(index + 1)}</span>
-          <span class="tool-label" aria-hidden="true">{building.label}</span>
-        </button>
-      {/each}
-    </div>
     <button
       type="button"
       class="rotate-control"

@@ -731,6 +731,36 @@ body {
   color: var(--ink-mid);
 }
 
+.build-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.build-back {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--cyan);
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.build-back:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.build-crumb {
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
 .rotate-value {
   display: inline-grid;
   place-items: center;
