@@ -4,19 +4,14 @@
   import HudDrawer from "./components/hud/HudDrawer.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
-  import type {
-    AreaKind,
-    BuildingType,
-    Overlay,
-    RoadPreset,
-    Tool,
-  } from "./domain/types";
+  import type { AreaKind, Overlay, Tool } from "./domain/types";
   import type {
     RuntimeCommandResult,
     RuntimeController,
     RuntimeSnapshot,
   } from "./runtime/types";
   import type { HudCategory } from "./ui/uiState";
+  import type { BuildCategoryId, BuildItemAction } from "./domain/catalog/buildMenu";
 
   interface Props {
     runtime: RuntimeController | null;
@@ -85,21 +80,28 @@
     }
   }
 
-  function handleSetBuilding(building: BuildingType): void {
-    if (runtime !== null) {
-      setSnapshot(runtime.setBuilding(building));
-    }
-  }
-
   function handleRotateBuilding(): void {
     if (runtime !== null) {
       setSnapshot(runtime.rotateBuilding());
     }
   }
 
-  function handleSetRoadPreset(preset: RoadPreset): void {
+  function handleSetBuildCategory(category: BuildCategoryId | null): void {
     if (runtime !== null) {
-      setSnapshot(runtime.setRoadPreset(preset));
+      setSnapshot(runtime.setBuildCategory(category));
+    }
+  }
+
+  function handleSelectBuildItem(action: BuildItemAction): void {
+    if (runtime === null) {
+      return;
+    }
+    if (action.kind === "road") {
+      setSnapshot(runtime.armRoad(action.roadPreset));
+    } else if (action.kind === "track") {
+      setSnapshot(runtime.setTool("track"));
+    } else {
+      setSnapshot(runtime.setBuilding(action.building));
     }
   }
 
@@ -346,15 +348,16 @@
         selectedBuilding={snapshot.ui.selectedBuilding}
         buildingRotation={snapshot.ui.buildingRotation}
         roadPreset={snapshot.ui.roadPreset}
+        buildCategory={snapshot.ui.buildCategory}
         inspector={snapshot.shell.inspector}
         routeDraft={snapshot.shell.routeDraft}
         routes={snapshot.shell.routes}
         onCloseDrawer={() => handleSetHudCategory(null)}
         onSetTool={handleSetTool}
         onSetArea={handleSetArea}
-        onSetBuilding={handleSetBuilding}
         onRotateBuilding={handleRotateBuilding}
-        onSetRoadPreset={handleSetRoadPreset}
+        onSetBuildCategory={handleSetBuildCategory}
+        onSelectBuildItem={handleSelectBuildItem}
         onSetOverlay={handleSetOverlay}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
         onRemoveDraftStop={handleRemoveDraftStop}
@@ -371,6 +374,7 @@
         hud={snapshot.shell.hud}
         onSetHudCategory={handleSetHudCategory}
         onCancel={() => setSnapshot(runtime.resetUi())}
+        onSetTool={handleSetTool}
       />
     {/if}
   </main>

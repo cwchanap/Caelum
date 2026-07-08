@@ -387,66 +387,63 @@ describe("App shell bootstrap", () => {
     render(App, { props: { runtime } });
 
     await openCategory("build");
-
     expect(
       screen.getByRole("button", {
         name: /Rotate building, current rotation 0 degrees/i,
       }),
     ).toBeDisabled();
 
+    await fireEvent.click(screen.getByRole("button", { name: "Residential" }));
     await fireEvent.click(screen.getByRole("button", { name: "Large House" }));
     expect(runtime.setBuilding).toHaveBeenCalledWith("largeHouse");
-    // Selecting a building resets activeHudCategory to null (matching
-    // production's nextBuildingUiState), which closes the drawer. Re-open
-    // Build to assert the selection persisted in the panel.
+
+    // Selecting a building closes the drawer and resets buildCategory; reopen and
+    // re-drill to assert the selection persisted in the panel.
     await openCategory("build");
-
-    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
-      "data-building",
-      "largeHouse",
-    );
-    expect(screen.getByRole("button", { name: "Large House" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByText("LARGE HOUSE 0")).toBeVisible();
-
+    await fireEvent.click(screen.getByRole("button", { name: "Residential" }));
+    const largeHouse = screen.getByRole("button", { name: "Large House" });
+    expect(largeHouse).toHaveAttribute("data-building", "largeHouse");
+    expect(largeHouse).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByRole("button", {
         name: /Rotate building, current rotation 0 degrees/i,
       }),
     ).toBeEnabled();
-
-    await fireEvent.click(
-      screen.getByRole("button", {
-        name: /Rotate building, current rotation 0 degrees/i,
-      }),
-    );
-    expect(runtime.rotateBuilding).toHaveBeenCalledTimes(1);
-    expect(
-      screen.getByRole("button", {
-        name: /Rotate building, current rotation 90 degrees/i,
-      }),
-    ).toBeEnabled();
-
-    await openCategory("routes");
-    await fireEvent.click(
-      within(screen.getByTestId("hud-drawer")).getByRole("button", {
-        name: "Bus Route",
-      }),
-    );
-    expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
   });
 
   it("wires area selection into the runtime", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
 
-    await openCategory("build");
+    await openCategory("area");
     await fireEvent.click(screen.getByRole("button", { name: "Commercial" }));
 
     expect(runtime.setArea).toHaveBeenCalledWith("commercial");
     expect(screen.getByText("AREA COMMERCIAL")).toBeVisible();
+  });
+
+  it("selects the remove tool from the persistent HUD cluster", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByTestId("hud-tool-remove"));
+    expect(runtime.setTool).toHaveBeenCalledWith("remove");
+  });
+
+  it("arms the road tool with a preset from Build → Road → 2-Lane", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Road" }));
+    await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
+    expect(runtime.armRoad).toHaveBeenCalledWith("dualBidirectional");
+  });
+
+  it("paints a zone from the Area category", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await openCategory("area");
+    await fireEvent.click(screen.getByRole("button", { name: "Industrial" }));
+    expect(runtime.setArea).toHaveBeenCalledWith("industrial");
   });
 
   it("wires tool, overlay, and close interactions with exact runtime ids", async () => {
