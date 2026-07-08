@@ -9,3 +9,10 @@ describe("createUiState road UX defaults", () => {
     expect(ui.selectedArea).toBeNull();
   });
 });
+
+describe("createUiState build menu defaults", () => {
+  it("defaults buildCategory to null", () => {
+    const ui = createUiState();
+    expect(ui.buildCategory).toBeNull();
+  });
+});

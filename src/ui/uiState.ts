@@ -7,10 +7,12 @@ import type {
   RoadPreset,
   Tool,
 } from "../domain/types";
+import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
   | "build"
+  | "area"
   | "routes"
   | "manage"
   | "data"
@@ -54,6 +56,8 @@ export interface UiState {
   selectedNodeKind: "stop" | "station" | null;
   selectedBuilding: BuildingType | null;
   selectedArea: AreaKind | null;
+  /** Open Build drill-down category, or null when showing the category root. */
+  buildCategory: BuildCategoryId | null;
   buildingRotation: BuildingRotation;
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
@@ -77,6 +81,7 @@ export function createUiState(): UiState {
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: null,
+    buildCategory: null,
     buildingRotation: 0,
     hoverTile: null,
     draftStopIds: [],
