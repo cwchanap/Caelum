@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
+import { buildItem, clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
   page,
@@ -24,33 +24,29 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
-  await openHudCategory(page, "build");
+  await openHudCategory(page, "area");
   await page.getByRole("button", { name: "Residential" }).click();
   await dragMapTiles(page, canvas, { x: 1, y: 1 }, { x: 3, y: 2 });
 
-  await openHudCategory(page, "build");
+  await openHudCategory(page, "area");
   await page.getByRole("button", { name: "Commercial" }).click();
   await dragMapTiles(page, canvas, { x: 5, y: 1 }, { x: 7, y: 3 });
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Supermarket" }).click();
+  await buildItem(page, "Commercial", "Supermarket");
   await clickMapTile(canvas, { x: 5, y: 1 });
   await expect(topbar.getByText("$112,000")).toBeVisible();
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Small House" }).click();
+  await buildItem(page, "Residential", "Small House");
   await clickMapTile(canvas, { x: 1, y: 1 });
 
   await expect(topbar.getByText("$108,000")).toBeVisible();
   await expect(populationReadout.getByText("4")).toBeVisible();
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Road", exact: true }).click();
+  await buildItem(page, "Road", "1-Lane");
   await dragMapTiles(page, canvas, { x: 1, y: 0 }, { x: 3, y: 0 });
   await expect(topbar.getByText("$107,700")).toBeVisible();
 
-  await openHudCategory(page, "build");
-  await page.getByRole("button", { name: "Bus Terminal" }).click();
+  await buildItem(page, "Bus", "Bus Terminal");
   await page.keyboard.press("r");
   await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
 
