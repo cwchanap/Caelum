@@ -1574,6 +1574,38 @@ button:focus-visible {
   cursor: default;
 }
 
+.hud-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.hud-tool {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.hud-tool:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.hud-tool.active {
+  color: var(--bg-deep);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
 /* Drawer docks above the slim bar (56px bar + 16px inset + 12px gap). */
 .hud-drawer {
   bottom: 84px;
