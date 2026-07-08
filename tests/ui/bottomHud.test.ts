@@ -8,6 +8,9 @@ function hud(overrides: Partial<ShellHudState> = {}): ShellHudState {
     activeCategory: "brief",
     activeToolChip: "INSPECT",
     canCancel: false,
+    buildCategory: null,
+    inspectToolActive: true,
+    removeToolActive: false,
     badges: {
       routeDraftActive: false,
       routeCount: 0,

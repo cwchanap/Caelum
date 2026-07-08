@@ -389,3 +389,37 @@ describe("ShellHudState", () => {
     expect(shell.hud.badges.routeCount).toBe(2);
   });
 });
+
+describe("selectShellState build HUD fields", () => {
+  it("exposes buildCategory from ui", () => {
+    const hud = selectShellState(createTestGameState(), {
+      ...createUiState(),
+      buildCategory: "bus",
+    }).hud;
+    expect(hud.buildCategory).toBe("bus");
+  });
+
+  it("marks inspect active only when inspect tool with no building/area", () => {
+    const base = createTestGameState();
+    expect(
+      selectShellState(base, { ...createUiState(), activeTool: "inspect" }).hud
+        .inspectToolActive,
+    ).toBe(true);
+    expect(
+      selectShellState(base, {
+        ...createUiState(),
+        activeTool: "inspect",
+        selectedBuilding: "smallHouse",
+      }).hud.inspectToolActive,
+    ).toBe(false);
+  });
+
+  it("marks remove active when the remove tool is selected", () => {
+    const hud = selectShellState(createTestGameState(), {
+      ...createUiState(),
+      activeTool: "remove",
+    }).hud;
+    expect(hud.removeToolActive).toBe(true);
+    expect(hud.inspectToolActive).toBe(false);
+  });
+});

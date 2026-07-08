@@ -240,6 +240,12 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
       ui.selectedArea !== null ||
       ui.activeOverlay !== null ||
       ui.selectedRouteId !== null,
+    buildCategory: ui.buildCategory,
+    inspectToolActive:
+      ui.activeTool === "inspect" &&
+      ui.selectedBuilding === null &&
+      ui.selectedArea === null,
+    removeToolActive: ui.activeTool === "remove",
     badges: {
       routeDraftActive: draftActive,
       routeCount: state.transit.routes.length + state.transit.metroLines.length,
