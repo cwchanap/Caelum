@@ -24,10 +24,15 @@ function hud(overrides: Partial<ShellHudState> = {}): ShellHudState {
 describe("BottomHud", () => {
   it("renders the five category buttons and the tool chip", () => {
     render(BottomHud, {
-      props: { hud: hud(), onSetHudCategory: vi.fn(), onCancel: vi.fn() },
+      props: {
+        hud: hud(),
+        onSetHudCategory: vi.fn(),
+        onCancel: vi.fn(),
+        onSetTool: vi.fn(),
+      },
     });
 
-    for (const id of ["build", "routes", "manage", "data", "brief"]) {
+    for (const id of ["build", "area", "routes", "manage", "data", "brief"]) {
       expect(screen.getByTestId(`hud-cat-${id}`)).toBeVisible();
     }
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
@@ -40,6 +45,7 @@ describe("BottomHud", () => {
         hud: hud({ activeCategory: "build" }),
         onSetHudCategory,
         onCancel: vi.fn(),
+        onSetTool: vi.fn(),
       },
     });
 
@@ -63,6 +69,7 @@ describe("BottomHud", () => {
         }),
         onSetHudCategory: vi.fn(),
         onCancel: vi.fn(),
+        onSetTool: vi.fn(),
       },
     });
 
@@ -77,7 +84,12 @@ describe("BottomHud", () => {
   it("disables cancel unless cancellable", async () => {
     const onCancel = vi.fn();
     const { rerender } = render(BottomHud, {
-      props: { hud: hud(), onSetHudCategory: vi.fn(), onCancel },
+      props: {
+        hud: hud(),
+        onSetHudCategory: vi.fn(),
+        onCancel,
+        onSetTool: vi.fn(),
+      },
     });
     expect(screen.getByTestId("hud-cancel")).toBeDisabled();
 
@@ -85,8 +97,33 @@ describe("BottomHud", () => {
       hud: hud({ canCancel: true }),
       onSetHudCategory: vi.fn(),
       onCancel,
+      onSetTool: vi.fn(),
     });
     await fireEvent.click(screen.getByTestId("hud-cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BottomHud persistent tools", () => {
+  it("renders Inspect/Remove toggles and fires onSetTool", async () => {
+    const onSetTool = vi.fn();
+    render(BottomHud, {
+      props: {
+        hud: hud({ inspectToolActive: true, removeToolActive: false }),
+        onSetHudCategory: vi.fn(),
+        onCancel: vi.fn(),
+        onSetTool,
+      },
+    });
+
+    const inspect = screen.getByTestId("hud-tool-inspect");
+    const remove = screen.getByTestId("hud-tool-remove");
+    expect(inspect).toHaveClass("active");
+    expect(remove).not.toHaveClass("active");
+
+    await fireEvent.click(remove);
+    expect(onSetTool).toHaveBeenCalledWith("remove");
+    await fireEvent.click(inspect);
+    expect(onSetTool).toHaveBeenLastCalledWith("inspect");
   });
 });

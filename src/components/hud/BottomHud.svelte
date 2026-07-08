@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Tool } from "../../domain/types";
   import type { ShellHudState } from "../../runtime/types";
   import type { HudCategory, PrimaryHudCategory } from "../../ui/uiState";
 
@@ -6,14 +7,16 @@
     hud: ShellHudState;
     onSetHudCategory: (category: HudCategory | null) => void;
     onCancel: () => void;
+    onSetTool: (tool: Tool) => void;
   }
 
-  let { hud, onSetHudCategory, onCancel }: Props = $props();
+  let { hud, onSetHudCategory, onCancel, onSetTool }: Props = $props();
 
   type CategoryButton = { id: PrimaryHudCategory; label: string };
 
   const categories: CategoryButton[] = [
     { id: "build", label: "Build" },
+    { id: "area", label: "Area" },
     { id: "routes", label: "Routes" },
     { id: "manage", label: "Manage" },
     { id: "data", label: "Data" },
@@ -70,6 +73,28 @@
   </div>
 
   <div class="hud-status">
+    <div class="hud-tools" aria-label="Global tools">
+      <button
+        type="button"
+        class="hud-tool"
+        class:active={hud.inspectToolActive}
+        data-testid="hud-tool-inspect"
+        aria-pressed={hud.inspectToolActive}
+        onclick={() => onSetTool("inspect")}
+      >
+        Inspect
+      </button>
+      <button
+        type="button"
+        class="hud-tool"
+        class:active={hud.removeToolActive}
+        data-testid="hud-tool-remove"
+        aria-pressed={hud.removeToolActive}
+        onclick={() => onSetTool("remove")}
+      >
+        Remove
+      </button>
+    </div>
     <span class="hud-tool-chip" data-testid="hud-tool-chip"
       >{hud.activeToolChip}</span
     >
