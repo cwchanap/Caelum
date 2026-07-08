@@ -9,7 +9,10 @@
     BuildCategoryId,
     BuildItemAction,
   } from "../../../domain/catalog/buildMenu";
-  import { BUILD_MENU, findBuildCategory } from "../../../domain/catalog/buildMenu";
+  import {
+    BUILD_MENU,
+    findBuildCategory,
+  } from "../../../domain/catalog/buildMenu";
 
   interface Props {
     buildCategory: BuildCategoryId | null;

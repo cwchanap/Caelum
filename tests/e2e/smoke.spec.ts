@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { buildItem, clickMapTile, dragMapTiles, openHudCategory } from "./helpers";
+import {
+  buildItem,
+  clickMapTile,
+  dragMapTiles,
+  openHudCategory,
+} from "./helpers";
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
   page,

@@ -8,7 +8,12 @@ describe("AreaPanel", () => {
     render(AreaPanel, { props: { selectedArea: null, onSetArea } });
 
     for (const label of [
-      "Residential", "Commercial", "Industrial", "Office", "Civic", "Park",
+      "Residential",
+      "Commercial",
+      "Industrial",
+      "Office",
+      "Civic",
+      "Park",
     ]) {
       expect(screen.getByRole("button", { name: label })).toBeVisible();
     }
@@ -18,7 +23,9 @@ describe("AreaPanel", () => {
   });
 
   it("marks the selected zone active", () => {
-    render(AreaPanel, { props: { selectedArea: "office", onSetArea: vi.fn() } });
+    render(AreaPanel, {
+      props: { selectedArea: "office", onSetArea: vi.fn() },
+    });
     expect(screen.getByRole("button", { name: "Office" })).toHaveAttribute(
       "aria-pressed",
       "true",
