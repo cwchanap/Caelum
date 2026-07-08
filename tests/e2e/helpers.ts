@@ -5,7 +5,14 @@ import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 
 export async function openHudCategory(
   page: Page,
-  category: "build" | "routes" | "manage" | "data" | "brief" | "inspect",
+  category:
+    | "build"
+    | "area"
+    | "routes"
+    | "manage"
+    | "data"
+    | "brief"
+    | "inspect",
 ): Promise<void> {
   await page.getByTestId(`hud-cat-${category}`).click();
 }
