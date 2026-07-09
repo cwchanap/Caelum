@@ -52,10 +52,6 @@
     }
     return selectedBuilding === null && activeTool === "track";
   }
-
-  function itemBuilding(action: BuildItemAction): BuildingType | undefined {
-    return action.kind === "building" ? action.building : undefined;
-  }
 </script>
 
 <div class="hud-panel" data-testid="panel-build">
@@ -93,7 +89,9 @@
           <button
             type="button"
             data-build-item={item.id}
-            data-building={itemBuilding(item.action)}
+            data-building={item.action.kind === "building"
+              ? item.action.building
+              : undefined}
             aria-pressed={isItemActive(item.action)}
             aria-label={item.label}
             class:active={isItemActive(item.action)}

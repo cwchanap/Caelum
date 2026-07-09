@@ -1487,7 +1487,7 @@ git commit -m "chore: verification pass for build menu restructure"
   - `buildCategory` state + `setBuildCategory` + reset on transitions → Tasks 1, 3.
   - Single-commit road arming → Task 3 (`armRoad`).
   - Testing (unit + e2e) → Tasks 1–10; verification → Task 11.
-- **Deviation from spec (documented):** the Rotate control is rendered at the panel bottom in **both** root and detail views (disabled when `selectedBuilding === null`), rather than only in the detail view. Rationale: selecting a building closes the drawer and resets `buildCategory`, so on reopen the panel shows the root — the control must be reachable there to rotate the still-selected building. Behavior matches the current always-present, conditionally-disabled Rotate.
+- **Spec-aligned: Rotate in both views:** the Rotate control is rendered at the panel bottom in **both** root and detail views (disabled when `selectedBuilding === null`), per spec lines 96–99. Rationale: selecting a building closes the drawer and resets `buildCategory`, so on reopen the panel shows the root — the control must be reachable there to rotate the still-selected building. Behavior matches the current always-present, conditionally-disabled Rotate.
 - **Type consistency:** `BuildItemAction` is the single shared shape across catalog (Task 2), BuildPanel `onSelectItem` (Task 6), HudDrawer `onSelectBuildItem` (Task 8), and App `handleSelectBuildItem` (Task 9). `setBuildCategory`/`armRoad` signatures match between `types.ts`, `createGameRuntime.ts`, and the appShell harness stub (Task 3).
 - **Placeholder scan:** no TBD/TODO; every code step shows full code.
 ```
