@@ -103,6 +103,17 @@ describe("BuildPanel detail view", () => {
     ).toBeEnabled();
   });
 
+  it("calls onRotateBuilding when the Rotate button is clicked", async () => {
+    const props = renderPanel({
+      buildCategory: "residential",
+      selectedBuilding: "smallHouse",
+    });
+    await fireEvent.click(
+      screen.getByRole("button", { name: /Rotate building/i }),
+    );
+    expect(props.onRotateBuilding).toHaveBeenCalledTimes(1);
+  });
+
   it("marks the active road preset when the road tool is armed", () => {
     renderPanel({
       buildCategory: "road",
