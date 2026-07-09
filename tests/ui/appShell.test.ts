@@ -158,6 +158,7 @@ function createRuntimeHarness(
         selectedBuilding: null,
         selectedArea: null,
         buildCategory: null,
+        buildingRotation: 0,
         roadPreset: preset,
         activeHudCategory: null,
       };

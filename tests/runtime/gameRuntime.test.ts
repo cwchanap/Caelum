@@ -976,6 +976,17 @@ describe("build category navigation", () => {
     expect(runtime.setArea("residential").ui.buildCategory).toBeNull();
   });
 
+  it("leaving the Build category via setHudCategory resets buildCategory to null", async () => {
+    const runtime = await createGameRuntime({ backend: backendSpy() });
+    runtime.setHudCategory("build");
+    runtime.setBuildCategory("bus");
+    expect(runtime.setHudCategory("area").ui.buildCategory).toBeNull();
+    // Returning to Build reopens at the root, not the Bus detail.
+    const snap = runtime.setHudCategory("build");
+    expect(snap.ui.buildCategory).toBeNull();
+    expect(snap.ui.activeHudCategory).toBe("build");
+  });
+
   it("armRoad selects the road tool with the given preset and closes the drawer", async () => {
     const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setHudCategory("build");
