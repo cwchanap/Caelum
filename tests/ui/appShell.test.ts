@@ -383,7 +383,7 @@ describe("App shell bootstrap", () => {
     expect(selectedSpeed).toHaveClass("active");
   });
 
-  it("wires Build and Route Planning menus separately", async () => {
+  it("wires the Build drill-down and persists the building selection", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
 
