@@ -94,8 +94,9 @@ Road is the only category whose leaf carries a preset. A Road leaf must set both
 the tool and the preset in one commit so a single click fully arms the tool.
 
 The **Rotate** control (currently at the bottom of the Build section) stays in the
-Build panel, shown in the detail view when the selected item is a rotatable
-building (i.e. `selectedBuilding !== null`).
+Build panel. It renders in **both the root and detail views** and is disabled when
+no building is selected (i.e. `selectedBuilding === null`); it is enabled once a
+rotatable building is the active selection.
 
 ### Area panel
 
@@ -118,7 +119,8 @@ export type BuildCategoryId =
 
 // A leaf's effect, expressed as a discriminated union the panel maps to setters.
 export type BuildItemAction =
-  | { kind: "tool"; tool: Extract<Tool, "road" | "track">; roadPreset?: RoadPreset }
+  | { kind: "road"; roadPreset: RoadPreset }
+  | { kind: "track" }
   | { kind: "building"; building: BuildingType };
 
 export interface BuildMenuItem { id: string; label: string; action: BuildItemAction }
@@ -174,7 +176,7 @@ change. No new badges for Area (it has no count/draft state).
 
 - **Rework** `src/components/hud/panels/BuildPanel.svelte` — replace the four
   stacked sections with the root/detail drill-down driven by `BUILD_MENU`. Props:
-  `buildCategory`, `selectedTool/selectedBuilding/roadPreset/buildingRotation`
+  `buildCategory`, `activeTool/selectedBuilding/roadPreset/buildingRotation`
   (for active-state highlighting), and callbacks `onSetBuildCategory`,
   `onSelectItem` (dispatches the leaf action), `onRotateBuilding`. Drops Global,
   Areas, and Network sections.
@@ -208,7 +210,8 @@ Unit / component (Vitest):
 - `tests/ui/buildPanel.test.ts` — root shows 10 categories; clicking a category
   calls `onSetBuildCategory`; detail shows that category's items + Back; Back
   returns to root; selecting a leaf dispatches the correct action (building vs
-  road+preset vs track); Rotate appears only for a selected building.
+  road+preset vs track); Rotate renders in both root and detail views and is
+  disabled when no building is selected.
 - New/updated tests for `AreaPanel.svelte` — 6 zones, `onSetArea` fires.
 - `tests/ui/bottomHud.test.ts` — Area chip present; persistent Inspect/Remove
   toggles render and reflect pressed state; toggling calls `setTool`.
