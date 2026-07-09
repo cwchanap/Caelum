@@ -707,12 +707,17 @@ export async function createGameRuntime({
       return enqueueDispatch({ type: "setSpeed", speed });
     },
     setHudCategory(category) {
-      return commit(
-        state,
-        category === ui.activeHudCategory
-          ? ui
-          : { ...ui, activeHudCategory: category },
-      );
+      if (category === ui.activeHudCategory) {
+        return commit(state, ui);
+      }
+      // Leaving the Build category resets the drill-down so the next time
+      // Build opens it shows the root (spec line 75-76). `buildCategory` is
+      // only meaningful while Build is the active category.
+      const nextUi =
+        category === "build"
+          ? { ...ui, activeHudCategory: category }
+          : { ...ui, activeHudCategory: category, buildCategory: null };
+      return commit(state, nextUi);
     },
     handleTileClick(point) {
       if (
