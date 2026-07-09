@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { BuildingType, Tool } from "../../../domain/types";
   import type { ShellRouteDraftState } from "../../../runtime/types";
+  import { pad2 } from "../../../format";
 
   type RouteTool = Extract<Tool, "busRoute" | "metroLine">;
 
@@ -28,10 +29,6 @@
     { id: "busRoute", label: "Bus Route" },
     { id: "metroLine", label: "Metro Line" },
   ];
-
-  function pad2(value: number): string {
-    return value.toString().padStart(2, "0");
-  }
 
   function formatCost(value: number): string {
     return `$${value.toLocaleString("en-US")}`;

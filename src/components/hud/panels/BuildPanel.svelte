@@ -13,6 +13,7 @@
     BUILD_MENU,
     findBuildCategory,
   } from "../../../domain/catalog/buildMenu";
+  import { pad2 } from "../../../format";
 
   interface Props {
     buildCategory: BuildCategoryId | null;
@@ -54,10 +55,6 @@
 
   function itemBuilding(action: BuildItemAction): BuildingType | undefined {
     return action.kind === "building" ? action.building : undefined;
-  }
-
-  function pad2(value: number): string {
-    return value.toString().padStart(2, "0");
   }
 </script>
 

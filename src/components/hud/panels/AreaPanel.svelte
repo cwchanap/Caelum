@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AreaKind } from "../../../domain/types";
   import { AREA_KINDS, AREA_LABELS } from "../../../domain/catalog/areas";
+  import { pad2 } from "../../../format";
 
   interface Props {
     selectedArea: AreaKind | null;
@@ -8,10 +9,6 @@
   }
 
   let { selectedArea, onSetArea }: Props = $props();
-
-  function pad2(value: number): string {
-    return value.toString().padStart(2, "0");
-  }
 </script>
 
 <div class="hud-panel" data-testid="panel-area">

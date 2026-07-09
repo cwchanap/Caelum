@@ -5,6 +5,7 @@ import { COSTS } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { closingLoopIsPathable } from "../ui/routeDraft";
+import { pad2 } from "../format";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
@@ -23,10 +24,6 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   lateness: "Lateness",
   growth: "Growth",
 };
-
-function pad2(value: number): string {
-  return value.toString().padStart(2, "0");
-}
 
 export function formatBudget(budget: number): string {
   return `$${budget.toLocaleString()}`;
