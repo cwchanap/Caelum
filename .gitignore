@@ -4,6 +4,7 @@ coverage/
 target/
 test-results/
 playwright-report/
+.playwright-mcp/
 .worktrees/
 .superpowers/
 .env

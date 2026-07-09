@@ -586,6 +586,9 @@ export async function createGameRuntime({
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
     },
+    // Pure UI mutation; callers (Build panel drill-down) only invoke this while
+    // the Build drawer is open. No guard here, so a direct controller call could
+    // leave a non-null buildCategory with Build inactive — unreachable from UI.
     setBuildCategory(category: BuildCategoryId | null) {
       return commit(
         state,
