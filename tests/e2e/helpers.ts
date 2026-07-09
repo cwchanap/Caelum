@@ -20,13 +20,25 @@ export async function openHudCategory(
 /**
  * Open the Build drawer, drill into a category, then select an item —
  * mirroring the category → item drill-down (BuildPanel.svelte).
+ *
+ * `hud-cat-build` is a toggle, so this helper must not click it when the
+ * Build drawer is already open (that would close it). It also returns to the
+ * Build root first if a previous call left it drilled into a sub-category,
+ * so the category buttons are always reachable regardless of prior state.
  */
 export async function buildItem(
   page: Page,
   category: string,
   item: string,
 ): Promise<void> {
-  await openHudCategory(page, "build");
+  const back = page.getByTestId("build-back");
+  if (await back.isVisible()) {
+    await back.click();
+  }
+  const buildCat = page.getByTestId("hud-cat-build");
+  if ((await buildCat.getAttribute("aria-pressed")) !== "true") {
+    await buildCat.click();
+  }
   await page.getByRole("button", { name: category, exact: true }).click();
   await page.getByRole("button", { name: item, exact: true }).click();
 }

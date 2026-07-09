@@ -22,7 +22,7 @@ function hud(overrides: Partial<ShellHudState> = {}): ShellHudState {
 }
 
 describe("BottomHud", () => {
-  it("renders the five category buttons and the tool chip", () => {
+  it("renders the six category buttons and the tool chip", () => {
     render(BottomHud, {
       props: {
         hud: hud(),
