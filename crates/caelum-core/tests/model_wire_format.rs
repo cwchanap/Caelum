@@ -957,4 +957,25 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
         road_value["authoredTiles"][0]["roadStructureId"],
         json!(null)
     );
+
+    engine.set_budget_for_test(99);
+    let rejected_road = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(4, 3) },
+        generation: 64,
+    });
+    let rejected_value = serde_json::to_value(rejected_road).unwrap();
+    assert_eq!(rejected_value["generation"], json!(64));
+    assert_eq!(rejected_value["cost"], json!(100));
+    assert_eq!(
+        rejected_value["rejection"],
+        json!({
+            "code": "insufficientBudget",
+            "context": {
+                "requiredBudget": 100,
+                "availableBudget": 99,
+                "affectedRouteIds": []
+            }
+        })
+    );
+    assert!(rejected_value.get("affordable").is_none());
 }

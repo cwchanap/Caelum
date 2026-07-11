@@ -62,7 +62,15 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
     preview_road_mutation(request: RoadMutationPreviewRequest) {
       return {
         generation: request.generation,
-        rejection: null,
+        cost: 100,
+        rejection: {
+          code: "insufficientBudget",
+          context: {
+            requiredBudget: 100,
+            availableBudget: 99,
+            affectedRouteIds: [],
+          },
+        },
       };
     }
   }
@@ -214,8 +222,17 @@ describe("createWasmBackend", () => {
       generation: 41,
       rejection: null,
     });
-    await expect(
-      backend.previewRoadMutation(roadRequest),
-    ).resolves.toMatchObject({ generation: 42, rejection: null });
+    await expect(backend.previewRoadMutation(roadRequest)).resolves.toEqual({
+      generation: 42,
+      cost: 100,
+      rejection: {
+        code: "insufficientBudget",
+        context: {
+          requiredBudget: 100,
+          availableBudget: 99,
+          affectedRouteIds: [],
+        },
+      },
+    });
   });
 });

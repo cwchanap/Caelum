@@ -167,16 +167,36 @@ describe("createTauriBackend", () => {
     };
     invokeMock
       .mockResolvedValueOnce({ generation: 51, rejection: null })
-      .mockResolvedValueOnce({ generation: 52, rejection: null });
+      .mockResolvedValueOnce({
+        generation: 52,
+        cost: 100,
+        rejection: {
+          code: "insufficientBudget",
+          context: {
+            requiredBudget: 100,
+            availableBudget: 99,
+            affectedRouteIds: [],
+          },
+        },
+      });
 
     const backend = await createTauriBackend();
     await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
       generation: 51,
       rejection: null,
     });
-    await expect(
-      backend.previewRoadMutation(roadRequest),
-    ).resolves.toMatchObject({ generation: 52, rejection: null });
+    await expect(backend.previewRoadMutation(roadRequest)).resolves.toEqual({
+      generation: 52,
+      cost: 100,
+      rejection: {
+        code: "insufficientBudget",
+        context: {
+          requiredBudget: 100,
+          availableBudget: 99,
+          affectedRouteIds: [],
+        },
+      },
+    });
     expect(invokeMock).toHaveBeenNthCalledWith(1, "game_preview_route", {
       request: routeRequest,
     });

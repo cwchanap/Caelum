@@ -273,3 +273,25 @@ fn road_preview_preserves_candidate_connection_order() {
         vec![Heading::West, Heading::East]
     );
 }
+
+#[test]
+fn unaffordable_road_preview_preserves_required_cost_and_engine_state() {
+    let mut engine = GameEngine::new();
+    engine.set_budget_for_test(99);
+    let before_snapshot = engine.snapshot();
+    let before_topology = engine.road_topology_for_test().clone();
+
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(2, 2) },
+        generation: 81,
+    });
+
+    assert_eq!(response.generation, 81);
+    assert_eq!(response.cost, 100);
+    let rejection = response.rejection.expect("budget rejection");
+    assert_eq!(rejection.code, RejectionCode::InsufficientBudget);
+    assert_eq!(rejection.context.required_budget, Some(100));
+    assert_eq!(rejection.context.available_budget, Some(99));
+    assert_eq!(engine.snapshot(), before_snapshot);
+    assert_eq!(engine.road_topology_for_test(), &before_topology);
+}

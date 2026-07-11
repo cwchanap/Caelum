@@ -606,12 +606,17 @@ fn rejected_road_preview(
     generation: u64,
     rejection: GameplayRejection,
 ) -> RoadMutationPreviewResponse {
+    let cost = if rejection.code == RejectionCode::InsufficientBudget {
+        rejection.context.required_budget.unwrap_or(0)
+    } else {
+        0
+    };
     RoadMutationPreviewResponse {
         generation,
         changed_tiles: Vec::new(),
         authored_tiles: Vec::new(),
         generated_structures: Vec::new(),
-        cost: 0,
+        cost,
         skipped_tiles: Vec::new(),
         route_impacts: Vec::new(),
         warnings: Vec::new(),
