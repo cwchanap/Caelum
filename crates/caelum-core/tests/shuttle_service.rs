@@ -423,6 +423,58 @@ fn alighting_after_zero_second_reversal_uses_the_completed_service_index() {
 }
 
 #[test]
+fn full_cycle_alighting_is_committed_when_vehicle_cursor_wraps_to_start() {
+    let mut state = metro_shuttle_state();
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.transit.vehicles[0].itinerary_index = 2;
+    state.active_trips = vec![trip(
+        metro_transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3),
+        TripStatus::Riding,
+        (10, 4),
+    )];
+    let initial_cursor = (
+        state.transit.vehicles[0].itinerary_index,
+        state.transit.vehicles[0].path_step_index,
+        state.transit.vehicles[0].step_progress,
+    );
+    let full_cycle_seconds: f64 = state.transit.metro_lines[0]
+        .legs
+        .iter()
+        .map(|leg| leg.estimated_seconds.unwrap())
+        .sum();
+
+    let completed = tick_vehicles(&state, full_cycle_seconds);
+
+    assert_eq!(
+        (
+            completed.transit.vehicles[0].itinerary_index,
+            completed.transit.vehicles[0].path_step_index,
+            completed.transit.vehicles[0].step_progress,
+        ),
+        initial_cursor
+    );
+    assert!(completed.transit.vehicles[0].passenger_ids.is_empty());
+    assert_eq!(completed.active_trips[0].status, TripStatus::Walking);
+    assert_eq!(completed.active_trips[0].current_leg_index, 1);
+    assert_eq!(completed.active_trips[0].position, (6, 4).into());
+}
+
+#[test]
+fn full_cycle_without_passenger_events_remains_a_no_op() {
+    let mut state = metro_shuttle_state();
+    state.transit.vehicles[0].itinerary_index = 2;
+    let full_cycle_seconds: f64 = state.transit.metro_lines[0]
+        .legs
+        .iter()
+        .map(|leg| leg.estimated_seconds.unwrap())
+        .sum();
+
+    let completed = tick_vehicles(&state, full_cycle_seconds);
+
+    assert_eq!(completed, state);
+}
+
+#[test]
 fn terminal_and_loop_rules_are_mode_correct() {
     let bus = shuttle_state();
     assert!(bus.transit.routes[0]

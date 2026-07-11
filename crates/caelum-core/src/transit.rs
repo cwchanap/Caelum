@@ -529,29 +529,32 @@ pub(crate) fn tick_vehicles_without_context(
             next_vehicle.step_progress,
         );
         next_vehicle.parked_position = None;
-        advance_vehicle_by_seconds(
+        let completion_events_changed = advance_vehicle_by_seconds(
             &mut next_vehicle,
             &itinerary,
             delta_seconds,
             |candidate, completed_itinerary_index| {
+                let mut event_changed = false;
                 let completed_leg = &itinerary[completed_itinerary_index];
                 if let Some(reached_position) = position_by_id.get(&completed_leg.to_waypoint_id) {
-                    *candidate = disembark_vehicle(
+                    let (disembarked, disembark_changed) = disembark_vehicle(
                         &mut active_trips,
                         candidate,
                         reached_position,
                         completed_itinerary_index,
                     );
+                    *candidate = disembarked;
+                    event_changed |= disembark_changed;
                 }
 
                 let next_itinerary_index = candidate.itinerary_index % itinerary.len();
                 let next_leg = &itinerary[next_itinerary_index];
                 if next_leg.kind != RouteLegKind::Service {
-                    return;
+                    return event_changed;
                 }
                 let Some(departure_position) = position_by_id.get(&next_leg.from_waypoint_id)
                 else {
-                    return;
+                    return event_changed;
                 };
                 let waiter_order = waiter_order_lookup
                     .get(&format!(
@@ -561,6 +564,7 @@ pub(crate) fn tick_vehicles_without_context(
                     ))
                     .cloned()
                     .unwrap_or_default();
+                let mut boarding_changed = false;
                 *candidate = board_vehicle(
                     &mut active_trips,
                     candidate,
@@ -568,10 +572,12 @@ pub(crate) fn tick_vehicles_without_context(
                     &mut occupied_passenger_ids,
                     &on_platform,
                     &waiter_order,
-                    &mut changed,
+                    &mut boarding_changed,
                 );
+                event_changed || boarding_changed
             },
         );
+        changed |= completion_events_changed;
         if previous_cursor
             != (
                 next_vehicle.itinerary_index,
@@ -1224,8 +1230,9 @@ fn advance_vehicle_by_seconds<F>(
     itinerary: &[RouteLegPath],
     mut remaining_seconds: f64,
     mut on_itinerary_leg_completed: F,
-) where
-    F: FnMut(&mut Vehicle, usize),
+) -> bool
+where
+    F: FnMut(&mut Vehicle, usize) -> bool,
 {
     let zero_step_limit = itinerary
         .iter()
@@ -1234,6 +1241,7 @@ fn advance_vehicle_by_seconds<F>(
         .sum::<usize>()
         .max(1);
     let mut consecutive_zero_steps = 0;
+    let mut completion_events_changed = false;
 
     while remaining_seconds > 0.0 {
         let original_itinerary_index = vehicle.itinerary_index;
@@ -1245,10 +1253,10 @@ fn advance_vehicle_by_seconds<F>(
             .expect("operational leg has a path");
         if path.step_count() == 0 {
             advance_vehicle_cursor(vehicle, itinerary);
-            on_itinerary_leg_completed(vehicle, itinerary_index);
+            completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return;
+                return completion_events_changed;
             }
             continue;
         }
@@ -1259,11 +1267,11 @@ fn advance_vehicle_by_seconds<F>(
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
             if vehicle.itinerary_index != original_itinerary_index {
-                on_itinerary_leg_completed(vehicle, itinerary_index);
+                completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);
             }
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return;
+                return completion_events_changed;
             }
             continue;
         }
@@ -1272,15 +1280,16 @@ fn advance_vehicle_by_seconds<F>(
 
         if remaining_seconds < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
-            return;
+            return completion_events_changed;
         }
 
         remaining_seconds -= remaining_step;
         advance_vehicle_cursor(vehicle, itinerary);
         if vehicle.itinerary_index != original_itinerary_index {
-            on_itinerary_leg_completed(vehicle, itinerary_index);
+            completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);
         }
     }
+    completion_events_changed
 }
 
 fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {
@@ -1358,7 +1367,7 @@ fn disembark_vehicle(
     vehicle: &Vehicle,
     reached_position: &Point,
     completed_itinerary_index: usize,
-) -> Vehicle {
+) -> (Vehicle, bool) {
     let passenger_ids = unique_passenger_ids(&vehicle.passenger_ids);
     let disembarking_ids: HashSet<String> = active_trips
         .iter()
@@ -1393,7 +1402,7 @@ fn disembark_vehicle(
         .into_iter()
         .filter(|passenger_id| !disembarking_ids.contains(passenger_id))
         .collect();
-    next
+    (next, !disembarking_ids.is_empty())
 }
 
 fn trip_can_board(

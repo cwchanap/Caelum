@@ -183,3 +183,77 @@ Fresh post-fix verification:
 
 - No known functional concerns.
 - Production `bun run build` remains unverified in this environment solely because `wasm-opt` was sandbox-blocked and escalation was unavailable due the execution usage limit. The failure occurred after release Rust/WASM compilation, at the optimizer process boundary.
+
+## Review fix: retain exact-full-cycle completion changes
+
+### Finding and root cause
+
+Review found that completion callbacks could mutate passengers and active trips during a large tick, yet `tick_vehicles_without_context` committed those local mutations only when boarding set `changed` or the final vehicle cursor differed from its initial tuple. A delta equal to one complete itinerary cycle returns the cursor to the same itinerary index, path-step index, and progress. When a rider alighted during that cycle and nobody boarded, both existing change signals stayed false, so the function returned the original snapshot and discarded the alighting event.
+
+### TDD evidence
+
+Added `full_cycle_alighting_is_committed_when_vehicle_cursor_wraps_to_start`, which starts a rider aboard at Metro Shuttle reversal index 2, advances by the sum of every itinerary-leg duration, and proves the final cursor exactly equals the initial cursor while the rider must be alighted at the planned service completion.
+
+RED command:
+
+```sh
+rtk proxy cargo test -p caelum-core --test shuttle_service full_cycle_alighting_is_committed_when_vehicle_cursor_wraps_to_start -- --nocapture
+```
+
+RED result: 0 passed, 1 failed, 9 filtered out. The failure was the expected passenger-list assertion: the returned snapshot still contained the rider because the callback mutation was discarded.
+
+GREEN commands:
+
+```sh
+rtk cargo test -p caelum-core --test shuttle_service full_cycle_alighting_is_committed_when_vehicle_cursor_wraps_to_start -- --nocapture
+rtk cargo test -p caelum-core --test shuttle_service
+```
+
+GREEN result: focused regression 1 passed/9 filtered; the then-current full Shuttle suite passed 10 tests. A preservation regression, `full_cycle_without_passenger_events_remains_a_no_op`, was then added and passed; the final Shuttle suite contains 11 passing tests.
+
+### Implementation and files
+
+- `crates/caelum-core/src/transit.rs`
+  - `disembark_vehicle` now explicitly returns both the updated vehicle and whether any passenger/trip state changed.
+  - The itinerary-completion callback returns an event-change boolean that combines exact-index alighting and exact-index boarding mutations.
+  - `advance_vehicle_by_seconds` aggregates completion-event changes across every completed leg and returns that signal to the tick.
+  - `tick_vehicles_without_context` folds the completion-event signal into `changed` independently of final cursor equality.
+  - Cursor inequality remains a separate movement-state signal; a completion with no alighting or boarding returns false and does not force a commit.
+- `crates/caelum-core/tests/shuttle_service.rs`
+  - Added the exact-full-cycle alighting regression.
+  - Added the exact-full-cycle no-event/no-op preservation regression.
+- `.superpowers/sdd/task-13-report.md`
+  - Appended this review-fix evidence.
+
+### Verification
+
+Fresh post-fix verification:
+
+- `rtk cargo fmt --all --check` — passed.
+- `rtk cargo clippy --workspace --all-targets -- -D warnings` — no issues found.
+- `rtk cargo test --workspace` — 262 passed across 27 suites.
+- `rtk cargo test -p caelum-core --test shuttle_service` — 11 passed.
+- `rtk cargo test -p caelum-core --test router_planning` — 7 passed.
+- `rtk cargo test -p caelum-core --test trip_lifecycle` — 38 passed.
+- `rtk cargo test -p caelum-core --test model_wire_format` — 26 passed.
+- `rtk bun run format:check` — passed.
+- `rtk bun run lint` — ESLint passed and strict workspace Clippy passed.
+- `rtk bun run check` — TypeScript and Svelte checks passed with 0 errors and 0 warnings.
+- `rtk bun run test` — 363 passed across 29 files.
+- `rtk git diff --check` — passed before the report append and is checked again before commit.
+
+The previously documented final-gate environment note remains unchanged: production `bun run build` cannot complete in this sandbox because `wasm-opt` is denied and escalation is unavailable. No new build attempt or workaround was made for this review-only fix.
+
+### Self-review
+
+- Confirmed the exact-full-cycle rider alights at service index 3, advances to walking/current leg 1 at the correct position, and remains committed even though the final cursor tuple equals the initial tuple.
+- Confirmed a passenger-free, waiter-free exact full cycle returns a snapshot equal to the input, so no-op completions are not falsely marked changed.
+- Confirmed completion-event signals are OR-aggregated across the whole large tick; a later no-op completion cannot erase an earlier alighting or boarding change.
+- Confirmed alighting still occurs before boarding at each completion, and terminal boarding after zero-duration reversals remains in the same callback order.
+- Confirmed exact mode/line/platform/visit-index matching, multi-leg remainder processing, operational guards, and present-node/tombstone filtering are unchanged.
+- Confirmed final cursor inequality still commits partial movement independently of event mutations.
+
+### Exact-full-cycle review-fix concerns
+
+- No known functional concerns.
+- The existing production-build environment restriction described above remains the only final-gate limitation.
