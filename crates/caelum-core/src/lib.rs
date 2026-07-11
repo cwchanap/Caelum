@@ -54,3 +54,4 @@ pub use preview::{
     RoutePreviewResponse, TurnSummary, WarningCode,
 };
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+pub use route_lifecycle::{project_position_onto_path, PathProjection};

@@ -399,24 +399,24 @@ impl GameEngine {
         &mut self,
         candidate: GameplayResult<NetworkCandidate>,
     ) -> DispatchResult {
-        let mut candidate = match candidate {
+        let mut network_candidate = match candidate {
             Ok(candidate) => candidate,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
-        let topology = match RoadTopology::compile(&candidate.snapshot.map) {
+        let topology = match RoadTopology::compile(&network_candidate.snapshot.map) {
             Ok(topology) => topology,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
-        let snapshot = route_lifecycle::recompute_affected_routes(
+        let candidate = route_lifecycle::recompute_affected_routes(
             &self.snapshot,
-            candidate.snapshot,
+            network_candidate.snapshot,
             RoutingContext {
                 road_topology: &topology,
             },
         );
-        candidate.context.affected_route_ids =
-            route_lifecycle::structurally_changed_route_ids(&self.snapshot, &snapshot);
-        self.commit_snapshot_and_topology(snapshot, topology, candidate.context)
+        network_candidate.context.affected_route_ids =
+            route_lifecycle::structurally_changed_route_ids(&self.snapshot, &candidate);
+        self.commit_snapshot_and_topology(candidate, topology, network_candidate.context)
     }
 
     fn commit_snapshot_and_topology(

@@ -747,9 +747,11 @@ pub fn assign_route_to_platform(
 ) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     if reassign_within_node(&mut next.transit.stops, node_id, route_id, platform_id) {
+        increment_route_revision(&mut next, route_id);
         return Ok(next);
     }
     if reassign_within_node(&mut next.transit.stations, node_id, route_id, platform_id) {
+        increment_route_revision(&mut next, route_id);
         return Ok(next);
     }
     let node_exists = state.transit.stops.iter().any(|stop| stop.id == node_id)
@@ -770,6 +772,26 @@ pub fn assign_route_to_platform(
         node_id,
         Some(route_id),
     ))
+}
+
+fn increment_route_revision(state: &mut GameSnapshot, route_id: &str) {
+    if let Some(route) = state
+        .transit
+        .routes
+        .iter_mut()
+        .find(|route| route.id == route_id)
+    {
+        route.revision = route.revision.saturating_add(1);
+        return;
+    }
+    if let Some(line) = state
+        .transit
+        .metro_lines
+        .iter_mut()
+        .find(|line| line.id == route_id)
+    {
+        line.revision = line.revision.saturating_add(1);
+    }
 }
 
 pub fn stop_coverage_radius(kind: &str) -> u8 {

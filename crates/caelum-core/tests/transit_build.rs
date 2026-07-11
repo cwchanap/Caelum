@@ -568,6 +568,8 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     let terminal = &snapshot.transit.stops[0];
     assert_eq!(terminal.platforms[0].route_ids, vec!["route-001"]);
     assert_eq!(terminal.platforms[1].route_ids, vec!["route-002"]);
+    let route_1_revision = snapshot.transit.routes[0].revision;
+    let route_2_revision = snapshot.transit.routes[1].revision;
 
     let moved = engine.dispatch(GameIntent::AssignRouteToPlatform {
         node_id: "stop-001".to_string(),
@@ -577,6 +579,11 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     let terminal = &moved.snapshot.transit.stops[0];
     assert!(terminal.platforms[0].route_ids.is_empty());
     assert_eq!(terminal.platforms[2].route_ids, vec!["route-001"]);
+    assert_eq!(
+        moved.snapshot.transit.routes[0].revision,
+        route_1_revision + 1
+    );
+    assert_eq!(moved.snapshot.transit.routes[1].revision, route_2_revision);
 }
 
 #[test]
