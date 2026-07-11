@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{GameSnapshot, Point, ServicePattern, TransitMode};
+use crate::model::{GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode};
 use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +37,10 @@ pub enum GameIntent {
     },
     CycleRoadDirection {
         point: Point,
+    },
+    PlaceRoundabout {
+        origin: Point,
+        size: RoundaboutSize,
     },
     LayTrack {
         point: Point,

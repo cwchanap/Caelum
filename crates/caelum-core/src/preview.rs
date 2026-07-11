@@ -518,7 +518,8 @@ fn preview_network_candidate(
         }
         RoadMutation::LayRoad { .. }
         | RoadMutation::LayRoadLine { .. }
-        | RoadMutation::CycleRoadDirection { .. } => road::apply_road_mutation(snapshot, mutation),
+        | RoadMutation::CycleRoadDirection { .. }
+        | RoadMutation::PlaceRoundabout { .. } => road::apply_road_mutation(snapshot, mutation),
     }
 }
 

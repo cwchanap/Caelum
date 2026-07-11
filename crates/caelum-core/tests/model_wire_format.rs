@@ -645,6 +645,17 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
                 ("rotation", json!(90)),
             ],
         ),
+        (
+            GameIntent::PlaceRoundabout {
+                origin: p(5, 6),
+                size: RoundaboutSize::Compact2x2,
+            },
+            "placeRoundabout",
+            vec![
+                ("origin", json!({ "x": 5, "y": 6 })),
+                ("size", json!("compact2x2")),
+            ],
+        ),
     ];
 
     // Exhaustiveness guard: every `GameIntent` variant must be wired up here.
@@ -658,6 +669,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
+            GameIntent::PlaceRoundabout { .. } => "placeRoundabout",
             GameIntent::LayTrack { .. } => "layTrack",
             GameIntent::LayTrackLine { .. } => "layTrackLine",
             GameIntent::RemoveAtTile { .. } => "removeAtTile",
@@ -825,6 +837,35 @@ fn road_structures_use_stable_camel_case_wire_shapes() {
     let value = serde_json::to_value(roundabout).unwrap();
     assert_eq!(value["kind"], json!("roundabout"));
     assert_eq!(value["size"], json!("compact2x2"));
+}
+
+#[test]
+fn place_roundabout_intent_and_preview_mutation_use_camel_case_wire() {
+    let intent = GameIntent::PlaceRoundabout {
+        origin: point(5, 6),
+        size: RoundaboutSize::Compact2x2,
+    };
+    assert_eq!(
+        serde_json::to_value(intent).unwrap(),
+        json!({
+            "type": "placeRoundabout",
+            "origin": { "x": 5, "y": 6 },
+            "size": "compact2x2"
+        })
+    );
+
+    let mutation = RoadMutation::PlaceRoundabout {
+        origin: point(8, 9),
+        size: RoundaboutSize::Standard3x3,
+    };
+    assert_eq!(
+        serde_json::to_value(mutation).unwrap(),
+        json!({
+            "type": "placeRoundabout",
+            "origin": { "x": 8, "y": 9 },
+            "size": "standard3x3"
+        })
+    );
 }
 
 #[test]

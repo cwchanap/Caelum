@@ -120,8 +120,12 @@ pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult
     }
 
     let mut next = state.clone();
-    let mut changed = false;
+    let removed_roundabouts = crate::roundabouts::remove_owned_roundabouts(&mut next, points);
+    let mut changed = !removed_roundabouts.ids.is_empty();
     for point in points {
+        if removed_roundabouts.member_points.contains(point) {
+            continue;
+        }
         if let Ok(candidate) = remove_at_tile(&next, point) {
             if candidate != next {
                 next = candidate;
@@ -137,6 +141,14 @@ pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult
 }
 
 pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
+    let mut roundabout_candidate = state.clone();
+    let removed = crate::roundabouts::remove_owned_roundabouts(
+        &mut roundabout_candidate,
+        std::slice::from_ref(point),
+    );
+    if !removed.ids.is_empty() {
+        return Ok(roundabout_candidate);
+    }
     let anchor = canonical_node_anchor(state, *point).unwrap_or(*point);
     let removed_building = state
         .buildings
@@ -1366,6 +1378,7 @@ fn is_valid_bus_stop_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         tile.kind == "road"
             && !tile.has_track
+            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
             && !is_building_occupied(state, point)
             && !state
                 .transit
@@ -1379,6 +1392,7 @@ fn is_valid_metro_station_placement(state: &GameSnapshot, point: &Point) -> bool
     get_tile(&state.map, point).is_some_and(|tile| {
         (tile.kind == "road" || tile.kind == "empty")
             && tile.has_track
+            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
             && !is_building_occupied(state, point)
             && !state
                 .transit
@@ -1392,6 +1406,7 @@ fn is_valid_track_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         (tile.kind == "empty" || tile.kind == "road")
             && !tile.has_track
+            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
             && !is_building_occupied(state, point)
             && !is_transit_node_at(state, point)
     })

@@ -9,6 +9,7 @@ import type {
   Heading,
   PlacedBuilding,
   Point,
+  RoundaboutSize,
   RoadStructure,
   RouteLegPath,
   ServicePattern,
@@ -84,6 +85,7 @@ export type GameIntent =
   | { type: "layRoad"; point: Point }
   | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
   | { type: "cycleRoadDirection"; point: Point }
+  | { type: "placeRoundabout"; origin: Point; size: RoundaboutSize }
   | { type: "layTrack"; point: Point }
   | { type: "layTrackLine"; points: Point[] }
   | { type: "removeAtTile"; point: Point }
@@ -144,6 +146,7 @@ export type RoadMutation =
   | { type: "layRoad"; point: Point }
   | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
   | { type: "cycleRoadDirection"; point: Point }
+  | { type: "placeRoundabout"; origin: Point; size: RoundaboutSize }
   | { type: "removeAtTile"; point: Point }
   | { type: "removeAtTiles"; points: Point[] };
 

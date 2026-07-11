@@ -1,8 +1,11 @@
+use std::collections::{BTreeSet, HashSet};
+
 use crate::model::{
-    Heading, MovementKind, PathGeometry, Point, RoadPort, RoadStructure, RoundaboutSize,
-    TripPosition,
+    GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RoadPort, RoadStructure,
+    RoundaboutSize, TripPosition,
 };
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+use crate::road::RoadMutationResult;
 use crate::road_topology::{RoadState, RoadTransition, BUS_TILE_MILLIS, ROUNDABOUT_ENTRY_MILLIS};
 
 pub const COMPACT_ROUNDABOUT_COST: i32 = 1_000;
@@ -47,6 +50,333 @@ pub fn roundabout_structure_id(size: RoundaboutSize, origin: Point) -> String {
     )
 }
 
+pub fn roundabout_cost(size: RoundaboutSize) -> i32 {
+    match size {
+        RoundaboutSize::Compact2x2 => COMPACT_ROUNDABOUT_COST,
+        RoundaboutSize::Standard3x3 => STANDARD_ROUNDABOUT_COST,
+    }
+}
+
+pub fn place_roundabout(
+    state: &GameSnapshot,
+    origin: Point,
+    size: RoundaboutSize,
+) -> GameplayResult<RoadMutationResult> {
+    let template = roundabout_template(size, origin);
+    validate_bounds(&state.map, &template.footprint)?;
+    validate_replaceable_occupancy(state, &template)?;
+    validate_complete_structure_overlap(&state.map, &template)?;
+    let captured_ports = capture_boundary_connections(&state.map, &template)?;
+    validate_port_mapping(&state.map, &template, &captured_ports)?;
+    let cost = roundabout_cost(size);
+    if state.budget < cost {
+        return Err(GameplayRejection::budget(cost, state.budget));
+    }
+
+    let mut candidate = state.clone();
+    remove_contained_automatic_junctions(&mut candidate.map, &template);
+    install_roundabout(&mut candidate.map, &template, captured_ports);
+    candidate.budget -= cost;
+    Ok(RoadMutationResult {
+        snapshot: candidate,
+        changed_tiles: template.footprint,
+        skipped_tiles: Vec::new(),
+        cost,
+    })
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemovedRoundabouts {
+    pub ids: BTreeSet<String>,
+    pub member_points: BTreeSet<Point>,
+}
+
+pub fn remove_owned_roundabouts(
+    candidate: &mut GameSnapshot,
+    points: &[Point],
+) -> RemovedRoundabouts {
+    let ids: BTreeSet<_> = points
+        .iter()
+        .filter_map(|point| roundabout_id_at(&candidate.map, *point))
+        .collect();
+    let member_points = candidate
+        .map
+        .road_structures
+        .iter()
+        .filter(|structure| {
+            matches!(structure, RoadStructure::Roundabout { .. }) && ids.contains(structure.id())
+        })
+        .flat_map(|structure| structure.footprint().iter().copied())
+        .collect();
+    for id in &ids {
+        remove_roundabout_structure(&mut candidate.map, id);
+    }
+    RemovedRoundabouts { ids, member_points }
+}
+
+fn validate_bounds(map: &GameMap, footprint: &[Point]) -> GameplayResult<()> {
+    if let Some(point) = footprint.iter().find(|point| map.tile(**point).is_none()) {
+        let mut rejection = GameplayRejection::at(RejectionCode::OutOfBounds, *point);
+        rejection.context.footprint = footprint.to_vec();
+        return Err(rejection);
+    }
+    Ok(())
+}
+
+fn validate_replaceable_occupancy(
+    state: &GameSnapshot,
+    template: &RoundaboutTemplate,
+) -> GameplayResult<()> {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    let has_building = state.buildings.iter().any(|building| {
+        building
+            .occupied_tiles
+            .iter()
+            .any(|point| footprint.contains(point))
+    });
+    let has_transit_node = state
+        .transit
+        .stops
+        .iter()
+        .any(|stop| footprint.contains(&stop.position))
+        || state
+            .transit
+            .stations
+            .iter()
+            .any(|station| footprint.contains(&station.position));
+    let blocked_tile = template.footprint.iter().any(|point| {
+        state
+            .map
+            .tile(*point)
+            .is_some_and(|tile| tile.has_track || !matches!(tile.kind.as_str(), "empty" | "road"))
+    });
+    if has_building || has_transit_node || blocked_tile {
+        return Err(blocked_footprint(&template.footprint));
+    }
+    Ok(())
+}
+
+fn validate_complete_structure_overlap(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+) -> GameplayResult<()> {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    for structure in &map.road_structures {
+        let overlaps = structure
+            .footprint()
+            .iter()
+            .any(|point| footprint.contains(point));
+        if !overlaps {
+            continue;
+        }
+        let fully_contained = structure
+            .footprint()
+            .iter()
+            .all(|point| footprint.contains(point));
+        if !structure.is_automatic_junction() || !fully_contained {
+            return Err(blocked_footprint(&template.footprint));
+        }
+    }
+    Ok(())
+}
+
+fn capture_boundary_connections(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+) -> GameplayResult<Vec<RoadPort>> {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    let mut captured = Vec::new();
+    for point in &template.footprint {
+        let tile = map
+            .tile(*point)
+            .expect("roundabout footprint was validated");
+        for edge in &tile.road_connections {
+            let outside = offset(*point, *edge);
+            if footprint.contains(&outside) {
+                continue;
+            }
+            let reciprocal = map.tile(outside).is_some_and(|neighbor| {
+                neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(*edge))
+            });
+            if !reciprocal {
+                continue;
+            }
+            let Some(slot) = template
+                .port_slots
+                .iter()
+                .find(|slot| slot.point == *point && slot.edge == *edge)
+            else {
+                return Err(unsafe_template_mapping(template));
+            };
+            let mut captured_port = slot.clone();
+            let external = map
+                .tile(outside)
+                .expect("reciprocal boundary connection has an external tile");
+            captured_port.id.push_str(match external.one_way {
+                None => ":twoWay",
+                Some(direction) if direction == opposite(*edge) => ":inbound",
+                Some(direction) if direction == *edge => ":outbound",
+                Some(_) => return Err(unsafe_template_mapping(template)),
+            });
+            captured.push(captured_port);
+        }
+    }
+    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    Ok(captured)
+}
+
+fn validate_port_mapping(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+    ports: &[RoadPort],
+) -> GameplayResult<()> {
+    for port in ports {
+        let external_point = offset(port.point, port.edge);
+        let external = map
+            .tile(external_point)
+            .ok_or_else(|| unsafe_template_mapping(template))?;
+        let compatible = match external.one_way {
+            None => port.id.ends_with(":twoWay"),
+            Some(direction) if direction == opposite(port.edge) => port.id.ends_with(":inbound"),
+            Some(direction) if direction == port.edge => port.id.ends_with(":outbound"),
+            Some(_) => false,
+        };
+        if !compatible {
+            return Err(unsafe_template_mapping(template));
+        }
+    }
+    Ok(())
+}
+
+fn remove_contained_automatic_junctions(map: &mut GameMap, template: &RoundaboutTemplate) {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    let removed_ids: HashSet<_> = map
+        .road_structures
+        .iter()
+        .filter(|structure| {
+            structure.is_automatic_junction()
+                && structure
+                    .footprint()
+                    .iter()
+                    .all(|point| footprint.contains(point))
+        })
+        .map(|structure| structure.id().to_string())
+        .collect();
+    map.road_structures
+        .retain(|structure| !removed_ids.contains(structure.id()));
+}
+
+fn install_roundabout(
+    map: &mut GameMap,
+    template: &RoundaboutTemplate,
+    captured_ports: Vec<RoadPort>,
+) {
+    let id = roundabout_structure_id(template.size, template.origin);
+    for point in &template.footprint {
+        let tile = map
+            .tile_mut(*point)
+            .expect("roundabout footprint was validated");
+        tile.kind = if template.circulation_tiles.contains(point) {
+            "road".to_string()
+        } else {
+            "empty".to_string()
+        };
+        tile.one_way = None;
+        tile.road_connections.clear();
+        tile.road_structure_id = Some(id.clone());
+    }
+    for port in &captured_ports {
+        map.tile_mut(port.point)
+            .expect("captured port belongs to footprint")
+            .road_connections
+            .push(port.edge);
+    }
+    for point in &template.footprint {
+        if let Some(tile) = map.tile_mut(*point) {
+            tile.road_connections.sort();
+            tile.road_connections.dedup();
+        }
+    }
+    map.road_structures.push(RoadStructure::Roundabout {
+        id,
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint.clone(),
+        ports: captured_ports,
+    });
+    map.road_structures
+        .sort_by(|left, right| left.id().cmp(right.id()));
+}
+
+fn roundabout_id_at(map: &GameMap, point: Point) -> Option<String> {
+    let id = map.tile(point)?.road_structure_id.as_deref()?;
+    map.road_structures
+        .iter()
+        .find(|structure| {
+            matches!(structure, RoadStructure::Roundabout { .. }) && structure.id() == id
+        })
+        .map(|structure| structure.id().to_string())
+}
+
+pub fn is_roundabout_owned(map: &GameMap, point: Point) -> bool {
+    roundabout_id_at(map, point).is_some()
+}
+
+fn remove_roundabout_structure(map: &mut GameMap, id: &str) {
+    let Some(structure) = map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            matches!(structure, RoadStructure::Roundabout { .. }) && structure.id() == id
+        })
+        .cloned()
+    else {
+        return;
+    };
+    for point in structure.footprint() {
+        let connections = map
+            .tile(*point)
+            .map(|tile| tile.road_connections.clone())
+            .unwrap_or_default();
+        for edge in connections {
+            if let Some(neighbor) = map.tile_mut(offset(*point, edge)) {
+                neighbor
+                    .road_connections
+                    .retain(|candidate| *candidate != opposite(edge));
+            }
+        }
+        if let Some(tile) = map.tile_mut(*point) {
+            tile.kind = "empty".to_string();
+            tile.one_way = None;
+            tile.road_connections.clear();
+            tile.road_structure_id = None;
+        }
+    }
+    map.road_structures.retain(|structure| structure.id() != id);
+}
+
+fn blocked_footprint(footprint: &[Point]) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::BlockedFootprint,
+        context: RejectionContext {
+            footprint: footprint.to_vec(),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn unsafe_template_mapping(template: &RoundaboutTemplate) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::UnsafeRoundaboutPortMapping,
+        context: RejectionContext {
+            structure_id: Some(roundabout_structure_id(template.size, template.origin)),
+            footprint: template.footprint.clone(),
+            ..RejectionContext::default()
+        },
+    }
+}
+
 pub fn compile_roundabout_transitions(
     structure: &RoadStructure,
 ) -> GameplayResult<Vec<(RoadState, RoadTransition)>> {
@@ -61,8 +391,12 @@ pub fn compile_roundabout_transitions(
         else {
             continue;
         };
-        let inbound = port_accepts_inbound(&template, canonical_port);
-        let outbound = port_accepts_outbound(&template, canonical_port);
+        let inbound = port.id.ends_with(":inbound")
+            || port.id.ends_with(":twoWay")
+            || (!port.id.ends_with(":outbound") && port_accepts_inbound(&template, canonical_port));
+        let outbound = port.id.ends_with(":outbound")
+            || port.id.ends_with(":twoWay")
+            || (!port.id.ends_with(":inbound") && port_accepts_outbound(&template, canonical_port));
         if inbound {
             transitions.push(entry_transition(parts.id, &template, canonical_port));
         }

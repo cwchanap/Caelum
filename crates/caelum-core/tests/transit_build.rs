@@ -1,6 +1,6 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding,
-    Point, RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
+    Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
     ServiceDirection, ServicePattern, Sim, TransitMode, TransitNodeStatus, TransitPath,
     TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
@@ -224,6 +224,56 @@ fn track_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
             point: (x, y).into(),
         });
     }
+}
+
+#[test]
+fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for y in 1..=9 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (6, y).into(),
+        });
+    }
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: (5, 4).into(),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(placed.applied, "{placed:?}");
+    assert_eq!(
+        placed.snapshot.transit.routes[0].legs[0].status,
+        RouteLegStatus::Connected
+    );
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (6, 5).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+    let broken = &removed.snapshot.transit.routes[0];
+    assert_eq!(broken.legs[0].status, RouteLegStatus::NetworkDisconnected);
+    assert!(broken.legs[0].last_valid_path.is_some());
+
+    for x in 5..=7 {
+        let repaired = engine.dispatch(GameIntent::LayRoad {
+            point: (x, 5).into(),
+        });
+        assert!(repaired.applied, "{repaired:?}");
+    }
+    assert_eq!(
+        engine.snapshot().transit.routes[0].legs[0].status,
+        RouteLegStatus::Connected
+    );
 }
 
 fn destination_building(
@@ -1045,6 +1095,59 @@ fn actual_bus_time_includes_the_same_turn_delay_as_its_path() {
         let arrived = tick_vehicles(&almost, 0.001);
         assert_eq!(vehicle(&arrived, &fixture.vehicle_id).itinerary_index, 1);
     }
+}
+
+#[test]
+fn vehicle_time_through_roundabout_matches_authoritative_path_duration() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for y in 1..=9 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (6, y).into(),
+        });
+    }
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: (5, 4).into(),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(placed.applied, "{placed:?}");
+
+    let state = placed.snapshot;
+    let route = &state.transit.routes[0];
+    let expected = route.legs[0]
+        .current_path
+        .as_ref()
+        .expect("roundabout route path")
+        .total_travel_seconds();
+    assert!(route.legs[0]
+        .current_path
+        .as_ref()
+        .unwrap()
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == MovementKind::RoundaboutEntry));
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    let start_leg_index = vehicle(&state, &vehicle_id).itinerary_index;
+    let almost = tick_vehicles(&state, expected - 0.001);
+    assert_eq!(
+        vehicle(&almost, &vehicle_id).itinerary_index,
+        start_leg_index
+    );
+    let arrived = tick_vehicles(&almost, 0.001);
+    assert_eq!(
+        vehicle(&arrived, &vehicle_id).itinerary_index,
+        start_leg_index + 1
+    );
 }
 
 #[test]

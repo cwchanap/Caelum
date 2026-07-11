@@ -1,4 +1,6 @@
-use caelum_core::model::{Heading, Point, RoadStructure, Route, ServicePattern, TransitMode};
+use caelum_core::model::{
+    Heading, Point, RoadStructure, RoundaboutSize, Route, ServicePattern, TransitMode,
+};
 use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest,
 };
@@ -130,6 +132,51 @@ fn mutation_preview_reports_applied_subset_cost_and_route_impacts() {
             route_id: "route-001".into(),
             kind: RouteImpactKind::Broken,
         }]
+    );
+}
+
+#[test]
+fn roundabout_preview_matches_commit_footprint_cost_structure_and_route_impact() {
+    let mut engine = existing_route_engine();
+    let request = RoadMutationPreviewRequest {
+        mutation: RoadMutation::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+        generation: 41,
+    };
+    let preview = engine.preview_road_mutation(request);
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert_eq!(preview.generation, 41);
+    assert_eq!(preview.cost, 2_000);
+    assert_eq!(preview.changed_tiles.len(), 9);
+    assert_eq!(preview.generated_structures.len(), 1);
+    assert!(matches!(
+        preview.generated_structures[0],
+        RoadStructure::Roundabout { .. }
+    ));
+    assert_eq!(
+        preview.route_impacts,
+        vec![RouteImpact {
+            route_id: "route-001".into(),
+            kind: RouteImpactKind::Rerouted,
+        }]
+    );
+
+    let committed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(5, 4),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
+    assert_eq!(committed.context.cost, preview.cost);
+    assert_eq!(
+        committed.context.affected_route_ids,
+        preview
+            .route_impacts
+            .iter()
+            .map(|impact| impact.route_id.clone())
+            .collect::<Vec<_>>()
     );
 }
 

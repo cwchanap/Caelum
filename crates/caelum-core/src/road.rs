@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::intent::{DispatchContext, RoadPreset};
-use crate::model::{GameMap, GameSnapshot, Heading, Point, RoadPort, RoadStructure, Tile};
+use crate::model::{
+    GameMap, GameSnapshot, Heading, Point, RoadPort, RoadStructure, RoundaboutSize, Tile,
+};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::transit::ROAD_COST;
 
@@ -23,6 +25,10 @@ pub enum RoadMutation {
     },
     CycleRoadDirection {
         point: Point,
+    },
+    PlaceRoundabout {
+        origin: Point,
+        size: RoundaboutSize,
     },
     RemoveAtTile {
         point: Point,
@@ -54,6 +60,9 @@ pub fn apply_road_mutation(
     state: &GameSnapshot,
     mutation: &RoadMutation,
 ) -> GameplayResult<RoadMutationResult> {
+    if let RoadMutation::PlaceRoundabout { origin, size } = mutation {
+        return crate::roundabouts::place_roundabout(state, *origin, *size);
+    }
     let mut candidate = state.clone();
     let mut changed_tiles = Vec::new();
     let mut skipped_tiles = Vec::new();
@@ -99,6 +108,9 @@ fn apply_linear_tiles_in_order(
         RoadMutation::CycleRoadDirection { point } => {
             cycle_road_direction(candidate, *point)?;
             changed_tiles.push(*point);
+        }
+        RoadMutation::PlaceRoundabout { .. } => {
+            unreachable!("roundabout mutations are handled atomically")
         }
         RoadMutation::RemoveAtTile { point } => {
             remove_road(candidate, *point)?;
@@ -224,6 +236,9 @@ fn author_lane_tiles(
         let Some(existing) = candidate.map.tile(*point).cloned() else {
             continue;
         };
+        if is_roundabout_owned(&candidate.map, *point) {
+            continue;
+        }
         if existing.kind == "road" {
             if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
                 continue;
@@ -328,6 +343,8 @@ fn connect(map: &mut GameMap, point: Point, heading: Heading) {
     let neighbor_point = offset(point, heading);
     if !matches!(map.tile(point), Some(tile) if tile.kind == "road")
         || !matches!(map.tile(neighbor_point), Some(tile) if tile.kind == "road")
+        || is_roundabout_owned(map, point)
+        || is_roundabout_owned(map, neighbor_point)
     {
         return;
     }
@@ -372,6 +389,9 @@ fn remove_road(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()>
         return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
     };
     if tile.kind != "road" {
+        return Err(GameplayRejection::at(RejectionCode::BlockedTile, point));
+    }
+    if is_roundabout_owned(&candidate.map, point) {
         return Err(GameplayRejection::at(RejectionCode::BlockedTile, point));
     }
     let connections = tile.road_connections.clone();
@@ -835,6 +855,18 @@ fn is_valid_road_placement(state: &GameSnapshot, point: Point) -> bool {
                 .stations
                 .iter()
                 .any(|station| station.position == point)
+    })
+}
+
+fn is_roundabout_owned(map: &GameMap, point: Point) -> bool {
+    let Some(structure_id) = map
+        .tile(point)
+        .and_then(|tile| tile.road_structure_id.as_deref())
+    else {
+        return false;
+    };
+    map.road_structures.iter().any(|structure| {
+        structure.id() == structure_id && matches!(structure, RoadStructure::Roundabout { .. })
     })
 }
 

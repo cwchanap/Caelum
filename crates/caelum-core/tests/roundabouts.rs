@@ -1,11 +1,14 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use caelum_core::model::{Heading, MovementKind, Point, RoadPort, RoadStructure, RoundaboutSize};
+use caelum_core::preview::RoadMutationPreviewRequest;
+use caelum_core::road::RoadMutation;
 use caelum_core::road_topology::{RoadState, RoadTransition};
 use caelum_core::roundabouts::{
     compile_roundabout_transitions, roundabout_structure_id, roundabout_template,
     RoundaboutTemplate, COMPACT_ROUNDABOUT_COST, STANDARD_ROUNDABOUT_COST,
 };
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -333,4 +336,292 @@ fn ids_ports_and_prices_are_canonical() {
         .all(|ports| { (ports[0].point, ports[0].edge) < (ports[1].point, ports[1].edge) }));
     assert_eq!(COMPACT_ROUNDABOUT_COST, 1_000);
     assert_eq!(STANDARD_ROUNDABOUT_COST, 2_000);
+}
+
+fn dispatch(engine: &mut GameEngine, intent: GameIntent) {
+    let result = engine.dispatch(intent);
+    assert!(result.applied, "fixture dispatch should apply: {result:?}");
+}
+
+fn road_line(engine: &mut GameEngine, points: Vec<Point>) {
+    dispatch(
+        engine,
+        GameIntent::LayRoadLine {
+            points,
+            preset: RoadPreset::TwoWay,
+        },
+    );
+}
+
+fn crossing_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
+    road_line(&mut engine, (1..=9).map(|y| point(6, y)).collect());
+    engine
+}
+
+fn place_standard_roundabout() -> GameIntent {
+    GameIntent::PlaceRoundabout {
+        origin: point(5, 4),
+        size: RoundaboutSize::Standard3x3,
+    }
+}
+
+fn only_roundabout(snapshot: &caelum_core::GameSnapshot) -> &RoadStructure {
+    let roundabouts: Vec<_> = snapshot
+        .map
+        .road_structures
+        .iter()
+        .filter(|structure| matches!(structure, RoadStructure::Roundabout { .. }))
+        .collect();
+    assert_eq!(roundabouts.len(), 1);
+    roundabouts[0]
+}
+
+#[test]
+fn compact_and_standard_charge_rust_authoritative_flat_costs() {
+    for (origin, size, expected) in [
+        (point(5, 5), RoundaboutSize::Compact2x2, 1_000),
+        (point(9, 8), RoundaboutSize::Standard3x3, 2_000),
+    ] {
+        let mut engine = GameEngine::new();
+        let before = engine.snapshot();
+        let result = engine.dispatch(GameIntent::PlaceRoundabout { origin, size });
+        assert!(result.applied, "{result:?}");
+        assert_eq!(result.snapshot.budget, before.budget - expected);
+        assert_eq!(result.context.cost, expected);
+    }
+}
+
+#[test]
+fn replacing_bare_roads_captures_every_crossing_boundary_connection() {
+    let mut engine = crossing_engine();
+    let result = engine.dispatch(place_standard_roundabout());
+    assert!(result.applied, "{result:?}");
+    let structure = only_roundabout(&result.snapshot);
+
+    assert_eq!(
+        structure.port_keys(),
+        vec![
+            (point(5, 5), Heading::West),
+            (point(6, 4), Heading::North),
+            (point(6, 6), Heading::South),
+            (point(7, 5), Heading::East),
+        ]
+    );
+    assert!(structure.footprint().iter().all(|point| {
+        result
+            .snapshot
+            .map
+            .tile(*point)
+            .unwrap()
+            .road_structure_id
+            .as_deref()
+            == Some(structure.id())
+    }));
+}
+
+#[test]
+fn complete_automatic_junction_may_be_replaced_but_partial_overlap_rejects() {
+    let mut full = crossing_engine();
+    assert!(full.dispatch(place_standard_roundabout()).applied);
+
+    let mut partial = GameEngine::new();
+    for y in [8, 9] {
+        road_line(&mut partial, (7..=12).map(|x| point(x, y)).collect());
+    }
+    for x in [9, 10] {
+        road_line(&mut partial, (6..=11).map(|y| point(x, y)).collect());
+    }
+    let before = partial.snapshot();
+    let result = partial.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(10, 8),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert_eq!(
+        result.rejection.unwrap().code,
+        RejectionCode::BlockedFootprint
+    );
+    assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn invalid_footprint_rejections_are_all_or_nothing() {
+    let mut fixtures = Vec::new();
+
+    let mut out_of_bounds = GameEngine::new();
+    fixtures.push((
+        out_of_bounds.snapshot(),
+        out_of_bounds.dispatch(GameIntent::PlaceRoundabout {
+            origin: point(-1, 0),
+            size: RoundaboutSize::Compact2x2,
+        }),
+    ));
+
+    let mut insufficient = GameEngine::new();
+    insufficient.set_budget_for_test(999);
+    fixtures.push((
+        insufficient.snapshot(),
+        insufficient.dispatch(GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        }),
+    ));
+
+    let mut existing = GameEngine::new();
+    dispatch(
+        &mut existing,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    fixtures.push((
+        existing.snapshot(),
+        existing.dispatch(GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        }),
+    ));
+
+    for (before, result) in fixtures {
+        assert!(!result.applied);
+        assert!(result.rejection.is_some());
+        assert_eq!(result.snapshot, before);
+    }
+}
+
+#[test]
+fn tracks_transit_nodes_and_buildings_reject_the_whole_placement() {
+    let mut track = GameEngine::new();
+    dispatch(&mut track, GameIntent::LayTrack { point: point(5, 5) });
+
+    let mut node = GameEngine::new();
+    dispatch(&mut node, GameIntent::LayRoad { point: point(5, 5) });
+    dispatch(&mut node, GameIntent::AddBusStop { point: point(5, 5) });
+
+    let mut building = GameEngine::new();
+    dispatch(
+        &mut building,
+        GameIntent::PaintAreaRectangle {
+            area: "residential".into(),
+            start: point(5, 5),
+            end: point(6, 5),
+        },
+    );
+    dispatch(
+        &mut building,
+        GameIntent::PlaceBuilding {
+            building_type: "smallHouse".into(),
+            origin: point(5, 5),
+            rotation: 0,
+        },
+    );
+
+    for mut engine in [track, node, building] {
+        let before = engine.snapshot();
+        let result = engine.dispatch(GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        });
+        assert!(!result.applied);
+        assert_eq!(
+            result.rejection.unwrap().code,
+            RejectionCode::BlockedFootprint
+        );
+        assert_eq!(result.snapshot, before);
+    }
+}
+
+#[test]
+fn removing_any_member_removes_the_structure_once_and_never_restores_old_roads() {
+    let mut engine = crossing_engine();
+    dispatch(&mut engine, place_standard_roundabout());
+    let structure = only_roundabout(&engine.snapshot()).clone();
+    let budget_after_placement = engine.snapshot().budget;
+    let latent_areas: Vec<_> = structure
+        .footprint()
+        .iter()
+        .map(|point| engine.snapshot().map.tile(*point).unwrap().area.clone())
+        .collect();
+    let result = engine.dispatch(GameIntent::RemoveAtTiles {
+        points: vec![structure.footprint()[0], structure.footprint()[4]],
+    });
+
+    assert!(result.applied, "{result:?}");
+    assert_eq!(result.snapshot.budget, budget_after_placement);
+    assert!(result
+        .snapshot
+        .map
+        .road_structures
+        .iter()
+        .all(|candidate| candidate.id() != structure.id()));
+    for (point, latent_area) in structure.footprint().iter().zip(latent_areas) {
+        let tile = result.snapshot.map.tile(*point).unwrap();
+        assert!(tile.road_structure_id.is_none());
+        assert_ne!(tile.kind, "road");
+        assert_eq!(tile.area, latent_area);
+    }
+}
+
+#[test]
+fn preview_matches_roundabout_cost_footprint_ports_and_structure() {
+    let engine = crossing_engine();
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 41,
+        mutation: RoadMutation::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    });
+    assert!(response.rejection.is_none(), "{response:?}");
+    assert_eq!(response.generation, 41);
+    assert_eq!(response.cost, 2_000);
+    assert_eq!(
+        response.changed_tiles,
+        roundabout_template(RoundaboutSize::Standard3x3, point(5, 4)).footprint
+    );
+    assert_eq!(response.generated_structures.len(), 1);
+    assert_eq!(
+        response.generated_structures[0].port_keys(),
+        vec![
+            (point(5, 5), Heading::West),
+            (point(6, 4), Heading::North),
+            (point(6, 6), Heading::South),
+            (point(7, 5), Heading::East),
+        ]
+    );
+}
+
+#[test]
+fn every_roundabout_owned_tile_blocks_other_infrastructure_and_zoning() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    );
+    let before = engine.snapshot();
+    for intent in [
+        GameIntent::LayRoad { point: point(6, 5) },
+        GameIntent::LayTrack { point: point(5, 4) },
+        GameIntent::AddBusStop { point: point(5, 4) },
+        GameIntent::PaintAreaRectangle {
+            area: "residential".into(),
+            start: point(6, 5),
+            end: point(6, 5),
+        },
+        GameIntent::PlaceBuilding {
+            building_type: "smallHouse".into(),
+            origin: point(6, 5),
+            rotation: 0,
+        },
+    ] {
+        let result = engine.dispatch(intent);
+        assert!(!result.applied, "{result:?}");
+        assert!(result.rejection.is_some());
+        assert_eq!(result.snapshot, before);
+    }
 }

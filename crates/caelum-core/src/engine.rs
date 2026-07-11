@@ -283,6 +283,13 @@ impl GameEngine {
                 )
                 .map(NetworkCandidate::from_road),
             ),
+            GameIntent::PlaceRoundabout { origin, size } => self.commit_network_mutation(
+                road::apply_road_mutation(
+                    &self.snapshot,
+                    &RoadMutation::PlaceRoundabout { origin, size },
+                )
+                .map(NetworkCandidate::from_road),
+            ),
             GameIntent::LayTrack { point } => {
                 let candidate = self.network_candidate_for_tiles(
                     transit::lay_track(&self.snapshot, &point),
