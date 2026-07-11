@@ -1,0 +1,609 @@
+use caelum_core::model::{
+    GameMap, Heading, MovementKind, PathGeometry, Point, RoadStructure, Tile, TransitPath,
+};
+use caelum_core::road_topology::{RoadState, RoadTopology};
+
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+fn blank_map(width: u8, height: u8) -> GameMap {
+    let tiles = (0..i32::from(height))
+        .flat_map(|y| {
+            (0..i32::from(width)).map(move |x| Tile {
+                id: format!("tile-{x}-{y}"),
+                x,
+                y,
+                kind: "empty".to_string(),
+                area: None,
+                has_track: false,
+                one_way: None,
+                road_connections: Vec::new(),
+                road_structure_id: None,
+            })
+        })
+        .collect();
+    GameMap {
+        width,
+        height,
+        tiles,
+        road_structures: Vec::new(),
+    }
+}
+
+fn heading_between(from: Point, to: Point) -> Heading {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Heading::North,
+        (1, 0) => Heading::East,
+        (0, 1) => Heading::South,
+        (-1, 0) => Heading::West,
+        delta => panic!("fixture points are not adjacent: {delta:?}"),
+    }
+}
+
+fn opposite(heading: Heading) -> Heading {
+    match heading {
+        Heading::North => Heading::South,
+        Heading::East => Heading::West,
+        Heading::South => Heading::North,
+        Heading::West => Heading::East,
+    }
+}
+
+fn offset(position: Point, heading: Heading) -> Point {
+    match heading {
+        Heading::North => point(position.x, position.y - 1),
+        Heading::East => point(position.x + 1, position.y),
+        Heading::South => point(position.x, position.y + 1),
+        Heading::West => point(position.x - 1, position.y),
+    }
+}
+
+fn road(map: &mut GameMap, position: Point, one_way: Option<Heading>) {
+    let tile = map.tile_mut(position).expect("fixture road is in bounds");
+    tile.kind = "road".to_string();
+    tile.one_way = one_way;
+}
+
+fn connect(map: &mut GameMap, first: Point, second: Point) {
+    let heading = heading_between(first, second);
+    road(map, first, map.tile(first).and_then(|tile| tile.one_way));
+    road(map, second, map.tile(second).and_then(|tile| tile.one_way));
+    map.tile_mut(first).unwrap().road_connections.push(heading);
+    map.tile_mut(second)
+        .unwrap()
+        .road_connections
+        .push(opposite(heading));
+}
+
+fn corridor(map: &mut GameMap, points: &[Point], one_way: Option<Heading>) {
+    for position in points {
+        road(map, *position, one_way);
+    }
+    for pair in points.windows(2) {
+        connect(map, pair[0], pair[1]);
+    }
+}
+
+fn automatic_junction(
+    map: &mut GameMap,
+    id: &str,
+    footprint: Vec<Point>,
+    port_keys: &[(Point, Heading)],
+) {
+    for position in &footprint {
+        road(map, *position, None);
+        map.tile_mut(*position).unwrap().road_structure_id = Some(id.to_string());
+    }
+    let ports = port_keys
+        .iter()
+        .enumerate()
+        .map(|(index, (position, edge))| caelum_core::model::RoadPort {
+            id: format!("{id}-port-{index}"),
+            point: *position,
+            edge: *edge,
+        })
+        .collect();
+    map.road_structures.push(RoadStructure::AutomaticJunction {
+        id: id.to_string(),
+        footprint,
+        ports,
+    });
+}
+
+fn four_way_topology() -> RoadTopology {
+    let mut map = blank_map(7, 7);
+    let center = point(3, 3);
+    for neighbor in [point(3, 2), point(4, 3), point(3, 4), point(2, 3)] {
+        connect(&mut map, center, neighbor);
+    }
+    automatic_junction(
+        &mut map,
+        "cross",
+        vec![center],
+        &[
+            (center, Heading::North),
+            (center, Heading::East),
+            (center, Heading::South),
+            (center, Heading::West),
+        ],
+    );
+    RoadTopology::compile(&map).unwrap()
+}
+
+fn junction_state(incoming_heading: Heading) -> RoadState {
+    RoadState {
+        position: point(3, 3),
+        incoming_heading,
+    }
+}
+
+#[test]
+fn classifies_all_ordinary_junction_movements() {
+    let topology = four_way_topology();
+    let cases = [
+        (Heading::North, Heading::North, MovementKind::Straight),
+        (Heading::North, Heading::East, MovementKind::RightTurn),
+        (Heading::North, Heading::West, MovementKind::LeftTurn),
+        (Heading::North, Heading::South, MovementKind::UTurn),
+    ];
+
+    for (incoming, outgoing, expected) in cases {
+        assert_eq!(
+            topology
+                .transition_for(junction_state(incoming), outgoing)
+                .unwrap()
+                .movement,
+            expected
+        );
+    }
+}
+
+struct DualCrossFixture {
+    map: GameMap,
+    topology: RoadTopology,
+}
+
+impl DualCrossFixture {
+    fn enters_lane_wrong_way(&self, step: &caelum_core::model::RoadPathStep) -> bool {
+        let destination = match &step.geometry {
+            PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => {
+                point(to.x.round() as i32, to.y.round() as i32)
+            }
+            PathGeometry::Arc { .. } => return false,
+        };
+        self.map
+            .tile(destination)
+            .and_then(|tile| tile.one_way)
+            .is_some_and(|heading| heading != step.leaving_heading)
+    }
+}
+
+fn dual_cross_fixture() -> DualCrossFixture {
+    let mut map = blank_map(20, 12);
+    corridor(
+        &mut map,
+        &(6..=15).map(|x| point(x, 8)).collect::<Vec<_>>(),
+        Some(Heading::East),
+    );
+    corridor(
+        &mut map,
+        &(6..=15).map(|x| point(x, 9)).collect::<Vec<_>>(),
+        Some(Heading::West),
+    );
+    corridor(
+        &mut map,
+        &(3..=8).rev().map(|y| point(15, y)).collect::<Vec<_>>(),
+        Some(Heading::North),
+    );
+    let center = point(15, 8);
+    automatic_junction(
+        &mut map,
+        "dual-cross",
+        vec![center],
+        &[
+            (center, Heading::North),
+            (center, Heading::South),
+            (center, Heading::West),
+        ],
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    DualCrossFixture { map, topology }
+}
+
+#[test]
+fn turns_between_dual_bidirectional_corridors_choose_the_compatible_outbound_lane() {
+    let fixture = dual_cross_fixture();
+    let path = fixture
+        .topology
+        .find_path(&fixture.map, &point(6, 8), &point(15, 3))
+        .expect("west approach must turn north");
+
+    assert!(path
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == MovementKind::LeftTurn));
+    assert!(path
+        .road_steps()
+        .iter()
+        .all(|step| !fixture.enters_lane_wrong_way(step)));
+    assert_eq!(
+        path.road_steps().last().unwrap().leaving_heading,
+        Heading::North
+    );
+}
+
+struct TurnPenaltyFixture {
+    map: GameMap,
+    topology: RoadTopology,
+    from: Point,
+    to: Point,
+    expected_cheaper_millis: u64,
+    fewer_tiles_with_uturn: Vec<Point>,
+}
+
+fn turn_penalty_fixture() -> TurnPenaltyFixture {
+    let mut map = blank_map(8, 5);
+    let from = point(1, 2);
+    let entry = point(2, 2);
+    let alternate = point(3, 2);
+    let to = point(4, 2);
+    let direct_exit = point(5, 2);
+    corridor(&mut map, &[from, entry], Some(Heading::East));
+    corridor(&mut map, &[alternate, to], Some(Heading::East));
+    connect(&mut map, entry, alternate);
+    connect(&mut map, direct_exit, to);
+    road(&mut map, direct_exit, None);
+    automatic_junction(
+        &mut map,
+        "weighted-junction",
+        vec![entry, direct_exit],
+        &[
+            (entry, Heading::West),
+            (entry, Heading::East),
+            (direct_exit, Heading::West),
+        ],
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    TurnPenaltyFixture {
+        map,
+        topology,
+        from,
+        to,
+        expected_cheaper_millis: 3_750,
+        fewer_tiles_with_uturn: vec![from, entry],
+    }
+}
+
+#[test]
+fn weighted_search_can_prefer_more_steps_with_a_cheaper_turn_sequence() {
+    let fixture = turn_penalty_fixture();
+    let path = fixture
+        .topology
+        .find_path(&fixture.map, &fixture.from, &fixture.to)
+        .unwrap();
+
+    assert_eq!(
+        (path.total_travel_seconds() * 1_000.0).round() as u64,
+        fixture.expected_cheaper_millis
+    );
+    assert_ne!(
+        path.road_steps()
+            .iter()
+            .map(|step| step.position)
+            .collect::<Vec<_>>(),
+        fixture.fewer_tiles_with_uturn
+    );
+}
+
+struct EqualCostFixture {
+    path: TransitPath,
+}
+
+impl EqualCostFixture {
+    fn path_key(&self) -> Vec<(Point, Heading, Heading, MovementKind)> {
+        self.path
+            .road_steps()
+            .iter()
+            .map(|step| {
+                (
+                    step.position,
+                    step.entering_heading,
+                    step.leaving_heading,
+                    step.movement,
+                )
+            })
+            .collect()
+    }
+}
+
+fn equal_cost_fixture(rebuild_tiles: bool) -> EqualCostFixture {
+    let mut map = blank_map(6, 5);
+    for corridor_points in [
+        vec![
+            point(1, 2),
+            point(1, 1),
+            point(2, 1),
+            point(3, 1),
+            point(3, 2),
+        ],
+        vec![
+            point(1, 2),
+            point(1, 3),
+            point(2, 3),
+            point(3, 3),
+            point(3, 2),
+        ],
+    ] {
+        corridor(&mut map, &corridor_points, None);
+    }
+    if rebuild_tiles {
+        map.tiles.reverse();
+    }
+    let topology = RoadTopology::compile(&map).unwrap();
+    let path = topology
+        .find_path(&map, &point(1, 2), &point(3, 2))
+        .unwrap();
+    EqualCostFixture { path }
+}
+
+#[test]
+fn equal_cost_paths_use_canonical_direction_and_stable_structure_ties() {
+    let first = equal_cost_fixture(false).path_key();
+    let rebuilt = equal_cost_fixture(true).path_key();
+    assert_eq!(first, rebuilt);
+    assert_eq!(first.first().unwrap().2, Heading::North);
+}
+
+struct PairedLaneFixture {
+    map: GameMap,
+    topology: RoadTopology,
+    midblock_left: Point,
+    midblock_right: Point,
+    legal_start: Point,
+    wrong_way_end: Point,
+}
+
+fn paired_lane_fixture() -> PairedLaneFixture {
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &(1..=5).map(|x| point(x, 2)).collect::<Vec<_>>(),
+        Some(Heading::East),
+    );
+    corridor(
+        &mut map,
+        &(1..=5).map(|x| point(x, 3)).collect::<Vec<_>>(),
+        Some(Heading::West),
+    );
+    connect(&mut map, point(5, 2), point(5, 3));
+    map.tile_mut(point(5, 2)).unwrap().one_way = None;
+    let topology = RoadTopology::compile(&map).unwrap();
+    PairedLaneFixture {
+        map,
+        topology,
+        midblock_left: point(3, 2),
+        midblock_right: point(3, 3),
+        legal_start: point(1, 2),
+        wrong_way_end: point(5, 3),
+    }
+}
+
+#[test]
+fn rejects_mid_block_lane_change_and_wrong_way_entry() {
+    let fixture = paired_lane_fixture();
+    assert!(fixture
+        .topology
+        .find_path(
+            &fixture.map,
+            &fixture.midblock_left,
+            &fixture.midblock_right
+        )
+        .is_none());
+    assert!(fixture
+        .topology
+        .find_path(&fixture.map, &fixture.legal_start, &fixture.wrong_way_end)
+        .is_none());
+}
+
+struct MovementFixture {
+    map: GameMap,
+    topology: RoadTopology,
+    from: Point,
+    to: Point,
+}
+
+fn movement_fixture(points: &[Point], from: Point, to: Point) -> MovementFixture {
+    let mut map = blank_map(7, 7);
+    corridor(&mut map, points, None);
+    let topology = RoadTopology::compile(&map).unwrap();
+    MovementFixture {
+        map,
+        topology,
+        from,
+        to,
+    }
+}
+
+fn l_junction_fixture() -> MovementFixture {
+    movement_fixture(
+        &[point(1, 2), point(2, 2), point(2, 3)],
+        point(1, 2),
+        point(2, 3),
+    )
+}
+
+fn t_junction_fixture() -> MovementFixture {
+    let mut fixture = movement_fixture(
+        &[point(1, 2), point(2, 2), point(2, 1)],
+        point(1, 2),
+        point(2, 1),
+    );
+    connect(&mut fixture.map, point(2, 2), point(3, 2));
+    automatic_junction(
+        &mut fixture.map,
+        "tee",
+        vec![point(2, 2)],
+        &[
+            (point(2, 2), Heading::North),
+            (point(2, 2), Heading::East),
+            (point(2, 2), Heading::West),
+        ],
+    );
+    fixture.topology = RoadTopology::compile(&fixture.map).unwrap();
+    fixture
+}
+
+fn cross_junction_fixture() -> MovementFixture {
+    let mut map = blank_map(7, 7);
+    let center = point(2, 2);
+    for neighbor in [point(2, 1), point(3, 2), point(2, 3), point(1, 2)] {
+        connect(&mut map, center, neighbor);
+    }
+    automatic_junction(
+        &mut map,
+        "cross-fixture",
+        vec![center],
+        &[
+            (center, Heading::North),
+            (center, Heading::East),
+            (center, Heading::South),
+            (center, Heading::West),
+        ],
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    MovementFixture {
+        map,
+        topology,
+        from: point(1, 2),
+        to: point(3, 2),
+    }
+}
+
+fn uturn_fixture() -> MovementFixture {
+    let mut map = blank_map(6, 6);
+    let entry = point(2, 3);
+    let exit = point(2, 2);
+    let from = point(1, 3);
+    let to = point(1, 2);
+    corridor(&mut map, &[from, entry], Some(Heading::East));
+    corridor(&mut map, &[exit, to], Some(Heading::West));
+    automatic_junction(
+        &mut map,
+        "uturn",
+        vec![entry, exit],
+        &[(entry, Heading::West), (exit, Heading::West)],
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    MovementFixture {
+        map,
+        topology,
+        from,
+        to,
+    }
+}
+
+#[test]
+fn l_t_cross_and_uturn_paths_report_their_actual_movement_steps() {
+    for (fixture, expected) in [
+        (l_junction_fixture(), MovementKind::RightTurn),
+        (t_junction_fixture(), MovementKind::LeftTurn),
+        (cross_junction_fixture(), MovementKind::Straight),
+        (uturn_fixture(), MovementKind::UTurn),
+    ] {
+        let path = fixture
+            .topology
+            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .unwrap();
+        assert!(path
+            .road_steps()
+            .iter()
+            .any(|step| step.movement == expected));
+        if expected == MovementKind::UTurn {
+            let step = path
+                .road_steps()
+                .iter()
+                .find(|step| step.movement == MovementKind::UTurn)
+                .unwrap();
+            assert!(matches!(
+                &step.geometry,
+                PathGeometry::QuadraticBezier { .. } | PathGeometry::Arc { .. }
+            ));
+        }
+    }
+}
+
+struct OffRoadStopFixture {
+    map: GameMap,
+    topology: RoadTopology,
+    stop: Point,
+    road_destination: Point,
+    road_start: Point,
+}
+
+fn off_road_stop_fixture() -> OffRoadStopFixture {
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &(2..=6).map(|x| point(x, 3)).collect::<Vec<_>>(),
+        None,
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    OffRoadStopFixture {
+        map,
+        topology,
+        stop: point(2, 2),
+        road_destination: point(6, 3),
+        road_start: point(6, 3),
+    }
+}
+
+#[test]
+fn off_road_stop_access_is_allowed_only_as_a_path_endpoint() {
+    let fixture = off_road_stop_fixture();
+    assert!(fixture
+        .topology
+        .find_path(&fixture.map, &fixture.stop, &fixture.road_destination)
+        .is_some());
+    assert!(fixture
+        .topology
+        .find_path(&fixture.map, &fixture.road_start, &fixture.stop)
+        .is_some());
+    assert!(!fixture.topology.contains_ordinary_state(fixture.stop));
+}
+
+#[test]
+fn structure_transition_keys_are_stable_when_authored_order_changes() {
+    let mut first = dual_cross_fixture();
+    let first_path = first
+        .topology
+        .find_path(&first.map, &point(6, 8), &point(15, 3))
+        .unwrap();
+    first.map.road_structures.reverse();
+    for structure in &mut first.map.road_structures {
+        if let RoadStructure::AutomaticJunction { ports, .. } = structure {
+            ports.reverse();
+        }
+    }
+    let rebuilt = RoadTopology::compile(&first.map).unwrap();
+    let rebuilt_path = rebuilt
+        .find_path(&first.map, &point(6, 8), &point(15, 3))
+        .unwrap();
+    assert_eq!(first_path, rebuilt_path);
+}
+
+#[test]
+fn endpoint_access_does_not_create_an_intermediate_shortcut() {
+    let mut map = blank_map(7, 6);
+    corridor(&mut map, &[point(1, 3), point(2, 3)], None);
+    corridor(&mut map, &[point(4, 3), point(5, 3)], None);
+    let topology = RoadTopology::compile(&map).unwrap();
+    let empty_bridge = point(3, 3);
+    assert!(topology
+        .find_path(&map, &point(1, 3), &point(5, 3))
+        .is_none());
+    assert!(topology
+        .find_path(&map, &point(1, 3), &empty_bridge)
+        .is_some());
+    assert_eq!(offset(empty_bridge, Heading::West), point(2, 3));
+}

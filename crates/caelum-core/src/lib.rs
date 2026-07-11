@@ -35,6 +35,7 @@ pub mod objectives;
 pub mod platforms;
 pub mod rejection;
 pub mod road;
+pub mod road_topology;
 pub mod router;
 pub mod scenario;
 pub mod state;

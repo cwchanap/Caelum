@@ -342,6 +342,134 @@ impl From<Point> for TripPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MovementKind {
+    Straight,
+    RightTurn,
+    LeftTurn,
+    UTurn,
+    RoundaboutEntry,
+    RoundaboutCirculation,
+    RoundaboutExit,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PathGeometry {
+    Line {
+        from: TripPosition,
+        to: TripPosition,
+    },
+    QuadraticBezier {
+        from: TripPosition,
+        control: TripPosition,
+        to: TripPosition,
+    },
+    Arc {
+        center: TripPosition,
+        radius: f64,
+        start_radians: f64,
+        sweep_radians: f64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadPathStep {
+    pub position: Point,
+    pub entering_heading: Heading,
+    pub leaving_heading: Heading,
+    pub movement: MovementKind,
+    pub geometry: PathGeometry,
+    pub travel_seconds: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackPathStep {
+    pub position: Point,
+    pub heading: Heading,
+    pub geometry: PathGeometry,
+    pub travel_seconds: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TransitPath {
+    Road {
+        steps: Vec<RoadPathStep>,
+        total_travel_seconds: f64,
+    },
+    Track {
+        steps: Vec<TrackPathStep>,
+        total_travel_seconds: f64,
+    },
+}
+
+pub enum TransitPathStepRef<'a> {
+    Road(&'a RoadPathStep),
+    Track(&'a TrackPathStep),
+}
+
+impl TransitPathStepRef<'_> {
+    pub fn travel_seconds(&self) -> f64 {
+        match self {
+            Self::Road(step) => step.travel_seconds,
+            Self::Track(step) => step.travel_seconds,
+        }
+    }
+
+    pub fn accepts_heading(&self, heading: Heading) -> bool {
+        match self {
+            Self::Road(step) => step.entering_heading == heading || step.leaving_heading == heading,
+            Self::Track(step) => step.heading == heading,
+        }
+    }
+}
+
+impl TransitPath {
+    pub fn total_travel_seconds(&self) -> f64 {
+        match self {
+            Self::Road {
+                total_travel_seconds,
+                ..
+            }
+            | Self::Track {
+                total_travel_seconds,
+                ..
+            } => *total_travel_seconds,
+        }
+    }
+
+    pub fn step_count(&self) -> usize {
+        match self {
+            Self::Road { steps, .. } => steps.len(),
+            Self::Track { steps, .. } => steps.len(),
+        }
+    }
+
+    pub fn step(&self, index: usize) -> Option<TransitPathStepRef<'_>> {
+        match self {
+            Self::Road { steps, .. } => steps.get(index).map(TransitPathStepRef::Road),
+            Self::Track { steps, .. } => steps.get(index).map(TransitPathStepRef::Track),
+        }
+    }
+
+    pub fn step_refs(&self) -> Vec<TransitPathStepRef<'_>> {
+        (0..self.step_count())
+            .filter_map(|index| self.step(index))
+            .collect()
+    }
+
+    pub fn road_steps(&self) -> &[RoadPathStep] {
+        match self {
+            Self::Road { steps, .. } => steps,
+            Self::Track { .. } => &[],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitNetwork {

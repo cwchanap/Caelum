@@ -1,13 +1,51 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::model::{GameMap, Heading, Point, Tile, TransitMode};
+use crate::model::{
+    GameMap, Heading, PathGeometry, Point, Tile, TrackPathStep, TransitMode, TransitPath,
+};
+use crate::road_topology::RoadTopology;
+use crate::transit::METRO_TILES_PER_SECOND;
 
-pub fn find_tile_path(
+pub fn find_track_path(map: &GameMap, from: &Point, to: &Point) -> Option<TransitPath> {
+    let points = deterministic_track_bfs(map, from, to)?;
+    Some(track_path_from_points(points, METRO_TILES_PER_SECOND))
+}
+
+pub fn compute_route_segments(
     map: &GameMap,
-    from: &Point,
-    to: &Point,
+    anchors: &[Point],
     mode: TransitMode,
-) -> Option<Vec<Point>> {
+) -> Vec<Vec<Point>> {
+    if anchors.len() < 2 {
+        return Vec::new();
+    }
+    let road_topology = (mode == TransitMode::Bus)
+        .then(|| RoadTopology::compile(map).ok())
+        .flatten();
+
+    anchors
+        .iter()
+        .enumerate()
+        .map(|(index, from)| {
+            let to = &anchors[(index + 1) % anchors.len()];
+            let path = match mode {
+                TransitMode::Bus => road_topology
+                    .as_ref()
+                    .and_then(|topology| topology.find_path(map, from, to)),
+                TransitMode::Metro => find_track_path(map, from, to),
+                TransitMode::Walk => None,
+            };
+            path.map(|path| transit_path_points(&path, *to))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+pub fn has_broken_segment(segments: &[Vec<Point>]) -> bool {
+    segments.iter().any(Vec::is_empty)
+}
+
+fn deterministic_track_bfs(map: &GameMap, from: &Point, to: &Point) -> Option<Vec<Point>> {
     let tile_by_key: HashMap<(i32, i32), &Tile> = map
         .tiles
         .iter()
@@ -27,86 +65,40 @@ pub fn find_tile_path(
     let mut queue = VecDeque::from([from_key]);
 
     while let Some(current_key) = queue.pop_front() {
-        let current_tile = tile_by_key.get(&current_key).copied();
-
         for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
             let next_key = (current_key.0 + dx, current_key.1 + dy);
             if parents.contains_key(&next_key) {
                 continue;
             }
-
             let Some(next_tile) = tile_by_key.get(&next_key).copied() else {
                 continue;
             };
-
-            let is_final_hop_to_off_network_stop =
-                next_key == to_key && !is_traversable(next_tile, mode);
-            if !is_final_hop_to_off_network_stop
-                && mode == TransitMode::Bus
-                && current_tile.is_some_and(|tile| tile.kind == "road" && tile.one_way.is_some())
-            {
-                let allowed = road_direction_offset(
-                    current_tile
-                        .and_then(|tile| tile.one_way)
-                        .expect("checked one-way presence"),
-                );
-                if (dx, dy) != allowed {
-                    continue;
-                }
-            }
-
-            if next_key != to_key && !is_traversable(next_tile, mode) {
+            if next_key != to_key && !next_tile.has_track {
                 continue;
             }
 
             parents.insert(next_key, Some(current_key));
-
             if next_key == to_key {
-                let path = build_path(&parents, next_key);
+                let path = build_track_points(&parents, next_key);
                 if path.len() == 2 {
-                    let from_tile = tile_by_key
-                        .get(&from_key)
-                        .copied()
-                        .expect("from tile exists");
-                    if !is_traversable(from_tile, mode) && !is_traversable(next_tile, mode) {
+                    let from_tile = tile_by_key.get(&from_key).copied()?;
+                    if !from_tile.has_track && !next_tile.has_track {
                         parents.remove(&next_key);
                         continue;
                     }
                 }
                 return Some(path);
             }
-
             queue.push_back(next_key);
         }
     }
-
     None
 }
 
-pub fn compute_route_segments(
-    map: &GameMap,
-    anchors: &[Point],
-    mode: TransitMode,
-) -> Vec<Vec<Point>> {
-    if anchors.len() < 2 {
-        return Vec::new();
-    }
-
-    anchors
-        .iter()
-        .enumerate()
-        .map(|(index, from)| {
-            let to = &anchors[(index + 1) % anchors.len()];
-            find_tile_path(map, from, to, mode).unwrap_or_default()
-        })
-        .collect()
-}
-
-pub fn has_broken_segment(segments: &[Vec<Point>]) -> bool {
-    segments.iter().any(Vec::is_empty)
-}
-
-fn build_path(parents: &HashMap<(i32, i32), Option<(i32, i32)>>, to_key: (i32, i32)) -> Vec<Point> {
+fn build_track_points(
+    parents: &HashMap<(i32, i32), Option<(i32, i32)>>,
+    to_key: (i32, i32),
+) -> Vec<Point> {
     let mut path = Vec::new();
     let mut cursor = Some(to_key);
     while let Some(key) = cursor {
@@ -117,19 +109,45 @@ fn build_path(parents: &HashMap<(i32, i32), Option<(i32, i32)>>, to_key: (i32, i
     path
 }
 
-fn is_traversable(tile: &Tile, mode: TransitMode) -> bool {
-    match mode {
-        TransitMode::Bus => tile.kind == "road",
-        TransitMode::Metro => tile.has_track,
-        TransitMode::Walk => false,
+fn track_path_from_points(points: Vec<Point>, tiles_per_second: f64) -> TransitPath {
+    let travel_seconds = 1.0 / tiles_per_second;
+    let steps: Vec<_> = points
+        .windows(2)
+        .filter_map(|pair| {
+            let heading = heading_between(pair[0], pair[1])?;
+            Some(TrackPathStep {
+                position: pair[0],
+                heading,
+                geometry: PathGeometry::Line {
+                    from: pair[0].into(),
+                    to: pair[1].into(),
+                },
+                travel_seconds,
+            })
+        })
+        .collect();
+    TransitPath::Track {
+        total_travel_seconds: steps.len() as f64 * travel_seconds,
+        steps,
     }
 }
 
-fn road_direction_offset(direction: Heading) -> (i32, i32) {
-    match direction {
-        Heading::North => (0, -1),
-        Heading::East => (1, 0),
-        Heading::South => (0, 1),
-        Heading::West => (-1, 0),
+fn transit_path_points(path: &TransitPath, destination: Point) -> Vec<Point> {
+    let mut points: Vec<_> = match path {
+        TransitPath::Road { steps, .. } => steps.iter().map(|step| step.position).collect(),
+        TransitPath::Track { steps, .. } => steps.iter().map(|step| step.position).collect(),
+    };
+    points.push(destination);
+    points.dedup();
+    points
+}
+
+fn heading_between(from: Point, to: Point) -> Option<Heading> {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Some(Heading::North),
+        (1, 0) => Some(Heading::East),
+        (0, 1) => Some(Heading::South),
+        (-1, 0) => Some(Heading::West),
+        _ => None,
     }
 }
