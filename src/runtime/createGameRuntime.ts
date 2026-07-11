@@ -3,6 +3,7 @@ import type {
   BuildingType,
   GameplayRejection,
   Point,
+  RoundaboutSize,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
@@ -823,6 +824,13 @@ export async function createGameRuntime({
     if (candidate.activeTool === "road") {
       return roadClickMutation(candidate.hoverTile);
     }
+    if (candidate.activeTool === "roundabout") {
+      return {
+        type: "placeRoundabout",
+        origin: candidate.hoverTile,
+        size: candidate.roundaboutSize,
+      };
+    }
     if (candidate.activeTool === "remove") {
       return { type: "removeAtTile", point: candidate.hoverTile };
     }
@@ -945,6 +953,22 @@ export async function createGameRuntime({
       const snapshot = commit(state, {
         ...nextToolUiState("road", ui),
         roadPreset: preset,
+      });
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
+    },
+    armRoundabout(size: RoundaboutSize) {
+      // Roundabouts are fixed click stamps. Switching sizes is one UI commit
+      // and invalidates any in-flight road preview so an older footprint can
+      // never populate the newly armed stamp.
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      const snapshot = commit(state, {
+        ...nextToolUiState("roundabout", ui),
+        roundaboutSize: size,
+        drag: null,
       });
       const mutation = roadMutationForUi(ui);
       return mutation === null
@@ -1128,6 +1152,17 @@ export async function createGameRuntime({
         // re-read against the latest map state after earlier queued updates
         // drain (see `roadClickIntent`).
         return enqueueComputedDispatch(() => roadClickIntent(point));
+      }
+
+      if (ui.activeTool === "roundabout") {
+        const size = ui.roundaboutSize;
+        invalidateRoadPreview();
+        commit(state, { ...ui, roadMutationPreview: null });
+        return enqueueDispatch({
+          type: "placeRoundabout",
+          origin: point,
+          size,
+        });
       }
 
       const intent = intentForToolClick(point);

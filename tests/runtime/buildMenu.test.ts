@@ -42,10 +42,29 @@ describe("BUILD_MENU", () => {
   it("maps the three road presets under the road category", () => {
     const road = BUILD_MENU.find((c) => c.id === "road");
     expect(
-      road?.items.map((i) =>
-        i.action.kind === "road" ? i.action.roadPreset : null,
+      road?.items.flatMap((i) =>
+        i.action.kind === "road" ? [i.action.roadPreset] : [],
       ),
     ).toEqual(["twoWay", "oneWay", "dualBidirectional"]);
+  });
+
+  it("lists both roundabout stamps under Road without duplicating prices", () => {
+    const road = BUILD_MENU.find((category) => category.id === "road");
+    expect(road?.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "compactRoundabout",
+          label: "Compact Roundabout",
+          action: { kind: "roundabout", size: "compact2x2" },
+        }),
+        expect.objectContaining({
+          id: "standardRoundabout",
+          label: "Standard Roundabout",
+          action: { kind: "roundabout", size: "standard3x3" },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(road)).not.toMatch(/1000|2000|cost/i);
   });
 
   it("puts a single track item under rail", () => {

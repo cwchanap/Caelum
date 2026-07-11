@@ -204,7 +204,8 @@ export interface RouteImpact {
 
 export interface AuthoredRoadTilePreview {
   point: Point;
-  oneWay: Heading | null;
+  /** serde_wasm_bindgen may omit Rust Option::None; Tauri JSON emits null. */
+  oneWay?: Heading | null;
   roadConnections: Heading[];
   roadStructureId: string | null;
 }

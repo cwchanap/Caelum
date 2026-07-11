@@ -104,6 +104,8 @@
     }
     if (action.kind === "road") {
       setSnapshot(runtime.armRoad(action.roadPreset));
+    } else if (action.kind === "roundabout") {
+      setSnapshot(runtime.armRoundabout(action.size));
     } else if (action.kind === "track") {
       setSnapshot(runtime.setTool("track"));
     } else {
@@ -408,6 +410,7 @@
         selectedBuilding={snapshot.ui.selectedBuilding}
         buildingRotation={snapshot.ui.buildingRotation}
         roadPreset={snapshot.ui.roadPreset}
+        roundaboutSize={snapshot.ui.roundaboutSize}
         buildCategory={snapshot.ui.buildCategory}
         inspector={snapshot.shell.inspector}
         routeDraft={snapshot.shell.routeDraft}

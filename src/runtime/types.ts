@@ -7,6 +7,7 @@ import type {
   Point,
   RoadPreset,
   RoadStructure,
+  RoundaboutSize,
   ServicePattern,
   Tool,
   TransitMode,
@@ -194,6 +195,7 @@ export interface RuntimeController {
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
   setBuildCategory: (category: BuildCategoryId | null) => RuntimeSnapshot;
   armRoad: (preset: RoadPreset) => RuntimeSnapshot;
+  armRoundabout: (size: RoundaboutSize) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
   setDragCurrent: (point: Point | null) => RuntimeSnapshot;
   commitDrag: () => RuntimeCommandResult;

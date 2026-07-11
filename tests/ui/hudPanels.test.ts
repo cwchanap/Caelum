@@ -111,6 +111,7 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     selectedBuilding: null,
     buildingRotation: 0 as const,
     roadPreset: "twoWay" as const,
+    roundaboutSize: "compact2x2" as const,
     buildCategory: null,
     inspector: null,
     routeDraft: null,

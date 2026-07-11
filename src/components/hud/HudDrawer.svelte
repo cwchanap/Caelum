@@ -5,6 +5,7 @@
     BuildingType,
     Overlay,
     RoadPreset,
+    RoundaboutSize,
     ServicePattern,
     Tool,
   } from "../../domain/types";
@@ -38,6 +39,7 @@
     selectedBuilding: BuildingType | null;
     buildingRotation: BuildingRotation;
     roadPreset: RoadPreset;
+    roundaboutSize: RoundaboutSize;
     buildCategory: BuildCategoryId | null;
     inspector: ShellInspectorState | null;
     routeDraft: RouteEditorView | null;
@@ -119,6 +121,7 @@
         activeTool={p.activeTool}
         selectedBuilding={p.selectedBuilding}
         roadPreset={p.roadPreset}
+        roundaboutSize={p.roundaboutSize}
         buildingRotation={p.buildingRotation}
         onSetBuildCategory={p.onSetBuildCategory}
         onSelectItem={p.onSelectBuildItem}

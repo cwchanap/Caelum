@@ -5,6 +5,7 @@ import type {
   Overlay,
   Point,
   RoadPreset,
+  RoundaboutSize,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
@@ -51,6 +52,8 @@ export interface UiState {
   activeTool: Tool;
   /** Road build style for the road tool's drag gesture. */
   roadPreset: RoadPreset;
+  /** Fixed authoritative stamp requested by the click-only roundabout tool. */
+  roundaboutSize: RoundaboutSize;
   /** In-progress drag gesture, or null when idle. */
   drag: DragGesture | null;
   activeOverlay: Overlay | null;
@@ -76,6 +79,7 @@ export function createUiState(): UiState {
   return {
     activeTool: "inspect",
     roadPreset: "twoWay",
+    roundaboutSize: "compact2x2",
     drag: null,
     activeOverlay: null,
     selectedId: null,

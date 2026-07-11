@@ -2,13 +2,14 @@ import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import BuildPanel from "../../src/components/hud/panels/BuildPanel.svelte";
 import type { BuildCategoryId } from "../../src/domain/catalog/buildMenu";
-import type { BuildingType } from "../../src/domain/types";
+import type { BuildingType, RoundaboutSize } from "../../src/domain/types";
 
 type Overrides = Partial<{
   buildCategory: BuildCategoryId | null;
-  activeTool: "inspect" | "road" | "track";
+  activeTool: "inspect" | "road" | "roundabout" | "track";
   selectedBuilding: BuildingType | null;
   roadPreset: "twoWay" | "oneWay" | "dualBidirectional";
+  roundaboutSize: RoundaboutSize;
 }>;
 
 function renderPanel(overrides: Overrides = {}) {
@@ -17,6 +18,7 @@ function renderPanel(overrides: Overrides = {}) {
     activeTool: "inspect" as const,
     selectedBuilding: null,
     roadPreset: "twoWay" as const,
+    roundaboutSize: "compact2x2" as const,
     buildingRotation: 0 as const,
     onSetBuildCategory: vi.fn(),
     onSelectItem: vi.fn(),
@@ -83,6 +85,17 @@ describe("BuildPanel detail view", () => {
     });
   });
 
+  it("dispatches a roundabout action carrying the fixed stamp size", async () => {
+    const props = renderPanel({ buildCategory: "road" });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Standard Roundabout" }),
+    );
+    expect(props.onSelectItem).toHaveBeenCalledWith({
+      kind: "roundabout",
+      size: "standard3x3",
+    });
+  });
+
   it("dispatches a track action", async () => {
     const props = renderPanel({ buildCategory: "rail" });
     await fireEvent.click(screen.getByRole("button", { name: "Track" }));
@@ -122,6 +135,17 @@ describe("BuildPanel detail view", () => {
     });
     expect(
       screen.getByRole("button", { name: "1-Lane One-Way" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("marks the active roundabout stamp", () => {
+    renderPanel({
+      buildCategory: "road",
+      activeTool: "roundabout",
+      roundaboutSize: "standard3x3",
+    });
+    expect(
+      screen.getByRole("button", { name: "Standard Roundabout" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 });

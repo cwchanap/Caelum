@@ -182,6 +182,38 @@ function roadPreview(
   };
 }
 
+function roundaboutPreview(
+  generation: number,
+  origin: Point,
+  size: "compact2x2" | "standard3x3" = "compact2x2",
+): RoadMutationPreviewResponse {
+  const width = size === "compact2x2" ? 2 : 3;
+  const footprint = Array.from({ length: width * width }, (_, index) => ({
+    x: origin.x + (index % width),
+    y: origin.y + Math.floor(index / width),
+  }));
+  return {
+    generation,
+    changedTiles: footprint,
+    authoredTiles: [],
+    generatedStructures: [
+      {
+        kind: "roundabout",
+        id: "roundabout-preview",
+        origin,
+        size,
+        footprint,
+        ports: [],
+      },
+    ],
+    cost: size === "compact2x2" ? 1_000 : 2_000,
+    skippedTiles: [],
+    routeImpacts: [],
+    warnings: [],
+    rejection: null,
+  };
+}
+
 function reassignRouteToPlatform<
   T extends { id: string; platforms: Stop["platforms"] },
 >(nodes: T[], nodeId: string, routeId: string, platformId: string): T[] {
@@ -923,6 +955,92 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview?.changedTiles).toEqual([
       { x: 6, y: 5 },
     ]);
+  });
+
+  it("arms a click tool and never starts a drag gesture", async () => {
+    const base = backendSpy();
+    const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));
+    const runtime = await createGameRuntime({
+      backend: { ...base, previewRoadMutation },
+    });
+    runtime.armRoundabout("compact2x2");
+    runtime.startDrag({ x: 10, y: 8 });
+    runtime.setHoverTile({ x: 12, y: 10 });
+
+    expect(runtime.getSnapshot().ui.activeTool).toBe("roundabout");
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    expect(previewRoadMutation).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mutation: {
+          type: "placeRoundabout",
+          origin: { x: 12, y: 10 },
+          size: "compact2x2",
+        },
+      }),
+    );
+  });
+
+  it("previews the selected stamp when armed over an existing hover tile", async () => {
+    const base = backendSpy();
+    const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));
+    const runtime = await createGameRuntime({
+      backend: { ...base, previewRoadMutation },
+    });
+
+    runtime.setHoverTile({ x: 4, y: 3 });
+    runtime.armRoundabout("standard3x3");
+
+    expect(previewRoadMutation).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mutation: {
+          type: "placeRoundabout",
+          origin: { x: 4, y: 3 },
+          size: "standard3x3",
+        },
+      }),
+    );
+  });
+
+  it("click dispatches the exact intent but Rust revalidates it", async () => {
+    const base = backendSpy();
+    const dispatch = vi.fn(base.dispatch.bind(base));
+    const runtime = await createGameRuntime({
+      backend: { ...base, dispatch },
+    });
+    runtime.armRoundabout("standard3x3");
+    await runtime.handleTileClick({ x: 7, y: 6 });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "placeRoundabout",
+      origin: { x: 7, y: 6 },
+      size: "standard3x3",
+    });
+  });
+
+  it("keeps only the latest roundabout hover preview", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.armRoundabout("compact2x2");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    runtime.setHoverTile({ x: 8, y: 7 });
+    previews.resolveRoad(2, roundaboutPreview(2, { x: 8, y: 7 }));
+    previews.resolveRoad(1, roundaboutPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toMatchObject({
+      generation: 2,
+      changedTiles: expect.arrayContaining([
+        { x: 8, y: 7 },
+        { x: 9, y: 8 },
+      ]),
+      generatedStructures: [
+        expect.objectContaining({
+          kind: "roundabout",
+          origin: { x: 8, y: 7 },
+          size: "compact2x2",
+        }),
+      ],
+    });
   });
 
   it("manages game and UI state with shell-friendly selectors", async () => {

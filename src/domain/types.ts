@@ -51,6 +51,7 @@ export type Tool =
   | "metroLine"
   | "area"
   | "road"
+  | "roundabout"
   | "track"
   | "remove";
 export type RoadPreset = "twoWay" | "oneWay" | "dualBidirectional";

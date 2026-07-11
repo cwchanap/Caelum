@@ -7,6 +7,8 @@ import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type {
   ActiveTrip,
+  Point,
+  RoadStructure,
   RouteLegPath,
   Stop,
   TransitPath,
@@ -470,6 +472,33 @@ function recordingFillCtx() {
   return { ctx, fillStyles };
 }
 
+function footprint3x3(origin: Point): Point[] {
+  return Array.from({ length: 9 }, (_, index) => ({
+    x: origin.x + (index % 3),
+    y: origin.y + Math.floor(index / 3),
+  }));
+}
+
+function standardRoundaboutFixture(): Extract<
+  RoadStructure,
+  { kind: "roundabout" }
+> {
+  const origin = { x: 5, y: 5 };
+  return {
+    kind: "roundabout",
+    id: "roundabout-001",
+    origin,
+    size: "standard3x3",
+    footprint: footprint3x3(origin),
+    ports: [
+      { id: "north", point: { x: 6, y: 5 }, edge: "north" },
+      { id: "east", point: { x: 7, y: 6 }, edge: "east" },
+      { id: "south", point: { x: 6, y: 7 }, edge: "south" },
+      { id: "west", point: { x: 5, y: 6 }, edge: "west" },
+    ],
+  };
+}
+
 describe("authoritative road mutation preview", () => {
   const drag = {
     tool: "road" as const,
@@ -687,6 +716,36 @@ describe("authoritative road mutation preview", () => {
     expect(ctx.strokeStyle).toBe(colors.oneWayArrow);
   });
 
+  it("treats an omitted two-way wire field as non-directional", () => {
+    const ctx = dragCtx();
+    expect(() =>
+      renderOverlays(ctx, createTestGameState(), {
+        ...createUiState(),
+        activeTool: "road",
+        drag,
+        roadPreviewGeneration: 1,
+        roadMutationPreview: {
+          generation: 1,
+          changedTiles: [{ x: 1, y: 2 }],
+          authoredTiles: [
+            {
+              point: { x: 1, y: 2 },
+              // Rust omits Option::None fields on the wire for a two-way tile.
+              roadConnections: ["east"],
+              roadStructureId: null,
+            },
+          ],
+          generatedStructures: [],
+          cost: 100,
+          skippedTiles: [],
+          routeImpacts: [],
+          warnings: [],
+          rejection: null,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("renders generated structure footprints from Rust", () => {
     const ctx = dragCtx();
     renderOverlays(ctx, createTestGameState(), {
@@ -719,6 +778,112 @@ describe("authoritative road mutation preview", () => {
       tileSize,
       tileSize,
     );
+  });
+
+  it("draws the authoritative roundabout footprint and captured ports", () => {
+    const ctx = dragCtx();
+    const structure = standardRoundaboutFixture();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "roundabout",
+      hoverTile: structure.origin,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [structure],
+        cost: 2_000,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
+    }
+    expect(ctx.strokeRect).toHaveBeenCalledWith(
+      5 * tileSize,
+      5 * tileSize,
+      3 * tileSize,
+      3 * tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      6.25 * tileSize,
+      6.25 * tileSize,
+      0.5 * tileSize,
+      0.5 * tileSize,
+    );
+    expect(ctx.moveTo).toHaveBeenCalledWith(6.5 * tileSize, 5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(6.5 * tileSize, 5.25 * tileSize);
+    expect(ctx.moveTo).toHaveBeenCalledWith(8 * tileSize, 6.5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(7.75 * tileSize, 6.5 * tileSize);
+    expect(ctx.strokeStyle).toBe(colors.previewValidStroke);
+  });
+
+  it("uses invalid preview styling when Rust rejects the roundabout", () => {
+    const ctx = dragCtx();
+    const structure = standardRoundaboutFixture();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "roundabout",
+      hoverTile: structure.origin,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [structure],
+        cost: 2_000,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: {
+          code: "unsafeRoundaboutPortMapping",
+          context: { affectedRouteIds: [] },
+        },
+      },
+    });
+
+    expect(ctx.strokeStyle).toBe(colors.previewInvalidStroke);
+  });
+
+  it("remove hover highlights the complete owned footprint", () => {
+    const ctx = dragCtx();
+    const structure = standardRoundaboutFixture();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "remove",
+      hoverTile: { x: 6, y: 6 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
+    }
   });
 });
 

@@ -15,6 +15,7 @@ import type {
   Overlay,
   Point,
   RoadPreset,
+  RoundaboutSize,
   Tool,
 } from "../../src/domain/types";
 import {
@@ -199,6 +200,20 @@ function createRuntimeHarness(
         buildCategory: null,
         buildingRotation: 0,
         roadPreset: preset,
+        activeHudCategory: null,
+      };
+      return publish();
+    }),
+    armRoundabout: vi.fn((size: RoundaboutSize) => {
+      ui = {
+        ...ui,
+        activeTool: "roundabout",
+        selectedBuilding: null,
+        selectedArea: null,
+        buildCategory: null,
+        buildingRotation: 0,
+        roundaboutSize: size,
+        drag: null,
         activeHudCategory: null,
       };
       return publish();
@@ -519,6 +534,17 @@ describe("App shell bootstrap", () => {
     expect(runtime.armRoad).toHaveBeenCalledWith("dualBidirectional");
   });
 
+  it("arms the standard click tool from Build → Road", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Road" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Standard Roundabout" }),
+    );
+    expect(runtime.armRoundabout).toHaveBeenCalledWith("standard3x3");
+  });
+
   it("paints a zone from the Area category", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
@@ -828,7 +854,7 @@ describe("App shell bootstrap", () => {
     expect(runtime.dismissRejection).toHaveBeenCalled();
   });
 
-  it("presents road mutation impacts in an accessible status notice", () => {
+  it("presents roundabout cost and route impacts in an accessible status notice", () => {
     let state = createTestGameState();
     state = addTestBusStop(state, { x: 7, y: 8 });
     state = addTestBusStop(state, { x: 15, y: 8 });
@@ -845,14 +871,33 @@ describe("App shell bootstrap", () => {
     };
     const ui = {
       ...createUiState(),
-      activeTool: "road" as const,
+      activeTool: "roundabout" as const,
       roadPreviewGeneration: 1,
       roadMutationPreview: {
         generation: 1,
-        changedTiles: [{ x: 8, y: 8 }],
+        changedTiles: [
+          { x: 8, y: 8 },
+          { x: 9, y: 8 },
+          { x: 8, y: 9 },
+          { x: 9, y: 9 },
+        ],
         authoredTiles: [],
-        generatedStructures: [],
-        cost: 100,
+        generatedStructures: [
+          {
+            kind: "roundabout" as const,
+            id: "roundabout-001",
+            origin: { x: 8, y: 8 },
+            size: "compact2x2" as const,
+            footprint: [
+              { x: 8, y: 8 },
+              { x: 9, y: 8 },
+              { x: 8, y: 9 },
+              { x: 9, y: 9 },
+            ],
+            ports: [],
+          },
+        ],
+        cost: 2_000,
         skippedTiles: [],
         routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
         warnings: [],
@@ -869,6 +914,9 @@ describe("App shell bootstrap", () => {
     );
     expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
       "Route 1 will become broken",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "$2,000",
     );
   });
 });

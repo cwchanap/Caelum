@@ -3,6 +3,7 @@
     BuildingRotation,
     BuildingType,
     RoadPreset,
+    RoundaboutSize,
     Tool,
   } from "../../../domain/types";
   import type {
@@ -20,6 +21,7 @@
     activeTool: Tool;
     selectedBuilding: BuildingType | null;
     roadPreset: RoadPreset;
+    roundaboutSize: RoundaboutSize;
     buildingRotation: BuildingRotation;
     onSetBuildCategory: (id: BuildCategoryId | null) => void;
     onSelectItem: (action: BuildItemAction) => void;
@@ -31,6 +33,7 @@
     activeTool,
     selectedBuilding,
     roadPreset,
+    roundaboutSize,
     buildingRotation,
     onSetBuildCategory,
     onSelectItem,
@@ -48,6 +51,13 @@
         selectedBuilding === null &&
         activeTool === "road" &&
         roadPreset === action.roadPreset
+      );
+    }
+    if (action.kind === "roundabout") {
+      return (
+        selectedBuilding === null &&
+        activeTool === "roundabout" &&
+        roundaboutSize === action.size
       );
     }
     return selectedBuilding === null && activeTool === "track";

@@ -4,6 +4,7 @@ import {
   type GameMap,
   type GameState,
   type Point,
+  type RoadStructure,
   type RouteLegPath,
   type Tile,
   type TransitPath,
@@ -29,6 +30,8 @@ import { drawDirectionArrow } from "./mapRenderer";
 import { pointAndTangentAt } from "./pathRenderer";
 
 const previewStrokeInset = 2;
+
+type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
 
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
@@ -282,6 +285,84 @@ function renderRoadPreviewFeedback(
   ctx.restore();
 }
 
+function renderRoundaboutPreviewStructure(
+  ctx: CanvasRenderingContext2D,
+  structure: RoundaboutStructure,
+  valid: boolean,
+  alreadyFilled: ReadonlySet<string>,
+): void {
+  const fillColor = valid ? colors.previewValid : colors.previewInvalid;
+  const strokeColor = valid
+    ? colors.previewValidStroke
+    : colors.previewInvalidStroke;
+
+  ctx.fillStyle = fillColor;
+  for (const point of structure.footprint) {
+    if (!alreadyFilled.has(`${point.x},${point.y}`)) {
+      fillTile(ctx, point);
+    }
+  }
+
+  if (structure.footprint.length > 0) {
+    const xs = structure.footprint.map((point) => point.x);
+    const ys = structure.footprint.map((point) => point.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(
+      minX * tileSize,
+      minY * tileSize,
+      (maxX - minX + 1) * tileSize,
+      (maxY - minY + 1) * tileSize,
+    );
+  }
+
+  if (structure.size === "standard3x3") {
+    // The authoritative 3x3 footprint owns its center even though that tile is
+    // not carriageway. Mark the protected island distinctly so the preview
+    // does not suggest it remains buildable.
+    ctx.fillStyle = colors.badgeBackground;
+    ctx.fillRect(
+      (structure.origin.x + 1.25) * tileSize,
+      (structure.origin.y + 1.25) * tileSize,
+      tileSize / 2,
+      tileSize / 2,
+    );
+  }
+
+  if (structure.ports.length === 0) {
+    return;
+  }
+  ctx.beginPath();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (const port of structure.ports) {
+    const left = port.point.x * tileSize;
+    const top = port.point.y * tileSize;
+    const centerX = left + tileSize / 2;
+    const centerY = top + tileSize / 2;
+    const tick = tileSize / 4;
+    if (port.edge === "north") {
+      ctx.moveTo(centerX, top);
+      ctx.lineTo(centerX, top + tick);
+    } else if (port.edge === "east") {
+      ctx.moveTo(left + tileSize, centerY);
+      ctx.lineTo(left + tileSize - tick, centerY);
+    } else if (port.edge === "south") {
+      ctx.moveTo(centerX, top + tileSize);
+      ctx.lineTo(centerX, top + tileSize - tick);
+    } else {
+      ctx.moveTo(left, centerY);
+      ctx.lineTo(left + tick, centerY);
+    }
+  }
+  ctx.stroke();
+}
+
 function renderRoadMutationPreview(
   ctx: CanvasRenderingContext2D,
   ui: UiState,
@@ -297,21 +378,45 @@ function renderRoadMutationPreview(
   const skipped = new Set(
     preview.skippedTiles.map((point) => `${point.x},${point.y}`),
   );
+  const roundabouts = preview.generatedStructures.filter(
+    (structure): structure is RoundaboutStructure =>
+      structure.kind === "roundabout",
+  );
+  const roundaboutFootprint = new Set(
+    roundabouts.flatMap((structure) =>
+      structure.footprint.map((point) => `${point.x},${point.y}`),
+    ),
+  );
+  const previewAccepted = preview.rejection === null;
   for (const point of [...preview.changedTiles, ...preview.skippedTiles]) {
     const key = `${point.x},${point.y}`;
-    const valid = changed.has(key) && !skipped.has(key);
-    ctx.fillStyle =
-      valid && !removal ? colors.previewValid : colors.previewInvalid;
-    ctx.strokeStyle =
-      valid && !removal
-        ? colors.previewValidStroke
-        : colors.previewInvalidStroke;
+    const valid =
+      previewAccepted && changed.has(key) && !skipped.has(key) && !removal;
+    ctx.fillStyle = valid ? colors.previewValid : colors.previewInvalid;
+    ctx.strokeStyle = valid
+      ? colors.previewValidStroke
+      : colors.previewInvalidStroke;
     fillTile(ctx, point);
-    strokeTile(ctx, point);
+    if (!roundaboutFootprint.has(key)) {
+      strokeTile(ctx, point);
+    }
   }
   for (const structure of preview.generatedStructures) {
-    ctx.fillStyle = colors.previewValid;
-    ctx.strokeStyle = colors.previewValidStroke;
+    if (structure.kind === "roundabout") {
+      renderRoundaboutPreviewStructure(
+        ctx,
+        structure,
+        previewAccepted && !removal,
+        changed,
+      );
+      continue;
+    }
+    ctx.fillStyle = previewAccepted
+      ? colors.previewValid
+      : colors.previewInvalid;
+    ctx.strokeStyle = previewAccepted
+      ? colors.previewValidStroke
+      : colors.previewInvalidStroke;
     for (const point of structure.footprint) {
       fillTile(ctx, point);
       strokeTile(ctx, point);
@@ -327,14 +432,14 @@ function renderRoadMutationPreview(
     }
     ctx.restore();
   }
-  const directed = preview.authoredTiles.filter((tile) => tile.oneWay !== null);
+  const directed = preview.authoredTiles.filter((tile) => tile.oneWay != null);
   if (directed.length > 0) {
     ctx.save();
     ctx.strokeStyle = colors.oneWayArrow;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     for (const tile of directed) {
-      if (tile.oneWay !== null) {
+      if (tile.oneWay != null) {
         drawDirectionArrow(ctx, tile.point, tile.oneWay);
       }
     }
@@ -661,7 +766,11 @@ export function renderOverlays(
     return;
   }
 
-  if (ui.activeTool === "road" || ui.activeTool === "remove") {
+  if (
+    ui.activeTool === "road" ||
+    ui.activeTool === "roundabout" ||
+    ui.activeTool === "remove"
+  ) {
     renderRoadMutationPreview(ctx, ui, ui.activeTool === "remove");
     if (ui.roadMutationPreview !== null) {
       return;

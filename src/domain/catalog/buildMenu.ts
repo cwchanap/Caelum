@@ -1,4 +1,4 @@
-import type { BuildingType, RoadPreset } from "../types";
+import type { BuildingType, RoadPreset, RoundaboutSize } from "../types";
 import { BUILDING_CATALOG } from "./buildings";
 
 export type BuildCategoryId =
@@ -17,6 +17,7 @@ export type BuildCategoryId =
  *  do not. The panel dispatches these to the matching runtime setter. */
 export type BuildItemAction =
   | { kind: "road"; roadPreset: RoadPreset }
+  | { kind: "roundabout"; size: RoundaboutSize }
   | { kind: "track" }
   | { kind: "building"; building: BuildingType };
 
@@ -60,6 +61,16 @@ export const BUILD_MENU: BuildMenuCategory[] = [
         id: "road-dual",
         label: "2-Lane",
         action: { kind: "road", roadPreset: "dualBidirectional" },
+      },
+      {
+        id: "compactRoundabout",
+        label: "Compact Roundabout",
+        action: { kind: "roundabout", size: "compact2x2" },
+      },
+      {
+        id: "standardRoundabout",
+        label: "Standard Roundabout",
+        action: { kind: "roundabout", size: "standard3x3" },
       },
     ],
   },
