@@ -166,7 +166,23 @@ describe("createTauriBackend", () => {
       generation: 52,
     };
     invokeMock
-      .mockResolvedValueOnce({ generation: 51, rejection: null })
+      .mockResolvedValueOnce({
+        generation: 51,
+        legs: [],
+        totalTravelSeconds: 0,
+        initialVehicleCost: 8_000,
+        affordable: true,
+        turnSummary: {
+          straight: 0,
+          rightTurn: 0,
+          leftTurn: 0,
+          uTurn: 0,
+          roundaboutEntry: 0,
+        },
+        missingWaypointIds: [],
+        warnings: [],
+        rejection: null,
+      })
       .mockResolvedValueOnce({
         generation: 52,
         cost: 100,

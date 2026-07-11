@@ -5,6 +5,7 @@ import {
   type Stop,
 } from "../domain/types";
 import type { RustGameSnapshot } from "./backend/types";
+import { normalizeRouteLegPath } from "./backend/shared";
 
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
   if (snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
@@ -18,21 +19,11 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
       ...snapshot.transit,
       routes: snapshot.transit.routes.map((route) => ({
         ...route,
-        legs: route.legs.map((leg) => ({
-          ...leg,
-          currentPath: leg.currentPath ?? null,
-          lastValidPath: leg.lastValidPath ?? null,
-          estimatedSeconds: leg.estimatedSeconds ?? null,
-        })),
+        legs: route.legs.map(normalizeRouteLegPath),
       })),
       metroLines: snapshot.transit.metroLines.map((line) => ({
         ...line,
-        legs: line.legs.map((leg) => ({
-          ...leg,
-          currentPath: leg.currentPath ?? null,
-          lastValidPath: leg.lastValidPath ?? null,
-          estimatedSeconds: leg.estimatedSeconds ?? null,
-        })),
+        legs: line.legs.map(normalizeRouteLegPath),
       })),
     },
     metrics: {

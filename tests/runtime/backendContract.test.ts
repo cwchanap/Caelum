@@ -119,9 +119,9 @@ describe("Rust backend contract", () => {
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
 
-  it("normalizes serde-wasm undefined route path options to explicit nulls", () => {
+  it("normalizes committed bus and metro route path options to explicit nulls", () => {
     const snapshot = createRustSnapshot();
-    const brokenLeg = {
+    const brokenBusLeg = {
       fromWaypointId: "stop-001",
       toWaypointId: "stop-002",
       direction: "loop" as const,
@@ -140,13 +140,37 @@ describe("Rust backend contract", () => {
       active: true,
       pattern: "loop",
       revision: 1,
-      legs: [brokenLeg],
+      legs: [brokenBusLeg],
+      pathBroken: true,
+    });
+    snapshot.transit.metroLines.push({
+      id: "metro-001",
+      name: "Metro 1",
+      color: "#aa00ff",
+      stationIds: ["station-001", "station-002"],
+      vehicleIds: [],
+      active: true,
+      pattern: "shuttle",
+      revision: 1,
+      legs: [
+        {
+          ...brokenBusLeg,
+          fromWaypointId: "station-001",
+          toWaypointId: "station-002",
+          direction: "outbound",
+        },
+      ],
       pathBroken: true,
     });
 
     const normalized = normalizeRustSnapshot(snapshot);
 
     expect(normalized.transit.routes[0].legs[0]).toMatchObject({
+      currentPath: null,
+      lastValidPath: null,
+      estimatedSeconds: null,
+    });
+    expect(normalized.transit.metroLines[0].legs[0]).toMatchObject({
       currentPath: null,
       lastValidPath: null,
       estimatedSeconds: null,

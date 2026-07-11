@@ -6,12 +6,12 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 
 `crates/caelum-core` owns the simulation. It is a Cargo workspace member gated by CI (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo build`) and by `lint-staged`.
 
-- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs the fixed tick pipeline (`tick_trips` → `evaluate_objectives`) over immutable snapshots. Trip outcomes are recorded inline by `tick_trips` (via `update_metrics`); there is no separate `record_trip_outcome` step. It publishes a new snapshot only when `next != current`, mirroring the TS runtime's reference-equality dispatch.
+- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs `tick_trips_with_objectives`, which advances immutable snapshots in deterministic boundary-aware substeps and evaluates objectives after each substep. Trip outcomes are recorded inline by the trip pipeline (via `update_metrics`); there is no separate `record_trip_outcome` step. It publishes a new snapshot only when `next != current`, matching the TS runtime's reference-equality dispatch.
 - `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
 - `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
 - `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
 - `scenario.rs`, `clock.rs` — Growing Suburb scenario and deterministic clock.
-- `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde for the future WASM/Tauri boundary.
+- `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde used by the active WASM and Tauri host boundaries.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
@@ -26,7 +26,7 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 - It publishes runtime snapshots for the Svelte shell.
 - It mounts the imperative canvas host and keeps rendering tied to runtime-owned state.
 
-Browser builds use the WASM backend generated from `crates/caelum-wasm`. Tauri builds use command calls into managed Rust command state. Both backends share the same `caelum-core::GameEngine` facade. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
+Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
 The host contract is `SNAPSHOT_SCHEMA_VERSION = 2`. Loading is strict: there is no heuristic legacy-snapshot migration or fallback path. Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
@@ -58,7 +58,8 @@ The shell is fully Svelte-owned:
 
 - `App.svelte` composes the runtime-backed shell and handles visible shell errors.
 - `Topbar.svelte` renders live metrics and pause/speed controls from derived runtime state.
-- `ControlTower.svelte` renders tools, overlays, and scenario brief data from runtime selectors.
+- `BottomHud.svelte` keeps the Build, Area, Routes, Manage, Data, and Brief categories docked at the bottom.
+- `HudDrawer.svelte` hosts the corresponding focused panels plus contextual Inspect content; the panel components render tools, route editing/management, overlays, and scenario data from runtime selectors.
 - `GameCanvas.svelte` provides the Svelte host for the imperative canvas while leaving drawing inside the existing render modules.
 
 Svelte consumes derived runtime snapshots and never becomes a second source of truth for gameplay state.
@@ -69,8 +70,8 @@ Canvas rendering remains imperative for parity and performance.
 
 - `GameCanvas.svelte` provides the board host element.
 - `createGameRuntime()` attaches the real `<canvas>` to that host.
-- `src/render/canvas.ts` still owns board sizing, coordinate mapping, and the render pass.
-- The existing map, overlay, transit, and citizen renderers remain unchanged aside from runtime call-site integration.
+- `src/render/canvas.ts` owns board sizing, coordinate mapping, and render-pass composition.
+- Map, building, overlay, transit, citizen, roundabout, and route-geometry renderers consume committed runtime state and local selection/draft presentation state without becoming gameplay authorities.
 
 ## Hosts
 

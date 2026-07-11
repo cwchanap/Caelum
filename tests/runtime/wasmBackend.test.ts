@@ -56,6 +56,30 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
     preview_route(request: RoutePreviewRequest) {
       return {
         generation: request.generation,
+        legs: [
+          {
+            fromWaypointId: request.waypointIds[0],
+            toWaypointId: request.waypointIds[1],
+            direction: request.pattern === "loop" ? "loop" : "outbound",
+            kind: "service",
+            status: "networkDisconnected",
+            currentPath: undefined,
+            lastValidPath: undefined,
+            estimatedSeconds: undefined,
+          },
+        ],
+        totalTravelSeconds: 0,
+        initialVehicleCost: 0,
+        affordable: true,
+        turnSummary: {
+          straight: 0,
+          rightTurn: 0,
+          leftTurn: 0,
+          uTurn: 0,
+          roundaboutEntry: 0,
+        },
+        missingWaypointIds: [],
+        warnings: [],
         rejection: null,
       };
     }
@@ -235,4 +259,32 @@ describe("createWasmBackend", () => {
       },
     });
   });
+
+  it.each([
+    ["bus", ["stop-001", "stop-002"]],
+    ["metro", ["station-001", "station-002"]],
+  ] as const)(
+    "normalizes broken %s preview leg options at the WASM boundary",
+    async (mode, waypointIds) => {
+      const backend = await createWasmBackend();
+
+      const response = await backend.previewRoute({
+        mode,
+        pattern: "shuttle",
+        waypointIds: [...waypointIds],
+        routeId: null,
+        expectedRevision: null,
+        generation: mode === "bus" ? 61 : 62,
+      });
+
+      expect(response.legs).toHaveLength(1);
+      expect(response.legs[0]).toMatchObject({
+        fromWaypointId: waypointIds[0],
+        toWaypointId: waypointIds[1],
+        currentPath: null,
+        lastValidPath: null,
+        estimatedSeconds: null,
+      });
+    },
+  );
 });

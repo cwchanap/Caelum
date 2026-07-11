@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import { normalizeDispatchResult } from "./shared";
+import {
+  normalizeDispatchResult,
+  normalizeRoutePreviewResponse,
+} from "./shared";
 import type {
   DispatchResult,
   GameBackend,
@@ -31,7 +34,13 @@ export async function createTauriBackend(): Promise<GameBackend> {
       return invoke<RustGameSnapshot>("game_reset");
     },
     async previewRoute(request: RoutePreviewRequest) {
-      return invoke<RoutePreviewResponse>("game_preview_route", { request });
+      const response = await invoke<RoutePreviewResponse>(
+        "game_preview_route",
+        {
+          request,
+        },
+      );
+      return normalizeRoutePreviewResponse(response);
     },
     async previewRoadMutation(request: RoadMutationPreviewRequest) {
       return invoke<RoadMutationPreviewResponse>("game_preview_road_mutation", {
