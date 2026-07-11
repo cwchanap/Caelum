@@ -382,6 +382,17 @@ fn no_live_waypoint_keeps_the_current_world_position_as_out_of_service_parking()
 }
 
 #[test]
+#[should_panic(
+    expected = "vehicle vehicle-001 on route route-001 has no exact world position while breaking service"
+)]
+fn broken_transition_rejects_a_vehicle_without_an_exact_world_position() {
+    let mut fixture = moving_vehicle_with_rider_fixture();
+    fixture.state.transit.vehicles[0].path_step_index = usize::MAX;
+
+    let _ = recompute_after_removal(&fixture.state, point(6, 5));
+}
+
+#[test]
 fn repaired_active_route_rebases_and_resumes_without_flipping_active() {
     let fixture = moving_vehicle_with_rider_fixture();
     let broken = recompute_after_removal(&fixture.state, point(6, 5));

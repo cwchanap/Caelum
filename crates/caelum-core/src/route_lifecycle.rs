@@ -207,12 +207,12 @@ fn break_service(
             .find(|vehicle| vehicle.id == candidate_vehicle.id)
             .and_then(|vehicle| vehicle_world_position(previous, mode, route_id, vehicle))
             .or_else(|| candidate_vehicle.parked_position.clone())
-            .or_else(|| {
-                waypoint_ids
-                    .iter()
-                    .find_map(|id| node_world(previous, mode, id))
-            })
-            .unwrap_or(TripPosition { x: 0.0, y: 0.0 });
+            .unwrap_or_else(|| {
+                panic!(
+                    "vehicle {} on route {} has no exact world position while breaking service",
+                    candidate_vehicle.id, route_id
+                )
+            });
         let target = parking_target(candidate, mode, &waypoint_ids, &vehicle_world);
         let (itinerary_index, parked_world) = target.map_or_else(
             || (None, vehicle_world),
@@ -362,23 +362,6 @@ fn present_node_world(
         .stations
         .iter()
         .find(|station| station.id == node_id && is_present_node(station.status))
-        .map(|station| station.position.into())
-}
-
-fn node_world(snapshot: &GameSnapshot, mode: TransitMode, node_id: &str) -> Option<TripPosition> {
-    if mode == TransitMode::Bus {
-        return snapshot
-            .transit
-            .stops
-            .iter()
-            .find(|stop| stop.id == node_id)
-            .map(|stop| stop.position.into());
-    }
-    snapshot
-        .transit
-        .stations
-        .iter()
-        .find(|station| station.id == node_id)
         .map(|station| station.position.into())
 }
 
