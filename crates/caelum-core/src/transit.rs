@@ -1064,7 +1064,8 @@ impl PlatformNode for crate::model::Station {
 pub(crate) fn park_vehicles_and_invalidate_trips(
     state: &mut GameSnapshot,
     line_id: &str,
-    positions: &[Point],
+    legs: &[RouteLegPath],
+    position_by_waypoint_id: &HashMap<String, Point>,
 ) {
     let mut parked_position_by_trip_id = HashMap::new();
 
@@ -1072,12 +1073,15 @@ pub(crate) fn park_vehicles_and_invalidate_trips(
         if vehicle.line_id != line_id {
             continue;
         }
-        if !positions.is_empty() {
-            let parked_at = &positions[vehicle.itinerary_index % positions.len()];
-            for passenger_id in &vehicle.passenger_ids {
-                parked_position_by_trip_id.insert(passenger_id.clone(), *parked_at);
+        if !legs.is_empty() {
+            let leg = &legs[vehicle.itinerary_index % legs.len()];
+            let parked_at = position_by_waypoint_id.get(&leg.from_waypoint_id);
+            if let Some(parked_at) = parked_at {
+                for passenger_id in &vehicle.passenger_ids {
+                    parked_position_by_trip_id.insert(passenger_id.clone(), *parked_at);
+                }
+                vehicle.parked_position = Some((*parked_at).into());
             }
-            vehicle.parked_position = Some((*parked_at).into());
         }
         vehicle.passenger_ids.clear();
         vehicle.path_step_index = 0;

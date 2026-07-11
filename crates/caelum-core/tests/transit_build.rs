@@ -7,8 +7,8 @@ use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{build_service_itinerary, ServiceLegSpec};
 use caelum_core::{
-    state::create_initial_snapshot, transit, GameEngine, GameIntent, RejectionCode, RoadPreset,
-    RoutingContext,
+    route_lifecycle, state::create_initial_snapshot, transit, GameEngine, GameIntent,
+    RejectionCode, RoadPreset, RoutingContext,
 };
 
 fn ids(values: &[&str]) -> Vec<String> {
@@ -119,6 +119,79 @@ fn mode_specific_terminal_reversals_are_explicit() {
         .road_steps()
         .iter()
         .any(|step| step.movement == caelum_core::model::MovementKind::UTurn));
+}
+
+#[test]
+fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for x in [2, 6, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    });
+    engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+
+    let mut state = engine.snapshot();
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let waypoint_ids = state.transit.routes[0].stop_ids.clone();
+    state.transit.routes[0].pattern = ServicePattern::Shuttle;
+    state.transit.routes[0].legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &waypoint_ids,
+        ServicePattern::Shuttle,
+    );
+    state.transit.vehicles[0].itinerary_index = 3;
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: (10, 5).into(),
+        destination: (6, 5).into(),
+        position: (9, 5).into(),
+        status: TripStatus::Riding,
+        deadline: 100.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Bus,
+                from: (10, 5).into(),
+                to: (6, 5).into(),
+                line_id: Some("route-001".to_string()),
+            }],
+            estimated_seconds: 10.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let candidate = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
+    let candidate_topology = RoadTopology::compile(&candidate.map).unwrap();
+    let next = route_lifecycle::recompute_affected_routes(
+        &state,
+        candidate,
+        RoutingContext {
+            road_topology: &candidate_topology,
+        },
+    );
+
+    assert!(next.transit.routes[0].path_broken);
+    assert_eq!(
+        next.transit.vehicles[0].parked_position,
+        Some((10, 5).into())
+    );
+    assert_eq!(next.active_trips[0].position, (10, 5).into());
+    assert_eq!(next.active_trips[0].status, TripStatus::Idle);
 }
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
@@ -255,6 +328,7 @@ fn duplicate_stop_route_stays_inactive_and_unassigned() {
 
     assert!(result.applied);
     assert!(!result.snapshot.transit.routes[0].active);
+    assert!(result.snapshot.transit.routes[0].legs.is_empty());
     assert!(!result.snapshot.transit.stops[0].platforms[0]
         .route_ids
         .contains(&"route-001".to_string()));

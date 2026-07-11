@@ -20,6 +20,16 @@ pub fn resolve_route_legs(
     waypoint_ids: &[String],
     pattern: ServicePattern,
 ) -> Vec<RouteLegPath> {
+    let Some(first_waypoint_id) = waypoint_ids.first() else {
+        return Vec::new();
+    };
+    if !waypoint_ids
+        .iter()
+        .skip(1)
+        .any(|waypoint_id| waypoint_id != first_waypoint_id)
+    {
+        return Vec::new();
+    }
     let specs = build_service_itinerary(mode, pattern, waypoint_ids);
     specs
         .iter()

@@ -26,7 +26,6 @@ pub fn recompute_affected_routes(
 
     for route_index in 0..next.transit.routes.len() {
         let route = next.transit.routes[route_index].clone();
-        let positions = resolve_positions(&route.stop_ids, &stop_position_by_id);
         let legs = resolve_route_legs(
             &candidate,
             context,
@@ -38,7 +37,7 @@ pub fn recompute_affected_routes(
             .iter()
             .any(|leg| leg.status != RouteLegStatus::Connected);
         if path_broken && !route.path_broken {
-            park_vehicles_and_invalidate_trips(&mut next, &route.id, &positions);
+            park_vehicles_and_invalidate_trips(&mut next, &route.id, &legs, &stop_position_by_id);
         }
         next.transit.routes[route_index].legs = legs;
         next.transit.routes[route_index].path_broken = path_broken;
@@ -46,7 +45,6 @@ pub fn recompute_affected_routes(
 
     for line_index in 0..next.transit.metro_lines.len() {
         let line = next.transit.metro_lines[line_index].clone();
-        let positions = resolve_positions(&line.station_ids, &station_position_by_id);
         let legs = resolve_route_legs(
             &candidate,
             context,
@@ -58,7 +56,7 @@ pub fn recompute_affected_routes(
             .iter()
             .any(|leg| leg.status != RouteLegStatus::Connected);
         if path_broken && !line.path_broken {
-            park_vehicles_and_invalidate_trips(&mut next, &line.id, &positions);
+            park_vehicles_and_invalidate_trips(&mut next, &line.id, &legs, &station_position_by_id);
         }
         next.transit.metro_lines[line_index].legs = legs;
         next.transit.metro_lines[line_index].path_broken = path_broken;
@@ -120,10 +118,4 @@ pub fn structurally_changed_route_ids(
     affected.sort();
     affected.dedup();
     affected
-}
-
-fn resolve_positions(ids: &[String], position_by_id: &HashMap<String, Point>) -> Vec<Point> {
-    ids.iter()
-        .filter_map(|id| position_by_id.get(id).copied())
-        .collect()
 }
