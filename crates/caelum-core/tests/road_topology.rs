@@ -559,6 +559,33 @@ fn right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent() {
     }
 }
 
+#[test]
+fn consecutive_geometry_is_continuous_through_right_and_left_turns() {
+    for fixture in [l_junction_fixture(), t_junction_fixture()] {
+        let path = fixture
+            .topology
+            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .unwrap();
+        for pair in path.road_steps().windows(2) {
+            let previous_end = match &pair[0].geometry {
+                PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
+                PathGeometry::Arc { .. } => panic!("fixture does not use arc geometry"),
+            };
+            let next_start = match &pair[1].geometry {
+                PathGeometry::Line { from, .. } | PathGeometry::QuadraticBezier { from, .. } => {
+                    from
+                }
+                PathGeometry::Arc { .. } => panic!("fixture does not use arc geometry"),
+            };
+            assert!(
+                (previous_end.x - next_start.x).abs() < 1e-9
+                    && (previous_end.y - next_start.y).abs() < 1e-9,
+                "geometry discontinuity: previous={previous_end:?}, next={next_start:?}"
+            );
+        }
+    }
+}
+
 struct OffRoadStopFixture {
     map: GameMap,
     topology: RoadTopology,

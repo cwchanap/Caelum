@@ -449,11 +449,11 @@ fn transition_geometry(
         MovementKind::RightTurn | MovementKind::LeftTurn => {
             let (incoming_dx, incoming_dy) = offset_components(incoming);
             PathGeometry::QuadraticBezier {
-                from: TripPosition {
-                    x: f64::from(from.x) - f64::from(incoming_dx) * 0.5,
-                    y: f64::from(from.y) - f64::from(incoming_dy) * 0.5,
+                from: from_position,
+                control: TripPosition {
+                    x: f64::from(from.x) + f64::from(incoming_dx) * 0.5,
+                    y: f64::from(from.y) + f64::from(incoming_dy) * 0.5,
                 },
-                control: from_position,
                 to: to_position,
             }
         }
