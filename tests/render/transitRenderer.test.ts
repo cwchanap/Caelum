@@ -44,17 +44,22 @@ function ctx(): CanvasRenderingContext2D {
 interface RecordedStroke {
   dash: number[];
   strokeStyle: string;
+  globalAlpha: number;
   path: Array<{ x: number; y: number }>;
 }
 
 function recordingContext(): {
   ctx: CanvasRenderingContext2D;
   strokes: RecordedStroke[];
+  fills: Array<{ fillStyle: string; globalAlpha: number }>;
 } {
   const strokes: RecordedStroke[] = [];
   let dash: number[] = [];
   let strokeStyle = "";
+  let fillStyle = "";
+  let globalAlpha = 1;
   let path: Array<{ x: number; y: number }> = [];
+  const fills: Array<{ fillStyle: string; globalAlpha: number }> = [];
   const context = {
     save: vi.fn(),
     restore: vi.fn(),
@@ -69,9 +74,16 @@ function recordingContext(): {
     }),
     quadraticCurveTo: vi.fn(),
     stroke: vi.fn(() => {
-      strokes.push({ dash: [...dash], strokeStyle, path: [...path] });
+      strokes.push({
+        dash: [...dash],
+        strokeStyle,
+        globalAlpha,
+        path: [...path],
+      });
     }),
-    fill: vi.fn(),
+    fill: vi.fn(() => {
+      fills.push({ fillStyle, globalAlpha });
+    }),
     arc: vi.fn(),
     fillRect: vi.fn(),
     translate: vi.fn(),
@@ -85,12 +97,23 @@ function recordingContext(): {
     set strokeStyle(next: string) {
       strokeStyle = next;
     },
-    fillStyle: "",
+    get fillStyle() {
+      return fillStyle;
+    },
+    set fillStyle(next: string) {
+      fillStyle = next;
+    },
+    get globalAlpha() {
+      return globalAlpha;
+    },
+    set globalAlpha(next: number) {
+      globalAlpha = next;
+    },
     lineWidth: 0,
     lineCap: "butt",
     lineJoin: "miter",
   } as unknown as CanvasRenderingContext2D;
-  return { ctx: context, strokes };
+  return { ctx: context, strokes, fills };
 }
 
 function linePath(x: number): TransitPath {
@@ -429,5 +452,64 @@ describe("renderTransit highlight", () => {
     expect(
       haloStrokes.find((stroke) => stroke.path[0]?.x === 80)?.dash,
     ).toEqual([6, 5]);
+  });
+
+  it("emits arrows only for the selected route and dims unrelated routes", () => {
+    const { ctx: context, strokes, fills } = recordingContext();
+    const sharedPath: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          enteringHeading: "east",
+          leavingHeading: "east",
+          movement: "straight",
+          geometry: {
+            kind: "line",
+            from: { x: 1, y: 1 },
+            to: { x: 5, y: 1 },
+          },
+          travelSeconds: 4,
+        },
+      ],
+      totalTravelSeconds: 4,
+    };
+    const initial = stateWithLegs([
+      routeLeg("a", "b", "connected", sharedPath),
+    ]);
+    const state = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        routes: [
+          {
+            ...initial.transit.routes[0],
+            id: "route-0002",
+            color: "#222222",
+          },
+          {
+            ...initial.transit.routes[0],
+            id: "route-0001",
+            color: "#111111",
+          },
+        ],
+      },
+    };
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-0002",
+    });
+
+    expect(
+      strokes.find((stroke) => stroke.strokeStyle === "#222222")?.globalAlpha,
+    ).toBe(1);
+    expect(
+      strokes.find((stroke) => stroke.strokeStyle === "#111111")?.globalAlpha,
+    ).toBe(0.42);
+    expect(fills.filter((fill) => fill.fillStyle === "#222222")).not.toEqual(
+      [],
+    );
+    expect(fills.filter((fill) => fill.fillStyle === "#111111")).toEqual([]);
   });
 });

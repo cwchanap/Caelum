@@ -3,6 +3,8 @@ import type { AreaKind } from "../domain/types";
 export const colors = {
   empty: "#d7e2df",
   road: "#5f6d75",
+  roadCenterline: "#d7dde0",
+  roundaboutIsland: "#71847a",
   track: "#33302b",
   oneWayArrow: "#e8eef0",
   areaResidential: "#8bcf8b",

@@ -1,5 +1,6 @@
 import type {
   GameState,
+  PathGeometry,
   RouteLegPath,
   TransitPath,
   TripPosition,
@@ -9,6 +10,16 @@ import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 import { drawPathGeometry, pointAndTangentAt } from "./pathRenderer";
+import {
+  canonicalCorridorPrimitive,
+  corridorOffsets,
+  directionArrowSamples,
+  offsetGeometry,
+} from "./routeGeometry";
+
+export const UNRELATED_ROUTE_OPACITY = 0.42;
+const SHARED_CORRIDOR_GAP_PX = 4;
+const DIRECTION_ARROW_SPACING_TILES = 1.5;
 
 function center(point: TripPosition): TripPosition {
   return {
@@ -22,6 +33,8 @@ function drawTransitPath(
   path: TransitPath,
   color: string,
   lineWidth: number,
+  routeId: string,
+  corridors: CorridorGroups,
 ): void {
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
@@ -29,7 +42,11 @@ function drawTransitPath(
   ctx.lineJoin = "round";
   for (const step of path.steps) {
     ctx.beginPath();
-    drawPathGeometry(ctx, step.geometry, center);
+    drawPathGeometry(
+      ctx,
+      offsetForRoute(step.geometry, routeId, corridors),
+      center,
+    );
     ctx.stroke();
   }
 }
@@ -37,6 +54,110 @@ function drawTransitPath(
 interface RouteStrokeStyle {
   color: string;
   lineWidth: number;
+}
+
+interface RenderableLine {
+  id: string;
+  color: string;
+  lineWidth: number;
+  legs: RouteLegPath[];
+}
+
+interface CorridorGroup {
+  canonicalTangent: TripPosition;
+  offsets: ReadonlyMap<string, number>;
+}
+
+type CorridorGroups = ReadonlyMap<string, CorridorGroup>;
+
+function presentationPath(leg: RouteLegPath): TransitPath | null {
+  return leg.status === "connected" ? leg.currentPath : leg.lastValidPath;
+}
+
+function renderableLines(state: GameState): RenderableLine[] {
+  return [
+    ...state.transit.routes.map((route) => ({
+      id: route.id,
+      color: route.color,
+      lineWidth: 5,
+      legs: route.legs,
+    })),
+    ...state.transit.metroLines.map((line) => ({
+      id: line.id,
+      color: line.color,
+      lineWidth: 8,
+      legs: line.legs,
+    })),
+  ].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function buildCorridorGroups(lines: readonly RenderableLine[]): CorridorGroups {
+  const grouped = new Map<
+    string,
+    { canonicalTangent: TripPosition; routeIds: Set<string> }
+  >();
+  for (const line of lines) {
+    for (const leg of line.legs) {
+      const path = presentationPath(leg);
+      if (path === null) continue;
+      for (const step of path.steps) {
+        const primitive = canonicalCorridorPrimitive(step.geometry);
+        const group = grouped.get(primitive.key);
+        if (group === undefined) {
+          grouped.set(primitive.key, {
+            canonicalTangent: primitive.canonicalTangent,
+            routeIds: new Set([line.id]),
+          });
+        } else {
+          group.routeIds.add(line.id);
+        }
+      }
+    }
+  }
+  return new Map(
+    [...grouped].map(([key, group]) => [
+      key,
+      {
+        canonicalTangent: group.canonicalTangent,
+        offsets: corridorOffsets([...group.routeIds], SHARED_CORRIDOR_GAP_PX),
+      },
+    ]),
+  );
+}
+
+function offsetForRoute(
+  geometry: PathGeometry,
+  routeId: string,
+  corridors: CorridorGroups,
+): PathGeometry {
+  const primitive = canonicalCorridorPrimitive(geometry);
+  const group = corridors.get(primitive.key);
+  if (group === undefined) return geometry;
+  const pixels = group.offsets.get(routeId) ?? 0;
+  return offsetGeometry(geometry, pixels / tileSize, group.canonicalTangent);
+}
+
+function offsetPath(
+  path: TransitPath,
+  routeId: string,
+  corridors: CorridorGroups,
+): TransitPath {
+  if (path.kind === "road") {
+    return {
+      ...path,
+      steps: path.steps.map((step) => ({
+        ...step,
+        geometry: offsetForRoute(step.geometry, routeId, corridors),
+      })),
+    };
+  }
+  return {
+    ...path,
+    steps: path.steps.map((step) => ({
+      ...step,
+      geometry: offsetForRoute(step.geometry, routeId, corridors),
+    })),
+  };
 }
 
 function routeLegEndpoints(
@@ -55,12 +176,21 @@ function renderLeg(
   leg: RouteLegPath,
   endpoints: { from?: TripPosition; to?: TripPosition },
   style: RouteStrokeStyle,
+  routeId: string,
+  corridors: CorridorGroups,
 ): void {
-  const path = leg.status === "connected" ? leg.currentPath : leg.lastValidPath;
+  const path = presentationPath(leg);
   const dotted = leg.status !== "connected";
   ctx.setLineDash(dotted ? [6, 5] : []);
   if (path !== null) {
-    drawTransitPath(ctx, path, style.color, style.lineWidth);
+    drawTransitPath(
+      ctx,
+      path,
+      style.color,
+      style.lineWidth,
+      routeId,
+      corridors,
+    );
   } else if (
     dotted &&
     endpoints.from !== undefined &&
@@ -87,9 +217,18 @@ function drawLegs(
   legs: RouteLegPath[],
   color: string,
   lineWidth: number,
+  routeId: string,
+  corridors: CorridorGroups,
 ): void {
   for (const leg of legs) {
-    renderLeg(ctx, leg, routeLegEndpoints(state, leg), { color, lineWidth });
+    renderLeg(
+      ctx,
+      leg,
+      routeLegEndpoints(state, leg),
+      { color, lineWidth },
+      routeId,
+      corridors,
+    );
   }
 }
 
@@ -98,10 +237,56 @@ function drawDraftLegs(
   legs: RouteLegPath[],
   color: string,
   lineWidth: number,
+  routeId: string,
+  corridors: CorridorGroups,
 ): void {
   for (const leg of legs) {
     if (leg.currentPath !== null) {
-      drawTransitPath(ctx, leg.currentPath, color, lineWidth);
+      drawTransitPath(
+        ctx,
+        leg.currentPath,
+        color,
+        lineWidth,
+        routeId,
+        corridors,
+      );
+    }
+  }
+}
+
+function drawDirectionArrowhead(
+  ctx: CanvasRenderingContext2D,
+  point: TripPosition,
+  angleRadians: number,
+): void {
+  const pixel = center(point);
+  ctx.save();
+  ctx.translate(pixel.x, pixel.y);
+  ctx.rotate(angleRadians);
+  ctx.beginPath();
+  ctx.moveTo(6, 0);
+  ctx.lineTo(-4, -4);
+  ctx.lineTo(-4, 4);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawLineDirectionArrows(
+  ctx: CanvasRenderingContext2D,
+  line: RenderableLine,
+  corridors: CorridorGroups,
+): void {
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = line.color;
+  for (const leg of line.legs) {
+    const path = presentationPath(leg);
+    if (path === null) continue;
+    const presentation = offsetPath(path, line.id, corridors);
+    for (const arrow of directionArrowSamples(
+      presentation,
+      DIRECTION_ARROW_SPACING_TILES,
+    )) {
+      drawDirectionArrowhead(ctx, arrow.point, arrow.angleRadians);
     }
   }
 }
@@ -154,27 +339,46 @@ export function renderTransit(
   state: GameState,
   ui: UiState,
 ): void {
-  if (ui.selectedRouteId !== null) {
-    const route = state.transit.routes.find(
-      (candidate) => candidate.id === ui.selectedRouteId,
+  const lines = renderableLines(state);
+  const corridors = buildCorridorGroups(lines);
+  const editedRouteId =
+    ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
+  const emphasizedIds = new Set(
+    [ui.selectedRouteId, editedRouteId].filter(
+      (routeId): routeId is string => routeId !== null,
+    ),
+  );
+
+  for (const line of lines) {
+    if (!emphasizedIds.has(line.id)) continue;
+    ctx.globalAlpha = 1;
+    drawLegs(
+      ctx,
+      state,
+      line.legs,
+      "#ffffffaa",
+      line.lineWidth + 4,
+      line.id,
+      corridors,
     );
-    if (route !== undefined) {
-      drawLegs(ctx, state, route.legs, "#ffffffaa", 9);
-    }
-    const line = state.transit.metroLines.find(
-      (candidate) => candidate.id === ui.selectedRouteId,
-    );
-    if (line !== undefined) {
-      drawLegs(ctx, state, line.legs, "#ffffffaa", 12);
-    }
   }
 
-  for (const route of state.transit.routes) {
-    drawLegs(ctx, state, route.legs, route.color, 5);
+  for (const line of lines) {
+    ctx.globalAlpha =
+      emphasizedIds.size === 0 || emphasizedIds.has(line.id)
+        ? 1
+        : UNRELATED_ROUTE_OPACITY;
+    drawLegs(
+      ctx,
+      state,
+      line.legs,
+      line.color,
+      line.lineWidth,
+      line.id,
+      corridors,
+    );
   }
-  for (const line of state.transit.metroLines) {
-    drawLegs(ctx, state, line.legs, line.color, 8);
-  }
+  ctx.globalAlpha = 1;
 
   const draft = ui.routeDraft;
   const draftLegs =
@@ -186,8 +390,22 @@ export function renderTransit(
   if (draftLegs.length >= 1) {
     ctx.save();
     ctx.setLineDash([6, 6]);
-    drawDraftLegs(ctx, draftLegs, "#f4d35e", 3);
+    drawDraftLegs(
+      ctx,
+      draftLegs,
+      "#f4d35e",
+      3,
+      editedRouteId ?? `draft-${draft?.instanceId ?? 0}`,
+      corridors,
+    );
     ctx.restore();
+    ctx.setLineDash([]);
+  }
+
+  for (const line of lines) {
+    if (emphasizedIds.has(line.id)) {
+      drawLineDirectionArrows(ctx, line, corridors);
+    }
   }
 
   for (const stop of state.transit.stops) {
