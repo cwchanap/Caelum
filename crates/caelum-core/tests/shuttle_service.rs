@@ -59,6 +59,50 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
     state
 }
 
+fn metro_shuttle_state() -> caelum_core::model::GameSnapshot {
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayTrack {
+            point: (x, 4).into(),
+        });
+    }
+    for x in [2, 6, 10] {
+        engine.dispatch(GameIntent::AddMetroStation {
+            point: (x, 4).into(),
+        });
+    }
+    engine.dispatch(GameIntent::AddMetroLine {
+        station_ids: ids(&["station-001", "station-002", "station-003"]),
+    });
+    let mut state = engine.snapshot();
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let station_ids = state.transit.metro_lines[0].station_ids.clone();
+    state.transit.metro_lines[0].pattern = ServicePattern::Shuttle;
+    state.transit.metro_lines[0].legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Metro,
+        &station_ids,
+        ServicePattern::Shuttle,
+    );
+    state.transit.metro_lines[0].path_broken = false;
+    state.transit.metro_lines[0].vehicle_ids = vec!["vehicle-001".to_string()];
+    state.transit.vehicles = vec![Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Metro,
+        line_id: "metro-001".to_string(),
+        capacity: 90,
+        passenger_ids: Vec::new(),
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.0,
+        parked_position: None,
+    }];
+    state
+}
+
 fn transit_plan(
     from: (i32, i32),
     to: (i32, i32),
@@ -77,6 +121,27 @@ fn transit_plan(
             alight_itinerary_index: Some(alight_itinerary_index),
         }],
         estimated_seconds: 100.0,
+    }
+}
+
+fn metro_transit_plan(
+    from: (i32, i32),
+    to: (i32, i32),
+    direction: ServiceDirection,
+    board_itinerary_index: usize,
+    alight_itinerary_index: usize,
+) -> RoutePlan {
+    RoutePlan {
+        legs: vec![RouteLeg {
+            mode: TransitMode::Metro,
+            from: from.into(),
+            to: to.into(),
+            line_id: Some("metro-001".to_string()),
+            service_direction: Some(direction),
+            board_itinerary_index: Some(board_itinerary_index),
+            alight_itinerary_index: Some(alight_itinerary_index),
+        }],
+        estimated_seconds: 120.0,
     }
 }
 
@@ -227,6 +292,77 @@ fn rider_boards_only_the_vehicle_visit_matching_the_plan() {
     assert_eq!(boarded.active_trips[0].status, TripStatus::Riding);
 }
 
+fn assert_terminal_waiter_boards_following_service_leg(
+    reversal_itinerary_index: usize,
+    service_itinerary_index: usize,
+    from: (i32, i32),
+    to: (i32, i32),
+    direction: ServiceDirection,
+) {
+    let mut state = metro_shuttle_state();
+    state.transit.vehicles[0].itinerary_index = reversal_itinerary_index;
+    state.active_trips = vec![trip(
+        metro_transit_plan(
+            from,
+            to,
+            direction,
+            service_itinerary_index,
+            service_itinerary_index,
+        ),
+        TripStatus::Waiting,
+        from,
+    )];
+
+    let on_reversal = tick_vehicles(&state, 0.0);
+    assert_eq!(
+        on_reversal.transit.vehicles[0].itinerary_index,
+        reversal_itinerary_index
+    );
+    assert!(on_reversal.transit.vehicles[0].passenger_ids.is_empty());
+    assert_eq!(on_reversal.active_trips[0].status, TripStatus::Waiting);
+
+    let first_service_step_seconds = on_reversal.transit.metro_lines[0].legs
+        [service_itinerary_index]
+        .current_path
+        .as_ref()
+        .unwrap()
+        .step(0)
+        .unwrap()
+        .travel_seconds();
+    let departed = tick_vehicles(&on_reversal, first_service_step_seconds / 2.0);
+
+    assert_eq!(
+        departed.transit.vehicles[0].itinerary_index,
+        service_itinerary_index
+    );
+    assert_eq!(departed.transit.vehicles[0].path_step_index, 0);
+    assert_eq!(departed.transit.vehicles[0].step_progress, 0.5);
+    assert_eq!(departed.transit.vehicles[0].passenger_ids, ["trip-001"]);
+    assert_eq!(departed.active_trips[0].status, TripStatus::Riding);
+}
+
+#[test]
+fn outbound_terminal_waiter_boards_after_zero_second_reversal() {
+    assert_terminal_waiter_boards_following_service_leg(
+        5,
+        0,
+        (2, 4),
+        (6, 4),
+        ServiceDirection::Outbound,
+    );
+}
+
+#[test]
+fn return_terminal_waiter_boards_after_zero_second_reversal() {
+    assert_terminal_waiter_boards_following_service_leg(
+        2,
+        3,
+        (10, 4),
+        (6, 4),
+        ServiceDirection::Return,
+    );
+}
+
 #[test]
 fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
     let mut state = shuttle_state();
@@ -267,59 +403,11 @@ fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
 
 #[test]
 fn alighting_after_zero_second_reversal_uses_the_completed_service_index() {
-    let mut engine = GameEngine::new();
-    for x in 2..=10 {
-        engine.dispatch(GameIntent::LayTrack {
-            point: (x, 4).into(),
-        });
-    }
-    for x in [2, 6, 10] {
-        engine.dispatch(GameIntent::AddMetroStation {
-            point: (x, 4).into(),
-        });
-    }
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: ids(&["station-001", "station-002", "station-003"]),
-    });
-    let mut state = engine.snapshot();
-    let topology = RoadTopology::compile(&state.map).unwrap();
-    let station_ids = state.transit.metro_lines[0].station_ids.clone();
-    state.transit.metro_lines[0].pattern = ServicePattern::Shuttle;
-    state.transit.metro_lines[0].legs = resolve_route_legs(
-        &state,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        TransitMode::Metro,
-        &station_ids,
-        ServicePattern::Shuttle,
-    );
-    state.transit.metro_lines[0].path_broken = false;
-    state.transit.metro_lines[0].vehicle_ids = vec!["vehicle-001".to_string()];
-    state.transit.vehicles = vec![Vehicle {
-        id: "vehicle-001".to_string(),
-        mode: TransitMode::Metro,
-        line_id: "metro-001".to_string(),
-        capacity: 90,
-        passenger_ids: vec!["trip-001".to_string()],
-        itinerary_index: 2,
-        path_step_index: 0,
-        step_progress: 0.0,
-        parked_position: None,
-    }];
+    let mut state = metro_shuttle_state();
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.transit.vehicles[0].itinerary_index = 2;
     state.active_trips = vec![trip(
-        RoutePlan {
-            legs: vec![RouteLeg {
-                mode: TransitMode::Metro,
-                from: (10, 4).into(),
-                to: (6, 4).into(),
-                line_id: Some("metro-001".to_string()),
-                service_direction: Some(ServiceDirection::Return),
-                board_itinerary_index: Some(3),
-                alight_itinerary_index: Some(3),
-            }],
-            estimated_seconds: 120.0,
-        },
+        metro_transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3),
         TripStatus::Riding,
         (10, 4),
     )];

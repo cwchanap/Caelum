@@ -7,8 +7,8 @@ use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, BusStopKind, GameMap, GameSnapshot, MetroLine, Platform, Point, Route,
-    RouteLegPath, ServicePattern, Tile, TransitMode, TransitNodeStatus, TransitPath, TripPosition,
-    TripPurpose, TripStatus, Vehicle,
+    RouteLegKind, RouteLegPath, ServicePattern, Tile, TransitMode, TransitNodeStatus, TransitPath,
+    TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -507,8 +507,10 @@ pub(crate) fn tick_vehicles_without_context(
             ))
             .cloned()
             .unwrap_or_default();
-        let at_waypoint = vehicle.path_step_index == 0 && vehicle.step_progress == 0.0;
-        let mut next_vehicle = if at_waypoint {
+        let at_service_departure = current_leg.kind == RouteLegKind::Service
+            && vehicle.path_step_index == 0
+            && vehicle.step_progress == 0.0;
+        let mut next_vehicle = if at_service_departure {
             board_vehicle(
                 &mut active_trips,
                 vehicle,
@@ -527,8 +529,49 @@ pub(crate) fn tick_vehicles_without_context(
             next_vehicle.step_progress,
         );
         next_vehicle.parked_position = None;
-        let completed_itinerary_indexes =
-            advance_vehicle_by_seconds(&mut next_vehicle, &itinerary, delta_seconds);
+        advance_vehicle_by_seconds(
+            &mut next_vehicle,
+            &itinerary,
+            delta_seconds,
+            |candidate, completed_itinerary_index| {
+                let completed_leg = &itinerary[completed_itinerary_index];
+                if let Some(reached_position) = position_by_id.get(&completed_leg.to_waypoint_id) {
+                    *candidate = disembark_vehicle(
+                        &mut active_trips,
+                        candidate,
+                        reached_position,
+                        completed_itinerary_index,
+                    );
+                }
+
+                let next_itinerary_index = candidate.itinerary_index % itinerary.len();
+                let next_leg = &itinerary[next_itinerary_index];
+                if next_leg.kind != RouteLegKind::Service {
+                    return;
+                }
+                let Some(departure_position) = position_by_id.get(&next_leg.from_waypoint_id)
+                else {
+                    return;
+                };
+                let waiter_order = waiter_order_lookup
+                    .get(&format!(
+                        "{}|{}",
+                        position_key(departure_position.x, departure_position.y),
+                        candidate.line_id
+                    ))
+                    .cloned()
+                    .unwrap_or_default();
+                *candidate = board_vehicle(
+                    &mut active_trips,
+                    candidate,
+                    departure_position,
+                    &mut occupied_passenger_ids,
+                    &on_platform,
+                    &waiter_order,
+                    &mut changed,
+                );
+            },
+        );
         if previous_cursor
             != (
                 next_vehicle.itinerary_index,
@@ -537,17 +580,6 @@ pub(crate) fn tick_vehicles_without_context(
             )
         {
             changed = true;
-        }
-        for completed_itinerary_index in completed_itinerary_indexes {
-            let completed_leg = &itinerary[completed_itinerary_index];
-            if let Some(reached_position) = position_by_id.get(&completed_leg.to_waypoint_id) {
-                next_vehicle = disembark_vehicle(
-                    &mut active_trips,
-                    &next_vehicle,
-                    reached_position,
-                    completed_itinerary_index,
-                );
-            }
         }
         vehicles.push(next_vehicle);
     }
@@ -1187,11 +1219,14 @@ fn assigned_line_data(
     Some((station_by_id, line.legs.clone()))
 }
 
-fn advance_vehicle_by_seconds(
+fn advance_vehicle_by_seconds<F>(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
     mut remaining_seconds: f64,
-) -> Vec<usize> {
+    mut on_itinerary_leg_completed: F,
+) where
+    F: FnMut(&mut Vehicle, usize),
+{
     let zero_step_limit = itinerary
         .iter()
         .filter_map(|leg| leg.current_path.as_ref())
@@ -1199,7 +1234,6 @@ fn advance_vehicle_by_seconds(
         .sum::<usize>()
         .max(1);
     let mut consecutive_zero_steps = 0;
-    let mut completed_itinerary_indexes = Vec::new();
 
     while remaining_seconds > 0.0 {
         let original_itinerary_index = vehicle.itinerary_index;
@@ -1211,10 +1245,10 @@ fn advance_vehicle_by_seconds(
             .expect("operational leg has a path");
         if path.step_count() == 0 {
             advance_vehicle_cursor(vehicle, itinerary);
-            completed_itinerary_indexes.push(itinerary_index);
+            on_itinerary_leg_completed(vehicle, itinerary_index);
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return completed_itinerary_indexes;
+                return;
             }
             continue;
         }
@@ -1225,11 +1259,11 @@ fn advance_vehicle_by_seconds(
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
             if vehicle.itinerary_index != original_itinerary_index {
-                completed_itinerary_indexes.push(itinerary_index);
+                on_itinerary_leg_completed(vehicle, itinerary_index);
             }
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return completed_itinerary_indexes;
+                return;
             }
             continue;
         }
@@ -1238,16 +1272,15 @@ fn advance_vehicle_by_seconds(
 
         if remaining_seconds < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
-            return completed_itinerary_indexes;
+            return;
         }
 
         remaining_seconds -= remaining_step;
         advance_vehicle_cursor(vehicle, itinerary);
         if vehicle.itinerary_index != original_itinerary_index {
-            completed_itinerary_indexes.push(itinerary_index);
+            on_itinerary_leg_completed(vehicle, itinerary_index);
         }
     }
-    completed_itinerary_indexes
 }
 
 fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {

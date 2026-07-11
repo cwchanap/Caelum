@@ -105,3 +105,81 @@ Fresh final verification on the completed diff:
 
 - No known functional blockers.
 - Local `wasm-pack` emitted its existing non-blocking warnings about falling back from a prebuilt `wasm-bindgen` binary and about a newer `wasm-pack` version; the WASM build completed successfully.
+
+## Review fix: terminal Shuttle boarding after reversal
+
+### Finding and root cause
+
+Review found that a terminal-origin Shuttle rider could miss departure. A Metro vehicle begins at the terminal's zero-duration `TerminalReversal`, while the plan correctly names the following service leg as `boardItineraryIndex`. `tick_vehicles_without_context` attempted boarding only once at the pre-advance reversal cursor. `advance_vehicle_by_seconds` then completed the reversal and consumed positive travel on the following service leg without exposing a boarding event at the newly entered visit.
+
+### TDD evidence
+
+RED regressions were added for both terminal directions:
+
+- `outbound_terminal_waiter_boards_after_zero_second_reversal`
+- `return_terminal_waiter_boards_after_zero_second_reversal`
+
+Command:
+
+```sh
+rtk proxy cargo test -p caelum-core --test shuttle_service terminal_waiter_boards_after_zero_second_reversal -- --nocapture
+```
+
+RED result: 0 passed, 2 failed, 7 filtered out. Both failures reached the planned following service index with half-step progress, but the vehicle passenger list was `[]` instead of `["trip-001"]`.
+
+After the event-order fix:
+
+```sh
+rtk cargo test -p caelum-core --test shuttle_service terminal_waiter_boards_after_zero_second_reversal -- --nocapture
+rtk cargo test -p caelum-core --test shuttle_service
+```
+
+GREEN result: focused regressions 2 passed/7 filtered; full Shuttle suite 9 passed.
+
+### Implementation and files
+
+- `crates/caelum-core/src/transit.rs`
+  - Initial boarding now occurs only at an actual service-leg departure.
+  - Vehicle advancement emits each itinerary-leg completion synchronously.
+  - Each completion is processed in physical event order: exact-index alighting at the completed leg, exact-index boarding at the newly entered service departure, then consumption of remaining positive travel.
+  - Service legs entered after zero-duration Metro reversal legs therefore board before their first positive path step.
+  - Direct Loop transitions and multi-leg remainder ticks use the same ordered completion path without duplicate initial boarding.
+- `crates/caelum-core/tests/shuttle_service.rs`
+  - Added outbound- and return-terminal waiting regressions.
+  - Added a shared Metro Shuttle fixture and reused it in the zero-reversal alighting regression.
+- `.superpowers/sdd/task-13-report.md`
+  - Appended this review-fix evidence.
+
+### Verification
+
+Fresh post-fix verification:
+
+- `rtk cargo fmt --all --check` — passed.
+- `rtk cargo clippy --workspace --all-targets -- -D warnings` — no issues found.
+- `rtk cargo test --workspace` — 260 passed across 27 suites.
+- `rtk cargo test -p caelum-core --test shuttle_service` — 9 passed.
+- `rtk cargo test -p caelum-core --test router_planning` — 7 passed.
+- `rtk cargo test -p caelum-core --test trip_lifecycle` — 38 passed.
+- `rtk cargo test -p caelum-core --test model_wire_format` — 26 passed.
+- `rtk bun run format:check` — passed.
+- `rtk bun run lint` — ESLint passed and strict workspace Clippy passed.
+- `rtk bun run check` — TypeScript and Svelte checks passed with 0 errors and 0 warnings.
+- `rtk bun run test` — 363 passed across 29 files.
+- `rtk git diff --check` — passed before the report append; the staged diff is checked again before commit.
+
+`rtk bun run build` reached release WASM optimization but failed because sandboxed `wasm-opt` returned `Operation not permitted`. The required outside-sandbox rerun was requested and rejected by the execution environment because its escalation usage limit had been reached. No workaround was attempted. Rust workspace compilation/tests, dev WASM-backed checks, frontend tests, lint, and type checks all completed successfully.
+
+### Self-review
+
+- Confirmed terminal riders remain waiting while the cursor is still on reversal index 5 (outbound) or 2 (return).
+- Confirmed each rider boards only after the cursor enters planned service index 0 (outbound) or 3 (return), and is aboard before the first positive step finishes.
+- Confirmed initial service-leg zero-delta boarding remains covered by the existing direction-specific boarding regression.
+- Confirmed alighting still uses every exact completed itinerary index, including a service completion after a zero-second reversal.
+- Confirmed completion processing alights before boarding, so intermediate-stop seat capacity is released before new riders board during a multi-leg remainder tick.
+- Confirmed boarding still requires exact mode, line, platform position, and itinerary index; operational-route and present-node guards are unchanged.
+- Confirmed callbacks occur only when the itinerary index changes, while initial boarding is handled once before advancement, avoiding duplicate departure events.
+
+### Review-fix concerns
+
+- No known functional concerns.
+- Production `bun run build` remains unverified in this environment solely because `wasm-opt` was sandbox-blocked and escalation was unavailable due the execution usage limit. The failure occurred after release Rust/WASM compilation, at the optimizer process boundary.
