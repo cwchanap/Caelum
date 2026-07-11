@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
 import {
   appendWaypoint,
+  applyNodeClick,
   applyRouteNodeClick,
   createDraft,
+  editDraft,
+  moveWaypoint,
   removeWaypoint,
+  reverseRoute,
+  selectWaypoint,
+  setPattern,
 } from "../../src/ui/routeDraft";
 
 function connectedPreview(generation: number): RoutePreviewResponse {
@@ -62,7 +68,7 @@ describe("route draft reducers", () => {
       preview: connectedPreview(2),
     };
 
-    expect(removeWaypoint(draft, 0)).toMatchObject({
+    expect(removeWaypoint(selectWaypoint(draft, 0, "replace"))).toMatchObject({
       waypointIds: ["stop-0002"],
       generation: 3,
       previewPending: true,
@@ -72,7 +78,66 @@ describe("route draft reducers", () => {
 
   it("returns the original draft for an invalid removal index", () => {
     const draft = createDraft("metro", 1);
-    expect(removeWaypoint(draft, 0)).toBe(draft);
+    expect(removeWaypoint(draft)).toBe(draft);
+  });
+});
+
+describe("route edit reducers", () => {
+  const loop = editDraft(
+    {
+      routeId: "route-0001",
+      expectedRevision: 7,
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["A", "B", "C"],
+    },
+    1,
+  );
+
+  it("inserts after the selected handle", () => {
+    const selected = selectWaypoint(loop, 1, "insertAfter");
+    expect(applyNodeClick(selected, "X").waypointIds).toEqual([
+      "A",
+      "B",
+      "X",
+      "C",
+    ]);
+  });
+
+  it("replaces exactly the selected handle", () => {
+    const selected = selectWaypoint(loop, 1, "replace");
+    expect(applyNodeClick(selected, "X").waypointIds).toEqual(["A", "X", "C"]);
+  });
+
+  it("removes and selects the nearest retained index", () => {
+    expect(
+      removeWaypoint(selectWaypoint(loop, 2, "replace")).selectedIndex,
+    ).toBe(1);
+  });
+
+  it("moves the selected waypoint without losing selection", () => {
+    const moved = moveWaypoint(selectWaypoint(loop, 1, "replace"), -1);
+    expect(moved.waypointIds).toEqual(["B", "A", "C"]);
+    expect(moved.selectedIndex).toBe(0);
+  });
+
+  it("keeps the first Loop waypoint fixed while reversing the rest", () => {
+    expect(reverseRoute(loop).waypointIds).toEqual(["A", "C", "B"]);
+  });
+
+  it("reverses the complete Shuttle list", () => {
+    expect(reverseRoute({ ...loop, pattern: "shuttle" }).waypointIds).toEqual([
+      "C",
+      "B",
+      "A",
+    ]);
+  });
+
+  it("increments generation and clears preview for every meaningful change", () => {
+    const changed = setPattern(loop, "shuttle");
+    expect(changed.generation).toBe(loop.generation + 1);
+    expect(changed.preview).toBeNull();
+    expect(changed.previewPending).toBe(true);
   });
 });
 

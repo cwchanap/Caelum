@@ -356,6 +356,34 @@ function applyIntent(
       },
     };
   }
+  if (intent.type === "updateRoute") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((route) =>
+          route.id === intent.routeId
+            ? {
+                ...route,
+                stopIds: intent.waypointIds,
+                pattern: intent.pattern,
+                revision: route.revision + 1,
+              }
+            : route,
+        ),
+        metroLines: snapshot.transit.metroLines.map((line) =>
+          line.id === intent.routeId
+            ? {
+                ...line,
+                stationIds: intent.waypointIds,
+                pattern: intent.pattern,
+                revision: line.revision + 1,
+              }
+            : line,
+        ),
+      },
+    };
+  }
   if (intent.type === "renameRoute") {
     return {
       ...snapshot,
@@ -568,6 +596,9 @@ function deferredDispatchBackend(
     async snapshot() {
       return snapshot;
     },
+    async previewRoute(request) {
+      return routePreview(request.generation, request.waypointIds);
+    },
     async dispatch(intent): Promise<DispatchResult> {
       intents.push(intent);
       await new Promise<void>((resolve) => {
@@ -639,6 +670,9 @@ function backendSpy(
     },
     async snapshot() {
       return snapshot;
+    },
+    async previewRoute(request) {
+      return routePreview(request.generation, request.waypointIds);
     },
     async dispatch(intent): Promise<DispatchResult> {
       intents.push(intent);
@@ -1370,6 +1404,7 @@ describe("route creation and management", () => {
     return [
       { x: 14, y: 7 },
       { x: 14, y: 8 },
+      { x: 14, y: 9 },
     ].reduce(
       (map, point) =>
         updateTile(map, point, (tile) => ({
@@ -1387,6 +1422,7 @@ describe("route creation and management", () => {
         stops: [
           createStop("stop-001", { x: 14, y: 7 }),
           createStop("stop-002", { x: 14, y: 8 }),
+          createStop("stop-003", { x: 14, y: 9 }),
         ],
         stations: [],
         routes: [],
@@ -1403,6 +1439,7 @@ describe("route creation and management", () => {
         stops: [
           createStop("stop-001", { x: 14, y: 7 }),
           createStop("stop-002", { x: 14, y: 8 }),
+          createStop("stop-003", { x: 14, y: 9 }),
         ],
         stations: [],
         routes: [
@@ -1432,6 +1469,277 @@ describe("route creation and management", () => {
     await runtime.handleTileClick({ x: 14, y: 8 });
     return { runtime, backend };
   }
+
+  function connectedRouteBackend(
+    initial = routeSnapshotWithRoute(),
+  ): BackendSpy {
+    const base = backendSpy(initial);
+    return {
+      ...base,
+      async previewRoute(request) {
+        return routePreview(
+          request.generation,
+          request.waypointIds,
+          "connected",
+        );
+      },
+    };
+  }
+
+  it("editing leaves committed service unchanged until Save succeeds", async () => {
+    const backend = connectedRouteBackend();
+    const runtime = await createGameRuntime({ backend });
+    const committed = runtime.getSnapshot().state.transit.routes[0];
+
+    runtime.startRouteEdit(committed.id);
+    await flushPromises();
+    runtime.selectRouteWaypoint(1, "replace");
+    runtime.handleTileClick({ x: 14, y: 9 });
+
+    expect(runtime.getSnapshot().state.transit.routes[0]).toEqual(committed);
+    await flushPromises();
+    await runtime.saveRouteDraft();
+    expect(runtime.getSnapshot().state.transit.routes[0].stopIds).toEqual([
+      "stop-001",
+      "stop-003",
+    ]);
+    expect(backend.intents).toContainEqual({
+      type: "updateRoute",
+      routeId: "route-001",
+      expectedRevision: 0,
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-003"],
+    });
+  });
+
+  it("applies editor transforms immediately and re-requests Rust previews", async () => {
+    const base = backendSpy(routeSnapshotWithRoute());
+    const previewRoute = vi.fn(async (request) =>
+      routePreview(request.generation, request.waypointIds),
+    );
+    const runtime = await createGameRuntime({
+      backend: { ...base, previewRoute },
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+
+    runtime.selectRouteWaypoint(1, "replace");
+    runtime.moveRouteWaypoint(-1);
+    runtime.reverseRouteDraft();
+    runtime.setRoutePattern("shuttle");
+    runtime.selectRouteWaypoint(1, "replace");
+    runtime.removeRouteWaypoint();
+
+    expect(runtime.getSnapshot().ui.routeDraft).toMatchObject({
+      pattern: "shuttle",
+      waypointIds: ["stop-002"],
+      selectedIndex: 0,
+      generation: 4,
+      previewPending: true,
+      preview: null,
+    });
+    expect(previewRoute).toHaveBeenCalledTimes(7);
+  });
+
+  it("keeps the draft after typed rejection or host failure", async () => {
+    for (const outcome of [
+      { kind: "rejection" as const, code: "disconnectedLeg" as const },
+      {
+        kind: "rejection" as const,
+        code: "routeChangedWhileEditing" as const,
+      },
+      { kind: "failure" as const },
+    ]) {
+      const base = connectedRouteBackend();
+      const backend: GameBackend = {
+        ...base,
+        async dispatch(intent) {
+          if (outcome.kind === "failure") {
+            throw new Error("host unavailable");
+          }
+          return {
+            snapshot: await base.snapshot(),
+            applied: false,
+            rejection: {
+              code: outcome.code,
+              context: { affectedRouteIds: ["route-001"] },
+            },
+            context: EMPTY_DISPATCH_CONTEXT,
+          };
+        },
+      };
+      const runtime = await createGameRuntime({ backend });
+      runtime.startRouteEdit("route-001");
+      await flushPromises();
+      const before = runtime.getSnapshot().ui.routeDraft;
+
+      await runtime.saveRouteDraft();
+
+      expect(runtime.getSnapshot().ui.routeDraft).toMatchObject({
+        source: before?.source,
+        waypointIds: before?.waypointIds,
+      });
+    }
+  });
+
+  it("does not clear a newer draft when an older Save resolves", async () => {
+    const saves = deferredDispatchBackend(routeSnapshotWithRoute());
+    const backend: GameBackend = {
+      ...saves,
+      async previewRoute(request) {
+        return routePreview(request.generation, request.waypointIds);
+      },
+    };
+    const runtime = await createGameRuntime({ backend });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    runtime.selectRouteWaypoint(0, "replace");
+    runtime.handleTileClick({ x: 14, y: 9 });
+
+    await saves.resolveNext();
+    await save;
+
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds[0]).toBe(
+      "stop-003",
+    );
+  });
+
+  it("does not clear a replacement draft with the same source and generation", async () => {
+    const saves = deferredDispatchBackend(routeSnapshotWithRoute());
+    const backend: GameBackend = {
+      ...saves,
+      async previewRoute(request) {
+        return routePreview(request.generation, request.waypointIds);
+      },
+    };
+    const runtime = await createGameRuntime({ backend });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const oldInstance = runtime.getSnapshot().ui.routeDraft!.instanceId;
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    runtime.cancelRouteDraft();
+    runtime.startRouteEdit("route-001");
+    const replacement = runtime.getSnapshot().ui.routeDraft!;
+    expect(replacement.generation).toBe(0);
+    expect(replacement.instanceId).not.toBe(oldInstance);
+
+    await saves.resolveNext();
+    await save;
+
+    expect(runtime.getSnapshot().ui.routeDraft?.instanceId).toBe(
+      replacement.instanceId,
+    );
+  });
+
+  it("Cancel and Escape discard only the draft", async () => {
+    for (const cancel of [
+      (runtime: RuntimeController) => runtime.cancelRouteDraft(),
+      (runtime: RuntimeController) => runtime.handleEscape(),
+    ]) {
+      const runtime = await createGameRuntime({
+        backend: connectedRouteBackend(),
+      });
+      const committed = structuredClone(
+        runtime.getSnapshot().state.transit.routes,
+      );
+      runtime.startRouteEdit("route-001");
+
+      cancel(runtime);
+
+      expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+      expect(runtime.getSnapshot().state.transit.routes).toEqual(committed);
+    }
+  });
+
+  it("Reload captures the latest saved revision after a stale rejection", async () => {
+    const initial = routeSnapshotWithRoute();
+    const latest = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        routes: initial.transit.routes.map((route) => ({
+          ...route,
+          revision: 9,
+        })),
+      },
+    };
+    const base = connectedRouteBackend(initial);
+    const backend: GameBackend = {
+      ...base,
+      async dispatch() {
+        return {
+          snapshot: latest,
+          applied: false,
+          rejection: {
+            code: "routeChangedWhileEditing",
+            context: {
+              routeId: "route-001",
+              expectedRevision: 0,
+              actualRevision: 9,
+              affectedRouteIds: ["route-001"],
+            },
+          },
+          context: EMPTY_DISPATCH_CONTEXT,
+        };
+      },
+    };
+    const runtime = await createGameRuntime({ backend });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    await runtime.saveRouteDraft();
+
+    runtime.reloadRouteDraft();
+
+    expect(runtime.getSnapshot().ui.routeDraft?.source).toEqual({
+      kind: "edit",
+      routeId: "route-001",
+      expectedRevision: 9,
+    });
+  });
+
+  it("successful creation save dispatches one atomic intent", async () => {
+    const base = backendSpy(routeSnapshot());
+    const dispatch = vi.fn(base.dispatch.bind(base));
+    const backend: BackendSpy = {
+      ...base,
+      dispatch,
+      async previewRoute(request) {
+        return routePreview(request.generation, request.waypointIds);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    await runtime.saveRouteDraft();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "createRoute" }),
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "assignVehicle" }),
+    );
+  });
+
+  it("routes the legacy Finish action through the pattern-aware Save flow", async () => {
+    const backend = connectedRouteBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+    runtime.setRoutePattern("shuttle");
+    await flushPromises();
+
+    await runtime.finishRoute();
+
+    expect(backend.intents).toContainEqual({
+      type: "createRoute",
+      mode: "bus",
+      pattern: "shuttle",
+      waypointIds: ["stop-001", "stop-002"],
+    });
+  });
 
   it("dispatches route finish and clears the draft only after Rust accepts it", async () => {
     const backend = backendSpy(routeSnapshot());
@@ -1527,6 +1835,7 @@ describe("route creation and management", () => {
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 14, y: 7 });
     runtime.handleTileClick({ x: 14, y: 8 });
+    await flushPromises();
     const finishPromise = runtime.finishRoute();
 
     // The queued state changes after preview. Runtime must still dispatch the
@@ -2178,6 +2487,7 @@ describe("fake backend applyIntent coverage", () => {
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.handleTileClick({ x: 15, y: 8 });
+    await flushPromises();
     await runtime.finishRoute();
     const after = runtime.getSnapshot();
     expect(backend.intents).toContainEqual({

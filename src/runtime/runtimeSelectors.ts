@@ -1,5 +1,6 @@
 import type {
   GameState,
+  GameplayRejection,
   MetroLine,
   Overlay,
   Route,
@@ -165,6 +166,7 @@ function stopLabel(
 function buildRouteDraft(
   state: GameState,
   ui: UiState,
+  rejection: GameplayRejection | null,
 ): ShellRouteDraftState | null {
   const draft = ui.routeDraft;
   if (draft === null || draft.waypointIds.length === 0) return null;
@@ -204,6 +206,11 @@ function buildRouteDraft(
     vehicleCost,
     canFinish,
     finishHint,
+    canReload:
+      draft.source.kind === "edit" &&
+      rejection?.code === "routeChangedWhileEditing" &&
+      (rejection.context.routeId === undefined ||
+        rejection.context.routeId === draft.source.routeId),
   };
 }
 
@@ -315,7 +322,11 @@ function buildRoadMutationPreview(
   };
 }
 
-export function selectShellState(state: GameState, ui: UiState): ShellState {
+export function selectShellState(
+  state: GameState,
+  ui: UiState,
+  rejection: GameplayRejection | null = null,
+): ShellState {
   const inspector = buildInspector(state, ui);
   const draftActive = ui.routeDraft !== null;
   // Single derivation of the active-tool label — bound to both the HUD chip
@@ -370,7 +381,7 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
     },
     hud,
     inspector,
-    routeDraft: buildRouteDraft(state, ui),
+    routeDraft: buildRouteDraft(state, ui, rejection),
     routes: buildRouteList(state, ui),
     roadMutationPreview: buildRoadMutationPreview(state, ui),
   };

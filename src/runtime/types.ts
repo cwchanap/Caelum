@@ -7,10 +7,12 @@ import type {
   Point,
   RoadPreset,
   RoadStructure,
+  ServicePattern,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
+import type { RouteDraft } from "../ui/routeDraft";
 import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
 
 export type { RouteDraft } from "../ui/routeDraft";
@@ -93,6 +95,7 @@ export interface ShellRouteDraftState {
   vehicleCost: number;
   canFinish: boolean;
   finishHint: string;
+  canReload: boolean;
 }
 
 export interface RouteServiceStatus {
@@ -197,6 +200,19 @@ export interface RuntimeController {
   removeDraftStop: (index: number) => RuntimeSnapshot;
   finishRoute: () => RuntimeCommandResult;
   cancelRoute: () => RuntimeSnapshot;
+  startRouteEdit: (routeId: string) => RuntimeSnapshot;
+  selectRouteWaypoint: (
+    index: number | null,
+    interaction: RouteDraft["interaction"],
+  ) => RuntimeSnapshot;
+  removeRouteWaypoint: () => RuntimeSnapshot;
+  moveRouteWaypoint: (delta: -1 | 1) => RuntimeSnapshot;
+  reverseRouteDraft: () => RuntimeSnapshot;
+  setRoutePattern: (pattern: ServicePattern) => RuntimeSnapshot;
+  saveRouteDraft: () => Promise<RuntimeSnapshot>;
+  cancelRouteDraft: () => RuntimeSnapshot;
+  reloadRouteDraft: () => RuntimeSnapshot;
+  handleEscape: () => RuntimeSnapshot;
   renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
   recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;

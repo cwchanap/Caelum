@@ -97,6 +97,34 @@ export function createDraft(mode: TransitMode, instanceId: number): RouteDraft {
   };
 }
 
+export function editDraft(
+  input: {
+    routeId: string;
+    expectedRevision: number;
+    mode: TransitMode;
+    pattern: ServicePattern;
+    waypointIds: string[];
+  },
+  instanceId: number,
+): RouteDraft {
+  return {
+    instanceId,
+    source: {
+      kind: "edit",
+      routeId: input.routeId,
+      expectedRevision: input.expectedRevision,
+    },
+    mode: input.mode,
+    pattern: input.pattern,
+    waypointIds: [...input.waypointIds],
+    selectedIndex: null,
+    interaction: "append",
+    generation: 0,
+    previewPending: true,
+    preview: null,
+  };
+}
+
 function changed(
   draft: RouteDraft,
   waypointIds: string[],
@@ -121,15 +149,84 @@ export function appendWaypoint(
   return changed(draft, [...draft.waypointIds, waypointId]);
 }
 
-export function removeWaypoint(draft: RouteDraft, index: number): RouteDraft {
-  if (index < 0 || index >= draft.waypointIds.length) return draft;
-  return changed(
-    draft,
-    draft.waypointIds.filter((_, candidate) => candidate !== index),
-    {
-      selectedIndex: draft.selectedIndex === index ? null : draft.selectedIndex,
-    },
+export function selectWaypoint(
+  draft: RouteDraft,
+  index: number | null,
+  interaction: RouteDraft["interaction"],
+): RouteDraft {
+  if (index !== null && (index < 0 || index >= draft.waypointIds.length)) {
+    return draft;
+  }
+  return { ...draft, selectedIndex: index, interaction };
+}
+
+export function applyNodeClick(draft: RouteDraft, nodeId: string): RouteDraft {
+  const index = draft.selectedIndex;
+  if (index === null || draft.interaction === "append") {
+    return changed(draft, [...draft.waypointIds, nodeId]);
+  }
+  if (index < 0 || index >= draft.waypointIds.length) {
+    return draft;
+  }
+  if (draft.interaction === "insertAfter") {
+    const waypointIds = [...draft.waypointIds];
+    waypointIds.splice(index + 1, 0, nodeId);
+    return changed(draft, waypointIds, { selectedIndex: index + 1 });
+  }
+  const waypointIds = [...draft.waypointIds];
+  waypointIds[index] = nodeId;
+  return changed(draft, waypointIds, { selectedIndex: index });
+}
+
+export function removeWaypoint(draft: RouteDraft): RouteDraft {
+  const index = draft.selectedIndex;
+  if (index === null || index < 0 || index >= draft.waypointIds.length) {
+    return draft;
+  }
+  const waypointIds = draft.waypointIds.filter(
+    (_, candidate) => candidate !== index,
   );
+  return changed(draft, waypointIds, {
+    selectedIndex:
+      waypointIds.length === 0 ? null : Math.min(index, waypointIds.length - 1),
+  });
+}
+
+export function moveWaypoint(draft: RouteDraft, delta: -1 | 1): RouteDraft {
+  const index = draft.selectedIndex;
+  const target = index === null ? -1 : index + delta;
+  if (
+    index === null ||
+    index < 0 ||
+    target < 0 ||
+    target >= draft.waypointIds.length
+  ) {
+    return draft;
+  }
+  const waypointIds = [...draft.waypointIds];
+  [waypointIds[index], waypointIds[target]] = [
+    waypointIds[target],
+    waypointIds[index],
+  ];
+  return changed(draft, waypointIds, { selectedIndex: target });
+}
+
+export function reverseRoute(draft: RouteDraft): RouteDraft {
+  if (draft.waypointIds.length < 2) return draft;
+  const waypointIds =
+    draft.pattern === "loop"
+      ? [draft.waypointIds[0], ...draft.waypointIds.slice(1).reverse()]
+      : [...draft.waypointIds].reverse();
+  return changed(draft, waypointIds, { selectedIndex: null });
+}
+
+export function setPattern(
+  draft: RouteDraft,
+  pattern: ServicePattern,
+): RouteDraft {
+  return pattern === draft.pattern
+    ? draft
+    : changed(draft, draft.waypointIds, { pattern });
 }
 
 function nodeMatchesMode(node: Stop | Station, mode: TransitMode): boolean {
@@ -160,7 +257,7 @@ export function applyRouteNodeClick(
     };
   }
   return {
-    draft: appendWaypoint(draft, node.id),
+    draft: applyNodeClick(draft, node.id),
     rejection: null,
   };
 }

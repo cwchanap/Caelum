@@ -4,7 +4,7 @@ import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
-import { createDraft } from "../../src/ui/routeDraft";
+import { createDraft, editDraft } from "../../src/ui/routeDraft";
 import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
@@ -268,6 +268,35 @@ describe("route selectors", () => {
     const draft = selectShellState(state, ui).routeDraft;
     expect(draft?.canFinish).toBe(false);
     expect(draft?.finishHint).toBe("Need $8,000");
+  });
+
+  it("offers Reload after a stale edit rejection", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        previewPending: false,
+        preview: routePreview(["stop-001", "stop-002"]),
+      },
+    };
+
+    const draft = selectShellState(state, ui, {
+      code: "routeChangedWhileEditing",
+      context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+    }).routeDraft;
+
+    expect(draft?.canReload).toBe(true);
   });
 
   it("lists routes and metro lines with selection state", () => {

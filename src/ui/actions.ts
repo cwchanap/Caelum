@@ -6,6 +6,7 @@ import {
   removeWaypoint,
   resolveStationAtTile,
   resolveStopAtTile,
+  selectWaypoint,
 } from "./routeDraft";
 import type { UiState } from "./uiState";
 
@@ -131,7 +132,12 @@ export function removeDraftNode(
   index: number,
 ): UiState {
   if (ui.routeDraft === null) return ui;
-  const routeDraft = removeWaypoint(ui.routeDraft, index);
+  const selected = selectWaypoint(
+    ui.routeDraft,
+    index,
+    ui.routeDraft.interaction,
+  );
+  const routeDraft = removeWaypoint(selected);
   return routeDraft === ui.routeDraft
     ? ui
     : { ...ui, routeDraft, routePreviewError: null };

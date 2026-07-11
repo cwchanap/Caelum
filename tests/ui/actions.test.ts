@@ -8,7 +8,7 @@ import {
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState, type UiState } from "../../src/ui/uiState";
-import { createDraft } from "../../src/ui/routeDraft";
+import { createDraft, selectWaypoint } from "../../src/ui/routeDraft";
 import {
   addTestBusStop,
   addTestMetroStation,
@@ -226,6 +226,20 @@ describe("applyUiTileClick route drafts", () => {
     result = applyUiTileClick(state, result.ui, { x: 7, y: 8 });
 
     expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-001"]);
+  });
+
+  it("uses the selected interaction when applying a compatible node click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const selectedUi = {
+      ...result.ui,
+      routeDraft: selectWaypoint(result.ui.routeDraft!, 0, "replace"),
+    };
+
+    result = applyUiTileClick(state, selectedUi, { x: 15, y: 8 });
+
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-002", "stop-002"]);
   });
 
   it("appends before Rust reports that the next leg is disconnected", () => {
