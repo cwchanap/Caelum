@@ -1379,6 +1379,112 @@ fn lay_road_line_over_building_occupied_tiles_is_unchanged() {
 }
 
 #[test]
+fn road_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 2, y: 2 };
+    let skipped = Point { x: 14, y: 8 };
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![changed, skipped],
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 100);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn track_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 2, y: 2 };
+    let skipped = Point { x: 1_000, y: 1_000 };
+
+    let result = engine.dispatch(GameIntent::LayTrackLine {
+        points: vec![changed, skipped],
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 500);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn area_stroke_dispatch_context_reports_changed_and_skipped_tiles() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 13, y: 10 };
+    let skipped = vec![
+        Point { x: 13, y: 9 },
+        Point { x: 14, y: 9 },
+        Point { x: 14, y: 10 },
+    ];
+
+    let result = engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: Point { x: 13, y: 9 },
+        end: Point { x: 14, y: 10 },
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, skipped);
+    assert_eq!(result.context.cost, 0);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
+    let mut engine = GameEngine::new();
+    for x in 2..=4 {
+        assert!(
+            engine
+                .dispatch(GameIntent::LayRoad {
+                    point: Point { x, y: 3 },
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::AddBusStop {
+                point: Point { x: 2, y: 3 },
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::AddBusStop {
+                point: Point { x: 4, y: 3 },
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::AddBusRoute {
+                stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            })
+            .applied
+    );
+
+    let changed = Point { x: 3, y: 3 };
+    let skipped = Point { x: 10, y: 10 };
+    let result = engine.dispatch(GameIntent::RemoveAtTiles {
+        points: vec![changed, skipped],
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 0);
+    assert_eq!(result.context.affected_route_ids, vec!["route-001"]);
+    assert!(result.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
 fn lay_road_line_dual_bidirectional_skips_building_occupied_reverse_tile() {
     // lay_reverse_lane on an empty-kind tile that is building-occupied passes
     // the "not empty kind" guard but fails is_valid_road_placement, returning

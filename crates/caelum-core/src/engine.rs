@@ -1,11 +1,155 @@
 use crate::areas;
 use crate::buildings;
-use crate::intent::{DispatchResult, GameIntent};
-use crate::model::GameSnapshot;
+use crate::intent::{DispatchContext, DispatchResult, GameIntent};
+use crate::model::{GameSnapshot, Point};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::state::create_initial_snapshot;
 use crate::transit;
 use crate::trips;
+
+fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
+    let before_tile = before
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == point.x && tile.y == point.y);
+    let after_tile = after
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == point.x && tile.y == point.y);
+    if before_tile != after_tile {
+        return true;
+    }
+
+    let before_building = before
+        .buildings
+        .iter()
+        .find(|building| building.occupied_tiles.contains(point));
+    let after_building = after
+        .buildings
+        .iter()
+        .find(|building| building.occupied_tiles.contains(point));
+    if before_building != after_building {
+        return true;
+    }
+
+    let before_stop = before
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.position == *point);
+    let after_stop = after
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.position == *point);
+    if before_stop != after_stop {
+        return true;
+    }
+
+    let before_station = before
+        .transit
+        .stations
+        .iter()
+        .find(|station| station.position == *point);
+    let after_station = after
+        .transit
+        .stations
+        .iter()
+        .find(|station| station.position == *point);
+    before_station != after_station
+}
+
+fn affected_route_ids(before: &GameSnapshot, after: &GameSnapshot) -> Vec<String> {
+    let mut affected = Vec::new();
+
+    for route in &before.transit.routes {
+        if after
+            .transit
+            .routes
+            .iter()
+            .find(|candidate| candidate.id == route.id)
+            != Some(route)
+        {
+            affected.push(route.id.clone());
+        }
+    }
+    for route in &after.transit.routes {
+        if !before
+            .transit
+            .routes
+            .iter()
+            .any(|candidate| candidate.id == route.id)
+        {
+            affected.push(route.id.clone());
+        }
+    }
+
+    for line in &before.transit.metro_lines {
+        if after
+            .transit
+            .metro_lines
+            .iter()
+            .find(|candidate| candidate.id == line.id)
+            != Some(line)
+        {
+            affected.push(line.id.clone());
+        }
+    }
+    for line in &after.transit.metro_lines {
+        if !before
+            .transit
+            .metro_lines
+            .iter()
+            .any(|candidate| candidate.id == line.id)
+        {
+            affected.push(line.id.clone());
+        }
+    }
+
+    affected
+}
+
+fn dispatch_context(
+    before: &GameSnapshot,
+    after: &GameSnapshot,
+    requested_tiles: &[Point],
+) -> DispatchContext {
+    let mut changed_tiles = Vec::new();
+    let mut skipped_tiles = Vec::new();
+
+    for point in requested_tiles {
+        if changed_tiles.contains(point) || skipped_tiles.contains(point) {
+            continue;
+        }
+        if point_changed(before, after, point) {
+            changed_tiles.push(*point);
+        } else {
+            skipped_tiles.push(*point);
+        }
+    }
+
+    // Some intents expand beyond their explicit anchors (for example the
+    // generated reverse carriageway of a dual-road stroke). Include every
+    // additional map tile changed by the authoritative mutation.
+    for tile in &after.map.tiles {
+        let point = Point {
+            x: tile.x,
+            y: tile.y,
+        };
+        if !changed_tiles.contains(&point) && point_changed(before, after, &point) {
+            changed_tiles.push(point);
+        }
+    }
+
+    DispatchContext {
+        changed_tiles,
+        skipped_tiles,
+        affected_route_ids: affected_route_ids(before, after),
+        cost: before.budget.saturating_sub(after.budget),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GameEngine {
@@ -74,32 +218,33 @@ impl GameEngine {
                 self.commit_result(transit::assign_vehicle(&self.snapshot, &mode, &line_id))
             }
             GameIntent::LayRoad { point } => {
-                self.commit_result(transit::lay_road(&self.snapshot, &point))
+                self.commit_result_for_tiles(transit::lay_road(&self.snapshot, &point), &[point])
             }
-            GameIntent::LayRoadLine { points, preset } => {
-                self.commit_result(transit::lay_road_line(&self.snapshot, &points, preset))
-            }
-            GameIntent::CycleRoadDirection { point } => {
-                self.commit_result(transit::cycle_road_direction(&self.snapshot, &point))
-            }
+            GameIntent::LayRoadLine { points, preset } => self.commit_result_for_tiles(
+                transit::lay_road_line(&self.snapshot, &points, preset),
+                &points,
+            ),
+            GameIntent::CycleRoadDirection { point } => self.commit_result_for_tiles(
+                transit::cycle_road_direction(&self.snapshot, &point),
+                &[point],
+            ),
             GameIntent::LayTrack { point } => {
-                self.commit_result(transit::lay_track(&self.snapshot, &point))
+                self.commit_result_for_tiles(transit::lay_track(&self.snapshot, &point), &[point])
             }
-            GameIntent::LayTrackLine { points } => {
-                self.commit_result(transit::lay_track_line(&self.snapshot, &points))
-            }
-            GameIntent::RemoveAtTile { point } => {
-                self.commit_result(transit::remove_at_tile(&self.snapshot, &point))
-            }
-            GameIntent::RemoveAtTiles { points } => {
-                self.commit_result(transit::remove_at_tiles(&self.snapshot, &points))
-            }
-            GameIntent::AddBusStop { point } => {
-                self.commit_result(transit::add_bus_stop(&self.snapshot, &point))
-            }
-            GameIntent::AddMetroStation { point } => {
-                self.commit_result(transit::add_metro_station(&self.snapshot, &point))
-            }
+            GameIntent::LayTrackLine { points } => self
+                .commit_result_for_tiles(transit::lay_track_line(&self.snapshot, &points), &points),
+            GameIntent::RemoveAtTile { point } => self
+                .commit_result_for_tiles(transit::remove_at_tile(&self.snapshot, &point), &[point]),
+            GameIntent::RemoveAtTiles { points } => self.commit_result_for_tiles(
+                transit::remove_at_tiles(&self.snapshot, &points),
+                &points,
+            ),
+            GameIntent::AddBusStop { point } => self
+                .commit_result_for_tiles(transit::add_bus_stop(&self.snapshot, &point), &[point]),
+            GameIntent::AddMetroStation { point } => self.commit_result_for_tiles(
+                transit::add_metro_station(&self.snapshot, &point),
+                &[point],
+            ),
             GameIntent::AddBusRoute { stop_ids } => {
                 self.commit_result(transit::add_bus_route(&self.snapshot, stop_ids))
             }
@@ -128,30 +273,46 @@ impl GameEngine {
                 &route_id,
                 &platform_id,
             )),
-            GameIntent::PaintAreaRectangle { area, start, end } => self.commit_result(
-                areas::paint_area_rectangle(&self.snapshot, &area, &start, &end),
-            ),
+            GameIntent::PaintAreaRectangle { area, start, end } => {
+                let points = areas::rectangle_points(
+                    &start,
+                    &end,
+                    self.snapshot.map.width,
+                    self.snapshot.map.height,
+                );
+                self.commit_result_for_tiles(
+                    areas::paint_area_rectangle(&self.snapshot, &area, &start, &end),
+                    &points,
+                )
+            }
             GameIntent::PlaceBuilding {
                 building_type,
                 origin,
                 rotation,
-            } => self.commit_result(buildings::place_building(
-                &self.snapshot,
-                &building_type,
-                &origin,
-                rotation,
-            )),
+            } => self.commit_result_for_tiles(
+                buildings::place_building(&self.snapshot, &building_type, &origin, rotation),
+                &[origin],
+            ),
         }
     }
 
     fn commit_result(&mut self, result: GameplayResult<GameSnapshot>) -> DispatchResult {
+        self.commit_result_for_tiles(result, &[])
+    }
+
+    fn commit_result_for_tiles(
+        &mut self,
+        result: GameplayResult<GameSnapshot>,
+        requested_tiles: &[Point],
+    ) -> DispatchResult {
         match result {
             Ok(next) => {
                 if next == self.snapshot {
                     return DispatchResult::unchanged(self.snapshot());
                 }
+                let context = dispatch_context(&self.snapshot, &next, requested_tiles);
                 self.snapshot = next;
-                DispatchResult::applied(self.snapshot())
+                DispatchResult::applied_with_context(self.snapshot(), context)
             }
             Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
         }
