@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Point, RoadStructure } from "../../src/domain/types";
 import {
   renderRoundabout,
+  roundaboutVisualTemplate,
   type TileMetrics,
 } from "../../src/render/roundaboutRenderer";
 
@@ -94,6 +95,12 @@ describe("renderRoundabout", () => {
     expect(context.fill).not.toHaveBeenCalled();
     expect(context.lineTo).toHaveBeenCalledTimes(structure.ports.length);
     expect(context.fillRect).toHaveBeenCalledTimes(structure.ports.length);
+    expect(context.moveTo).toHaveBeenCalledWith(176, 176);
+    expect(context.lineTo).toHaveBeenCalledWith(176, 160);
+    expect(context.fillRect).toHaveBeenCalledWith(172, 163.8, 8, 2);
+    expect(context.moveTo).toHaveBeenCalledWith(208, 176);
+    expect(context.lineTo).toHaveBeenCalledWith(224, 176);
+    expect(context.fillRect).toHaveBeenCalledWith(218.2, 172, 2, 8);
   });
 
   it("draws eight standard curves and one protected center island", () => {
@@ -110,5 +117,34 @@ describe("renderRoundabout", () => {
       0,
       Math.PI * 2,
     );
+    expect(context.moveTo).toHaveBeenCalledWith(208, 176);
+    expect(context.lineTo).toHaveBeenCalledWith(208, 160);
+    expect(context.fillRect).toHaveBeenCalledWith(204, 163.8, 8, 2);
+    expect(context.moveTo).toHaveBeenCalledWith(240, 208);
+    expect(context.lineTo).toHaveBeenCalledWith(256, 208);
+    expect(context.fillRect).toHaveBeenCalledWith(250.2, 204, 2, 8);
   });
+
+  it.each([compactRoundaboutFixture(), standardRoundaboutFixture()])(
+    "orders $size circulation curves counterclockwise",
+    (structure) => {
+      const curves = roundaboutVisualTemplate(structure).circulationCurves;
+
+      expect(curves.every((curve) => curve.kind === "arc")).toBe(true);
+      for (let index = 0; index < curves.length; index += 1) {
+        const curve = curves[index];
+        const next = curves[(index + 1) % curves.length];
+        if (curve.kind !== "arc" || next.kind !== "arc") {
+          throw new Error("roundabout template must use arc paint geometry");
+        }
+        expect(curve.sweepRadians).toBeLessThan(0);
+        if (index < curves.length - 1) {
+          expect(curve.startRadians + curve.sweepRadians).toBeCloseTo(
+            next.startRadians,
+            10,
+          );
+        }
+      }
+    },
+  );
 });

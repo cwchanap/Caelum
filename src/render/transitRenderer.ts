@@ -14,7 +14,8 @@ import {
   canonicalCorridorPrimitive,
   corridorOffsets,
   directionArrowSamples,
-  offsetGeometry,
+  routePathPresentation,
+  type RoutePathPresentation,
 } from "./routeGeometry";
 
 export const UNRELATED_ROUTE_OPACITY = 0.42;
@@ -58,8 +59,10 @@ interface RouteStrokeStyle {
 
 interface RenderableLine {
   id: string;
+  mode: "bus" | "metro";
   color: string;
   lineWidth: number;
+  waypointIds: string[];
   legs: RouteLegPath[];
 }
 
@@ -78,14 +81,18 @@ function renderableLines(state: GameState): RenderableLine[] {
   return [
     ...state.transit.routes.map((route) => ({
       id: route.id,
+      mode: "bus" as const,
       color: route.color,
       lineWidth: 5,
+      waypointIds: route.stopIds,
       legs: route.legs,
     })),
     ...state.transit.metroLines.map((line) => ({
       id: line.id,
+      mode: "metro" as const,
       color: line.color,
       lineWidth: 8,
+      waypointIds: line.stationIds,
       legs: line.legs,
     })),
   ].sort((left, right) => left.id.localeCompare(right.id));
@@ -125,16 +132,30 @@ function buildCorridorGroups(lines: readonly RenderableLine[]): CorridorGroups {
   );
 }
 
+function presentationForRoute(
+  geometry: PathGeometry,
+  routeId: string,
+  corridors: CorridorGroups,
+): RoutePathPresentation {
+  const primitive = canonicalCorridorPrimitive(geometry);
+  const group = corridors.get(primitive.key);
+  if (group === undefined) {
+    return routePathPresentation(geometry, 0, primitive.canonicalTangent);
+  }
+  const pixels = group.offsets.get(routeId) ?? 0;
+  return routePathPresentation(
+    geometry,
+    pixels / tileSize,
+    group.canonicalTangent,
+  );
+}
+
 function offsetForRoute(
   geometry: PathGeometry,
   routeId: string,
   corridors: CorridorGroups,
 ): PathGeometry {
-  const primitive = canonicalCorridorPrimitive(geometry);
-  const group = corridors.get(primitive.key);
-  if (group === undefined) return geometry;
-  const pixels = group.offsets.get(routeId) ?? 0;
-  return offsetGeometry(geometry, pixels / tileSize, group.canonicalTangent);
+  return presentationForRoute(geometry, routeId, corridors).geometry;
 }
 
 function offsetPath(
@@ -291,6 +312,57 @@ function drawLineDirectionArrows(
   }
 }
 
+function waypointGeometry(
+  line: RenderableLine,
+  waypointId: string,
+): PathGeometry | null {
+  for (const leg of line.legs) {
+    if (leg.fromWaypointId !== waypointId) continue;
+    const path = presentationPath(leg);
+    const geometry = path?.steps[0]?.geometry;
+    if (geometry !== undefined) return geometry;
+  }
+  for (const leg of line.legs) {
+    if (leg.toWaypointId !== waypointId) continue;
+    const path = presentationPath(leg);
+    const geometry = path?.steps.at(-1)?.geometry;
+    if (geometry !== undefined) return geometry;
+  }
+  return null;
+}
+
+function drawRouteNodeCues(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  lines: readonly RenderableLine[],
+  corridors: CorridorGroups,
+  emphasizedIds: ReadonlySet<string>,
+): void {
+  for (const line of lines) {
+    ctx.globalAlpha =
+      emphasizedIds.size === 0 || emphasizedIds.has(line.id)
+        ? 1
+        : UNRELATED_ROUTE_OPACITY;
+    ctx.fillStyle = line.color;
+    const nodes =
+      line.mode === "bus" ? state.transit.stops : state.transit.stations;
+    for (const waypointId of new Set(line.waypointIds)) {
+      const node = nodes.find(
+        (candidate) =>
+          candidate.id === waypointId && candidate.status === "present",
+      );
+      const geometry = waypointGeometry(line, waypointId);
+      if (node === undefined || geometry === null) continue;
+      const presentation = presentationForRoute(geometry, line.id, corridors);
+      const point = center(presentation.translatePoint(node.position));
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function vehicleItinerary(
   state: GameState,
   vehicle: Vehicle,
@@ -315,6 +387,7 @@ interface VehicleSample {
 function vehicleSample(
   state: GameState,
   vehicle: Vehicle,
+  corridors: CorridorGroups,
 ): VehicleSample | null {
   const itinerary = vehicleItinerary(state, vehicle);
   if (itinerary === null || itinerary.length === 0) {
@@ -326,15 +399,29 @@ function vehicleSample(
   const path = leg?.currentPath;
   const step = path?.steps[vehicle.pathStepIndex];
   if (step === undefined) {
-    return vehicle.parkedPosition === null
-      ? null
-      : { point: center(vehicle.parkedPosition), tangent: null };
+    if (vehicle.parkedPosition === null) return null;
+    const geometry =
+      leg === undefined ? undefined : presentationPath(leg)?.steps[0]?.geometry;
+    const point =
+      geometry === undefined
+        ? vehicle.parkedPosition
+        : presentationForRoute(
+            geometry,
+            vehicle.lineId,
+            corridors,
+          ).translatePoint(vehicle.parkedPosition);
+    return { point: center(point), tangent: null };
   }
-  const sample = pointAndTangentAt(step.geometry, vehicle.stepProgress);
+  const presentation = presentationForRoute(
+    step.geometry,
+    vehicle.lineId,
+    corridors,
+  );
+  const sample = pointAndTangentAt(presentation.geometry, vehicle.stepProgress);
   return { point: center(sample.point), tangent: sample.tangent };
 }
 
-export function renderTransit(
+function renderTransitContents(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
@@ -399,7 +486,6 @@ export function renderTransit(
       corridors,
     );
     ctx.restore();
-    ctx.setLineDash([]);
   }
 
   for (const line of lines) {
@@ -422,8 +508,9 @@ export function renderTransit(
     ctx.arc(point.x, point.y, 8, 0, Math.PI * 2);
     ctx.fill();
   }
+  drawRouteNodeCues(ctx, state, lines, corridors, emphasizedIds);
   for (const vehicle of state.transit.vehicles) {
-    const sample = vehicleSample(state, vehicle);
+    const sample = vehicleSample(state, vehicle, corridors);
     if (sample === null) {
       continue;
     }
@@ -437,5 +524,18 @@ export function renderTransit(
     } else {
       ctx.fillRect(sample.point.x - 7, sample.point.y - 14, 14, 8);
     }
+  }
+}
+
+export function renderTransit(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  ctx.save();
+  try {
+    renderTransitContents(ctx, state, ui);
+  } finally {
+    ctx.restore();
   }
 }

@@ -80,6 +80,47 @@ describe("corridorOffsets", () => {
     expect(reverse.key).toBe(forward.key);
     expect(reverse.canonicalTangent).toEqual(forward.canonicalTangent);
   });
+
+  it("groups reversed quadratic and arc primitives without direction labels", () => {
+    const quadratic = {
+      kind: "quadraticBezier" as const,
+      from: { x: 1, y: 2 },
+      control: { x: 3, y: 4 },
+      to: { x: 5, y: 2 },
+    };
+    const reverseQuadratic = {
+      ...quadratic,
+      from: quadratic.to,
+      to: quadratic.from,
+    };
+    const arc = {
+      kind: "arc" as const,
+      center: { x: 8, y: 8 },
+      radius: 2,
+      startRadians: 0,
+      sweepRadians: Math.PI / 2,
+    };
+    const reverseArc = {
+      ...arc,
+      startRadians: Math.PI / 2,
+      sweepRadians: -Math.PI / 2,
+    };
+
+    expect(canonicalCorridorPrimitive(reverseQuadratic)).toEqual(
+      canonicalCorridorPrimitive(quadratic),
+    );
+    const forwardArc = canonicalCorridorPrimitive(arc);
+    const backwardArc = canonicalCorridorPrimitive(reverseArc);
+    expect(backwardArc.key).toBe(forwardArc.key);
+    expect(backwardArc.canonicalTangent.x).toBeCloseTo(
+      forwardArc.canonicalTangent.x,
+      10,
+    );
+    expect(backwardArc.canonicalTangent.y).toBeCloseTo(
+      forwardArc.canonicalTangent.y,
+      10,
+    );
+  });
 });
 
 describe("offsetGeometry", () => {
@@ -114,5 +155,72 @@ describe("directionArrowSamples", () => {
     expect(arrows.every((arrow) => Number.isFinite(arrow.angleRadians))).toBe(
       true,
     );
+  });
+
+  it("returns concrete quadratic U-turn positions and tangents", () => {
+    const path: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: { x: 0, y: 0 },
+          enteringHeading: "east",
+          leavingHeading: "west",
+          movement: "uTurn",
+          geometry: {
+            kind: "quadraticBezier",
+            from: { x: 0, y: 0 },
+            control: { x: 1, y: 1 },
+            to: { x: 2, y: 0 },
+          },
+          travelSeconds: 1,
+        },
+      ],
+      totalTravelSeconds: 1,
+    };
+
+    expect(directionArrowSamples(path, 1)).toEqual([
+      {
+        point: {
+          x: expect.closeTo(0.8528943093, 8),
+          y: expect.closeTo(0.4891799579, 8),
+        },
+        angleRadians: expect.closeTo(0.1460581325, 8),
+        movement: "uTurn",
+      },
+    ]);
+  });
+
+  it("returns concrete roundabout arc positions and tangents", () => {
+    const path: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: { x: 2, y: 0 },
+          enteringHeading: "south",
+          leavingHeading: "west",
+          movement: "roundaboutCirculation",
+          geometry: {
+            kind: "arc",
+            center: { x: 0, y: 0 },
+            radius: 2,
+            startRadians: 0,
+            sweepRadians: Math.PI / 2,
+          },
+          travelSeconds: 1,
+        },
+      ],
+      totalTravelSeconds: 1,
+    };
+
+    expect(directionArrowSamples(path, Math.PI / 2)).toEqual([
+      {
+        point: {
+          x: expect.closeTo(1.4124261858, 8),
+          y: expect.closeTo(1.4159986828, 8),
+        },
+        angleRadians: expect.closeTo(2.3574575589, 8),
+        movement: "roundaboutCirculation",
+      },
+    ]);
   });
 });

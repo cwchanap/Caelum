@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
 import type { RouteLegPath, TransitPath } from "../../src/domain/types";
+import { colors } from "../../src/render/colors";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import {
@@ -51,26 +52,90 @@ interface RecordedStroke {
 function recordingContext(): {
   ctx: CanvasRenderingContext2D;
   strokes: RecordedStroke[];
-  fills: Array<{ fillStyle: string; globalAlpha: number }>;
+  fills: Array<{
+    fillStyle: string;
+    globalAlpha: number;
+    pathKind: "arc" | "polygon" | "none";
+    point: { x: number; y: number };
+  }>;
+  arcs: Array<{
+    x: number;
+    y: number;
+    radius: number;
+    fillStyle: string;
+  }>;
+  fillRects: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fillStyle: string;
+  }>;
 } {
   const strokes: RecordedStroke[] = [];
   let dash: number[] = [];
   let strokeStyle = "";
   let fillStyle = "";
   let globalAlpha = 1;
+  let translation = { x: 0, y: 0 };
   let path: Array<{ x: number; y: number }> = [];
-  const fills: Array<{ fillStyle: string; globalAlpha: number }> = [];
+  let pathKind: "arc" | "polygon" | "none" = "none";
+  const stack: Array<{
+    dash: number[];
+    strokeStyle: string;
+    fillStyle: string;
+    globalAlpha: number;
+    translation: { x: number; y: number };
+  }> = [];
+  const fills: Array<{
+    fillStyle: string;
+    globalAlpha: number;
+    pathKind: "arc" | "polygon" | "none";
+    point: { x: number; y: number };
+  }> = [];
+  const arcs: Array<{
+    x: number;
+    y: number;
+    radius: number;
+    fillStyle: string;
+  }> = [];
+  const fillRects: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fillStyle: string;
+  }> = [];
   const context = {
-    save: vi.fn(),
-    restore: vi.fn(),
+    save: vi.fn(() => {
+      stack.push({
+        dash: [...dash],
+        strokeStyle,
+        fillStyle,
+        globalAlpha,
+        translation: { ...translation },
+      });
+    }),
+    restore: vi.fn(() => {
+      const saved = stack.pop();
+      if (saved === undefined) return;
+      dash = saved.dash;
+      strokeStyle = saved.strokeStyle;
+      fillStyle = saved.fillStyle;
+      globalAlpha = saved.globalAlpha;
+      translation = saved.translation;
+    }),
     beginPath: vi.fn(() => {
       path = [];
+      pathKind = "none";
     }),
     moveTo: vi.fn((x: number, y: number) => {
       path.push({ x, y });
+      pathKind = "polygon";
     }),
     lineTo: vi.fn((x: number, y: number) => {
       path.push({ x, y });
+      pathKind = "polygon";
     }),
     quadraticCurveTo: vi.fn(),
     stroke: vi.fn(() => {
@@ -82,15 +147,42 @@ function recordingContext(): {
       });
     }),
     fill: vi.fn(() => {
-      fills.push({ fillStyle, globalAlpha });
+      fills.push({
+        fillStyle,
+        globalAlpha,
+        pathKind,
+        point: { ...translation },
+      });
     }),
-    arc: vi.fn(),
-    fillRect: vi.fn(),
-    translate: vi.fn(),
+    arc: vi.fn((x: number, y: number, radius: number) => {
+      pathKind = "arc";
+      arcs.push({
+        x: x + translation.x,
+        y: y + translation.y,
+        radius,
+        fillStyle,
+      });
+    }),
+    fillRect: vi.fn((x: number, y: number, width: number, height: number) => {
+      fillRects.push({
+        x: x + translation.x,
+        y: y + translation.y,
+        width,
+        height,
+        fillStyle,
+      });
+    }),
+    translate: vi.fn((x: number, y: number) => {
+      translation = {
+        x: translation.x + x,
+        y: translation.y + y,
+      };
+    }),
     rotate: vi.fn(),
     setLineDash: vi.fn((next: number[]) => {
       dash = [...next];
     }),
+    getLineDash: vi.fn(() => [...dash]),
     get strokeStyle() {
       return strokeStyle;
     },
@@ -113,7 +205,7 @@ function recordingContext(): {
     lineCap: "butt",
     lineJoin: "miter",
   } as unknown as CanvasRenderingContext2D;
-  return { ctx: context, strokes, fills };
+  return { ctx: context, strokes, fills, arcs, fillRects };
 }
 
 function linePath(x: number): TransitPath {
@@ -134,6 +226,27 @@ function linePath(x: number): TransitPath {
       },
     ],
     totalTravelSeconds: 1,
+  };
+}
+
+function sharedLinePath(): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 1, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x: 1, y: 1 },
+          to: { x: 5, y: 1 },
+        },
+        travelSeconds: 4,
+      },
+    ],
+    totalTravelSeconds: 4,
   };
 }
 
@@ -223,6 +336,20 @@ describe("renderTransit highlight", () => {
     expect(() =>
       renderTransit(ctx(), busState(), createUiState()),
     ).not.toThrow();
+  });
+
+  it("restores the caller alpha and line dash exactly", () => {
+    const { ctx: context } = recordingContext();
+    context.globalAlpha = 0.37;
+    context.setLineDash([9, 3]);
+
+    renderTransit(context, busState(), {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(context.globalAlpha).toBe(0.37);
+    expect(context.getLineDash()).toEqual([9, 3]);
   });
 
   it("renders with a selected route", () => {
@@ -412,7 +539,7 @@ describe("renderTransit highlight", () => {
   });
 
   it("uses a direct dotted fallback only when no last-valid geometry exists", () => {
-    const { ctx: context, strokes } = recordingContext();
+    const { ctx: context, strokes, fills } = recordingContext();
     const state = stateWithLegs([
       routeLeg("a", "b", "networkDisconnected", null),
     ]);
@@ -429,6 +556,100 @@ describe("renderTransit highlight", () => {
       { x: 320, y: 288 },
     ]);
     expect(strokes.at(-1)?.dash).toEqual([6, 5]);
+    expect(
+      fills.filter(
+        (fill) => fill.fillStyle === "#e04f39" && fill.pathKind === "polygon",
+      ),
+    ).toEqual([]);
+  });
+
+  it("uses dotted last-valid geometry for broken-route arrows", () => {
+    const { ctx: context, strokes, fills } = recordingContext();
+    const state = stateWithLegs([
+      routeLeg("a", "b", "networkDisconnected", sharedLinePath()),
+    ]);
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(
+      strokes.some(
+        (stroke) => stroke.strokeStyle === "#e04f39" && stroke.dash.length > 0,
+      ),
+    ).toBe(true);
+    expect(
+      fills.some(
+        (fill) => fill.fillStyle === "#e04f39" && fill.pathKind === "polygon",
+      ),
+    ).toBe(true);
+  });
+
+  it("draws selected metro arrows with track geometry", () => {
+    const { ctx: context, fills } = recordingContext();
+    const initial = createTestGameState();
+    const trackPath: TransitPath = {
+      kind: "track",
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          heading: "east",
+          geometry: {
+            kind: "line",
+            from: { x: 1, y: 1 },
+            to: { x: 5, y: 1 },
+          },
+          travelSeconds: 2,
+        },
+      ],
+      totalTravelSeconds: 2,
+    };
+    const state = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        stations: [
+          {
+            id: "station-a",
+            status: "present" as const,
+            position: { x: 1, y: 1 },
+            platforms: [],
+          },
+          {
+            id: "station-b",
+            status: "present" as const,
+            position: { x: 5, y: 1 },
+            platforms: [],
+          },
+        ],
+        metroLines: [
+          {
+            id: "metro-001",
+            name: "Metro 1",
+            color: "#3355aa",
+            stationIds: ["station-a", "station-b"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [routeLeg("station-a", "station-b", "connected", trackPath)],
+            pathBroken: false,
+          },
+        ],
+      },
+    };
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "metro-001",
+    });
+
+    expect(
+      fills.some(
+        (fill) => fill.fillStyle === "#3355aa" && fill.pathKind === "polygon",
+      ),
+    ).toBe(true);
   });
 
   it("selected halo repeats each leg dash state", () => {
@@ -456,24 +677,7 @@ describe("renderTransit highlight", () => {
 
   it("emits arrows only for the selected route and dims unrelated routes", () => {
     const { ctx: context, strokes, fills } = recordingContext();
-    const sharedPath: TransitPath = {
-      kind: "road",
-      steps: [
-        {
-          position: { x: 1, y: 1 },
-          enteringHeading: "east",
-          leavingHeading: "east",
-          movement: "straight",
-          geometry: {
-            kind: "line",
-            from: { x: 1, y: 1 },
-            to: { x: 5, y: 1 },
-          },
-          travelSeconds: 4,
-        },
-      ],
-      totalTravelSeconds: 4,
-    };
+    const sharedPath = sharedLinePath();
     const initial = stateWithLegs([
       routeLeg("a", "b", "connected", sharedPath),
     ]);
@@ -507,9 +711,134 @@ describe("renderTransit highlight", () => {
     expect(
       strokes.find((stroke) => stroke.strokeStyle === "#111111")?.globalAlpha,
     ).toBe(0.42);
-    expect(fills.filter((fill) => fill.fillStyle === "#222222")).not.toEqual(
-      [],
+    expect(
+      fills.filter(
+        (fill) => fill.fillStyle === "#222222" && fill.pathKind === "polygon",
+      ),
+    ).not.toEqual([]);
+    expect(
+      fills.filter(
+        (fill) => fill.fillStyle === "#111111" && fill.pathKind === "polygon",
+      ),
+    ).toEqual([]);
+  });
+
+  it("applies one route presentation offset to strokes, arrows, cues, and vehicles", () => {
+    const {
+      ctx: context,
+      strokes,
+      fills,
+      arcs,
+      fillRects,
+    } = recordingContext();
+    const initial = stateWithLegs([
+      routeLeg("a", "b", "connected", sharedLinePath()),
+    ]);
+    const baseRoute = initial.transit.routes[0];
+    const routes = [
+      {
+        ...baseRoute,
+        id: "route-0002",
+        color: "#222222",
+        stopIds: ["a", "b"],
+        vehicleIds: ["vehicle-0002"],
+      },
+      {
+        ...baseRoute,
+        id: "route-0001",
+        color: "#111111",
+        stopIds: ["a", "b"],
+        vehicleIds: ["vehicle-0001"],
+      },
+    ];
+    const state = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        stops: initial.transit.stops.map((stop) =>
+          stop.id === "b" ? { ...stop, position: { x: 5, y: 1 } } : stop,
+        ),
+        routes,
+        vehicles: [
+          {
+            id: "vehicle-0001",
+            mode: "bus" as const,
+            lineId: "route-0001",
+            capacity: 40,
+            passengerIds: [],
+            itineraryIndex: 0,
+            pathStepIndex: 0,
+            stepProgress: 0.5,
+            parkedPosition: null,
+          },
+          {
+            id: "vehicle-0002",
+            mode: "bus" as const,
+            lineId: "route-0002",
+            capacity: 40,
+            passengerIds: [],
+            itineraryIndex: 0,
+            pathStepIndex: 0,
+            stepProgress: 0.5,
+            parkedPosition: null,
+          },
+        ],
+      },
+    };
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-0002",
+    });
+
+    expect(
+      strokes.find((stroke) => stroke.strokeStyle === "#111111")?.path[0],
+    ).toEqual({ x: 48, y: 46 });
+    expect(
+      strokes.find((stroke) => stroke.strokeStyle === "#222222")?.path[0],
+    ).toEqual({ x: 48, y: 50 });
+    expect(
+      fills.find(
+        (fill) => fill.fillStyle === "#222222" && fill.pathKind === "polygon",
+      )?.point,
+    ).toEqual({ x: 96, y: 50 });
+    expect(
+      arcs.some(
+        (arc) =>
+          arc.fillStyle === "#111111" &&
+          arc.radius === 3 &&
+          arc.x === 48 &&
+          arc.y === 46,
+      ),
+    ).toBe(true);
+    expect(
+      arcs.some(
+        (arc) =>
+          arc.fillStyle === "#222222" &&
+          arc.radius === 3 &&
+          arc.x === 48 &&
+          arc.y === 50,
+      ),
+    ).toBe(true);
+    expect(
+      fillRects.filter(
+        (rect) =>
+          rect.fillStyle === colors.bus &&
+          rect.width === 14 &&
+          rect.height === 8,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ x: 105, y: 32 }),
+        expect.objectContaining({ x: 105, y: 36 }),
+      ]),
     );
-    expect(fills.filter((fill) => fill.fillStyle === "#111111")).toEqual([]);
+    expect(fillRects).toContainEqual({
+      x: 43,
+      y: 43,
+      width: 10,
+      height: 10,
+      fillStyle: colors.bus,
+    });
   });
 });

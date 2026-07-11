@@ -246,6 +246,8 @@ describe("canvas helpers", () => {
 
   it("does not render missing stops or stations as physical nodes", () => {
     const ctx = {
+      save: vi.fn(),
+      restore: vi.fn(),
       fillRect: vi.fn(),
       beginPath: vi.fn(),
       arc: vi.fn(),

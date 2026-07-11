@@ -61,6 +61,31 @@ export function offsetGeometry(
   return translateGeometry(geometry, normal.x * pixels, normal.y * pixels);
 }
 
+export interface RoutePathPresentation {
+  geometry: PathGeometry;
+  translation: TripPosition;
+  translatePoint: (point: TripPosition) => TripPosition;
+}
+
+export function routePathPresentation(
+  geometry: PathGeometry,
+  pixels: number,
+  canonicalTangent: TripPosition,
+): RoutePathPresentation {
+  const presented = offsetGeometry(geometry, pixels, canonicalTangent);
+  const sourceStart = pointAndTangentAt(geometry, 0).point;
+  const presentedStart = pointAndTangentAt(presented, 0).point;
+  const translation = {
+    x: presentedStart.x - sourceStart.x,
+    y: presentedStart.y - sourceStart.y,
+  };
+  return {
+    geometry: presented,
+    translation,
+    translatePoint: (point) => translated(point, translation.x, translation.y),
+  };
+}
+
 function stableNumber(value: number): string {
   const normalized = Object.is(value, -0) ? 0 : value;
   return Number(normalized.toFixed(9)).toString();
