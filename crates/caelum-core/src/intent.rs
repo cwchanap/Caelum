@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{GameSnapshot, Point};
+use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,5 +99,53 @@ pub enum GameIntent {
 pub struct DispatchResult {
     pub snapshot: GameSnapshot,
     pub applied: bool,
-    pub rejection: Option<String>,
+    pub rejection: Option<GameplayRejection>,
+    pub context: DispatchContext,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DispatchContext {
+    pub changed_tiles: Vec<Point>,
+    pub skipped_tiles: Vec<Point>,
+    pub affected_route_ids: Vec<String>,
+    pub cost: i32,
+}
+
+impl DispatchResult {
+    pub fn applied(snapshot: GameSnapshot) -> Self {
+        Self {
+            snapshot,
+            applied: true,
+            rejection: None,
+            context: DispatchContext::default(),
+        }
+    }
+
+    pub fn applied_with_context(snapshot: GameSnapshot, context: DispatchContext) -> Self {
+        Self {
+            snapshot,
+            applied: true,
+            rejection: None,
+            context,
+        }
+    }
+
+    pub fn unchanged(snapshot: GameSnapshot) -> Self {
+        Self {
+            snapshot,
+            applied: false,
+            rejection: None,
+            context: DispatchContext::default(),
+        }
+    }
+
+    pub fn rejected(snapshot: GameSnapshot, rejection: GameplayRejection) -> Self {
+        Self {
+            snapshot,
+            applied: false,
+            rejection: Some(rejection),
+            context: DispatchContext::default(),
+        }
+    }
 }

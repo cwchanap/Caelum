@@ -3,7 +3,7 @@ use caelum_core::{
     commute::{shift_template_for_id, worker_profile_for_id},
     model::{PlacedBuilding, Point, Sim, WorkerProfile},
     state::create_initial_snapshot,
-    GameEngine, GameIntent,
+    GameEngine, GameIntent, RejectionCode,
 };
 
 #[test]
@@ -47,7 +47,10 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
         rotation: 0,
     });
     assert!(!rejected.applied);
-    assert_eq!(rejected.rejection.as_deref(), Some("area mismatch"));
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidBuildingPlacement)
+    );
 
     engine.dispatch(GameIntent::PaintAreaRectangle {
         area: "residential".to_string(),
@@ -174,7 +177,10 @@ fn place_building_rejects_invalid_rotation_without_placing() {
     });
 
     assert!(!rejected.applied);
-    assert_eq!(rejected.rejection.as_deref(), Some("invalid rotation"));
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidBuildingPlacement)
+    );
     assert!(rejected.snapshot.buildings.is_empty());
 }
 
@@ -252,7 +258,10 @@ fn place_metro_station_building_requires_track_and_creates_linked_station() {
         rotation: 0,
     });
     assert!(!rejected.applied);
-    assert_eq!(rejected.rejection.as_deref(), Some("track required"));
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::TrackRequired)
+    );
 
     engine.dispatch(GameIntent::LayTrack {
         point: (8, 2).into(),
@@ -278,7 +287,7 @@ fn place_metro_station_building_requires_track_and_creates_linked_station() {
 fn unassigned_worker(id: &str, home: Point) -> Sim {
     Sim {
         id: id.to_string(),
-        home: home.clone(),
+        home,
         position: home,
         worker_profile: WorkerProfile::Worker,
         shift_template: None,
@@ -295,7 +304,7 @@ fn destination_on(id: &str, building_type: &str, tiles: Vec<Point>) -> PlacedBui
     PlacedBuilding {
         id: id.to_string(),
         building_type: building_type.to_string(),
-        origin: tiles[0].clone(),
+        origin: tiles[0],
         rotation: 0,
         occupied_tiles: tiles,
         transit_node_id: None,
@@ -316,10 +325,10 @@ fn assign_workplaces_skips_a_workers_home_tile_when_alternatives_exist() {
     // Destinations are enumerated in building order, so `home` is index 0:
     // without the home filter, round-robin would assign the first worker home.
     state.buildings = vec![
-        destination_on("building-001", "supermarket", vec![home.clone()]),
-        destination_on("building-002", "factory", vec![other.clone()]),
+        destination_on("building-001", "supermarket", vec![home]),
+        destination_on("building-002", "factory", vec![other]),
     ];
-    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+    state.sims = vec![unassigned_worker("sim-001", home)];
 
     assign_workplaces(&mut state);
 
@@ -341,7 +350,10 @@ fn paint_area_rectangle_rejects_off_map_rectangle_without_hanging() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("no paintable tiles"));
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::OutOfBounds)
+    );
 }
 
 // Regression: a PaintAreaRectangle spanning the entire i32 range must not hang
@@ -379,7 +391,10 @@ fn place_building_rejects_overflowing_origin_without_panicking() {
     });
 
     assert!(!rejected.applied);
-    assert_eq!(rejected.rejection.as_deref(), Some("invalid footprint"));
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidBuildingPlacement)
+    );
     assert!(rejected.snapshot.buildings.is_empty());
 }
 
@@ -391,12 +406,8 @@ fn place_building_rejects_overflowing_origin_without_panicking() {
 fn assign_workplaces_falls_back_to_home_when_home_is_the_only_destination() {
     let home = Point { x: 2, y: 3 };
     let mut state = create_initial_snapshot();
-    state.buildings = vec![destination_on(
-        "building-001",
-        "supermarket",
-        vec![home.clone()],
-    )];
-    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+    state.buildings = vec![destination_on("building-001", "supermarket", vec![home])];
+    state.sims = vec![unassigned_worker("sim-001", home)];
 
     assign_workplaces(&mut state);
 
@@ -419,21 +430,15 @@ fn assign_workplaces_promotes_home_fallback_worker_when_a_real_destination_appea
 
     // First pass: the only destination is the worker's home tile, so the
     // worker falls back to a home workplace.
-    state.buildings = vec![destination_on(
-        "building-001",
-        "supermarket",
-        vec![home.clone()],
-    )];
-    state.sims = vec![unassigned_worker("sim-001", home.clone())];
+    state.buildings = vec![destination_on("building-001", "supermarket", vec![home])];
+    state.sims = vec![unassigned_worker("sim-001", home)];
     assign_workplaces(&mut state);
     assert_eq!(state.sims[0].workplace, Some(home));
 
     // A real non-home destination is built later; the worker must be promoted.
-    state.buildings.push(destination_on(
-        "building-002",
-        "factory",
-        vec![other.clone()],
-    ));
+    state
+        .buildings
+        .push(destination_on("building-002", "factory", vec![other]));
     assign_workplaces(&mut state);
 
     assert_eq!(state.sims[0].workplace, Some(other));
@@ -449,11 +454,11 @@ fn assign_workplaces_leaves_an_existing_real_workplace_unchanged() {
     let second = Point { x: 7, y: 8 };
     let mut state = create_initial_snapshot();
     state.buildings = vec![
-        destination_on("building-001", "supermarket", vec![first.clone()]),
-        destination_on("building-002", "factory", vec![second.clone()]),
+        destination_on("building-001", "supermarket", vec![first]),
+        destination_on("building-002", "factory", vec![second]),
     ];
-    let mut worker = unassigned_worker("sim-001", home.clone());
-    worker.workplace = Some(first.clone());
+    let mut worker = unassigned_worker("sim-001", home);
+    worker.workplace = Some(first);
     state.sims = vec![worker];
 
     assign_workplaces(&mut state);

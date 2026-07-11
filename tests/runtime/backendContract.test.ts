@@ -1,9 +1,35 @@
-import { describe, expect, it } from "vitest";
-import type { GameBackend, GameIntent } from "../../src/runtime/backend/types";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { GameplayRejection } from "../../src/domain/types";
+import type {
+  DispatchContext,
+  DispatchResult,
+  GameBackend,
+  GameIntent,
+} from "../../src/runtime/backend/types";
+import { rejectionMessage } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 describe("Rust backend contract", () => {
+  it("uses structured gameplay rejections and success context", () => {
+    const insufficientBudget: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 8_000,
+        availableBudget: 7_999,
+        affectedRouteIds: [],
+      },
+    };
+
+    expectTypeOf<
+      DispatchResult["rejection"]
+    >().toEqualTypeOf<GameplayRejection | null>();
+    expectTypeOf<DispatchResult["context"]>().toEqualTypeOf<DispatchContext>();
+    expect(rejectionMessage(insufficientBudget)).toBe(
+      "Needs $8,000; only $7,999 is available.",
+    );
+  });
+
   it("normalizes a Rust snapshot into shell-readable frontend state", () => {
     const rustSnapshot = createRustSnapshot({
       day: 1,
@@ -129,8 +155,24 @@ describe("Rust backend contract", () => {
         },
         applied: true,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       }),
-      tick: async () => ({ snapshot, applied: false, rejection: null }),
+      tick: async () => ({
+        snapshot,
+        applied: false,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      }),
       reset: async () => snapshot,
     };
 

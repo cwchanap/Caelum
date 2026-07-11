@@ -10,6 +10,7 @@ use crate::model::{
 };
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::trips::WAIT_PATIENCE_SECONDS;
 
 pub const BUS_STOP_COST: i32 = 2_000;
@@ -31,12 +32,38 @@ pub const METRO_TILES_PER_SECOND: f64 = 1.6;
 /// preserved.
 const EPSILON: f64 = 0.000_001;
 
-pub fn lay_road(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+fn route_rejection(code: RejectionCode, route_id: &str) -> GameplayRejection {
+    GameplayRejection {
+        code,
+        context: RejectionContext {
+            route_id: Some(route_id.to_string()),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn node_rejection(code: RejectionCode, node_id: &str, route_id: Option<&str>) -> GameplayRejection {
+    GameplayRejection {
+        code,
+        context: RejectionContext {
+            route_id: route_id.map(str::to_string),
+            node_id: Some(node_id.to_string()),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+pub fn lay_road(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     if state.budget < ROAD_COST {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(ROAD_COST, state.budget));
     }
     if !is_valid_road_placement(state, point) {
-        return Err("invalid road placement".to_string());
+        let code = if get_tile(&state.map, point).is_none() {
+            RejectionCode::OutOfBounds
+        } else {
+            RejectionCode::BlockedTile
+        };
+        return Err(GameplayRejection::at(code, *point));
     }
 
     let mut next = state.clone();
@@ -45,12 +72,17 @@ pub fn lay_road(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, Str
     Ok(recompute_route_paths(&next))
 }
 
-pub fn lay_track(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+pub fn lay_track(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     if state.budget < TRACK_COST {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(TRACK_COST, state.budget));
     }
     if !is_valid_track_placement(state, point) {
-        return Err("invalid track placement".to_string());
+        let code = if get_tile(&state.map, point).is_none() {
+            RejectionCode::OutOfBounds
+        } else {
+            RejectionCode::BlockedTile
+        };
+        return Err(GameplayRejection::at(code, *point));
     }
 
     let mut next = state.clone();
@@ -63,9 +95,9 @@ pub fn lay_road_line(
     state: &GameSnapshot,
     points: &[Point],
     preset: RoadPreset,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     if points.is_empty() {
-        return Err("empty road line".to_string());
+        return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
     }
 
     // OneWay follows the drag direction (start→current) so the arrow points the
@@ -98,14 +130,17 @@ pub fn lay_road_line(
     }
 
     if !changed {
-        return Err("road line unchanged".to_string());
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidRoadStroke,
+            points[0],
+        ));
     }
     Ok(recompute_route_paths(&next))
 }
 
-pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> Result<GameSnapshot, String> {
+pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
     if points.is_empty() {
-        return Err("empty track line".to_string());
+        return Err(GameplayRejection::new(RejectionCode::InvalidTrackStroke));
     }
 
     let mut next = state.clone();
@@ -120,14 +155,17 @@ pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> Result<GameSnap
     }
 
     if !changed {
-        return Err("track line unchanged".to_string());
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidTrackStroke,
+            points[0],
+        ));
     }
     Ok(recompute_route_paths(&next))
 }
 
-pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> Result<GameSnapshot, String> {
+pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
     if points.is_empty() {
-        return Err("empty remove line".to_string());
+        return Err(GameplayRejection::new(RejectionCode::BlockedTile));
     }
 
     let mut next = state.clone();
@@ -142,12 +180,12 @@ pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> Result<GameSna
     }
 
     if !changed {
-        return Err("remove line unchanged".to_string());
+        return Err(GameplayRejection::at(RejectionCode::BlockedTile, points[0]));
     }
     Ok(next)
 }
 
-pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     let removed_building = state
         .buildings
         .iter()
@@ -236,15 +274,35 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> Result<GameSnapsho
     Ok(next)
 }
 
-pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     // `AddBusStop` is the lightweight road-tile bus stop path. Bus terminals
     // are multi-platform buildings with their own cost (12,000) and 3x2
     // footprint validation, placed via `PlaceBuilding` -> `place_building`.
     if state.budget < BUS_STOP_COST {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(BUS_STOP_COST, state.budget));
     }
     if !is_valid_bus_stop_placement(state, point) {
-        return Err("invalid bus stop placement".to_string());
+        let rejection = match get_tile(&state.map, point) {
+            None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
+            Some(tile) if tile.kind != "road" => {
+                GameplayRejection::at(RejectionCode::RoadRequired, *point)
+            }
+            Some(_) => state
+                .transit
+                .stops
+                .iter()
+                .find(|stop| stop.position == *point)
+                .map_or_else(
+                    || GameplayRejection::at(RejectionCode::BlockedTile, *point),
+                    |stop| {
+                        let mut rejection =
+                            node_rejection(RejectionCode::NodeAlreadyExists, &stop.id, None);
+                        rejection.context.point = Some(*point);
+                        rejection
+                    },
+                ),
+        };
+        return Err(rejection);
     }
 
     let mut next = state.clone();
@@ -256,19 +314,39 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot,
     next.transit.stops.push(crate::model::Stop {
         id: stop_id.clone(),
         kind: "busStop".to_string(),
-        position: point.clone(),
+        position: *point,
         platforms: bus_platforms(&stop_id, "busStop"),
     });
 
     Ok(next)
 }
 
-pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     if state.budget < METRO_STATION_COST {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(METRO_STATION_COST, state.budget));
     }
     if !is_valid_metro_station_placement(state, point) {
-        return Err("invalid metro station placement".to_string());
+        let rejection = match get_tile(&state.map, point) {
+            None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
+            Some(tile) if !tile.has_track => {
+                GameplayRejection::at(RejectionCode::TrackRequired, *point)
+            }
+            Some(_) => state
+                .transit
+                .stations
+                .iter()
+                .find(|station| station.position == *point)
+                .map_or_else(
+                    || GameplayRejection::at(RejectionCode::BlockedTile, *point),
+                    |station| {
+                        let mut rejection =
+                            node_rejection(RejectionCode::NodeAlreadyExists, &station.id, None);
+                        rejection.context.point = Some(*point);
+                        rejection
+                    },
+                ),
+        };
+        return Err(rejection);
     }
 
     let mut next = state.clone();
@@ -282,14 +360,14 @@ pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> Result<GameSnap
     next.budget -= METRO_STATION_COST;
     next.transit.stations.push(crate::model::Station {
         id: station_id.clone(),
-        position: point.clone(),
+        position: *point,
         platforms: metro_platforms(&station_id),
     });
 
     Ok(next)
 }
 
-pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> Result<GameSnapshot, String> {
+pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     let route_id = next_entity_id(
         "route",
@@ -302,7 +380,7 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> Result<Game
         .transit
         .stops
         .iter()
-        .map(|stop| (stop.id.clone(), stop.position.clone()))
+        .map(|stop| (stop.id.clone(), stop.position))
         .collect();
     let (_, segments, ids_missing) = resolve_line_segments(
         &state.map,
@@ -333,7 +411,7 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> Result<Game
 pub fn add_metro_line(
     state: &GameSnapshot,
     station_ids: Vec<String>,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     let line_id = next_entity_id(
         "metro",
@@ -346,7 +424,7 @@ pub fn add_metro_line(
         .transit
         .stations
         .iter()
-        .map(|station| (station.id.clone(), station.position.clone()))
+        .map(|station| (station.id.clone(), station.position))
         .collect();
     let (_, segments, ids_missing) = resolve_line_segments(
         &state.map,
@@ -378,13 +456,18 @@ pub fn assign_vehicle(
     state: &GameSnapshot,
     mode: &str,
     line_id: &str,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     // `mode` arrives as a string from `GameIntent::AssignVehicle`; validate and lift it to
     // the typed enum once at this boundary so everything downstream is compiler-checked.
     let transit_mode = match mode {
         "bus" => TransitMode::Bus,
         "metro" => TransitMode::Metro,
-        _ => return Err(format!("unknown mode: {mode}")),
+        _ => {
+            return Err(route_rejection(
+                RejectionCode::IncompatibleRouteNode,
+                line_id,
+            ));
+        }
     };
     let cost = if transit_mode == TransitMode::Bus {
         BUS_COST
@@ -392,7 +475,7 @@ pub fn assign_vehicle(
         METRO_COST
     };
     if state.budget < cost {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(cost, state.budget));
     }
 
     let vehicle = Vehicle {
@@ -424,13 +507,13 @@ pub fn assign_vehicle(
             .iter_mut()
             .find(|route| route.id == line_id)
         else {
-            return Err(format!("line not found: {line_id}"));
+            return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
         };
         if !route.active {
-            return Err(format!("line inactive: {line_id}"));
+            return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
         }
         if route.path_broken {
-            return Err(format!("line path broken: {line_id}"));
+            return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
         }
         route.vehicle_ids.push(vehicle.id.clone());
     } else {
@@ -440,13 +523,13 @@ pub fn assign_vehicle(
             .iter_mut()
             .find(|line| line.id == line_id)
         else {
-            return Err(format!("line not found: {line_id}"));
+            return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
         };
         if !line.active {
-            return Err(format!("line inactive: {line_id}"));
+            return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
         }
         if line.path_broken {
-            return Err(format!("line path broken: {line_id}"));
+            return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
         }
         line.vehicle_ids.push(vehicle.id.clone());
     }
@@ -572,12 +655,12 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
     Some((remaining_progress * steps as f64) / tiles_per_second(vehicle.mode))
 }
 
-pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> Result<GameSnapshot, String> {
+pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
     let Some(tile) = get_tile(&state.map, point) else {
-        return Err("tile not found".to_string());
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, *point));
     };
     if tile.kind != "road" {
-        return Err("tile is not road".to_string());
+        return Err(GameplayRejection::at(RejectionCode::RoadRequired, *point));
     }
 
     let mut next = state.clone();
@@ -610,7 +693,7 @@ pub fn set_route_active(
     state: &GameSnapshot,
     route_id: &str,
     active: bool,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     if let Some(route) = next
         .transit
@@ -619,7 +702,7 @@ pub fn set_route_active(
         .find(|route| route.id == route_id)
     {
         if route.active == active {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         route.active = active;
         return Ok(next);
@@ -631,19 +714,19 @@ pub fn set_route_active(
         .find(|line| line.id == route_id)
     {
         if line.active == active {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         line.active = active;
         return Ok(next);
     }
-    Err(format!("line not found: {route_id}"))
+    Err(route_rejection(RejectionCode::RouteNotFound, route_id))
 }
 
 pub fn rename_route(
     state: &GameSnapshot,
     route_id: &str,
     name: &str,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     if let Some(route) = next
         .transit
@@ -653,7 +736,7 @@ pub fn rename_route(
     {
         let final_name = final_route_name("bus", route_id, name);
         if route.name == final_name {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         route.name = final_name;
         return Ok(next);
@@ -666,19 +749,19 @@ pub fn rename_route(
     {
         let final_name = final_route_name("metro", route_id, name);
         if line.name == final_name {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         line.name = final_name;
         return Ok(next);
     }
-    Err(format!("line not found: {route_id}"))
+    Err(route_rejection(RejectionCode::RouteNotFound, route_id))
 }
 
 pub fn recolor_route(
     state: &GameSnapshot,
     route_id: &str,
     color: &str,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     if let Some(route) = next
         .transit
@@ -687,7 +770,7 @@ pub fn recolor_route(
         .find(|route| route.id == route_id)
     {
         if route.color == color {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         route.color = color.to_string();
         return Ok(next);
@@ -699,15 +782,15 @@ pub fn recolor_route(
         .find(|line| line.id == route_id)
     {
         if line.color == color {
-            return Err("unchanged".to_string());
+            return Ok(state.clone());
         }
         line.color = color.to_string();
         return Ok(next);
     }
-    Err(format!("line not found: {route_id}"))
+    Err(route_rejection(RejectionCode::RouteNotFound, route_id))
 }
 
-pub fn delete_route(state: &GameSnapshot, route_id: &str) -> Result<GameSnapshot, String> {
+pub fn delete_route(state: &GameSnapshot, route_id: &str) -> GameplayResult<GameSnapshot> {
     let is_route = state
         .transit
         .routes
@@ -719,7 +802,7 @@ pub fn delete_route(state: &GameSnapshot, route_id: &str) -> Result<GameSnapshot
         .iter()
         .any(|line| line.id == route_id);
     if !is_route && !is_line {
-        return Err(format!("line not found: {route_id}"));
+        return Err(route_rejection(RejectionCode::RouteNotFound, route_id));
     }
 
     let mut next = state.clone();
@@ -748,7 +831,7 @@ pub fn assign_route_to_platform(
     node_id: &str,
     route_id: &str,
     platform_id: &str,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
     if reassign_within_node(&mut next.transit.stops, node_id, route_id, platform_id) {
         return Ok(next);
@@ -756,7 +839,24 @@ pub fn assign_route_to_platform(
     if reassign_within_node(&mut next.transit.stations, node_id, route_id, platform_id) {
         return Ok(next);
     }
-    Err("platform assignment unchanged".to_string())
+    let node_exists = state.transit.stops.iter().any(|stop| stop.id == node_id)
+        || state
+            .transit
+            .stations
+            .iter()
+            .any(|station| station.id == node_id);
+    if !node_exists {
+        return Err(node_rejection(
+            RejectionCode::MissingRouteNode,
+            node_id,
+            Some(route_id),
+        ));
+    }
+    Err(node_rejection(
+        RejectionCode::InvalidPlatform,
+        node_id,
+        Some(route_id),
+    ))
 }
 
 pub fn recompute_route_paths(state: &GameSnapshot) -> GameSnapshot {
@@ -764,13 +864,13 @@ pub fn recompute_route_paths(state: &GameSnapshot) -> GameSnapshot {
         .transit
         .stops
         .iter()
-        .map(|stop| (stop.id.clone(), stop.position.clone()))
+        .map(|stop| (stop.id.clone(), stop.position))
         .collect();
     let station_position_by_id: HashMap<String, Point> = state
         .transit
         .stations
         .iter()
-        .map(|station| (station.id.clone(), station.position.clone()))
+        .map(|station| (station.id.clone(), station.position))
         .collect();
     let mut next = state.clone();
 
@@ -820,9 +920,9 @@ pub fn stop_coverage_radius(kind: &str) -> u8 {
 fn remove_infrastructure_at_tile(
     state: &GameSnapshot,
     point: &Point,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let Some(tile) = get_tile(&state.map, point) else {
-        return Err("tile not found".to_string());
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, *point));
     };
 
     let mut next = state.clone();
@@ -834,7 +934,7 @@ fn remove_infrastructure_at_tile(
         set_tile_kind(&mut next.map, point, "empty");
         return Ok(recompute_route_paths(&next));
     }
-    Err("nothing to remove".to_string())
+    Err(GameplayRejection::at(RejectionCode::BlockedTile, *point))
 }
 
 fn cleanup_removed_destination_references(
@@ -871,11 +971,7 @@ fn cleanup_removed_destination_references(
     let workplace_by_sim_id: HashMap<String, Point> = state
         .sims
         .iter()
-        .filter_map(|sim| {
-            sim.workplace
-                .clone()
-                .map(|workplace| (sim.id.clone(), workplace))
-        })
+        .filter_map(|sim| sim.workplace.map(|workplace| (sim.id.clone(), workplace)))
         .collect();
     let mut invalidated_trip_ids = HashSet::new();
     let mut removed_trip_ids = HashSet::new();
@@ -1135,7 +1231,7 @@ fn park_vehicles_and_invalidate_trips(
         if !positions.is_empty() {
             let parked_at = &positions[vehicle.segment_index % positions.len()];
             for passenger_id in &vehicle.passenger_ids {
-                parked_position_by_trip_id.insert(passenger_id.clone(), parked_at.clone());
+                parked_position_by_trip_id.insert(passenger_id.clone(), *parked_at);
             }
         }
         vehicle.passenger_ids.clear();
@@ -1169,7 +1265,7 @@ fn invalidate_trips_for_line(
         trip.route_plan = None;
         trip.current_leg_index = 0;
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
-            trip.position = parked_at.clone().into();
+            trip.position = (*parked_at).into();
         }
         invalidated_trip_ids.push(trip.id.clone());
     }
@@ -1227,11 +1323,7 @@ fn assigned_line_data(
         let positions: Option<Vec<Point>> = route
             .stop_ids
             .iter()
-            .map(|stop_id| {
-                stop_by_id
-                    .get(stop_id.as_str())
-                    .map(|point| (*point).clone())
-            })
+            .map(|stop_id| stop_by_id.get(stop_id.as_str()).map(|point| *(*point)))
             .collect();
         return positions.map(|positions| (positions, route.segments.clone()));
     }
@@ -1256,7 +1348,7 @@ fn assigned_line_data(
         .map(|station_id| {
             station_by_id
                 .get(station_id.as_str())
-                .map(|point| (*point).clone())
+                .map(|point| *(*point))
         })
         .collect();
     positions.map(|positions| (positions, line.segments.clone()))
@@ -1349,7 +1441,7 @@ fn disembark_vehicle(
 
     for trip in active_trips {
         if disembarking_ids.contains(&trip.id) {
-            trip.position = reached_position.clone().into();
+            trip.position = (*reached_position).into();
             trip.status = TripStatus::Walking;
             trip.current_leg_index += 1;
         }

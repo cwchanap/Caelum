@@ -8,9 +8,9 @@ fn waiting_trip(id: &str, position: Point, line_id: &str, patience_remaining: f6
         id: id.to_string(),
         sim_id: format!("sim-{id}"),
         purpose: TripPurpose::CommuteOutbound,
-        origin: position.clone(),
+        origin: position,
         destination: (0, 0).into(),
-        position: position.clone().into(),
+        position: position.into(),
         status: TripStatus::Waiting,
         deadline: 9_999.0,
         route_plan: Some(RoutePlan {

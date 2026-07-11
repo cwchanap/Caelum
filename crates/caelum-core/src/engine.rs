@@ -2,6 +2,7 @@ use crate::areas;
 use crate::buildings;
 use crate::intent::{DispatchResult, GameIntent};
 use crate::model::GameSnapshot;
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::state::create_initial_snapshot;
 use crate::transit;
 use crate::trips;
@@ -41,19 +42,11 @@ impl GameEngine {
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
         let next = trips::tick_trips_with_objectives(&self.snapshot, delta_seconds);
         if next == self.snapshot {
-            return DispatchResult {
-                snapshot: self.snapshot(),
-                applied: false,
-                rejection: None,
-            };
+            return DispatchResult::unchanged(self.snapshot());
         }
 
         self.snapshot = next;
-        DispatchResult {
-            snapshot: self.snapshot(),
-            applied: true,
-            rejection: None,
-        }
+        DispatchResult::applied(self.snapshot())
     }
 
     /// Apply a single player [`GameIntent`] (build, paint, transit edit, speed/pause,
@@ -68,11 +61,10 @@ impl GameEngine {
             }
             GameIntent::SetSpeed { speed } => {
                 if !matches!(speed, 0 | 1 | 2 | 4) {
-                    return DispatchResult {
-                        snapshot: self.snapshot(),
-                        applied: false,
-                        rejection: Some(format!("invalid speed: {speed}")),
-                    };
+                    return DispatchResult::rejected(
+                        self.snapshot(),
+                        GameplayRejection::new(RejectionCode::InvalidSpeed),
+                    );
                 }
                 let mut next = self.snapshot.clone();
                 next.speed = speed;
@@ -136,61 +128,32 @@ impl GameEngine {
                 &route_id,
                 &platform_id,
             )),
-            GameIntent::PaintAreaRectangle { area, start, end } => {
-                match areas::paint_area_rectangle(&self.snapshot, &area, &start, &end) {
-                    Some(next) => {
-                        self.snapshot = next;
-                        DispatchResult {
-                            snapshot: self.snapshot(),
-                            applied: true,
-                            rejection: None,
-                        }
-                    }
-                    None => DispatchResult {
-                        snapshot: self.snapshot(),
-                        applied: false,
-                        rejection: Some("no paintable tiles".to_string()),
-                    },
-                }
-            }
+            GameIntent::PaintAreaRectangle { area, start, end } => self.commit_result(
+                areas::paint_area_rectangle(&self.snapshot, &area, &start, &end),
+            ),
             GameIntent::PlaceBuilding {
                 building_type,
                 origin,
                 rotation,
-            } => match buildings::place_building(&self.snapshot, &building_type, &origin, rotation)
-            {
-                Ok(next) => {
-                    self.snapshot = next;
-                    DispatchResult {
-                        snapshot: self.snapshot(),
-                        applied: true,
-                        rejection: None,
-                    }
-                }
-                Err(rejection) => DispatchResult {
-                    snapshot: self.snapshot(),
-                    applied: false,
-                    rejection: Some(rejection),
-                },
-            },
+            } => self.commit_result(buildings::place_building(
+                &self.snapshot,
+                &building_type,
+                &origin,
+                rotation,
+            )),
         }
     }
 
-    fn commit_result(&mut self, result: Result<GameSnapshot, String>) -> DispatchResult {
+    fn commit_result(&mut self, result: GameplayResult<GameSnapshot>) -> DispatchResult {
         match result {
             Ok(next) => {
-                self.snapshot = next;
-                DispatchResult {
-                    snapshot: self.snapshot(),
-                    applied: true,
-                    rejection: None,
+                if next == self.snapshot {
+                    return DispatchResult::unchanged(self.snapshot());
                 }
+                self.snapshot = next;
+                DispatchResult::applied(self.snapshot())
             }
-            Err(rejection) => DispatchResult {
-                snapshot: self.snapshot(),
-                applied: false,
-                rejection: Some(rejection),
-            },
+            Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
         }
     }
 }

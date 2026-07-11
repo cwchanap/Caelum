@@ -1,4 +1,10 @@
-import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
+import type {
+  AreaKind,
+  BuildingType,
+  GameplayRejection,
+  Point,
+  Tool,
+} from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import { COSTS } from "../domain/catalog/transit";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
@@ -103,7 +109,7 @@ export async function createGameRuntime({
   let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
   let backendError: string | null = null;
-  let rejection: string | null = null;
+  let rejection: GameplayRejection | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
   let running = false;
   // Once the backend has failed fatally, no further dispatches or ticks are
@@ -838,7 +844,10 @@ export async function createGameRuntime({
           !submittedNodesExist ||
           !loopStillCloses
         ) {
-          rejection = "Route no longer valid";
+          rejection = {
+            code: "routeChangedWhileEditing",
+            context: { affectedRouteIds: [] },
+          };
           return commit(state, ui);
         }
 
@@ -904,7 +913,7 @@ export async function createGameRuntime({
           // rejection as a recoverable status (not a fatal backendError) so
           // the player understands why the line has no service without the
           // runtime halting.
-          rejection = vehicleResult.rejection ?? "assignVehicle rejected";
+          rejection = vehicleResult.rejection;
           return commit(
             normalizeRustSnapshot(vehicleResult.snapshot),
             commitUi(ui),

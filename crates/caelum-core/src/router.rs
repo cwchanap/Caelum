@@ -114,7 +114,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .stops
                     .iter()
                     .find(|stop| stop.id == *stop_id)
-                    .map(|stop| stop.position.clone())
+                    .map(|stop| stop.position)
             })
             .collect();
 
@@ -142,7 +142,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .stations
                     .iter()
                     .find(|station| station.id == *station_id)
-                    .map(|station| station.position.clone())
+                    .map(|station| station.position)
             })
             .collect();
 
@@ -250,8 +250,8 @@ fn manhattan_distance(from: &Point, to: &Point) -> i32 {
 fn walk_leg(from: &Point, to: &Point) -> RouteLeg {
     RouteLeg {
         mode: TransitMode::Walk,
-        from: from.clone(),
-        to: to.clone(),
+        from: *from,
+        to: *to,
         line_id: None,
     }
 }
@@ -259,8 +259,8 @@ fn walk_leg(from: &Point, to: &Point) -> RouteLeg {
 fn transit_leg(mode: TransitMode, from: &Point, to: &Point, line_id: &str) -> RouteLeg {
     RouteLeg {
         mode,
-        from: from.clone(),
-        to: to.clone(),
+        from: *from,
+        to: *to,
         line_id: Some(line_id.to_string()),
     }
 }

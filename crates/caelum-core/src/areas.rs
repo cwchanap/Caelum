@@ -1,4 +1,5 @@
 use crate::model::{GameSnapshot, Point};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 
 pub const AREAS: &[&str] = &[
     "residential",
@@ -76,15 +77,19 @@ pub fn paint_area_rectangle(
     area: &str,
     start: &Point,
     end: &Point,
-) -> Option<GameSnapshot> {
+) -> GameplayResult<GameSnapshot> {
     if !AREAS.contains(&area) {
-        return None;
+        return Err(GameplayRejection::at(RejectionCode::BlockedTile, *start));
     }
 
     let mut next = state.clone();
     let mut changed = false;
+    let points = rectangle_points(start, end, state.map.width, state.map.height);
+    if points.is_empty() {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, *start));
+    }
 
-    for point in rectangle_points(start, end, state.map.width, state.map.height) {
+    for point in points {
         if !is_area_paintable(state, &point) {
             continue;
         }
@@ -102,5 +107,9 @@ pub fn paint_area_rectangle(
         }
     }
 
-    changed.then_some(next)
+    if changed {
+        Ok(next)
+    } else {
+        Err(GameplayRejection::at(RejectionCode::BlockedTile, *start))
+    }
 }

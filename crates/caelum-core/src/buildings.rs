@@ -3,6 +3,22 @@ use crate::commute::{shift_template_for_id, worker_profile_for_id};
 use crate::ids::next_entity_id;
 use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, WorkerProfile};
 use crate::platforms::{bus_platforms, metro_platforms};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+
+fn placement_rejection(
+    code: RejectionCode,
+    point: Point,
+    footprint: &[Point],
+) -> GameplayRejection {
+    GameplayRejection {
+        code,
+        context: RejectionContext {
+            point: Some(point),
+            footprint: footprint.to_vec(),
+            ..RejectionContext::default()
+        },
+    }
+}
 
 // Compute the occupied tiles for a building of `definition` placed at `origin`
 // with `rotation`. Returns `None` when the footprint cannot be constructed
@@ -56,16 +72,19 @@ pub fn can_place_building(
     building_type: &str,
     origin: &Point,
     rotation: u16,
-) -> Result<Vec<Point>, String> {
+) -> GameplayResult<Vec<Point>> {
     let definition = building_definition(building_type)
-        .ok_or_else(|| format!("unknown building: {building_type}"))?;
+        .ok_or_else(|| GameplayRejection::at(RejectionCode::InvalidBuildingPlacement, *origin))?;
 
     if !matches!(rotation, 0 | 90 | 180 | 270) {
-        return Err("invalid rotation".to_string());
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidBuildingPlacement,
+            *origin,
+        ));
     }
 
-    let occupied_tiles =
-        footprint(definition, origin, rotation).ok_or_else(|| "invalid footprint".to_string())?;
+    let occupied_tiles = footprint(definition, origin, rotation)
+        .ok_or_else(|| GameplayRejection::at(RejectionCode::InvalidBuildingPlacement, *origin))?;
 
     for point in &occupied_tiles {
         let Some(tile) = state
@@ -74,27 +93,51 @@ pub fn can_place_building(
             .iter()
             .find(|tile| tile.x == point.x && tile.y == point.y)
         else {
-            return Err("off map".to_string());
+            return Err(placement_rejection(
+                RejectionCode::OutOfBounds,
+                *point,
+                &occupied_tiles,
+            ));
         };
 
         if building_type == "metroStation" {
             if !matches!(tile.kind.as_str(), "empty" | "road") {
-                return Err("tile is not empty".to_string());
+                return Err(placement_rejection(
+                    RejectionCode::BlockedFootprint,
+                    *point,
+                    &occupied_tiles,
+                ));
             }
             if !tile.has_track {
-                return Err("track required".to_string());
+                return Err(placement_rejection(
+                    RejectionCode::TrackRequired,
+                    *point,
+                    &occupied_tiles,
+                ));
             }
         } else {
             if tile.kind != "empty" {
-                return Err("tile is not empty".to_string());
+                return Err(placement_rejection(
+                    RejectionCode::BlockedFootprint,
+                    *point,
+                    &occupied_tiles,
+                ));
             }
             if tile.has_track {
-                return Err("track occupied".to_string());
+                return Err(placement_rejection(
+                    RejectionCode::BlockedFootprint,
+                    *point,
+                    &occupied_tiles,
+                ));
             }
         }
         if let Some(allowed_area) = definition.allowed_area {
             if tile.area.as_deref() != Some(allowed_area) {
-                return Err("area mismatch".to_string());
+                return Err(placement_rejection(
+                    RejectionCode::InvalidBuildingPlacement,
+                    *point,
+                    &occupied_tiles,
+                ));
             }
         }
         if state
@@ -102,7 +145,11 @@ pub fn can_place_building(
             .iter()
             .any(|building| building.occupied_tiles.iter().any(|tile| tile == point))
         {
-            return Err("building occupied".to_string());
+            return Err(placement_rejection(
+                RejectionCode::BlockedFootprint,
+                *point,
+                &occupied_tiles,
+            ));
         }
         if state
             .transit
@@ -110,7 +157,11 @@ pub fn can_place_building(
             .iter()
             .any(|stop| stop.position == *point)
         {
-            return Err("stop occupied".to_string());
+            return Err(placement_rejection(
+                RejectionCode::BlockedFootprint,
+                *point,
+                &occupied_tiles,
+            ));
         }
         if state
             .transit
@@ -118,7 +169,11 @@ pub fn can_place_building(
             .iter()
             .any(|station| station.position == *point)
         {
-            return Err("station occupied".to_string());
+            return Err(placement_rejection(
+                RejectionCode::BlockedFootprint,
+                *point,
+                &occupied_tiles,
+            ));
         }
     }
 
@@ -130,11 +185,11 @@ pub fn place_building(
     building_type: &str,
     origin: &Point,
     rotation: u16,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let definition = building_definition(building_type)
-        .ok_or_else(|| format!("unknown building: {building_type}"))?;
+        .ok_or_else(|| GameplayRejection::at(RejectionCode::InvalidBuildingPlacement, *origin))?;
     if state.budget < definition.cost {
-        return Err("insufficient budget".to_string());
+        return Err(GameplayRejection::budget(definition.cost, state.budget));
     }
     let mut next = place_building_core(state, building_type, origin, rotation)?;
     next.budget -= definition.cost;
@@ -146,9 +201,9 @@ pub fn place_building_core(
     building_type: &str,
     origin: &Point,
     rotation: u16,
-) -> Result<GameSnapshot, String> {
+) -> GameplayResult<GameSnapshot> {
     let definition = building_definition(building_type)
-        .ok_or_else(|| format!("unknown building: {building_type}"))?;
+        .ok_or_else(|| GameplayRejection::at(RejectionCode::InvalidBuildingPlacement, *origin))?;
 
     let occupied_tiles = can_place_building(state, building_type, origin, rotation)?;
     let mut next = state.clone();
@@ -167,7 +222,7 @@ pub fn place_building_core(
         next.transit.stops.push(Stop {
             id: stop_id.clone(),
             kind: definition.effect.to_string(),
-            position: origin.clone(),
+            position: *origin,
             platforms: bus_platforms(&stop_id, definition.effect),
         });
         transit_node_id = Some(stop_id);
@@ -183,7 +238,7 @@ pub fn place_building_core(
         );
         next.transit.stations.push(Station {
             id: station_id.clone(),
-            position: origin.clone(),
+            position: *origin,
             platforms: metro_platforms(&station_id),
         });
         transit_node_id = Some(station_id);
@@ -192,7 +247,7 @@ pub fn place_building_core(
     next.buildings.push(PlacedBuilding {
         id: building_id,
         building_type: building_type.to_string(),
-        origin: origin.clone(),
+        origin: *origin,
         rotation,
         occupied_tiles: occupied_tiles.clone(),
         transit_node_id,
@@ -201,11 +256,11 @@ pub fn place_building_core(
     if definition.effect == "housing" {
         for index in 0..usize::from(definition.citizen_count) {
             let sim_id = next_entity_id("sim", next.sims.iter().map(|sim| sim.id.clone()));
-            let home = occupied_tiles[index % occupied_tiles.len()].clone();
+            let home = occupied_tiles[index % occupied_tiles.len()];
             let worker_profile = worker_profile_for_id(&sim_id);
             next.sims.push(Sim {
                 id: sim_id.clone(),
-                home: home.clone(),
+                home,
                 position: home,
                 worker_profile,
                 shift_template: shift_template_for_id(&sim_id).map(str::to_string),
@@ -286,7 +341,7 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
         } else {
             eligible[destination_index % eligible.len()]
         };
-        sim.workplace = Some(workplace.clone());
+        sim.workplace = Some(*workplace);
         destination_index += 1;
     }
 }

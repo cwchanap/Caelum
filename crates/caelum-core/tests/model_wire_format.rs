@@ -7,13 +7,50 @@
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
 
+use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Metrics, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, Tile,
     TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
     WorkerProfile,
 };
+use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
+use caelum_core::state::create_initial_snapshot;
 use caelum_core::{DispatchResult, GameIntent, RoadPreset};
 use serde_json::json;
+
+#[test]
+fn snapshot_carries_the_authoritative_schema_version() {
+    let snapshot = create_initial_snapshot();
+    assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["schemaVersion"],
+        json!(2)
+    );
+}
+
+#[test]
+fn gameplay_rejection_uses_stable_camel_case_wire_names() {
+    let rejection = GameplayRejection {
+        code: RejectionCode::InsufficientBudget,
+        context: RejectionContext {
+            required_budget: Some(8_000),
+            available_budget: Some(7_999),
+            ..RejectionContext::default()
+        },
+    };
+
+    assert_eq!(
+        serde_json::to_value(rejection).unwrap(),
+        json!({
+            "code": "insufficientBudget",
+            "context": {
+                "requiredBudget": 8000,
+                "availableBudget": 7999,
+                "affectedRouteIds": []
+            }
+        })
+    );
+}
 
 fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
     ActiveTrip {
@@ -467,8 +504,6 @@ fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
     // the objective copy from them), and they must match the TS domain
     // `Scenario.objectives` shape exactly — including `rollingWindowSeconds`,
     // which a previous TS shim had drifted to 600 while the core evaluates 300.
-    use caelum_core::state::create_initial_snapshot;
-
     let snapshot = create_initial_snapshot();
     let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
     assert_eq!(value["name"], json!("Growing Suburb"));
@@ -593,18 +628,14 @@ fn dispatch_result_round_trips_through_serde_json() {
     // cannot silently drop or rename a field that the WASM path handles.
     //
     // Both the applied (rejection = None) and rejected (rejection = Some) cases
-    // are covered, since `Option<String>` is the field most likely to diverge
+    // are covered, since `Option<GameplayRejection>` is the field most likely to diverge
     // between serializers.
     use caelum_core::state::create_initial_snapshot;
 
     let snapshot = create_initial_snapshot();
 
     // Applied case: rejection is None -> serializes to JSON `null`.
-    let applied = DispatchResult {
-        snapshot: snapshot.clone(),
-        applied: true,
-        rejection: None,
-    };
+    let applied = DispatchResult::applied(snapshot.clone());
     let value = serde_json::to_value(&applied).expect("applied result should serialize");
     assert_eq!(value["applied"], json!(true));
     assert_eq!(value["rejection"], json!(null));
@@ -613,21 +644,32 @@ fn dispatch_result_round_trips_through_serde_json() {
         serde_json::from_value(value).expect("applied result should deserialize back");
     assert_eq!(back, applied);
 
-    // Rejected case: rejection is Some -> serializes to a JSON string.
-    let rejected = DispatchResult {
-        snapshot: snapshot.clone(),
-        applied: false,
-        rejection: Some("invalid speed: 3".to_string()),
-    };
+    // Rejected case: rejection is Some -> serializes to structured JSON.
+    let rejected = DispatchResult::rejected(
+        snapshot.clone(),
+        GameplayRejection::new(RejectionCode::InvalidSpeed),
+    );
     let value = serde_json::to_value(&rejected).expect("rejected result should serialize");
     assert_eq!(value["applied"], json!(false));
-    assert_eq!(value["rejection"], json!("invalid speed: 3"));
+    assert_eq!(
+        value["rejection"],
+        json!({ "code": "invalidSpeed", "context": { "affectedRouteIds": [] } })
+    );
+    assert_eq!(
+        value["context"],
+        json!({
+            "changedTiles": [],
+            "skippedTiles": [],
+            "affectedRouteIds": [],
+            "cost": 0
+        })
+    );
     let back: DispatchResult =
         serde_json::from_value(value.clone()).expect("rejected result should deserialize back");
     assert_eq!(back, rejected);
 
     // Cross-check: the serialized JSON shape matches what the TS `DispatchResult`
-    // interface expects (`{ snapshot, applied, rejection }`), so a Tauri IPC
+    // interface expects (`{ snapshot, applied, rejection, context }`), so a Tauri IPC
     // response is structurally identical to a WASM `engine.dispatch()` return.
     let keys: std::collections::HashSet<String> = value
         .as_object()
@@ -637,7 +679,7 @@ fn dispatch_result_round_trips_through_serde_json() {
         .collect();
     assert_eq!(
         keys,
-        ["snapshot", "applied", "rejection"]
+        ["snapshot", "applied", "rejection", "context"]
             .into_iter()
             .map(String::from)
             .collect(),

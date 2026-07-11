@@ -1,4 +1,5 @@
 import { tileId } from "../../src/domain/ids";
+import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import type { RustGameSnapshot } from "../../src/runtime/backend/types";
 
@@ -23,6 +24,7 @@ export function createRustSnapshot(
   overrides: Partial<RustGameSnapshot> = {},
 ): RustGameSnapshot {
   return {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     time: 0,
     day: 0,
     clockMinutes: 0,

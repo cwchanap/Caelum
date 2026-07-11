@@ -2,6 +2,7 @@ import type {
   AreaKind,
   BuildingType,
   GameState,
+  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
@@ -119,7 +120,7 @@ export interface RuntimeSnapshot {
   // vehicle assignment). Distinct from `backendError` (fatal host failure):
   // a rejection does not stop the runtime and is dismissible by the player.
   // Auto-clears on the next successful dispatch.
-  rejection: string | null;
+  rejection: GameplayRejection | null;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;

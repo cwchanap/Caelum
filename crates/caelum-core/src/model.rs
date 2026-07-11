@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 2;
+
 /// How a transit leg is travelled. Serialized as the lowercase TS-parity strings
 /// `walk` / `bus` / `metro` (see `tests/model_wire_format.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +57,7 @@ pub enum WorkerProfile {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameSnapshot {
+    pub schema_version: u16,
     pub time: f64,
     pub day: u32,
     pub clock_minutes: u16,
@@ -177,7 +180,7 @@ pub struct PlacedBuilding {
     pub transit_node_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Point {
     pub x: i32,
     pub y: i32,

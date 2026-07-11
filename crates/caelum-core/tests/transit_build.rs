@@ -2,7 +2,9 @@ use caelum_core::model::{
     ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
     TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent, RoadPreset};
+use caelum_core::{
+    state::create_initial_snapshot, transit, GameEngine, GameIntent, RejectionCode, RoadPreset,
+};
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
     Route {
@@ -41,7 +43,7 @@ fn destination_building(
     PlacedBuilding {
         id: id.to_string(),
         building_type: building_type.to_string(),
-        origin: occupied_tiles[0].clone(),
+        origin: occupied_tiles[0],
         rotation: 0,
         occupied_tiles,
         transit_node_id: None,
@@ -51,7 +53,7 @@ fn destination_building(
 fn worker_sim(id: &str, position: Point, workplace: Point) -> Sim {
     Sim {
         id: id.to_string(),
-        home: position.clone(),
+        home: position,
         position,
         worker_profile: WorkerProfile::Worker,
         shift_template: None,
@@ -538,8 +540,8 @@ fn removing_destination_reassigns_workplaces_away_from_removed_tiles() {
         destination_building("building-002", "factory", remaining_tiles.clone()),
     ];
     state.sims = vec![
-        worker_sim("sim-001", (1, 1).into(), removed_tiles[0].clone()),
-        worker_sim("sim-002", (1, 2).into(), remaining_tiles[0].clone()),
+        worker_sim("sim-001", (1, 1).into(), removed_tiles[0]),
+        worker_sim("sim-002", (1, 2).into(), remaining_tiles[0]),
     ];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -557,7 +559,7 @@ fn removing_destination_reassigns_workplaces_away_from_removed_tiles() {
         .sims
         .iter()
         .find(|sim| sim.id == "sim-001")
-        .and_then(|sim| sim.workplace.clone())
+        .and_then(|sim| sim.workplace)
         .expect("worker should be reassigned");
     assert!(remaining_tiles.contains(&reassigned));
 }
@@ -586,14 +588,14 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
     state.sims = vec![worker_sim(
         "sim-001",
         Point { x: 2, y: 5 },
-        removed_tiles[0].clone(),
+        removed_tiles[0],
     )];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0].clone(),
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Riding,
         deadline: 3_600.0,
@@ -601,7 +603,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
                 from: Point { x: 2, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: Some("route-001".to_string()),
             }],
             estimated_seconds: 120.0,
@@ -680,7 +682,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
     state.sims = vec![worker_sim(
         "sim-001",
         Point { x: 2, y: 5 },
-        removed_tiles[0].clone(),
+        removed_tiles[0],
     )];
     // Mid-commute: deadline long elapsed (well past the 300s grace), patience
     // almost gone. Without the timer refresh this trip is doomed on the next
@@ -691,7 +693,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0].clone(),
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Riding,
         deadline: 1_000.0,
@@ -699,7 +701,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
                 from: Point { x: 2, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: Some("route-001".to_string()),
             }],
             estimated_seconds: 120.0,
@@ -745,7 +747,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
     // Worker is mid-return: origin is the (about to be removed) workplace, but the
     // trip's destination is home. Clearing the workplace must not retarget this
     // return trip toward a replacement workplace.
-    let mut sim = worker_sim("sim-001", home.clone(), removed_tiles[0].clone());
+    let mut sim = worker_sim("sim-001", home, removed_tiles[0]);
     sim.outbound_resolved_today = true;
     sim.outbound_arrived_today = true;
     state.sims = vec![sim];
@@ -753,8 +755,8 @@ fn removing_destination_keeps_return_trip_targeting_home() {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteReturn,
-        origin: removed_tiles[0].clone(),
-        destination: home.clone(),
+        origin: removed_tiles[0],
+        destination: home,
         position: Point { x: 4, y: 5 }.into(),
         status: TripStatus::Walking,
         deadline: 3_600.0,
@@ -762,7 +764,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Walk,
                 from: Point { x: 4, y: 5 },
-                to: home.clone(),
+                to: home,
                 line_id: None,
             }],
             estimated_seconds: 60.0,
@@ -781,7 +783,6 @@ fn removing_destination_keeps_return_trip_targeting_home() {
     // Workplace was cleared and reassigned to a still-standing destination...
     let reassigned = sim
         .workplace
-        .clone()
         .expect("worker reassigned to a replacement workplace");
     assert!(remaining_tiles.contains(&reassigned));
 
@@ -815,17 +816,13 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         "supermarket",
         removed_tiles.clone(),
     )];
-    state.sims = vec![worker_sim(
-        "sim-001",
-        home.clone(),
-        removed_tiles[0].clone(),
-    )];
+    state.sims = vec![worker_sim("sim-001", home, removed_tiles[0])];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
-        destination: removed_tiles[0].clone(),
+        origin: home,
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Walking,
         deadline: 3_600.0,
@@ -833,7 +830,7 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Walk,
                 from: Point { x: 3, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: None,
             }],
             estimated_seconds: 60.0,
@@ -1265,7 +1262,10 @@ fn lay_track_line_empty_points_is_rejected() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::LayTrackLine { points: vec![] });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("empty track line"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidTrackStroke)
+    );
 }
 
 #[test]
@@ -1277,7 +1277,10 @@ fn lay_track_line_all_invalid_tiles_is_unchanged() {
         points: vec![(100, 100).into()],
     });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("track line unchanged"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidTrackStroke)
+    );
     assert_eq!(result.snapshot.budget, 120_000);
 }
 
@@ -1286,7 +1289,10 @@ fn remove_at_tiles_empty_points_is_rejected() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::RemoveAtTiles { points: vec![] });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("empty remove line"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::BlockedTile)
+    );
 }
 
 #[test]
@@ -1298,7 +1304,10 @@ fn remove_at_tiles_all_unchanged_is_rejected() {
         points: vec![(100, 100).into()],
     });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("remove line unchanged"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::BlockedTile)
+    );
 }
 
 #[test]
@@ -1364,7 +1373,7 @@ fn lay_road_line_over_building_occupied_tiles_is_unchanged() {
         RoadPreset::OneWay,
     );
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "road line unchanged");
+    assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRoadStroke);
     // No budget was consumed (the input state is untouched on the Err path).
     assert_eq!(state.budget, 120_000);
 }

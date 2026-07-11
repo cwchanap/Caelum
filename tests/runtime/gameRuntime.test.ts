@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   GameMap,
+  GameplayRejection,
   MetroLine,
   Point,
   RoadDirection,
@@ -20,6 +21,23 @@ import type {
 } from "../../src/runtime/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import { createTestGameState } from "../helpers/gameState";
+
+const EMPTY_DISPATCH_CONTEXT = {
+  changedTiles: [],
+  skippedTiles: [],
+  affectedRouteIds: [],
+  cost: 0,
+};
+
+const TEST_REJECTION: GameplayRejection = {
+  code: "blockedTile",
+  context: { affectedRouteIds: [] },
+};
+
+const ROUTE_CHANGED_REJECTION: GameplayRejection = {
+  code: "routeChangedWhileEditing",
+  context: { affectedRouteIds: [] },
+};
 
 type BackendSpy = GameBackend & {
   intents: GameIntent[];
@@ -434,10 +452,20 @@ function deferredDispatchBackend(
       });
       if (rejectNext) {
         rejectNext = false;
-        return { snapshot, applied: false, rejection: "rejected by test" };
+        return {
+          snapshot,
+          applied: false,
+          rejection: TEST_REJECTION,
+          context: EMPTY_DISPATCH_CONTEXT,
+        };
       }
       snapshot = applyIntent(snapshot, intent);
-      return { snapshot, applied: true, rejection: null };
+      return {
+        snapshot,
+        applied: true,
+        rejection: null,
+        context: EMPTY_DISPATCH_CONTEXT,
+      };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
       const before = snapshot;
@@ -448,7 +476,12 @@ function deferredDispatchBackend(
               ...snapshot,
               time: snapshot.time + deltaSeconds * snapshot.speed,
             };
-      return { snapshot, applied: snapshot !== before, rejection: null };
+      return {
+        snapshot,
+        applied: snapshot !== before,
+        rejection: null,
+        context: EMPTY_DISPATCH_CONTEXT,
+      };
     },
     async reset() {
       snapshot = fullRustSnapshot();
@@ -487,10 +520,20 @@ function backendSpy(
       intents.push(intent);
       if (rejectNext) {
         rejectNext = false;
-        return { snapshot, applied: false, rejection: "rejected by test" };
+        return {
+          snapshot,
+          applied: false,
+          rejection: TEST_REJECTION,
+          context: EMPTY_DISPATCH_CONTEXT,
+        };
       }
       snapshot = applyIntent(snapshot, intent);
-      return { snapshot, applied: true, rejection: null };
+      return {
+        snapshot,
+        applied: true,
+        rejection: null,
+        context: EMPTY_DISPATCH_CONTEXT,
+      };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
       const before = snapshot;
@@ -501,7 +544,12 @@ function backendSpy(
               ...snapshot,
               time: snapshot.time + deltaSeconds * snapshot.speed,
             };
-      return { snapshot, applied: snapshot !== before, rejection: null };
+      return {
+        snapshot,
+        applied: snapshot !== before,
+        rejection: null,
+        context: EMPTY_DISPATCH_CONTEXT,
+      };
     },
     async reset() {
       snapshot = fullRustSnapshot();
@@ -803,6 +851,7 @@ describe("Game Runtime", () => {
         snapshot: await backend.snapshot(),
         applied: true,
         rejection: null,
+        context: EMPTY_DISPATCH_CONTEXT,
       };
     });
     const baseDispatch = backend.dispatch;
@@ -1133,7 +1182,14 @@ describe("route creation and management", () => {
   it("surfaces assignVehicle rejection as a recoverable rejection, not a fatal backendError", async () => {
     const base = backendSpy(routeSnapshot());
     // Wrap the spy so assignVehicle is rejected but other intents succeed.
-    const rejectAssignVehicle = "insufficient budget for vehicle";
+    const rejectAssignVehicle: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 8_000,
+        availableBudget: 0,
+        affectedRouteIds: [],
+      },
+    };
     const backend: BackendSpy = {
       ...base,
       async dispatch(intent) {
@@ -1142,6 +1198,7 @@ describe("route creation and management", () => {
             snapshot: await base.snapshot(),
             applied: false,
             rejection: rejectAssignVehicle,
+            context: EMPTY_DISPATCH_CONTEXT,
           };
         }
         return base.dispatch(intent);
@@ -1155,7 +1212,7 @@ describe("route creation and management", () => {
     const snapshot = runtime.getSnapshot();
     // The rejection must surface as a recoverable rejection, not a fatal
     // backendError that halts the runtime.
-    expect(snapshot.rejection).toBe(rejectAssignVehicle);
+    expect(snapshot.rejection).toEqual(rejectAssignVehicle);
     expect(snapshot.backendError).toBeNull();
     expect(runtime.isRunning()).toBe(true);
     // The route was created (addBusRoute succeeded) even though the vehicle
@@ -1232,7 +1289,7 @@ describe("route creation and management", () => {
       "stop-001",
       "stop-002",
     ]);
-    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
   });
 
   it("revalidates that submitted stops still exist before dispatching", async () => {
@@ -1269,7 +1326,7 @@ describe("route creation and management", () => {
     expect(
       backend.intents.some((intent) => intent.type === "addBusRoute"),
     ).toBe(false);
-    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
   });
 
   it("revalidates that the closing loop still closes before dispatching", async () => {
@@ -1310,7 +1367,7 @@ describe("route creation and management", () => {
     expect(
       backend.intents.some((intent) => intent.type === "addBusRoute"),
     ).toBe(false);
-    expect(runtime.getSnapshot().rejection).toBe("Route no longer valid");
+    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
   });
 
   it("keeps the accepted snapshot when the backend creates a route but surfaces no new id", async () => {
@@ -1327,6 +1384,7 @@ describe("route creation and management", () => {
             snapshot: await base.snapshot(),
             applied: true,
             rejection: null,
+            context: EMPTY_DISPATCH_CONTEXT,
           };
         }
         return base.dispatch(intent);
@@ -1455,7 +1513,7 @@ describe("route creation and management", () => {
     backend.rejectNextDispatch();
     const snapshot = await runtime.setSpeed(2);
 
-    expect(snapshot.rejection).toBe("rejected by test");
+    expect(snapshot.rejection).toEqual(TEST_REJECTION);
     expect(snapshot.backendError).toBeNull();
 
     // A subsequent successful dispatch auto-clears the rejection.
@@ -1471,12 +1529,12 @@ describe("route creation and management", () => {
     // Surface a rejection via a rejected dispatch.
     backend.rejectNextDispatch();
     const rejected = await runtime.setSpeed(2);
-    expect(rejected.rejection).toBe("rejected by test");
+    expect(rejected.rejection).toEqual(TEST_REJECTION);
 
     // A tick must NOT overwrite the rejection — the Rust engine never returns
     // a rejection from tick(), so the banner should persist until dismissed.
     await runtime.tick(1);
-    expect(runtime.getSnapshot().rejection).toBe("rejected by test");
+    expect(runtime.getSnapshot().rejection).toEqual(TEST_REJECTION);
 
     // Dismissing still works after a tick.
     runtime.dismissRejection();

@@ -180,10 +180,30 @@ function backendSpy(): GameBackend {
     },
     async dispatch(intent): Promise<DispatchResult> {
       snapshot = applyIntent(snapshot, intent);
-      return { snapshot, applied: true, rejection: null };
+      return {
+        snapshot,
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      };
     },
     async tick(): Promise<DispatchResult> {
-      return { snapshot, applied: false, rejection: null };
+      return {
+        snapshot,
+        applied: false,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      };
     },
     async reset() {
       snapshot = createRustSnapshot({

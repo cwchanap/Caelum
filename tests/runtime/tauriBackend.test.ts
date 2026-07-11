@@ -13,6 +13,12 @@ import { createRustSnapshot } from "../fixtures/rustSnapshot";
 // TS wrapper passes across the IPC boundary — the contract the Rust
 // `#[tauri::command]` handlers in `src-tauri/src/lib.rs` depend on.
 const invokeMock = vi.fn();
+const emptyContext = {
+  changedTiles: [],
+  skippedTiles: [],
+  affectedRouteIds: [],
+  cost: 0,
+};
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) =>
@@ -50,6 +56,7 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -73,6 +80,7 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: undefined,
+      context: emptyContext,
     } as unknown as DispatchResult;
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -83,12 +91,16 @@ describe("createTauriBackend", () => {
     expect(result.applied).toBe(true);
   });
 
-  it("dispatch() preserves a Some rejection string unchanged", async () => {
+  it("dispatch() preserves a structured Some rejection unchanged", async () => {
     const snapshot = createRustSnapshot();
     const raw: DispatchResult = {
       snapshot,
       applied: false,
-      rejection: "invalid speed: 3",
+      rejection: {
+        code: "invalidSpeed",
+        context: { affectedRouteIds: [] },
+      },
+      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -102,7 +114,10 @@ describe("createTauriBackend", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("game_dispatch", { intent });
     expect(result.applied).toBe(false);
-    expect(result.rejection).toBe("invalid speed: 3");
+    expect(result.rejection).toEqual({
+      code: "invalidSpeed",
+      context: { affectedRouteIds: [] },
+    });
   });
 
   it("tick() invokes game_tick with deltaSeconds and normalizes the result", async () => {
@@ -111,6 +126,7 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 

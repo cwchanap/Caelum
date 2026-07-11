@@ -342,7 +342,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             // `has_valid_workplace_destination` above guarantees a workplace, but
             // prefer a defensive `continue` over `.expect()` so a future regression
             // in that guard surfaces as a skipped sim rather than a panic.
-            let Some(workplace) = sim.workplace.clone() else {
+            let Some(workplace) = sim.workplace else {
                 continue;
             };
 
@@ -420,9 +420,9 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                     state,
                     &sim.id,
                     TripPurpose::CommuteOutbound,
-                    sim.home.clone(),
+                    sim.home,
                     workplace,
-                    sim.position.clone().into(),
+                    sim.position.into(),
                     scheduled_time,
                 );
                 state.active_trips.push(trip);
@@ -444,8 +444,8 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                 state,
                 &sim.id,
                 TripPurpose::CommuteReturn,
-                sim.position.clone(),
-                sim.home.clone(),
+                sim.position,
+                sim.home,
                 sim.position.into(),
                 scheduled_time,
             );
@@ -1026,13 +1026,13 @@ fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
 
     match trip.purpose {
         TripPurpose::CommuteOutbound => {
-            sim.position = trip.destination.clone();
+            sim.position = trip.destination;
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.outbound_arrived_today = true;
             }
         }
         TripPurpose::CommuteReturn => {
-            sim.position = sim.home.clone();
+            sim.position = sim.home;
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.returned_home_today = true;
             }
@@ -1164,7 +1164,7 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
             if workplace == &sim.home || !has_valid_workplace_destination(state, sim) {
                 return None;
             }
-            Some((sim.id.clone(), (sim.home.clone(), workplace.clone())))
+            Some((sim.id.clone(), (sim.home, *workplace)))
         })
         .collect();
 
@@ -1190,7 +1190,7 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
         if trip.destination != *home {
             continue;
         }
-        to_retarget.push((index, workplace.clone()));
+        to_retarget.push((index, *workplace));
     }
 
     for (index, workplace) in to_retarget {

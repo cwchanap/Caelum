@@ -20,7 +20,7 @@ pub fn find_tile_path(
         return None;
     }
     if from_key == to_key {
-        return Some(vec![from.clone()]);
+        return Some(vec![*from]);
     }
 
     let mut parents: HashMap<(i32, i32), Option<(i32, i32)>> = HashMap::from([(from_key, None)]);

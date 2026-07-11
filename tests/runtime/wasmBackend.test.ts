@@ -21,10 +21,30 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       if (intent.type === "setPaused" && typeof intent.paused === "boolean") {
         this.#paused = intent.paused;
       }
-      return { applied: true, rejection: null, snapshot: this.snapshot() };
+      return {
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+        snapshot: this.snapshot(),
+      };
     }
     tick() {
-      return { applied: true, rejection: null, snapshot: this.snapshot() };
+      return {
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+        snapshot: this.snapshot(),
+      };
     }
     reset() {
       return this.snapshot();

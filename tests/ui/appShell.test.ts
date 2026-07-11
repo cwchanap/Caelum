@@ -11,6 +11,7 @@ import type {
   AreaKind,
   BuildingType,
   GameState,
+  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
@@ -40,7 +41,7 @@ function createRuntimeHarness(
     state?: GameState;
     ui?: UiState;
     backendError?: string | null;
-    rejection?: string | null;
+    rejection?: GameplayRejection | null;
   } = {},
 ): { runtime: RuntimeController } {
   let state = options.state ?? createTestGameState();
@@ -696,14 +697,22 @@ describe("App shell bootstrap", () => {
   });
 
   it("surfaces gameplay rejection as a dismissible banner without stopping the runtime", async () => {
+    const insufficientBudget: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 8_000,
+        availableBudget: 7_999,
+        affectedRouteIds: [],
+      },
+    };
     const { runtime } = createRuntimeHarness({
-      rejection: "Cannot afford vehicle",
+      rejection: insufficientBudget,
     });
 
     render(App, { props: { runtime } });
 
     const banner = await screen.findByTestId("rejection-banner");
-    expect(banner).toHaveTextContent("Cannot afford vehicle");
+    expect(banner).toHaveTextContent("Needs $8,000; only $7,999 is available.");
     expect(banner).toHaveAttribute("role", "status");
     // A rejection must not stop the runtime (unlike a fatal backendError).
     expect(runtime.stop).not.toHaveBeenCalled();

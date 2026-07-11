@@ -1,5 +1,5 @@
 use caelum_core::model::MetricsState;
-use caelum_core::{GameEngine, GameIntent};
+use caelum_core::{GameEngine, GameIntent, RejectionCode};
 
 fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
     let decoded: GameIntent =
@@ -173,10 +173,9 @@ fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
 
     assert!(!result.applied);
     assert_eq!(result.snapshot, before);
-    assert_eq!(
-        result.rejection.as_deref(),
-        Some("line not found: missing-route")
-    );
+    let rejection = result.rejection.expect("missing route should reject");
+    assert_eq!(rejection.code, RejectionCode::RouteNotFound);
+    assert_eq!(rejection.context.route_id.as_deref(), Some("missing-route"));
 }
 
 #[test]
@@ -220,5 +219,8 @@ fn set_speed_rejects_invalid_speed_without_changing_snapshot() {
     assert!(!result.applied);
     assert_eq!(result.snapshot, before);
     assert_eq!(result.snapshot.speed, 2);
-    assert_eq!(result.rejection.as_deref(), Some("invalid speed: 3"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidSpeed)
+    );
 }

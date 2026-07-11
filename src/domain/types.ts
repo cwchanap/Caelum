@@ -1,4 +1,5 @@
 export type TileKind = "empty" | "road";
+export const SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export type AreaKind =
   | "residential"
   | "commercial"
@@ -54,6 +55,51 @@ export type Overlay =
 export interface Point {
   x: number;
   y: number;
+}
+
+export type RejectionCode =
+  | "insufficientBudget"
+  | "invalidSpeed"
+  | "blockedTile"
+  | "outOfBounds"
+  | "roadRequired"
+  | "trackRequired"
+  | "invalidRoadStroke"
+  | "invalidTrackStroke"
+  | "invalidDirectionChange"
+  | "nodeAlreadyExists"
+  | "ambiguousTransitNode"
+  | "missingRouteNode"
+  | "incompatibleRouteNode"
+  | "tooFewRouteNodes"
+  | "duplicateRouteNodes"
+  | "disconnectedLeg"
+  | "routeChangedWhileEditing"
+  | "routeNotFound"
+  | "structureNotFound"
+  | "invalidPlatform"
+  | "invalidBuildingPlacement"
+  | "blockedFootprint"
+  | "unsafeRoundaboutPortMapping";
+
+export interface RejectionContext {
+  routeId?: string;
+  nodeId?: string;
+  structureId?: string;
+  fromWaypointId?: string;
+  toWaypointId?: string;
+  point?: Point;
+  footprint?: Point[];
+  expectedRevision?: number;
+  actualRevision?: number;
+  requiredBudget?: number;
+  availableBudget?: number;
+  affectedRouteIds: string[];
+}
+
+export interface GameplayRejection {
+  code: RejectionCode;
+  context: RejectionContext;
 }
 
 /** Unit direction vector for each road arrow (canonical direction -> vector). */
@@ -261,6 +307,7 @@ export interface TransitNetwork {
 }
 
 export interface GameState {
+  schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
   time: number;
   day: number;
   clockMinutes: number;

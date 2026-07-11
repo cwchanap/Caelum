@@ -1,3 +1,8 @@
+// `GameplayResult<T>` is an intentionally unboxed public contract: both hosts
+// serialize `GameplayRejection` directly, so boxing it only to reduce the Rust
+// enum's stack size would make the authoritative mutation API less direct.
+#![allow(clippy::result_large_err)]
+
 //! Authoritative simulation core for Caelum.
 //!
 //! This crate owns the tick pipeline, transit routing, the trip/commute lifecycle,
@@ -28,6 +33,7 @@ pub mod model;
 pub mod network;
 pub mod objectives;
 pub mod platforms;
+pub mod rejection;
 pub mod router;
 pub mod scenario;
 pub mod state;
@@ -35,5 +41,6 @@ pub mod transit;
 pub mod trips;
 
 pub use engine::GameEngine;
-pub use intent::{DispatchResult, GameIntent, RoadPreset};
+pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
 pub use model::GameSnapshot;
+pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};

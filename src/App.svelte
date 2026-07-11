@@ -10,6 +10,7 @@
     RuntimeController,
     RuntimeSnapshot,
   } from "./runtime/types";
+  import { rejectionMessage } from "./runtime/rejectionMessages";
   import type { HudCategory } from "./ui/uiState";
   import type {
     BuildCategoryId,
@@ -328,7 +329,7 @@
           data-testid="rejection-banner"
           role="status"
         >
-          <span>{snapshot.rejection}</span>
+          <span>{rejectionMessage(snapshot.rejection)}</span>
           <button
             type="button"
             class="rejection-dismiss"

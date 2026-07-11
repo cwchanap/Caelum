@@ -5,6 +5,7 @@ import type {
   BuildingType,
   GameMap,
   GrowthWave,
+  GameplayRejection,
   PlacedBuilding,
   Point,
   Sim,
@@ -53,6 +54,7 @@ export interface RustScenarioConfig {
 }
 
 export interface RustGameSnapshot {
+  schemaVersion: 2;
   time: number;
   day: number;
   clockMinutes: number;
@@ -111,7 +113,15 @@ export type GameIntent =
 export interface DispatchResult {
   snapshot: RustGameSnapshot;
   applied: boolean;
-  rejection: string | null;
+  rejection: GameplayRejection | null;
+  context: DispatchContext;
+}
+
+export interface DispatchContext {
+  changedTiles: Point[];
+  skippedTiles: Point[];
+  affectedRouteIds: string[];
+  cost: number;
 }
 
 export interface GameBackend {
