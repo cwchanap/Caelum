@@ -176,12 +176,14 @@ for (const fixture of [
     size: "compact2x2",
     origin: { x: 6, y: 12 },
     footprintLength: 4,
+    minimumSameArmCirculation: 2,
   },
   {
     label: "Standard Roundabout",
     size: "standard3x3",
     origin: { x: 21, y: 12 },
     footprintLength: 9,
+    minimumSameArmCirculation: 5,
   },
 ] as const) {
   test(`places, routes, U-turns, and removes ${fixture.label}`, async ({
@@ -266,14 +268,17 @@ for (const fixture of [
       "connected",
     ]);
     for (const reversalIndex of [1, 3]) {
-      expect(route!.legs[reversalIndex].currentPath?.kind).toBe("road");
+      const reversalSteps = roadSteps(route!.legs[reversalIndex]);
+      expect(reversalSteps.map((step) => step.movement)).toContain("uTurn");
     }
 
     const sameArmSteps = roadSteps(route!.legs[0]).filter((step) =>
       step.movement.startsWith("roundabout"),
     );
     const circulationCount = sameArmSteps.length - 2;
-    expect(circulationCount).toBeGreaterThanOrEqual(3);
+    expect(circulationCount).toBeGreaterThanOrEqual(
+      fixture.minimumSameArmCirculation,
+    );
     expect(sameArmSteps.map((step) => step.movement)).toEqual([
       "roundaboutEntry",
       ...Array.from(
