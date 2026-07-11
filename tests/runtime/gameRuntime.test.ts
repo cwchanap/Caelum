@@ -1836,6 +1836,59 @@ describe("route creation and management", () => {
     expect(previewRoute).toHaveBeenCalledTimes(1);
   });
 
+  it("does not carry a stale rejection into a fresh edit of the same route", async () => {
+    const initial = routeSnapshotWithRoute();
+    const latest = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        routes: initial.transit.routes.map((route) => ({
+          ...route,
+          revision: 9,
+        })),
+      },
+    };
+    const base = connectedRouteBackend(initial);
+    const backend: GameBackend = {
+      ...base,
+      async dispatch() {
+        return {
+          snapshot: latest,
+          applied: false,
+          rejection: {
+            code: "routeChangedWhileEditing",
+            context: {
+              routeId: "route-001",
+              expectedRevision: 0,
+              actualRevision: 9,
+              affectedRouteIds: ["route-001"],
+            },
+          },
+          context: EMPTY_DISPATCH_CONTEXT,
+        };
+      },
+    };
+    const runtime = await createGameRuntime({ backend });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    await runtime.saveRouteDraft();
+    runtime.cancelRouteDraft();
+
+    runtime.startRouteEdit("route-001");
+    const fresh = runtime.getSnapshot();
+
+    expect(fresh.ui.routeDraft?.source).toEqual({
+      kind: "edit",
+      routeId: "route-001",
+      expectedRevision: 9,
+    });
+    expect(fresh.rejection).toBeNull();
+    expect(fresh.shell.routeDraft?.canReload).toBe(false);
+
+    const afterReload = runtime.reloadRouteDraft();
+    expect(afterReload.ui.routeDraft).toBe(fresh.ui.routeDraft);
+  });
+
   it("successful creation save dispatches one atomic intent", async () => {
     const base = backendSpy(routeSnapshot());
     const dispatch = vi.fn(base.dispatch.bind(base));

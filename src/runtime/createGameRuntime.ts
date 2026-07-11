@@ -606,6 +606,12 @@ export async function createGameRuntime({
     if (route === undefined && line === undefined) {
       return commit(state, ui);
     }
+    if (
+      rejection?.code === "routeChangedWhileEditing" &&
+      rejection.context.routeId === routeId
+    ) {
+      rejection = null;
+    }
     const routeDraft = editDraft(
       route !== undefined
         ? {
