@@ -315,18 +315,21 @@ function applyIntent(
       ],
     };
   }
-  if (intent.type === "addBusRoute") {
+  if (intent.type === "createRoute" && intent.mode === "bus") {
     const id = `route-${(snapshot.transit.routes.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
       .toString()
       .padStart(3, "0")}`;
     const route: Route = {
       id,
       name: `Bus ${snapshot.transit.routes.length + 1}`,
       color: "#2563eb",
-      stopIds: intent.stopIds,
-      vehicleIds: [],
+      stopIds: intent.waypointIds,
+      vehicleIds: [vehicleId],
       active: true,
-      pattern: "loop",
+      pattern: intent.pattern,
       revision: 0,
       legs: [],
       pathBroken: false,
@@ -336,6 +339,20 @@ function applyIntent(
       transit: {
         ...snapshot.transit,
         routes: [...snapshot.transit.routes, route],
+        vehicles: [
+          ...snapshot.transit.vehicles,
+          {
+            id: vehicleId,
+            mode: "bus",
+            lineId: id,
+            capacity: 18,
+            passengerIds: [],
+            itineraryIndex: 0,
+            pathStepIndex: 0,
+            stepProgress: 0,
+            parkedPosition: null,
+          },
+        ],
       },
     };
   }
@@ -428,18 +445,21 @@ function applyIntent(
       },
     };
   }
-  if (intent.type === "addMetroLine") {
+  if (intent.type === "createRoute" && intent.mode === "metro") {
     const id = `metro-${(snapshot.transit.metroLines.length + 1)
+      .toString()
+      .padStart(3, "0")}`;
+    const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
       .toString()
       .padStart(3, "0")}`;
     const line: MetroLine = {
       id,
       name: `Metro ${snapshot.transit.metroLines.length + 1}`,
       color: "#2867b2",
-      stationIds: intent.stationIds,
-      vehicleIds: [],
+      stationIds: intent.waypointIds,
+      vehicleIds: [vehicleId],
       active: true,
-      pattern: "loop",
+      pattern: intent.pattern,
       revision: 0,
       legs: [],
       pathBroken: false,
@@ -449,6 +469,20 @@ function applyIntent(
       transit: {
         ...snapshot.transit,
         metroLines: [...snapshot.transit.metroLines, line],
+        vehicles: [
+          ...snapshot.transit.vehicles,
+          {
+            id: vehicleId,
+            mode: "metro",
+            lineId: id,
+            capacity: 90,
+            passengerIds: [],
+            itineraryIndex: 0,
+            pathStepIndex: 0,
+            stepProgress: 0,
+            parkedPosition: null,
+          },
+        ],
       },
     };
   }
@@ -1417,40 +1451,33 @@ describe("route creation and management", () => {
     await runtime.finishRoute();
 
     expect(backend.intents).toContainEqual({
-      type: "addBusRoute",
-      stopIds: ["stop-001", "stop-002"],
+      type: "createRoute",
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
     });
     expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
   });
 
-  it("chains assignVehicle after route creation so the line gets a vehicle", async () => {
+  it("legacy Finish UI now sends one atomic createRoute intent", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
 
     await runtime.finishRoute();
 
-    // The create intent is followed by an assignVehicle intent for the new
-    // line id, in order — mirroring the old atomic TS finishDraftRoute.
-    const createIndex = backend.intents.findIndex(
-      (intent) => intent.type === "addBusRoute",
-    );
-    const assignIndex = backend.intents.findIndex(
-      (intent) => intent.type === "assignVehicle",
-    );
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(assignIndex).toBeGreaterThan(createIndex);
-    expect(backend.intents[assignIndex]).toEqual({
+    expect(backend.intents).toEqual([
+      {
+        type: "createRoute",
+        mode: "bus",
+        pattern: "loop",
+        waypointIds: ["stop-001", "stop-002"],
+      },
+    ]);
+    expect(backend.intents).not.toContainEqual({
       type: "assignVehicle",
       mode: "bus",
       lineId: "route-001",
     });
-
-    const route = runtime.getSnapshot().state.transit.routes[0];
-    expect(route.vehicleIds).toEqual(["vehicle-001"]);
-    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
-    expect(runtime.getSnapshot().state.transit.vehicles[0].lineId).toBe(
-      "route-001",
-    );
   });
 
   it("does not dispatch assignVehicle when the backend rejects the route", async () => {
@@ -1462,52 +1489,6 @@ describe("route creation and management", () => {
 
     expect(backend.intents.some((i) => i.type === "assignVehicle")).toBe(false);
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
-  });
-
-  it("surfaces assignVehicle rejection as a recoverable rejection, not a fatal backendError", async () => {
-    const base = backendSpy(routeSnapshot());
-    // Wrap the spy so assignVehicle is rejected but other intents succeed.
-    const rejectAssignVehicle: GameplayRejection = {
-      code: "insufficientBudget",
-      context: {
-        requiredBudget: 8_000,
-        availableBudget: 0,
-        affectedRouteIds: [],
-      },
-    };
-    const backend: BackendSpy = {
-      ...base,
-      async dispatch(intent) {
-        if (intent.type === "assignVehicle") {
-          return {
-            snapshot: await base.snapshot(),
-            applied: false,
-            rejection: rejectAssignVehicle,
-            context: EMPTY_DISPATCH_CONTEXT,
-          };
-        }
-        return base.dispatch(intent);
-      },
-    };
-    const { runtime } = await withTwoStops(backend);
-    runtime.start();
-
-    await runtime.finishRoute();
-
-    const snapshot = runtime.getSnapshot();
-    // The rejection must surface as a recoverable rejection, not a fatal
-    // backendError that halts the runtime.
-    expect(snapshot.rejection).toEqual(rejectAssignVehicle);
-    expect(snapshot.backendError).toBeNull();
-    expect(runtime.isRunning()).toBe(true);
-    // The route was created (addBusRoute succeeded) even though the vehicle
-    // assignment was rejected.
-    expect(snapshot.state.transit.routes).toHaveLength(1);
-    expect(snapshot.state.transit.vehicles).toHaveLength(0);
-
-    // Dismissing clears the rejection.
-    runtime.dismissRejection();
-    expect(runtime.getSnapshot().rejection).toBeNull();
   });
 
   it("does not let a slow route finish clear a newer draft", async () => {
@@ -1526,9 +1507,6 @@ describe("route creation and management", () => {
       "stop-002",
     ]);
 
-    await backend.resolveNext();
-    // `finishRoute` chains `addBusRoute` → `assignVehicle`; resolve the
-    // vehicle-assignment dispatch too so the queued operation completes.
     await backend.resolveNext();
     await firstFinish;
 
@@ -1557,25 +1535,19 @@ describe("route creation and management", () => {
     await backend.resolveNext();
     await flushPromises();
     await backend.resolveNext();
-    await flushPromises();
-    await backend.resolveNext();
     await finishPromise;
 
     expect(
-      backend.intents.some((intent) => intent.type === "addBusRoute"),
+      backend.intents.some((intent) => intent.type === "createRoute"),
     ).toBe(true);
   });
 
-  it("keeps the accepted snapshot when the backend creates a route but surfaces no new id", async () => {
-    // If the backend accepts addBusRoute but returns a snapshot with no new
-    // route id (an edge case), finishRoute must keep the accepted snapshot
-    // rather than crash trying to assign a vehicle to a missing line.
+  it("keeps an accepted atomic snapshot even when the backend surfaces no new id", async () => {
     const base = backendSpy(routeSnapshot());
     const backend: BackendSpy = {
       ...base,
       async dispatch(intent) {
-        if (intent.type === "addBusRoute") {
-          // Accept but return the unchanged snapshot (no new route id).
+        if (intent.type === "createRoute") {
           return {
             snapshot: await base.snapshot(),
             applied: true,
@@ -1590,7 +1562,6 @@ describe("route creation and management", () => {
 
     await runtime.finishRoute();
 
-    // No vehicle was assigned (no new line id to target).
     expect(
       backend.intents.some((intent) => intent.type === "assignVehicle"),
     ).toBe(false);
@@ -1609,10 +1580,10 @@ describe("route creation and management", () => {
     const second = runtime.finishRoute();
     await Promise.all([first, second]);
 
-    const addBusRouteCount = backend.intents.filter(
-      (intent) => intent.type === "addBusRoute",
+    const createRouteCount = backend.intents.filter(
+      (intent) => intent.type === "createRoute",
     ).length;
-    expect(addBusRouteCount).toBe(1);
+    expect(createRouteCount).toBe(1);
     expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
   });
@@ -2055,7 +2026,7 @@ describe("fake backend applyIntent coverage", () => {
     expect(tileAt(removed.snapshot, 2, 3)?.hasTrack).toBe(false);
   });
 
-  it("applies addMetroStation and addMetroLine to transit", async () => {
+  it("applies addMetroStation and atomic createRoute to transit", async () => {
     const backend = backendSpy();
 
     const station = await backend.dispatch({
@@ -2066,8 +2037,10 @@ describe("fake backend applyIntent coverage", () => {
     expect(station.snapshot.transit.stations[0].platforms).toHaveLength(2);
 
     const line = await backend.dispatch({
-      type: "addMetroLine",
-      stationIds: ["station-001"],
+      type: "createRoute",
+      mode: "metro",
+      pattern: "loop",
+      waypointIds: ["station-001"],
     });
     expect(line.snapshot.transit.metroLines).toHaveLength(1);
     expect(line.snapshot.transit.metroLines[0].stationIds).toEqual([
@@ -2078,7 +2051,12 @@ describe("fake backend applyIntent coverage", () => {
   it("applies assignRouteToPlatform to the targeted platform", async () => {
     const backend = backendSpy();
     await backend.dispatch({ type: "addBusStop", point: { x: 1, y: 1 } });
-    await backend.dispatch({ type: "addBusRoute", stopIds: ["stop-001"] });
+    await backend.dispatch({
+      type: "createRoute",
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001"],
+    });
 
     const reassigned = await backend.dispatch({
       type: "assignRouteToPlatform",
@@ -2203,8 +2181,10 @@ describe("fake backend applyIntent coverage", () => {
     await runtime.finishRoute();
     const after = runtime.getSnapshot();
     expect(backend.intents).toContainEqual({
-      type: "addBusRoute",
-      stopIds: ["stop-001", "stop-002"],
+      type: "createRoute",
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
     });
     expect(after.ui.routeDraft).toBeNull();
   });

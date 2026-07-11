@@ -27,8 +27,10 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
             point: (x, 5).into(),
         });
     }
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
     });
     let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
@@ -71,8 +73,11 @@ fn metro_shuttle_state() -> caelum_core::model::GameSnapshot {
             point: (x, 4).into(),
         });
     }
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: ids(&["station-001", "station-002", "station-003"]),
+    engine.set_budget_for_test(transit::METRO_COST);
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["station-001", "station-002", "station-003"]),
     });
     let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();

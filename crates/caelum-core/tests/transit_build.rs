@@ -131,14 +131,11 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
             point: (x, 5).into(),
         });
     }
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
     });
-    engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
-    });
-
     let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
     let waypoint_ids = state.transit.routes[0].stop_ids.clone();
@@ -269,12 +266,10 @@ fn two_stop_bus_engine() -> GameEngine {
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
-    });
-    engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine
 }
@@ -451,7 +446,7 @@ fn creates_active_bus_route_and_assigns_vehicle() {
 }
 
 #[test]
-fn duplicate_stop_route_stays_inactive_and_unassigned() {
+fn duplicate_stop_route_is_rejected_atomically() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad {
         point: (3, 4).into(),
@@ -460,20 +455,25 @@ fn duplicate_stop_route_stays_inactive_and_unassigned() {
         point: (3, 4).into(),
     });
 
-    let result = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-001".to_string()],
+    let result = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-001".to_string()],
     });
 
-    assert!(result.applied);
-    assert!(!result.snapshot.transit.routes[0].active);
-    assert!(result.snapshot.transit.routes[0].legs.is_empty());
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.expect("duplicate rejection").code,
+        RejectionCode::DuplicateRouteNodes
+    );
+    assert!(result.snapshot.transit.routes.is_empty());
     assert!(!result.snapshot.transit.stops[0].platforms[0]
         .route_ids
         .contains(&"route-001".to_string()));
 }
 
 #[test]
-fn metro_line_serializes_station_ids_and_rejects_vehicle_when_broken() {
+fn disconnected_metro_creation_is_rejected_atomically() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayTrack {
         point: (2, 4).into(),
@@ -488,25 +488,18 @@ fn metro_line_serializes_station_ids_and_rejects_vehicle_when_broken() {
         point: (12, 4).into(),
     });
 
-    let line = engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    let line = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
-    assert!(line.applied);
-    let serialized = serde_json::to_value(&line.snapshot.transit.metro_lines[0])
-        .expect("metro line should serialize");
+    assert!(!line.applied);
     assert_eq!(
-        serialized.get("stationIds"),
-        Some(&serde_json::json!(["station-001", "station-002"]))
+        line.rejection.expect("disconnected rejection").code,
+        RejectionCode::DisconnectedLeg
     );
-    assert!(serialized.get("stopIds").is_none());
-    assert!(line.snapshot.transit.metro_lines[0].path_broken);
-
-    let rejected = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "metro".to_string(),
-        line_id: "metro-001".to_string(),
-    });
-    assert!(!rejected.applied);
-    assert!(rejected.snapshot.transit.vehicles.is_empty());
+    assert!(line.snapshot.transit.metro_lines.is_empty());
+    assert!(line.snapshot.transit.vehicles.is_empty());
 }
 
 #[test]
@@ -561,11 +554,15 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 3).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
 
     let snapshot = engine.snapshot();
@@ -602,8 +599,10 @@ fn bus_stop_building_rebuild_restores_stable_node_and_route() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 3).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: ids(&["stop-001", "stop-002"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
     let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
 
@@ -651,8 +650,10 @@ fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 3).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: ids(&["stop-001", "stop-002"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -701,8 +702,10 @@ fn bus_terminal_rebuild_restores_stable_node_and_route() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 3).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: ids(&["stop-001", "stop-002"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
     let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
     engine.dispatch(GameIntent::RemoveAtTile {
@@ -740,8 +743,10 @@ fn metro_station_building_rebuild_restores_stable_node_and_line() {
             rotation: 0,
         });
     }
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: ids(&["station-001", "station-002"]),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["station-001", "station-002"]),
     });
     let original_platforms = engine.snapshot().transit.stations[0].platforms.clone();
 
@@ -752,6 +757,7 @@ fn metro_station_building_rebuild_restores_stable_node_and_line() {
         removed.snapshot.transit.stations[0].status,
         TransitNodeStatus::Missing
     );
+    engine.set_budget_for_test(25_000);
 
     let restored = engine.dispatch(GameIntent::PlaceBuilding {
         building_type: "metroStation".to_string(),
@@ -782,8 +788,10 @@ fn cycling_road_direction_breaks_and_restores_route() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(!engine.snapshot().transit.routes[0].path_broken);
 
@@ -1447,21 +1455,18 @@ fn connected_metro_line_creates_vehicle() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
 
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "metro".to_string(),
-        line_id: "metro-001".to_string(),
-    });
-
-    assert!(vehicle.applied);
+    assert!(created.applied);
     assert_eq!(
-        vehicle.snapshot.transit.metro_lines[0].vehicle_ids,
+        created.snapshot.transit.metro_lines[0].vehicle_ids,
         vec!["vehicle-001"]
     );
-    assert_eq!(vehicle.snapshot.transit.vehicles[0].capacity, 90);
+    assert_eq!(created.snapshot.transit.vehicles[0].capacity, 90);
 }
 
 #[test]
@@ -2044,8 +2049,10 @@ fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
     );
     assert!(
         engine
-            .dispatch(GameIntent::AddBusRoute {
-                stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            .dispatch(GameIntent::CreateRoute {
+                mode: TransitMode::Bus,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
             })
             .applied
     );

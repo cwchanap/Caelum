@@ -952,13 +952,12 @@ export async function createGameRuntime({
         return commit(state, ui);
       }
       const { instanceId, generation, mode } = submittedDraft;
-      const createIntent: GameIntent =
-        mode === "bus"
-          ? { type: "addBusRoute", stopIds: submittedDraft.waypointIds }
-          : {
-              type: "addMetroLine",
-              stationIds: submittedDraft.waypointIds,
-            };
+      const createIntent: GameIntent = {
+        type: "createRoute",
+        mode,
+        pattern: "loop",
+        waypointIds: submittedDraft.waypointIds,
+      };
 
       return queueBackend(async () => {
         const currentDraft = ui.routeDraft;
@@ -970,12 +969,6 @@ export async function createGameRuntime({
           return commit(state, ui);
         }
 
-        const beforeIds = new Set(
-          (mode === "bus"
-            ? state.transit.routes
-            : state.transit.metroLines
-          ).map((entry) => entry.id),
-        );
         const createResult = await backend.dispatch(createIntent);
         backendError = null;
         rejection = createResult.rejection;
@@ -994,40 +987,7 @@ export async function createGameRuntime({
           return { ...current, routeDraft: null, routePreviewError: null };
         };
 
-        if (!createResult.applied) {
-          return commit(afterCreate, commitUi(ui));
-        }
-
-        // Identify the freshly created line by diffing ids, then assign a
-        // vehicle. If the line cannot be resolved (e.g. the backend accepted
-        // but did not surface a new id), keep the accepted snapshot rather
-        // than silently dropping the route.
-        const afterRoutes =
-          mode === "bus"
-            ? afterCreate.transit.routes
-            : afterCreate.transit.metroLines;
-        const newLine = afterRoutes.find((entry) => !beforeIds.has(entry.id));
-        if (newLine === undefined) {
-          return commit(afterCreate, commitUi(ui));
-        }
-
-        const vehicleResult = await backend.dispatch({
-          type: "assignVehicle",
-          mode,
-          lineId: newLine.id,
-        });
-        if (!vehicleResult.applied) {
-          rejection = vehicleResult.rejection;
-          return commit(
-            normalizeRustSnapshot(vehicleResult.snapshot),
-            commitUi(ui),
-          );
-        }
-        rejection = null;
-        return commit(
-          normalizeRustSnapshot(vehicleResult.snapshot),
-          commitUi(ui),
-        );
+        return commit(afterCreate, commitUi(ui));
       });
     },
     cancelRoute() {

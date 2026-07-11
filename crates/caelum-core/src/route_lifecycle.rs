@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
 
 use crate::engine::RoutingContext;
@@ -23,6 +23,91 @@ pub fn is_route_operational(active: bool, legs: &[RouteLegPath]) -> bool {
         && legs
             .iter()
             .all(|leg| leg.status == RouteLegStatus::Connected)
+}
+
+pub fn rebase_edited_route_vehicles_and_riders(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+    old_waypoint_ids: &[String],
+    new_waypoint_ids: &[String],
+) {
+    let old_ids: HashSet<&str> = old_waypoint_ids.iter().map(String::as_str).collect();
+    let retained_ids: HashSet<&str> = new_waypoint_ids
+        .iter()
+        .filter_map(|id| old_ids.contains(id.as_str()).then_some(id.as_str()))
+        .collect();
+    let vehicle_indexes: Vec<usize> = candidate
+        .transit
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vehicle)| (vehicle.line_id == route_id).then_some(index))
+        .collect();
+    let mut parked_position_by_trip_id = HashMap::new();
+
+    for vehicle_index in vehicle_indexes {
+        let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let vehicle_world = previous
+            .transit
+            .vehicles
+            .iter()
+            .find(|vehicle| vehicle.id == candidate_vehicle.id)
+            .and_then(|vehicle| vehicle_world_position(previous, mode, route_id, vehicle))
+            .or_else(|| candidate_vehicle.parked_position.clone());
+        let target = vehicle_world.as_ref().and_then(|world| {
+            parking_target_for_retained(candidate, mode, new_waypoint_ids, &retained_ids, world)
+        });
+        let parked_world = target
+            .as_ref()
+            .map(|(_, _, world)| world.clone())
+            .or(vehicle_world);
+        let vehicle = &mut candidate.transit.vehicles[vehicle_index];
+        if let Some((itinerary_index, _, _)) = target {
+            vehicle.itinerary_index = itinerary_index;
+        } else {
+            vehicle.itinerary_index = 0;
+        }
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
+        vehicle.parked_position = parked_world.clone();
+        if let Some(parked_world) = parked_world {
+            for passenger_id in &vehicle.passenger_ids {
+                parked_position_by_trip_id.insert(passenger_id.clone(), parked_world.clone());
+            }
+        }
+        vehicle.passenger_ids.clear();
+    }
+
+    invalidate_trips_for_line(
+        &mut candidate.active_trips,
+        &mut candidate.transit.vehicles,
+        route_id,
+        &parked_position_by_trip_id,
+    );
+}
+
+fn parking_target_for_retained(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    waypoint_ids: &[String],
+    retained_ids: &HashSet<&str>,
+    vehicle_world: &TripPosition,
+) -> Option<(usize, String, TripPosition)> {
+    waypoint_ids
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| retained_ids.contains(id.as_str()))
+        .filter_map(|(index, id)| {
+            present_node_world(snapshot, mode, id).map(|world| (index, id.clone(), world))
+        })
+        .min_by(|left, right| {
+            squared_distance(&left.2, vehicle_world)
+                .total_cmp(&squared_distance(&right.2, vehicle_world))
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.1.cmp(&right.1))
+        })
 }
 
 pub fn recompute_affected_routes(

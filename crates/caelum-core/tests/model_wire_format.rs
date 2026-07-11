@@ -56,8 +56,10 @@ fn bus_route_fixture() -> Route {
     engine.dispatch(GameIntent::AddBusStop {
         point: point(10, 5),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine.snapshot().transit.routes[0].clone()
 }
@@ -519,18 +521,32 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             vec![("point", json!({ "x": 5, "y": 6 }))],
         ),
         (
-            GameIntent::AddBusRoute {
-                stop_ids: vec!["stop-1".to_string(), "stop-2".to_string()],
+            GameIntent::CreateRoute {
+                mode: TransitMode::Bus,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["stop-1".to_string(), "stop-2".to_string()],
             },
-            "addBusRoute",
-            vec![("stopIds", json!(["stop-1", "stop-2"]))],
+            "createRoute",
+            vec![
+                ("mode", json!("bus")),
+                ("pattern", json!("loop")),
+                ("waypointIds", json!(["stop-1", "stop-2"])),
+            ],
         ),
         (
-            GameIntent::AddMetroLine {
-                station_ids: vec!["station-1".to_string()],
+            GameIntent::UpdateRoute {
+                route_id: "metro-001".to_string(),
+                expected_revision: 7,
+                pattern: ServicePattern::Shuttle,
+                waypoint_ids: vec!["station-1".to_string(), "station-2".to_string()],
             },
-            "addMetroLine",
-            vec![("stationIds", json!(["station-1"]))],
+            "updateRoute",
+            vec![
+                ("routeId", json!("metro-001")),
+                ("expectedRevision", json!(7)),
+                ("pattern", json!("shuttle")),
+                ("waypointIds", json!(["station-1", "station-2"])),
+            ],
         ),
         (
             GameIntent::SetRouteActive {
@@ -624,8 +640,8 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::RemoveAtTiles { .. } => "removeAtTiles",
             GameIntent::AddBusStop { .. } => "addBusStop",
             GameIntent::AddMetroStation { .. } => "addMetroStation",
-            GameIntent::AddBusRoute { .. } => "addBusRoute",
-            GameIntent::AddMetroLine { .. } => "addMetroLine",
+            GameIntent::CreateRoute { .. } => "createRoute",
+            GameIntent::UpdateRoute { .. } => "updateRoute",
             GameIntent::SetRouteActive { .. } => "setRouteActive",
             GameIntent::RenameRoute { .. } => "renameRoute",
             GameIntent::RecolorRoute { .. } => "recolorRoute",

@@ -6,9 +6,9 @@ use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    ActiveTrip, BusStopKind, GameMap, GameSnapshot, MetroLine, Platform, Point, Route,
-    RouteLegKind, RouteLegPath, ServicePattern, Tile, TransitMode, TransitNodeStatus, TransitPath,
-    TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, BusStopKind, GameMap, GameSnapshot, Platform, Point, RouteLegKind, RouteLegPath,
+    Tile, TransitMode, TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus,
+    Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -298,69 +298,6 @@ pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<
     Ok(next)
 }
 
-pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> GameplayResult<GameSnapshot> {
-    let mut next = state.clone();
-    let route_id = next_entity_id(
-        "route",
-        next.transit.routes.iter().map(|route| route.id.clone()),
-    );
-    let route_number = entity_number_from_id("route", &route_id);
-    let distinct_stop_ids = distinct_ids(&stop_ids);
-    let active = distinct_valid_stop_count(state, &stop_ids) >= 2;
-    if active {
-        next.transit.stops =
-            assign_route_to_least_loaded(&next.transit.stops, &distinct_stop_ids, &route_id);
-    }
-
-    next.transit.routes.push(Route {
-        id: route_id,
-        name: format!("Bus {route_number}"),
-        color: "#e04f39".to_string(),
-        stop_ids,
-        vehicle_ids: Vec::new(),
-        active,
-        pattern: ServicePattern::Loop,
-        revision: 0,
-        legs: Vec::new(),
-        path_broken: false,
-    });
-
-    Ok(next)
-}
-
-pub fn add_metro_line(
-    state: &GameSnapshot,
-    station_ids: Vec<String>,
-) -> GameplayResult<GameSnapshot> {
-    let mut next = state.clone();
-    let line_id = next_entity_id(
-        "metro",
-        next.transit.metro_lines.iter().map(|line| line.id.clone()),
-    );
-    let line_number = entity_number_from_id("metro", &line_id);
-    let distinct_station_ids = distinct_ids(&station_ids);
-    let active = distinct_valid_station_count(state, &station_ids) >= 2;
-    if active {
-        next.transit.stations =
-            assign_route_to_least_loaded(&next.transit.stations, &distinct_station_ids, &line_id);
-    }
-
-    next.transit.metro_lines.push(MetroLine {
-        id: line_id,
-        name: format!("Metro {line_number}"),
-        color: "#2867b2".to_string(),
-        station_ids,
-        vehicle_ids: Vec::new(),
-        active,
-        pattern: ServicePattern::Loop,
-        revision: 0,
-        legs: Vec::new(),
-        path_broken: false,
-    });
-
-    Ok(next)
-}
-
 pub fn assign_vehicle(
     state: &GameSnapshot,
     mode: &str,
@@ -378,37 +315,12 @@ pub fn assign_vehicle(
             ));
         }
     };
-    let cost = if transit_mode == TransitMode::Bus {
-        BUS_COST
-    } else {
-        METRO_COST
-    };
+    let cost = vehicle_cost(transit_mode);
     if state.budget < cost {
         return Err(GameplayRejection::budget(cost, state.budget));
     }
 
-    let vehicle = Vehicle {
-        id: next_entity_id(
-            "vehicle",
-            state
-                .transit
-                .vehicles
-                .iter()
-                .map(|vehicle| vehicle.id.clone()),
-        ),
-        mode: transit_mode,
-        line_id: line_id.to_string(),
-        capacity: if transit_mode == TransitMode::Bus {
-            18
-        } else {
-            90
-        },
-        passenger_ids: Vec::new(),
-        itinerary_index: 0,
-        path_step_index: 0,
-        step_progress: 0.0,
-        parked_position: None,
-    };
+    let vehicle = initial_vehicle(state, transit_mode, line_id);
     let mut next = state.clone();
 
     if transit_mode == TransitMode::Bus {
@@ -448,6 +360,35 @@ pub fn assign_vehicle(
     next.budget -= cost;
     next.transit.vehicles.push(vehicle);
     Ok(next)
+}
+
+pub fn vehicle_cost(mode: TransitMode) -> i32 {
+    match mode {
+        TransitMode::Bus => BUS_COST,
+        TransitMode::Metro => METRO_COST,
+        TransitMode::Walk => 0,
+    }
+}
+
+pub(crate) fn initial_vehicle(state: &GameSnapshot, mode: TransitMode, route_id: &str) -> Vehicle {
+    Vehicle {
+        id: next_entity_id(
+            "vehicle",
+            state
+                .transit
+                .vehicles
+                .iter()
+                .map(|vehicle| vehicle.id.clone()),
+        ),
+        mode,
+        line_id: route_id.to_string(),
+        capacity: if mode == TransitMode::Bus { 18 } else { 90 },
+        passenger_ids: Vec::new(),
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.0,
+        parked_position: None,
+    }
 }
 
 /// Advance every vehicle along its assigned line, boarding/disembarking passengers.
@@ -978,74 +919,6 @@ fn cleanup_removed_destination_references(
             .passenger_ids
             .retain(|passenger_id| !invalidated_trip_ids.contains(passenger_id));
     }
-}
-
-fn distinct_valid_stop_count(state: &GameSnapshot, stop_ids: &[String]) -> usize {
-    let existing_stop_ids: HashSet<&str> = state
-        .transit
-        .stops
-        .iter()
-        .filter(|stop| is_present_node(stop.status))
-        .map(|stop| stop.id.as_str())
-        .collect();
-    stop_ids
-        .iter()
-        .filter(|stop_id| existing_stop_ids.contains(stop_id.as_str()))
-        .collect::<HashSet<_>>()
-        .len()
-}
-
-fn distinct_valid_station_count(state: &GameSnapshot, station_ids: &[String]) -> usize {
-    let existing_station_ids: HashSet<&str> = state
-        .transit
-        .stations
-        .iter()
-        .filter(|station| is_present_node(station.status))
-        .map(|station| station.id.as_str())
-        .collect();
-    station_ids
-        .iter()
-        .filter(|station_id| existing_station_ids.contains(station_id.as_str()))
-        .collect::<HashSet<_>>()
-        .len()
-}
-
-fn distinct_ids(ids: &[String]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut distinct = Vec::new();
-    for id in ids {
-        if seen.insert(id.clone()) {
-            distinct.push(id.clone());
-        }
-    }
-    distinct
-}
-
-fn assign_route_to_least_loaded<T>(nodes: &[T], node_ids: &[String], route_id: &str) -> Vec<T>
-where
-    T: Clone + PlatformNode,
-{
-    let target_ids: HashSet<&str> = node_ids.iter().map(String::as_str).collect();
-    nodes
-        .iter()
-        .cloned()
-        .map(|mut node| {
-            if !target_ids.contains(node.id()) || node.platforms().is_empty() {
-                return node;
-            }
-            let best_index = node
-                .platforms()
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, platform)| platform.route_ids.len())
-                .map(|(index, _)| index)
-                .unwrap_or(0);
-            node.platforms_mut()[best_index]
-                .route_ids
-                .push(route_id.to_string());
-            node
-        })
-        .collect()
 }
 
 fn reassign_within_node<T>(

@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan,
-    ServiceDirection, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome,
+    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
@@ -228,8 +228,10 @@ fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let assigned = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -493,8 +495,10 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -543,8 +547,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -610,8 +616,10 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -676,8 +684,10 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (5, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -723,8 +733,10 @@ fn cursor_resets_progress_at_path_step_boundary() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (7, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),

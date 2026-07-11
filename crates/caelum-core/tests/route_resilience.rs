@@ -1,6 +1,6 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, Point,
-    RoadPathStep, Route, RouteLegStatus, RoutePlan, ServiceDirection, TransitMode,
+    RoadPathStep, Route, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
     TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
@@ -71,7 +71,11 @@ fn add_bus_route(engine: &mut GameEngine, stops: &[(i32, i32)]) {
     let stop_ids = (1..=stops.len())
         .map(|index| format!("stop-{index:03}"))
         .collect();
-    let result = engine.dispatch(GameIntent::AddBusRoute { stop_ids });
+    let result = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: stop_ids,
+    });
     assert!(result.applied, "fixture route should apply: {result:?}");
 }
 
@@ -536,7 +540,11 @@ fn shared_stop_route_engine() -> GameEngine {
         vec!["stop-001".to_string(), "stop-002".to_string()],
         vec!["stop-002".to_string(), "stop-003".to_string()],
     ] {
-        let added = engine.dispatch(GameIntent::AddBusRoute { stop_ids });
+        let added = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: stop_ids,
+        });
         assert!(added.applied, "fixture route should apply: {added:?}");
     }
     engine

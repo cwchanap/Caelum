@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{GameSnapshot, Point};
+use crate::model::{GameSnapshot, Point, ServicePattern, TransitMode};
 use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,11 +56,16 @@ pub enum GameIntent {
     AddMetroStation {
         point: Point,
     },
-    AddBusRoute {
-        stop_ids: Vec<String>,
+    CreateRoute {
+        mode: TransitMode,
+        pattern: ServicePattern,
+        waypoint_ids: Vec<String>,
     },
-    AddMetroLine {
-        station_ids: Vec<String>,
+    UpdateRoute {
+        route_id: String,
+        expected_revision: u32,
+        pattern: ServicePattern,
+        waypoint_ids: Vec<String>,
     },
     SetRouteActive {
         route_id: String,

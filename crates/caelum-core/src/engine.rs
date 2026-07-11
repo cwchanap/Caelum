@@ -9,6 +9,7 @@ use crate::preview::{
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
+use crate::route_editor;
 use crate::route_lifecycle;
 use crate::state::create_initial_snapshot;
 use crate::transit;
@@ -324,12 +325,36 @@ impl GameEngine {
                 );
                 self.commit_network_mutation(candidate)
             }
-            GameIntent::AddBusRoute { stop_ids } => self.commit_network_mutation(
-                transit::add_bus_route(&self.snapshot, stop_ids).map(NetworkCandidate::plain),
-            ),
-            GameIntent::AddMetroLine { station_ids } => self.commit_network_mutation(
-                transit::add_metro_line(&self.snapshot, station_ids).map(NetworkCandidate::plain),
-            ),
+            GameIntent::CreateRoute {
+                mode,
+                pattern,
+                waypoint_ids,
+            } => {
+                let result = route_editor::create_route(
+                    &self.snapshot,
+                    self.routing_context(),
+                    mode,
+                    pattern,
+                    waypoint_ids,
+                );
+                self.commit_result(result)
+            }
+            GameIntent::UpdateRoute {
+                route_id,
+                expected_revision,
+                pattern,
+                waypoint_ids,
+            } => {
+                let result = route_editor::update_route(
+                    &self.snapshot,
+                    self.routing_context(),
+                    &route_id,
+                    expected_revision,
+                    pattern,
+                    waypoint_ids,
+                );
+                self.commit_result(result)
+            }
             GameIntent::SetRouteActive { route_id, active } => {
                 self.commit_result(transit::set_route_active(&self.snapshot, &route_id, active))
             }

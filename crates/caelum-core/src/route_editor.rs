@@ -1,0 +1,368 @@
+use std::collections::BTreeSet;
+
+use crate::engine::RoutingContext;
+use crate::ids::next_entity_id;
+use crate::model::{
+    GameSnapshot, MetroLine, Route, RouteLegPath, RouteLegStatus, ServicePattern, TransitMode,
+};
+use crate::network::resolve_route_legs;
+use crate::platforms::{apply_route_platform_delta, assign_added_waypoint_platforms};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+use crate::route_lifecycle::rebase_edited_route_vehicles_and_riders;
+use crate::transit::{initial_vehicle, vehicle_cost};
+use crate::transit_nodes::{garbage_collect_missing_nodes, validate_present_compatible_node};
+
+#[derive(Clone)]
+struct RouteView {
+    mode: TransitMode,
+    waypoint_ids: Vec<String>,
+    revision: u32,
+    legs: Vec<RouteLegPath>,
+}
+
+pub fn create_route(
+    state: &GameSnapshot,
+    context: RoutingContext<'_>,
+    mode: TransitMode,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+) -> GameplayResult<GameSnapshot> {
+    validate_waypoints(state, mode, &waypoint_ids, None)?;
+    let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
+    require_all_connected(&legs, None)?;
+    let cost = vehicle_cost(mode);
+    if state.budget < cost {
+        return Err(GameplayRejection::budget(cost, state.budget));
+    }
+
+    let mut candidate = state.clone();
+    let route_id = next_route_id(&candidate, mode);
+    assign_added_waypoint_platforms(&mut candidate, mode, &route_id, &waypoint_ids)?;
+    let vehicle = initial_vehicle(&candidate, mode, &route_id);
+    let vehicle_id = vehicle.id.clone();
+    insert_route(
+        &mut candidate,
+        mode,
+        route_id,
+        pattern,
+        waypoint_ids,
+        legs,
+        vehicle_id,
+    );
+    candidate.transit.vehicles.push(vehicle);
+    candidate.budget -= cost;
+    Ok(candidate)
+}
+
+pub fn update_route(
+    state: &GameSnapshot,
+    context: RoutingContext<'_>,
+    route_id: &str,
+    expected_revision: u32,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+) -> GameplayResult<GameSnapshot> {
+    let current = route_view(state, route_id).ok_or_else(|| route_not_found(route_id))?;
+    if current.revision != expected_revision {
+        return Err(stale_revision(
+            route_id,
+            expected_revision,
+            current.revision,
+        ));
+    }
+    validate_waypoints(state, current.mode, &waypoint_ids, Some(route_id))?;
+    let mut legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
+    validate_edit_legs(&current.legs, &legs, route_id)?;
+    carry_forward_leg_history(&current.legs, &mut legs);
+
+    let mut candidate = state.clone();
+    apply_route_platform_delta(
+        &mut candidate,
+        current.mode,
+        route_id,
+        &current.waypoint_ids,
+        &waypoint_ids,
+    )?;
+    write_structural_route_fields(
+        &mut candidate,
+        route_id,
+        pattern,
+        waypoint_ids.clone(),
+        legs,
+        current.revision.saturating_add(1),
+    );
+    rebase_edited_route_vehicles_and_riders(
+        state,
+        &mut candidate,
+        current.mode,
+        route_id,
+        &current.waypoint_ids,
+        &waypoint_ids,
+    );
+    Ok(garbage_collect_missing_nodes(&candidate))
+}
+
+fn validate_waypoints(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    waypoint_ids: &[String],
+    route_id: Option<&str>,
+) -> GameplayResult<()> {
+    if mode == TransitMode::Walk {
+        return Err(route_validation_rejection(
+            RejectionCode::IncompatibleRouteNode,
+            route_id,
+            None,
+        ));
+    }
+    if waypoint_ids.len() < 2 {
+        return Err(route_validation_rejection(
+            RejectionCode::TooFewRouteNodes,
+            route_id,
+            waypoint_ids.first().map(String::as_str),
+        ));
+    }
+    let unique: BTreeSet<_> = waypoint_ids.iter().collect();
+    if unique.len() != waypoint_ids.len() {
+        let mut seen = BTreeSet::new();
+        let duplicate = waypoint_ids
+            .iter()
+            .find(|id| !seen.insert(id.as_str()))
+            .map(String::as_str);
+        return Err(route_validation_rejection(
+            RejectionCode::DuplicateRouteNodes,
+            route_id,
+            duplicate,
+        ));
+    }
+
+    for waypoint_id in waypoint_ids {
+        validate_present_compatible_node(snapshot, mode, waypoint_id, route_id)?;
+    }
+    Ok(())
+}
+
+fn validate_edit_legs(
+    old_legs: &[RouteLegPath],
+    new_legs: &[RouteLegPath],
+    route_id: &str,
+) -> GameplayResult<()> {
+    for leg in new_legs {
+        if leg.status == RouteLegStatus::Connected {
+            continue;
+        }
+        let carried = old_legs.iter().any(|old| {
+            old.status != RouteLegStatus::Connected
+                && old.from_waypoint_id == leg.from_waypoint_id
+                && old.to_waypoint_id == leg.to_waypoint_id
+                && old.direction == leg.direction
+        });
+        if !carried {
+            return Err(disconnected_leg_rejection(leg, Some(route_id)));
+        }
+    }
+    Ok(())
+}
+
+fn carry_forward_leg_history(old_legs: &[RouteLegPath], new_legs: &mut [RouteLegPath]) {
+    for leg in new_legs {
+        if leg.status == RouteLegStatus::Connected {
+            leg.last_valid_path = leg.current_path.clone();
+            continue;
+        }
+        if let Some(old) = old_legs.iter().find(|old| {
+            old.status != RouteLegStatus::Connected
+                && old.from_waypoint_id == leg.from_waypoint_id
+                && old.to_waypoint_id == leg.to_waypoint_id
+                && old.direction == leg.direction
+        }) {
+            leg.last_valid_path = old.last_valid_path.clone();
+        }
+    }
+}
+
+fn require_all_connected(legs: &[RouteLegPath], route_id: Option<&str>) -> GameplayResult<()> {
+    if let Some(leg) = legs
+        .iter()
+        .find(|leg| leg.status != RouteLegStatus::Connected)
+    {
+        return Err(disconnected_leg_rejection(leg, route_id));
+    }
+    Ok(())
+}
+
+fn disconnected_leg_rejection(leg: &RouteLegPath, route_id: Option<&str>) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::DisconnectedLeg,
+        context: RejectionContext {
+            route_id: route_id.map(str::to_string),
+            from_waypoint_id: Some(leg.from_waypoint_id.clone()),
+            to_waypoint_id: Some(leg.to_waypoint_id.clone()),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn route_validation_rejection(
+    code: RejectionCode,
+    route_id: Option<&str>,
+    node_id: Option<&str>,
+) -> GameplayRejection {
+    GameplayRejection {
+        code,
+        context: RejectionContext {
+            route_id: route_id.map(str::to_string),
+            node_id: node_id.map(str::to_string),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn route_not_found(route_id: &str) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::RouteNotFound,
+        context: RejectionContext {
+            route_id: Some(route_id.to_string()),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn stale_revision(route_id: &str, expected: u32, actual: u32) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::RouteChangedWhileEditing,
+        context: RejectionContext {
+            route_id: Some(route_id.to_string()),
+            expected_revision: Some(expected),
+            actual_revision: Some(actual),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn route_view(snapshot: &GameSnapshot, route_id: &str) -> Option<RouteView> {
+    if let Some(route) = snapshot
+        .transit
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+    {
+        return Some(RouteView {
+            mode: TransitMode::Bus,
+            waypoint_ids: route.stop_ids.clone(),
+            revision: route.revision,
+            legs: route.legs.clone(),
+        });
+    }
+    snapshot
+        .transit
+        .metro_lines
+        .iter()
+        .find(|line| line.id == route_id)
+        .map(|line| RouteView {
+            mode: TransitMode::Metro,
+            waypoint_ids: line.station_ids.clone(),
+            revision: line.revision,
+            legs: line.legs.clone(),
+        })
+}
+
+fn next_route_id(snapshot: &GameSnapshot, mode: TransitMode) -> String {
+    match mode {
+        TransitMode::Bus => next_entity_id(
+            "route",
+            snapshot.transit.routes.iter().map(|route| route.id.clone()),
+        ),
+        TransitMode::Metro => next_entity_id(
+            "metro",
+            snapshot
+                .transit
+                .metro_lines
+                .iter()
+                .map(|line| line.id.clone()),
+        ),
+        TransitMode::Walk => unreachable!("walk route rejected during validation"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_route(
+    snapshot: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: String,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+    legs: Vec<RouteLegPath>,
+    vehicle_id: String,
+) {
+    let number = route_id
+        .rsplit('-')
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    match mode {
+        TransitMode::Bus => snapshot.transit.routes.push(Route {
+            id: route_id,
+            name: format!("Bus {number}"),
+            color: "#e04f39".to_string(),
+            stop_ids: waypoint_ids,
+            vehicle_ids: vec![vehicle_id],
+            active: true,
+            pattern,
+            revision: 0,
+            legs,
+            path_broken: false,
+        }),
+        TransitMode::Metro => snapshot.transit.metro_lines.push(MetroLine {
+            id: route_id,
+            name: format!("Metro {number}"),
+            color: "#2867b2".to_string(),
+            station_ids: waypoint_ids,
+            vehicle_ids: vec![vehicle_id],
+            active: true,
+            pattern,
+            revision: 0,
+            legs,
+            path_broken: false,
+        }),
+        TransitMode::Walk => unreachable!("walk route rejected during validation"),
+    }
+}
+
+fn write_structural_route_fields(
+    snapshot: &mut GameSnapshot,
+    route_id: &str,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+    legs: Vec<RouteLegPath>,
+    revision: u32,
+) {
+    let path_broken = legs
+        .iter()
+        .any(|leg| leg.status != RouteLegStatus::Connected);
+    if let Some(route) = snapshot
+        .transit
+        .routes
+        .iter_mut()
+        .find(|route| route.id == route_id)
+    {
+        route.pattern = pattern;
+        route.stop_ids = waypoint_ids;
+        route.legs = legs;
+        route.path_broken = path_broken;
+        route.revision = revision;
+        return;
+    }
+    if let Some(line) = snapshot
+        .transit
+        .metro_lines
+        .iter_mut()
+        .find(|line| line.id == route_id)
+    {
+        line.pattern = pattern;
+        line.station_ids = waypoint_ids;
+        line.legs = legs;
+        line.path_broken = path_broken;
+        line.revision = revision;
+    }
+}

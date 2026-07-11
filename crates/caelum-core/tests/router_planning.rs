@@ -1,4 +1,6 @@
-use caelum_core::model::{GameSnapshot, TransitMode, TransitNodeStatus, TransitPath};
+use caelum_core::model::{
+    GameSnapshot, ServicePattern, TransitMode, TransitNodeStatus, TransitPath,
+};
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -26,8 +28,10 @@ fn bus_route_state() -> GameEngine {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine
 }
@@ -134,8 +138,10 @@ fn creates_metro_route_plan_from_connected_stations() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
 
     let plan = router::find_route_plan(&engine.snapshot(), &(1, 4).into(), &(13, 4).into())

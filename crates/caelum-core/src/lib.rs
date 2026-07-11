@@ -37,6 +37,7 @@ pub mod preview;
 pub mod rejection;
 pub mod road;
 pub mod road_topology;
+pub mod route_editor;
 pub mod route_lifecycle;
 pub mod router;
 pub mod scenario;

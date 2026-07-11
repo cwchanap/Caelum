@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, TransitMode, TripPurpose,
-    TripStatus,
+    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
+    TripPurpose, TripStatus,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoutingContext};
@@ -24,20 +24,16 @@ fn bus_route_vehicle_carries_commute_trip() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    let route = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied);
     assert!(!route.snapshot.transit.routes[0].path_broken);
+    assert_eq!(route.snapshot.transit.vehicles.len(), 1);
 
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
-    });
-    assert!(vehicle.applied);
-    assert_eq!(vehicle.snapshot.transit.vehicles.len(), 1);
-
-    let mut snapshot = vehicle.snapshot;
+    let mut snapshot = route.snapshot;
     snapshot.active_trips.push(ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -114,8 +110,10 @@ fn removing_road_marks_route_broken() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -136,8 +134,10 @@ fn routing_ignores_a_route_with_any_disconnected_leg() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    let route = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let mut state = route.snapshot;
     state.transit.routes[0].path_broken = false;

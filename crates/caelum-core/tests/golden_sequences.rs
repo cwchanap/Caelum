@@ -1,4 +1,4 @@
-use caelum_core::model::{MetricsState, WorkerProfile};
+use caelum_core::model::{MetricsState, ServicePattern, TransitMode, WorkerProfile};
 use caelum_core::{clock, transit, trips, GameEngine, GameIntent};
 
 #[test]
@@ -204,19 +204,14 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (3, 4).into(),
     });
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
-    let assigned = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "metro".to_string(),
-        line_id: "metro-001".to_string(),
-    });
-    assert!(
-        assigned.applied,
-        "vehicle should assign on a connected line"
-    );
+    assert!(created.applied, "connected route should create its vehicle");
 
-    let mut state = assigned.snapshot;
+    let mut state = created.snapshot;
     state.paused = false;
 
     // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
@@ -257,14 +252,13 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
         engine.dispatch(GameIntent::AddMetroStation {
             point: (3, 4).into(),
         });
-        engine.dispatch(GameIntent::AddMetroLine {
-            station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        let created = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Metro,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
         });
-        let assigned = engine.dispatch(GameIntent::AssignVehicle {
-            mode: "metro".to_string(),
-            line_id: "metro-001".to_string(),
-        });
-        let mut state = assigned.snapshot;
+        assert!(created.applied, "connected route should create its vehicle");
+        let mut state = created.snapshot;
         state.paused = false;
         state
     };

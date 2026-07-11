@@ -42,8 +42,10 @@ fn existing_route_engine() -> GameEngine {
     let mut engine = editable_network_engine();
     dispatch(
         &mut engine,
-        GameIntent::AddBusRoute {
-            stop_ids: ids(&["stop-001", "stop-002"]),
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: ids(&["stop-001", "stop-002"]),
         },
     );
     engine
@@ -72,8 +74,10 @@ fn preview_and_committed_route_use_identical_leg_paths() {
     assert_eq!(preview.generation, 9);
     assert!(preview.rejection.is_none(), "{preview:?}");
 
-    let committed = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: request.waypoint_ids,
+    let committed = engine.dispatch(GameIntent::CreateRoute {
+        mode: request.mode,
+        pattern: request.pattern,
+        waypoint_ids: request.waypoint_ids,
     });
     assert_eq!(newest_route(&committed.snapshot).legs, preview.legs);
 }
@@ -230,8 +234,10 @@ fn alternate_path_engine() -> GameEngine {
     }
     dispatch(
         &mut engine,
-        GameIntent::AddBusRoute {
-            stop_ids: ids(&["stop-001", "stop-002"]),
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: ids(&["stop-001", "stop-002"]),
         },
     );
     engine

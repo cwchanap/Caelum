@@ -1,4 +1,4 @@
-use caelum_core::model::MetricsState;
+use caelum_core::model::{MetricsState, ServicePattern, TransitMode};
 use caelum_core::{GameEngine, GameIntent, RejectionCode};
 
 fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
@@ -61,12 +61,16 @@ fn transit_intents_use_camel_case_json_fields() {
         }),
     );
     assert_intent_json(
-        GameIntent::AddMetroLine {
-            station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        GameIntent::CreateRoute {
+            mode: TransitMode::Metro,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
         },
         serde_json::json!({
-            "type": "addMetroLine",
-            "stationIds": ["station-001", "station-002"]
+            "type": "createRoute",
+            "mode": "metro",
+            "pattern": "loop",
+            "waypointIds": ["station-001", "station-002"]
         }),
     );
     assert_intent_json(

@@ -1,5 +1,5 @@
-use crate::model::{BusStopKind, GameSnapshot, Point, TransitNodeStatus};
-use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
+use crate::model::{BusStopKind, GameSnapshot, Point, TransitMode, TransitNodeStatus};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogicalNodeKind {
@@ -10,6 +10,54 @@ pub enum LogicalNodeKind {
 
 pub fn is_present_node(status: TransitNodeStatus) -> bool {
     status == TransitNodeStatus::Present
+}
+
+pub fn validate_present_compatible_node(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    node_id: &str,
+    route_id: Option<&str>,
+) -> GameplayResult<()> {
+    let compatible = match mode {
+        TransitMode::Bus => snapshot
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == node_id)
+            .is_some_and(|stop| is_present_node(stop.status)),
+        TransitMode::Metro => snapshot
+            .transit
+            .stations
+            .iter()
+            .find(|station| station.id == node_id)
+            .is_some_and(|station| is_present_node(station.status)),
+        TransitMode::Walk => false,
+    };
+    if compatible {
+        return Ok(());
+    }
+
+    let other_mode_exists = match mode {
+        TransitMode::Bus => snapshot
+            .transit
+            .stations
+            .iter()
+            .any(|station| station.id == node_id),
+        TransitMode::Metro => snapshot.transit.stops.iter().any(|stop| stop.id == node_id),
+        TransitMode::Walk => true,
+    };
+    Err(GameplayRejection {
+        code: if other_mode_exists {
+            RejectionCode::IncompatibleRouteNode
+        } else {
+            RejectionCode::MissingRouteNode
+        },
+        context: RejectionContext {
+            route_id: route_id.map(str::to_string),
+            node_id: Some(node_id.to_string()),
+            ..RejectionContext::default()
+        },
+    })
 }
 
 pub fn canonical_node_anchor(snapshot: &GameSnapshot, clicked: Point) -> Option<Point> {

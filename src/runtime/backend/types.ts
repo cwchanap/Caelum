@@ -90,8 +90,19 @@ export type GameIntent =
   | { type: "removeAtTiles"; points: Point[] }
   | { type: "addBusStop"; point: Point }
   | { type: "addMetroStation"; point: Point }
-  | { type: "addBusRoute"; stopIds: string[] }
-  | { type: "addMetroLine"; stationIds: string[] }
+  | {
+      type: "createRoute";
+      mode: "bus" | "metro";
+      pattern: ServicePattern;
+      waypointIds: string[];
+    }
+  | {
+      type: "updateRoute";
+      routeId: string;
+      expectedRevision: number;
+      pattern: ServicePattern;
+      waypointIds: string[];
+    }
   | { type: "setRouteActive"; routeId: string; active: boolean }
   | { type: "renameRoute"; routeId: string; name: string }
   | { type: "recolorRoute"; routeId: string; color: string }
