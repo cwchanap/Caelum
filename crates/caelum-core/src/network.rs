@@ -13,25 +13,20 @@ pub fn find_track_path(map: &GameMap, from: &Point, to: &Point) -> Option<Transi
 
 pub fn compute_route_segments(
     map: &GameMap,
+    road_topology: &RoadTopology,
     anchors: &[Point],
     mode: TransitMode,
 ) -> Vec<Vec<Point>> {
     if anchors.len() < 2 {
         return Vec::new();
     }
-    let road_topology = (mode == TransitMode::Bus)
-        .then(|| RoadTopology::compile(map).ok())
-        .flatten();
-
     anchors
         .iter()
         .enumerate()
         .map(|(index, from)| {
             let to = &anchors[(index + 1) % anchors.len()];
             let path = match mode {
-                TransitMode::Bus => road_topology
-                    .as_ref()
-                    .and_then(|topology| topology.find_path(map, from, to)),
+                TransitMode::Bus => road_topology.find_path(map, from, to),
                 TransitMode::Metro => find_track_path(map, from, to),
                 TransitMode::Walk => None,
             };

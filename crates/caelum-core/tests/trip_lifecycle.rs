@@ -3,8 +3,9 @@ use caelum_core::model::{
     TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
     WorkerProfile,
 };
+use caelum_core::road_topology::RoadTopology;
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
-use caelum_core::{GameEngine, GameIntent};
+use caelum_core::{GameEngine, GameIntent, RoutingContext};
 
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
@@ -1703,7 +1704,14 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
     waiting.patience_remaining = 70.0;
     state.active_trips = vec![waiting];
 
-    let next = trips::tick_trips_with_objectives(&state, 70.0);
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let next = trips::tick_trips_with_objectives(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        70.0,
+    );
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1752,7 +1760,14 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
     // before Trip A's patience expiry at t=61s. Without the aggregate boundary
     // the crossing is missed and the loss is never detected.
-    let next = trips::tick_trips_with_objectives(&state, 200.0);
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let next = trips::tick_trips_with_objectives(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        200.0,
+    );
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1789,7 +1804,14 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
     // outcomes), then the tick advances 390s past the 300s rolling window. By
     // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
     // start = 100s). Without per-substep evaluation, the loss is missed.
-    let next = trips::tick_trips_with_objectives(&state, 400.0);
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let next = trips::tick_trips_with_objectives(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        400.0,
+    );
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(

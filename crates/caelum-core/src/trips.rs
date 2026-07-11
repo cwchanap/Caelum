@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
+use crate::engine::RoutingContext;
 use crate::model::{
     ActiveTrip, GameSnapshot, Metrics, MetricsState, Point, RoutePlan, Sim, TransitMode,
     TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, WorkerProfile,
@@ -14,6 +15,18 @@ const WALK_SECONDS_PER_TILE: f64 = 20.0;
 pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
+
+fn plan_route(
+    state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan> {
+    context.map_or_else(
+        || router::find_route_plan(state, origin, destination),
+        |context| crate::commute::plan_route(state, context, origin, destination),
+    )
+}
 
 /// Boundaries per sim per day: outbound spawn + outbound resolution + return
 /// spawn + return resolution, plus headroom for the walk-leg / patience /
@@ -40,7 +53,7 @@ struct TripMetricDelta {
 }
 
 pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    tick_trips_substepped(state, delta_seconds, |_| false)
+    tick_trips_substepped(state, None, delta_seconds, |_| false)
 }
 
 /// Like [`tick_trips`] but evaluates objectives after every substep and stops the
@@ -55,8 +68,12 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 /// evaluation makes a coarse tick equivalent to a sequence of stepped ticks for
 /// objective detection, preserving the determinism/granularity-independence
 /// invariant.
-pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    tick_trips_substepped(state, delta_seconds, |next| {
+pub fn tick_trips_with_objectives(
+    state: &GameSnapshot,
+    context: RoutingContext<'_>,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    tick_trips_substepped(state, Some(context), delta_seconds, |next| {
         let evaluated = objectives::evaluate_objectives(next);
         *next = evaluated;
         next.metrics.state != MetricsState::Running
@@ -65,6 +82,7 @@ pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> G
 
 fn tick_trips_substepped(
     state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
     delta_seconds: f64,
     mut on_substep: impl FnMut(&mut GameSnapshot) -> bool,
 ) -> GameSnapshot {
@@ -108,7 +126,7 @@ fn tick_trips_substepped(
         reset_daily_commute_flags(&mut next);
         spawn_due_commute_trips(&mut next);
 
-        let substep_end = next_boundary_after(&next)
+        let substep_end = next_boundary_after(&next, context)
             .map(|boundary| boundary.min(final_time))
             .unwrap_or(final_time);
         let substep_delta = (substep_end - next.time).max(0.0);
@@ -116,7 +134,7 @@ fn tick_trips_substepped(
             break;
         }
 
-        next = advance_tick_substep(&next, substep_delta);
+        next = advance_tick_substep(&next, context, substep_delta);
         steps += 1;
         if on_substep(&mut next) {
             early_termination = true;
@@ -197,16 +215,24 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
         .saturating_add(1)
 }
 
-fn advance_tick_substep(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+fn advance_tick_substep(
+    state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
+    delta_seconds: f64,
+) -> GameSnapshot {
     let mut next = state.clone();
     next.time += delta_seconds;
     sync_clock(&mut next);
     reset_daily_commute_flags(&mut next);
 
-    let vehicle_state = transit::tick_vehicles(&next, delta_seconds);
+    let vehicle_state = context.map_or_else(
+        || transit::tick_vehicles_without_context(&next, delta_seconds),
+        |context| transit::tick_vehicles(&next, context, delta_seconds),
+    );
     let just_disembarked_trip_ids = just_disembarked_trip_ids(&next, &vehicle_state);
     advance_active_trips_with_zero_delta_ids(
         &vehicle_state,
+        context,
         delta_seconds,
         &just_disembarked_trip_ids,
     )
@@ -218,11 +244,12 @@ fn sync_clock(state: &mut GameSnapshot) {
 }
 
 pub fn advance_active_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    advance_active_trips_with_zero_delta_ids(state, delta_seconds, &HashSet::new())
+    advance_active_trips_with_zero_delta_ids(state, None, delta_seconds, &HashSet::new())
 }
 
 fn advance_active_trips_with_zero_delta_ids(
     state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
     delta_seconds: f64,
     zero_delta_trip_ids: &HashSet<String>,
 ) -> GameSnapshot {
@@ -235,7 +262,13 @@ fn advance_active_trips_with_zero_delta_ids(
             delta_seconds
         };
         let tick_start_time = (state.time - trip_delta_seconds).max(0.0);
-        results.push(tick_trip(state, trip, trip_delta_seconds, tick_start_time));
+        results.push(tick_trip(
+            state,
+            context,
+            trip,
+            trip_delta_seconds,
+            tick_start_time,
+        ));
     }
 
     let metric_delta = TripMetricDelta {
@@ -454,7 +487,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
     }
 }
 
-fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
+fn next_boundary_after(state: &GameSnapshot, context: Option<RoutingContext<'_>>) -> Option<f64> {
     let after = state.time + EPSILON;
     let mut next = None;
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
@@ -497,7 +530,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     }
 
     for trip in &state.active_trips {
-        track_active_trip_boundary(&mut next, state, trip, after);
+        track_active_trip_boundary(&mut next, state, context, trip, after);
     }
 
     track_aggregate_wait_boundary(&mut next, state, after);
@@ -559,6 +592,7 @@ fn track_aggregate_wait_boundary(next: &mut Option<f64>, state: &GameSnapshot, a
 fn track_active_trip_boundary(
     next: &mut Option<f64>,
     state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
     trip: &ActiveTrip,
     after: f64,
 ) {
@@ -571,7 +605,7 @@ fn track_active_trip_boundary(
 
     let route_plan = if trip.route_plan.is_none() || trip.status == TripStatus::Riding {
         let snapped_origin = snap_position_to_point(&trip.position);
-        router::find_route_plan(state, &snapped_origin, &trip.destination)
+        plan_route(state, context, &snapped_origin, &trip.destination)
     } else {
         trip.route_plan.clone()
     };
@@ -729,6 +763,7 @@ fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
 
 fn tick_trip(
     state: &GameSnapshot,
+    context: Option<RoutingContext<'_>>,
     trip: &ActiveTrip,
     delta_seconds: f64,
     tick_start_time: f64,
@@ -754,7 +789,7 @@ fn tick_trip(
     if route_plan.is_none() {
         let snapped_origin = snap_position_to_point(&next_trip.position);
         let Some(planned_route) =
-            router::find_route_plan(state, &snapped_origin, &next_trip.destination)
+            plan_route(state, context, &snapped_origin, &next_trip.destination)
         else {
             return TripTickResult {
                 trip: mark_unserved(next_trip),

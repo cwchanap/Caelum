@@ -1,3 +1,4 @@
+use crate::engine::RoutingContext;
 use crate::model::{GameSnapshot, Point, RouteLeg, RoutePlan, TransitMode};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 
@@ -95,6 +96,15 @@ pub fn find_route_plan(
     }
 
     best_candidate(candidates)
+}
+
+pub fn plan_route(
+    state: &GameSnapshot,
+    _context: RoutingContext<'_>,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan> {
+    find_route_plan(state, origin, destination)
 }
 
 fn active_services(state: &GameSnapshot) -> Vec<TransitService> {

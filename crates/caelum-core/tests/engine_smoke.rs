@@ -162,6 +162,15 @@ fn new_engine_exposes_initial_snapshot() {
 }
 
 #[test]
+fn serialized_snapshot_does_not_include_the_engine_topology_cache() {
+    let engine = GameEngine::new();
+    let value = serde_json::to_value(engine.snapshot()).expect("snapshot should serialize");
+
+    assert!(value.get("roadTopology").is_none());
+    assert!(value.get("road_topology").is_none());
+}
+
+#[test]
 fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
     let mut engine = GameEngine::new();
     let before = engine.snapshot();

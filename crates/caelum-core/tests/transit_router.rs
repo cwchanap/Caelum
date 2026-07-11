@@ -1,5 +1,6 @@
 use caelum_core::model::{ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus};
-use caelum_core::{transit, GameEngine, GameIntent};
+use caelum_core::road_topology::RoadTopology;
+use caelum_core::{transit, GameEngine, GameIntent, RoutingContext};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -56,7 +57,14 @@ fn bus_route_vehicle_carries_commute_trip() {
         patience_remaining: 30.0,
     });
 
-    let boarded = transit::tick_vehicles(&snapshot, 0.0);
+    let topology = RoadTopology::compile(&snapshot.map).unwrap();
+    let boarded = transit::tick_vehicles(
+        &snapshot,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        0.0,
+    );
     assert!(boarded.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
@@ -67,7 +75,13 @@ fn bus_route_vehicle_carries_commute_trip() {
         .expect("trip should remain after boarding");
     assert_eq!(boarded_trip.status, TripStatus::Riding);
 
-    let arrived = transit::tick_vehicles(&boarded, 20.0);
+    let arrived = transit::tick_vehicles(
+        &boarded,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        20.0,
+    );
     assert!(!arrived.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));

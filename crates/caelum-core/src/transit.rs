@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::commute::trip_deadline_seconds;
+use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
     TripPosition, TripPurpose, TripStatus, Vehicle,
 };
-use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::{apply_road_mutation, RoadMutation};
@@ -75,7 +75,7 @@ pub fn lay_track(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnap
     let mut next = state.clone();
     next.budget -= TRACK_COST;
     set_tile_track(&mut next.map, point, true);
-    Ok(recompute_route_paths(&next))
+    Ok(next)
 }
 
 pub fn lay_road_line(
@@ -115,7 +115,7 @@ pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<
             points[0],
         ));
     }
-    Ok(recompute_route_paths(&next))
+    Ok(next)
 }
 
 pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
@@ -331,19 +331,6 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> GameplayRes
     let route_number = entity_number_from_id("route", &route_id);
     let distinct_stop_ids = distinct_ids(&stop_ids);
     let active = distinct_valid_stop_count(state, &stop_ids) >= 2;
-    let stop_position_by_id: HashMap<String, Point> = state
-        .transit
-        .stops
-        .iter()
-        .map(|stop| (stop.id.clone(), stop.position))
-        .collect();
-    let (_, segments, ids_missing) = resolve_line_segments(
-        &state.map,
-        &stop_ids,
-        &stop_position_by_id,
-        TransitMode::Bus,
-    );
-
     if active {
         next.transit.stops =
             assign_route_to_least_loaded(&next.transit.stops, &distinct_stop_ids, &route_id);
@@ -356,8 +343,8 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> GameplayRes
         stop_ids,
         vehicle_ids: Vec::new(),
         active,
-        path_broken: ids_missing || has_broken_segment(&segments),
-        segments,
+        path_broken: false,
+        segments: Vec::new(),
     });
 
     Ok(next)
@@ -375,19 +362,6 @@ pub fn add_metro_line(
     let line_number = entity_number_from_id("metro", &line_id);
     let distinct_station_ids = distinct_ids(&station_ids);
     let active = distinct_valid_station_count(state, &station_ids) >= 2;
-    let station_position_by_id: HashMap<String, Point> = state
-        .transit
-        .stations
-        .iter()
-        .map(|station| (station.id.clone(), station.position))
-        .collect();
-    let (_, segments, ids_missing) = resolve_line_segments(
-        &state.map,
-        &station_ids,
-        &station_position_by_id,
-        TransitMode::Metro,
-    );
-
     if active {
         next.transit.stations =
             assign_route_to_least_loaded(&next.transit.stations, &distinct_station_ids, &line_id);
@@ -400,8 +374,8 @@ pub fn add_metro_line(
         station_ids,
         vehicle_ids: Vec::new(),
         active,
-        path_broken: ids_missing || has_broken_segment(&segments),
-        segments,
+        path_broken: false,
+        segments: Vec::new(),
     });
 
     Ok(next)
@@ -502,7 +476,18 @@ pub fn assign_vehicle(
 /// "commit only when changed" discipline and is a deliberate "more correct" choice;
 /// a WASM/Tauri consumer must not assume `tick_vehicles` yields a fresh allocation
 /// every call.
-pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+pub fn tick_vehicles(
+    state: &GameSnapshot,
+    _context: RoutingContext<'_>,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    tick_vehicles_without_context(state, delta_seconds)
+}
+
+pub(crate) fn tick_vehicles_without_context(
+    state: &GameSnapshot,
+    delta_seconds: f64,
+) -> GameSnapshot {
     let mut active_trips = state.active_trips.clone();
     let mut occupied_passenger_ids: HashSet<String> = state
         .transit
@@ -798,56 +783,6 @@ pub fn assign_route_to_platform(
     ))
 }
 
-pub fn recompute_route_paths(state: &GameSnapshot) -> GameSnapshot {
-    let stop_position_by_id: HashMap<String, Point> = state
-        .transit
-        .stops
-        .iter()
-        .map(|stop| (stop.id.clone(), stop.position))
-        .collect();
-    let station_position_by_id: HashMap<String, Point> = state
-        .transit
-        .stations
-        .iter()
-        .map(|station| (station.id.clone(), station.position))
-        .collect();
-    let mut next = state.clone();
-
-    for route_index in 0..next.transit.routes.len() {
-        let route = next.transit.routes[route_index].clone();
-        let (positions, segments, ids_missing) = resolve_line_segments(
-            &state.map,
-            &route.stop_ids,
-            &stop_position_by_id,
-            TransitMode::Bus,
-        );
-        let path_broken = ids_missing || has_broken_segment(&segments);
-        if path_broken && !route.path_broken {
-            park_vehicles_and_invalidate_trips(&mut next, &route.id, &positions);
-        }
-        next.transit.routes[route_index].segments = segments;
-        next.transit.routes[route_index].path_broken = path_broken;
-    }
-
-    for line_index in 0..next.transit.metro_lines.len() {
-        let line = next.transit.metro_lines[line_index].clone();
-        let (positions, segments, ids_missing) = resolve_line_segments(
-            &state.map,
-            &line.station_ids,
-            &station_position_by_id,
-            TransitMode::Metro,
-        );
-        let path_broken = ids_missing || has_broken_segment(&segments);
-        if path_broken && !line.path_broken {
-            park_vehicles_and_invalidate_trips(&mut next, &line.id, &positions);
-        }
-        next.transit.metro_lines[line_index].segments = segments;
-        next.transit.metro_lines[line_index].path_broken = path_broken;
-    }
-
-    next
-}
-
 pub fn stop_coverage_radius(kind: &str) -> u8 {
     if kind == "busTerminal" {
         4
@@ -867,7 +802,7 @@ fn remove_infrastructure_at_tile(
     let mut next = state.clone();
     if tile.has_track {
         set_tile_track(&mut next.map, point, false);
-        return Ok(recompute_route_paths(&next));
+        return Ok(next);
     }
     if tile.kind == "road" {
         return apply_road_mutation(state, &RoadMutation::RemoveAtTile { point: *point })
@@ -986,25 +921,6 @@ fn cleanup_removed_destination_references(
             .passenger_ids
             .retain(|passenger_id| !invalidated_trip_ids.contains(passenger_id));
     }
-}
-
-fn resolve_line_segments(
-    map: &GameMap,
-    ids: &[String],
-    position_by_id: &HashMap<String, Point>,
-    mode: TransitMode,
-) -> (Vec<Point>, Vec<Vec<Point>>, bool) {
-    let positions: Vec<Point> = ids
-        .iter()
-        .filter_map(|id| position_by_id.get(id).cloned())
-        .collect();
-    let ids_missing = positions.len() != ids.len();
-    let segments = if ids_missing {
-        Vec::new()
-    } else {
-        compute_route_segments(map, &positions, mode)
-    };
-    (positions, segments, ids_missing)
 }
 
 fn distinct_valid_stop_count(state: &GameSnapshot, stop_ids: &[String]) -> usize {
@@ -1156,7 +1072,7 @@ impl PlatformNode for crate::model::Station {
     }
 }
 
-fn park_vehicles_and_invalidate_trips(
+pub(crate) fn park_vehicles_and_invalidate_trips(
     state: &mut GameSnapshot,
     line_id: &str,
     positions: &[Point],

@@ -36,13 +36,14 @@ pub mod platforms;
 pub mod rejection;
 pub mod road;
 pub mod road_topology;
+pub mod route_lifecycle;
 pub mod router;
 pub mod scenario;
 pub mod state;
 pub mod transit;
 pub mod trips;
 
-pub use engine::GameEngine;
+pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
 pub use model::GameSnapshot;
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};

@@ -1,4 +1,15 @@
-use crate::model::WorkerProfile;
+use crate::engine::RoutingContext;
+use crate::model::{GameSnapshot, Point, RoutePlan, WorkerProfile};
+use crate::router;
+
+pub fn plan_route(
+    state: &GameSnapshot,
+    context: RoutingContext<'_>,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan> {
+    router::plan_route(state, context, origin, destination)
+}
 
 pub fn numeric_id_suffix(id: &str) -> usize {
     id.rsplit_once('-')

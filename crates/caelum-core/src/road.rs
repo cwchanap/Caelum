@@ -66,7 +66,6 @@ pub fn apply_road_mutation(
     )?;
     refresh_automatic_junctions(&mut candidate.map, &changed_tiles)?;
     canonicalize_authored_roads(&mut candidate.map);
-    candidate = crate::transit::recompute_route_paths(&candidate);
     Ok(RoadMutationResult {
         snapshot: candidate,
         changed_tiles,
