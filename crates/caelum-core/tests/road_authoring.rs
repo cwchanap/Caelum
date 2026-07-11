@@ -258,7 +258,7 @@ fn single_point_road_connects_only_neighbor_endpoints() {
         apply_road_mutation(&state, &RoadMutation::LayRoad { point: point(5, 5) }).unwrap();
     assert_eq!(
         tile(&result.snapshot, point(5, 5)).road_connections,
-        vec![Heading::West, Heading::East]
+        vec![Heading::East, Heading::West]
     );
     assert!(tile(&result.snapshot, point(5, 6))
         .road_connections

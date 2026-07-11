@@ -723,9 +723,9 @@ fn heading_key(heading: Heading) -> &'static str {
 fn road_connection_rank(heading: Heading) -> u8 {
     match heading {
         Heading::North => 0,
-        Heading::West => 1,
-        Heading::East => 2,
-        Heading::South => 3,
+        Heading::East => 1,
+        Heading::South => 2,
+        Heading::West => 3,
     }
 }
 
