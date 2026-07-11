@@ -4,7 +4,10 @@ import { renderBuildings } from "./buildingRenderer";
 import { renderCitizens } from "./citizenRenderer";
 import { renderCursorBadge } from "./cursorBadge";
 import { renderMap } from "./mapRenderer";
-import { renderOverlays } from "./overlayRenderer";
+import {
+  renderOverlays,
+  renderRouteDraftHandleOverlay,
+} from "./overlayRenderer";
 import { renderTransit } from "./transitRenderer";
 
 export const tileSize = 32;
@@ -115,6 +118,7 @@ export function renderGame(
   renderOverlays(ctx, state, ui);
   renderTransit(ctx, state, ui);
   renderCitizens(ctx, state);
+  renderRouteDraftHandleOverlay(ctx, state, ui);
   ctx.restore();
 
   renderCursorBadge(ctx, state, ui, transform);

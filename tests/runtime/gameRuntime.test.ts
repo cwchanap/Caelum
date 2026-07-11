@@ -819,7 +819,7 @@ describe("Game Runtime", () => {
 
     expect(runtime.getSnapshot().ui.routeDraft?.generation).toBe(3);
     expect(runtime.getSnapshot().ui.routeDraft?.preview?.generation).toBe(3);
-    expect(runtime.getSnapshot().shell.routeDraft?.canFinish).toBe(true);
+    expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
   });
 
   it("suppresses a response from an older draft instance with the same generation", async () => {
@@ -838,7 +838,7 @@ describe("Game Runtime", () => {
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 1, y: 1 });
     const firstInstance = runtime.getSnapshot().ui.routeDraft?.instanceId;
-    runtime.cancelRoute();
+    runtime.cancelRouteDraft();
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 1, y: 1 });
     const secondInstance = runtime.getSnapshot().ui.routeDraft?.instanceId;
@@ -1527,6 +1527,40 @@ describe("route creation and management", () => {
     });
   });
 
+  it("selects a retained missing draft handle without changing or previewing the draft", async () => {
+    const initial = routeSnapshotWithRoute();
+    const missing = {
+      ...initial,
+      transit: {
+        ...initial.transit,
+        stops: initial.transit.stops.map((node) =>
+          node.id === "stop-002"
+            ? { ...node, status: "missing" as const }
+            : node,
+        ),
+      },
+    };
+    const base = backendSpy(missing);
+    const previewRoute = vi.fn(async (request) =>
+      routePreview(request.generation, request.waypointIds),
+    );
+    const runtime = await createGameRuntime({
+      backend: { ...base, previewRoute },
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const before = runtime.getSnapshot().ui.routeDraft;
+
+    runtime.handleTileClick({ x: 14, y: 8 });
+
+    expect(runtime.getSnapshot().ui.routeDraft).toMatchObject({
+      waypointIds: before?.waypointIds,
+      generation: before?.generation,
+      selectedIndex: 1,
+    });
+    expect(previewRoute).toHaveBeenCalledTimes(1);
+  });
+
   it("applies editor transforms immediately and re-requests Rust previews", async () => {
     const base = backendSpy(routeSnapshotWithRoute());
     const previewRoute = vi.fn(async (request) =>
@@ -1913,14 +1947,14 @@ describe("route creation and management", () => {
     );
   });
 
-  it("routes the legacy Finish action through the pattern-aware Save flow", async () => {
+  it("routes Save through the selected service pattern", async () => {
     const backend = connectedRouteBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
     await flushPromises();
     runtime.setRoutePattern("shuttle");
     await flushPromises();
 
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(backend.intents).toContainEqual({
       type: "createRoute",
@@ -1930,7 +1964,7 @@ describe("route creation and management", () => {
     });
   });
 
-  it("dispatches route finish and clears the draft only after Rust accepts it", async () => {
+  it("dispatches route save and clears the draft only after Rust accepts it", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
     expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
@@ -1939,13 +1973,13 @@ describe("route creation and management", () => {
     ]);
 
     backend.rejectNextDispatch();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
     expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
 
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(backend.intents).toContainEqual({
       type: "createRoute",
@@ -1956,11 +1990,11 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
   });
 
-  it("legacy Finish UI now sends one atomic createRoute intent", async () => {
+  it("Save sends one atomic createRoute intent", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
 
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(backend.intents).toEqual([
       {
@@ -1982,7 +2016,7 @@ describe("route creation and management", () => {
     const { runtime } = await withTwoStops(backend);
 
     backend.rejectNextDispatch();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(backend.intents.some((i) => i.type === "assignVehicle")).toBe(false);
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
@@ -1992,10 +2026,10 @@ describe("route creation and management", () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
 
-    const firstFinish = runtime.finishRoute();
+    const firstFinish = runtime.saveRouteDraft();
     await Promise.resolve();
 
-    runtime.cancelRoute();
+    runtime.cancelRouteDraft();
     runtime.setTool("busRoute");
     await runtime.handleTileClick({ x: 14, y: 7 });
     await runtime.handleTileClick({ x: 14, y: 8 });
@@ -2025,7 +2059,7 @@ describe("route creation and management", () => {
     runtime.handleTileClick({ x: 14, y: 7 });
     runtime.handleTileClick({ x: 14, y: 8 });
     await flushPromises();
-    const finishPromise = runtime.finishRoute();
+    const finishPromise = runtime.saveRouteDraft();
 
     // The queued state changes after preview. Runtime must still dispatch the
     // submitted intent so Rust recomputes and accepts/rejects authoritatively.
@@ -2058,7 +2092,7 @@ describe("route creation and management", () => {
     };
     const { runtime } = await withTwoStops(backend);
 
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(
       backend.intents.some((intent) => intent.type === "assignVehicle"),
@@ -2066,7 +2100,7 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
-  it("does not duplicate a route on a concurrent double-finishRoute", async () => {
+  it("does not duplicate a route on concurrent Saves", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
 
@@ -2074,8 +2108,8 @@ describe("route creation and management", () => {
     // resolves. The second closure must bail when it sees the draft was
     // cleared by the first — no duplicate route, no double-charge, no second
     // vehicle.
-    const first = runtime.finishRoute();
-    const second = runtime.finishRoute();
+    const first = runtime.saveRouteDraft();
+    const second = runtime.saveRouteDraft();
     await Promise.all([first, second]);
 
     const createRouteCount = backend.intents.filter(
@@ -2086,13 +2120,13 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
   });
 
-  it("deduplicates a deferred Save and legacy Finish for the same draft", async () => {
+  it("deduplicates deferred Saves for the same draft", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
     await flushPromises();
 
     const save = runtime.saveRouteDraft();
-    const finish = runtime.finishRoute();
+    const finish = runtime.saveRouteDraft();
     await Promise.resolve();
 
     expect(
@@ -2105,17 +2139,18 @@ describe("route creation and management", () => {
 
   it("removes a draft stop and cancels a draft", async () => {
     const { runtime } = await withTwoStops();
-    const afterRemove = runtime.removeDraftStop(0);
+    runtime.selectRouteWaypoint(0, "replace");
+    const afterRemove = runtime.removeRouteWaypoint();
     expect(afterRemove.ui.routeDraft?.waypointIds).toEqual(["stop-002"]);
     expect(afterRemove.ui.routeDraft?.preview).toBeNull();
 
-    const afterCancel = runtime.cancelRoute();
+    const afterCancel = runtime.cancelRouteDraft();
     expect(afterCancel.ui.routeDraft).toBeNull();
   });
 
   it("renames, recolors, toggles, selects, and deletes a route", async () => {
     const { runtime } = await withTwoStops();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
 
     expect(
       (await runtime.renameRoute("route-001", "Loop")).state.transit.routes[0]
@@ -2157,7 +2192,7 @@ describe("route creation and management", () => {
 
   it("clears the selected route when switching tools", async () => {
     const { runtime } = await withTwoStops();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
     runtime.selectRoute("route-001");
     expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
   });
@@ -2177,7 +2212,7 @@ describe("route creation and management", () => {
 
   it("clears the selected route when it is deleted", async () => {
     const { runtime } = await withTwoStops();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
     runtime.selectRoute("route-001");
     const snapshot = await runtime.deleteRoute("route-001");
     expect(snapshot.ui.selectedRouteId).toBe(null);
@@ -2667,17 +2702,17 @@ describe("fake backend applyIntent coverage", () => {
     });
   });
 
-  it("finishRoute is a no-op when the active tool is not a route tool", async () => {
+  it("saveRouteDraft is a no-op when the active tool is not a route tool", async () => {
     const runtime = await createGameRuntime({ backend: backendSpy() });
     runtime.setTool("inspect");
     const before = runtime.getSnapshot();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
     const after = runtime.getSnapshot();
     expect(after.state).toBe(before.state);
     expect(after.ui).toBe(before.ui);
   });
 
-  it("finishRoute defers one-way closing validation to Rust", async () => {
+  it("saveRouteDraft defers one-way closing validation to Rust", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({ backend });
     // Build a one-way road so the closing loop can't path back.
@@ -2694,7 +2729,7 @@ describe("fake backend applyIntent coverage", () => {
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.handleTileClick({ x: 15, y: 8 });
     await flushPromises();
-    await runtime.finishRoute();
+    await runtime.saveRouteDraft();
     const after = runtime.getSnapshot();
     expect(backend.intents).toContainEqual({
       type: "createRoute",

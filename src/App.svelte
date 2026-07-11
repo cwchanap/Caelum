@@ -5,8 +5,9 @@
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
   import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
-  import type { AreaKind, Overlay, Tool } from "./domain/types";
+  import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
+    RouteDraft,
     RuntimeCommandResult,
     RuntimeController,
     RuntimeSnapshot,
@@ -128,21 +129,60 @@
     }
   }
 
-  function handleRemoveDraftStop(index: number): void {
+  function handleSelectRouteWaypoint(
+    index: number | null,
+    interaction: RouteDraft["interaction"],
+  ): void {
     if (runtime !== null) {
-      setSnapshot(runtime.removeDraftStop(index));
+      setSnapshot(runtime.selectRouteWaypoint(index, interaction));
     }
   }
 
-  function handleFinishRoute(): void {
+  function handleRemoveRouteWaypoint(): void {
     if (runtime !== null) {
-      void applyRuntimeResult(() => runtime.finishRoute());
+      setSnapshot(runtime.removeRouteWaypoint());
     }
   }
 
-  function handleCancelRoute(): void {
+  function handleMoveRouteWaypoint(delta: -1 | 1): void {
     if (runtime !== null) {
-      setSnapshot(runtime.cancelRoute());
+      setSnapshot(runtime.moveRouteWaypoint(delta));
+    }
+  }
+
+  function handleReverseRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.reverseRouteDraft());
+    }
+  }
+
+  function handleSetRoutePattern(pattern: ServicePattern): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.setRoutePattern(pattern));
+    }
+  }
+
+  function handleSaveRouteDraft(): void {
+    if (runtime !== null) {
+      void applyRuntimeResult(() => runtime.saveRouteDraft());
+    }
+  }
+
+  function handleCancelRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.cancelRouteDraft());
+    }
+  }
+
+  function handleReloadRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.reloadRouteDraft());
+    }
+  }
+
+  function handleStartRouteEdit(routeId: string): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.startRouteEdit(routeId));
     }
   }
 
@@ -217,7 +257,7 @@
       if (snapshot !== null && !snapshot.shell.hud.canCancel) {
         return;
       }
-      setSnapshot(runtime.resetUi());
+      setSnapshot(runtime.handleEscape());
       return;
     }
 
@@ -373,9 +413,15 @@
         onSelectBuildItem={handleSelectBuildItem}
         onSetOverlay={handleSetOverlay}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
-        onRemoveDraftStop={handleRemoveDraftStop}
-        onFinishRoute={handleFinishRoute}
-        onCancelRoute={handleCancelRoute}
+        onSelectRouteWaypoint={handleSelectRouteWaypoint}
+        onRemoveRouteWaypoint={handleRemoveRouteWaypoint}
+        onMoveRouteWaypoint={handleMoveRouteWaypoint}
+        onReverseRouteDraft={handleReverseRouteDraft}
+        onSetRoutePattern={handleSetRoutePattern}
+        onSaveRouteDraft={handleSaveRouteDraft}
+        onCancelRouteDraft={handleCancelRouteDraft}
+        onReloadRouteDraft={handleReloadRouteDraft}
+        onStartRouteEdit={handleStartRouteEdit}
         onRenameRoute={handleRenameRoute}
         onRecolorRoute={handleRecolorRoute}
         onToggleRouteActive={handleToggleRouteActive}

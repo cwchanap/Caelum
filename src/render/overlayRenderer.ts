@@ -13,6 +13,8 @@ import type {
   AuthoredRoadTilePreview,
   RoadMutationPreviewResponse,
 } from "../runtime/backend/types";
+import { selectRouteEditorView } from "../runtime/runtimeSelectors";
+import type { RouteEditorView } from "../runtime/types";
 import {
   BUILDING_CATALOG,
   getBuildingFootprint,
@@ -389,6 +391,74 @@ function transitNode(state: GameState, nodeId: string) {
   return (
     state.transit.stops.find((node) => node.id === nodeId) ??
     state.transit.stations.find((node) => node.id === nodeId)
+  );
+}
+
+function drawNumberedHandle(
+  ctx: CanvasRenderingContext2D,
+  position: TripPosition,
+  number: number,
+  options: { selected: boolean; missing: boolean },
+): void {
+  const x = position.x * tileSize + tileSize / 2;
+  const y = position.y * tileSize + tileSize / 2;
+  const radius = options.selected ? 12 : 10;
+  ctx.save();
+  ctx.setLineDash(options.missing ? [4, 3] : []);
+  ctx.lineWidth = options.selected ? 4 : 2;
+  ctx.strokeStyle = options.missing ? colors.unserved : colors.badgeText;
+  ctx.fillStyle = colors.badgeBackground;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  if (options.missing) {
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y - 6);
+    ctx.lineTo(x + 6, y + 6);
+    ctx.moveTo(x + 6, y - 6);
+    ctx.lineTo(x - 6, y + 6);
+    ctx.stroke();
+  }
+  ctx.font = "bold 11px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = colors.badgeText;
+  ctx.fillText(String(number), x, y);
+  ctx.restore();
+}
+
+export function renderRouteDraftHandles(
+  ctx: CanvasRenderingContext2D,
+  editor: RouteEditorView,
+  nodePositions: ReadonlyMap<string, TripPosition>,
+): void {
+  for (const waypoint of editor.waypoints) {
+    const position = nodePositions.get(waypoint.id);
+    if (!position) continue;
+    drawNumberedHandle(ctx, position, waypoint.index + 1, {
+      selected: waypoint.selected,
+      missing: waypoint.status === "missing",
+    });
+  }
+}
+
+export function renderRouteDraftHandleOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  const routeEditor = selectRouteEditorView(state, ui, null);
+  if (routeEditor === null) return;
+  renderRouteDraftHandles(
+    ctx,
+    routeEditor,
+    new Map(
+      [...state.transit.stops, ...state.transit.stations].map((node) => [
+        node.id,
+        node.position,
+      ]),
+    ),
   );
 }
 

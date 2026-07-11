@@ -1,11 +1,72 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import HudDrawer from "../../src/components/hud/HudDrawer.svelte";
+import RouteEditor from "../../src/components/hud/panels/RouteEditor.svelte";
 import type {
+  RouteEditorView,
   ShellBriefState,
   ShellInspectorState,
   ShellRouteListState,
 } from "../../src/runtime/types";
+
+function createDraftView(
+  overrides: Partial<RouteEditorView> = {},
+): RouteEditorView {
+  return {
+    source: "create",
+    title: "New Bus Route",
+    mode: "bus",
+    pattern: "loop",
+    waypoints: [
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: true,
+      },
+      {
+        id: "stop-002",
+        index: 1,
+        label: "Stop B",
+        status: "present",
+        selected: false,
+      },
+    ],
+    selectedIndex: 0,
+    interaction: "replace",
+    previewPending: false,
+    previewStatus: "connected",
+    previewMessage: "Connected",
+    canSave: true,
+    canReload: false,
+    ...overrides,
+  };
+}
+
+function editDraftView(
+  overrides: Partial<RouteEditorView> = {},
+): RouteEditorView {
+  return createDraftView({
+    source: "edit",
+    title: "Editing Route 1",
+    ...overrides,
+  });
+}
+
+function editorProps(editor: RouteEditorView) {
+  return {
+    editor,
+    onSelectWaypoint: vi.fn(),
+    onRemove: vi.fn(),
+    onMove: vi.fn(),
+    onReverse: vi.fn(),
+    onPattern: vi.fn(),
+    onSave: vi.fn(),
+    onCancel: vi.fn(),
+    onReload: vi.fn(),
+  };
+}
 
 const brief: ShellBriefState = {
   title: "Scenario",
@@ -62,9 +123,15 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     onSelectBuildItem: vi.fn(),
     onSetOverlay: vi.fn(),
     onAssignRouteToPlatform: vi.fn(),
-    onRemoveDraftStop: vi.fn(),
-    onFinishRoute: vi.fn(),
-    onCancelRoute: vi.fn(),
+    onSelectRouteWaypoint: vi.fn(),
+    onRemoveRouteWaypoint: vi.fn(),
+    onMoveRouteWaypoint: vi.fn(),
+    onReverseRouteDraft: vi.fn(),
+    onSetRoutePattern: vi.fn(),
+    onSaveRouteDraft: vi.fn(),
+    onCancelRouteDraft: vi.fn(),
+    onReloadRouteDraft: vi.fn(),
+    onStartRouteEdit: vi.fn(),
     onRenameRoute: vi.fn(),
     onRecolorRoute: vi.fn(),
     onToggleRouteActive: vi.fn(),
@@ -186,5 +253,48 @@ describe("HudDrawer panel routing", () => {
     const drawer = screen.getByTestId("hud-drawer");
     expect(drawer).toHaveAttribute("aria-hidden", "false");
     expect((drawer as HTMLElement).inert).toBe(false);
+  });
+});
+
+describe("RouteEditor", () => {
+  it("renders the same editor controls for creation and committed edits", async () => {
+    const { rerender } = render(RouteEditor, {
+      props: editorProps(createDraftView()),
+    });
+    for (const name of [
+      "Loop",
+      "Shuttle",
+      "Replace",
+      "Insert after",
+      "Move up",
+      "Move down",
+      "Reverse",
+      "Remove",
+      "Save route",
+      "Cancel",
+    ]) {
+      expect(
+        screen.getByRole(
+          name === "Loop" || name === "Shuttle" ? "radio" : "button",
+          { name },
+        ),
+      ).toBeVisible();
+    }
+
+    await rerender(editorProps(editDraftView()));
+    expect(screen.getByText("Editing Route 1")).toBeVisible();
+    expect(
+      screen.getByText("Saved service stays live until Save."),
+    ).toBeVisible();
+  });
+
+  it("offers Reload after a stale revision and keeps Cancel available", () => {
+    render(RouteEditor, {
+      props: editorProps(editDraftView({ canReload: true })),
+    });
+    expect(
+      screen.getByRole("button", { name: "Reload saved route" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
   });
 });

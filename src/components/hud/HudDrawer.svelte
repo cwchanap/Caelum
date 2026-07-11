@@ -5,12 +5,14 @@
     BuildingType,
     Overlay,
     RoadPreset,
+    ServicePattern,
     Tool,
   } from "../../domain/types";
   import type {
     ShellBriefState,
     ShellInspectorState,
-    ShellRouteDraftState,
+    RouteDraft,
+    RouteEditorView,
     ShellRouteListState,
   } from "../../runtime/types";
   import type { HudCategory } from "../../ui/uiState";
@@ -25,6 +27,7 @@
   import DataPanel from "./panels/DataPanel.svelte";
   import BriefPanel from "./panels/BriefPanel.svelte";
   import InspectPanel from "./panels/InspectPanel.svelte";
+  import RouteEditor from "./panels/RouteEditor.svelte";
 
   interface Props {
     category: HudCategory | null;
@@ -37,7 +40,7 @@
     roadPreset: RoadPreset;
     buildCategory: BuildCategoryId | null;
     inspector: ShellInspectorState | null;
-    routeDraft: ShellRouteDraftState | null;
+    routeDraft: RouteEditorView | null;
     routes: ShellRouteListState;
     onCloseDrawer: () => void;
     onSetTool: (tool: Tool) => void;
@@ -51,9 +54,18 @@
       routeId: string,
       platformId: string,
     ) => void;
-    onRemoveDraftStop: (index: number) => void;
-    onFinishRoute: () => void;
-    onCancelRoute: () => void;
+    onSelectRouteWaypoint: (
+      index: number | null,
+      interaction: RouteDraft["interaction"],
+    ) => void;
+    onRemoveRouteWaypoint: () => void;
+    onMoveRouteWaypoint: (delta: -1 | 1) => void;
+    onReverseRouteDraft: () => void;
+    onSetRoutePattern: (pattern: ServicePattern) => void;
+    onSaveRouteDraft: () => void;
+    onCancelRouteDraft: () => void;
+    onReloadRouteDraft: () => void;
+    onStartRouteEdit: (routeId: string) => void;
     onRenameRoute: (routeId: string, name: string) => void;
     onRecolorRoute: (routeId: string, color: string) => void;
     onToggleRouteActive: (routeId: string) => void;
@@ -120,20 +132,40 @@
         selectedBuilding={p.selectedBuilding}
         routeDraft={p.routeDraft}
         onSetTool={p.onSetTool}
-        onRemoveDraftStop={p.onRemoveDraftStop}
-        onFinishRoute={p.onFinishRoute}
-        onCancelRoute={p.onCancelRoute}
+        onSelectWaypoint={p.onSelectRouteWaypoint}
+        onRemove={p.onRemoveRouteWaypoint}
+        onMove={p.onMoveRouteWaypoint}
+        onReverse={p.onReverseRouteDraft}
+        onPattern={p.onSetRoutePattern}
+        onSave={p.onSaveRouteDraft}
+        onCancel={p.onCancelRouteDraft}
+        onReload={p.onReloadRouteDraft}
       />
     {:else if p.category === "manage"}
-      <ManagePanel
-        routes={p.routes}
-        onRenameRoute={p.onRenameRoute}
-        onRecolorRoute={p.onRecolorRoute}
-        onToggleRouteActive={p.onToggleRouteActive}
-        onDeleteRoute={p.onDeleteRoute}
-        onSelectRoute={p.onSelectRoute}
-        onFocusRouteFailure={p.onFocusRouteFailure}
-      />
+      {#if p.routeDraft?.source === "edit"}
+        <RouteEditor
+          editor={p.routeDraft}
+          onSelectWaypoint={p.onSelectRouteWaypoint}
+          onRemove={p.onRemoveRouteWaypoint}
+          onMove={p.onMoveRouteWaypoint}
+          onReverse={p.onReverseRouteDraft}
+          onPattern={p.onSetRoutePattern}
+          onSave={p.onSaveRouteDraft}
+          onCancel={p.onCancelRouteDraft}
+          onReload={p.onReloadRouteDraft}
+        />
+      {:else}
+        <ManagePanel
+          routes={p.routes}
+          onRenameRoute={p.onRenameRoute}
+          onRecolorRoute={p.onRecolorRoute}
+          onToggleRouteActive={p.onToggleRouteActive}
+          onDeleteRoute={p.onDeleteRoute}
+          onSelectRoute={p.onSelectRoute}
+          onFocusRouteFailure={p.onFocusRouteFailure}
+          onEditRoute={p.onStartRouteEdit}
+        />
+      {/if}
     {:else if p.category === "data"}
       <DataPanel
         activeOverlay={p.activeOverlay}

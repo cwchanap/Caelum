@@ -10,6 +10,7 @@
     onDeleteRoute: (routeId: string) => void;
     onSelectRoute: (routeId: string | null) => void;
     onFocusRouteFailure: (routeId: string, legIndex: number) => void;
+    onEditRoute: (routeId: string) => void;
   }
 
   let {
@@ -20,6 +21,7 @@
     onDeleteRoute,
     onSelectRoute,
     onFocusRouteFailure,
+    onEditRoute,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -166,6 +168,14 @@
               </ul>
             {/if}
             <div class="route-item-controls">
+              <button
+                type="button"
+                class="route-edit"
+                aria-label={`Edit ${route.name}`}
+                onclick={() => onEditRoute(route.id)}
+              >
+                Edit {route.name}
+              </button>
               <button
                 type="button"
                 class="route-toggle"

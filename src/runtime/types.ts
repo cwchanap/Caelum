@@ -9,6 +9,7 @@ import type {
   RoadStructure,
   ServicePattern,
   Tool,
+  TransitMode,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
@@ -86,19 +87,26 @@ export interface ShellInspectorState {
   platforms: ShellPlatform[];
 }
 
-export interface ShellRouteDraftStop {
+export interface RouteEditorWaypointView {
+  id: string;
   index: number;
   label: string;
-  coord: string;
+  status: "present" | "missing";
+  selected: boolean;
 }
 
-export interface ShellRouteDraftState {
-  mode: "bus" | "metro";
-  stops: ShellRouteDraftStop[];
-  distinctCount: number;
-  vehicleCost: number;
-  canFinish: boolean;
-  finishHint: string;
+export interface RouteEditorView {
+  source: "create" | "edit";
+  title: string;
+  mode: TransitMode;
+  pattern: ServicePattern;
+  waypoints: RouteEditorWaypointView[];
+  selectedIndex: number | null;
+  interaction: RouteDraft["interaction"];
+  previewPending: boolean;
+  previewStatus: "empty" | "connected" | "broken" | "rejected";
+  previewMessage: string | null;
+  canSave: boolean;
   canReload: boolean;
 }
 
@@ -150,7 +158,7 @@ export interface ShellState {
   brief: ShellBriefState;
   hud: ShellHudState;
   inspector: ShellInspectorState | null;
-  routeDraft: ShellRouteDraftState | null;
+  routeDraft: RouteEditorView | null;
   routes: ShellRouteListState;
   roadMutationPreview: RoadMutationPreviewView | null;
 }
@@ -201,9 +209,6 @@ export interface RuntimeController {
     routeId: string,
     platformId: string,
   ) => RuntimeCommandResult;
-  removeDraftStop: (index: number) => RuntimeSnapshot;
-  finishRoute: () => RuntimeCommandResult;
-  cancelRoute: () => RuntimeSnapshot;
   startRouteEdit: (routeId: string) => RuntimeSnapshot;
   selectRouteWaypoint: (
     index: number | null,

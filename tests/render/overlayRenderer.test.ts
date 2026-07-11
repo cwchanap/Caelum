@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderOverlays } from "../../src/render/overlayRenderer";
+import {
+  renderOverlays,
+  renderRouteDraftHandles,
+} from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type {
@@ -11,6 +14,7 @@ import type {
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
 import { withAreas, withTracks } from "../helpers/mapFixtures";
+import type { RouteEditorView } from "../../src/runtime/types";
 
 function fakeCtx() {
   return {
@@ -24,6 +28,92 @@ function fakeCtx() {
     globalAlpha: 1,
   } as unknown as CanvasRenderingContext2D;
 }
+
+function editDraftView(): RouteEditorView {
+  return {
+    source: "edit",
+    title: "Editing Route 1",
+    mode: "bus",
+    pattern: "loop",
+    waypoints: [
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: false,
+      },
+      {
+        id: "stop-002",
+        index: 1,
+        label: "Missing Bus Stop",
+        status: "missing",
+        selected: true,
+      },
+      {
+        id: "stop-003",
+        index: 2,
+        label: "Stop C",
+        status: "present",
+        selected: false,
+      },
+    ],
+    selectedIndex: 1,
+    interaction: "replace",
+    previewPending: false,
+    previewStatus: "broken",
+    previewMessage: "Missing Bus Stop to Stop C cannot connect",
+    canSave: true,
+    canReload: false,
+  };
+}
+
+function draftHandleContext() {
+  let status: "present" | "missing" = "present";
+  const labels: Array<{ text: string; status: "present" | "missing" }> = [];
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    arc: vi.fn(),
+    stroke: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    fill: vi.fn(),
+    setLineDash: vi.fn((dash: number[]) => {
+      status = dash.length > 0 ? "missing" : "present";
+    }),
+    fillText: vi.fn((text: string) => labels.push({ text, status })),
+    fillStyle: "",
+    strokeStyle: "",
+    lineWidth: 0,
+    font: "",
+    textAlign: "center",
+    textBaseline: "middle",
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, labels };
+}
+
+describe("route draft handles", () => {
+  it("renders numbered present and missing handles", () => {
+    const { ctx, labels } = draftHandleContext();
+    renderRouteDraftHandles(
+      ctx,
+      editDraftView(),
+      new Map([
+        ["stop-001", { x: 2, y: 3 }],
+        ["stop-002", { x: 6, y: 4 }],
+        ["stop-003", { x: 8, y: 5 }],
+      ]),
+    );
+
+    expect(labels).toEqual([
+      { text: "1", status: "present" },
+      { text: "2", status: "missing" },
+      { text: "3", status: "present" },
+    ]);
+  });
+});
 
 const stop: Stop = {
   id: "stop-001",

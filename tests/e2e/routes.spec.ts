@@ -1,10 +1,24 @@
 import { expect, test } from "@playwright/test";
+import type { MovementKind, RouteLegPath } from "../../src/domain/types";
 import {
   buildItem,
   clickMapTile,
   dragMapTiles,
   openHudCategory,
+  runtimeSnapshot,
 } from "./helpers";
+
+const TURN_ROUTE_STOPS = [
+  { x: 4, y: 10 },
+  { x: 7, y: 14 },
+] as const;
+const EXTRA_TURN_STOP = { x: 11, y: 10 } as const;
+
+function roadMovements(leg: RouteLegPath): MovementKind[] {
+  return leg.currentPath?.kind === "road"
+    ? leg.currentPath.steps.map((step) => step.movement)
+    : [];
+}
 
 // Read the live Rust-derived transit state exposed on `window` in dev mode.
 // `src/main.ts` only assigns `window.__caelumRuntime` under
@@ -71,8 +85,9 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   // the in-progress draft (stop list + finish/cancel actions).
   await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByTestId("remove-draft-stop-1").click();
-  await page.getByRole("button", { name: /finish route/i }).click();
+  await page.getByTestId("route-waypoint-1").click();
+  await page.getByRole("button", { name: "Remove" }).click();
+  await page.getByRole("button", { name: "Save route" }).click();
 
   // The route now appears in the management panel.
   await openHudCategory(page, "manage");
@@ -117,7 +132,7 @@ test("create a metro line on laid track", async ({ page }) => {
   // The Metro Line tool auto-hides the drawer; reopen it to finish the draft.
   await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: /finish route/i }).click();
+  await page.getByRole("button", { name: "Save route" }).click();
 
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("routes-panel")).toBeVisible();
@@ -150,7 +165,7 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await clickMapTile(canvas, { x: 11, y: 5 });
   await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: /finish route/i }).click();
+  await page.getByRole("button", { name: "Save route" }).click();
 
   // The route must appear AND the core must have assigned a vehicle to it.
   // This is the regression guard for the dropped `assignVehicle` step: without
@@ -175,4 +190,81 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await expect
     .poll(async () => (await clockValue.textContent())?.trim() ?? "")
     .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
+});
+
+test("turns between paired roads and edits the committed route", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await buildItem(page, "Road", "2-Lane");
+  await dragMapTiles(page, canvas, { x: 3, y: 11 }, { x: 13, y: 11 });
+  await buildItem(page, "Road", "2-Lane");
+  await dragMapTiles(page, canvas, { x: 8, y: 6 }, { x: 8, y: 15 });
+  await buildItem(page, "Bus", "Bus Stop");
+  for (const stop of [...TURN_ROUTE_STOPS, EXTRA_TURN_STOP]) {
+    await clickMapTile(canvas, stop);
+  }
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Bus Route" }).click();
+  for (const stop of TURN_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openHudCategory(page, "routes");
+  await page.getByRole("radio", { name: "Loop" }).check();
+  await page.getByRole("button", { name: "Save route" }).click();
+
+  await openHudCategory(page, "manage");
+  await page.getByRole("button", { name: /Edit Route/ }).click();
+  await page.getByTestId("route-waypoint-0").click();
+  await page.getByRole("button", { name: "Insert after" }).click();
+  await clickMapTile(canvas, EXTRA_TURN_STOP);
+  await expect(page.getByTestId("route-preview-status")).toHaveText(
+    /connected/i,
+  );
+  await page.getByRole("button", { name: "Save route" }).click();
+
+  const route = (await runtimeSnapshot(page)).state.transit.routes.at(-1)!;
+  expect(route.stopIds).toHaveLength(TURN_ROUTE_STOPS.length + 1);
+  expect(
+    route.legs
+      .flatMap(roadMovements)
+      .some((movement) => ["leftTurn", "rightTurn"].includes(movement)),
+  ).toBe(true);
+});
+
+test("rebuilds an exact-anchor missing station and repairs its routes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const first = { x: 16, y: 2 };
+  const second = { x: 20, y: 2 };
+  await buildItem(page, "Rail", "Track");
+  await dragMapTiles(page, canvas, first, second);
+  await buildItem(page, "Metro", "Metro Station");
+  await clickMapTile(canvas, first);
+  await clickMapTile(canvas, second);
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Metro Line" }).click();
+  await clickMapTile(canvas, first);
+  await clickMapTile(canvas, second);
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Save route" }).click();
+  const line = (await runtimeSnapshot(page)).state.transit.metroLines.at(-1)!;
+
+  await page.getByTestId("hud-tool-remove").click();
+  await clickMapTile(canvas, first);
+  await openHudCategory(page, "manage");
+  await expect(page.getByText(/Missing Metro Station/)).toBeVisible();
+  await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
+    "Broken",
+  );
+
+  await buildItem(page, "Metro", "Metro Station");
+  await clickMapTile(canvas, first);
+  await openHudCategory(page, "manage");
+  await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
+    "Running",
+  );
 });

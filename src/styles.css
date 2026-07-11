@@ -1012,15 +1012,52 @@ body {
   border-color: var(--cyan);
 }
 
-.route-draft {
+.route-editor {
   margin-top: 8px;
-  padding: 8px 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-left: 2px solid var(--cyan);
   background: rgba(63, 224, 197, 0.05);
 }
 
-.draft-stops {
+.route-editor-head h4,
+.route-editor-head p {
+  margin: 0;
+}
+
+.route-editor-head h4 {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 13px;
+}
+
+.route-editor-head p,
+.route-editor-empty,
+.route-preview {
+  margin: 4px 0 0;
+  color: var(--ink-mid);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.route-pattern {
+  display: flex;
+  gap: 12px;
+  margin: 10px 0;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.route-pattern legend {
+  width: 100%;
+  margin-bottom: 4px;
+  color: var(--ink-mid);
+}
+
+.route-waypoints {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1029,61 +1066,51 @@ body {
   gap: 4px;
 }
 
-.draft-stop {
+.route-waypoints button {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-}
-
-.draft-stop-label {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-mid);
+  text-align: left;
   font-family: var(--font-mono);
   font-size: 11px;
-  letter-spacing: 0.02em;
-  color: var(--ink-mid);
+  cursor: pointer;
 }
 
-.draft-stop-remove {
-  flex: none;
+.route-waypoints button.active {
+  border-color: var(--cyan);
+  color: var(--ink);
+}
+
+.route-waypoints button.missing {
+  border-style: dashed;
+  border-color: var(--red);
+}
+
+.route-waypoint-number {
+  display: inline-grid;
   width: 18px;
   height: 18px;
-  display: grid;
   place-items: center;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  background: var(--surface-raised);
-  color: var(--ink-mid);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    color 0.12s ease,
-    border-color 0.12s ease;
+  border: 1px solid currentColor;
+  border-radius: 50%;
 }
 
-.draft-stop-remove:hover {
-  color: var(--ink);
-  border-color: var(--cyan);
-}
-
-.draft-readout {
-  margin: 6px 0 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  color: var(--ink-mid);
-}
-
-.draft-actions {
+.route-edit-modes,
+.route-waypoint-actions,
+.route-editor-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 
-.draft-finish,
-.draft-cancel {
-  flex: 1;
+.route-editor button,
+.route-item-controls .route-edit {
   min-height: 30px;
   padding: 5px 10px;
   border: 1px solid var(--line);
@@ -1101,22 +1128,32 @@ body {
     color 0.15s ease;
 }
 
-.draft-finish {
+.route-editor button.active,
+.route-save {
   border-left: 2px solid var(--cyan);
 }
 
-.draft-finish:hover:not(:disabled),
-.draft-cancel:hover {
+.route-editor button:hover:not(:disabled),
+.route-item-controls .route-edit:hover {
   border-color: var(--cyan);
   background: rgba(63, 224, 197, 0.09);
 }
 
-.draft-finish:disabled {
+.route-editor button:disabled {
   cursor: not-allowed;
   border-color: rgba(154, 174, 182, 0.2);
   border-left-color: var(--ink-mid);
   background: rgba(154, 174, 182, 0.08);
   color: var(--ink-mid);
+}
+
+.route-preview--connected {
+  color: var(--cyan);
+}
+
+.route-preview--broken,
+.route-preview--rejected {
+  color: var(--red);
 }
 
 .route-list {
@@ -1289,6 +1326,7 @@ body {
   flex-wrap: wrap;
 }
 
+.route-edit,
 .route-toggle,
 .route-delete {
   min-height: 26px;

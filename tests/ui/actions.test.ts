@@ -3,6 +3,7 @@ import type { GameState, Point } from "../../src/domain/types";
 import {
   applyUiTileClick,
   cancelDraftRoute,
+  draftHandleIndexAtPoint,
   removeDraftNode,
   resolveNodeAtTile,
   resolveNodesAtTile,
@@ -307,6 +308,33 @@ describe("applyUiTileClick route drafts", () => {
     const next = cancelDraftRoute(ui);
 
     expect(next.routeDraft).toBeNull();
+  });
+});
+
+describe("draftHandleIndexAtPoint", () => {
+  it("resolves a retained missing waypoint by its exact anchor", () => {
+    let state = addTestBusStop(createTestGameState(), { x: 6, y: 4 });
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((node) => ({
+          ...node,
+          status: "missing" as const,
+        })),
+      },
+    };
+    const draft = {
+      ...createDraft("bus", 1),
+      source: {
+        kind: "edit" as const,
+        routeId: "route-001",
+        expectedRevision: 1,
+      },
+      waypointIds: ["stop-other", "stop-001"],
+    };
+
+    expect(draftHandleIndexAtPoint(draft, state, { x: 6, y: 4 })).toBe(1);
   });
 });
 

@@ -2,6 +2,21 @@ import type { Locator, Page } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import type { RuntimeSnapshot } from "../../src/runtime/types";
+
+export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
+  return page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: { getSnapshot: () => RuntimeSnapshot };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    return runtime.getSnapshot();
+  });
+}
 
 export async function openHudCategory(
   page: Page,

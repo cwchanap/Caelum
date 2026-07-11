@@ -10,7 +10,7 @@ import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
   applyUiTileClick,
-  removeDraftNode as applyRemoveDraftNode,
+  draftHandleIndexAtPoint,
 } from "../ui/actions";
 import {
   canSaveRouteDraft,
@@ -1085,6 +1085,26 @@ export async function createGameRuntime({
       return commit(state, nextUi);
     },
     handleTileClick(point) {
+      if (ui.routeDraft?.source.kind === "edit") {
+        const handleIndex = draftHandleIndexAtPoint(
+          ui.routeDraft,
+          state,
+          point,
+        );
+        if (handleIndex !== null) {
+          const routeDraft = selectWaypoint(
+            ui.routeDraft,
+            handleIndex,
+            ui.routeDraft.interaction,
+          );
+          return commit(
+            state,
+            routeDraft === ui.routeDraft
+              ? ui
+              : { ...ui, routeDraft, routePreviewError: null },
+          );
+        }
+      }
       if (
         (ui.activeTool === "inspect" && ui.selectedBuilding === null) ||
         ui.activeTool === "busRoute" ||
@@ -1175,20 +1195,6 @@ export async function createGameRuntime({
     cancelRouteDraft,
     reloadRouteDraft,
     handleEscape,
-    removeDraftStop(index) {
-      const previousDraft = ui.routeDraft;
-      const snapshot = commit(state, applyRemoveDraftNode(state, ui, index));
-      if (ui.routeDraft !== null && ui.routeDraft !== previousDraft) {
-        requestRoutePreview(ui.routeDraft);
-      }
-      return snapshot;
-    },
-    finishRoute() {
-      return saveRouteDraft();
-    },
-    cancelRoute() {
-      return cancelRouteDraft();
-    },
     renameRoute(routeId, name) {
       return enqueueDispatch({ type: "renameRoute", routeId, name });
     },
@@ -1218,7 +1224,7 @@ export async function createGameRuntime({
     deleteRoute(routeId) {
       // Only clear the selection when the backend actually applied the delete;
       // a rejected delete leaves the route in place, so its selection must
-      // survive (parity with `finishRoute`'s `applied` gate).
+      // survive (parity with route Save's `applied` gate).
       return enqueueDispatch(
         { type: "deleteRoute", routeId },
         (applied, currentUi) =>

@@ -31,6 +31,7 @@ function callbacks() {
     onDeleteRoute: vi.fn(),
     onSelectRoute: vi.fn(),
     onFocusRouteFailure: vi.fn(),
+    onEditRoute: vi.fn(),
   };
 }
 
@@ -192,5 +193,32 @@ describe("ManagePanel route controls", () => {
       screen.getByRole("button", { name: "Focus Stop B to Stop C" }),
     );
     expect(cb.onFocusRouteFailure).toHaveBeenCalledWith("route-001", 1);
+  });
+
+  it("launches Edit from a broken route", async () => {
+    const cb = callbacks();
+    render(ManagePanel, {
+      props: {
+        routes: routes([
+          {
+            status: { primary: "broken", pausedAfterRepair: false },
+            failures: [
+              {
+                legIndex: 0,
+                fromWaypointId: "stop-001",
+                toWaypointId: "stop-002",
+                fromLabel: "Stop A",
+                toLabel: "Missing Bus Stop",
+                reason: "missingNode",
+              },
+            ],
+          },
+        ]),
+        ...cb,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "Edit Bus 1" }));
+    expect(cb.onEditRoute).toHaveBeenCalledWith("route-001");
   });
 });

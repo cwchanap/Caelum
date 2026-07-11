@@ -254,19 +254,46 @@ function createRuntimeHarness(
     assignRouteToPlatform: vi.fn(
       (_nodeId: string, _routeId: string, _platformId: string) => publish(),
     ),
-    removeDraftStop: vi.fn((_index: number) => publish()),
-    finishRoute: vi.fn(() => publish()),
-    cancelRoute: vi.fn(() => publish()),
     startRouteEdit: vi.fn((_routeId: string) => publish()),
-    selectRouteWaypoint: vi.fn((_index, _interaction) => publish()),
-    removeRouteWaypoint: vi.fn(() => publish()),
+    selectRouteWaypoint: vi.fn((index, interaction) => {
+      if (ui.routeDraft !== null) {
+        ui = {
+          ...ui,
+          routeDraft: { ...ui.routeDraft, selectedIndex: index, interaction },
+        };
+      }
+      return publish();
+    }),
+    removeRouteWaypoint: vi.fn(() => {
+      if (ui.routeDraft?.selectedIndex !== null && ui.routeDraft !== null) {
+        const selectedIndex = ui.routeDraft.selectedIndex;
+        const waypointIds = ui.routeDraft.waypointIds.filter(
+          (_, index) => index !== selectedIndex,
+        );
+        ui = {
+          ...ui,
+          routeDraft: {
+            ...ui.routeDraft,
+            waypointIds,
+            selectedIndex: null,
+          },
+        };
+      }
+      return publish();
+    }),
     moveRouteWaypoint: vi.fn((_delta) => publish()),
     reverseRouteDraft: vi.fn(() => publish()),
     setRoutePattern: vi.fn((_pattern) => publish()),
     saveRouteDraft: vi.fn(async () => publish()),
     cancelRouteDraft: vi.fn(() => publish()),
     reloadRouteDraft: vi.fn(() => publish()),
-    handleEscape: vi.fn(() => publish()),
+    handleEscape: vi.fn(() => {
+      ui =
+        ui.routeDraft === null
+          ? createUiState()
+          : { ...ui, routeDraft: null, routePreviewError: null };
+      return publish();
+    }),
     renameRoute: vi.fn((_routeId: string, _name: string) => publish()),
     recolorRoute: vi.fn((_routeId: string, _color: string) => publish()),
     toggleRouteActive: vi.fn((_routeId: string) => publish()),
@@ -564,7 +591,7 @@ describe("App shell bootstrap", () => {
     expect(drawer).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("resets transient ui state when Escape is pressed", async () => {
+  it("cancels only the active route draft when Escape is pressed", async () => {
     const { runtime } = createRuntimeHarness({
       ui: {
         ...createUiState(),
@@ -580,13 +607,13 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
-      "brief",
+      "routes",
     );
-    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
-    expect(screen.getByText("—")).toBeVisible();
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("BUSROUTE");
+    expect(screen.queryByTestId("route-draft")).toBeNull();
   });
 
   it("does not reset on Escape when Cancel is disabled (bare inspect)", async () => {
@@ -608,7 +635,7 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.handleEscape).not.toHaveBeenCalled();
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
       "manage",
@@ -635,7 +662,7 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("hud-badge-overlay")).toBeNull();
   });
 
@@ -658,7 +685,7 @@ describe("App shell bootstrap", () => {
     await fireEvent.keyDown(window, { key: "Escape" });
 
     expect(runtime.cancelDrag).toHaveBeenCalledTimes(1);
-    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.handleEscape).not.toHaveBeenCalled();
     // Tool + preset survive; only the drag is dropped.
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("ROAD");
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
@@ -669,7 +696,7 @@ describe("App shell bootstrap", () => {
     // A second Escape now performs the full reset.
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
@@ -1041,7 +1068,9 @@ describe("App manage-panel route handlers", () => {
 
     await openCategory("manage");
     await fireEvent.click(
-      screen.getByRole("button", { name: "Focus Stop A to Stop B" }),
+      screen.getByRole("button", {
+        name: "Focus Stop A to Missing Bus Stop",
+      }),
     );
 
     expect(runtime.focusRouteFailure).toHaveBeenCalledWith("route-001", 0);
@@ -1062,7 +1091,7 @@ describe("App manage-panel route handlers", () => {
     expect(runtime.deleteRoute).toHaveBeenCalledWith("route-001");
   });
 
-  it("wires cancelRoute through the RoutesPanel draft-cancel button", async () => {
+  it("wires cancelRouteDraft through the shared editor Cancel button", async () => {
     const { runtime } = createRuntimeHarness({
       state: routeState(),
       ui: {
@@ -1074,14 +1103,12 @@ describe("App manage-panel route handlers", () => {
     });
     render(App, { props: { runtime } });
 
-    // The drawer is already open on "routes" via the initial UI state. The
-    // draft-cancel button ("Cancel Route") lives inside the RoutesPanel.
-    const cancelBtn = screen.getByRole("button", { name: /Cancel Route/i });
+    const cancelBtn = screen.getByRole("button", { name: "Cancel" });
     await fireEvent.click(cancelBtn);
-    expect(runtime.cancelRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.cancelRouteDraft).toHaveBeenCalledTimes(1);
   });
 
-  it("wires finishRoute through the Finish Route button during a draft", async () => {
+  it("wires saveRouteDraft through the Save route button during a draft", async () => {
     let state = routeState();
     // Add roads so the closing loop is pathable.
     state = {
@@ -1106,12 +1133,12 @@ describe("App manage-panel route handlers", () => {
     });
     render(App, { props: { runtime } });
 
-    const finishBtn = screen.getByRole("button", { name: /Finish Route/i });
+    const finishBtn = screen.getByRole("button", { name: "Save route" });
     await fireEvent.click(finishBtn);
-    expect(runtime.finishRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.saveRouteDraft).toHaveBeenCalledTimes(1);
   });
 
-  it("wires removeDraftStop through the draft stop list remove button", async () => {
+  it("wires selected waypoint removal through the shared editor", async () => {
     const { runtime } = createRuntimeHarness({
       state: routeState(),
       ui: {
@@ -1123,10 +1150,13 @@ describe("App manage-panel route handlers", () => {
     });
     render(App, { props: { runtime } });
 
-    // The routes drawer renders the draft stop list with per-stop remove
-    // buttons. The test id is `remove-draft-stop-${index}`.
-    const removeBtn = screen.getByTestId("remove-draft-stop-1");
-    await fireEvent.click(removeBtn);
-    expect(runtime.removeDraftStop).toHaveBeenCalledWith(1);
+    await fireEvent.click(screen.getByTestId("route-waypoint-1"));
+    expect(runtime.selectRouteWaypoint).toHaveBeenCalledWith(1, "append");
+    await fireEvent.click(
+      within(screen.getByTestId("route-draft")).getByRole("button", {
+        name: "Remove",
+      }),
+    );
+    expect(runtime.removeRouteWaypoint).toHaveBeenCalledTimes(1);
   });
 });

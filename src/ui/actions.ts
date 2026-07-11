@@ -7,12 +7,27 @@ import {
   resolveStationAtTile,
   resolveStopAtTile,
   selectWaypoint,
+  type RouteDraft,
 } from "./routeDraft";
 import type { UiState } from "./uiState";
 
 export type ResolvedNode =
   | { kind: "stop"; node: Stop }
   | { kind: "station"; node: Station };
+
+export function draftHandleIndexAtPoint(
+  draft: RouteDraft,
+  state: GameState,
+  point: Point,
+): number | null {
+  const index = draft.waypointIds.findIndex((id) => {
+    const node =
+      state.transit.stops.find((candidate) => candidate.id === id) ??
+      state.transit.stations.find((candidate) => candidate.id === id);
+    return node?.position.x === point.x && node.position.y === point.y;
+  });
+  return index >= 0 ? index : null;
+}
 
 export function resolveNodesAtTile(
   state: GameState,

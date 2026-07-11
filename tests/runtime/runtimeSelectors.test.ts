@@ -230,7 +230,7 @@ describe("route selectors", () => {
     expect(shell.routeDraft).toBe(null);
   });
 
-  it("derives a bus draft with stop labels and a finish gate", () => {
+  it("derives a bus editor with waypoint labels and a Save gate", () => {
     const state = twoStops();
     const ui = {
       ...createUiState(),
@@ -242,21 +242,29 @@ describe("route selectors", () => {
     };
     const shell = selectShellState(state, ui);
     expect(shell.routeDraft?.mode).toBe("bus");
-    expect(shell.routeDraft?.stops).toEqual([
-      { index: 0, label: "Bus Stop", coord: "(7,8)" },
+    expect(shell.routeDraft?.waypoints).toEqual([
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: false,
+      },
     ]);
-    expect(shell.routeDraft?.canFinish).toBe(false);
-    expect(shell.routeDraft?.finishHint).toBe("Add another stop");
+    expect(shell.routeDraft?.canSave).toBe(false);
+    expect(shell.routeDraft?.previewMessage).toBe(
+      "Add at least two waypoints.",
+    );
   });
 
-  it("enables finish at two affordable stops", () => {
+  it("enables Save at two affordable stops", () => {
     const state = twoStops();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
       routeDraft: busDraft(["stop-001", "stop-002"], true),
     };
-    expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(true);
+    expect(selectShellState(state, ui).routeDraft?.canSave).toBe(true);
   });
 
   it("keeps the selector Save gate in parity with the shared predicate", () => {
@@ -268,12 +276,12 @@ describe("route selectors", () => {
       routeDraft,
     };
 
-    expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(
+    expect(selectShellState(state, ui).routeDraft?.canSave).toBe(
       canSaveRouteDraft(routeDraft),
     );
   });
 
-  it("blocks finish when unaffordable with a cost hint", () => {
+  it("blocks Save when unaffordable with a cost hint", () => {
     const state = { ...twoStops(), budget: 1_000 };
     const ui = {
       ...createUiState(),
@@ -284,8 +292,8 @@ describe("route selectors", () => {
       },
     };
     const draft = selectShellState(state, ui).routeDraft;
-    expect(draft?.canFinish).toBe(false);
-    expect(draft?.finishHint).toBe("Need $8,000");
+    expect(draft?.canSave).toBe(false);
+    expect(draft?.previewMessage).toBe("Need $8,000.");
   });
 
   it("offers Reload after a stale edit rejection", () => {
@@ -315,6 +323,61 @@ describe("route selectors", () => {
     }).routeDraft;
 
     expect(draft?.canReload).toBe(true);
+  });
+
+  it("builds an edit view that retains missing-node labels and names rejected endpoints", () => {
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((node) =>
+          node.id === "stop-002"
+            ? { ...node, status: "missing" as const }
+            : node,
+        ),
+      },
+    };
+    const preview = routePreview(["stop-001", "stop-002"]);
+    preview.legs[0] = {
+      ...preview.legs[0],
+      status: "missingNode",
+      currentPath: null,
+    };
+    preview.missingWaypointIds = ["stop-002"];
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        previewPending: false,
+        preview,
+      },
+    };
+
+    const editor = selectShellState(state, ui).routeDraft;
+    expect(editor).toMatchObject({
+      source: "edit",
+      title: "Editing Bus 1",
+      previewStatus: "broken",
+    });
+    expect(editor?.waypoints[1]).toMatchObject({
+      id: "stop-002",
+      status: "missing",
+      label: "Missing Bus Stop",
+    });
+    expect(editor?.previewMessage).toContain("Stop A");
+    expect(editor?.previewMessage).toContain("Missing Bus Stop");
   });
 
   it("lists routes and metro lines with selection state", () => {
@@ -387,7 +450,7 @@ describe("route selectors", () => {
           fromWaypointId: "stop-002",
           toWaypointId: "stop-003",
           fromLabel: "Stop B",
-          toLabel: "Stop C",
+          toLabel: "Missing Bus Stop",
           reason: "missingNode",
         },
       ],
