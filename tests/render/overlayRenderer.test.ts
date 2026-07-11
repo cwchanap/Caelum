@@ -200,8 +200,13 @@ function dragCtx() {
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn((text: string) => ({ width: text.length * 6 })),
     fillStyle: "",
     strokeStyle: "",
+    font: "",
+    textAlign: "start",
+    textBaseline: "alphabetic",
     lineWidth: 0,
     lineCap: "",
     lineJoin: "",
@@ -222,6 +227,8 @@ function recordingFillCtx() {
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn((text: string) => ({ width: text.length * 6 })),
     set fillStyle(v: string) {
       fillStyles.push(v);
     },
@@ -229,6 +236,9 @@ function recordingFillCtx() {
       return fillStyles.at(-1) ?? "";
     },
     strokeStyle: "",
+    font: "",
+    textAlign: "start",
+    textBaseline: "alphabetic",
     lineWidth: 0,
     lineCap: "",
     lineJoin: "",
@@ -330,6 +340,98 @@ describe("authoritative road mutation preview", () => {
       },
     });
     expect(ctx.fillRect).not.toHaveBeenCalled();
+    expect(ctx.fillText).not.toHaveBeenCalled();
+    expect(ctx.lineTo).not.toHaveBeenCalled();
+  });
+
+  it("draws authored road connection topology without inferring adjacency", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [
+          {
+            point: { x: 1, y: 2 },
+            oneWay: null,
+            roadConnections: ["north", "east"],
+            roadStructureId: null,
+          },
+        ],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(ctx.moveTo).toHaveBeenCalledWith(48, 80);
+    expect(ctx.lineTo).toHaveBeenCalledWith(48, 64);
+    expect(ctx.lineTo).toHaveBeenCalledWith(64, 80);
+    expect(ctx.lineTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("presents the exact authoritative road preview cost", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 375,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$375",
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it("presents stable route-impact feedback from the Rust response", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 500,
+        skippedTiles: [],
+        routeImpacts: [
+          { routeId: "route-z", kind: "broken" },
+          { routeId: "route-a", kind: "rerouted" },
+        ],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$500 · route-a rerouted · route-z broken",
+      expect.any(Number),
+      expect.any(Number),
+    );
   });
 
   it("draws direction arrows from authored preview tiles", () => {

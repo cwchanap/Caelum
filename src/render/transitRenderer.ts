@@ -117,7 +117,13 @@ export function renderTransit(
     drawLegs(ctx, line.legs, line.color, 8);
   }
 
-  const draftLegs = ui.routeDraft?.preview?.legs ?? [];
+  const draft = ui.routeDraft;
+  const draftLegs =
+    draft !== null &&
+    draft.preview !== null &&
+    draft.preview.generation === draft.generation
+      ? draft.preview.legs
+      : [];
   if (draftLegs.length >= 1) {
     ctx.save();
     ctx.setLineDash([6, 6]);

@@ -769,6 +769,33 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.routeDraft?.preview).toBeNull();
   });
 
+  it("ignores a pending route preview after the runtime stops", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [createStop("stop-0001", { x: 1, y: 1 })],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(initial);
+    const runtime = await createGameRuntime({ backend: previews.backend });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+
+    runtime.start();
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.stop();
+    listener.mockClear();
+    previews.resolveRoute(1, routePreview(1, ["stop-0001"]));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.routeDraft?.preview).toBeNull();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("runs route previews outside the gameplay dispatch queue", async () => {
     const initial = fullRustSnapshot({
       transit: {

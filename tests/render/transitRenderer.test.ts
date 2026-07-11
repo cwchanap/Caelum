@@ -96,6 +96,42 @@ describe("renderTransit highlight", () => {
     expect(mockCtx.lineTo).toHaveBeenCalled();
   });
 
+  it("does not render draft geometry from a stale preview generation", () => {
+    const context = ctx();
+    const sourceState = busState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001", "stop-002"],
+        generation: 2,
+        preview: {
+          generation: 1,
+          legs: sourceState.transit.routes[0].legs,
+          totalTravelSeconds: 1,
+          initialVehicleCost: 8_000,
+          affordable: true,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        },
+      },
+    };
+
+    renderTransit(context, createTestGameState(), ui);
+
+    expect(context.moveTo).not.toHaveBeenCalled();
+    expect(context.lineTo).not.toHaveBeenCalled();
+  });
+
   it("draws the route line through the road path tiles, not stop-to-stop", () => {
     // Stops at (7,8) and (15,4): the path runs along y=8 then up x=15, so the
     // polyline must include the corner tile (15,8) — a straight line would not.

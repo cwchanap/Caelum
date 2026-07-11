@@ -1,10 +1,15 @@
-import type {
-  ActiveTrip,
-  GameMap,
-  GameState,
-  Point,
-  Tile,
+import {
+  ROAD_DIRECTION_OFFSET,
+  type ActiveTrip,
+  type GameMap,
+  type GameState,
+  type Point,
+  type Tile,
 } from "../domain/types";
+import type {
+  AuthoredRoadTilePreview,
+  RoadMutationPreviewResponse,
+} from "../runtime/backend/types";
 import {
   BUILDING_CATALOG,
   getBuildingFootprint,
@@ -195,6 +200,77 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
+function drawAuthoredRoadConnections(
+  ctx: CanvasRenderingContext2D,
+  tile: AuthoredRoadTilePreview,
+): void {
+  const centerX = tile.point.x * tileSize + tileSize / 2;
+  const centerY = tile.point.y * tileSize + tileSize / 2;
+  for (const heading of tile.roadConnections) {
+    const offset = ROAD_DIRECTION_OFFSET[heading];
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(
+      centerX + (offset.x * tileSize) / 2,
+      centerY + (offset.y * tileSize) / 2,
+    );
+    ctx.stroke();
+  }
+}
+
+function compareRouteImpacts(
+  left: RoadMutationPreviewResponse["routeImpacts"][number],
+  right: RoadMutationPreviewResponse["routeImpacts"][number],
+): number {
+  if (left.routeId !== right.routeId) {
+    return left.routeId < right.routeId ? -1 : 1;
+  }
+  if (left.kind === right.kind) return 0;
+  return left.kind < right.kind ? -1 : 1;
+}
+
+function roadPreviewFeedback(preview: RoadMutationPreviewResponse): string {
+  const impacts = [...preview.routeImpacts]
+    .sort(compareRouteImpacts)
+    .map((impact) => `${impact.routeId} ${impact.kind}`)
+    .join(" · ");
+  const cost = `$${preview.cost.toLocaleString()}`;
+  return impacts.length === 0 ? cost : `${cost} · ${impacts}`;
+}
+
+function roadPreviewAnchor(preview: RoadMutationPreviewResponse): Point {
+  return (
+    preview.authoredTiles[0]?.point ??
+    preview.changedTiles[0] ??
+    preview.skippedTiles[0] ??
+    preview.generatedStructures[0]?.footprint[0] ?? { x: 0, y: 0 }
+  );
+}
+
+function renderRoadPreviewFeedback(
+  ctx: CanvasRenderingContext2D,
+  preview: RoadMutationPreviewResponse,
+): void {
+  const text = roadPreviewFeedback(preview);
+  const anchor = roadPreviewAnchor(preview);
+  const centerX = anchor.x * tileSize + tileSize / 2;
+  const height = 18;
+  const padding = 4;
+
+  ctx.save();
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const width = ctx.measureText(text).width + padding * 2;
+  const boxX = centerX - width / 2;
+  const boxY = Math.max(2, anchor.y * tileSize - height - 4);
+  ctx.fillStyle = colors.badgeBackground;
+  ctx.fillRect(boxX, boxY, width, height);
+  ctx.fillStyle = colors.badgeText;
+  ctx.fillText(text, centerX, boxY + height / 2);
+  ctx.restore();
+}
+
 function renderRoadMutationPreview(
   ctx: CanvasRenderingContext2D,
   ui: UiState,
@@ -230,6 +306,16 @@ function renderRoadMutationPreview(
       strokeTile(ctx, point);
     }
   }
+  if (preview.authoredTiles.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = colors.previewValidStroke;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    for (const tile of preview.authoredTiles) {
+      drawAuthoredRoadConnections(ctx, tile);
+    }
+    ctx.restore();
+  }
   const directed = preview.authoredTiles.filter((tile) => tile.oneWay !== null);
   if (directed.length > 0) {
     ctx.save();
@@ -243,6 +329,7 @@ function renderRoadMutationPreview(
     }
     ctx.restore();
   }
+  renderRoadPreviewFeedback(ctx, preview);
 }
 
 function renderDragPreview(

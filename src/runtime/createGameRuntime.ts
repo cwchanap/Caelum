@@ -201,6 +201,7 @@ export async function createGameRuntime({
   };
 
   const stop = (): void => {
+    previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
     running = false;
