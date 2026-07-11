@@ -33,6 +33,7 @@ pub mod model;
 pub mod network;
 pub mod objectives;
 pub mod platforms;
+pub mod preview;
 pub mod rejection;
 pub mod road;
 pub mod road_topology;
@@ -47,4 +48,9 @@ pub mod trips;
 pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
 pub use model::GameSnapshot;
+pub use preview::{
+    AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,
+    RoadMutationPreviewResponse, RouteImpact, RouteImpactKind, RoutePreviewRequest,
+    RoutePreviewResponse, TurnSummary, WarningCode,
+};
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};

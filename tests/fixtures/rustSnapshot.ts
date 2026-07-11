@@ -1,7 +1,10 @@
 import { tileId } from "../../src/domain/ids";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
-import type { RustGameSnapshot } from "../../src/runtime/backend/types";
+import type {
+  GameBackend,
+  RustGameSnapshot,
+} from "../../src/runtime/backend/types";
 
 // Build a full in-bounds empty grid so the default snapshot is valid on its
 // own (matching what the Rust backend returns), instead of an empty `tiles`
@@ -78,5 +81,45 @@ export function createRustSnapshot(
       growthWaves: [],
     },
     ...overrides,
+  };
+}
+
+export function previewBackendStubs(): Pick<
+  GameBackend,
+  "previewRoute" | "previewRoadMutation"
+> {
+  return {
+    async previewRoute(request) {
+      return {
+        generation: request.generation,
+        legs: [],
+        totalTravelSeconds: 0,
+        initialVehicleCost: 0,
+        affordable: true,
+        turnSummary: {
+          straight: 0,
+          rightTurn: 0,
+          leftTurn: 0,
+          uTurn: 0,
+          roundaboutEntry: 0,
+        },
+        missingWaypointIds: [],
+        warnings: [],
+        rejection: null,
+      };
+    },
+    async previewRoadMutation(request) {
+      return {
+        generation: request.generation,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      };
+    },
   };
 }

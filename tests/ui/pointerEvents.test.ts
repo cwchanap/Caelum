@@ -10,7 +10,10 @@ import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/canvas";
 import { createTestGameState } from "../helpers/gameState";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
 
 // jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
 // returns null. The runtime guards all of those, but to exercise the real
@@ -175,6 +178,7 @@ function backendSpy(): GameBackend {
   });
 
   return {
+    ...previewBackendStubs(),
     async snapshot() {
       return snapshot;
     },

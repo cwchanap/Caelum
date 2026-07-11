@@ -5,10 +5,17 @@ import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
 } from "../../src/runtime/backend/types";
 import { rejectionMessage } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
 
 describe("Rust backend contract", () => {
   it("uses structured gameplay rejections and success context", () => {
@@ -146,6 +153,7 @@ describe("Rust backend contract", () => {
     const intent: GameIntent = { type: "setPaused", paused: false };
     const snapshot = createRustSnapshot();
     const backend: GameBackend = {
+      ...previewBackendStubs(),
       snapshot: async () => snapshot,
       dispatch: async (received) => ({
         snapshot: {
@@ -179,6 +187,37 @@ describe("Rust backend contract", () => {
     await expect(backend.dispatch(intent)).resolves.toMatchObject({
       applied: true,
       snapshot: { paused: false },
+    });
+
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 7,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "layRoad", point: { x: 2, y: 2 } },
+      generation: 8,
+    };
+    expectTypeOf<GameBackend["previewRoute"]>().toEqualTypeOf<
+      (request: RoutePreviewRequest) => Promise<RoutePreviewResponse>
+    >();
+    expectTypeOf<GameBackend["previewRoadMutation"]>().toEqualTypeOf<
+      (
+        request: RoadMutationPreviewRequest,
+      ) => Promise<RoadMutationPreviewResponse>
+    >();
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: routeRequest.generation,
+      rejection: null,
+    });
+    await expect(
+      backend.previewRoadMutation(roadRequest),
+    ).resolves.toMatchObject({
+      generation: roadRequest.generation,
+      rejection: null,
     });
   });
 

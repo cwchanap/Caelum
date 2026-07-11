@@ -1,6 +1,9 @@
 use std::sync::Mutex;
 
-use caelum_core::{DispatchResult, GameEngine, GameIntent, GameSnapshot};
+use caelum_core::{
+    DispatchResult, GameEngine, GameIntent, GameSnapshot, RoadMutationPreviewRequest,
+    RoadMutationPreviewResponse, RoutePreviewRequest, RoutePreviewResponse,
+};
 use tauri::State;
 
 type EngineState = Mutex<GameEngine>;
@@ -32,6 +35,24 @@ fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
     Ok(engine.reset())
 }
 
+#[tauri::command]
+fn game_preview_route(
+    state: State<'_, EngineState>,
+    request: RoutePreviewRequest,
+) -> Result<RoutePreviewResponse, String> {
+    let engine = state.lock().map_err(|error| error.to_string())?;
+    Ok(engine.preview_route(request))
+}
+
+#[tauri::command]
+fn game_preview_road_mutation(
+    state: State<'_, EngineState>,
+    request: RoadMutationPreviewRequest,
+) -> Result<RoadMutationPreviewResponse, String> {
+    let engine = state.lock().map_err(|error| error.to_string())?;
+    Ok(engine.preview_road_mutation(request))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -40,7 +61,9 @@ pub fn run() {
             game_snapshot,
             game_dispatch,
             game_tick,
-            game_reset
+            game_reset,
+            game_preview_route,
+            game_preview_road_mutation
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

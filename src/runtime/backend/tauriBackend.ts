@@ -5,6 +5,10 @@ import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
   RustGameSnapshot,
 } from "./types";
 
@@ -25,6 +29,14 @@ export async function createTauriBackend(): Promise<GameBackend> {
     },
     async reset() {
       return invoke<RustGameSnapshot>("game_reset");
+    },
+    async previewRoute(request: RoutePreviewRequest) {
+      return invoke<RoutePreviewResponse>("game_preview_route", { request });
+    },
+    async previewRoadMutation(request: RoadMutationPreviewRequest) {
+      return invoke<RoadMutationPreviewResponse>("game_preview_road_mutation", {
+        request,
+      });
     },
   };
 }

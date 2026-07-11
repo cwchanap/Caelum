@@ -1,6 +1,7 @@
 use caelum_core::model::Point;
+use caelum_core::road::RoadMutation;
 use caelum_core::road_topology::RoadTopology;
-use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -98,4 +99,24 @@ fn partial_stroke_commits_one_topology_for_the_applied_subset() {
         engine.road_topology_for_test(),
         &RoadTopology::compile(&result.snapshot.map).unwrap()
     );
+}
+
+#[test]
+fn previewed_candidate_topology_is_never_committed() {
+    let engine = GameEngine::new();
+    let before_snapshot = engine.snapshot();
+    let before_topology = engine.road_topology_for_test().clone();
+
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2), point(4, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 71,
+    });
+
+    assert!(response.rejection.is_none());
+    assert_eq!(response.changed_tiles.len(), 3);
+    assert_eq!(engine.snapshot(), before_snapshot);
+    assert_eq!(engine.road_topology_for_test(), &before_topology);
 }

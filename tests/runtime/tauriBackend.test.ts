@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DispatchResult,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoutePreviewRequest,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
@@ -148,5 +150,42 @@ describe("createTauriBackend", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("game_reset", undefined);
     expect(result).toEqual(snapshot as RustGameSnapshot);
+  });
+
+  it("invokes the immutable route and road preview commands", async () => {
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 51,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "removeAtTile", point: { x: 5, y: 5 } },
+      generation: 52,
+    };
+    invokeMock
+      .mockResolvedValueOnce({ generation: 51, rejection: null })
+      .mockResolvedValueOnce({ generation: 52, rejection: null });
+
+    const backend = await createTauriBackend();
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: 51,
+      rejection: null,
+    });
+    await expect(
+      backend.previewRoadMutation(roadRequest),
+    ).resolves.toMatchObject({ generation: 52, rejection: null });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "game_preview_route", {
+      request: routeRequest,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      2,
+      "game_preview_road_mutation",
+      {
+        request: roadRequest,
+      },
+    );
   });
 });

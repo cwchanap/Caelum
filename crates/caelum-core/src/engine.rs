@@ -2,6 +2,10 @@ use crate::areas;
 use crate::buildings;
 use crate::intent::{DispatchContext, DispatchResult, GameIntent};
 use crate::model::{GameSnapshot, Point};
+use crate::preview::{
+    self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
+    RoutePreviewResponse,
+};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
@@ -87,7 +91,7 @@ fn tile_layer_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point
     }
 }
 
-fn dispatch_context(
+pub(crate) fn dispatch_context(
     before: &GameSnapshot,
     after: &GameSnapshot,
     requested_tiles: &[Point],
@@ -199,6 +203,22 @@ impl GameEngine {
     #[doc(hidden)]
     pub fn road_topology_for_test(&self) -> &RoadTopology {
         &self.road_topology
+    }
+
+    #[doc(hidden)]
+    pub fn set_budget_for_test(&mut self, budget: i32) {
+        self.snapshot.budget = budget;
+    }
+
+    pub fn preview_route(&self, request: RoutePreviewRequest) -> RoutePreviewResponse {
+        preview::preview_route(&self.snapshot, self.routing_context(), request)
+    }
+
+    pub fn preview_road_mutation(
+        &self,
+        request: RoadMutationPreviewRequest,
+    ) -> RoadMutationPreviewResponse {
+        preview::preview_road_mutation(&self.snapshot, &self.road_topology, request)
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current

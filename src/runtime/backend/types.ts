@@ -6,9 +6,14 @@ import type {
   GameMap,
   GrowthWave,
   GameplayRejection,
+  Heading,
   PlacedBuilding,
   Point,
+  RoadStructure,
+  RouteLegPath,
+  ServicePattern,
   Sim,
+  TransitMode,
   TripOutcomeKind,
   TransitNetwork,
 } from "../../domain/types";
@@ -124,9 +129,91 @@ export interface DispatchContext {
   cost: number;
 }
 
+export type RoadMutation =
+  | { type: "layRoad"; point: Point }
+  | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
+  | { type: "cycleRoadDirection"; point: Point }
+  | { type: "removeAtTile"; point: Point }
+  | { type: "removeAtTiles"; points: Point[] };
+
+export interface RoutePreviewRequest {
+  mode: TransitMode;
+  pattern: ServicePattern;
+  waypointIds: string[];
+  routeId: string | null;
+  expectedRevision: number | null;
+  generation: number;
+}
+
+export interface TurnSummary {
+  straight: number;
+  rightTurn: number;
+  leftTurn: number;
+  uTurn: number;
+  roundaboutEntry: number;
+}
+
+export type WarningCode =
+  | "skippedTiles"
+  | "existingBrokenLeg"
+  | "routeWillReroute"
+  | "routeWillBreak";
+
+export interface GameplayWarning {
+  code: WarningCode;
+  context: GameplayRejection["context"];
+}
+
+export interface RoutePreviewResponse {
+  generation: number;
+  legs: RouteLegPath[];
+  totalTravelSeconds: number;
+  initialVehicleCost: number;
+  affordable: boolean;
+  turnSummary: TurnSummary;
+  missingWaypointIds: string[];
+  warnings: GameplayWarning[];
+  rejection: GameplayRejection | null;
+}
+
+export interface RoadMutationPreviewRequest {
+  mutation: RoadMutation;
+  generation: number;
+}
+
+export type RouteImpactKind = "rerouted" | "broken";
+
+export interface RouteImpact {
+  routeId: string;
+  kind: RouteImpactKind;
+}
+
+export interface AuthoredRoadTilePreview {
+  point: Point;
+  oneWay: Heading | null;
+  roadConnections: Heading[];
+  roadStructureId: string | null;
+}
+
+export interface RoadMutationPreviewResponse {
+  generation: number;
+  changedTiles: Point[];
+  authoredTiles: AuthoredRoadTilePreview[];
+  generatedStructures: RoadStructure[];
+  cost: number;
+  skippedTiles: Point[];
+  routeImpacts: RouteImpact[];
+  warnings: GameplayWarning[];
+  rejection: GameplayRejection | null;
+}
+
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
   dispatch(intent: GameIntent): Promise<DispatchResult>;
   tick(deltaSeconds: number): Promise<DispatchResult>;
   reset(): Promise<RustGameSnapshot>;
+  previewRoute(request: RoutePreviewRequest): Promise<RoutePreviewResponse>;
+  previewRoadMutation(
+    request: RoadMutationPreviewRequest,
+  ): Promise<RoadMutationPreviewResponse>;
 }

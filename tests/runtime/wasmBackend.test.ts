@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
+import type {
+  RoadMutationPreviewRequest,
+  RoutePreviewRequest,
+} from "../../src/runtime/backend/types";
 
 const dims = vi.hoisted(() => ({ width: 0, height: 0 }));
 
@@ -48,6 +52,18 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
     }
     reset() {
       return this.snapshot();
+    }
+    preview_route(request: RoutePreviewRequest) {
+      return {
+        generation: request.generation,
+        rejection: null,
+      };
+    }
+    preview_road_mutation(request: RoadMutationPreviewRequest) {
+      return {
+        generation: request.generation,
+        rejection: null,
+      };
     }
   }
   return { default: init, init, WasmGameEngine };
@@ -177,5 +193,29 @@ describe("createWasmBackend", () => {
     expect(resetSnapshot).toBeDefined();
     // The mock's reset() returns the current engine snapshot.
     expect(resetSnapshot.day).toBe(0);
+  });
+
+  it("forwards route and road preview requests to the WASM engine", async () => {
+    const backend = await createWasmBackend();
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 41,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "layRoad", point: { x: 4, y: 4 } },
+      generation: 42,
+    };
+
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: 41,
+      rejection: null,
+    });
+    await expect(
+      backend.previewRoadMutation(roadRequest),
+    ).resolves.toMatchObject({ generation: 42, rejection: null });
   });
 });

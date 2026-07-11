@@ -19,7 +19,10 @@ import type {
   RuntimeController,
   RuntimeSnapshot,
 } from "../../src/runtime/types";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
 import { createTestGameState } from "../helpers/gameState";
 
 const EMPTY_DISPATCH_CONTEXT = {
@@ -441,6 +444,7 @@ function deferredDispatchBackend(
   let rejectNext = false;
 
   return {
+    ...previewBackendStubs(),
     intents,
     rejectNextDispatch() {
       rejectNext = true;
@@ -512,6 +516,7 @@ function backendSpy(
   let rejectNext = false;
 
   return {
+    ...previewBackendStubs(),
     intents,
     rejectNextDispatch() {
       rejectNext = true;

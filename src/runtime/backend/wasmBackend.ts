@@ -4,6 +4,10 @@ import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
   RustGameSnapshot,
 } from "./types";
 
@@ -56,6 +60,16 @@ export async function createWasmBackend(): Promise<GameBackend> {
     },
     async reset() {
       return engine.reset() as RustGameSnapshot;
+    },
+    async previewRoute(request: RoutePreviewRequest) {
+      const response = engine.preview_route(request) as RoutePreviewResponse;
+      return { ...response, rejection: response.rejection ?? null };
+    },
+    async previewRoadMutation(request: RoadMutationPreviewRequest) {
+      const response = engine.preview_road_mutation(
+        request,
+      ) as RoadMutationPreviewResponse;
+      return { ...response, rejection: response.rejection ?? null };
     },
   };
 }

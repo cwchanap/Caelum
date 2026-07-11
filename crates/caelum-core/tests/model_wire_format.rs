@@ -10,12 +10,17 @@
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
-    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TransitPath,
-    TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServicePattern, Sim, Tile,
+    TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
+    Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
+use caelum_core::road::RoadMutation;
 use caelum_core::state::create_initial_snapshot;
-use caelum_core::{DispatchResult, GameEngine, GameIntent, RoadPreset};
+use caelum_core::{
+    DispatchResult, GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset,
+    RoutePreviewRequest,
+};
 use serde_json::json;
 
 fn point(x: i32, y: i32) -> Point {
@@ -882,4 +887,74 @@ fn scenario_config_growth_waves_defaults_to_empty_when_omitted() {
     let config: ScenarioConfig =
         serde_json::from_value(value).expect("scenario without growthWaves deserializes");
     assert!(config.growth_waves.is_empty());
+}
+
+#[test]
+fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
+    let route_request = RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+        route_id: None,
+        expected_revision: None,
+        generation: 61,
+    };
+    assert_eq!(
+        serde_json::to_value(&route_request).unwrap(),
+        json!({
+            "mode": "bus",
+            "pattern": "loop",
+            "waypointIds": ["stop-001", "stop-002"],
+            "routeId": null,
+            "expectedRevision": null,
+            "generation": 61
+        })
+    );
+
+    let road_request = RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 62,
+    };
+    assert_eq!(
+        serde_json::to_value(&road_request).unwrap(),
+        json!({
+            "mutation": {
+                "type": "layRoadLine",
+                "points": [{ "x": 2, "y": 2 }, { "x": 3, "y": 2 }],
+                "preset": "twoWay"
+            },
+            "generation": 62
+        })
+    );
+
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
+    }
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: point(10, 5),
+    });
+    let route_response = engine.preview_route(route_request);
+    let route_value = serde_json::to_value(route_response).unwrap();
+    assert_eq!(route_value["generation"], json!(61));
+    assert_eq!(route_value["rejection"], json!(null));
+    assert_eq!(route_value["initialVehicleCost"], json!(8_000));
+    assert!(route_value.get("total_travel_seconds").is_none());
+
+    let road_response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(3, 3) },
+        generation: 63,
+    });
+    let road_value = serde_json::to_value(road_response).unwrap();
+    assert_eq!(road_value["generation"], json!(63));
+    assert_eq!(road_value["rejection"], json!(null));
+    assert_eq!(road_value["authoredTiles"][0]["oneWay"], json!(null));
+    assert_eq!(
+        road_value["authoredTiles"][0]["roadStructureId"],
+        json!(null)
+    );
 }
