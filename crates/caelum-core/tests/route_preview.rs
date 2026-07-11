@@ -111,7 +111,10 @@ fn mutation_preview_reports_applied_subset_cost_and_route_impacts() {
     });
 
     assert_eq!(response.generation, 17);
-    assert_eq!(response.changed_tiles, vec![point(6, 5), point(7, 5)]);
+    assert_eq!(
+        response.changed_tiles,
+        vec![point(6, 5), point(7, 5), point(5, 5), point(8, 5)]
+    );
     assert_eq!(response.skipped_tiles, vec![point(20, 3)]);
     assert_eq!(response.cost, 0);
     assert_eq!(
@@ -120,12 +123,18 @@ fn mutation_preview_reports_applied_subset_cost_and_route_impacts() {
             .iter()
             .map(|tile| tile.point)
             .collect::<Vec<_>>(),
-        vec![point(6, 5), point(7, 5)]
+        vec![point(6, 5), point(7, 5), point(5, 5), point(8, 5)]
     );
-    assert!(response
-        .authored_tiles
-        .iter()
-        .all(|tile| tile.road_connections.is_empty()));
+    assert_eq!(response.authored_tiles[0].road_connections, vec![]);
+    assert_eq!(response.authored_tiles[1].road_connections, vec![]);
+    assert_eq!(
+        response.authored_tiles[2].road_connections,
+        vec![Heading::West]
+    );
+    assert_eq!(
+        response.authored_tiles[3].road_connections,
+        vec![Heading::East]
+    );
     assert_eq!(
         response.route_impacts,
         vec![RouteImpact {
@@ -267,7 +276,7 @@ fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
         mutation: RoadMutation::RemoveAtTile { point: point(6, 5) },
     });
     assert!(preview.rejection.is_none(), "{preview:?}");
-    assert_eq!(preview.changed_tiles.len(), 9);
+    assert_eq!(preview.changed_tiles.len(), 11);
     assert_eq!(
         preview.route_impacts,
         vec![RouteImpact {
@@ -375,6 +384,49 @@ fn edit_preview_is_free_and_rejects_stale_revision_with_full_context() {
     assert_eq!(rejection.context.actual_revision, Some(0));
 }
 
+#[test]
+fn same_mode_tombstone_is_missing_in_preview_and_commit() {
+    let mut engine = existing_route_engine();
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 5) });
+    let before = engine.snapshot();
+    let route = newest_route(&before).clone();
+    assert_eq!(
+        before.transit.stops[0].status,
+        caelum_core::model::TransitNodeStatus::Missing
+    );
+
+    let preview = engine.preview_route(RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: route.pattern,
+        waypoint_ids: route.stop_ids.clone(),
+        route_id: Some(route.id.clone()),
+        expected_revision: Some(route.revision),
+        generation: 82,
+    });
+
+    assert_eq!(preview.missing_waypoint_ids, vec!["stop-001"]);
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::MissingRouteNode)
+    );
+
+    let committed = engine.dispatch(GameIntent::UpdateRoute {
+        route_id: route.id,
+        expected_revision: route.revision,
+        pattern: route.pattern,
+        waypoint_ids: route.stop_ids,
+    });
+    assert!(!committed.applied);
+    assert_eq!(
+        committed
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::MissingRouteNode)
+    );
+    assert_eq!(committed.snapshot, before);
+}
+
 fn alternate_path_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     road_line(&mut engine, (2..=5).map(|x| point(x, 4)).collect());
@@ -421,7 +473,7 @@ fn road_preview_reports_generated_junction_and_stable_reroute_impact() {
 
 #[test]
 fn road_preview_preserves_candidate_connection_order() {
-    let engine = GameEngine::new();
+    let mut engine = GameEngine::new();
     let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
         mutation: RoadMutation::LayRoadLine {
             points: vec![point(2, 2), point(3, 2), point(4, 2)],
@@ -431,8 +483,86 @@ fn road_preview_preserves_candidate_connection_order() {
     });
     assert_eq!(
         response.authored_tiles[1].road_connections,
-        vec![Heading::West, Heading::East]
+        vec![Heading::East, Heading::West]
     );
+
+    let committed = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(2, 2), point(3, 2), point(4, 2)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(
+        committed
+            .snapshot
+            .map
+            .tile(point(3, 2))
+            .unwrap()
+            .road_connections,
+        response.authored_tiles[1].road_connections
+    );
+}
+
+#[test]
+fn endpoint_connection_preview_and_commit_include_the_reciprocal_neighbor() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+    );
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(4, 2) },
+        generation: 83,
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert!(preview.changed_tiles.contains(&point(3, 2)));
+    assert!(preview.changed_tiles.contains(&point(4, 2)));
+    assert!(preview
+        .authored_tiles
+        .iter()
+        .any(|tile| tile.point == point(3, 2)
+            && tile.road_connections == vec![Heading::East, Heading::West]));
+
+    let committed = engine.dispatch(GameIntent::LayRoad { point: point(4, 2) });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
+}
+
+#[test]
+fn roundabout_removal_preview_and_commit_include_reciprocal_port_neighbors() {
+    let mut engine = existing_route_engine();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    );
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 84,
+        mutation: RoadMutation::RemoveAtTile { point: point(6, 5) },
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert_eq!(preview.changed_tiles.len(), 11);
+    assert!(preview.changed_tiles.contains(&point(4, 5)));
+    assert!(preview.changed_tiles.contains(&point(8, 5)));
+
+    let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
+    for point in &preview.changed_tiles {
+        let authored = preview
+            .authored_tiles
+            .iter()
+            .find(|tile| tile.point == *point)
+            .expect("every changed map tile has an authored preview");
+        let committed_tile = committed.snapshot.map.tile(*point).unwrap();
+        assert_eq!(authored.road_connections, committed_tile.road_connections);
+    }
 }
 
 #[test]

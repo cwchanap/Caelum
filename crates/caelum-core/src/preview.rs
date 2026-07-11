@@ -13,6 +13,7 @@ use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
 use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost, roundabout_template};
 use crate::transit::{self, BUS_COST, METRO_COST};
+use crate::transit_nodes::validate_present_compatible_node;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -253,7 +254,7 @@ pub fn preview_road_mutation(
                 .map(|tile| AuthoredRoadTilePreview {
                     point: *point,
                     one_way: tile.one_way,
-                    road_connections: preview_road_connections(&tile.road_connections),
+                    road_connections: tile.road_connections.clone(),
                     road_structure_id: tile.road_structure_id.clone(),
                 })
         })
@@ -308,13 +309,6 @@ fn vehicle_cost(mode: TransitMode) -> i32 {
         TransitMode::Metro => METRO_COST,
         TransitMode::Walk => 0,
     }
-}
-
-fn preview_road_connections(connections: &[Heading]) -> Vec<Heading> {
-    if connections == [Heading::East, Heading::West] {
-        return vec![Heading::West, Heading::East];
-    }
-    connections.to_vec()
 }
 
 fn existing_route<'a>(
@@ -384,41 +378,15 @@ fn validate_waypoints(
         ));
     }
     for waypoint_id in &request.waypoint_ids {
-        let compatible = match request.mode {
-            TransitMode::Bus => snapshot
-                .transit
-                .stops
-                .iter()
-                .any(|stop| stop.id == *waypoint_id),
-            TransitMode::Metro => snapshot
-                .transit
-                .stations
-                .iter()
-                .any(|station| station.id == *waypoint_id),
-            TransitMode::Walk => false,
-        };
-        if compatible {
-            continue;
+        if let Err(mut rejection) = validate_present_compatible_node(
+            snapshot,
+            request.mode,
+            waypoint_id,
+            request.route_id.as_deref(),
+        ) {
+            rejection.context.expected_revision = request.expected_revision;
+            return Some(rejection);
         }
-        let incompatible = snapshot
-            .transit
-            .stops
-            .iter()
-            .any(|stop| stop.id == *waypoint_id)
-            || snapshot
-                .transit
-                .stations
-                .iter()
-                .any(|station| station.id == *waypoint_id);
-        return Some(route_validation_rejection(
-            if incompatible {
-                RejectionCode::IncompatibleRouteNode
-            } else {
-                RejectionCode::MissingRouteNode
-            },
-            request,
-            Some(waypoint_id),
-        ));
     }
     None
 }
@@ -444,16 +412,13 @@ fn missing_waypoint_ids(snapshot: &GameSnapshot, request: &RoutePreviewRequest) 
         .waypoint_ids
         .iter()
         .filter(|waypoint_id| {
-            !snapshot
-                .transit
-                .stops
-                .iter()
-                .any(|stop| stop.id == waypoint_id.as_str())
-                && !snapshot
-                    .transit
-                    .stations
-                    .iter()
-                    .any(|station| station.id == waypoint_id.as_str())
+            validate_present_compatible_node(
+                snapshot,
+                request.mode,
+                waypoint_id,
+                request.route_id.as_deref(),
+            )
+            .is_err_and(|rejection| rejection.code == RejectionCode::MissingRouteNode)
         })
         .cloned()
         .collect()
@@ -500,7 +465,7 @@ fn preview_network_candidate(
     snapshot: &GameSnapshot,
     mutation: &RoadMutation,
 ) -> Result<RoadMutationResult, GameplayRejection> {
-    match mutation {
+    let result = match mutation {
         RoadMutation::RemoveAtTile { point } => {
             let candidate = transit::remove_at_tile(snapshot, point)?;
             let context = dispatch_context(snapshot, &candidate, &[*point]);
@@ -525,7 +490,10 @@ fn preview_network_candidate(
         | RoadMutation::LayRoadLine { .. }
         | RoadMutation::CycleRoadDirection { .. }
         | RoadMutation::PlaceRoundabout { .. } => road::apply_road_mutation(snapshot, mutation),
-    }
+    }?;
+    Ok(crate::engine::normalize_road_mutation_result(
+        snapshot, result,
+    ))
 }
 
 fn route_impacts(

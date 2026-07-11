@@ -245,14 +245,7 @@ fn stale_revision(route_id: &str, expected: u32, actual: u32) -> GameplayRejecti
 }
 
 fn exhausted_revision(route_id: &str, actual: u32) -> GameplayRejection {
-    GameplayRejection {
-        code: RejectionCode::RouteRevisionExhausted,
-        context: RejectionContext {
-            route_id: Some(route_id.to_string()),
-            actual_revision: Some(actual),
-            ..RejectionContext::default()
-        },
-    }
+    GameplayRejection::route_revision_exhausted(route_id, actual)
 }
 
 fn route_view(snapshot: &GameSnapshot, route_id: &str) -> Option<RouteView> {

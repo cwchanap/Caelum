@@ -132,6 +132,7 @@ fn recompute_after_candidate(previous: &GameSnapshot, candidate: GameSnapshot) -
             road_topology: &topology,
         },
     )
+    .expect("fixture route revisions are available")
 }
 
 struct BrokenServiceFixture {

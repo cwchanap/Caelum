@@ -1,4 +1,4 @@
-use caelum_core::model::Point;
+use caelum_core::model::{Point, ServicePattern, TransitMode};
 use caelum_core::road::RoadMutation;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset};
@@ -117,6 +117,40 @@ fn previewed_candidate_topology_is_never_committed() {
 
     assert!(response.rejection.is_none());
     assert_eq!(response.changed_tiles.len(), 3);
+    assert_eq!(engine.snapshot(), before_snapshot);
+    assert_eq!(engine.road_topology_for_test(), &before_topology);
+}
+
+#[test]
+fn exhausted_route_revision_rejects_network_mutation_without_committing_snapshot_or_cache() {
+    let mut engine = GameEngine::new();
+    let road = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(road.applied, "{road:?}");
+    for x in [2, 10] {
+        let stop = engine.dispatch(GameIntent::AddBusStop { point: point(x, 5) });
+        assert!(stop.applied, "{stop:?}");
+    }
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+    });
+    assert!(route.applied, "{route:?}");
+    engine.set_route_revision_for_test("route-001", u32::MAX);
+    let before_snapshot = engine.snapshot();
+    let before_topology = engine.road_topology_for_test().clone();
+
+    let result = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::RouteRevisionExhausted)
+    );
+    assert_eq!(result.snapshot, before_snapshot);
     assert_eq!(engine.snapshot(), before_snapshot);
     assert_eq!(engine.road_topology_for_test(), &before_topology);
 }

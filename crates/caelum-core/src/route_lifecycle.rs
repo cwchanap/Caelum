@@ -8,6 +8,7 @@ use crate::model::{
     TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
+use crate::rejection::{GameplayRejection, GameplayResult};
 use crate::transit::invalidate_trips_for_line;
 use crate::transit_nodes::is_present_node;
 
@@ -114,17 +115,17 @@ pub fn recompute_affected_routes(
     previous: &GameSnapshot,
     mut candidate: GameSnapshot,
     context: RoutingContext<'_>,
-) -> GameSnapshot {
-    recompute_bus_routes(previous, &mut candidate, context);
-    recompute_metro_lines(previous, &mut candidate, context);
-    candidate
+) -> GameplayResult<GameSnapshot> {
+    recompute_bus_routes(previous, &mut candidate, context)?;
+    recompute_metro_lines(previous, &mut candidate, context)?;
+    Ok(candidate)
 }
 
 fn recompute_bus_routes(
     previous: &GameSnapshot,
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
-) {
+) -> GameplayResult<()> {
     for route_index in 0..candidate.transit.routes.len() {
         let route = candidate.transit.routes[route_index].clone();
         let previous_route = previous
@@ -159,7 +160,7 @@ fn recompute_bus_routes(
                 platform_assignments(&candidate.transit.stops, &route.id),
             ) {
                 candidate.transit.routes[route_index].revision =
-                    previous_route.revision.saturating_add(1);
+                    next_revision(&route.id, previous_route.revision)?;
             }
         }
 
@@ -167,13 +168,14 @@ fn recompute_bus_routes(
         candidate.transit.routes[route_index].path_broken = path_broken;
         transition_route_service(previous, candidate, TransitMode::Bus, &route.id);
     }
+    Ok(())
 }
 
 fn recompute_metro_lines(
     previous: &GameSnapshot,
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
-) {
+) -> GameplayResult<()> {
     for line_index in 0..candidate.transit.metro_lines.len() {
         let line = candidate.transit.metro_lines[line_index].clone();
         let previous_line = previous
@@ -208,7 +210,7 @@ fn recompute_metro_lines(
                 platform_assignments(&candidate.transit.stations, &line.id),
             ) {
                 candidate.transit.metro_lines[line_index].revision =
-                    previous_line.revision.saturating_add(1);
+                    next_revision(&line.id, previous_line.revision)?;
             }
         }
 
@@ -216,6 +218,13 @@ fn recompute_metro_lines(
         candidate.transit.metro_lines[line_index].path_broken = path_broken;
         transition_route_service(previous, candidate, TransitMode::Metro, &line.id);
     }
+    Ok(())
+}
+
+fn next_revision(route_id: &str, revision: u32) -> GameplayResult<u32> {
+    revision
+        .checked_add(1)
+        .ok_or_else(|| GameplayRejection::route_revision_exhausted(route_id, revision))
 }
 
 fn transition_route_service(

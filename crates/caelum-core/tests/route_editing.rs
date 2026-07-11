@@ -386,6 +386,35 @@ fn only_structural_mutations_increment_revision() {
 }
 
 #[test]
+fn exhausted_platform_revision_rejects_without_reassigning_the_platform() {
+    let mut engine = editable_metro_engine(&[2, 10], METRO_COST * 2);
+    create_route(
+        &mut engine,
+        TransitMode::Metro,
+        ServicePattern::Loop,
+        ids(&["station-001", "station-002"]),
+    );
+    engine.set_route_revision_for_test("metro-001", u32::MAX);
+    let before = engine.snapshot();
+
+    let result = engine.dispatch(GameIntent::AssignRouteToPlatform {
+        node_id: "station-001".into(),
+        route_id: "metro-001".into(),
+        platform_id: "station-001-p1".into(),
+    });
+
+    assert!(!result.applied);
+    let rejection = result
+        .rejection
+        .expect("exhausted platform revision must reject");
+    assert_eq!(rejection.code, RejectionCode::RouteRevisionExhausted);
+    assert_eq!(rejection.context.route_id.as_deref(), Some("metro-001"));
+    assert_eq!(rejection.context.actual_revision, Some(u32::MAX));
+    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
 fn only_identical_preexisting_broken_directional_legs_may_carry_forward() {
     let mut engine = editable_bus_engine(&[2, 10, 3, 12], BUS_COST);
     create_route(

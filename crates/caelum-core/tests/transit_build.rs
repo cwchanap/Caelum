@@ -184,7 +184,8 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         RoutingContext {
             road_topology: &candidate_topology,
         },
-    );
+    )
+    .expect("fixture route revisions are available");
 
     assert!(next.transit.routes[0].path_broken);
     assert_eq!(
@@ -2167,7 +2168,10 @@ fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(
+        result.context.changed_tiles,
+        vec![changed, Point { x: 2, y: 3 }, Point { x: 4, y: 3 }]
+    );
     assert_eq!(result.context.skipped_tiles, vec![skipped]);
     assert_eq!(result.context.cost, 0);
     assert_eq!(result.context.affected_route_ids, vec!["route-001"]);

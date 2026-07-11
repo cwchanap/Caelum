@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::intent::{DispatchContext, RoadPreset};
+use crate::intent::RoadPreset;
 use crate::model::{
     GameMap, GameSnapshot, Heading, Point, RoadPort, RoadStructure, RoundaboutSize, Tile,
 };
@@ -43,17 +43,6 @@ pub struct RoadMutationResult {
     pub changed_tiles: Vec<Point>,
     pub skipped_tiles: Vec<Point>,
     pub cost: i32,
-}
-
-impl RoadMutationResult {
-    pub fn dispatch_context(&self) -> DispatchContext {
-        DispatchContext {
-            changed_tiles: self.changed_tiles.clone(),
-            skipped_tiles: self.skipped_tiles.clone(),
-            affected_route_ids: Vec::new(),
-            cost: self.cost,
-        }
-    }
 }
 
 pub fn apply_road_mutation(

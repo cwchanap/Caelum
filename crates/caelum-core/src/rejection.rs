@@ -97,4 +97,15 @@ impl GameplayRejection {
             },
         }
     }
+
+    pub fn route_revision_exhausted(route_id: &str, actual_revision: u32) -> Self {
+        Self {
+            code: RejectionCode::RouteRevisionExhausted,
+            context: RejectionContext {
+                route_id: Some(route_id.to_string()),
+                actual_revision: Some(actual_revision),
+                ..RejectionContext::default()
+            },
+        }
+    }
 }

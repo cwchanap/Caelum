@@ -86,6 +86,7 @@ fn tile_layer_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point
                 || before.area != after.area
                 || before.has_track != after.has_track
                 || before.one_way != after.one_way
+                || before.road_connections != after.road_connections
                 || before.road_structure_id != after.road_structure_id
         }
         _ => before != after,
@@ -132,6 +133,19 @@ pub(crate) fn dispatch_context(
     }
 }
 
+pub(crate) fn normalize_road_mutation_result(
+    before: &GameSnapshot,
+    mut result: RoadMutationResult,
+) -> RoadMutationResult {
+    let mut requested_tiles = result.changed_tiles.clone();
+    requested_tiles.extend(result.skipped_tiles.iter().copied());
+    let context = dispatch_context(before, &result.snapshot, &requested_tiles);
+    result.changed_tiles = context.changed_tiles;
+    result.skipped_tiles = context.skipped_tiles;
+    result.cost = context.cost;
+    result
+}
+
 #[derive(Clone, Copy)]
 pub struct RoutingContext<'a> {
     pub road_topology: &'a RoadTopology,
@@ -150,8 +164,14 @@ impl NetworkCandidate {
         }
     }
 
-    pub fn from_road(result: RoadMutationResult) -> Self {
-        let context = result.dispatch_context();
+    pub fn from_road(before: &GameSnapshot, result: RoadMutationResult) -> Self {
+        let result = normalize_road_mutation_result(before, result);
+        let context = DispatchContext {
+            changed_tiles: result.changed_tiles.clone(),
+            skipped_tiles: result.skipped_tiles.clone(),
+            affected_route_ids: Vec::new(),
+            cost: result.cost,
+        };
         Self {
             snapshot: result.snapshot,
             context,
@@ -211,6 +231,29 @@ impl GameEngine {
         self.snapshot.budget = budget;
     }
 
+    #[doc(hidden)]
+    pub fn set_route_revision_for_test(&mut self, route_id: &str, revision: u32) {
+        if let Some(route) = self
+            .snapshot
+            .transit
+            .routes
+            .iter_mut()
+            .find(|route| route.id == route_id)
+        {
+            route.revision = revision;
+            return;
+        }
+        if let Some(line) = self
+            .snapshot
+            .transit
+            .metro_lines
+            .iter_mut()
+            .find(|line| line.id == route_id)
+        {
+            line.revision = revision;
+        }
+    }
+
     pub fn preview_route(&self, request: RoutePreviewRequest) -> RoutePreviewResponse {
         preview::preview_route(&self.snapshot, self.routing_context(), request)
     }
@@ -267,28 +310,28 @@ impl GameEngine {
             }
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })
-                    .map(NetworkCandidate::from_road),
+                    .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
             ),
             GameIntent::LayRoadLine { points, preset } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::LayRoadLine { points, preset },
                 )
-                .map(NetworkCandidate::from_road),
+                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
             ),
             GameIntent::CycleRoadDirection { point } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::CycleRoadDirection { point },
                 )
-                .map(NetworkCandidate::from_road),
+                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
             ),
             GameIntent::PlaceRoundabout { origin, size } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::PlaceRoundabout { origin, size },
                 )
-                .map(NetworkCandidate::from_road),
+                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
             ),
             GameIntent::LayTrack { point } => {
                 let candidate = self.network_candidate_for_tiles(
@@ -439,13 +482,16 @@ impl GameEngine {
             Ok(topology) => topology,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
-        let candidate = route_lifecycle::recompute_affected_routes(
+        let candidate = match route_lifecycle::recompute_affected_routes(
             &self.snapshot,
             network_candidate.snapshot,
             RoutingContext {
                 road_topology: &topology,
             },
-        );
+        ) {
+            Ok(candidate) => candidate,
+            Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+        };
         network_candidate.context.affected_route_ids =
             route_lifecycle::structurally_changed_route_ids(&self.snapshot, &candidate);
         self.commit_snapshot_and_topology(candidate, topology, network_candidate.context)

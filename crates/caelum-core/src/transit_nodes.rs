@@ -18,22 +18,22 @@ pub fn validate_present_compatible_node(
     node_id: &str,
     route_id: Option<&str>,
 ) -> GameplayResult<()> {
-    let compatible = match mode {
+    let compatible_status = match mode {
         TransitMode::Bus => snapshot
             .transit
             .stops
             .iter()
             .find(|stop| stop.id == node_id)
-            .is_some_and(|stop| is_present_node(stop.status)),
+            .map(|stop| stop.status),
         TransitMode::Metro => snapshot
             .transit
             .stations
             .iter()
             .find(|station| station.id == node_id)
-            .is_some_and(|station| is_present_node(station.status)),
-        TransitMode::Walk => false,
+            .map(|station| station.status),
+        TransitMode::Walk => None,
     };
-    if compatible {
+    if compatible_status.is_some_and(is_present_node) {
         return Ok(());
     }
 
@@ -47,7 +47,9 @@ pub fn validate_present_compatible_node(
         TransitMode::Walk => true,
     };
     Err(GameplayRejection {
-        code: if other_mode_exists {
+        code: if compatible_status.is_some() {
+            RejectionCode::MissingRouteNode
+        } else if other_mode_exists {
             RejectionCode::IncompatibleRouteNode
         } else {
             RejectionCode::MissingRouteNode
