@@ -919,6 +919,28 @@ describe("App shell bootstrap", () => {
       "$2,000",
     );
   });
+
+  it("surfaces a recoverable road preview host error without replacing the shell", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadMutationPreviewError: "preview host offline",
+    };
+    const { runtime } = createRuntimeHarness({ ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("game-shell")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("road-mutation-notice")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Road preview unavailable: preview host offline",
+    );
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("ROUNDABOUT");
+  });
 });
 
 describe("App hotkeys", () => {

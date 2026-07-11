@@ -11,6 +11,7 @@ use crate::network::resolve_route_legs;
 use crate::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
+use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost, roundabout_template};
 use crate::transit::{self, BUS_COST, METRO_COST};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -231,11 +232,15 @@ pub fn preview_road_mutation(
     let generation = request.generation;
     let candidate = match preview_network_candidate(snapshot, &request.mutation) {
         Ok(candidate) => candidate,
-        Err(rejection) => return rejected_road_preview(generation, rejection),
+        Err(rejection) => {
+            return rejected_road_preview(snapshot, generation, &request.mutation, rejection)
+        }
     };
     let topology = match RoadTopology::compile(&candidate.snapshot.map) {
         Ok(topology) => topology,
-        Err(rejection) => return rejected_road_preview(generation, rejection),
+        Err(rejection) => {
+            return rejected_road_preview(snapshot, generation, &request.mutation, rejection)
+        }
     };
     let authored_tiles = candidate
         .changed_tiles
@@ -604,19 +609,39 @@ fn classify_route_impact(
 }
 
 fn rejected_road_preview(
+    snapshot: &GameSnapshot,
     generation: u64,
+    mutation: &RoadMutation,
     rejection: GameplayRejection,
 ) -> RoadMutationPreviewResponse {
-    let cost = if rejection.code == RejectionCode::InsufficientBudget {
-        rejection.context.required_budget.unwrap_or(0)
-    } else {
-        0
+    let (changed_tiles, generated_structures, cost) = match mutation {
+        RoadMutation::PlaceRoundabout { origin, size } => {
+            let template = roundabout_template(*size, *origin);
+            (
+                template.footprint,
+                vec![attempted_roundabout_structure(
+                    &snapshot.map,
+                    *origin,
+                    *size,
+                )],
+                roundabout_cost(*size),
+            )
+        }
+        _ => (
+            Vec::new(),
+            Vec::new(),
+            if rejection.code == RejectionCode::InsufficientBudget {
+                rejection.context.required_budget.unwrap_or(0)
+            } else {
+                0
+            },
+        ),
     };
     RoadMutationPreviewResponse {
         generation,
-        changed_tiles: Vec::new(),
+        changed_tiles,
         authored_tiles: Vec::new(),
-        generated_structures: Vec::new(),
+        generated_structures,
         cost,
         skipped_tiles: Vec::new(),
         route_impacts: Vec::new(),

@@ -67,6 +67,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
         ? current.routePreviewError
         : null,
     roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -88,6 +89,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     routeDraft: null,
     routePreviewError: null,
     roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -112,6 +114,7 @@ function nextBuildingUiState(
     routeDraft: null,
     routePreviewError: null,
     roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -757,6 +760,7 @@ export async function createGameRuntime({
       ...ui,
       roadPreviewGeneration: generation,
       roadMutationPreview: null,
+      roadMutationPreviewError: null,
     });
     void previewCoordinator
       .requestRoadMutation({ mutation, generation })
@@ -768,10 +772,26 @@ export async function createGameRuntime({
         ) {
           return;
         }
-        commit(state, { ...ui, roadMutationPreview: response });
+        commit(state, {
+          ...ui,
+          roadMutationPreview: response,
+          roadMutationPreviewError: null,
+        });
       })
       .catch((error: unknown) => {
-        failBackend(error);
+        if (
+          dead ||
+          activeRoadMutation === null ||
+          ui.roadPreviewGeneration !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError:
+            error instanceof Error ? error.message : String(error),
+        });
       });
     return pending;
   };
@@ -1025,7 +1045,12 @@ export async function createGameRuntime({
         state,
         ui.drag === null
           ? ui
-          : { ...ui, drag: null, roadMutationPreview: null },
+          : {
+              ...ui,
+              drag: null,
+              roadMutationPreview: null,
+              roadMutationPreviewError: null,
+            },
       );
     },
     commitDrag() {
@@ -1041,7 +1066,12 @@ export async function createGameRuntime({
       // could no longer match by identity.
       const roadPreset = ui.roadPreset;
       invalidateRoadPreview();
-      commit(state, { ...ui, drag: null, roadMutationPreview: null });
+      commit(state, {
+        ...ui,
+        drag: null,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+      });
       if (gesture.tool === "area") {
         return enqueueDispatch({
           type: "paintAreaRectangle",
@@ -1157,7 +1187,11 @@ export async function createGameRuntime({
       if (ui.activeTool === "roundabout") {
         const size = ui.roundaboutSize;
         invalidateRoadPreview();
-        commit(state, { ...ui, roadMutationPreview: null });
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
         return enqueueDispatch({
           type: "placeRoundabout",
           origin: point,
@@ -1298,7 +1332,12 @@ export async function createGameRuntime({
       const snapshot = commit(state, {
         ...ui,
         hoverTile: point,
-        ...(point === null ? { roadMutationPreview: null } : {}),
+        ...(point === null
+          ? {
+              roadMutationPreview: null,
+              roadMutationPreviewError: null,
+            }
+          : {}),
       });
       const mutation = roadMutationForUi(ui);
       return mutation === null

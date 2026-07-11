@@ -852,6 +852,23 @@ describe("authoritative road mutation preview", () => {
       },
     });
 
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
+    }
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      6.25 * tileSize,
+      6.25 * tileSize,
+      0.5 * tileSize,
+      0.5 * tileSize,
+    );
+    expect(ctx.moveTo).toHaveBeenCalledWith(6.5 * tileSize, 5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(6.5 * tileSize, 5.25 * tileSize);
+    expect(ctx.fillText).toHaveBeenCalledWith("$2,000", 5.5 * tileSize, 147);
     expect(ctx.strokeStyle).toBe(colors.previewInvalidStroke);
   });
 

@@ -70,6 +70,8 @@ export interface UiState {
   routePreviewError: RouteDraftError | null;
   roadPreviewGeneration: number;
   roadMutationPreview: RoadMutationPreviewResponse | null;
+  /** Recoverable host failure for the current road preview request. */
+  roadMutationPreviewError: string | null;
   selectedRouteId: string | null;
   routeFailureFocus: { routeId: string; legIndex: number } | null;
   activeHudCategory: HudCategory | null;
@@ -93,6 +95,7 @@ export function createUiState(): UiState {
     routePreviewError: null,
     roadPreviewGeneration: 0,
     roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
     routeFailureFocus: null,
     activeHudCategory: "brief",

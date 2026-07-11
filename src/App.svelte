@@ -397,7 +397,10 @@
         </div>
       {/if}
 
-      <RoadMutationNotice preview={snapshot.shell.roadMutationPreview} />
+      <RoadMutationNotice
+        preview={snapshot.shell.roadMutationPreview}
+        error={snapshot.ui.roadMutationPreviewError}
+      />
 
       <GameCanvas {runtime} onShellError={handleShellError} />
 

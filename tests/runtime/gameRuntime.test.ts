@@ -771,8 +771,12 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
   >();
   const roadResolvers = new Map<
     number,
-    (response: RoadMutationPreviewResponse) => void
+    {
+      resolve: (response: RoadMutationPreviewResponse) => void;
+      reject: (error: Error) => void;
+    }
   >();
+  const roadRequestGenerations: number[] = [];
   const backend: BackendSpy = {
     ...base,
     previewRoute(request) {
@@ -784,13 +788,15 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
       });
     },
     previewRoadMutation(request) {
-      return new Promise((resolve) => {
-        roadResolvers.set(request.generation, resolve);
+      roadRequestGenerations.push(request.generation);
+      return new Promise((resolve, reject) => {
+        roadResolvers.set(request.generation, { resolve, reject });
       });
     },
   };
   return {
     backend,
+    roadRequestGenerations,
     resolveRoute(
       generation: number,
       response: RoutePreviewResponse,
@@ -802,10 +808,16 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
       resolve(response);
     },
     resolveRoad(generation: number, response: RoadMutationPreviewResponse) {
-      const resolve = roadResolvers.get(generation);
-      if (resolve === undefined)
+      const deferred = roadResolvers.get(generation);
+      if (deferred === undefined)
         throw new Error(`No road generation ${generation}`);
-      resolve(response);
+      deferred.resolve(response);
+    },
+    rejectRoad(generation: number, error: Error) {
+      const deferred = roadResolvers.get(generation);
+      if (deferred === undefined)
+        throw new Error(`No road generation ${generation}`);
+      deferred.reject(error);
     },
   };
 }
@@ -1040,6 +1052,56 @@ describe("Game Runtime", () => {
           size: "compact2x2",
         }),
       ],
+    });
+  });
+
+  it("ignores a stale road preview failure after a newer hover wins", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.armRoundabout("compact2x2");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    runtime.setHoverTile({ x: 8, y: 7 });
+    previews.rejectRoad(1, new Error("stale preview failed"));
+    previews.resolveRoad(2, roundaboutPreview(2, { x: 8, y: 7 }));
+    await flushPromises();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.ui.roadMutationPreviewError).toBeNull();
+    expect(snapshot.ui.activeTool).toBe("roundabout");
+    expect(snapshot.ui.roadMutationPreview?.generation).toBe(2);
+  });
+
+  it("surfaces a current road preview host failure nonfatally and recovers", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.armRoundabout("standard3x3");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.rejectRoad(1, new Error("preview host offline"));
+    await flushPromises();
+
+    let snapshot = runtime.getSnapshot();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.ui.roadMutationPreviewError).toBe("preview host offline");
+    expect(snapshot.ui.activeTool).toBe("roundabout");
+
+    runtime.setHoverTile({ x: 8, y: 7 });
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+    previews.resolveRoad(
+      2,
+      roundaboutPreview(2, { x: 8, y: 7 }, "standard3x3"),
+    );
+    await flushPromises();
+
+    snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.roadMutationPreviewError).toBeNull();
+    expect(snapshot.ui.roadMutationPreview?.generation).toBe(2);
+    await runtime.setSpeed(2);
+    expect(previews.backend.intents).toContainEqual({
+      type: "setSpeed",
+      speed: 2,
     });
   });
 

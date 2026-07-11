@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, VecDeque};
 use caelum_core::model::{Heading, MovementKind, Point, RoadPort, RoadStructure, RoundaboutSize};
 use caelum_core::preview::RoadMutationPreviewRequest;
 use caelum_core::road::RoadMutation;
-use caelum_core::road_topology::{RoadState, RoadTransition};
+use caelum_core::road_topology::{RoadState, RoadTopology, RoadTransition};
 use caelum_core::roundabouts::{
     compile_roundabout_transitions, roundabout_structure_id, roundabout_template,
     RoundaboutTemplate, COMPACT_ROUNDABOUT_COST, STANDARD_ROUNDABOUT_COST,
@@ -591,6 +591,109 @@ fn preview_matches_roundabout_cost_footprint_ports_and_structure() {
             (point(7, 5), Heading::East),
         ]
     );
+}
+
+#[test]
+fn blocked_roundabout_preview_keeps_attempted_geometry_and_cost_without_mutation() {
+    let mut engine = GameEngine::new();
+    dispatch(&mut engine, GameIntent::LayTrack { point: point(5, 5) });
+    let before = engine.snapshot();
+    let topology = engine.road_topology_for_test().clone();
+    let template = roundabout_template(RoundaboutSize::Standard3x3, point(5, 5));
+
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 42,
+        mutation: RoadMutation::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Standard3x3,
+        },
+    });
+
+    assert_eq!(
+        response
+            .rejection
+            .as_ref()
+            .map(|rejection| rejection.code.clone()),
+        Some(RejectionCode::BlockedFootprint)
+    );
+    assert_eq!(response.changed_tiles, template.footprint);
+    assert_eq!(response.cost, STANDARD_ROUNDABOUT_COST);
+    assert!(matches!(
+        response.generated_structures.as_slice(),
+        [RoadStructure::Roundabout {
+            origin,
+            size: RoundaboutSize::Standard3x3,
+            footprint,
+            ..
+        }] if *origin == point(5, 5) && *footprint == template.footprint
+    ));
+    assert_eq!(engine.snapshot(), before);
+    assert_eq!(engine.road_topology_for_test(), &topology);
+}
+
+#[test]
+fn out_of_bounds_roundabout_preview_keeps_full_off_map_footprint_and_anchor() {
+    let engine = GameEngine::new();
+    let before = engine.snapshot();
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(-1, 0));
+
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 43,
+        mutation: RoadMutation::PlaceRoundabout {
+            origin: point(-1, 0),
+            size: RoundaboutSize::Compact2x2,
+        },
+    });
+
+    assert_eq!(
+        response
+            .rejection
+            .as_ref()
+            .map(|rejection| rejection.code.clone()),
+        Some(RejectionCode::OutOfBounds)
+    );
+    assert_eq!(response.changed_tiles, template.footprint);
+    assert_eq!(response.changed_tiles.first(), Some(&point(-1, 0)));
+    assert_eq!(response.cost, COMPACT_ROUNDABOUT_COST);
+    assert_eq!(response.generated_structures.len(), 1);
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
+fn unsafe_port_preview_keeps_relevant_boundary_port_and_attempted_structure() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
+    let mut snapshot = engine.snapshot();
+    snapshot.map.tile_mut(point(4, 5)).unwrap().one_way = Some(Heading::North);
+    let topology = RoadTopology::compile(&snapshot.map).expect("fixture topology compiles");
+    let before = snapshot.clone();
+    let template = roundabout_template(RoundaboutSize::Standard3x3, point(5, 4));
+
+    let response = caelum_core::preview::preview_road_mutation(
+        &snapshot,
+        &topology,
+        RoadMutationPreviewRequest {
+            generation: 44,
+            mutation: RoadMutation::PlaceRoundabout {
+                origin: point(5, 4),
+                size: RoundaboutSize::Standard3x3,
+            },
+        },
+    );
+
+    assert_eq!(
+        response
+            .rejection
+            .as_ref()
+            .map(|rejection| rejection.code.clone()),
+        Some(RejectionCode::UnsafeRoundaboutPortMapping)
+    );
+    assert_eq!(response.changed_tiles, template.footprint);
+    assert_eq!(response.cost, STANDARD_ROUNDABOUT_COST);
+    assert!(response.generated_structures[0]
+        .port_keys()
+        .contains(&(point(5, 5), Heading::West)));
+    assert_eq!(snapshot, before);
 }
 
 #[test]

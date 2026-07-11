@@ -57,6 +57,27 @@ pub fn roundabout_cost(size: RoundaboutSize) -> i32 {
     }
 }
 
+/// Builds the authoritative geometry used to visualize a roundabout attempt
+/// that failed validation. Unlike `place_roundabout`, this helper is tolerant
+/// of off-map tiles and unsafe boundary mappings: previews must preserve the
+/// attempted footprint and any reciprocal road ports even when the mutation
+/// cannot be committed.
+pub fn attempted_roundabout_structure(
+    map: &GameMap,
+    origin: Point,
+    size: RoundaboutSize,
+) -> RoadStructure {
+    let template = roundabout_template(size, origin);
+    let ports = attempted_boundary_connections(map, &template);
+    RoadStructure::Roundabout {
+        id: roundabout_structure_id(size, origin),
+        origin,
+        size,
+        footprint: template.footprint,
+        ports,
+    }
+}
+
 pub fn place_roundabout(
     state: &GameSnapshot,
     origin: Point,
@@ -224,6 +245,53 @@ fn capture_boundary_connections(
     captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
     captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
     Ok(captured)
+}
+
+fn attempted_boundary_connections(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    let structure_id = roundabout_structure_id(template.size, template.origin);
+    let mut captured = Vec::new();
+    for point in &template.footprint {
+        let Some(tile) = map.tile(*point) else {
+            continue;
+        };
+        for edge in &tile.road_connections {
+            let outside = offset(*point, *edge);
+            if footprint.contains(&outside) {
+                continue;
+            }
+            let Some(external) = map.tile(outside).filter(|neighbor| {
+                neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(*edge))
+            }) else {
+                continue;
+            };
+            let mut port = template
+                .port_slots
+                .iter()
+                .find(|slot| slot.point == *point && slot.edge == *edge)
+                .cloned()
+                .unwrap_or_else(|| RoadPort {
+                    id: format!(
+                        "{structure_id}:attempted-port:{},{}:{}",
+                        point.x,
+                        point.y,
+                        heading_key(*edge)
+                    ),
+                    point: *point,
+                    edge: *edge,
+                });
+            port.id.push_str(match external.one_way {
+                None => ":twoWay",
+                Some(direction) if direction == opposite(*edge) => ":inbound",
+                Some(direction) if direction == *edge => ":outbound",
+                Some(_) => ":incompatible",
+            });
+            captured.push(port);
+        }
+    }
+    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    captured
 }
 
 fn validate_port_mapping(

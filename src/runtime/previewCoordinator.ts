@@ -29,19 +29,40 @@ export function createPreviewCoordinator(
     async requestRoute(request) {
       const epoch = routeEpoch;
       latestRouteGeneration = request.generation;
-      const response = await backend.previewRoute(request);
-      return epoch === routeEpoch &&
-        response.generation === latestRouteGeneration
-        ? response
-        : null;
+      try {
+        const response = await backend.previewRoute(request);
+        return epoch === routeEpoch &&
+          response.generation === latestRouteGeneration
+          ? response
+          : null;
+      } catch (error) {
+        if (
+          epoch !== routeEpoch ||
+          request.generation !== latestRouteGeneration
+        ) {
+          return null;
+        }
+        throw error;
+      }
     },
     async requestRoadMutation(request) {
       const epoch = roadEpoch;
       latestRoadGeneration = request.generation;
-      const response = await backend.previewRoadMutation(request);
-      return epoch === roadEpoch && response.generation === latestRoadGeneration
-        ? response
-        : null;
+      try {
+        const response = await backend.previewRoadMutation(request);
+        return epoch === roadEpoch &&
+          response.generation === latestRoadGeneration
+          ? response
+          : null;
+      } catch (error) {
+        if (
+          epoch !== roadEpoch ||
+          request.generation !== latestRoadGeneration
+        ) {
+          return null;
+        }
+        throw error;
+      }
     },
     invalidateRoute() {
       routeEpoch += 1;
