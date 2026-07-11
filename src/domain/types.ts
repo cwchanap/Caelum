@@ -335,6 +335,9 @@ export interface RouteLeg {
   from: Point;
   to: Point;
   lineId?: string;
+  serviceDirection: ServiceDirection | null;
+  boardItineraryIndex: number | null;
+  alightItineraryIndex: number | null;
 }
 
 export interface RoutePlan {

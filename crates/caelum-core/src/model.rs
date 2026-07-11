@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u16 = 2;
 
@@ -680,6 +680,20 @@ pub struct RouteLeg {
     pub to: Point,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub service_direction: Option<ServiceDirection>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub board_itinerary_index: Option<usize>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub alight_itinerary_index: Option<usize>,
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 /// Terminal outcome of a completed/failed trip. Serialized as the lowercase TS-parity

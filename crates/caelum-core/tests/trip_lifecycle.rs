@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan, Sim,
-    TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan,
+    ServiceDirection, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
@@ -47,6 +47,9 @@ fn walk_plan(from: Point, to: Point, estimated_seconds: f64) -> RoutePlan {
             from,
             to,
             line_id: None,
+            service_direction: None,
+            board_itinerary_index: None,
+            alight_itinerary_index: None,
         }],
     }
 }
@@ -59,6 +62,9 @@ fn bus_plan(from: Point, to: Point, line_id: &str) -> RoutePlan {
             from,
             to,
             line_id: Some(line_id.to_string()),
+            service_direction: Some(ServiceDirection::Loop),
+            board_itinerary_index: Some(0),
+            alight_itinerary_index: Some(0),
         }],
     }
 }
@@ -83,12 +89,18 @@ fn bus_then_walk_plan(bus_from: Point, bus_to: Point, walk_to: Point, line_id: &
                 from: bus_from,
                 to: bus_to,
                 line_id: Some(line_id.to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: bus_to,
                 to: walk_to,
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
         ],
     }
@@ -1478,12 +1490,18 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Bus,
                 from: (5, 3).into(),
                 to: (22, 3).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
         ],
     };
@@ -1561,12 +1579,18 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
         ],
     });
@@ -1617,18 +1641,27 @@ fn zero_length_transfer_walk_collapses_between_transit_legs() {
                 from: (5, 3).into(),
                 to: (8, 3).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: (8, 3).into(),
                 to: (8, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Bus,
                 from: (8, 3).into(),
                 to: (22, 3).into(),
                 line_id: Some("route-002".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
         ],
     });

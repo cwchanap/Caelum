@@ -39,7 +39,17 @@ function waitingBusTrip(
     deadline: 9_999,
     routePlan: {
       estimatedSeconds: 100,
-      legs: [{ mode: "bus", from: position, to: { x: 0, y: 0 }, lineId }],
+      legs: [
+        {
+          mode: "bus",
+          from: position,
+          to: { x: 0, y: 0 },
+          lineId,
+          serviceDirection: "loop",
+          boardItineraryIndex: 0,
+          alightItineraryIndex: 0,
+        },
+      ],
     },
     currentLegIndex: 0,
     patienceRemaining: 100,

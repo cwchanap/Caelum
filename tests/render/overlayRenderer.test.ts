@@ -54,6 +54,9 @@ function waiter(): ActiveTrip {
           from: { x: 3, y: 3 },
           to: { x: 9, y: 9 },
           lineId: "route-001",
+          serviceDirection: "loop",
+          boardItineraryIndex: 0,
+          alightItineraryIndex: 0,
         },
       ],
     },
@@ -1010,7 +1013,15 @@ describe("crowding overlay ratios", () => {
       routePlan: {
         estimatedSeconds: 100,
         legs: [
-          { mode: "bus", from: { x: 3, y: 3 }, to: { x: 9, y: 9 }, lineId },
+          {
+            mode: "bus",
+            from: { x: 3, y: 3 },
+            to: { x: 9, y: 9 },
+            lineId,
+            serviceDirection: "loop",
+            boardItineraryIndex: 0,
+            alightItineraryIndex: 0,
+          },
         ],
       },
     });

@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, Point,
-    RoadPathStep, Route, RouteLegStatus, RoutePlan, TransitMode, TransitNodeStatus, TransitPath,
-    TripPosition, TripPurpose, TripStatus, Vehicle,
+    RoadPathStep, Route, RouteLegStatus, RoutePlan, ServiceDirection, TransitMode,
+    TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -177,6 +177,9 @@ fn moving_vehicle_with_rider_fixture() -> BrokenServiceFixture {
                 from: point(2, 5),
                 to: point(10, 5),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: path.total_travel_seconds(),
         }),
@@ -248,6 +251,9 @@ fn route_with_alternate_path_and_rider() -> AlternateRouteFixture {
                 from: point(2, 5),
                 to: point(10, 5),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: old_path.total_travel_seconds(),
         }),
@@ -462,6 +468,9 @@ fn mutations_while_already_broken_do_not_repeat_break_side_effects() {
                 from: point(2, 5),
                 to: point(10, 5),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: 10.0,
         }),

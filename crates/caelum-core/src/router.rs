@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::engine::RoutingContext;
 use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
 use crate::route_lifecycle::is_route_operational;
+use crate::service_itinerary::{enumerate_ride_edges, service_visits, RideEdge};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 use crate::transit_nodes::is_present_node;
 
@@ -8,8 +11,9 @@ use crate::transit_nodes::is_present_node;
 struct TransitService {
     mode: TransitMode,
     line_id: String,
-    anchors: Vec<Point>,
+    waypoint_positions: HashMap<String, Point>,
     legs: Vec<RouteLegPath>,
+    ride_edges: Vec<RideEdge>,
 }
 
 pub fn find_route_plan(
@@ -28,25 +32,19 @@ pub fn find_route_plan(
     let services = active_services(state);
 
     for service in &services {
-        for board_index in 0..service.anchors.len() {
-            for alight_index in 0..service.anchors.len() {
-                if board_index == alight_index {
-                    continue;
-                }
-
-                let board_at = &service.anchors[board_index];
-                let alight_at = &service.anchors[alight_index];
-                candidates.push(RoutePlan {
-                    legs: vec![
-                        walk_leg(origin, board_at),
-                        transit_leg(service.mode, board_at, alight_at, &service.line_id),
-                        walk_leg(alight_at, destination),
-                    ],
-                    estimated_seconds: walk_seconds(origin, board_at)
-                        + ride_seconds(service.mode, &service.legs, board_index, alight_index)
-                        + walk_seconds(alight_at, destination),
-                });
-            }
+        for edge in &service.ride_edges {
+            let board_at = &service.waypoint_positions[&edge.board_waypoint_id];
+            let alight_at = &service.waypoint_positions[&edge.alight_waypoint_id];
+            candidates.push(RoutePlan {
+                legs: vec![
+                    walk_leg(origin, board_at),
+                    transit_leg(service, edge, board_at, alight_at),
+                    walk_leg(alight_at, destination),
+                ],
+                estimated_seconds: walk_seconds(origin, board_at)
+                    + ride_seconds(service.mode, &service.legs, edge)
+                    + walk_seconds(alight_at, destination),
+            });
         }
     }
 
@@ -56,48 +54,29 @@ pub fn find_route_plan(
                 continue;
             }
 
-            let first_start_index = nearest_anchor_index(&first.anchors, origin);
-            let second_end_index = nearest_anchor_index(&second.anchors, destination);
-            let Some((transfer_first_index, transfer_second_index)) =
-                best_transfer_indexes(first, second)
-            else {
-                continue;
-            };
-            let Some(first_start_index) = first_start_index else {
-                continue;
-            };
-            let Some(second_end_index) = second_end_index else {
-                continue;
-            };
-
-            let first_start = &first.anchors[first_start_index];
-            let second_end = &second.anchors[second_end_index];
-            let transfer_first = &first.anchors[transfer_first_index];
-            let transfer_second = &second.anchors[transfer_second_index];
-            candidates.push(RoutePlan {
-                legs: vec![
-                    walk_leg(origin, first_start),
-                    transit_leg(first.mode, first_start, transfer_first, &first.line_id),
-                    walk_leg(transfer_first, transfer_second),
-                    transit_leg(second.mode, transfer_second, second_end, &second.line_id),
-                    walk_leg(second_end, destination),
-                ],
-                estimated_seconds: walk_seconds(origin, first_start)
-                    + ride_seconds(
-                        first.mode,
-                        &first.legs,
-                        first_start_index,
-                        transfer_first_index,
-                    )
-                    + walk_seconds(transfer_first, transfer_second)
-                    + ride_seconds(
-                        second.mode,
-                        &second.legs,
-                        transfer_second_index,
-                        second_end_index,
-                    )
-                    + walk_seconds(second_end, destination),
-            });
+            for first_edge in &first.ride_edges {
+                for second_edge in &second.ride_edges {
+                    let first_start = &first.waypoint_positions[&first_edge.board_waypoint_id];
+                    let transfer_first = &first.waypoint_positions[&first_edge.alight_waypoint_id];
+                    let transfer_second =
+                        &second.waypoint_positions[&second_edge.board_waypoint_id];
+                    let second_end = &second.waypoint_positions[&second_edge.alight_waypoint_id];
+                    candidates.push(RoutePlan {
+                        legs: vec![
+                            walk_leg(origin, first_start),
+                            transit_leg(first, first_edge, first_start, transfer_first),
+                            walk_leg(transfer_first, transfer_second),
+                            transit_leg(second, second_edge, transfer_second, second_end),
+                            walk_leg(second_end, destination),
+                        ],
+                        estimated_seconds: walk_seconds(origin, first_start)
+                            + ride_seconds(first.mode, &first.legs, first_edge)
+                            + walk_seconds(transfer_first, transfer_second)
+                            + ride_seconds(second.mode, &second.legs, second_edge)
+                            + walk_seconds(second_end, destination),
+                    });
+                }
+            }
         }
     }
 
@@ -121,7 +100,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
             continue;
         }
 
-        let anchors: Vec<Point> = route
+        let waypoint_positions: HashMap<String, Point> = route
             .stop_ids
             .iter()
             .filter_map(|stop_id| {
@@ -130,15 +109,17 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .stops
                     .iter()
                     .find(|stop| stop.id == *stop_id && is_present_node(stop.status))
-                    .map(|stop| stop.position)
+                    .map(|stop| (stop_id.clone(), stop.position))
             })
             .collect();
 
-        if anchors.len() >= 2 && anchors.len() == route.stop_ids.len() {
+        if waypoint_positions.len() >= 2 && waypoint_positions.len() == route.stop_ids.len() {
+            let visits = service_visits(&route.stop_ids, &route.legs);
             services.push(TransitService {
                 mode: TransitMode::Bus,
                 line_id: route.id.clone(),
-                anchors,
+                waypoint_positions,
+                ride_edges: enumerate_ride_edges(&visits, &route.legs),
                 legs: route.legs.clone(),
             });
         }
@@ -149,7 +130,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
             continue;
         }
 
-        let anchors: Vec<Point> = line
+        let waypoint_positions: HashMap<String, Point> = line
             .station_ids
             .iter()
             .filter_map(|station_id| {
@@ -158,15 +139,17 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .stations
                     .iter()
                     .find(|station| station.id == *station_id && is_present_node(station.status))
-                    .map(|station| station.position)
+                    .map(|station| (station_id.clone(), station.position))
             })
             .collect();
 
-        if anchors.len() >= 2 && anchors.len() == line.station_ids.len() {
+        if waypoint_positions.len() >= 2 && waypoint_positions.len() == line.station_ids.len() {
+            let visits = service_visits(&line.station_ids, &line.legs);
             services.push(TransitService {
                 mode: TransitMode::Metro,
                 line_id: line.id.clone(),
-                anchors,
+                waypoint_positions,
+                ride_edges: enumerate_ride_edges(&visits, &line.legs),
                 legs: line.legs.clone(),
             });
         }
@@ -189,61 +172,16 @@ fn best_candidate(candidates: Vec<RoutePlan>) -> Option<RoutePlan> {
     best
 }
 
-fn nearest_anchor_index(anchors: &[Point], target: &Point) -> Option<usize> {
-    let mut nearest_index = None;
-    let mut nearest_distance = i32::MAX;
-
-    for (index, anchor) in anchors.iter().enumerate() {
-        let distance = manhattan_distance(anchor, target);
-        if distance < nearest_distance {
-            nearest_distance = distance;
-            nearest_index = Some(index);
-        }
-    }
-
-    nearest_index
-}
-
-fn best_transfer_indexes(
-    first: &TransitService,
-    second: &TransitService,
-) -> Option<(usize, usize)> {
-    let mut best: Option<(usize, usize, i32)> = None;
-
-    for (first_index, first_anchor) in first.anchors.iter().enumerate() {
-        for (second_index, second_anchor) in second.anchors.iter().enumerate() {
-            let distance = manhattan_distance(first_anchor, second_anchor);
-            if best
-                .as_ref()
-                .map_or(true, |(_, _, best_distance)| distance < *best_distance)
-            {
-                best = Some((first_index, second_index, distance));
-            }
-        }
-    }
-
-    best.map(|(first_index, second_index, _)| (first_index, second_index))
-}
-
-fn ride_seconds(
-    mode: TransitMode,
-    legs: &[RouteLegPath],
-    from_index: usize,
-    to_index: usize,
-) -> f64 {
-    let count = legs.len();
-    if count == 0 || from_index == to_index {
+fn ride_seconds(mode: TransitMode, legs: &[RouteLegPath], edge: &RideEdge) -> f64 {
+    if legs.is_empty() {
         return boarding_seconds(mode);
     }
-
-    let mut seconds = 0.0;
-    let mut index = from_index;
-    while index != to_index {
-        seconds += leg_travel_seconds(mode, &legs[index]);
-        index = (index + 1) % count;
-    }
-
-    boarding_seconds(mode) + seconds
+    boarding_seconds(mode)
+        + edge
+            .itinerary_leg_indexes
+            .iter()
+            .map(|index| leg_travel_seconds(mode, &legs[*index]))
+            .sum::<f64>()
 }
 
 fn leg_travel_seconds(mode: TransitMode, leg: &RouteLegPath) -> f64 {
@@ -282,15 +220,21 @@ fn walk_leg(from: &Point, to: &Point) -> RouteLeg {
         from: *from,
         to: *to,
         line_id: None,
+        service_direction: None,
+        board_itinerary_index: None,
+        alight_itinerary_index: None,
     }
 }
 
-fn transit_leg(mode: TransitMode, from: &Point, to: &Point, line_id: &str) -> RouteLeg {
+fn transit_leg(service: &TransitService, edge: &RideEdge, from: &Point, to: &Point) -> RouteLeg {
     RouteLeg {
-        mode,
+        mode: service.mode,
         from: *from,
         to: *to,
-        line_id: Some(line_id.to_string()),
+        line_id: Some(service.line_id.clone()),
+        service_direction: Some(edge.service_direction),
+        board_itinerary_index: Some(edge.board_itinerary_index),
+        alight_itinerary_index: Some(edge.alight_itinerary_index),
     }
 }
 

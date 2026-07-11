@@ -1,3 +1,4 @@
+use crate::model::RouteLegPath;
 use crate::model::{RouteLegKind, ServiceDirection, ServicePattern, TransitMode};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6,6 +7,49 @@ pub struct ServiceLegSpec {
     pub to_waypoint_id: String,
     pub direction: ServiceDirection,
     pub kind: RouteLegKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceVisit {
+    pub waypoint_id: String,
+    pub direction: ServiceDirection,
+    pub arriving_itinerary_index: Option<usize>,
+    pub departing_itinerary_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RideEdge {
+    pub board_waypoint_id: String,
+    pub alight_waypoint_id: String,
+    pub service_direction: ServiceDirection,
+    pub board_itinerary_index: usize,
+    pub alight_itinerary_index: usize,
+    pub itinerary_leg_indexes: Vec<usize>,
+}
+
+impl RideEdge {
+    fn from_visits(board: &ServiceVisit, alight: &ServiceVisit, legs: &[RouteLegPath]) -> Self {
+        let alight_itinerary_index = alight
+            .arriving_itinerary_index
+            .expect("a cyclic service visit has an arriving service leg");
+        let mut itinerary_leg_indexes = Vec::new();
+        let mut index = board.departing_itinerary_index;
+        loop {
+            itinerary_leg_indexes.push(index);
+            if index == alight_itinerary_index {
+                break;
+            }
+            index = (index + 1) % legs.len();
+        }
+        Self {
+            board_waypoint_id: board.waypoint_id.clone(),
+            alight_waypoint_id: alight.waypoint_id.clone(),
+            service_direction: board.direction,
+            board_itinerary_index: board.departing_itinerary_index,
+            alight_itinerary_index,
+            itinerary_leg_indexes,
+        }
+    }
 }
 
 impl ServiceLegSpec {
@@ -31,6 +75,51 @@ pub fn build_service_itinerary(
         ServicePattern::Loop => loop_specs(waypoint_ids),
         ServicePattern::Shuttle => shuttle_specs(mode, waypoint_ids),
     }
+}
+
+pub fn service_visits(waypoint_ids: &[String], legs: &[RouteLegPath]) -> Vec<ServiceVisit> {
+    legs.iter()
+        .enumerate()
+        .filter(|(_, leg)| {
+            leg.kind == RouteLegKind::Service
+                && waypoint_ids
+                    .iter()
+                    .any(|waypoint_id| waypoint_id == &leg.from_waypoint_id)
+        })
+        .map(|(index, leg)| ServiceVisit {
+            waypoint_id: leg.from_waypoint_id.clone(),
+            direction: leg.direction,
+            arriving_itinerary_index: previous_service_leg_index(legs, index),
+            departing_itinerary_index: index,
+        })
+        .collect()
+}
+
+pub fn enumerate_ride_edges(visits: &[ServiceVisit], legs: &[RouteLegPath]) -> Vec<RideEdge> {
+    if legs.is_empty() {
+        return Vec::new();
+    }
+    visits
+        .iter()
+        .enumerate()
+        .flat_map(|(board_order, board)| {
+            downstream_visits_before_repeat(visits, board_order)
+                .map(move |alight| RideEdge::from_visits(board, alight, legs))
+        })
+        .collect()
+}
+
+fn previous_service_leg_index(legs: &[RouteLegPath], index: usize) -> Option<usize> {
+    (1..=legs.len())
+        .map(|offset| (index + legs.len() - offset) % legs.len())
+        .find(|candidate| legs[*candidate].kind == RouteLegKind::Service)
+}
+
+fn downstream_visits_before_repeat(
+    visits: &[ServiceVisit],
+    board_order: usize,
+) -> impl Iterator<Item = &ServiceVisit> {
+    (1..visits.len()).map(move |offset| &visits[(board_order + offset) % visits.len()])
 }
 
 fn loop_specs(ids: &[String]) -> Vec<ServiceLegSpec> {

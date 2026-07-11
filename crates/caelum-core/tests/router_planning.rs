@@ -60,6 +60,9 @@ fn creates_walking_route_for_nearby_destinations() {
     assert_eq!(plan.estimated_seconds, 40.0);
     assert_eq!(plan.legs.len(), 1);
     assert_eq!(plan.legs[0].mode, TransitMode::Walk);
+    assert_eq!(plan.legs[0].service_direction, None);
+    assert_eq!(plan.legs[0].board_itinerary_index, None);
+    assert_eq!(plan.legs[0].alight_itinerary_index, None);
 }
 
 #[test]
@@ -84,6 +87,12 @@ fn creates_bus_route_plan_from_connected_stops() {
         vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk]
     );
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("route-001"));
+    assert_eq!(
+        plan.legs[1].service_direction,
+        Some(caelum_core::model::ServiceDirection::Loop)
+    );
+    assert_eq!(plan.legs[1].board_itinerary_index, Some(0));
+    assert_eq!(plan.legs[1].alight_itinerary_index, Some(0));
     assert_eq!(plan.legs[1].from, (2, 5).into());
     assert_eq!(plan.legs[1].to, (12, 5).into());
 }

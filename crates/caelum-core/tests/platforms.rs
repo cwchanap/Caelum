@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, Point, RouteLeg, RoutePlan, TransitMode, TransitNodeStatus,
-    TripPurpose, TripStatus,
+    ActiveTrip, BusStopKind, Point, RouteLeg, RoutePlan, ServiceDirection, TransitMode,
+    TransitNodeStatus, TripPurpose, TripStatus,
 };
 use caelum_core::{platforms, GameEngine};
 
@@ -21,6 +21,9 @@ fn waiting_trip(id: &str, position: Point, line_id: &str, patience_remaining: f6
                 from: position,
                 to: (0, 0).into(),
                 line_id: Some(line_id.to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
         }),
         current_leg_index: 0,
@@ -109,6 +112,9 @@ fn station_platforms_participate_in_the_same_position_line_index() {
             from: (9, 9).into(),
             to: (0, 0).into(),
             line_id: Some("metro-001".to_string()),
+            service_direction: Some(ServiceDirection::Loop),
+            board_itinerary_index: Some(0),
+            alight_itinerary_index: Some(0),
         }],
     });
     snapshot.active_trips = vec![trip];

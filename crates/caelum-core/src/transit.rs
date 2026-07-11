@@ -527,7 +527,8 @@ pub(crate) fn tick_vehicles_without_context(
             next_vehicle.step_progress,
         );
         next_vehicle.parked_position = None;
-        advance_vehicle_by_seconds(&mut next_vehicle, &itinerary, delta_seconds);
+        let completed_itinerary_indexes =
+            advance_vehicle_by_seconds(&mut next_vehicle, &itinerary, delta_seconds);
         if previous_cursor
             != (
                 next_vehicle.itinerary_index,
@@ -537,12 +538,16 @@ pub(crate) fn tick_vehicles_without_context(
         {
             changed = true;
         }
-        if next_vehicle.itinerary_index != previous_cursor.0 {
-            let Some(reached_position) = position_by_id.get(&current_leg.to_waypoint_id) else {
-                vehicles.push(next_vehicle);
-                continue;
-            };
-            next_vehicle = disembark_vehicle(&mut active_trips, &next_vehicle, reached_position);
+        for completed_itinerary_index in completed_itinerary_indexes {
+            let completed_leg = &itinerary[completed_itinerary_index];
+            if let Some(reached_position) = position_by_id.get(&completed_leg.to_waypoint_id) {
+                next_vehicle = disembark_vehicle(
+                    &mut active_trips,
+                    &next_vehicle,
+                    reached_position,
+                    completed_itinerary_index,
+                );
+            }
         }
         vehicles.push(next_vehicle);
     }
@@ -1186,7 +1191,7 @@ fn advance_vehicle_by_seconds(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
     mut remaining_seconds: f64,
-) {
+) -> Vec<usize> {
     let zero_step_limit = itinerary
         .iter()
         .filter_map(|leg| leg.current_path.as_ref())
@@ -1194,18 +1199,22 @@ fn advance_vehicle_by_seconds(
         .sum::<usize>()
         .max(1);
     let mut consecutive_zero_steps = 0;
+    let mut completed_itinerary_indexes = Vec::new();
 
     while remaining_seconds > 0.0 {
-        let leg = &itinerary[vehicle.itinerary_index % itinerary.len()];
+        let original_itinerary_index = vehicle.itinerary_index;
+        let itinerary_index = vehicle.itinerary_index % itinerary.len();
+        let leg = &itinerary[itinerary_index];
         let path = leg
             .current_path
             .as_ref()
             .expect("operational leg has a path");
         if path.step_count() == 0 {
             advance_vehicle_cursor(vehicle, itinerary);
+            completed_itinerary_indexes.push(itinerary_index);
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return;
+                return completed_itinerary_indexes;
             }
             continue;
         }
@@ -1215,9 +1224,12 @@ fn advance_vehicle_by_seconds(
         let step_seconds = step.travel_seconds();
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
+            if vehicle.itinerary_index != original_itinerary_index {
+                completed_itinerary_indexes.push(itinerary_index);
+            }
             consecutive_zero_steps += 1;
             if consecutive_zero_steps > zero_step_limit {
-                return;
+                return completed_itinerary_indexes;
             }
             continue;
         }
@@ -1226,12 +1238,16 @@ fn advance_vehicle_by_seconds(
 
         if remaining_seconds < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
-            return;
+            return completed_itinerary_indexes;
         }
 
         remaining_seconds -= remaining_step;
         advance_vehicle_cursor(vehicle, itinerary);
+        if vehicle.itinerary_index != original_itinerary_index {
+            completed_itinerary_indexes.push(itinerary_index);
+        }
     }
+    completed_itinerary_indexes
 }
 
 fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {
@@ -1308,6 +1324,7 @@ fn disembark_vehicle(
     active_trips: &mut [ActiveTrip],
     vehicle: &Vehicle,
     reached_position: &Point,
+    completed_itinerary_index: usize,
 ) -> Vehicle {
     let passenger_ids = unique_passenger_ids(&vehicle.passenger_ids);
     let disembarking_ids: HashSet<String> = active_trips
@@ -1323,6 +1340,7 @@ fn disembark_vehicle(
                     .is_some_and(|leg| {
                         leg.mode == vehicle.mode
                             && leg.line_id.as_deref() == Some(vehicle.line_id.as_str())
+                            && leg.alight_itinerary_index == Some(completed_itinerary_index)
                             && leg.to == *reached_position
                     })
         })
@@ -1365,6 +1383,7 @@ fn trip_can_board(
         .is_some_and(|leg| {
             leg.mode == vehicle.mode
                 && leg.line_id.as_deref() == Some(vehicle.line_id.as_str())
+                && leg.board_itinerary_index == Some(vehicle.itinerary_index)
                 && trip_position_matches_point(&trip.position, current_position)
         })
 }

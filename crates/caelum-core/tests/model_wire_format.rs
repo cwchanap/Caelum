@@ -10,9 +10,9 @@
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
-    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServicePattern, Sim, Station, Stop,
-    Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
+    Sim, Station, Stop, Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -255,12 +255,59 @@ fn vehicle_and_route_leg_mode_serializes_to_legacy_strings() {
             from: (0, 0).into(),
             to: (1, 0).into(),
             line_id: Some("route-001".to_string()),
+            service_direction: (mode != TransitMode::Walk).then_some(ServiceDirection::Loop),
+            board_itinerary_index: (mode != TransitMode::Walk).then_some(0),
+            alight_itinerary_index: (mode != TransitMode::Walk).then_some(0),
         };
         let value = serde_json::to_value(&leg).expect("leg should serialize");
         assert_eq!(
             value["mode"],
             json!(wire),
             "route leg mode wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_visit_fields_are_required_and_walk_fields_serialize_as_null() {
+    let walk = RouteLeg {
+        mode: TransitMode::Walk,
+        from: (0, 0).into(),
+        to: (1, 0).into(),
+        line_id: None,
+        service_direction: None,
+        board_itinerary_index: None,
+        alight_itinerary_index: None,
+    };
+    let walk_value = serde_json::to_value(&walk).unwrap();
+    assert_eq!(walk_value["serviceDirection"], serde_json::Value::Null);
+    assert_eq!(walk_value["boardItineraryIndex"], serde_json::Value::Null);
+    assert_eq!(walk_value["alightItineraryIndex"], serde_json::Value::Null);
+
+    let transit = RouteLeg {
+        mode: TransitMode::Bus,
+        from: (2, 5).into(),
+        to: (6, 5).into(),
+        line_id: Some("route-001".to_string()),
+        service_direction: Some(ServiceDirection::Return),
+        board_itinerary_index: Some(4),
+        alight_itinerary_index: Some(4),
+    };
+    let transit_value = serde_json::to_value(&transit).unwrap();
+    assert_eq!(transit_value["serviceDirection"], json!("return"));
+    assert_eq!(transit_value["boardItineraryIndex"], json!(4));
+    assert_eq!(transit_value["alightItineraryIndex"], json!(4));
+
+    for field in [
+        "serviceDirection",
+        "boardItineraryIndex",
+        "alightItineraryIndex",
+    ] {
+        let mut missing = transit_value.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<RouteLeg>(missing).is_err(),
+            "schema-v2 RouteLeg field {field} must be required"
         );
     }
 }
@@ -673,6 +720,9 @@ fn snapshot_round_trips_through_json() {
         from: (0, 0).into(),
         to: (1, 0).into(),
         line_id: None,
+        service_direction: None,
+        board_itinerary_index: None,
+        alight_itinerary_index: None,
     };
     let plan = RoutePlan {
         legs: vec![leg],

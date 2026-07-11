@@ -1,5 +1,6 @@
 use caelum_core::model::{
-    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, TransitMode, TripPurpose, TripStatus,
+    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, TransitMode, TripPurpose,
+    TripStatus,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoutingContext};
@@ -52,6 +53,9 @@ fn bus_route_vehicle_carries_commute_trip() {
                 from: (2, 5).into(),
                 to: (12, 5).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: 60.0,
         }),
