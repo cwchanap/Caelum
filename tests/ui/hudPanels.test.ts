@@ -290,11 +290,58 @@ describe("RouteEditor", () => {
 
   it("offers Reload after a stale revision and keeps Cancel available", () => {
     render(RouteEditor, {
-      props: editorProps(editDraftView({ canReload: true })),
+      props: editorProps(
+        editDraftView({
+          canReload: true,
+          canSave: false,
+          previewStatus: "rejected",
+          previewMessage:
+            "This route changed while you were editing it. Reload the saved route.",
+        }),
+      ),
     });
     expect(
       screen.getByRole("button", { name: "Reload saved route" }),
     ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save route" })).toBeDisabled();
+    expect(screen.getByTestId("route-preview-status")).toHaveTextContent(
+      "This route changed while you were editing it. Reload the saved route.",
+    );
     expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  });
+
+  it("renders retained missing waypoints in the Manage editor", () => {
+    render(HudDrawer, {
+      props: drawerProps({
+        category: "manage",
+        routeDraft: editDraftView({
+          waypoints: [
+            {
+              id: "stop-001",
+              index: 0,
+              label: "Stop A",
+              status: "present",
+              selected: false,
+            },
+            {
+              id: "stop-002",
+              index: 1,
+              label: "Missing Bus Stop",
+              status: "missing",
+              selected: true,
+            },
+          ],
+          selectedIndex: 1,
+          previewStatus: "broken",
+          previewMessage:
+            "Stop A → Missing Bus Stop includes a missing waypoint.",
+        }),
+      }),
+    });
+
+    expect(screen.getByTestId("route-waypoint-1")).toHaveTextContent(
+      "Missing Bus Stop",
+    );
+    expect(screen.getByTestId("route-waypoint-1")).toHaveClass("missing");
   });
 });

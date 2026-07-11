@@ -12,6 +12,7 @@ import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
+import { rejectionMessage } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
@@ -258,7 +259,19 @@ export function selectRouteEditorView(
 ): RouteEditorView | null {
   const draft = ui.routeDraft;
   if (draft === null) return null;
-  const preview = routeDraftPreviewMessage(state, ui);
+  const staleRejection =
+    draft.source.kind === "edit" &&
+    rejection?.code === "routeChangedWhileEditing" &&
+    rejection.context.routeId === draft.source.routeId
+      ? rejection
+      : null;
+  const preview =
+    staleRejection === null
+      ? routeDraftPreviewMessage(state, ui)
+      : {
+          status: "rejected" as const,
+          message: rejectionMessage(staleRejection),
+        };
   const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
   const title =
     routeId === null
@@ -288,11 +301,8 @@ export function selectRouteEditorView(
     previewPending: draft.previewPending,
     previewStatus: preview.status,
     previewMessage: preview.message,
-    canSave: canSaveRouteDraft(draft),
-    canReload:
-      draft.source.kind === "edit" &&
-      rejection?.code === "routeChangedWhileEditing" &&
-      rejection.context.routeId === draft.source.routeId,
+    canSave: staleRejection === null && canSaveRouteDraft(draft),
+    canReload: staleRejection !== null,
   };
 }
 

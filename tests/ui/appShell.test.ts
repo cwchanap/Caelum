@@ -616,6 +616,32 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("route-draft")).toBeNull();
   });
 
+  it("gives Cancel · Esc the same draft-only semantics as keyboard Escape", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        activeOverlay: "growth",
+        selectedId: "route-001",
+        routeDraft: busDraft(["stop-001"]),
+        activeHudCategory: "routes",
+      },
+    });
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByTestId("hud-cancel"));
+
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
+    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "busRoute",
+      activeOverlay: "growth",
+      selectedId: "route-001",
+      activeHudCategory: "routes",
+      routeDraft: null,
+    });
+  });
+
   it("does not reset on Escape when Cancel is disabled (bare inspect)", async () => {
     // canCancel is false when activeTool === "inspect" with no draft and no
     // selected building. Escape shares the Cancel button's label, so it must

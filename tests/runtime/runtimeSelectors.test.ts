@@ -312,6 +312,7 @@ describe("route selectors", () => {
           },
           1,
         ),
+        generation: 1,
         previewPending: false,
         preview: routePreview(["stop-001", "stop-002"]),
       },
@@ -322,7 +323,51 @@ describe("route selectors", () => {
       context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
     }).routeDraft;
 
-    expect(draft?.canReload).toBe(true);
+    expect(draft).toMatchObject({
+      canReload: true,
+      canSave: false,
+      previewStatus: "rejected",
+      previewMessage:
+        "This route changed while you were editing it. Reload the saved route.",
+    });
+  });
+
+  it("does not apply another route's stale rejection to the active editor", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        previewPending: false,
+        preview: routePreview(["stop-001", "stop-002"]),
+      },
+    };
+
+    expect(
+      selectShellState(state, ui, {
+        code: "routeChangedWhileEditing",
+        context: {
+          routeId: "route-999",
+          affectedRouteIds: ["route-999"],
+        },
+      }).routeDraft,
+    ).toMatchObject({
+      canReload: false,
+      canSave: true,
+      previewStatus: "connected",
+      previewMessage: "Connected",
+    });
   });
 
   it("builds an edit view that retains missing-node labels and names rejected endpoints", () => {
