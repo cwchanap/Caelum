@@ -13,6 +13,7 @@ import {
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
 import {
+  canSaveRouteDraft,
   createDraft,
   editDraft,
   moveWaypoint,
@@ -21,6 +22,7 @@ import {
   selectWaypoint,
   setPattern,
   type RouteDraft,
+  type RouteDraftInteractionError,
 } from "../ui/routeDraft";
 import { axisLockedLine } from "../ui/roadDrag";
 import { createUiState, type UiState } from "../ui/uiState";
@@ -452,6 +454,7 @@ export async function createGameRuntime({
 
   const queueBackend = (
     operation: () => Promise<RuntimeSnapshot>,
+    onError: (error: unknown) => RuntimeSnapshot = failBackend,
   ): Promise<RuntimeSnapshot> => {
     if (dead) {
       // The backend is fatally failed; do not attempt further operations.
@@ -473,7 +476,7 @@ export async function createGameRuntime({
       () => undefined,
       () => undefined,
     );
-    return run.catch(failBackend);
+    return run.catch(onError);
   };
 
   const enqueueDispatch = (
@@ -561,25 +564,15 @@ export async function createGameRuntime({
             previewPending: false,
             preview: response,
           },
-          routePreviewError: response.rejection,
+          routePreviewError:
+            ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+              ? ui.routePreviewError
+              : response.rejection,
         });
       })
       .catch((error: unknown) => {
         failBackend(error);
       });
-  };
-
-  const draftCanSave = (draft: RouteDraft): boolean => {
-    const preview = draft.preview;
-    return (
-      preview !== null &&
-      preview.generation === draft.generation &&
-      preview.rejection === null &&
-      preview.legs.length > 0 &&
-      (draft.source.kind === "edit" ||
-        preview.legs.every((leg) => leg.status === "connected")) &&
-      preview.affordable
-    );
   };
 
   const commitRouteDraft = (routeDraft: RouteDraft): RuntimeSnapshot => {
@@ -594,6 +587,14 @@ export async function createGameRuntime({
     requestRoutePreview(routeDraft);
     return result;
   };
+
+  const rejectRouteDraftInteraction = (
+    error: RouteDraftInteractionError,
+  ): RuntimeSnapshot =>
+    commit(state, {
+      ...ui,
+      routePreviewError: error,
+    });
 
   const startRouteEdit = (routeId: string): RuntimeSnapshot => {
     const route = state.transit.routes.find(
@@ -643,12 +644,7 @@ export async function createGameRuntime({
 
   const saveRouteDraft = async (): Promise<RuntimeSnapshot> => {
     const draft = ui.routeDraft;
-    if (
-      !draft ||
-      draft.mode === "walk" ||
-      !draft.preview ||
-      !draftCanSave(draft)
-    ) {
+    if (!draft || !canSaveRouteDraft(draft)) {
       return getSnapshot();
     }
     const token = {
@@ -679,30 +675,46 @@ export async function createGameRuntime({
             pattern: draft.pattern,
             waypointIds: draft.waypointIds,
           };
-    return enqueueDispatch(intent, (applied, currentUi) => {
-      const current = currentUi.routeDraft;
+    const isCurrent = (current: RouteDraft | null): boolean => {
       const source =
         current?.source.kind === "create"
           ? "create"
           : current
             ? `edit:${current.source.routeId}:${current.source.expectedRevision}`
             : "none";
-      if (
-        applied &&
-        current &&
+      return (
+        current !== null &&
         current.instanceId === token.instanceId &&
         current.generation === token.generation &&
         source === token.source
-      ) {
-        previewCoordinator.invalidateRoute();
-        return {
-          ...currentUi,
-          routeDraft: null,
-          routePreviewError: null,
-        };
-      }
-      return currentUi;
-    }).finally(() => {
+      );
+    };
+    return queueBackend(
+      async () => {
+        const result = await backend.dispatch(intent);
+        const current = ui.routeDraft;
+        const tokenIsCurrent = isCurrent(current);
+        if (tokenIsCurrent) {
+          backendError = null;
+          rejection = result.rejection;
+        }
+        if (result.applied && tokenIsCurrent) {
+          previewCoordinator.invalidateRoute();
+          return commit(normalizeRustSnapshot(result.snapshot), {
+            ...ui,
+            routeDraft: null,
+            routePreviewError: null,
+          });
+        }
+        return commit(normalizeRustSnapshot(result.snapshot), ui);
+      },
+      (error) => {
+        if (isCurrent(ui.routeDraft)) {
+          return failBackend(error);
+        }
+        return getSnapshot();
+      },
+    ).finally(() => {
       activeRouteSaveTokens.delete(tokenKey);
     });
   };
@@ -714,7 +726,11 @@ export async function createGameRuntime({
 
   const reloadRouteDraft = (): RuntimeSnapshot => {
     const draft = ui.routeDraft;
-    if (draft?.source.kind !== "edit") {
+    if (
+      draft?.source.kind !== "edit" ||
+      rejection?.code !== "routeChangedWhileEditing" ||
+      rejection.context.routeId !== draft.source.routeId
+    ) {
       return commit(state, ui);
     }
     rejection = null;
@@ -1101,19 +1117,43 @@ export async function createGameRuntime({
     },
     startRouteEdit,
     selectRouteWaypoint(index, interaction) {
-      return ui.routeDraft === null
-        ? commit(state, ui)
-        : commitRouteDraft(selectWaypoint(ui.routeDraft, index, interaction));
+      if (ui.routeDraft === null) return commit(state, ui);
+      const routeDraft = selectWaypoint(ui.routeDraft, index, interaction);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: { operation: "selectWaypoint", waypointIndex: index },
+          })
+        : commitRouteDraft(routeDraft);
     },
     removeRouteWaypoint() {
-      return ui.routeDraft === null
-        ? commit(state, ui)
-        : commitRouteDraft(removeWaypoint(ui.routeDraft));
+      if (ui.routeDraft === null) return commit(state, ui);
+      const selectedIndex = ui.routeDraft.selectedIndex;
+      const routeDraft = removeWaypoint(ui.routeDraft);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: {
+              operation: "removeWaypoint",
+              waypointIndex: selectedIndex,
+            },
+          })
+        : commitRouteDraft(routeDraft);
     },
     moveRouteWaypoint(delta) {
-      return ui.routeDraft === null
-        ? commit(state, ui)
-        : commitRouteDraft(moveWaypoint(ui.routeDraft, delta));
+      if (ui.routeDraft === null) return commit(state, ui);
+      const selectedIndex = ui.routeDraft.selectedIndex;
+      const routeDraft = moveWaypoint(ui.routeDraft, delta);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: {
+              operation: "moveWaypoint",
+              waypointIndex: selectedIndex,
+              delta,
+            },
+          })
+        : commitRouteDraft(routeDraft);
     },
     reverseRouteDraft() {
       return ui.routeDraft === null

@@ -46,6 +46,8 @@ type BackendSpy = GameBackend & {
 };
 
 type DeferredDispatchBackend = BackendSpy & {
+  rejectNextDispatchWith(rejection: GameplayRejection): void;
+  failNextDispatch(error: Error): void;
   resolveNext(): Promise<void>;
 };
 
@@ -582,13 +584,20 @@ function deferredDispatchBackend(
   const intents: GameIntent[] = [];
   const pending: Array<() => void> = [];
   let snapshot = initial;
-  let rejectNext = false;
+  let nextRejection: GameplayRejection | null = null;
+  let nextError: Error | null = null;
 
   return {
     ...previewBackendStubs(),
     intents,
     rejectNextDispatch() {
-      rejectNext = true;
+      nextRejection = TEST_REJECTION;
+    },
+    rejectNextDispatchWith(rejection) {
+      nextRejection = rejection;
+    },
+    failNextDispatch(error) {
+      nextError = error;
     },
     setSnapshot(next) {
       snapshot = next;
@@ -604,12 +613,18 @@ function deferredDispatchBackend(
       await new Promise<void>((resolve) => {
         pending.push(resolve);
       });
-      if (rejectNext) {
-        rejectNext = false;
+      if (nextError !== null) {
+        const error = nextError;
+        nextError = null;
+        throw error;
+      }
+      if (nextRejection !== null) {
+        const rejection = nextRejection;
+        nextRejection = null;
         return {
           snapshot,
           applied: false,
-          rejection: TEST_REJECTION,
+          rejection,
           context: EMPTY_DISPATCH_CONTEXT,
         };
       }
@@ -1541,6 +1556,67 @@ describe("route creation and management", () => {
     expect(previewRoute).toHaveBeenCalledTimes(7);
   });
 
+  it("surfaces and clears a typed invalid waypoint selection error", async () => {
+    const runtime = await createGameRuntime({
+      backend: connectedRouteBackend(),
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const draft = runtime.getSnapshot().ui.routeDraft;
+
+    const invalid = runtime.selectRouteWaypoint(99, "replace");
+
+    expect(invalid.ui.routeDraft).toBe(draft);
+    expect(invalid.ui.routePreviewError).toEqual({
+      code: "invalidRouteDraftInteraction",
+      context: { operation: "selectWaypoint", waypointIndex: 99 },
+    });
+
+    const valid = runtime.selectRouteWaypoint(1, "replace");
+    expect(valid.ui.routePreviewError).toBeNull();
+  });
+
+  it("keeps a local interaction error when an older preview resolves", async () => {
+    const previews = deferredPreviewBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({ backend: previews.backend });
+    runtime.startRouteEdit("route-001");
+    runtime.selectRouteWaypoint(99, "replace");
+
+    previews.resolveRoute(0, routePreview(0, ["stop-001", "stop-002"]));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.routePreviewError).toEqual({
+      code: "invalidRouteDraftInteraction",
+      context: { operation: "selectWaypoint", waypointIndex: 99 },
+    });
+  });
+
+  it("surfaces typed errors for invalid remove and move operations", async () => {
+    const runtime = await createGameRuntime({
+      backend: connectedRouteBackend(),
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+
+    expect(runtime.removeRouteWaypoint().ui.routePreviewError).toEqual({
+      code: "invalidRouteDraftInteraction",
+      context: { operation: "removeWaypoint", waypointIndex: null },
+    });
+
+    runtime.selectRouteWaypoint(0, "replace");
+    expect(runtime.moveRouteWaypoint(-1).ui.routePreviewError).toEqual({
+      code: "invalidRouteDraftInteraction",
+      context: {
+        operation: "moveWaypoint",
+        waypointIndex: 0,
+        delta: -1,
+      },
+    });
+
+    const valid = runtime.moveRouteWaypoint(1);
+    expect(valid.ui.routePreviewError).toBeNull();
+  });
+
   it("keeps the draft after typed rejection or host failure", async () => {
     for (const outcome of [
       { kind: "rejection" as const, code: "disconnectedLeg" as const },
@@ -1553,7 +1629,7 @@ describe("route creation and management", () => {
       const base = connectedRouteBackend();
       const backend: GameBackend = {
         ...base,
-        async dispatch(intent) {
+        async dispatch(_intent) {
           if (outcome.kind === "failure") {
             throw new Error("host unavailable");
           }
@@ -1634,6 +1710,49 @@ describe("route creation and management", () => {
     );
   });
 
+  it("does not attach an old Save rejection to a replacement draft", async () => {
+    const saves = deferredDispatchBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({ backend: saves });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    runtime.cancelRouteDraft();
+    runtime.startRouteEdit("route-001");
+    saves.rejectNextDispatchWith({
+      code: "routeChangedWhileEditing",
+      context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+    });
+
+    await saves.resolveNext();
+    await save;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.shell.routeDraft?.canReload).toBe(false);
+  });
+
+  it("does not attach an old Save host error to a replacement draft", async () => {
+    const saves = deferredDispatchBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({ backend: saves });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    runtime.cancelRouteDraft();
+    runtime.startRouteEdit("route-001");
+    saves.failNextDispatch(new Error("old save unavailable"));
+
+    await saves.resolveNext();
+    await save;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.shell.routeDraft?.canReload).toBe(false);
+  });
+
   it("Cancel and Escape discard only the draft", async () => {
     for (const cancel of [
       (runtime: RuntimeController) => runtime.cancelRouteDraft(),
@@ -1698,6 +1817,23 @@ describe("route creation and management", () => {
       routeId: "route-001",
       expectedRevision: 9,
     });
+  });
+
+  it("Reload is a no-op without a matching stale edit rejection", async () => {
+    const base = connectedRouteBackend();
+    const previewRoute = vi.fn(base.previewRoute.bind(base));
+    const runtime = await createGameRuntime({
+      backend: { ...base, previewRoute },
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const before = runtime.getSnapshot().ui.routeDraft;
+
+    const snapshot = runtime.reloadRouteDraft();
+
+    expect(snapshot.ui.routeDraft).toBe(before);
+    expect(snapshot.rejection).toBeNull();
+    expect(previewRoute).toHaveBeenCalledTimes(1);
   });
 
   it("successful creation save dispatches one atomic intent", async () => {
@@ -1895,6 +2031,23 @@ describe("route creation and management", () => {
     expect(createRouteCount).toBe(1);
     expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
+  });
+
+  it("deduplicates a deferred Save and legacy Finish for the same draft", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    const save = runtime.saveRouteDraft();
+    const finish = runtime.finishRoute();
+    await Promise.resolve();
+
+    expect(
+      backend.intents.filter((intent) => intent.type === "createRoute"),
+    ).toHaveLength(1);
+    await backend.resolveNext();
+    await Promise.all([save, finish]);
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
   });
 
   it("removes a draft stop and cancels a draft", async () => {

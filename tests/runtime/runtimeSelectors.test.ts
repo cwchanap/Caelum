@@ -4,7 +4,11 @@ import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
-import { createDraft, editDraft } from "../../src/ui/routeDraft";
+import {
+  canSaveRouteDraft,
+  createDraft,
+  editDraft,
+} from "../../src/ui/routeDraft";
 import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
@@ -253,6 +257,20 @@ describe("route selectors", () => {
       routeDraft: busDraft(["stop-001", "stop-002"], true),
     };
     expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(true);
+  });
+
+  it("keeps the selector Save gate in parity with the shared predicate", () => {
+    const state = twoStops();
+    const routeDraft = busDraft(["stop-001", "stop-002"], true);
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft,
+    };
+
+    expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(
+      canSaveRouteDraft(routeDraft),
+    );
   });
 
   it("blocks finish when unaffordable with a cost hint", () => {

@@ -30,6 +30,43 @@ export interface RouteDraftClickResult {
   rejection: GameplayRejection | null;
 }
 
+export type RouteDraftInteractionOperation =
+  | "selectWaypoint"
+  | "removeWaypoint"
+  | "moveWaypoint";
+
+export interface RouteDraftInteractionError {
+  code: "invalidRouteDraftInteraction";
+  context: {
+    operation: RouteDraftInteractionOperation;
+    waypointIndex: number | null;
+    delta?: -1 | 1;
+  };
+}
+
+export type RouteDraftError = GameplayRejection | RouteDraftInteractionError;
+
+type SaveableRouteDraft = RouteDraft & {
+  mode: Exclude<TransitMode, "walk">;
+  preview: RoutePreviewResponse;
+};
+
+export function canSaveRouteDraft(
+  draft: RouteDraft,
+): draft is SaveableRouteDraft {
+  const preview = draft.preview;
+  return (
+    draft.mode !== "walk" &&
+    preview !== null &&
+    preview.generation === draft.generation &&
+    preview.rejection === null &&
+    preview.legs.length > 0 &&
+    (draft.source.kind === "edit" ||
+      preview.legs.every((leg) => leg.status === "connected")) &&
+    preview.affordable
+  );
+}
+
 function samePoint(left: Point, right: Point): boolean {
   return left.x === right.x && left.y === right.y;
 }

@@ -4,6 +4,7 @@ import {
   appendWaypoint,
   applyNodeClick,
   applyRouteNodeClick,
+  canSaveRouteDraft,
   createDraft,
   editDraft,
   moveWaypoint,
@@ -138,6 +139,37 @@ describe("route edit reducers", () => {
     expect(changed.generation).toBe(loop.generation + 1);
     expect(changed.preview).toBeNull();
     expect(changed.previewPending).toBe(true);
+  });
+
+  it("uses one pure save predicate for current valid previews", () => {
+    const preview = {
+      ...connectedPreview(0),
+      legs: [
+        {
+          fromWaypointId: "A",
+          toWaypointId: "B",
+          direction: "loop" as const,
+          kind: "service" as const,
+          status: "connected" as const,
+          currentPath: null,
+          lastValidPath: null,
+          estimatedSeconds: 1,
+        },
+      ],
+    };
+    const draft = {
+      ...createDraft("bus", 1),
+      waypointIds: ["A", "B"],
+      preview,
+    };
+
+    expect(canSaveRouteDraft(draft)).toBe(true);
+    expect(
+      canSaveRouteDraft({
+        ...draft,
+        preview: { ...preview, generation: draft.generation + 1 },
+      }),
+    ).toBe(false);
   });
 });
 

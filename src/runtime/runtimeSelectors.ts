@@ -11,6 +11,7 @@ import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
+import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
 import type { UiState } from "../ui/uiState";
 import type {
@@ -176,14 +177,7 @@ function buildRouteDraft(
     (draft.mode === "bus" ? COSTS.bus : COSTS.metro);
   const distinct = new Set(ids).size;
   const preview = draft.preview;
-  const canFinish =
-    preview !== null &&
-    preview.generation === draft.generation &&
-    preview.rejection === null &&
-    preview.legs.length > 0 &&
-    (draft.source.kind === "edit" ||
-      preview.legs.every((leg) => leg.status === "connected")) &&
-    preview.affordable;
+  const canFinish = canSaveRouteDraft(draft);
   const finishHint = draft.previewPending
     ? "Checking route…"
     : preview === null || preview.legs.length === 0
@@ -209,8 +203,7 @@ function buildRouteDraft(
     canReload:
       draft.source.kind === "edit" &&
       rejection?.code === "routeChangedWhileEditing" &&
-      (rejection.context.routeId === undefined ||
-        rejection.context.routeId === draft.source.routeId),
+      rejection.context.routeId === draft.source.routeId,
   };
 }
 

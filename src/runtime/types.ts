@@ -15,7 +15,11 @@ import type { HudCategory, UiState } from "../ui/uiState";
 import type { RouteDraft } from "../ui/routeDraft";
 import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
 
-export type { RouteDraft } from "../ui/routeDraft";
+export type {
+  RouteDraft,
+  RouteDraftError,
+  RouteDraftInteractionError,
+} from "../ui/routeDraft";
 export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {

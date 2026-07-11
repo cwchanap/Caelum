@@ -2,7 +2,6 @@ import type {
   AreaKind,
   BuildingRotation,
   BuildingType,
-  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
@@ -10,7 +9,7 @@ import type {
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
-import type { RouteDraft } from "./routeDraft";
+import type { RouteDraft, RouteDraftError } from "./routeDraft";
 
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
@@ -65,7 +64,7 @@ export interface UiState {
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
   routeDraft: RouteDraft | null;
-  routePreviewError: GameplayRejection | null;
+  routePreviewError: RouteDraftError | null;
   roadPreviewGeneration: number;
   roadMutationPreview: RoadMutationPreviewResponse | null;
   selectedRouteId: string | null;
