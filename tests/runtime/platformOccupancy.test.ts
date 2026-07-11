@@ -10,6 +10,7 @@ import type { ActiveTrip, Stop } from "../../src/domain/types";
 const stop: Stop = {
   id: "stop-001",
   kind: "busStop",
+  status: "present",
   position: { x: 3, y: 3 },
   platforms: [
     {
@@ -121,5 +122,17 @@ describe("selectPlatformOccupancy", () => {
     const state = stateWithTrips([]);
     const occupancy = selectPlatformOccupancy(state);
     expect(occupancy.get("stop-001-p0")).toEqual({ count: 0, capacity: 2 });
+  });
+
+  it("does not expose a platform entry or queue for a missing node", () => {
+    const state = stateWithTrips([waitingTrip({ x: 3, y: 3 }, "route-001")]);
+    state.transit.stops[0] = {
+      ...state.transit.stops[0],
+      status: "missing",
+    };
+
+    const occupancy = selectPlatformOccupancy(state);
+
+    expect(occupancy.has("stop-001-p0")).toBe(false);
   });
 });

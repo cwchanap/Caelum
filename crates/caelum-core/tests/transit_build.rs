@@ -1,7 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding, Point,
-    RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, Sim, TransitMode, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding,
+    Point, RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNodeStatus, TransitPath,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -424,7 +425,7 @@ fn adds_bus_stop_on_road_and_charges_budget() {
     assert_eq!(result.snapshot.transit.stops.len(), 1);
     let stop = &result.snapshot.transit.stops[0];
     assert_eq!(stop.id, "stop-001");
-    assert_eq!(stop.kind, "busStop");
+    assert_eq!(stop.kind, BusStopKind::BusStop);
     assert_eq!(stop.platforms[0].capacity, 50);
     assert_eq!(result.snapshot.budget, 117_900);
 }
@@ -584,6 +585,188 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
         route_1_revision + 1
     );
     assert_eq!(moved.snapshot.transit.routes[1].revision, route_2_revision);
+}
+
+#[test]
+fn bus_stop_building_rebuild_restores_stable_node_and_route() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 10);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (10, 3).into(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 4).into(),
+    });
+    assert_eq!(
+        removed.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Missing
+    );
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    assert_eq!(restored.snapshot.transit.stops.len(), 2);
+    assert_eq!(restored.snapshot.transit.stops[0].id, "stop-001");
+    assert_eq!(
+        restored.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Present
+    );
+    assert_eq!(
+        restored.snapshot.transit.stops[0].platforms,
+        original_platforms
+    );
+    assert_eq!(
+        restored.snapshot.buildings[0].transit_node_id.as_deref(),
+        Some("stop-001")
+    );
+    assert!(!restored.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 12);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 3).into(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: ids(&["stop-001", "stop-002"]),
+    });
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (4, 5).into(),
+    });
+
+    let terminal = removed
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("referenced terminal tombstone remains");
+    assert_eq!(terminal.position, (2, 4).into());
+    assert_eq!(terminal.status, TransitNodeStatus::Missing);
+    assert!(removed.snapshot.buildings.is_empty());
+
+    let obstruction = engine.dispatch(GameIntent::LayTrack {
+        point: (2, 4).into(),
+    });
+    assert!(obstruction.applied);
+    let rejected = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedFootprint)
+    );
+    assert_eq!(
+        rejected.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Missing
+    );
+}
+
+#[test]
+fn bus_terminal_rebuild_restores_stable_node_and_route() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 12);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 3).into(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
+    engine.dispatch(GameIntent::RemoveAtTile {
+        point: (4, 5).into(),
+    });
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    let terminal = restored
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("original terminal identity is restored");
+    assert_eq!(terminal.kind, BusStopKind::BusTerminal);
+    assert_eq!(terminal.status, TransitNodeStatus::Present);
+    assert_eq!(terminal.platforms, original_platforms);
+    assert!(!restored.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn metro_station_building_rebuild_restores_stable_node_and_line() {
+    let mut engine = GameEngine::new();
+    track_line(&mut engine, 4, 2, 10);
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::PlaceBuilding {
+            building_type: "metroStation".to_string(),
+            origin: (x, 4).into(),
+            rotation: 0,
+        });
+    }
+    engine.dispatch(GameIntent::AddMetroLine {
+        station_ids: ids(&["station-001", "station-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stations[0].platforms.clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 4).into(),
+    });
+    assert_eq!(
+        removed.snapshot.transit.stations[0].status,
+        TransitNodeStatus::Missing
+    );
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "metroStation".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    assert_eq!(restored.snapshot.transit.stations[0].id, "station-001");
+    assert_eq!(
+        restored.snapshot.transit.stations[0].status,
+        TransitNodeStatus::Present
+    );
+    assert_eq!(
+        restored.snapshot.transit.stations[0].platforms,
+        original_platforms
+    );
+    assert!(!restored.snapshot.transit.metro_lines[0].path_broken);
 }
 
 #[test]

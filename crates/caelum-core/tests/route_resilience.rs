@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RoadPathStep, Route,
-    RouteLegStatus, RoutePlan, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus,
-    Vehicle,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, Point,
+    RoadPathStep, Route, RouteLegStatus, RoutePlan, TransitMode, TransitNodeStatus, TransitPath,
+    TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -302,4 +302,176 @@ fn arc_projection_normalizes_authored_angles_before_clamping() {
 
     assert!((projection.step_progress - 0.5).abs() < 1e-12);
     assert!(projection.distance_squared < 1e-24);
+}
+
+fn shared_stop_route_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 10));
+    for x in [2, 6, 10] {
+        let added = engine.dispatch(GameIntent::AddBusStop { point: point(x, 5) });
+        assert!(added.applied, "fixture stop should apply: {added:?}");
+    }
+    for stop_ids in [
+        vec!["stop-001".to_string(), "stop-002".to_string()],
+        vec!["stop-002".to_string(), "stop-003".to_string()],
+    ] {
+        let added = engine.dispatch(GameIntent::AddBusRoute { stop_ids });
+        assert!(added.applied, "fixture route should apply: {added:?}");
+    }
+    engine
+}
+
+#[test]
+fn referenced_demolition_preserves_shared_node_and_route_identity() {
+    let mut engine = shared_stop_route_engine();
+    let before = engine.snapshot();
+    let original_platforms = before.transit.stops[1].platforms.clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+
+    assert!(removed.applied);
+    let preserved = removed
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-002")
+        .expect("a referenced stop should be retained as a tombstone");
+    assert_eq!(preserved.status, TransitNodeStatus::Missing);
+    assert_eq!(preserved.position, point(6, 5));
+    assert_eq!(preserved.platforms, original_platforms);
+    assert_eq!(
+        removed
+            .snapshot
+            .transit
+            .routes
+            .iter()
+            .map(|route| route.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["route-001", "route-002"]
+    );
+    assert!(removed.snapshot.transit.routes.iter().all(|route| {
+        route.path_broken
+            && route
+                .legs
+                .iter()
+                .any(|leg| leg.status == RouteLegStatus::MissingNode)
+    }));
+
+    let reused = engine.dispatch(GameIntent::LayTrack { point: point(6, 5) });
+    assert!(
+        reused.applied,
+        "a missing stop must not occupy its anchor: {reused:?}"
+    );
+}
+
+#[test]
+fn same_kind_same_anchor_rebuild_restores_shared_node_once() {
+    let mut engine = shared_stop_route_engine();
+    let original_platforms = engine.snapshot().transit.stops[1].platforms.clone();
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+    assert!(removed.applied);
+
+    let restored = engine.dispatch(GameIntent::AddBusStop { point: point(6, 5) });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    let matching: Vec<_> = restored
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .filter(|stop| stop.position == point(6, 5))
+        .collect();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].id, "stop-002");
+    assert_eq!(matching[0].status, TransitNodeStatus::Present);
+    assert_eq!(matching[0].platforms, original_platforms);
+    assert!(restored
+        .snapshot
+        .transit
+        .routes
+        .iter()
+        .all(|route| !route.path_broken));
+}
+
+#[test]
+fn unreferenced_node_deletes_instead_of_tombstoning() {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 4));
+    let added = engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    assert!(added.applied);
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 5) });
+
+    assert!(removed.applied);
+    assert!(removed.snapshot.transit.stops.is_empty());
+}
+
+#[test]
+fn removing_last_route_reference_garbage_collects_tombstone() {
+    let mut engine = shared_stop_route_engine();
+    engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+
+    let first = engine.dispatch(GameIntent::DeleteRoute {
+        route_id: "route-001".to_string(),
+    });
+    assert!(first
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .any(|stop| stop.id == "stop-002"));
+
+    let second = engine.dispatch(GameIntent::DeleteRoute {
+        route_id: "route-002".to_string(),
+    });
+    assert!(second
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .all(|stop| stop.id != "stop-002"));
+}
+
+#[test]
+fn ambiguous_same_kind_anchor_rejects_without_mutating_candidate() {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(7, 6, 8));
+    engine.dispatch(GameIntent::AddBusStop { point: point(7, 7) });
+    let mut state = engine.snapshot();
+    state.transit.stops[0].status = TransitNodeStatus::Missing;
+    let mut duplicate = state.transit.stops[0].clone();
+    duplicate.id = "stop-002".to_string();
+    for platform in &mut duplicate.platforms {
+        platform.id = platform.id.replace("stop-001", "stop-002");
+    }
+    state.transit.stops.push(duplicate);
+    let before = state.clone();
+
+    let rejection = transit::add_bus_stop(&state, &point(7, 7)).unwrap_err();
+
+    assert_eq!(
+        rejection.code,
+        caelum_core::RejectionCode::AmbiguousTransitNode
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn incompatible_tombstone_kind_allocates_without_restoring_it() {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(7, 6, 8));
+    engine.dispatch(GameIntent::AddBusStop { point: point(7, 7) });
+    let mut state = engine.snapshot();
+    state.transit.stops[0].kind = BusStopKind::BusTerminal;
+    state.transit.stops[0].status = TransitNodeStatus::Missing;
+
+    let next = transit::add_bus_stop(&state, &point(7, 7)).expect("new bus stop allocates");
+
+    assert_eq!(next.transit.stops.len(), 2);
+    assert_eq!(next.transit.stops[0].status, TransitNodeStatus::Missing);
+    assert_eq!(next.transit.stops[0].kind, BusStopKind::BusTerminal);
+    assert_eq!(next.transit.stops[1].id, "stop-002");
+    assert_eq!(next.transit.stops[1].kind, BusStopKind::BusStop);
+    assert_eq!(next.transit.stops[1].status, TransitNodeStatus::Present);
 }

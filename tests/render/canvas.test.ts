@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderBuildings } from "../../src/render/buildingRenderer";
 import { canvasToTile, syncCanvasSize } from "../../src/render/canvas";
 import { renderOverlays } from "../../src/render/overlayRenderer";
+import { renderTransit } from "../../src/render/transitRenderer";
 import { getBuildingFootprint } from "../../src/domain/catalog/buildings";
 import { stopCoverageRadius } from "../../src/domain/catalog/transit";
 import { createUiState } from "../../src/ui/uiState";
@@ -139,6 +140,7 @@ describe("canvas helpers", () => {
       stopCoverageRadius({
         id: "stop-001",
         kind: "busStop",
+        status: "present",
         position: { x: 0, y: 0 },
         platforms: [],
       }),
@@ -147,6 +149,7 @@ describe("canvas helpers", () => {
       stopCoverageRadius({
         id: "stop-002",
         kind: "busTerminal",
+        status: "present",
         position: { x: 0, y: 0 },
         platforms: [],
       }),
@@ -221,6 +224,7 @@ describe("canvas helpers", () => {
           {
             id: "stop-001",
             kind: "busTerminal" as const,
+            status: "present" as const,
             position: { x: 6, y: 7 },
             platforms: [],
           },
@@ -238,6 +242,42 @@ describe("canvas helpers", () => {
       width: 9 * tileSize,
       height: 9 * tileSize,
     });
+  });
+
+  it("does not render missing stops or stations as physical nodes", () => {
+    const ctx = {
+      fillRect: vi.fn(),
+      beginPath: vi.fn(),
+      arc: vi.fn(),
+      fill: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const state = createTestGameState({
+      transit: {
+        ...createTestGameState().transit,
+        stops: [
+          {
+            id: "stop-001",
+            kind: "busStop",
+            status: "missing",
+            position: { x: 3, y: 3 },
+            platforms: [],
+          },
+        ],
+        stations: [
+          {
+            id: "station-001",
+            status: "missing",
+            position: { x: 4, y: 4 },
+            platforms: [],
+          },
+        ],
+      },
+    });
+
+    renderTransit(ctx, state, createUiState());
+
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+    expect(ctx.arc).not.toHaveBeenCalled();
   });
 
   it("renders selected building preview over the full footprint", () => {

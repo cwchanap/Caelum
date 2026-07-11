@@ -23,6 +23,7 @@ function fakeCtx() {
 const stop: Stop = {
   id: "stop-001",
   kind: "busStop",
+  status: "present",
   position: { x: 3, y: 3 },
   platforms: [
     { id: "stop-001-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
@@ -541,12 +542,14 @@ describe("coverage overlay", () => {
           {
             id: "stop-001",
             kind: "busStop" as const,
+            status: "present" as const,
             position: { x: 5, y: 5 },
             platforms: [],
           },
           {
             id: "stop-002",
             kind: "busTerminal" as const,
+            status: "present" as const,
             position: { x: 10, y: 10 },
             platforms: [],
           },
@@ -554,6 +557,7 @@ describe("coverage overlay", () => {
         stations: [
           {
             id: "station-001",
+            status: "present" as const,
             position: { x: 15, y: 15 },
             platforms: [],
           },
@@ -586,6 +590,22 @@ describe("coverage overlay", () => {
       tileSize * 9,
       tileSize * 9,
     );
+  });
+
+  it("does not render coverage for missing nodes", () => {
+    const ctx = fakeCtx();
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        ...createTestGameState().transit,
+        stops: [{ ...stop, status: "missing" as const }],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "coverage" as const };
+
+    renderOverlays(ctx, state, ui);
+
+    expect(ctx.fillRect).not.toHaveBeenCalled();
   });
 });
 
@@ -767,6 +787,7 @@ describe("crowding overlay ratios", () => {
     const crowdedStop: Stop = {
       id: "stop-001",
       kind: "busStop",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
@@ -809,6 +830,7 @@ describe("crowding overlay ratios", () => {
     const quietStop: Stop = {
       id: "stop-001",
       kind: "busStop",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
@@ -837,6 +859,7 @@ describe("crowding overlay ratios", () => {
     const multiStop: Stop = {
       id: "stop-001",
       kind: "busTerminal",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         {

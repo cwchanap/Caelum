@@ -38,8 +38,9 @@ export function resolveStopAtTile(
   state: GameState,
   point: Point,
 ): Stop | undefined {
-  const exactStop = state.transit.stops.find((candidate) =>
-    samePoint(candidate.position, point),
+  const exactStop = state.transit.stops.find(
+    (candidate) =>
+      candidate.status === "present" && samePoint(candidate.position, point),
   );
   if (exactStop !== undefined) return exactStop;
 
@@ -51,15 +52,19 @@ export function resolveStopAtTile(
   );
   return building?.transitNodeId === undefined
     ? undefined
-    : state.transit.stops.find((stop) => stop.id === building.transitNodeId);
+    : state.transit.stops.find(
+        (stop) =>
+          stop.id === building.transitNodeId && stop.status === "present",
+      );
 }
 
 export function resolveStationAtTile(
   state: GameState,
   point: Point,
 ): Station | undefined {
-  const exactStation = state.transit.stations.find((candidate) =>
-    samePoint(candidate.position, point),
+  const exactStation = state.transit.stations.find(
+    (candidate) =>
+      candidate.status === "present" && samePoint(candidate.position, point),
   );
   if (exactStation !== undefined) return exactStation;
 
@@ -72,7 +77,8 @@ export function resolveStationAtTile(
   return building?.transitNodeId === undefined
     ? undefined
     : state.transit.stations.find(
-        (station) => station.id === building.transitNodeId,
+        (station) =>
+          station.id === building.transitNodeId && station.status === "present",
       );
 }
 
@@ -135,6 +141,15 @@ export function applyRouteNodeClick(
   draft: RouteDraft,
   node: Stop | Station,
 ): RouteDraftClickResult {
+  if (node.status !== "present") {
+    return {
+      draft,
+      rejection: {
+        code: "missingRouteNode",
+        context: { nodeId: node.id, affectedRouteIds: [] },
+      },
+    };
+  }
   if (!nodeMatchesMode(node, draft.mode)) {
     return {
       draft,

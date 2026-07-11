@@ -43,8 +43,13 @@ function isBuildingOccupied(state: GameState, point: Point): boolean {
 
 function isTransitNodeAt(state: GameState, point: Point): boolean {
   return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
+    state.transit.stops.some(
+      (stop) => stop.status === "present" && samePoint(stop.position, point),
+    ) ||
+    state.transit.stations.some(
+      (station) =>
+        station.status === "present" && samePoint(station.position, point),
+    )
   );
 }
 

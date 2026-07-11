@@ -81,6 +81,7 @@ describe("applyRouteNodeClick", () => {
     const result = applyRouteNodeClick(createDraft("bus", 1), {
       id: "stop-0001",
       kind: "busStop",
+      status: "present",
       position: { x: 2, y: 3 },
       platforms: [],
     });
@@ -94,6 +95,7 @@ describe("applyRouteNodeClick", () => {
     const result = applyRouteNodeClick(draft, {
       id: "stop-0001",
       kind: "busStop",
+      status: "present",
       position: { x: 2, y: 3 },
       platforms: [],
     });
@@ -101,6 +103,23 @@ describe("applyRouteNodeClick", () => {
     expect(result.draft).toBe(draft);
     expect(result.rejection).toEqual({
       code: "incompatibleRouteNode",
+      context: { nodeId: "stop-0001", affectedRouteIds: [] },
+    });
+  });
+
+  it("rejects a missing node before changing the draft", () => {
+    const draft = createDraft("bus", 1);
+    const result = applyRouteNodeClick(draft, {
+      id: "stop-0001",
+      kind: "busStop",
+      status: "missing",
+      position: { x: 2, y: 3 },
+      platforms: [],
+    });
+
+    expect(result.draft).toBe(draft);
+    expect(result.rejection).toEqual({
+      code: "missingRouteNode",
       context: { nodeId: "stop-0001", affectedRouteIds: [] },
     });
   });

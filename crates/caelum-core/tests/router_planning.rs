@@ -1,4 +1,4 @@
-use caelum_core::model::{GameSnapshot, TransitMode, TransitPath};
+use caelum_core::model::{GameSnapshot, TransitMode, TransitNodeStatus, TransitPath};
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -86,6 +86,19 @@ fn creates_bus_route_plan_from_connected_stops() {
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("route-001"));
     assert_eq!(plan.legs[1].from, (2, 5).into());
     assert_eq!(plan.legs[1].to, (12, 5).into());
+}
+
+#[test]
+fn missing_node_is_not_enumerated_as_a_router_anchor() {
+    let mut snapshot = bus_route_state().snapshot();
+    snapshot.transit.stops[0].status = TransitNodeStatus::Missing;
+    snapshot.transit.routes[0].path_broken = false;
+
+    let plan = router::find_route_plan(&snapshot, &(1, 5).into(), &(13, 5).into())
+        .expect("walking fallback remains available");
+
+    assert_eq!(plan.legs.len(), 1);
+    assert_eq!(plan.legs[0].mode, TransitMode::Walk);
 }
 
 #[test]

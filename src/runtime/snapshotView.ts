@@ -1,4 +1,9 @@
-import { SNAPSHOT_SCHEMA_VERSION, type GameState } from "../domain/types";
+import {
+  SNAPSHOT_SCHEMA_VERSION,
+  type GameState,
+  type Station,
+  type Stop,
+} from "../domain/types";
 import type { RustGameSnapshot } from "./backend/types";
 
 export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
@@ -19,4 +24,8 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
       growthWaves: snapshot.scenario.growthWaves,
     },
   };
+}
+
+export function isPresentTransitNode(node: Stop | Station): boolean {
+  return node.status === "present";
 }

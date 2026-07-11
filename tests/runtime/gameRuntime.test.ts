@@ -87,6 +87,7 @@ function createStop(id: string, position: Point): Stop {
   return {
     id,
     kind: "busStop",
+    status: "present",
     position,
     platforms: [
       {
@@ -416,6 +417,7 @@ function applyIntent(
           ...snapshot.transit.stations,
           {
             id,
+            status: "present",
             position: intent.point,
             platforms: [
               { id: `${id}-p0`, label: "A", capacity: 300, routeIds: [] },

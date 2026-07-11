@@ -1,7 +1,7 @@
 use caelum_core::{
     buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::{PlacedBuilding, Point, Sim, WorkerProfile},
+    model::{BusStopKind, PlacedBuilding, Point, Sim, WorkerProfile},
     state::create_initial_snapshot,
     GameEngine, GameIntent, RejectionCode,
 };
@@ -201,7 +201,7 @@ fn place_bus_stop_building_creates_linked_stop() {
     let stop = &placed.snapshot.transit.stops[0];
     assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
     assert_eq!(stop.id, "stop-001");
-    assert_eq!(stop.kind, "busStop");
+    assert_eq!(stop.kind, BusStopKind::BusStop);
     assert_eq!(stop.position, building.origin);
     assert_eq!(stop.platforms.len(), 1);
     assert_eq!(stop.platforms[0].id, "stop-001-p0");
@@ -223,7 +223,7 @@ fn place_bus_terminal_building_creates_terminal_stop_platforms() {
     let building = &placed.snapshot.buildings[0];
     let stop = &placed.snapshot.transit.stops[0];
     assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
-    assert_eq!(stop.kind, "busTerminal");
+    assert_eq!(stop.kind, BusStopKind::BusTerminal);
     assert_eq!(stop.position, building.origin);
     assert_eq!(stop.platforms.len(), 3);
     assert_eq!(stop.platforms[2].id, "stop-001-p2");

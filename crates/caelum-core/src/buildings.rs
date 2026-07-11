@@ -1,9 +1,15 @@
 use crate::building_catalog::{building_definition, BuildingDefinition};
 use crate::commute::{shift_template_for_id, worker_profile_for_id};
 use crate::ids::next_entity_id;
-use crate::model::{GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, WorkerProfile};
+use crate::model::{
+    BusStopKind, GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, TransitNodeStatus,
+    WorkerProfile,
+};
 use crate::platforms::{bus_platforms, metro_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+use crate::transit_nodes::{
+    is_present_node, matching_present_node_id, restore_or_create_node, LogicalNodeKind,
+};
 
 fn placement_rejection(
     code: RejectionCode,
@@ -163,7 +169,7 @@ pub fn can_place_building(
             .transit
             .stops
             .iter()
-            .any(|stop| stop.position == *point)
+            .any(|stop| is_present_node(stop.status) && stop.position == *point)
         {
             return Err(placement_rejection(
                 RejectionCode::BlockedFootprint,
@@ -175,7 +181,7 @@ pub fn can_place_building(
             .transit
             .stations
             .iter()
-            .any(|station| station.position == *point)
+            .any(|station| is_present_node(station.status) && station.position == *point)
         {
             return Err(placement_rejection(
                 RejectionCode::BlockedFootprint,
@@ -223,17 +229,32 @@ pub fn place_building_core(
     let mut transit_node_id = None;
 
     if matches!(definition.effect, "busStop" | "busTerminal") {
+        let kind = if definition.effect == "busTerminal" {
+            BusStopKind::BusTerminal
+        } else {
+            BusStopKind::BusStop
+        };
+        let logical_kind = if kind == BusStopKind::BusTerminal {
+            LogicalNodeKind::BusTerminal
+        } else {
+            LogicalNodeKind::BusStop
+        };
         let stop_id = next_entity_id(
             "stop",
             next.transit.stops.iter().map(|stop| stop.id.clone()),
         );
-        next.transit.stops.push(Stop {
-            id: stop_id.clone(),
-            kind: definition.effect.to_string(),
-            position: *origin,
-            platforms: bus_platforms(&stop_id, definition.effect),
-        });
-        transit_node_id = Some(stop_id);
+        next = restore_or_create_node(&next, logical_kind, *origin, |state| {
+            let mut allocated = state.clone();
+            allocated.transit.stops.push(Stop {
+                id: stop_id.clone(),
+                kind,
+                status: TransitNodeStatus::Present,
+                position: *origin,
+                platforms: bus_platforms(&stop_id, kind),
+            });
+            Ok(allocated)
+        })?;
+        transit_node_id = matching_present_node_id(&next, logical_kind, *origin);
     }
 
     if definition.effect == "metroStation" {
@@ -244,12 +265,17 @@ pub fn place_building_core(
                 .iter()
                 .map(|station| station.id.clone()),
         );
-        next.transit.stations.push(Station {
-            id: station_id.clone(),
-            position: *origin,
-            platforms: metro_platforms(&station_id),
-        });
-        transit_node_id = Some(station_id);
+        next = restore_or_create_node(&next, LogicalNodeKind::MetroStation, *origin, |state| {
+            let mut allocated = state.clone();
+            allocated.transit.stations.push(Station {
+                id: station_id.clone(),
+                status: TransitNodeStatus::Present,
+                position: *origin,
+                platforms: metro_platforms(&station_id),
+            });
+            Ok(allocated)
+        })?;
+        transit_node_id = matching_present_node_id(&next, LogicalNodeKind::MetroStation, *origin);
     }
 
     next.buildings.push(PlacedBuilding {

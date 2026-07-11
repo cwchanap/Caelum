@@ -34,6 +34,7 @@ export type BuildingType =
   | "parkPlaza";
 export type BuildingRotation = 0 | 90 | 180 | 270;
 export type StopKind = "busStop" | "busTerminal";
+export type TransitNodeStatus = "present" | "missing";
 export type CitizenStatus =
   | "idle"
   | "walking"
@@ -187,12 +188,14 @@ export interface Platform {
 export interface Stop {
   id: string;
   kind: StopKind;
+  status: TransitNodeStatus;
   position: Point;
   platforms: Platform[];
 }
 
 export interface Station {
   id: string;
+  status: TransitNodeStatus;
   position: Point;
   platforms: Platform[];
 }

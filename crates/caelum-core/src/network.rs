@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::service_itinerary::{build_service_itinerary, ServiceLegSpec};
 use crate::transit::METRO_TILES_PER_SECOND;
+use crate::transit_nodes::is_present_node;
 
 pub fn find_track_path(map: &GameMap, from: &Point, to: &Point) -> Option<TransitPath> {
     let points = deterministic_track_bfs(map, from, to)?;
@@ -139,13 +140,13 @@ fn waypoint_position(snapshot: &GameSnapshot, mode: TransitMode, id: &str) -> Op
             .stops
             .iter()
             .find(|stop| stop.id == id)
-            .map(|stop| stop.position),
+            .and_then(|stop| is_present_node(stop.status).then_some(stop.position)),
         TransitMode::Metro => snapshot
             .transit
             .stations
             .iter()
             .find(|station| station.id == id)
-            .map(|station| station.position),
+            .and_then(|station| is_present_node(station.status).then_some(station.position)),
         TransitMode::Walk => None,
     }
 }

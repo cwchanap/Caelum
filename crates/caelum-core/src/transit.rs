@@ -6,12 +6,17 @@ use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLegPath,
-    ServicePattern, Tile, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, BusStopKind, GameMap, GameSnapshot, MetroLine, Platform, Point, Route,
+    RouteLegPath, ServicePattern, Tile, TransitMode, TransitNodeStatus, TransitPath, TripPosition,
+    TripPurpose, TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::{apply_road_mutation, RoadMutation};
+use crate::transit_nodes::{
+    canonical_node_anchor, garbage_collect_missing_nodes, is_present_node,
+    remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
+};
 use crate::trips::WAIT_PATIENCE_SECONDS;
 
 pub const BUS_STOP_COST: i32 = 2_000;
@@ -131,6 +136,7 @@ pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult
 }
 
 pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
+    let anchor = canonical_node_anchor(state, *point).unwrap_or(*point);
     let removed_building = state
         .buildings
         .iter()
@@ -157,40 +163,16 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         }
     } else {
         for stop in &state.transit.stops {
-            if stop.position == *point {
+            if is_present_node(stop.status) && stop.position == anchor {
                 removed_stop_ids.insert(stop.id.clone());
             }
         }
         for station in &state.transit.stations {
-            if station.position == *point {
+            if is_present_node(station.status) && station.position == anchor {
                 removed_station_ids.insert(station.id.clone());
             }
         }
     }
-
-    let removed_route_ids: Vec<String> = state
-        .transit
-        .routes
-        .iter()
-        .filter(|route| {
-            route
-                .stop_ids
-                .iter()
-                .any(|stop_id| removed_stop_ids.contains(stop_id))
-        })
-        .map(|route| route.id.clone())
-        .collect();
-    let removed_line_ids: Vec<String> = state
-        .transit
-        .metro_lines
-        .iter()
-        .filter(|line| {
-            line.station_ids
-                .iter()
-                .any(|station_id| removed_station_ids.contains(station_id))
-        })
-        .map(|line| line.id.clone())
-        .collect();
 
     if removed_building.is_none() && removed_stop_ids.is_empty() && removed_station_ids.is_empty() {
         return remove_infrastructure_at_tile(state, point);
@@ -202,18 +184,11 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
             .retain(|candidate| candidate.id != building.id);
     }
     cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
-    next.transit
-        .stops
-        .retain(|stop| !removed_stop_ids.contains(&stop.id));
-    next.transit
-        .stations
-        .retain(|station| !removed_station_ids.contains(&station.id));
-
-    for route_id in removed_route_ids {
-        next = delete_route(&next, &route_id)?;
+    for stop_id in removed_stop_ids {
+        next = remove_or_tombstone_node(&next, &stop_id);
     }
-    for line_id in removed_line_ids {
-        next = delete_route(&next, &line_id)?;
+    for station_id in removed_station_ids {
+        next = remove_or_tombstone_node(&next, &station_id);
     }
 
     Ok(next)
@@ -236,7 +211,7 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
                 .transit
                 .stops
                 .iter()
-                .find(|stop| stop.position == *point)
+                .find(|stop| is_present_node(stop.status) && stop.position == *point)
                 .map_or_else(
                     || GameplayRejection::at(RejectionCode::BlockedTile, *point),
                     |stop| {
@@ -250,18 +225,22 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
         return Err(rejection);
     }
 
-    let mut next = state.clone();
     let stop_id = next_entity_id(
         "stop",
-        next.transit.stops.iter().map(|stop| stop.id.clone()),
+        state.transit.stops.iter().map(|stop| stop.id.clone()),
     );
+    let mut next = restore_or_create_node(state, LogicalNodeKind::BusStop, *point, |source| {
+        let mut allocated = source.clone();
+        allocated.transit.stops.push(crate::model::Stop {
+            id: stop_id.clone(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: *point,
+            platforms: bus_platforms(&stop_id, BusStopKind::BusStop),
+        });
+        Ok(allocated)
+    })?;
     next.budget -= BUS_STOP_COST;
-    next.transit.stops.push(crate::model::Stop {
-        id: stop_id.clone(),
-        kind: "busStop".to_string(),
-        position: *point,
-        platforms: bus_platforms(&stop_id, "busStop"),
-    });
 
     Ok(next)
 }
@@ -280,7 +259,7 @@ pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<
                 .transit
                 .stations
                 .iter()
-                .find(|station| station.position == *point)
+                .find(|station| is_present_node(station.status) && station.position == *point)
                 .map_or_else(
                     || GameplayRejection::at(RejectionCode::BlockedTile, *point),
                     |station| {
@@ -294,20 +273,26 @@ pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<
         return Err(rejection);
     }
 
-    let mut next = state.clone();
     let station_id = next_entity_id(
         "station",
-        next.transit
+        state
+            .transit
             .stations
             .iter()
             .map(|station| station.id.clone()),
     );
+    let mut next =
+        restore_or_create_node(state, LogicalNodeKind::MetroStation, *point, |source| {
+            let mut allocated = source.clone();
+            allocated.transit.stations.push(crate::model::Station {
+                id: station_id.clone(),
+                status: TransitNodeStatus::Present,
+                position: *point,
+                platforms: metro_platforms(&station_id),
+            });
+            Ok(allocated)
+        })?;
     next.budget -= METRO_STATION_COST;
-    next.transit.stations.push(crate::model::Station {
-        id: station_id.clone(),
-        position: *point,
-        platforms: metro_platforms(&station_id),
-    });
 
     Ok(next)
 }
@@ -736,7 +721,7 @@ pub fn delete_route(state: &GameSnapshot, route_id: &str) -> GameplayResult<Game
         route_id,
         &HashMap::new(),
     );
-    Ok(next)
+    Ok(garbage_collect_missing_nodes(&next))
 }
 
 pub fn assign_route_to_platform(
@@ -746,6 +731,23 @@ pub fn assign_route_to_platform(
     platform_id: &str,
 ) -> GameplayResult<GameSnapshot> {
     let mut next = state.clone();
+    let node_is_missing = state
+        .transit
+        .stops
+        .iter()
+        .any(|stop| stop.id == node_id && !is_present_node(stop.status))
+        || state
+            .transit
+            .stations
+            .iter()
+            .any(|station| station.id == node_id && !is_present_node(station.status));
+    if node_is_missing {
+        return Err(node_rejection(
+            RejectionCode::MissingRouteNode,
+            node_id,
+            Some(route_id),
+        ));
+    }
     if reassign_within_node(&mut next.transit.stops, node_id, route_id, platform_id) {
         increment_route_revision(&mut next, route_id);
         return Ok(next);
@@ -794,8 +796,8 @@ fn increment_route_revision(state: &mut GameSnapshot, route_id: &str) {
     }
 }
 
-pub fn stop_coverage_radius(kind: &str) -> u8 {
-    if kind == "busTerminal" {
+pub fn stop_coverage_radius(kind: BusStopKind) -> u8 {
+    if kind == BusStopKind::BusTerminal {
         4
     } else {
         2
@@ -939,6 +941,7 @@ fn distinct_valid_stop_count(state: &GameSnapshot, stop_ids: &[String]) -> usize
         .transit
         .stops
         .iter()
+        .filter(|stop| is_present_node(stop.status))
         .map(|stop| stop.id.as_str())
         .collect();
     stop_ids
@@ -953,6 +956,7 @@ fn distinct_valid_station_count(state: &GameSnapshot, station_ids: &[String]) ->
         .transit
         .stations
         .iter()
+        .filter(|station| is_present_node(station.status))
         .map(|station| station.id.as_str())
         .collect();
     station_ids
@@ -1411,6 +1415,9 @@ fn waiter_order_lookup(
     let mut lookup: HashMap<String, Vec<String>> = HashMap::new();
 
     for stop in &state.transit.stops {
+        if !is_present_node(stop.status) {
+            continue;
+        }
         let pos_key = position_key(stop.position.x, stop.position.y);
         for platform in &stop.platforms {
             for route_id in &platform.route_ids {
@@ -1425,6 +1432,9 @@ fn waiter_order_lookup(
     }
 
     for station in &state.transit.stations {
+        if !is_present_node(station.status) {
+            continue;
+        }
         let pos_key = position_key(station.position.x, station.position.y);
         for platform in &station.platforms {
             for route_id in &platform.route_ids {
@@ -1461,7 +1471,7 @@ fn is_valid_bus_stop_placement(state: &GameSnapshot, point: &Point) -> bool {
                 .transit
                 .stops
                 .iter()
-                .any(|stop| stop.position == *point)
+                .any(|stop| is_present_node(stop.status) && stop.position == *point)
     })
 }
 
@@ -1474,7 +1484,7 @@ fn is_valid_metro_station_placement(state: &GameSnapshot, point: &Point) -> bool
                 .transit
                 .stations
                 .iter()
-                .any(|station| station.position == *point)
+                .any(|station| is_present_node(station.status) && station.position == *point)
     })
 }
 
@@ -1499,12 +1509,12 @@ fn is_transit_node_at(state: &GameSnapshot, point: &Point) -> bool {
         .transit
         .stops
         .iter()
-        .any(|stop| stop.position == *point)
+        .any(|stop| is_present_node(stop.status) && stop.position == *point)
         || state
             .transit
             .stations
             .iter()
-            .any(|station| station.position == *point)
+            .any(|station| is_present_node(station.status) && station.position == *point)
 }
 
 fn get_tile<'a>(map: &'a GameMap, point: &Point) -> Option<&'a Tile> {

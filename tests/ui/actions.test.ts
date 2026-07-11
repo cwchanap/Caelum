@@ -30,6 +30,7 @@ function withColocatedStopAndStation(
         {
           id: "stop-001",
           kind: "busStop",
+          status: "present",
           position: { ...point },
           platforms: [
             { id: "stop-001-p0", label: "A", capacity: 50, routeIds: [] },
@@ -40,6 +41,7 @@ function withColocatedStopAndStation(
         ...state.transit.stations,
         {
           id: "station-001",
+          status: "present",
           position: { ...point },
           platforms: [
             { id: "station-001-p0", label: "A", capacity: 300, routeIds: [] },
@@ -94,6 +96,23 @@ describe("resolveNodeAtTile", () => {
 
   it("returns null on an empty tile", () => {
     expect(resolveNodeAtTile(createTestGameState(), { x: 0, y: 0 })).toBeNull();
+  });
+
+  it("does not resolve a missing node for routing or inspection", () => {
+    let state = addTestBusStop(createTestGameState(), { x: 7, y: 2 });
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) => ({
+          ...stop,
+          status: "missing" as const,
+        })),
+      },
+    };
+
+    expect(resolveNodeAtTile(state, { x: 7, y: 2 })).toBeNull();
+    expect(resolveNodesAtTile(state, { x: 7, y: 2 })).toEqual([]);
   });
 
   it("honors the preferred node kind on a co-located tile", () => {

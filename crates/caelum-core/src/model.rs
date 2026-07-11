@@ -42,6 +42,20 @@ pub enum RouteLegStatus {
     MissingNode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitNodeStatus {
+    Present,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BusStopKind {
+    BusStop,
+    BusTerminal,
+}
+
 /// Lifecycle state of an active trip. Serialized as the lowercase TS-parity strings
 /// `idle` / `walking` / `waiting` / `riding` / `arrived` / `late` / `unserved`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -546,7 +560,8 @@ pub struct TransitNetwork {
 #[serde(rename_all = "camelCase")]
 pub struct Stop {
     pub id: String,
-    pub kind: String,
+    pub kind: BusStopKind,
+    pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
 }
@@ -554,6 +569,7 @@ pub struct Stop {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Station {
     pub id: String,
+    pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
 }

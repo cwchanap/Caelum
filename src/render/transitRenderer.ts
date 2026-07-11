@@ -132,11 +132,13 @@ export function renderTransit(
   }
 
   for (const stop of state.transit.stops) {
+    if (stop.status !== "present") continue;
     const point = center(stop.position);
     ctx.fillStyle = colors.bus;
     ctx.fillRect(point.x - 5, point.y - 5, 10, 10);
   }
   for (const station of state.transit.stations) {
+    if (station.status !== "present") continue;
     const point = center(station.position);
     ctx.fillStyle = colors.metro;
     ctx.beginPath();

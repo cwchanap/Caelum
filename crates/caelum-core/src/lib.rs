@@ -43,6 +43,7 @@ pub mod scenario;
 pub mod service_itinerary;
 pub mod state;
 pub mod transit;
+pub mod transit_nodes;
 pub mod trips;
 
 pub use engine::{GameEngine, RoutingContext};

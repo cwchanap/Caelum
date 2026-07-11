@@ -1,4 +1,5 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
+import { isPresentTransitNode } from "../runtime/snapshotView";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,
@@ -18,11 +19,11 @@ export function resolveNodesAtTile(
 ): ResolvedNode[] {
   const nodes: ResolvedNode[] = [];
   const stop = resolveStopAtTile(state, point);
-  if (stop !== undefined) {
+  if (stop !== undefined && isPresentTransitNode(stop)) {
     nodes.push({ kind: "stop", node: stop });
   }
   const station = resolveStationAtTile(state, point);
-  if (station !== undefined) {
+  if (station !== undefined && isPresentTransitNode(station)) {
     nodes.push({ kind: "station", node: station });
   }
   return nodes;

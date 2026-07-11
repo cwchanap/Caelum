@@ -1,6 +1,7 @@
 use crate::engine::RoutingContext;
 use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
+use crate::transit_nodes::is_present_node;
 
 #[derive(Clone)]
 struct TransitService {
@@ -127,7 +128,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .transit
                     .stops
                     .iter()
-                    .find(|stop| stop.id == *stop_id)
+                    .find(|stop| stop.id == *stop_id && is_present_node(stop.status))
                     .map(|stop| stop.position)
             })
             .collect();
@@ -155,7 +156,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                     .transit
                     .stations
                     .iter()
-                    .find(|station| station.id == *station_id)
+                    .find(|station| station.id == *station_id && is_present_node(station.status))
                     .map(|station| station.position)
             })
             .collect();

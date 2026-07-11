@@ -290,6 +290,7 @@ export function addTestBusStop(
   const stop: Stop = {
     id,
     kind,
+    status: "present",
     position: clonePoint(position),
     platforms: busPlatforms(id, kind),
   };
@@ -309,6 +310,7 @@ export function addTestMetroStation(
   const id = nextId("station", state.transit.stations.length);
   const station: Station = {
     id,
+    status: "present",
     position: clonePoint(position),
     platforms: metroPlatforms(id),
   };
@@ -563,6 +565,7 @@ export function placeTestBuilding(
         {
           id: stopId,
           kind: definition.effect,
+          status: "present",
           position: clonePoint(origin),
           platforms: busPlatforms(stopId, definition.effect),
         },
@@ -579,6 +582,7 @@ export function placeTestBuilding(
         ...transit.stations,
         {
           id: stationId,
+          status: "present",
           position: clonePoint(origin),
           platforms: metroPlatforms(stationId),
         },

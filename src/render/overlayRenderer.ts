@@ -51,8 +51,13 @@ function isBuildingOccupied(state: GameState, point: Point): boolean {
 
 function isTransitNodeAt(state: GameState, point: Point): boolean {
   return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
+    state.transit.stops.some(
+      (stop) => stop.status === "present" && samePoint(stop.position, point),
+    ) ||
+    state.transit.stations.some(
+      (station) =>
+        station.status === "present" && samePoint(station.position, point),
+    )
   );
 }
 
@@ -385,10 +390,12 @@ export function renderOverlays(
     ctx.fillStyle = colors.coverage;
 
     for (const stop of state.transit.stops) {
+      if (stop.status !== "present") continue;
       fillCoverageArea(ctx, stop.position, stopCoverageRadius(stop));
     }
 
     for (const station of state.transit.stations) {
+      if (station.status !== "present") continue;
       fillCoverageArea(ctx, station.position, 4);
     }
   }
@@ -415,7 +422,9 @@ export function renderOverlays(
 
   if (ui.activeOverlay === "crowding") {
     const occupancy = selectPlatformOccupancy(state);
-    const nodes = [...state.transit.stops, ...state.transit.stations];
+    const nodes = [...state.transit.stops, ...state.transit.stations].filter(
+      (node) => node.status === "present",
+    );
 
     for (const node of nodes) {
       let maxRatio = 0;

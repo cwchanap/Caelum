@@ -1,16 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::model::{ActiveTrip, GameSnapshot, Platform, RouteLeg, TransitMode, TripStatus};
+use crate::model::{
+    ActiveTrip, BusStopKind, GameSnapshot, Platform, RouteLeg, TransitMode, TripStatus,
+};
+use crate::transit_nodes::is_present_node;
 
 pub const BUS_PLATFORM_CAPACITY: u16 = 50;
 pub const METRO_PLATFORM_CAPACITY: u16 = 300;
 
 const PLATFORM_LABELS: [&str; 6] = ["A", "B", "C", "D", "E", "F"];
 
-pub fn bus_platforms(stop_id: &str, kind: &str) -> Vec<Platform> {
+pub fn bus_platforms(stop_id: &str, kind: BusStopKind) -> Vec<Platform> {
     build_platforms(
         stop_id,
-        if kind == "busTerminal" { 3 } else { 1 },
+        if kind == BusStopKind::BusTerminal {
+            3
+        } else {
+            1
+        },
         BUS_PLATFORM_CAPACITY,
     )
 }
@@ -106,6 +113,9 @@ fn platform_index(state: &GameSnapshot) -> HashMap<String, String> {
     let mut index = HashMap::new();
 
     for stop in &state.transit.stops {
+        if !is_present_node(stop.status) {
+            continue;
+        }
         let pos_key = position_key(stop.position.x, stop.position.y);
         for platform in &stop.platforms {
             for route_id in &platform.route_ids {
@@ -115,6 +125,9 @@ fn platform_index(state: &GameSnapshot) -> HashMap<String, String> {
     }
 
     for station in &state.transit.stations {
+        if !is_present_node(station.status) {
+            continue;
+        }
         let pos_key = position_key(station.position.x, station.position.y);
         for platform in &station.platforms {
             for route_id in &platform.route_ids {
@@ -130,12 +143,18 @@ fn platform_capacities(state: &GameSnapshot) -> HashMap<String, u16> {
     let mut capacities = HashMap::new();
 
     for stop in &state.transit.stops {
+        if !is_present_node(stop.status) {
+            continue;
+        }
         for platform in &stop.platforms {
             capacities.insert(platform.id.clone(), platform.capacity);
         }
     }
 
     for station in &state.transit.stations {
+        if !is_present_node(station.status) {
+            continue;
+        }
         for platform in &station.platforms {
             capacities.insert(platform.id.clone(), platform.capacity);
         }

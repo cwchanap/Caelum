@@ -10,9 +10,9 @@
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
-    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServicePattern, Sim, Tile,
-    TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
-    Vehicle, WorkerProfile,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServicePattern, Sim, Station, Stop,
+    Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -25,6 +25,26 @@ use serde_json::json;
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
+}
+
+#[test]
+fn transit_node_kind_and_status_are_required_schema_v2_fields() {
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::LayRoad { point: point(2, 5) });
+    let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    let mut stop_value = serde_json::to_value(&stop_result.snapshot.transit.stops[0]).unwrap();
+    assert_eq!(stop_value["kind"], json!("busStop"));
+    assert_eq!(stop_value["status"], json!("present"));
+    stop_value.as_object_mut().unwrap().remove("status");
+    assert!(serde_json::from_value::<Stop>(stop_value).is_err());
+
+    engine.dispatch(GameIntent::LayTrack { point: point(5, 5) });
+    let station_result = engine.dispatch(GameIntent::AddMetroStation { point: point(5, 5) });
+    let mut station_value =
+        serde_json::to_value(&station_result.snapshot.transit.stations[0]).unwrap();
+    assert_eq!(station_value["status"], json!("present"));
+    station_value.as_object_mut().unwrap().remove("status");
+    assert!(serde_json::from_value::<Station>(station_value).is_err());
 }
 
 fn bus_route_fixture() -> Route {
