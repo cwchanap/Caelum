@@ -507,6 +507,18 @@ describe("App shell bootstrap", () => {
     ).toBeEnabled();
   });
 
+  it("arms bus stops as a road-node tool from the Build drill-down", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Bus" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Bus Stop" }));
+
+    expect(runtime.setTool).toHaveBeenCalledWith("busStop");
+    expect(runtime.setBuilding).not.toHaveBeenCalledWith("busStop");
+  });
+
   it("wires area selection into the runtime", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

@@ -14,6 +14,27 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
   }
   return {
     ...snapshot,
+    transit: {
+      ...snapshot.transit,
+      routes: snapshot.transit.routes.map((route) => ({
+        ...route,
+        legs: route.legs.map((leg) => ({
+          ...leg,
+          currentPath: leg.currentPath ?? null,
+          lastValidPath: leg.lastValidPath ?? null,
+          estimatedSeconds: leg.estimatedSeconds ?? null,
+        })),
+      })),
+      metroLines: snapshot.transit.metroLines.map((line) => ({
+        ...line,
+        legs: line.legs.map((leg) => ({
+          ...leg,
+          currentPath: leg.currentPath ?? null,
+          lastValidPath: leg.lastValidPath ?? null,
+          estimatedSeconds: leg.estimatedSeconds ?? null,
+        })),
+      })),
+    },
     metrics: {
       ...snapshot.metrics,
       waitingCitizenCount: snapshot.metrics.waitingTripCount,

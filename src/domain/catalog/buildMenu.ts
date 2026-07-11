@@ -1,4 +1,4 @@
-import type { BuildingType, RoadPreset, RoundaboutSize } from "../types";
+import type { BuildingType, RoadPreset, RoundaboutSize, Tool } from "../types";
 import { BUILDING_CATALOG } from "./buildings";
 
 export type BuildCategoryId =
@@ -19,6 +19,7 @@ export type BuildItemAction =
   | { kind: "road"; roadPreset: RoadPreset }
   | { kind: "roundabout"; size: RoundaboutSize }
   | { kind: "track" }
+  | { kind: "tool"; tool: Extract<Tool, "busStop" | "metroStation"> }
   | { kind: "building"; building: BuildingType };
 
 export interface BuildMenuItem {
@@ -39,6 +40,16 @@ function buildingItem(building: BuildingType): BuildMenuItem {
     id: building,
     label: BUILDING_CATALOG[building].label,
     action: { kind: "building", building },
+  };
+}
+
+function transitNodeItem(
+  tool: Extract<Tool, "busStop" | "metroStation">,
+): BuildMenuItem {
+  return {
+    id: tool,
+    label: BUILDING_CATALOG[tool].label,
+    action: { kind: "tool", tool },
   };
 }
 
@@ -82,9 +93,13 @@ export const BUILD_MENU: BuildMenuCategory[] = [
   {
     id: "bus",
     label: "Bus",
-    items: [buildingItem("busStop"), buildingItem("busTerminal")],
+    items: [transitNodeItem("busStop"), buildingItem("busTerminal")],
   },
-  { id: "metro", label: "Metro", items: [buildingItem("metroStation")] },
+  {
+    id: "metro",
+    label: "Metro",
+    items: [transitNodeItem("metroStation")],
+  },
   {
     id: "residential",
     label: "Residential",

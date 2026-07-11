@@ -119,6 +119,40 @@ describe("Rust backend contract", () => {
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
 
+  it("normalizes serde-wasm undefined route path options to explicit nulls", () => {
+    const snapshot = createRustSnapshot();
+    const brokenLeg = {
+      fromWaypointId: "stop-001",
+      toWaypointId: "stop-002",
+      direction: "loop" as const,
+      kind: "service" as const,
+      status: "networkDisconnected" as const,
+      currentPath: undefined as unknown as null,
+      lastValidPath: undefined as unknown as null,
+      estimatedSeconds: undefined as unknown as null,
+    };
+    snapshot.transit.routes.push({
+      id: "route-001",
+      name: "Bus 1",
+      color: "#00aaff",
+      stopIds: ["stop-001", "stop-002"],
+      vehicleIds: [],
+      active: true,
+      pattern: "loop",
+      revision: 1,
+      legs: [brokenLeg],
+      pathBroken: true,
+    });
+
+    const normalized = normalizeRustSnapshot(snapshot);
+
+    expect(normalized.transit.routes[0].legs[0]).toMatchObject({
+      currentPath: null,
+      lastValidPath: null,
+      estimatedSeconds: null,
+    });
+  });
+
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
     // Guards against the drift that motivated this contract: a previous TS shim
     // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.

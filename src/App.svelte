@@ -108,6 +108,8 @@
       setSnapshot(runtime.armRoundabout(action.size));
     } else if (action.kind === "track") {
       setSnapshot(runtime.setTool("track"));
+    } else if (action.kind === "tool") {
+      setSnapshot(runtime.setTool(action.tool));
     } else {
       setSnapshot(runtime.setBuilding(action.building));
     }

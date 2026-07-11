@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
@@ -29,7 +29,11 @@ export async function openHudCategory(
     | "brief"
     | "inspect",
 ): Promise<void> {
-  await page.getByTestId(`hud-cat-${category}`).click();
+  const trigger = page.getByTestId(`hud-cat-${category}`);
+  if ((await trigger.getAttribute("aria-pressed")) !== "true") {
+    await trigger.click();
+  }
+  await expect(trigger).toHaveAttribute("aria-pressed", "true");
 }
 
 /**
@@ -186,4 +190,25 @@ export async function dragMapTiles(
   // before the test proceeds, preventing the next action from racing with
   // the drag commit — especially on slower CI runners.
   await page.waitForTimeout(0);
+}
+
+export async function removeMapTile(
+  page: Page,
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<void> {
+  const remove = page.getByTestId("hud-tool-remove");
+  if ((await remove.getAttribute("aria-pressed")) !== "true") {
+    await remove.click();
+  }
+  await clickMapTile(canvas, tile);
+}
+
+export async function rebuildRoadTile(
+  page: Page,
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<void> {
+  await buildItem(page, "Road", "1-Lane");
+  await clickMapTile(canvas, tile);
 }

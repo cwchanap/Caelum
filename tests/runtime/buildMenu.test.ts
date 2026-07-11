@@ -22,7 +22,11 @@ describe("BUILD_MENU", () => {
   it("covers every building in BUILDING_CATALOG exactly once", () => {
     const placed = BUILD_MENU.flatMap((c) =>
       c.items.flatMap((i) =>
-        i.action.kind === "building" ? [i.action.building] : [],
+        i.action.kind === "building"
+          ? [i.action.building]
+          : i.action.kind === "tool"
+            ? [i.action.tool]
+            : [],
       ),
     );
     const catalogTypes = Object.keys(BUILDING_CATALOG) as BuildingType[];
@@ -71,5 +75,18 @@ describe("BUILD_MENU", () => {
     const rail = BUILD_MENU.find((c) => c.id === "rail");
     expect(rail?.items).toHaveLength(1);
     expect(rail?.items[0]?.action.kind).toBe("track");
+  });
+
+  it("arms road-bound transit nodes as tools instead of generic buildings", () => {
+    const bus = BUILD_MENU.find((category) => category.id === "bus");
+    const metro = BUILD_MENU.find((category) => category.id === "metro");
+
+    expect(bus?.items.find((item) => item.id === "busStop")?.action).toEqual({
+      kind: "tool",
+      tool: "busStop",
+    });
+    expect(
+      metro?.items.find((item) => item.id === "metroStation")?.action,
+    ).toEqual({ kind: "tool", tool: "metroStation" });
   });
 });

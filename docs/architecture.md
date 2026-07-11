@@ -28,11 +28,29 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 
 Browser builds use the WASM backend generated from `crates/caelum-wasm`. Tauri builds use command calls into managed Rust command state. Both backends share the same `caelum-core::GameEngine` facade. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 2`. Loading is strict: there is no heuristic legacy-snapshot migration or fallback path. Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
+
+Linear road, track, remove, and area strokes may partially apply in authored order where their intent allows skipped tiles. Direction changes, route creation/updates, and roundabout placement/removal are atomic mutations. A tile owned by any road structure blocks every other infrastructure or zoning operation until that structure is removed through its owning mutation.
+
+### Authored roads and cached topology
+
+Road occupancy is not connectivity. Rust serializes reciprocal tile-edge connections plus stable automatic-junction/roundabout structures. `GameEngine` compiles those authored facts into a non-serialized heading-state `RoadTopology` and commits a candidate snapshot/topology together.
+
+Bus routes use deterministic weighted movement steps (straight, right, left, U-turn, roundabout entry/circulation/exit); metro routes continue to use deterministic track paths. The same Rust-provided step durations drive previews, trip estimates, and vehicle movement.
+
+### Route lifecycle and editing
+
+Routes store Loop/Shuttle directional service legs with current and last-valid tagged paths. Missing referenced nodes remain non-physical tombstones; exact same-kind/same-anchor rebuilding restores their identity. Route creation and revision-checked updates are atomic Rust intents. TypeScript owns only the unsaved ordered-ID draft and generation-safe rendering of Rust previews.
+
+### Road structures
+
+Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement captures compatible boundary ports, may replace only fully contained bare roads/automatic junctions, preserves latent area, and removes as one structure.
+
 ## Area zoning layer
 
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
-The Growing Suburb scenario ships as a sandbox: the map starts empty (no pre-seeded districts, no timed growth waves, no starting citizens), and growth is entirely player-driven through area painting and building placement. The TS-side growth-wave synthesis was removed in f2c4cec and `snapshotView.ts` hardcodes `growthWaves: []`; any future timed-growth mechanic belongs in `crates/caelum-core` so browser and Tauri hosts stay symmetric (tracked as HPA-118).
+The Growing Suburb scenario ships as a sandbox with an authored dual-bidirectional arterial cross, but no pre-seeded districts, timed growth waves, buildings, or citizens. Growth is player-driven through area painting and building placement. TypeScript does not synthesize growth waves: `snapshotView.ts` passes through the Rust-owned scenario list (empty for the shipped scenario), and any future timed-growth mechanic belongs in `crates/caelum-core` so browser and Tauri hosts stay symmetric.
 
 ## UI shell
 

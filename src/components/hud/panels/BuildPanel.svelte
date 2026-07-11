@@ -60,6 +60,9 @@
         roundaboutSize === action.size
       );
     }
+    if (action.kind === "tool") {
+      return selectedBuilding === null && activeTool === action.tool;
+    }
     return selectedBuilding === null && activeTool === "track";
   }
 </script>

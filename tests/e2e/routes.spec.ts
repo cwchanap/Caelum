@@ -5,19 +5,64 @@ import {
   clickMapTile,
   dragMapTiles,
   openHudCategory,
+  rebuildRoadTile,
+  removeMapTile,
   runtimeSnapshot,
 } from "./helpers";
 
 const TURN_ROUTE_STOPS = [
-  { x: 4, y: 10 },
-  { x: 7, y: 14 },
+  { x: 8, y: 10 },
+  { x: 9, y: 11 },
 ] as const;
-const EXTRA_TURN_STOP = { x: 11, y: 10 } as const;
+const EXTRA_TURN_STOP = { x: 8, y: 11 } as const;
+const DAMAGE_ROUTE_STOPS = [
+  { x: 4, y: 4 },
+  { x: 12, y: 4 },
+] as const;
+const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
+const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
 
 function roadMovements(leg: RouteLegPath): MovementKind[] {
   return leg.currentPath?.kind === "road"
     ? leg.currentPath.steps.map((step) => step.movement)
     : [];
+}
+
+async function seedRouteWithPrimaryAndAlternateRoad(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 13, y: 4 });
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 13, y: 6 });
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 3, y: 6 });
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 13, y: 4 }, { x: 13, y: 6 });
+  await buildItem(page, "Bus", "Bus Stop");
+  for (const stop of DAMAGE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+}
+
+async function createDamageRoute(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await openHudCategory(page, "routes");
+  await page.getByRole("button", { name: "Bus Route" }).click();
+  for (const stop of DAMAGE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openHudCategory(page, "routes");
+  await page.getByRole("radio", { name: "Loop" }).check();
+  await page.getByRole("button", { name: "Save route" }).click();
+}
+
+async function newestBusRoute(page: import("@playwright/test").Page) {
+  const snapshot = await runtimeSnapshot(page);
+  return snapshot.state.transit.routes.at(-1)!;
 }
 
 // Read the live Rust-derived transit state exposed on `window` in dev mode.
@@ -71,22 +116,25 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
 
   await buildItem(page, "Bus", "Bus Stop");
-  await clickMapTile(canvas, { x: 3, y: 5 });
-  await clickMapTile(canvas, { x: 7, y: 5 });
-  await clickMapTile(canvas, { x: 11, y: 5 });
+  await clickMapTile(canvas, { x: 3, y: 6 });
+  await clickMapTile(canvas, { x: 7, y: 6 });
+  await clickMapTile(canvas, { x: 11, y: 6 });
 
   // Draft a route: add three stops, remove the middle one, then finish.
   await openHudCategory(page, "routes");
   await page.getByRole("button", { name: "Bus Route" }).click();
-  await clickMapTile(canvas, { x: 3, y: 5 });
-  await clickMapTile(canvas, { x: 7, y: 5 });
-  await clickMapTile(canvas, { x: 11, y: 5 });
+  await clickMapTile(canvas, { x: 3, y: 6 });
+  await clickMapTile(canvas, { x: 7, y: 6 });
+  await clickMapTile(canvas, { x: 11, y: 6 });
   // Selecting the Bus Route tool auto-hides the drawer; reopen it to manage
   // the in-progress draft (stop list + finish/cancel actions).
   await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByTestId("route-waypoint-1").click();
-  await page.getByRole("button", { name: "Remove" }).click();
+  await page
+    .getByTestId("route-draft")
+    .getByRole("button", { name: "Remove" })
+    .click();
   await page.getByRole("button", { name: "Save route" }).click();
 
   // The route now appears in the management panel.
@@ -153,16 +201,16 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 11, y: 6 });
 
   await buildItem(page, "Bus", "Bus Stop");
-  await clickMapTile(canvas, { x: 3, y: 5 });
-  await clickMapTile(canvas, { x: 7, y: 5 });
-  await clickMapTile(canvas, { x: 11, y: 5 });
+  await clickMapTile(canvas, { x: 3, y: 6 });
+  await clickMapTile(canvas, { x: 7, y: 6 });
+  await clickMapTile(canvas, { x: 11, y: 6 });
 
   // Draft + finish a route over all three stops.
   await openHudCategory(page, "routes");
   await page.getByRole("button", { name: "Bus Route" }).click();
-  await clickMapTile(canvas, { x: 3, y: 5 });
-  await clickMapTile(canvas, { x: 7, y: 5 });
-  await clickMapTile(canvas, { x: 11, y: 5 });
+  await clickMapTile(canvas, { x: 3, y: 6 });
+  await clickMapTile(canvas, { x: 7, y: 6 });
+  await clickMapTile(canvas, { x: 11, y: 6 });
   await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByRole("button", { name: "Save route" }).click();
@@ -210,6 +258,15 @@ test("turns between paired roads and edits the committed route", async ({
   for (const stop of TURN_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
+  await expect
+    .poll(async () => {
+      const draft = (await runtimeSnapshot(page)).ui.routeDraft;
+      return {
+        pending: draft?.previewPending ?? true,
+        rejection: draft?.preview?.rejection?.code ?? null,
+      };
+    })
+    .toEqual({ pending: false, rejection: null });
   await openHudCategory(page, "routes");
   await page.getByRole("radio", { name: "Loop" }).check();
   await page.getByRole("button", { name: "Save route" }).click();
@@ -256,7 +313,7 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await page.getByTestId("hud-tool-remove").click();
   await clickMapTile(canvas, first);
   await openHudCategory(page, "manage");
-  await expect(page.getByText(/Missing Metro Station/)).toBeVisible();
+  await expect(page.getByText(/Missing Metro Station/)).toHaveCount(2);
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
     "Broken",
   );
@@ -265,6 +322,36 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await clickMapTile(canvas, first);
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
+    "Running",
+  );
+});
+
+test("reroutes when possible, then preserves a dotted last-valid leg until repair", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await seedRouteWithPrimaryAndAlternateRoad(page);
+  await createDamageRoute(page);
+  const before = await newestBusRoute(page);
+
+  await removeMapTile(page, canvas, PRIMARY_ROAD_TILE);
+  const rerouted = await newestBusRoute(page);
+  expect(rerouted.pathBroken).toBe(false);
+  expect(rerouted.legs[0].currentPath).not.toEqual(before.legs[0].currentPath);
+
+  await removeMapTile(page, canvas, ALTERNATE_ROAD_TILE);
+  const broken = await newestBusRoute(page);
+  expect(broken.pathBroken).toBe(true);
+  expect(broken.legs[0].currentPath).toBeNull();
+  expect(broken.legs[0].lastValidPath).toEqual(rerouted.legs[0].lastValidPath);
+  await openHudCategory(page, "manage");
+  await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
+    "Broken",
+  );
+  await rebuildRoadTile(page, canvas, ALTERNATE_ROAD_TILE);
+  await openHudCategory(page, "manage");
+  await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
     "Running",
   );
 });
