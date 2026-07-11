@@ -1,5 +1,6 @@
 use caelum_core::model::{
-    GameMap, Heading, MovementKind, PathGeometry, Point, RoadStructure, Tile, TransitPath,
+    GameMap, Heading, MovementKind, PathGeometry, Point, RoadStructure, RoundaboutSize, Tile,
+    TransitPath,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
 
@@ -533,6 +534,31 @@ fn l_t_cross_and_uturn_paths_report_their_actual_movement_steps() {
     }
 }
 
+#[test]
+fn right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent() {
+    for (fixture, movement) in [
+        (l_junction_fixture(), MovementKind::RightTurn),
+        (t_junction_fixture(), MovementKind::LeftTurn),
+    ] {
+        let path = fixture
+            .topology
+            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .unwrap();
+        let step = path
+            .road_steps()
+            .iter()
+            .find(|step| step.movement == movement)
+            .unwrap();
+        let PathGeometry::QuadraticBezier { from, control, to } = &step.geometry else {
+            panic!("turn must use quadratic geometry");
+        };
+        let cross = (control.x - from.x) * (to.y - from.y) - (control.y - from.y) * (to.x - from.x);
+        assert!(cross.abs() > f64::EPSILON, "turn control lies on chord");
+        assert_eq!(from.y, control.y, "eastbound entry tangent must be flat");
+        assert!(from.x < control.x, "entry tangent must point east");
+    }
+}
+
 struct OffRoadStopFixture {
     map: GameMap,
     topology: RoadTopology,
@@ -573,6 +599,30 @@ fn off_road_stop_access_is_allowed_only_as_a_path_endpoint() {
 }
 
 #[test]
+fn off_road_endpoint_access_is_not_serialized_as_zero_duration_geometry() {
+    let fixture = off_road_stop_fixture();
+    for (from, to) in [
+        (fixture.stop, fixture.road_destination),
+        (fixture.road_start, fixture.stop),
+    ] {
+        let path = fixture
+            .topology
+            .find_path(&fixture.map, &from, &to)
+            .unwrap();
+        assert!(path
+            .road_steps()
+            .iter()
+            .all(|step| step.travel_seconds > 0.0));
+        let step_total: f64 = path
+            .road_steps()
+            .iter()
+            .map(|step| step.travel_seconds)
+            .sum();
+        assert!((step_total - path.total_travel_seconds()).abs() < f64::EPSILON);
+    }
+}
+
+#[test]
 fn structure_transition_keys_are_stable_when_authored_order_changes() {
     let mut first = dual_cross_fixture();
     let first_path = first
@@ -590,6 +640,38 @@ fn structure_transition_keys_are_stable_when_authored_order_changes() {
         .find_path(&first.map, &point(6, 8), &point(15, 3))
         .unwrap();
     assert_eq!(first_path, rebuilt_path);
+}
+
+#[test]
+fn roundabout_is_not_routable_before_complete_ring_templates_exist() {
+    let mut map = blank_map(7, 7);
+    let center = point(3, 3);
+    let west = point(2, 3);
+    let east = point(4, 3);
+    connect(&mut map, west, center);
+    connect(&mut map, center, east);
+    map.tile_mut(center).unwrap().road_structure_id = Some("roundabout".to_string());
+    map.road_structures.push(RoadStructure::Roundabout {
+        id: "roundabout".to_string(),
+        origin: center,
+        size: RoundaboutSize::Compact2x2,
+        footprint: vec![center],
+        ports: vec![
+            caelum_core::model::RoadPort {
+                id: "roundabout-west".to_string(),
+                point: center,
+                edge: Heading::West,
+            },
+            caelum_core::model::RoadPort {
+                id: "roundabout-east".to_string(),
+                point: center,
+                edge: Heading::East,
+            },
+        ],
+    });
+
+    let topology = RoadTopology::compile(&map).unwrap();
+    assert!(topology.find_path(&map, &west, &east).is_none());
 }
 
 #[test]

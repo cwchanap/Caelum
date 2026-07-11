@@ -9,9 +9,9 @@
 
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, Heading, Metrics, MetricsState, PlacedBuilding, Point, RoadPort, RoadStructure,
-    RoundaboutSize, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TripOutcome, TripOutcomeKind,
-    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
+    RoadStructure, RoundaboutSize, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TransitPath,
+    TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::state::create_initial_snapshot;
@@ -29,6 +29,44 @@ fn snapshot_carries_the_authoritative_schema_version() {
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
         json!(2)
+    );
+}
+
+#[test]
+fn path_geometry_struct_variant_fields_use_camel_case() {
+    let geometry = PathGeometry::Arc {
+        center: TripPosition { x: 2.5, y: 3.5 },
+        radius: 1.25,
+        start_radians: 0.5,
+        sweep_radians: 1.75,
+    };
+
+    assert_eq!(
+        serde_json::to_value(geometry).unwrap(),
+        json!({
+            "kind": "arc",
+            "center": { "x": 2.5, "y": 3.5 },
+            "radius": 1.25,
+            "startRadians": 0.5,
+            "sweepRadians": 1.75
+        })
+    );
+}
+
+#[test]
+fn transit_path_struct_variant_fields_use_camel_case() {
+    let path = TransitPath::Road {
+        steps: Vec::new(),
+        total_travel_seconds: 3.75,
+    };
+
+    assert_eq!(
+        serde_json::to_value(path).unwrap(),
+        json!({
+            "kind": "road",
+            "steps": [],
+            "totalTravelSeconds": 3.75
+        })
     );
 }
 

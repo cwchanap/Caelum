@@ -35,7 +35,7 @@ pub fn compute_route_segments(
                 TransitMode::Metro => find_track_path(map, from, to),
                 TransitMode::Walk => None,
             };
-            path.map(|path| transit_path_points(&path, *to))
+            path.map(|path| transit_path_points(&path, *from, *to))
                 .unwrap_or_default()
         })
         .collect()
@@ -132,14 +132,40 @@ fn track_path_from_points(points: Vec<Point>, tiles_per_second: f64) -> TransitP
     }
 }
 
-fn transit_path_points(path: &TransitPath, destination: Point) -> Vec<Point> {
-    let mut points: Vec<_> = match path {
-        TransitPath::Road { steps, .. } => steps.iter().map(|step| step.position).collect(),
-        TransitPath::Track { steps, .. } => steps.iter().map(|step| step.position).collect(),
-    };
+fn transit_path_points(path: &TransitPath, origin: Point, destination: Point) -> Vec<Point> {
+    let mut points = vec![origin];
+    match path {
+        TransitPath::Road { steps, .. } => {
+            for step in steps {
+                points.push(step.position);
+                if let Some(point) = geometry_destination(&step.geometry) {
+                    points.push(point);
+                }
+            }
+        }
+        TransitPath::Track { steps, .. } => {
+            for step in steps {
+                points.push(step.position);
+                if let Some(point) = geometry_destination(&step.geometry) {
+                    points.push(point);
+                }
+            }
+        }
+    }
     points.push(destination);
     points.dedup();
     points
+}
+
+fn geometry_destination(geometry: &PathGeometry) -> Option<Point> {
+    let to = match geometry {
+        PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
+        PathGeometry::Arc { .. } => return None,
+    };
+    Some(Point {
+        x: to.x.round() as i32,
+        y: to.y.round() as i32,
+    })
 }
 
 fn heading_between(from: Point, to: Point) -> Option<Heading> {

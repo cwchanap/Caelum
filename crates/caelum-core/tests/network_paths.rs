@@ -2,11 +2,29 @@ use caelum_core::model::{Point, TransitPath};
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{network, GameEngine, GameIntent};
 
-fn path_points(path: &TransitPath, destination: Point) -> Vec<(i32, i32)> {
-    let mut points: Vec<Point> = match path {
-        TransitPath::Road { steps, .. } => steps.iter().map(|step| step.position).collect(),
-        TransitPath::Track { steps, .. } => steps.iter().map(|step| step.position).collect(),
+fn path_points(path: &TransitPath, origin: Point, destination: Point) -> Vec<(i32, i32)> {
+    let mut points = vec![origin];
+    let geometries: Vec<_> = match path {
+        TransitPath::Road { steps, .. } => steps
+            .iter()
+            .map(|step| (step.position, &step.geometry))
+            .collect(),
+        TransitPath::Track { steps, .. } => steps
+            .iter()
+            .map(|step| (step.position, &step.geometry))
+            .collect(),
     };
+    for (position, geometry) in geometries {
+        points.push(position);
+        if let caelum_core::model::PathGeometry::Line { to, .. }
+        | caelum_core::model::PathGeometry::QuadraticBezier { to, .. } = geometry
+        {
+            points.push(Point {
+                x: to.x.round() as i32,
+                y: to.y.round() as i32,
+            });
+        }
+    }
     points.push(destination);
     points.dedup();
     points.into_iter().map(|point| (point.x, point.y)).collect()
@@ -39,7 +57,7 @@ fn finds_straight_shortest_bus_path() {
         .find_path(map, &(2, 5).into(), &(6, 5).into())
         .expect("road line should be pathable");
 
-    let points = path_points(&path, (6, 5).into());
+    let points = path_points(&path, (2, 5).into(), (6, 5).into());
     assert_eq!(points, vec![(2, 5), (3, 5), (4, 5), (5, 5), (6, 5)]);
 }
 
@@ -58,7 +76,7 @@ fn deterministic_equal_shortest_paths_use_north_east_south_west_order() {
     let path = network::find_track_path(&engine.snapshot().map, &(5, 2).into(), &(7, 4).into())
         .expect("track ring should be pathable");
 
-    let points = path_points(&path, (7, 4).into());
+    let points = path_points(&path, (5, 2).into(), (7, 4).into());
     assert_eq!(points, vec![(5, 2), (6, 2), (7, 2), (7, 3), (7, 4)]);
 }
 
@@ -73,7 +91,7 @@ fn rejects_adjacent_off_network_endpoints_then_finds_network_path() {
         .find_path(map, &(8, 4).into(), &(9, 4).into())
         .expect("adjacent off-road stops should connect through road");
 
-    let points = path_points(&path, (9, 4).into());
+    let points = path_points(&path, (8, 4).into(), (9, 4).into());
     assert_eq!(points, vec![(8, 4), (8, 5), (9, 5), (9, 4)]);
 }
 

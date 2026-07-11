@@ -149,6 +149,9 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
     let mut compiled = Vec::new();
 
     for structure in structures {
+        if !matches!(structure, RoadStructure::AutomaticJunction { .. }) {
+            continue;
+        }
         let mut ports: Vec<_> = structure.ports().iter().collect();
         ports.sort_by(|left, right| {
             (left.point, left.edge, left.id.as_str()).cmp(&(
@@ -199,12 +202,7 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
                     continue;
                 }
 
-                let movement = match structure {
-                    RoadStructure::AutomaticJunction { .. } => {
-                        classify_movement(incoming, outgoing)
-                    }
-                    RoadStructure::Roundabout { .. } => MovementKind::RoundaboutEntry,
-                };
+                let movement = classify_movement(incoming, outgoing);
                 let structure_tiles =
                     entry.point.x.abs_diff(exit.point.x) + entry.point.y.abs_diff(exit.point.y) + 1;
                 let base_millis = BUS_TILE_MILLIS.saturating_mul(structure_tiles);
@@ -319,17 +317,15 @@ fn deterministic_dijkstra(
     let target_is_road = is_road(map, *to);
     let mut best = BTreeMap::new();
     let mut parents: BTreeMap<RoadState, (RoadState, RoadTransition)> = BTreeMap::new();
-    let mut prefixes = BTreeMap::new();
     let mut heap = BinaryHeap::new();
 
-    for (state, prefix) in starts {
+    for state in starts {
         let rank = PathRank::zero();
         let should_insert = best
             .get(&state)
             .map_or(true, |existing: &PathRank| rank < *existing);
         if should_insert {
             best.insert(state, rank.clone());
-            prefixes.insert(state, prefix);
             heap.push(Reverse((rank, state)));
         }
     }
@@ -339,24 +335,10 @@ fn deterministic_dijkstra(
             continue;
         }
         if target_is_road && state.position == *to {
-            return Some(build_road_path(
-                state,
-                rank.total_millis,
-                &parents,
-                &prefixes,
-                None,
-            ));
+            return Some(build_road_path(state, rank.total_millis, &parents));
         }
         if !target_is_road && manhattan(state.position, *to) == 1 {
-            let leaving = heading_between(state.position, *to)?;
-            let suffix = access_step(state.position, *to, state.incoming_heading, leaving);
-            return Some(build_road_path(
-                state,
-                rank.total_millis,
-                &parents,
-                &prefixes,
-                Some(suffix),
-            ));
+            return Some(build_road_path(state, rank.total_millis, &parents));
         }
 
         for transition in topology.transitions.get(&state).into_iter().flatten() {
@@ -375,16 +357,9 @@ fn deterministic_dijkstra(
     None
 }
 
-fn start_states(
-    topology: &RoadTopology,
-    map: &GameMap,
-    from: Point,
-) -> Vec<(RoadState, Option<RoadPathStep>)> {
+fn start_states(topology: &RoadTopology, map: &GameMap, from: Point) -> Vec<RoadState> {
     if is_road(map, from) {
-        return road_start_states(topology, from)
-            .into_iter()
-            .map(|state| (state, None))
-            .collect();
+        return road_start_states(topology, from);
     }
 
     let mut starts = Vec::new();
@@ -393,19 +368,10 @@ fn start_states(
         if !is_road(map, adjacent) {
             continue;
         }
-        for state in road_start_states(topology, adjacent) {
-            starts.push((
-                state,
-                Some(access_step(
-                    from,
-                    adjacent,
-                    state.incoming_heading,
-                    state.incoming_heading,
-                )),
-            ));
-        }
+        starts.extend(road_start_states(topology, adjacent));
     }
-    starts.sort_by_key(|(state, _)| *state);
+    starts.sort();
+    starts.dedup();
     starts
 }
 
@@ -440,8 +406,6 @@ fn build_road_path(
     goal: RoadState,
     total_millis: u64,
     parents: &BTreeMap<RoadState, (RoadState, RoadTransition)>,
-    prefixes: &BTreeMap<RoadState, Option<RoadPathStep>>,
-    suffix: Option<RoadPathStep>,
 ) -> TransitPath {
     let mut cursor = goal;
     let mut reversed = Vec::new();
@@ -451,43 +415,20 @@ fn build_road_path(
     }
     reversed.reverse();
 
-    let mut steps = Vec::new();
-    if let Some(prefix) = prefixes.get(&cursor).cloned().flatten() {
-        steps.push(prefix);
-    }
-    steps.extend(reversed.into_iter().map(|(from, transition)| RoadPathStep {
-        position: from.position,
-        entering_heading: from.incoming_heading,
-        leaving_heading: transition.to.incoming_heading,
-        movement: transition.movement,
-        geometry: transition.geometry,
-        travel_seconds: f64::from(transition.travel_millis) / 1_000.0,
-    }));
-    if let Some(suffix) = suffix {
-        steps.push(suffix);
-    }
+    let steps = reversed
+        .into_iter()
+        .map(|(from, transition)| RoadPathStep {
+            position: from.position,
+            entering_heading: from.incoming_heading,
+            leaving_heading: transition.to.incoming_heading,
+            movement: transition.movement,
+            geometry: transition.geometry,
+            travel_seconds: f64::from(transition.travel_millis) / 1_000.0,
+        })
+        .collect();
     TransitPath::Road {
         steps,
         total_travel_seconds: total_millis as f64 / 1_000.0,
-    }
-}
-
-fn access_step(
-    from: Point,
-    to: Point,
-    entering_heading: Heading,
-    leaving_heading: Heading,
-) -> RoadPathStep {
-    RoadPathStep {
-        position: from,
-        entering_heading,
-        leaving_heading,
-        movement: MovementKind::Straight,
-        geometry: PathGeometry::Line {
-            from: from.into(),
-            to: to.into(),
-        },
-        travel_seconds: 0.0,
     }
 }
 
@@ -505,14 +446,17 @@ fn transition_geometry(
             from: from_position,
             to: to_position,
         },
-        MovementKind::RightTurn | MovementKind::LeftTurn => PathGeometry::QuadraticBezier {
-            from: from_position,
-            control: TripPosition {
-                x: f64::from(from.x) + f64::from(offset_components(outgoing).0) * 0.5,
-                y: f64::from(from.y) + f64::from(offset_components(outgoing).1) * 0.5,
-            },
-            to: to_position,
-        },
+        MovementKind::RightTurn | MovementKind::LeftTurn => {
+            let (incoming_dx, incoming_dy) = offset_components(incoming);
+            PathGeometry::QuadraticBezier {
+                from: TripPosition {
+                    x: f64::from(from.x) - f64::from(incoming_dx) * 0.5,
+                    y: f64::from(from.y) - f64::from(incoming_dy) * 0.5,
+                },
+                control: from_position,
+                to: to_position,
+            }
+        }
         MovementKind::UTurn => {
             let (dx, dy) = offset_components(incoming);
             PathGeometry::QuadraticBezier {
@@ -553,16 +497,6 @@ fn is_road(map: &GameMap, point: Point) -> bool {
 
 fn manhattan(first: Point, second: Point) -> u32 {
     first.x.abs_diff(second.x) + first.y.abs_diff(second.y)
-}
-
-fn heading_between(from: Point, to: Point) -> Option<Heading> {
-    match (to.x - from.x, to.y - from.y) {
-        (0, -1) => Some(Heading::North),
-        (1, 0) => Some(Heading::East),
-        (0, 1) => Some(Heading::South),
-        (-1, 0) => Some(Heading::West),
-        _ => None,
-    }
 }
 
 fn canonical_headings() -> [Heading; 4] {
