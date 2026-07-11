@@ -1,0 +1,336 @@
+use std::collections::{BTreeSet, VecDeque};
+
+use caelum_core::model::{Heading, MovementKind, Point, RoadPort, RoadStructure, RoundaboutSize};
+use caelum_core::road_topology::{RoadState, RoadTransition};
+use caelum_core::roundabouts::{
+    compile_roundabout_transitions, roundabout_structure_id, roundabout_template,
+    RoundaboutTemplate, COMPACT_ROUNDABOUT_COST, STANDARD_ROUNDABOUT_COST,
+};
+
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+fn points(values: &[(i32, i32)]) -> Vec<Point> {
+    values.iter().map(|(x, y)| point(*x, *y)).collect()
+}
+
+fn opposite(heading: Heading) -> Heading {
+    match heading {
+        Heading::North => Heading::South,
+        Heading::East => Heading::West,
+        Heading::South => Heading::North,
+        Heading::West => Heading::East,
+    }
+}
+
+fn offset(position: Point, heading: Heading) -> Point {
+    match heading {
+        Heading::North => point(position.x, position.y - 1),
+        Heading::East => point(position.x + 1, position.y),
+        Heading::South => point(position.x, position.y + 1),
+        Heading::West => point(position.x - 1, position.y),
+    }
+}
+
+fn heading_between(from: Point, to: Point) -> Heading {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Heading::North,
+        (1, 0) => Heading::East,
+        (0, 1) => Heading::South,
+        (-1, 0) => Heading::West,
+        delta => panic!("fixture points are not adjacent: {delta:?}"),
+    }
+}
+
+fn structure_from_template(template: &RoundaboutTemplate, ports: Vec<RoadPort>) -> RoadStructure {
+    RoadStructure::Roundabout {
+        id: roundabout_structure_id(template.size, template.origin),
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint.clone(),
+        ports,
+    }
+}
+
+struct CompiledTemplateTopology {
+    transitions: Vec<(RoadState, RoadTransition)>,
+}
+
+impl CompiledTemplateTopology {
+    fn has_circulation(&self, from: Point, to: Point) -> bool {
+        self.transitions.iter().any(|(state, transition)| {
+            state.position == from
+                && transition.to.position == to
+                && transition.movement == MovementKind::RoundaboutCirculation
+        })
+    }
+}
+
+fn compile_template_topology(template: &RoundaboutTemplate) -> CompiledTemplateTopology {
+    let structure = structure_from_template(template, template.port_slots.clone());
+    CompiledTemplateTopology {
+        transitions: compile_roundabout_transitions(&structure).unwrap(),
+    }
+}
+
+#[derive(Clone)]
+struct ApproachPort {
+    arm: Heading,
+    port: RoadPort,
+}
+
+struct CompiledPath {
+    steps: Vec<RoadTransition>,
+}
+
+impl CompiledPath {
+    fn road_steps(&self) -> &[RoadTransition] {
+        &self.steps
+    }
+
+    fn movements(&self) -> impl Iterator<Item = &MovementKind> {
+        self.steps.iter().map(|step| &step.movement)
+    }
+}
+
+struct ApproachFixture {
+    transitions: Vec<(RoadState, RoadTransition)>,
+    inbound_ports: Vec<ApproachPort>,
+    outbound_ports: Vec<ApproachPort>,
+    minimum_uturn_circulation_steps: usize,
+}
+
+impl ApproachFixture {
+    fn path(&self, entry: &ApproachPort, exit: &ApproachPort) -> Option<CompiledPath> {
+        let entry_state = RoadState {
+            position: entry.port.point,
+            incoming_heading: opposite(entry.port.edge),
+        };
+        let exit_destination = offset(exit.port.point, exit.port.edge);
+        let mut queue = VecDeque::new();
+        for (state, transition) in &self.transitions {
+            if *state == entry_state && transition.movement == MovementKind::RoundaboutEntry {
+                queue.push_back((transition.to, vec![transition.clone()]));
+            }
+        }
+
+        let mut visited = BTreeSet::new();
+        while let Some((state, path)) = queue.pop_front() {
+            if !visited.insert(state) {
+                continue;
+            }
+            for (from, transition) in &self.transitions {
+                if *from != state {
+                    continue;
+                }
+                let mut next_path = path.clone();
+                next_path.push(transition.clone());
+                if transition.movement == MovementKind::RoundaboutExit
+                    && transition.to.position == exit_destination
+                {
+                    return Some(CompiledPath { steps: next_path });
+                }
+                if transition.movement == MovementKind::RoundaboutCirculation {
+                    queue.push_back((transition.to, next_path));
+                }
+            }
+        }
+        None
+    }
+}
+
+fn ring_neighbors(template: &RoundaboutTemplate, position: Point) -> (Point, Point) {
+    let index = template
+        .counterclockwise_ring
+        .iter()
+        .position(|candidate| *candidate == position)
+        .unwrap();
+    let previous = template.counterclockwise_ring
+        [(index + template.counterclockwise_ring.len() - 1) % template.counterclockwise_ring.len()];
+    let next = template.counterclockwise_ring[(index + 1) % template.counterclockwise_ring.len()];
+    (previous, next)
+}
+
+fn expected_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> bool {
+    let (_, next) = ring_neighbors(template, port.point);
+    opposite(port.edge) == heading_between(port.point, next)
+}
+
+fn expected_outbound(template: &RoundaboutTemplate, port: &RoadPort) -> bool {
+    let (previous, _) = ring_neighbors(template, port.point);
+    port.edge == heading_between(previous, port.point)
+}
+
+fn approach_fixture(size: RoundaboutSize) -> ApproachFixture {
+    let template = roundabout_template(size, point(4, 4));
+    let inbound_ports: Vec<_> = template
+        .port_slots
+        .iter()
+        .filter(|port| expected_inbound(&template, port))
+        .cloned()
+        .map(|port| ApproachPort {
+            arm: port.edge,
+            port,
+        })
+        .collect();
+    let outbound_ports: Vec<_> = template
+        .port_slots
+        .iter()
+        .filter(|port| expected_outbound(&template, port))
+        .cloned()
+        .map(|port| ApproachPort {
+            arm: port.edge,
+            port,
+        })
+        .collect();
+    let captured_ports = inbound_ports
+        .iter()
+        .chain(&outbound_ports)
+        .map(|approach| approach.port.clone())
+        .collect();
+    let structure = structure_from_template(&template, captured_ports);
+    ApproachFixture {
+        transitions: compile_roundabout_transitions(&structure).unwrap(),
+        inbound_ports,
+        outbound_ports,
+        minimum_uturn_circulation_steps: match size {
+            RoundaboutSize::Compact2x2 => 2,
+            RoundaboutSize::Standard3x3 => 5,
+        },
+    }
+}
+
+fn all_four_approach_fixtures() -> Vec<ApproachFixture> {
+    vec![
+        approach_fixture(RoundaboutSize::Compact2x2),
+        approach_fixture(RoundaboutSize::Standard3x3),
+    ]
+}
+
+struct DualLaneFixture {
+    inbound_port: RoadPort,
+    outbound_port: RoadPort,
+    compiled: Vec<(RoadState, RoadTransition)>,
+}
+
+impl DualLaneFixture {
+    fn transitions(&self) -> impl Iterator<Item = &RoadTransition> {
+        self.compiled.iter().map(|(_, transition)| transition)
+    }
+}
+
+fn dual_lane_roundabout_fixture() -> DualLaneFixture {
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));
+    let inbound_port = template
+        .port_slots
+        .iter()
+        .find(|port| port.edge == Heading::North && expected_inbound(&template, port))
+        .unwrap()
+        .clone();
+    let outbound_port = template
+        .port_slots
+        .iter()
+        .find(|port| port.edge == Heading::North && expected_outbound(&template, port))
+        .unwrap()
+        .clone();
+    let structure =
+        structure_from_template(&template, vec![inbound_port.clone(), outbound_port.clone()]);
+    DualLaneFixture {
+        inbound_port,
+        outbound_port,
+        compiled: compile_roundabout_transitions(&structure).unwrap(),
+    }
+}
+
+#[test]
+fn compact_and_standard_templates_have_exact_owned_footprints() {
+    let compact = roundabout_template(RoundaboutSize::Compact2x2, point(5, 6));
+    assert_eq!(compact.footprint, points(&[(5, 6), (6, 6), (5, 7), (6, 7)]));
+    assert!(compact.protected_island.is_empty());
+
+    let standard = roundabout_template(RoundaboutSize::Standard3x3, point(5, 6));
+    assert_eq!(standard.footprint.len(), 9);
+    assert_eq!(standard.protected_island, vec![point(6, 7)]);
+    assert_eq!(standard.circulation_tiles.len(), 8);
+}
+
+#[test]
+fn every_ring_edge_is_counterclockwise_and_no_reverse_edge_exists() {
+    for size in [RoundaboutSize::Compact2x2, RoundaboutSize::Standard3x3] {
+        let template = roundabout_template(size, point(4, 4));
+        let topology = compile_template_topology(&template);
+        for pair in template.counterclockwise_ring.windows(2) {
+            assert!(topology.has_circulation(pair[0], pair[1]));
+            assert!(!topology.has_circulation(pair[1], pair[0]));
+        }
+        let last = *template.counterclockwise_ring.last().unwrap();
+        let first = template.counterclockwise_ring[0];
+        assert!(topology.has_circulation(last, first));
+        assert!(!topology.has_circulation(first, last));
+    }
+}
+
+#[test]
+fn each_compatible_entry_can_reach_every_exit_including_its_own_arm() {
+    for fixture in all_four_approach_fixtures() {
+        for entry in &fixture.inbound_ports {
+            for exit in &fixture.outbound_ports {
+                let path = fixture.path(entry, exit).expect("compatible exit");
+                assert_eq!(
+                    path.road_steps().first().unwrap().movement,
+                    MovementKind::RoundaboutEntry
+                );
+                assert_eq!(
+                    path.road_steps().last().unwrap().movement,
+                    MovementKind::RoundaboutExit
+                );
+                if entry.arm == exit.arm {
+                    assert!(
+                        path.movements()
+                            .filter(|kind| **kind == MovementKind::RoundaboutCirculation)
+                            .count()
+                            >= fixture.minimum_uturn_circulation_steps
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn paired_lanes_use_separate_ports_and_only_entry_adds_delay() {
+    let fixture = dual_lane_roundabout_fixture();
+    assert_ne!(fixture.inbound_port.id, fixture.outbound_port.id);
+    let transitions = fixture.transitions();
+    for transition in transitions {
+        let extra = transition.travel_millis - transition.base_travel_millis();
+        match transition.movement {
+            MovementKind::RoundaboutEntry => assert_eq!(extra, 750),
+            MovementKind::RoundaboutCirculation | MovementKind::RoundaboutExit => {
+                assert_eq!(extra, 0)
+            }
+            other => panic!("unexpected roundabout movement: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn ids_ports_and_prices_are_canonical() {
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(5, 6));
+    assert_eq!(
+        roundabout_structure_id(template.size, template.origin),
+        "roundabout:compact2x2:5,6"
+    );
+    assert_eq!(template.port_slots.len(), 8);
+    assert_eq!(
+        template.port_slots[0].id,
+        "roundabout:compact2x2:5,6:port:5,6:north"
+    );
+    assert!(template
+        .port_slots
+        .windows(2)
+        .all(|ports| { (ports[0].point, ports[0].edge) < (ports[1].point, ports[1].edge) }));
+    assert_eq!(COMPACT_ROUNDABOUT_COST, 1_000);
+    assert_eq!(STANDARD_ROUNDABOUT_COST, 2_000);
+}

@@ -3,6 +3,7 @@ use caelum_core::model::{
     TransitPath,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
+use caelum_core::roundabouts::{roundabout_structure_id, roundabout_template};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -670,35 +671,59 @@ fn structure_transition_keys_are_stable_when_authored_order_changes() {
 }
 
 #[test]
-fn roundabout_is_not_routable_before_complete_ring_templates_exist() {
-    let mut map = blank_map(7, 7);
-    let center = point(3, 3);
-    let west = point(2, 3);
-    let east = point(4, 3);
-    connect(&mut map, west, center);
-    connect(&mut map, center, east);
-    map.tile_mut(center).unwrap().road_structure_id = Some("roundabout".to_string());
+fn fixed_roundabout_transitions_connect_compatible_external_lanes() {
+    let mut map = blank_map(9, 9);
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));
+    let id = roundabout_structure_id(template.size, template.origin);
+    for position in &template.footprint {
+        road(&mut map, *position, None);
+        map.tile_mut(*position).unwrap().road_structure_id = Some(id.clone());
+    }
+
+    let west_inbound = template
+        .port_slots
+        .iter()
+        .find(|port| port.point == point(3, 4) && port.edge == Heading::West)
+        .unwrap()
+        .clone();
+    let east_outbound = template
+        .port_slots
+        .iter()
+        .find(|port| port.point == point(4, 4) && port.edge == Heading::East)
+        .unwrap()
+        .clone();
+    corridor(
+        &mut map,
+        &[point(1, 4), point(2, 4), west_inbound.point],
+        Some(Heading::East),
+    );
+    corridor(
+        &mut map,
+        &[east_outbound.point, point(5, 4), point(6, 4)],
+        Some(Heading::East),
+    );
+    map.tile_mut(west_inbound.point).unwrap().one_way = None;
+    map.tile_mut(east_outbound.point).unwrap().one_way = None;
     map.road_structures.push(RoadStructure::Roundabout {
-        id: "roundabout".to_string(),
-        origin: center,
-        size: RoundaboutSize::Compact2x2,
-        footprint: vec![center],
-        ports: vec![
-            caelum_core::model::RoadPort {
-                id: "roundabout-west".to_string(),
-                point: center,
-                edge: Heading::West,
-            },
-            caelum_core::model::RoadPort {
-                id: "roundabout-east".to_string(),
-                point: center,
-                edge: Heading::East,
-            },
-        ],
+        id,
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint,
+        ports: vec![west_inbound, east_outbound],
     });
 
     let topology = RoadTopology::compile(&map).unwrap();
-    assert!(topology.find_path(&map, &west, &east).is_none());
+    let path = topology
+        .find_path(&map, &point(1, 4), &point(6, 4))
+        .expect("roundabout should connect compatible lanes");
+    assert!(path
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == MovementKind::RoundaboutEntry));
+    assert!(path
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == MovementKind::RoundaboutExit));
 }
 
 #[test]

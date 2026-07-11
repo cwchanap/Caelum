@@ -196,6 +196,15 @@ pub enum RoundaboutSize {
     Standard3x3,
 }
 
+impl RoundaboutSize {
+    pub(crate) fn stable_id_key(self) -> &'static str {
+        match self {
+            Self::Compact2x2 => "compact2x2",
+            Self::Standard3x3 => "standard3x3",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoadPort {

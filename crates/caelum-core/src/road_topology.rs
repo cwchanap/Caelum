@@ -6,6 +6,7 @@ use crate::model::{
     TripPosition,
 };
 use crate::rejection::GameplayResult;
+use crate::roundabouts::compile_roundabout_transitions;
 
 pub const BUS_TILE_MILLIS: u32 = 1_250;
 pub const RIGHT_TURN_MILLIS: u32 = 500;
@@ -184,92 +185,94 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
     let mut compiled = Vec::new();
 
     for structure in structures {
-        if !matches!(structure, RoadStructure::AutomaticJunction { .. }) {
+        match structure {
+            RoadStructure::AutomaticJunction { .. } => {
+                compiled.extend(compile_automatic_junction_transitions(map, structure)?);
+            }
+            RoadStructure::Roundabout { .. } => {
+                compiled.extend(compile_roundabout_transitions(structure)?);
+            }
+        }
+    }
+    Ok(compiled)
+}
+
+fn compile_automatic_junction_transitions(
+    map: &GameMap,
+    structure: &RoadStructure,
+) -> GameplayResult<Vec<CompiledTransition>> {
+    let mut compiled = Vec::new();
+    let mut ports: Vec<_> = structure.ports().iter().collect();
+    ports.sort_by(|left, right| {
+        (left.point, left.edge, left.id.as_str()).cmp(&(right.point, right.edge, right.id.as_str()))
+    });
+    for entry in &ports {
+        let incoming = opposite(entry.edge);
+        let Some(entry_port_tile) = map.tile(entry.point) else {
+            continue;
+        };
+        if entry_port_tile.kind != "road" || !entry_port_tile.road_connections.contains(&entry.edge)
+        {
             continue;
         }
-        let mut ports: Vec<_> = structure.ports().iter().collect();
-        ports.sort_by(|left, right| {
-            (left.point, left.edge, left.id.as_str()).cmp(&(
-                right.point,
-                right.edge,
-                right.id.as_str(),
-            ))
-        });
-        for entry in &ports {
-            let incoming = opposite(entry.edge);
-            let Some(entry_port_tile) = map.tile(entry.point) else {
+        let entry_outside = offset(entry.point, entry.edge);
+        let Some(entry_tile) = map.tile(entry_outside) else {
+            continue;
+        };
+        if entry_tile.kind != "road"
+            || !entry_tile.road_connections.contains(&opposite(entry.edge))
+            || !lane_accepts(entry_tile.one_way, incoming)
+        {
+            continue;
+        }
+
+        for exit in &ports {
+            let outgoing = exit.edge;
+            let Some(exit_port_tile) = map.tile(exit.point) else {
                 continue;
             };
-            if entry_port_tile.kind != "road"
-                || !entry_port_tile.road_connections.contains(&entry.edge)
+            if exit_port_tile.kind != "road" || !exit_port_tile.road_connections.contains(&outgoing)
             {
                 continue;
             }
-            let entry_outside = offset(entry.point, entry.edge);
-            let Some(entry_tile) = map.tile(entry_outside) else {
+            let exit_outside = offset(exit.point, outgoing);
+            let Some(exit_tile) = map.tile(exit_outside) else {
                 continue;
             };
-            if entry_tile.kind != "road"
-                || !entry_tile.road_connections.contains(&opposite(entry.edge))
-                || !lane_accepts(entry_tile.one_way, incoming)
+            if exit_tile.kind != "road"
+                || !exit_tile.road_connections.contains(&opposite(outgoing))
+                || !lane_accepts(exit_tile.one_way, outgoing)
             {
                 continue;
             }
 
-            for exit in &ports {
-                let outgoing = exit.edge;
-                let Some(exit_port_tile) = map.tile(exit.point) else {
-                    continue;
-                };
-                if exit_port_tile.kind != "road"
-                    || !exit_port_tile.road_connections.contains(&outgoing)
-                {
-                    continue;
-                }
-                let exit_outside = offset(exit.point, outgoing);
-                let Some(exit_tile) = map.tile(exit_outside) else {
-                    continue;
-                };
-                if exit_tile.kind != "road"
-                    || !exit_tile.road_connections.contains(&opposite(outgoing))
-                    || !lane_accepts(exit_tile.one_way, outgoing)
-                {
-                    continue;
-                }
-
-                let movement = classify_movement(incoming, outgoing);
-                let structure_tiles =
-                    entry.point.x.abs_diff(exit.point.x) + entry.point.y.abs_diff(exit.point.y) + 1;
-                let base_millis = BUS_TILE_MILLIS.saturating_mul(structure_tiles);
-                compiled.push((
-                    RoadState {
-                        position: entry.point,
-                        incoming_heading: incoming,
+            let movement = classify_movement(incoming, outgoing);
+            let structure_tiles =
+                entry.point.x.abs_diff(exit.point.x) + entry.point.y.abs_diff(exit.point.y) + 1;
+            let base_millis = BUS_TILE_MILLIS.saturating_mul(structure_tiles);
+            compiled.push((
+                RoadState {
+                    position: entry.point,
+                    incoming_heading: incoming,
+                },
+                RoadTransition {
+                    to: RoadState {
+                        position: exit_outside,
+                        incoming_heading: outgoing,
                     },
-                    RoadTransition {
-                        to: RoadState {
-                            position: exit_outside,
-                            incoming_heading: outgoing,
-                        },
-                        movement,
-                        geometry: transition_geometry(
-                            entry.point,
-                            incoming,
-                            exit_outside,
-                            outgoing,
-                        ),
-                        travel_millis: base_millis + movement_extra_millis(movement),
-                        stable_key: format!(
-                            "structure:{}:{}>{}:{}:{}",
-                            structure.id(),
-                            entry.id,
-                            exit.id,
-                            heading_key(outgoing),
-                            exit_tile.id
-                        ),
-                    },
-                ));
-            }
+                    movement,
+                    geometry: transition_geometry(entry.point, incoming, exit_outside, outgoing),
+                    travel_millis: base_millis + movement_extra_millis(movement),
+                    stable_key: format!(
+                        "structure:{}:{}>{}:{}:{}",
+                        structure.id(),
+                        entry.id,
+                        exit.id,
+                        heading_key(outgoing),
+                        exit_tile.id
+                    ),
+                },
+            ));
         }
     }
     Ok(compiled)
