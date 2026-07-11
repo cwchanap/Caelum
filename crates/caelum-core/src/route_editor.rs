@@ -74,6 +74,10 @@ pub fn update_route(
     let mut legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
     validate_edit_legs(&current.legs, &legs, route_id)?;
     carry_forward_leg_history(&current.legs, &mut legs);
+    let next_revision = current
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| exhausted_revision(route_id, current.revision))?;
 
     let mut candidate = state.clone();
     apply_route_platform_delta(
@@ -89,7 +93,7 @@ pub fn update_route(
         pattern,
         waypoint_ids.clone(),
         legs,
-        current.revision.saturating_add(1),
+        next_revision,
     );
     rebase_edited_route_vehicles_and_riders(
         state,
@@ -234,6 +238,17 @@ fn stale_revision(route_id: &str, expected: u32, actual: u32) -> GameplayRejecti
         context: RejectionContext {
             route_id: Some(route_id.to_string()),
             expected_revision: Some(expected),
+            actual_revision: Some(actual),
+            ..RejectionContext::default()
+        },
+    }
+}
+
+fn exhausted_revision(route_id: &str, actual: u32) -> GameplayRejection {
+    GameplayRejection {
+        code: RejectionCode::RouteRevisionExhausted,
+        context: RejectionContext {
+            route_id: Some(route_id.to_string()),
             actual_revision: Some(actual),
             ..RejectionContext::default()
         },

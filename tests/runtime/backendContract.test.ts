@@ -37,6 +37,21 @@ describe("Rust backend contract", () => {
     );
   });
 
+  it("describes an exhausted route revision with route and revision context", () => {
+    const exhaustedRevision: GameplayRejection = {
+      code: "routeRevisionExhausted",
+      context: {
+        routeId: "route-001",
+        actualRevision: 4_294_967_295,
+        affectedRouteIds: [],
+      },
+    };
+
+    expect(rejectionMessage(exhaustedRevision)).toBe(
+      "route-001 cannot be edited because its revision 4,294,967,295 is exhausted.",
+    );
+  });
+
   it("normalizes a Rust snapshot into shell-readable frontend state", () => {
     const rustSnapshot = createRustSnapshot({
       day: 1,

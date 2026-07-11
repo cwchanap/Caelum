@@ -95,6 +95,15 @@ fn route<'a>(snapshot: &'a GameSnapshot, route_id: &str) -> &'a Route {
         .expect("fixture route")
 }
 
+fn route_mut<'a>(snapshot: &'a mut GameSnapshot, route_id: &str) -> &'a mut Route {
+    snapshot
+        .transit
+        .routes
+        .iter_mut()
+        .find(|route| route.id == route_id)
+        .expect("fixture route")
+}
+
 fn vehicle<'a>(snapshot: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
     snapshot
         .transit
@@ -204,6 +213,38 @@ fn stale_update_rejects_without_mutating_latest_metadata() {
         Some(route(&before, "route-001").revision)
     );
     assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn exhausted_route_revision_rejects_without_mutating_the_snapshot() {
+    let mut engine = editable_bus_engine(&[2, 6, 10], BUS_COST);
+    create_route(
+        &mut engine,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    let mut state = engine.snapshot();
+    route_mut(&mut state, "route-001").revision = u32::MAX;
+    let before = state.clone();
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology");
+
+    let result = route_editor::update_route(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        "route-001",
+        u32::MAX,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-003"]),
+    );
+
+    let rejection = result.expect_err("exhausted revision must reject");
+    assert_eq!(rejection.code, RejectionCode::RouteRevisionExhausted);
+    assert_eq!(rejection.context.route_id.as_deref(), Some("route-001"));
+    assert_eq!(rejection.context.actual_revision, Some(u32::MAX));
+    assert_eq!(state, before);
 }
 
 #[test]
@@ -427,6 +468,44 @@ fn riding_trip(route_id: &str, passenger_id: &str) -> ActiveTrip {
     }
 }
 
+fn trip_with_future_route_leg(route_id: &str) -> ActiveTrip {
+    ActiveTrip {
+        id: "trip-002".into(),
+        sim_id: "sim-002".into(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: point(0, 5),
+        destination: point(10, 5),
+        position: point(1, 5).into(),
+        status: TripStatus::Walking,
+        deadline: 100.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![
+                RouteLeg {
+                    mode: TransitMode::Walk,
+                    from: point(0, 5),
+                    to: point(2, 5),
+                    line_id: None,
+                    service_direction: None,
+                    board_itinerary_index: None,
+                    alight_itinerary_index: None,
+                },
+                RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: point(2, 5),
+                    to: point(10, 5),
+                    line_id: Some(route_id.into()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
+                },
+            ],
+            estimated_seconds: 30.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }
+}
+
 fn update_direct(
     state: &GameSnapshot,
     route_id: &str,
@@ -486,6 +565,34 @@ fn live_update_rebases_vehicles_replans_riders_and_collects_last_tombstone() {
         .stops
         .iter()
         .any(|stop| stop.id == "stop-002"));
+}
+
+#[test]
+fn live_update_replans_trip_with_edited_route_only_in_a_future_remaining_leg() {
+    let mut engine = editable_bus_engine(&[2, 6, 10], BUS_COST);
+    create_route(
+        &mut engine,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    let mut state = engine.snapshot();
+    state.active_trips = vec![trip_with_future_route_leg("route-001")];
+    let original_position = state.active_trips[0].position.clone();
+    let revision = route(&state, "route-001").revision;
+
+    let result = update_direct(
+        &state,
+        "route-001",
+        revision,
+        ids(&["stop-001", "stop-003"]),
+    );
+
+    let trip = &result.active_trips[0];
+    assert_eq!(trip.status, TripStatus::Idle);
+    assert!(trip.route_plan.is_none());
+    assert_eq!(trip.current_leg_index, 0);
+    assert_eq!(trip.position, original_position);
 }
 
 #[test]

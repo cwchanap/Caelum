@@ -24,6 +24,7 @@ pub enum RejectionCode {
     DuplicateRouteNodes,
     DisconnectedLeg,
     RouteChangedWhileEditing,
+    RouteRevisionExhausted,
     RouteNotFound,
     StructureNotFound,
     InvalidPlatform,

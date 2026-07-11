@@ -174,6 +174,30 @@ fn gameplay_rejection_uses_stable_camel_case_wire_names() {
     );
 }
 
+#[test]
+fn route_revision_exhausted_rejection_uses_stable_camel_case_wire_name() {
+    let rejection = GameplayRejection {
+        code: RejectionCode::RouteRevisionExhausted,
+        context: RejectionContext {
+            route_id: Some("route-001".into()),
+            actual_revision: Some(u32::MAX),
+            ..RejectionContext::default()
+        },
+    };
+
+    assert_eq!(
+        serde_json::to_value(rejection).unwrap(),
+        json!({
+            "code": "routeRevisionExhausted",
+            "context": {
+                "routeId": "route-001",
+                "actualRevision": 4294967295_u64,
+                "affectedRouteIds": []
+            }
+        })
+    );
+}
+
 fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
     ActiveTrip {
         id: "trip-day-0-trip-1".to_string(),

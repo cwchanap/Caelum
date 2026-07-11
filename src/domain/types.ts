@@ -108,6 +108,7 @@ export type RejectionCode =
   | "duplicateRouteNodes"
   | "disconnectedLeg"
   | "routeChangedWhileEditing"
+  | "routeRevisionExhausted"
   | "routeNotFound"
   | "structureNotFound"
   | "invalidPlatform"

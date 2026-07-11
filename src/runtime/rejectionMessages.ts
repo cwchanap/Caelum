@@ -20,6 +20,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       );
     case "routeChangedWhileEditing":
       return "This route changed while you were editing it. Reload the saved route.";
+    case "routeRevisionExhausted":
+      return `${context.routeId ?? "That route"} cannot be edited because its revision ${numberFormat.format(context.actualRevision ?? 0)} is exhausted.`;
     case "disconnectedLeg":
       return `No legal path connects ${
         context.fromWaypointId ?? "the selected node"
