@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, TransitMode,
-    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan, Sim,
+    TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
@@ -204,6 +204,49 @@ fn riding_trip_without_vehicle_replans_from_current_position() {
         recovered.route_plan.as_ref().unwrap().legs[0].from,
         Point { x: 15, y: 8 }
     );
+}
+
+#[test]
+fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    let mut state = assigned.snapshot;
+    state.transit.routes[0].path_broken = false;
+    state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
+    state.transit.routes[0].legs[0].current_path = None;
+    let mut waiting = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (2, 5).into(),
+        (12, 5).into(),
+    );
+    waiting.route_plan = Some(bus_plan((2, 5).into(), (12, 5).into(), "route-001"));
+    state.active_trips = vec![waiting];
+
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    let next = transit::tick_vehicles(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        0.0,
+    );
+
+    assert!(next.transit.vehicles[0].passenger_ids.is_empty());
+    assert_eq!(next.active_trips[0].status, TripStatus::Waiting);
 }
 
 #[test]

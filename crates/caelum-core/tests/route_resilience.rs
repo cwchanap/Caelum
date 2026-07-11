@@ -116,6 +116,10 @@ fn point_at(geometry: &PathGeometry, progress: f64) -> TripPosition {
 
 fn recompute_after_removal(previous: &GameSnapshot, removed: Point) -> GameSnapshot {
     let candidate = transit::remove_at_tile(previous, &removed).expect("fixture removal applies");
+    recompute_after_candidate(previous, candidate)
+}
+
+fn recompute_after_candidate(previous: &GameSnapshot, candidate: GameSnapshot) -> GameSnapshot {
     let topology = RoadTopology::compile(&candidate.map).expect("candidate topology compiles");
     route_lifecycle::recompute_affected_routes(
         previous,
@@ -124,6 +128,69 @@ fn recompute_after_removal(previous: &GameSnapshot, removed: Point) -> GameSnaps
             road_topology: &topology,
         },
     )
+}
+
+struct BrokenServiceFixture {
+    state: GameSnapshot,
+    route_id: String,
+    vehicle_id: String,
+    rider_id: String,
+    vehicle_world: TripPosition,
+}
+
+fn moving_vehicle_with_rider_fixture() -> BrokenServiceFixture {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 10));
+    add_bus_route(&mut engine, &[(2, 5), (10, 5)]);
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
+
+    let mut state = assigned.snapshot;
+    let path = state.transit.routes[0].legs[0]
+        .current_path
+        .as_ref()
+        .expect("fixture route is connected");
+    let path_step_index = path.step_count() - 1;
+    let vehicle_world = point_at(geometry_at(path, path_step_index), 0.75);
+    let rider_id = "trip-001".to_string();
+    state.transit.vehicles[0].path_step_index = path_step_index;
+    state.transit.vehicles[0].step_progress = 0.75;
+    state.transit.vehicles[0].passenger_ids = vec![rider_id.clone()];
+    state.active_trips.push(ActiveTrip {
+        id: rider_id.clone(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: point(2, 5),
+        destination: point(10, 5),
+        position: vehicle_world.clone(),
+        status: TripStatus::Riding,
+        deadline: 1_000.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![caelum_core::model::RouteLeg {
+                mode: TransitMode::Bus,
+                from: point(2, 5),
+                to: point(10, 5),
+                line_id: Some("route-001".to_string()),
+            }],
+            estimated_seconds: path.total_travel_seconds(),
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    });
+
+    BrokenServiceFixture {
+        state,
+        route_id: "route-001".to_string(),
+        vehicle_id: "vehicle-001".to_string(),
+        rider_id,
+        vehicle_world,
+    }
 }
 
 struct AlternateRouteFixture {
@@ -274,6 +341,140 @@ fn one_topology_transaction_increments_route_revision_once() {
     let next = recompute_after_removal(&fixture.state, point(6, 5));
 
     assert_eq!(route(&next, &fixture.route_id).revision, before + 1);
+}
+
+#[test]
+fn first_broken_transition_parks_at_nearest_live_waypoint_and_replans_riders() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let old_active = route(&fixture.state, &fixture.route_id).active;
+
+    let next = recompute_after_removal(&fixture.state, point(6, 5));
+    let route = route(&next, &fixture.route_id);
+    let vehicle = vehicle(&next, &fixture.vehicle_id);
+    let rider = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == fixture.rider_id)
+        .expect("fixture rider remains active for replanning");
+
+    assert!(route.path_broken);
+    assert_eq!(route.active, old_active);
+    assert_eq!(vehicle.parked_position, Some(point(10, 5).into()));
+    assert!(vehicle.passenger_ids.is_empty());
+    assert_eq!(rider.position, point(10, 5).into());
+    assert_eq!(rider.status, TripStatus::Idle);
+    assert!(rider.route_plan.is_none());
+    assert_eq!(rider.current_leg_index, 0);
+}
+
+#[test]
+fn no_live_waypoint_keeps_the_current_world_position_as_out_of_service_parking() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let candidate = transit::remove_at_tiles(&fixture.state, &[point(2, 5), point(10, 5)])
+        .expect("fixture waypoint removal applies");
+
+    let next = recompute_after_candidate(&fixture.state, candidate);
+    let vehicle = vehicle(&next, &fixture.vehicle_id);
+
+    assert!(route(&next, &fixture.route_id).path_broken);
+    assert_eq!(vehicle.parked_position, Some(fixture.vehicle_world.clone()));
+    assert_eq!(next.active_trips[0].position, fixture.vehicle_world);
+}
+
+#[test]
+fn repaired_active_route_rebases_and_resumes_without_flipping_active() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let broken = recompute_after_removal(&fixture.state, point(6, 5));
+    let repair_candidate = transit::lay_road(&broken, &point(6, 5)).expect("repair applies");
+
+    let repaired = recompute_after_candidate(&broken, repair_candidate);
+    let route = route(&repaired, &fixture.route_id);
+    let vehicle = vehicle(&repaired, &fixture.vehicle_id);
+
+    assert!(!route.path_broken);
+    assert!(route.active);
+    assert!(vehicle.parked_position.is_none());
+    assert_eq!(vehicle.itinerary_index, 1);
+    assert_eq!(vehicle.path_step_index, 0);
+    assert_eq!(vehicle.step_progress, 0.0);
+}
+
+#[test]
+fn repaired_paused_route_stays_paused() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let mut broken = recompute_after_removal(&fixture.state, point(6, 5));
+    broken.transit.routes[0].active = false;
+    let repair_candidate = transit::lay_road(&broken, &point(6, 5)).expect("repair applies");
+
+    let repaired = recompute_after_candidate(&broken, repair_candidate);
+
+    assert!(!route(&repaired, &fixture.route_id).active);
+    assert!(vehicle(&repaired, &fixture.vehicle_id)
+        .parked_position
+        .is_some());
+}
+
+#[test]
+fn restoring_one_live_waypoint_reparks_a_still_broken_vehicle_there() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let no_nodes_candidate = transit::remove_at_tiles(&fixture.state, &[point(2, 5), point(10, 5)])
+        .expect("fixture waypoint removal applies");
+    let no_nodes = recompute_after_candidate(&fixture.state, no_nodes_candidate);
+    let restore_candidate =
+        transit::add_bus_stop(&no_nodes, &point(10, 5)).expect("waypoint restoration applies");
+
+    let one_node = recompute_after_candidate(&no_nodes, restore_candidate);
+
+    assert!(route(&one_node, &fixture.route_id).path_broken);
+    assert_eq!(
+        vehicle(&one_node, &fixture.vehicle_id).parked_position,
+        Some(point(10, 5).into())
+    );
+}
+
+#[test]
+fn mutations_while_already_broken_do_not_repeat_break_side_effects() {
+    let fixture = moving_vehicle_with_rider_fixture();
+    let mut broken = recompute_after_removal(&fixture.state, point(6, 5));
+    broken.active_trips.push(ActiveTrip {
+        id: "trip-after-break".to_string(),
+        sim_id: "sim-002".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: point(2, 5),
+        destination: point(10, 5),
+        position: point(2, 5).into(),
+        status: TripStatus::Waiting,
+        deadline: 1_000.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![caelum_core::model::RouteLeg {
+                mode: TransitMode::Bus,
+                from: point(2, 5),
+                to: point(10, 5),
+                line_id: Some("route-001".to_string()),
+            }],
+            estimated_seconds: 10.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    });
+    let before_parking = vehicle(&broken, &fixture.vehicle_id)
+        .parked_position
+        .clone();
+    let candidate = transit::lay_road(&broken, &point(20, 12)).expect("unrelated road applies");
+
+    let next = recompute_after_candidate(&broken, candidate);
+    let untouched_trip = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "trip-after-break")
+        .expect("fixture trip remains");
+
+    assert_eq!(
+        vehicle(&next, &fixture.vehicle_id).parked_position,
+        before_parking
+    );
+    assert_eq!(untouched_trip.status, TripStatus::Waiting);
+    assert!(untouched_trip.route_plan.is_some());
 }
 
 #[test]

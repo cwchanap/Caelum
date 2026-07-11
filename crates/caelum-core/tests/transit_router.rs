@@ -1,6 +1,8 @@
-use caelum_core::model::{ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus};
+use caelum_core::model::{
+    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, TransitMode, TripPurpose, TripStatus,
+};
 use caelum_core::road_topology::RoadTopology;
-use caelum_core::{transit, GameEngine, GameIntent, RoutingContext};
+use caelum_core::{router, transit, GameEngine, GameIntent, RoutingContext};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -118,4 +120,28 @@ fn removing_road_marks_route_broken() {
 
     assert!(removed.applied);
     assert!(removed.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn routing_ignores_a_route_with_any_disconnected_leg() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+    });
+    let route = engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let mut state = route.snapshot;
+    state.transit.routes[0].path_broken = false;
+    state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
+    state.transit.routes[0].legs[0].current_path = None;
+
+    let plan = router::find_route_plan(&state, &(2, 5).into(), &(12, 5).into())
+        .expect("walking fallback remains available");
+
+    assert!(plan.legs.iter().all(|leg| leg.mode == TransitMode::Walk));
 }

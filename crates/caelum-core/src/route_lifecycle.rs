@@ -4,17 +4,25 @@ use std::f64::consts::TAU;
 
 use crate::engine::RoutingContext;
 use crate::model::{
-    GameSnapshot, Heading, PathGeometry, Platform, Point, RouteLegPath, RouteLegStatus,
-    TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
+    GameSnapshot, Heading, PathGeometry, Platform, RouteLegPath, RouteLegStatus, TransitMode,
+    TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
-use crate::transit::park_vehicles_and_invalidate_trips;
+use crate::transit::invalidate_trips_for_line;
+use crate::transit_nodes::is_present_node;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PathProjection {
     pub path_step_index: usize,
     pub step_progress: f64,
     pub distance_squared: f64,
+}
+
+pub fn is_route_operational(active: bool, legs: &[RouteLegPath]) -> bool {
+    active
+        && legs
+            .iter()
+            .all(|leg| leg.status == RouteLegStatus::Connected)
 }
 
 pub fn recompute_affected_routes(
@@ -32,13 +40,6 @@ fn recompute_bus_routes(
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
 ) {
-    let position_by_id: HashMap<String, Point> = candidate
-        .transit
-        .stops
-        .iter()
-        .map(|stop| (stop.id.clone(), stop.position))
-        .collect();
-
     for route_index in 0..candidate.transit.routes.len() {
         let route = candidate.transit.routes[route_index].clone();
         let previous_route = previous
@@ -77,11 +78,9 @@ fn recompute_bus_routes(
             }
         }
 
-        if path_broken && !route.path_broken {
-            park_vehicles_and_invalidate_trips(candidate, &route.id, &legs, &position_by_id);
-        }
         candidate.transit.routes[route_index].legs = legs;
         candidate.transit.routes[route_index].path_broken = path_broken;
+        transition_route_service(previous, candidate, TransitMode::Bus, &route.id);
     }
 }
 
@@ -90,13 +89,6 @@ fn recompute_metro_lines(
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
 ) {
-    let position_by_id: HashMap<String, Point> = candidate
-        .transit
-        .stations
-        .iter()
-        .map(|station| (station.id.clone(), station.position))
-        .collect();
-
     for line_index in 0..candidate.transit.metro_lines.len() {
         let line = candidate.transit.metro_lines[line_index].clone();
         let previous_line = previous
@@ -135,12 +127,265 @@ fn recompute_metro_lines(
             }
         }
 
-        if path_broken && !line.path_broken {
-            park_vehicles_and_invalidate_trips(candidate, &line.id, &legs, &position_by_id);
-        }
         candidate.transit.metro_lines[line_index].legs = legs;
         candidate.transit.metro_lines[line_index].path_broken = path_broken;
+        transition_route_service(previous, candidate, TransitMode::Metro, &line.id);
     }
+}
+
+fn transition_route_service(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+) {
+    let was_broken = route_is_broken(previous, mode, route_id);
+    let is_broken = route_is_broken(candidate, mode, route_id);
+    match (was_broken, is_broken) {
+        (false, true) => break_service(previous, candidate, mode, route_id),
+        (true, false) => restore_service(previous, candidate, mode, route_id),
+        (true, true) => {
+            rebase_broken_parking_to_new_live_waypoint(previous, candidate, mode, route_id);
+        }
+        _ => {}
+    }
+}
+
+fn route_is_broken(snapshot: &GameSnapshot, mode: TransitMode, route_id: &str) -> bool {
+    route_data(snapshot, mode, route_id).is_some_and(|(_, _, legs)| {
+        legs.iter()
+            .any(|leg| leg.status != RouteLegStatus::Connected)
+    })
+}
+
+fn route_data<'a>(
+    snapshot: &'a GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+) -> Option<(bool, &'a [String], &'a [RouteLegPath])> {
+    if mode == TransitMode::Bus {
+        let route = snapshot
+            .transit
+            .routes
+            .iter()
+            .find(|route| route.id == route_id)?;
+        return Some((route.active, &route.stop_ids, &route.legs));
+    }
+    let line = snapshot
+        .transit
+        .metro_lines
+        .iter()
+        .find(|line| line.id == route_id)?;
+    Some((line.active, &line.station_ids, &line.legs))
+}
+
+fn break_service(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+) {
+    let Some((_, waypoint_ids, _)) = route_data(candidate, mode, route_id) else {
+        return;
+    };
+    let waypoint_ids = waypoint_ids.to_vec();
+    let vehicle_indexes: Vec<usize> = candidate
+        .transit
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vehicle)| (vehicle.line_id == route_id).then_some(index))
+        .collect();
+    let mut parked_position_by_trip_id = HashMap::new();
+
+    for vehicle_index in vehicle_indexes {
+        let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let vehicle_world = previous
+            .transit
+            .vehicles
+            .iter()
+            .find(|vehicle| vehicle.id == candidate_vehicle.id)
+            .and_then(|vehicle| vehicle_world_position(previous, mode, route_id, vehicle))
+            .or_else(|| candidate_vehicle.parked_position.clone())
+            .or_else(|| {
+                waypoint_ids
+                    .iter()
+                    .find_map(|id| node_world(previous, mode, id))
+            })
+            .unwrap_or(TripPosition { x: 0.0, y: 0.0 });
+        let target = parking_target(candidate, mode, &waypoint_ids, &vehicle_world);
+        let (itinerary_index, parked_world) = target.map_or_else(
+            || (None, vehicle_world),
+            |(index, _, world)| (Some(index), world),
+        );
+        let vehicle = &mut candidate.transit.vehicles[vehicle_index];
+        for passenger_id in &vehicle.passenger_ids {
+            parked_position_by_trip_id.insert(passenger_id.clone(), parked_world.clone());
+        }
+        if let Some(index) = itinerary_index {
+            vehicle.itinerary_index = index;
+        }
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
+        vehicle.parked_position = Some(parked_world);
+        vehicle.passenger_ids.clear();
+    }
+
+    invalidate_trips_for_line(
+        &mut candidate.active_trips,
+        &mut candidate.transit.vehicles,
+        route_id,
+        &parked_position_by_trip_id,
+    );
+}
+
+fn restore_service(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+) {
+    let Some((active, waypoint_ids, _)) = route_data(candidate, mode, route_id) else {
+        return;
+    };
+    let waypoint_ids = waypoint_ids.to_vec();
+    rebase_parked_vehicles(previous, candidate, mode, route_id, active, &waypoint_ids);
+}
+
+fn rebase_broken_parking_to_new_live_waypoint(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+) {
+    let Some((_, waypoint_ids, _)) = route_data(candidate, mode, route_id) else {
+        return;
+    };
+    let waypoint_ids = waypoint_ids.to_vec();
+    let gained_live_waypoint = waypoint_ids.iter().any(|id| {
+        present_node_world(previous, mode, id).is_none()
+            && present_node_world(candidate, mode, id).is_some()
+    });
+    if !gained_live_waypoint {
+        return;
+    }
+    rebase_parked_vehicles(previous, candidate, mode, route_id, false, &waypoint_ids);
+}
+
+fn rebase_parked_vehicles(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+    resume: bool,
+    waypoint_ids: &[String],
+) {
+    let vehicle_indexes: Vec<usize> = candidate
+        .transit
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vehicle)| (vehicle.line_id == route_id).then_some(index))
+        .collect();
+    for vehicle_index in vehicle_indexes {
+        let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let vehicle_world = candidate_vehicle
+            .parked_position
+            .clone()
+            .or_else(|| vehicle_world_position(previous, mode, route_id, candidate_vehicle));
+        let Some(vehicle_world) = vehicle_world else {
+            continue;
+        };
+        let Some((itinerary_index, _, parked_world)) =
+            parking_target(candidate, mode, waypoint_ids, &vehicle_world)
+        else {
+            continue;
+        };
+        let vehicle = &mut candidate.transit.vehicles[vehicle_index];
+        vehicle.itinerary_index = itinerary_index;
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
+        vehicle.parked_position = if resume { None } else { Some(parked_world) };
+    }
+}
+
+fn vehicle_world_position(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    route_id: &str,
+    vehicle: &Vehicle,
+) -> Option<TripPosition> {
+    if let Some(parked_position) = &vehicle.parked_position {
+        return Some(parked_position.clone());
+    }
+    let (_, _, legs) = route_data(snapshot, mode, route_id)?;
+    let leg = legs.get(vehicle.itinerary_index % legs.len())?;
+    let path = leg.current_path.as_ref().or(leg.last_valid_path.as_ref())?;
+    vehicle_world_sample(path, vehicle).map(|(world, _)| world)
+}
+
+fn parking_target(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    waypoint_ids: &[String],
+    vehicle_world: &TripPosition,
+) -> Option<(usize, String, TripPosition)> {
+    waypoint_ids
+        .iter()
+        .enumerate()
+        .filter_map(|(index, id)| {
+            present_node_world(snapshot, mode, id).map(|world| (index, id.clone(), world))
+        })
+        .min_by(|left, right| {
+            squared_distance(&left.2, vehicle_world)
+                .total_cmp(&squared_distance(&right.2, vehicle_world))
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.1.cmp(&right.1))
+        })
+}
+
+fn present_node_world(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    node_id: &str,
+) -> Option<TripPosition> {
+    if mode == TransitMode::Bus {
+        return snapshot
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == node_id && is_present_node(stop.status))
+            .map(|stop| stop.position.into());
+    }
+    snapshot
+        .transit
+        .stations
+        .iter()
+        .find(|station| station.id == node_id && is_present_node(station.status))
+        .map(|station| station.position.into())
+}
+
+fn node_world(snapshot: &GameSnapshot, mode: TransitMode, node_id: &str) -> Option<TripPosition> {
+    if mode == TransitMode::Bus {
+        return snapshot
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == node_id)
+            .map(|stop| stop.position.into());
+    }
+    snapshot
+        .transit
+        .stations
+        .iter()
+        .find(|station| station.id == node_id)
+        .map(|station| station.position.into())
+}
+
+fn squared_distance(left: &TripPosition, right: &TripPosition) -> f64 {
+    let dx = left.x - right.x;
+    let dy = left.y - right.y;
+    dx * dx + dy * dy
 }
 
 trait PlatformNode {

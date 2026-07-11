@@ -1,5 +1,6 @@
 use crate::engine::RoutingContext;
 use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
+use crate::route_lifecycle::is_route_operational;
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 use crate::transit_nodes::is_present_node;
 
@@ -116,7 +117,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
     let mut services = Vec::new();
 
     for route in &state.transit.routes {
-        if !route.active || route.path_broken {
+        if !is_route_operational(route.active, &route.legs) {
             continue;
         }
 
@@ -144,7 +145,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
     }
 
     for line in &state.transit.metro_lines {
-        if !line.active || line.path_broken {
+        if !is_route_operational(line.active, &line.legs) {
             continue;
         }
 

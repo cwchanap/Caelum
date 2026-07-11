@@ -13,6 +13,7 @@ use crate::model::{
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::{apply_road_mutation, RoadMutation};
+use crate::route_lifecycle::is_route_operational;
 use crate::transit_nodes::{
     canonical_node_anchor, garbage_collect_missing_nodes, is_present_node,
     remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
@@ -422,7 +423,7 @@ pub fn assign_vehicle(
         if !route.active {
             return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
         }
-        if route.path_broken {
+        if !is_route_operational(route.active, &route.legs) {
             return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
         }
         route.vehicle_ids.push(vehicle.id.clone());
@@ -438,7 +439,7 @@ pub fn assign_vehicle(
         if !line.active {
             return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
         }
-        if line.path_broken {
+        if !is_route_operational(line.active, &line.legs) {
             return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
         }
         line.vehicle_ids.push(vehicle.id.clone());
@@ -1087,46 +1088,11 @@ impl PlatformNode for crate::model::Station {
     }
 }
 
-pub(crate) fn park_vehicles_and_invalidate_trips(
-    state: &mut GameSnapshot,
-    line_id: &str,
-    legs: &[RouteLegPath],
-    position_by_waypoint_id: &HashMap<String, Point>,
-) {
-    let mut parked_position_by_trip_id = HashMap::new();
-
-    for vehicle in &mut state.transit.vehicles {
-        if vehicle.line_id != line_id {
-            continue;
-        }
-        if !legs.is_empty() {
-            let leg = &legs[vehicle.itinerary_index % legs.len()];
-            let parked_at = position_by_waypoint_id.get(&leg.from_waypoint_id);
-            if let Some(parked_at) = parked_at {
-                for passenger_id in &vehicle.passenger_ids {
-                    parked_position_by_trip_id.insert(passenger_id.clone(), *parked_at);
-                }
-                vehicle.parked_position = Some((*parked_at).into());
-            }
-        }
-        vehicle.passenger_ids.clear();
-        vehicle.path_step_index = 0;
-        vehicle.step_progress = 0.0;
-    }
-
-    invalidate_trips_for_line(
-        &mut state.active_trips,
-        &mut state.transit.vehicles,
-        line_id,
-        &parked_position_by_trip_id,
-    );
-}
-
-fn invalidate_trips_for_line(
+pub(crate) fn invalidate_trips_for_line(
     active_trips: &mut [ActiveTrip],
     vehicles: &mut [Vehicle],
     line_id: &str,
-    parked_position_by_trip_id: &HashMap<String, Point>,
+    parked_position_by_trip_id: &HashMap<String, TripPosition>,
 ) {
     let mut invalidated_trip_ids: Vec<String> = Vec::new();
     for trip in active_trips {
@@ -1141,7 +1107,7 @@ fn invalidate_trips_for_line(
         trip.route_plan = None;
         trip.current_leg_index = 0;
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
-            trip.position = (*parked_at).into();
+            trip.position = parked_at.clone();
         }
         invalidated_trip_ids.push(trip.id.clone());
     }
@@ -1187,7 +1153,7 @@ fn assigned_line_data(
             .routes
             .iter()
             .find(|candidate| candidate.id == vehicle.line_id)?;
-        if !route.active || route.path_broken {
+        if !is_route_operational(route.active, &route.legs) {
             return None;
         }
         let stop_by_id: HashMap<String, Point> = state
@@ -1204,7 +1170,7 @@ fn assigned_line_data(
         .metro_lines
         .iter()
         .find(|candidate| candidate.id == vehicle.line_id)?;
-    if !line.active || line.path_broken {
+    if !is_route_operational(line.active, &line.legs) {
         return None;
     }
     let station_by_id: HashMap<String, Point> = state
