@@ -46,6 +46,41 @@ impl RoadTopology {
         deterministic_dijkstra(self, map, from, to)
     }
 
+    pub fn find_terminal_reversal(
+        &self,
+        terminal: Point,
+        previous_exit_heading: Heading,
+        next_required_entry_heading: Heading,
+    ) -> Option<TransitPath> {
+        let transition = self.transition_for(
+            RoadState {
+                position: terminal,
+                incoming_heading: previous_exit_heading,
+            },
+            next_required_entry_heading,
+        )?;
+        if transition.movement != MovementKind::UTurn {
+            return None;
+        }
+        let geometry = transition_geometry(
+            terminal,
+            previous_exit_heading,
+            terminal,
+            next_required_entry_heading,
+        );
+        Some(TransitPath::Road {
+            steps: vec![RoadPathStep {
+                position: terminal,
+                entering_heading: previous_exit_heading,
+                leaving_heading: next_required_entry_heading,
+                movement: MovementKind::UTurn,
+                geometry,
+                travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+            }],
+            total_travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+        })
+    }
+
     #[doc(hidden)]
     pub fn transition_for(&self, from: RoadState, outgoing: Heading) -> Option<&RoadTransition> {
         self.transitions

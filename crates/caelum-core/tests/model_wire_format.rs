@@ -10,16 +10,69 @@
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
-    RoadStructure, RoundaboutSize, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TransitPath,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TransitPath,
     TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::state::create_initial_snapshot;
-use caelum_core::{DispatchResult, GameIntent, RoadPreset};
+use caelum_core::{DispatchResult, GameEngine, GameIntent, RoadPreset};
 use serde_json::json;
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
+}
+
+fn bus_route_fixture() -> Route {
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
+    }
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: point(10, 5),
+    });
+    engine.dispatch(GameIntent::AddBusRoute {
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    engine.snapshot().transit.routes[0].clone()
+}
+
+#[test]
+fn route_wire_uses_directional_legs_without_legacy_segments() {
+    let route = bus_route_fixture();
+    let value = serde_json::to_value(route).unwrap();
+
+    assert_eq!(value["pattern"], json!("loop"));
+    assert_eq!(value["revision"], json!(0));
+    assert!(value.get("legs").is_some());
+    assert!(value.get("segments").is_none());
+    assert_eq!(value["legs"][0]["direction"], json!("loop"));
+    assert_eq!(value["legs"][0]["kind"], json!("service"));
+    assert_eq!(value["legs"][0]["status"], json!("connected"));
+    assert_eq!(value["legs"][0]["currentPath"]["kind"], json!("road"));
+}
+
+#[test]
+fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
+    let vehicle = Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-001".to_string(),
+        capacity: 18,
+        passenger_ids: Vec::new(),
+        itinerary_index: 1,
+        path_step_index: 2,
+        step_progress: 0.25,
+        parked_position: Some(TripPosition { x: 3.0, y: 4.0 }),
+    };
+    let value = serde_json::to_value(vehicle).unwrap();
+
+    assert_eq!(value["itineraryIndex"], json!(1));
+    assert_eq!(value["pathStepIndex"], json!(2));
+    assert_eq!(value["stepProgress"], json!(0.25));
+    assert_eq!(value["parkedPosition"], json!({ "x": 3.0, "y": 4.0 }));
+    assert!(value.get("segmentIndex").is_none());
+    assert!(value.get("progress").is_none());
 }
 
 #[test]
@@ -160,8 +213,10 @@ fn vehicle_and_route_leg_mode_serializes_to_legacy_strings() {
             line_id: "route-001".to_string(),
             capacity: 18,
             passenger_ids: Vec::new(),
-            segment_index: 0,
-            progress: 0.0,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
         };
         let value = serde_json::to_value(&vehicle).expect("vehicle should serialize");
         assert_eq!(
@@ -579,8 +634,10 @@ fn snapshot_round_trips_through_json() {
         line_id: "metro-001".to_string(),
         capacity: 90,
         passenger_ids: vec!["sim-001".to_string()],
-        segment_index: 2,
-        progress: 0.25,
+        itinerary_index: 2,
+        path_step_index: 3,
+        step_progress: 0.25,
+        parked_position: Some(TripPosition { x: 4.0, y: 5.0 }),
     };
     let json = serde_json::to_value(&vehicle).expect("serialize");
     let back: Vehicle = serde_json::from_value(json).expect("deserialize");

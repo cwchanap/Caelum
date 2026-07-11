@@ -8,13 +8,17 @@ import type {
   BuildingType,
   GameMap,
   GameState,
+  Heading,
   MetroLine,
   PlacedBuilding,
   Point,
   Route,
+  RouteLegPath,
   Station,
   Stop,
   StopKind,
+  TransitMode,
+  TransitPath,
   Vehicle,
 } from "../../src/domain/types";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
@@ -106,6 +110,99 @@ function routeSegments(
   });
 }
 
+function headingBetween(from: Point, to: Point): Heading {
+  if (to.x > from.x) return "east";
+  if (to.x < from.x) return "west";
+  if (to.y > from.y) return "south";
+  return "north";
+}
+
+function roadFixturePath(points: Point[]): TransitPath {
+  const steps = points.slice(0, -1).map((position, index) => {
+    const to = points[index + 1];
+    const heading = headingBetween(position, to);
+    return {
+      position: clonePoint(position),
+      enteringHeading: heading,
+      leavingHeading: heading,
+      movement: "straight" as const,
+      geometry: {
+        kind: "line" as const,
+        from: clonePoint(position),
+        to: clonePoint(to),
+      },
+      travelSeconds: 1.25,
+    };
+  });
+  return {
+    kind: "road",
+    steps,
+    totalTravelSeconds: steps.length * 1.25,
+  };
+}
+
+function trackFixturePath(points: Point[]): TransitPath {
+  const steps = points.slice(0, -1).map((position, index) => {
+    const to = points[index + 1];
+    return {
+      position: clonePoint(position),
+      heading: headingBetween(position, to),
+      geometry: {
+        kind: "line" as const,
+        from: clonePoint(position),
+        to: clonePoint(to),
+      },
+      travelSeconds: 0.625,
+    };
+  });
+  return {
+    kind: "track",
+    steps,
+    totalTravelSeconds: steps.length * 0.625,
+  };
+}
+
+function legFromLegacyFixture(
+  mode: TransitMode,
+  fromWaypointId: string,
+  toWaypointId: string,
+  points: Point[],
+): RouteLegPath {
+  const path =
+    points.length === 0
+      ? null
+      : mode === "bus"
+        ? roadFixturePath(points)
+        : trackFixturePath(points);
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop",
+    kind: "service",
+    status: path ? "connected" : "networkDisconnected",
+    currentPath: path,
+    lastValidPath: path,
+    estimatedSeconds: path?.totalTravelSeconds ?? null,
+  };
+}
+
+function routeLegs(
+  map: GameMap,
+  waypointIds: string[],
+  positions: Point[],
+  mode: "bus" | "metro",
+): RouteLegPath[] {
+  const segments = routeSegments(map, positions, mode);
+  return segments.map((points, index) =>
+    legFromLegacyFixture(
+      mode,
+      waypointIds[index],
+      waypointIds[(index + 1) % waypointIds.length],
+      points,
+    ),
+  );
+}
+
 export function createTestGameState(
   overrides: Partial<GameState> = {},
 ): GameState {
@@ -184,7 +281,7 @@ export function addTestBusRoute(
     const position = stopById.get(stopId);
     return position === undefined ? [] : [position];
   });
-  const segments = routeSegments(state.map, positions, "bus");
+  const legs = routeLegs(state.map, stopIds, positions, "bus");
   const route: Route = {
     id,
     name: `Bus ${state.transit.routes.length + 1}`,
@@ -195,8 +292,10 @@ export function addTestBusRoute(
     stopIds,
     vehicleIds: [],
     active: true,
-    segments,
-    pathBroken: segments.some((segment) => segment.length === 0),
+    pattern: "loop",
+    revision: 0,
+    legs,
+    pathBroken: legs.some((leg) => leg.status !== "connected"),
   };
   return {
     ...state,
@@ -220,7 +319,7 @@ export function addTestMetroLine(
     const position = stationById.get(stationId);
     return position === undefined ? [] : [position];
   });
-  const segments = routeSegments(state.map, positions, "metro");
+  const legs = routeLegs(state.map, stationIds, positions, "metro");
   const line: MetroLine = {
     id,
     name: `Metro ${state.transit.metroLines.length + 1}`,
@@ -231,8 +330,10 @@ export function addTestMetroLine(
     stationIds,
     vehicleIds: [],
     active: true,
-    segments,
-    pathBroken: segments.some((segment) => segment.length === 0),
+    pattern: "loop",
+    revision: 0,
+    legs,
+    pathBroken: legs.some((leg) => leg.status !== "connected"),
   };
   return {
     ...state,
@@ -260,8 +361,10 @@ export function assignTestVehicle(
     lineId,
     capacity: mode === "bus" ? 30 : 120,
     passengerIds: [],
-    segmentIndex: 0,
-    progress: 0,
+    itineraryIndex: 0,
+    pathStepIndex: 0,
+    stepProgress: 0,
+    parkedPosition: null,
   };
   const transit =
     mode === "bus"
@@ -330,11 +433,11 @@ export function removeTestInfrastructureAtTile(
           const position = stopById.get(stopId);
           return position === undefined ? [] : [position];
         });
-        const segments = routeSegments(nextMap, positions, "bus");
+        const legs = routeLegs(nextMap, route.stopIds, positions, "bus");
         return {
           ...(routeById.get(route.id) ?? route),
-          segments,
-          pathBroken: segments.some((segment) => segment.length === 0),
+          legs,
+          pathBroken: legs.some((leg) => leg.status !== "connected"),
         };
       }),
       metroLines: nextState.transit.metroLines.map((line) => {
@@ -348,12 +451,38 @@ export function removeTestInfrastructureAtTile(
           const position = stationById.get(stationId);
           return position === undefined ? [] : [position];
         });
-        const segments = routeSegments(nextMap, positions, "metro");
+        const legs = routeLegs(nextMap, line.stationIds, positions, "metro");
         return {
           ...(lineById.get(line.id) ?? line),
-          segments,
-          pathBroken: segments.some((segment) => segment.length === 0),
+          legs,
+          pathBroken: legs.some((leg) => leg.status !== "connected"),
         };
+      }),
+      vehicles: nextState.transit.vehicles.map((vehicle) => {
+        const line =
+          vehicle.mode === "bus"
+            ? nextState.transit.routes.find(
+                (route) => route.id === vehicle.lineId,
+              )
+            : nextState.transit.metroLines.find(
+                (candidate) => candidate.id === vehicle.lineId,
+              );
+        const waypointId = line?.legs[vehicle.itineraryIndex]?.fromWaypointId;
+        const parkedPosition =
+          vehicle.mode === "bus"
+            ? nextState.transit.stops.find((stop) => stop.id === waypointId)
+                ?.position
+            : nextState.transit.stations.find(
+                (station) => station.id === waypointId,
+              )?.position;
+        return parkedPosition === undefined
+          ? vehicle
+          : {
+              ...vehicle,
+              pathStepIndex: 0,
+              stepProgress: 0,
+              parkedPosition: clonePoint(parkedPosition),
+            };
       }),
     },
   };

@@ -10,6 +10,13 @@ export type AreaKind =
 export type Heading = "north" | "east" | "south" | "west";
 export type RoadDirection = Heading;
 export type TransitMode = "walk" | "bus" | "metro";
+export type ServicePattern = "loop" | "shuttle";
+export type ServiceDirection = "loop" | "outbound" | "return";
+export type RouteLegKind = "service" | "terminalReversal";
+export type RouteLegStatus =
+  | "connected"
+  | "networkDisconnected"
+  | "missingNode";
 export type BuildingType =
   | "busStop"
   | "busTerminal"
@@ -190,6 +197,62 @@ export interface Station {
   platforms: Platform[];
 }
 
+export type MovementKind =
+  | "straight"
+  | "rightTurn"
+  | "leftTurn"
+  | "uTurn"
+  | "roundaboutEntry"
+  | "roundaboutCirculation"
+  | "roundaboutExit";
+
+export type PathGeometry =
+  | { kind: "line"; from: TripPosition; to: TripPosition }
+  | {
+      kind: "quadraticBezier";
+      from: TripPosition;
+      control: TripPosition;
+      to: TripPosition;
+    }
+  | {
+      kind: "arc";
+      center: TripPosition;
+      radius: number;
+      startRadians: number;
+      sweepRadians: number;
+    };
+
+export interface RoadPathStep {
+  position: Point;
+  enteringHeading: Heading;
+  leavingHeading: Heading;
+  movement: MovementKind;
+  geometry: PathGeometry;
+  travelSeconds: number;
+}
+
+export interface TrackPathStep {
+  position: Point;
+  heading: Heading;
+  geometry: PathGeometry;
+  travelSeconds: number;
+}
+
+export type TransitPath =
+  | { kind: "road"; steps: RoadPathStep[]; totalTravelSeconds: number }
+  | { kind: "track"; steps: TrackPathStep[]; totalTravelSeconds: number };
+
+export interface RouteLegPath {
+  fromWaypointId: string;
+  toWaypointId: string;
+  direction: ServiceDirection;
+  kind: RouteLegKind;
+  status: RouteLegStatus;
+  currentPath: TransitPath | null;
+  lastValidPath: TransitPath | null;
+  estimatedSeconds: number | null;
+}
+
 export interface Route {
   id: string;
   name: string;
@@ -197,11 +260,9 @@ export interface Route {
   stopIds: string[];
   vehicleIds: string[];
   active: boolean;
-  /** Tile path per consecutive stop pair, closing the loop (last -> first).
-   *  An unpathable pair is an empty array. */
-  segments: Point[][];
-  /** True when any segment is unpathable. Runs only when active && !pathBroken;
-   *  network damage never touches the player's `active` toggle. */
+  pattern: ServicePattern;
+  revision: number;
+  legs: RouteLegPath[];
   pathBroken: boolean;
 }
 
@@ -212,11 +273,9 @@ export interface MetroLine {
   stationIds: string[];
   vehicleIds: string[];
   active: boolean;
-  /** Tile path per consecutive station pair, closing the loop (last -> first).
-   *  An unpathable pair is an empty array. */
-  segments: Point[][];
-  /** True when any segment is unpathable. Runs only when active && !pathBroken;
-   *  network damage never touches the player's `active` toggle. */
+  pattern: ServicePattern;
+  revision: number;
+  legs: RouteLegPath[];
   pathBroken: boolean;
 }
 
@@ -226,8 +285,10 @@ export interface Vehicle {
   lineId: string;
   capacity: number;
   passengerIds: string[];
-  segmentIndex: number;
-  progress: number;
+  itineraryIndex: number;
+  pathStepIndex: number;
+  stepProgress: number;
+  parkedPosition: TripPosition | null;
 }
 
 export type WorkerProfile = "worker" | "nonWorker";

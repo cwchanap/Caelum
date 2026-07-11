@@ -12,6 +12,36 @@ pub enum TransitMode {
     Metro,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServicePattern {
+    Loop,
+    Shuttle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServiceDirection {
+    Loop,
+    Outbound,
+    Return,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RouteLegKind {
+    Service,
+    TerminalReversal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RouteLegStatus {
+    Connected,
+    NetworkDisconnected,
+    MissingNode,
+}
+
 /// Lifecycle state of an active trip. Serialized as the lowercase TS-parity strings
 /// `idle` / `walking` / `waiting` / `riding` / `arrived` / `late` / `unserved`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -480,6 +510,30 @@ impl TransitPath {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RouteLegPath {
+    pub from_waypoint_id: String,
+    pub to_waypoint_id: String,
+    pub direction: ServiceDirection,
+    pub kind: RouteLegKind,
+    pub status: RouteLegStatus,
+    pub current_path: Option<TransitPath>,
+    pub last_valid_path: Option<TransitPath>,
+    pub estimated_seconds: Option<f64>,
+}
+
+impl RouteLegPath {
+    pub fn key(&self) -> (&str, &str, ServiceDirection, RouteLegKind) {
+        (
+            &self.from_waypoint_id,
+            &self.to_waypoint_id,
+            self.direction,
+            self.kind,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransitNetwork {
     pub stops: Vec<Stop>,
     pub stations: Vec<Station>,
@@ -522,7 +576,9 @@ pub struct Route {
     pub stop_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
-    pub segments: Vec<Vec<Point>>,
+    pub pattern: ServicePattern,
+    pub revision: u32,
+    pub legs: Vec<RouteLegPath>,
     pub path_broken: bool,
 }
 
@@ -535,7 +591,9 @@ pub struct MetroLine {
     pub station_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
-    pub segments: Vec<Vec<Point>>,
+    pub pattern: ServicePattern,
+    pub revision: u32,
+    pub legs: Vec<RouteLegPath>,
     pub path_broken: bool,
 }
 
@@ -547,8 +605,10 @@ pub struct Vehicle {
     pub line_id: String,
     pub capacity: u16,
     pub passenger_ids: Vec<String>,
-    pub segment_index: usize,
-    pub progress: f64,
+    pub itinerary_index: usize,
+    pub path_step_index: usize,
+    pub step_progress: f64,
+    pub parked_position: Option<TripPosition>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

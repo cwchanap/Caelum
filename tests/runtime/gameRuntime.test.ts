@@ -245,7 +245,9 @@ function applyIntent(
       stopIds: intent.stopIds,
       vehicleIds: [],
       active: true,
-      segments: [],
+      pattern: "loop",
+      revision: 0,
+      legs: [],
       pathBroken: false,
     };
     return {
@@ -355,7 +357,9 @@ function applyIntent(
       stationIds: intent.stationIds,
       vehicleIds: [],
       active: true,
-      segments: [],
+      pattern: "loop",
+      revision: 0,
+      legs: [],
       pathBroken: false,
     };
     return {
@@ -378,8 +382,10 @@ function applyIntent(
       lineId: intent.lineId,
       capacity: intent.mode === "bus" ? 30 : 120,
       passengerIds: [],
-      segmentIndex: 0,
-      progress: 0,
+      itineraryIndex: 0,
+      pathStepIndex: 0,
+      stepProgress: 0,
+      parkedPosition: null,
     };
     const transit =
       intent.mode === "bus"
@@ -1096,7 +1102,9 @@ describe("route creation and management", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: [],
             active,
-            segments: [],
+            pattern: "loop",
+            revision: 0,
+            legs: [],
             pathBroken: false,
           },
         ],
@@ -2027,7 +2035,9 @@ describe("fake backend applyIntent coverage", () => {
             stopIds: ["stop-001", "stop-002"],
             vehicleIds: [],
             active: true,
-            segments: [],
+            pattern: "loop",
+            revision: 0,
+            legs: [],
             pathBroken: false,
           },
         ],

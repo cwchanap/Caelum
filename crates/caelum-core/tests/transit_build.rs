@@ -1,10 +1,125 @@
 use caelum_core::model::{
-    ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, Sim, TransitMode, TransitPath, TripPurpose, TripStatus,
+    Vehicle, WorkerProfile,
 };
+use caelum_core::network::resolve_route_legs;
+use caelum_core::road_topology::RoadTopology;
+use caelum_core::service_itinerary::{build_service_itinerary, ServiceLegSpec};
 use caelum_core::{
     state::create_initial_snapshot, transit, GameEngine, GameIntent, RejectionCode, RoadPreset,
+    RoutingContext,
 };
+
+fn ids(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+#[test]
+fn shuttle_builds_outbound_reversal_return_reversal_in_order() {
+    let specs = build_service_itinerary(
+        TransitMode::Bus,
+        ServicePattern::Shuttle,
+        &ids(&["A", "B", "C"]),
+    );
+
+    assert_eq!(
+        specs.iter().map(ServiceLegSpec::key).collect::<Vec<_>>(),
+        vec![
+            ("A", "B", ServiceDirection::Outbound, RouteLegKind::Service,),
+            ("B", "C", ServiceDirection::Outbound, RouteLegKind::Service,),
+            (
+                "C",
+                "C",
+                ServiceDirection::Return,
+                RouteLegKind::TerminalReversal,
+            ),
+            ("C", "B", ServiceDirection::Return, RouteLegKind::Service,),
+            ("B", "A", ServiceDirection::Return, RouteLegKind::Service,),
+            (
+                "A",
+                "A",
+                ServiceDirection::Outbound,
+                RouteLegKind::TerminalReversal,
+            ),
+        ]
+    );
+}
+
+fn resolve_fixture(
+    pattern: ServicePattern,
+    mode: TransitMode,
+) -> Vec<caelum_core::model::RouteLegPath> {
+    let mut engine = GameEngine::new();
+    match mode {
+        TransitMode::Bus => {
+            road_line(&mut engine, 5, 2, 10);
+            for x in [2, 6, 10] {
+                engine.dispatch(GameIntent::AddBusStop {
+                    point: (x, 5).into(),
+                });
+            }
+        }
+        TransitMode::Metro => {
+            track_line(&mut engine, 5, 2, 10);
+            for x in [2, 6, 10] {
+                engine.dispatch(GameIntent::AddMetroStation {
+                    point: (x, 5).into(),
+                });
+            }
+        }
+        TransitMode::Walk => unreachable!("fixture only resolves vehicle modes"),
+    }
+    let snapshot = engine.snapshot();
+    let topology = RoadTopology::compile(&snapshot.map).unwrap();
+    let waypoint_ids = if mode == TransitMode::Bus {
+        ids(&["stop-001", "stop-002", "stop-003"])
+    } else {
+        ids(&["station-001", "station-002", "station-003"])
+    };
+    resolve_route_legs(
+        &snapshot,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        mode,
+        &waypoint_ids,
+        pattern,
+    )
+}
+
+#[test]
+fn mode_specific_terminal_reversals_are_explicit() {
+    let metro = resolve_fixture(ServicePattern::Shuttle, TransitMode::Metro);
+    let metro_reversals: Vec<_> = metro
+        .iter()
+        .filter(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .collect();
+    assert_eq!(metro_reversals.len(), 2);
+    assert!(metro_reversals.iter().all(|leg| {
+        leg.status == RouteLegStatus::Connected
+            && matches!(
+                leg.current_path.as_ref(),
+                Some(TransitPath::Track {
+                    total_travel_seconds: 0.0,
+                    ..
+                })
+            )
+    }));
+
+    let bus = resolve_fixture(ServicePattern::Shuttle, TransitMode::Bus);
+    let bus_reversal = bus
+        .iter()
+        .find(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .unwrap();
+    assert!(bus_reversal
+        .current_path
+        .as_ref()
+        .unwrap()
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == caelum_core::model::MovementKind::UTurn));
+}
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
     Route {
@@ -14,7 +129,9 @@ fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
         stop_ids: stop_ids.iter().map(|s| s.to_string()).collect(),
         vehicle_ids: Vec::new(),
         active: true,
-        segments: Vec::new(),
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: Vec::new(),
         path_broken: false,
     }
 }
@@ -118,7 +235,7 @@ fn creates_active_bus_route_and_assigns_vehicle() {
     assert_eq!(route.vehicle_ids, vec!["vehicle-001"]);
     assert!(route.active);
     assert!(!route.path_broken);
-    assert_eq!(route.segments.len(), 2);
+    assert_eq!(route.legs.len(), 2);
     assert_eq!(snapshot.transit.vehicles[0].capacity, 18);
 }
 
@@ -492,15 +609,15 @@ fn bulldozes_track_before_road_on_crossing_tile() {
 }
 
 #[test]
-fn vehicles_advance_by_speed_over_segment_steps() {
+fn vehicles_advance_by_duration_over_path_steps() {
     let mut engine = two_stop_bus_engine();
     engine.dispatch(GameIntent::SetPaused { paused: false });
 
     let ticked = engine.tick(1.0);
 
     assert!(ticked.applied);
-    let progress = ticked.snapshot.transit.vehicles[0].progress;
-    assert!((progress - 0.1).abs() < 0.000_001);
+    let progress = ticked.snapshot.transit.vehicles[0].step_progress;
+    assert!((progress - 0.8).abs() < 0.000_001);
 }
 
 #[test]
@@ -617,8 +734,10 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string(), "trip-other".to_string()],
-        segment_index: 0,
-        progress: 0.25,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.25,
+        parked_position: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -844,8 +963,10 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-day-0-trip-001".to_string()],
-        segment_index: 0,
-        progress: 0.25,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.25,
+        parked_position: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -921,8 +1042,10 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
             line_id: "route-A".to_string(),
             capacity: 18,
             passenger_ids: Vec::new(),
-            segment_index: 0,
-            progress: 0.0,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
         },
         Vehicle {
             id: "veh-B".to_string(),
@@ -930,8 +1053,10 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
             line_id: "route-B".to_string(),
             capacity: 18,
             passenger_ids: vec!["trip-001".to_string()],
-            segment_index: 0,
-            progress: 0.4,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.4,
+            parked_position: None,
         },
     ];
     state.active_trips = vec![ActiveTrip {
@@ -1004,8 +1129,10 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
         line_id: "route-A".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string()],
-        segment_index: 0,
-        progress: 0.4,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.4,
+        parked_position: None,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),

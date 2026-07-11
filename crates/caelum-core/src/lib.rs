@@ -39,6 +39,7 @@ pub mod road_topology;
 pub mod route_lifecycle;
 pub mod router;
 pub mod scenario;
+pub mod service_itinerary;
 pub mod state;
 pub mod transit;
 pub mod trips;

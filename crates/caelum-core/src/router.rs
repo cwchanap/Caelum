@@ -1,5 +1,5 @@
 use crate::engine::RoutingContext;
-use crate::model::{GameSnapshot, Point, RouteLeg, RoutePlan, TransitMode};
+use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 
 #[derive(Clone)]
@@ -7,7 +7,7 @@ struct TransitService {
     mode: TransitMode,
     line_id: String,
     anchors: Vec<Point>,
-    segments: Vec<Vec<Point>>,
+    legs: Vec<RouteLegPath>,
 }
 
 pub fn find_route_plan(
@@ -34,7 +34,7 @@ pub fn find_route_plan(
 
                 let board_at = &service.anchors[board_index];
                 let alight_at = &service.anchors[alight_index];
-                let steps = ride_steps(&service.segments, board_index, alight_index);
+                let steps = ride_steps(&service.legs, board_index, alight_index);
 
                 candidates.push(RoutePlan {
                     legs: vec![
@@ -74,9 +74,8 @@ pub fn find_route_plan(
             let second_end = &second.anchors[second_end_index];
             let transfer_first = &first.anchors[transfer_first_index];
             let transfer_second = &second.anchors[transfer_second_index];
-            let first_steps = ride_steps(&first.segments, first_start_index, transfer_first_index);
-            let second_steps =
-                ride_steps(&second.segments, transfer_second_index, second_end_index);
+            let first_steps = ride_steps(&first.legs, first_start_index, transfer_first_index);
+            let second_steps = ride_steps(&second.legs, transfer_second_index, second_end_index);
 
             candidates.push(RoutePlan {
                 legs: vec![
@@ -133,7 +132,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                 mode: TransitMode::Bus,
                 line_id: route.id.clone(),
                 anchors,
-                segments: route.segments.clone(),
+                legs: route.legs.clone(),
             });
         }
     }
@@ -161,7 +160,7 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
                 mode: TransitMode::Metro,
                 line_id: line.id.clone(),
                 anchors,
-                segments: line.segments.clone(),
+                legs: line.legs.clone(),
             });
         }
     }
@@ -219,8 +218,8 @@ fn best_transfer_indexes(
     best.map(|(first_index, second_index, _)| (first_index, second_index))
 }
 
-fn ride_steps(segments: &[Vec<Point>], from_index: usize, to_index: usize) -> usize {
-    let count = segments.len();
+fn ride_steps(legs: &[RouteLegPath], from_index: usize, to_index: usize) -> usize {
+    let count = legs.len();
     if count == 0 || from_index == to_index {
         return 0;
     }
@@ -228,7 +227,10 @@ fn ride_steps(segments: &[Vec<Point>], from_index: usize, to_index: usize) -> us
     let mut steps = 0;
     let mut index = from_index;
     while index != to_index {
-        steps += (segments[index].len()).saturating_sub(1).max(1);
+        steps += legs[index]
+            .current_path
+            .as_ref()
+            .map_or(1, |path| path.step_count().max(1));
         index = (index + 1) % count;
     }
 

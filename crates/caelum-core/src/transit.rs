@@ -6,8 +6,8 @@ use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, Tile, TransitMode,
-    TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLegPath,
+    ServicePattern, Tile, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -22,16 +22,6 @@ pub const ROAD_COST: i32 = 100;
 pub const TRACK_COST: i32 = 500;
 pub const BUS_TILES_PER_SECOND: f64 = 0.8;
 pub const METRO_TILES_PER_SECOND: f64 = 1.6;
-
-/// Tolerance for stop-boundary comparisons. A substep scheduled via
-/// [`seconds_until_next_vehicle_stop`] to land exactly on the next stop can, via
-/// floating-point round-off, compute a progress of `0.9999999999999999` or
-/// `1.0000000000000002` instead of `1.0`. Comparisons against `1.0` use this
-/// epsilon so proximity is treated as a stop arrival and the carried progress
-/// on the next segment is clamped to zero (see [`tick_vehicles`] and
-/// [`disembark_vehicle`]); legitimate overshoot (≥ `EPSILON` of a segment) is
-/// preserved.
-const EPSILON: f64 = 0.000_001;
 
 fn route_rejection(code: RejectionCode, route_id: &str) -> GameplayRejection {
     GameplayRejection {
@@ -343,8 +333,10 @@ pub fn add_bus_route(state: &GameSnapshot, stop_ids: Vec<String>) -> GameplayRes
         stop_ids,
         vehicle_ids: Vec::new(),
         active,
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: Vec::new(),
         path_broken: false,
-        segments: Vec::new(),
     });
 
     Ok(next)
@@ -374,8 +366,10 @@ pub fn add_metro_line(
         station_ids,
         vehicle_ids: Vec::new(),
         active,
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: Vec::new(),
         path_broken: false,
-        segments: Vec::new(),
     });
 
     Ok(next)
@@ -424,8 +418,10 @@ pub fn assign_vehicle(
             90
         },
         passenger_ids: Vec::new(),
-        segment_index: 0,
-        progress: 0.0,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.0,
+        parked_position: None,
     };
     let mut next = state.clone();
 
@@ -502,16 +498,21 @@ pub(crate) fn tick_vehicles_without_context(
     let mut vehicles = Vec::with_capacity(state.transit.vehicles.len());
 
     for vehicle in &state.transit.vehicles {
-        let Some((line_positions, segments)) = assigned_line_data(state, vehicle) else {
+        let Some((position_by_id, itinerary)) = assigned_line_data(state, vehicle) else {
             vehicles.push(vehicle.clone());
             continue;
         };
-        if line_positions.len() < 2 {
+        if itinerary.is_empty() {
             vehicles.push(vehicle.clone());
             continue;
         }
 
-        let current_position = &line_positions[vehicle.segment_index % line_positions.len()];
+        let itinerary_index = vehicle.itinerary_index % itinerary.len();
+        let current_leg = &itinerary[itinerary_index];
+        let Some(current_position) = position_by_id.get(&current_leg.from_waypoint_id) else {
+            vehicles.push(vehicle.clone());
+            continue;
+        };
         let waiter_order = waiter_order_lookup
             .get(&format!(
                 "{}|{}",
@@ -520,7 +521,8 @@ pub(crate) fn tick_vehicles_without_context(
             ))
             .cloned()
             .unwrap_or_default();
-        let mut next_vehicle = if vehicle.progress == 0.0 {
+        let at_waypoint = vehicle.path_step_index == 0 && vehicle.step_progress == 0.0;
+        let mut next_vehicle = if at_waypoint {
             board_vehicle(
                 &mut active_trips,
                 vehicle,
@@ -533,43 +535,29 @@ pub(crate) fn tick_vehicles_without_context(
         } else {
             vehicle.clone()
         };
-
-        let segment = segments.get(vehicle.segment_index % segments.len().max(1));
-        let steps = segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
-        let progress = next_vehicle.progress
-            + (tiles_per_second(next_vehicle.mode) * delta_seconds) / steps as f64;
-
-        // FP guard: a substep scheduled to land on the next stop (via
-        // `seconds_until_next_vehicle_stop`) should reach it exactly, but
-        // rounded arithmetic can leave `progress` a hair under 1.0. A strict
-        // `< 1.0` check would keep the vehicle on the old segment, and the
-        // next-stop boundary (a hair after `state.time`) would be skipped by
-        // `track_next_boundary` (it filters candidates `<= state.time +
-        // EPSILON`), delaying the arrival until some later substep. Treat
-        // proximity within `EPSILON` as a stop arrival. Legitimate partial
-        // progress (`< 1.0 - EPSILON`) still stays on the segment.
-        if progress < 1.0 - EPSILON {
-            if progress != next_vehicle.progress {
-                changed = true;
-            }
-            next_vehicle.progress = progress;
-            vehicles.push(next_vehicle);
-            continue;
-        }
-
-        let reached_position = &line_positions[(vehicle.segment_index + 1) % line_positions.len()];
-        let next_segment = segments.get((vehicle.segment_index + 1) % segments.len().max(1));
-        let next_steps = next_segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
-        next_vehicle.progress = progress;
-        next_vehicle = disembark_vehicle(
-            &mut active_trips,
-            &next_vehicle,
-            reached_position,
-            line_positions.len(),
-            steps,
-            next_steps,
+        let previous_cursor = (
+            next_vehicle.itinerary_index,
+            next_vehicle.path_step_index,
+            next_vehicle.step_progress,
         );
-        changed = true;
+        next_vehicle.parked_position = None;
+        advance_vehicle_one_step_compat(&mut next_vehicle, &itinerary, delta_seconds);
+        if previous_cursor
+            != (
+                next_vehicle.itinerary_index,
+                next_vehicle.path_step_index,
+                next_vehicle.step_progress,
+            )
+        {
+            changed = true;
+        }
+        if next_vehicle.itinerary_index != previous_cursor.0 {
+            let Some(reached_position) = position_by_id.get(&current_leg.to_waypoint_id) else {
+                vehicles.push(next_vehicle);
+                continue;
+            };
+            next_vehicle = disembark_vehicle(&mut active_trips, &next_vehicle, reached_position);
+        }
         vehicles.push(next_vehicle);
     }
 
@@ -584,15 +572,16 @@ pub(crate) fn tick_vehicles_without_context(
 }
 
 pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
-    let (line_positions, segments) = assigned_line_data(state, vehicle)?;
-    if line_positions.len() < 2 {
-        return None;
-    }
-
-    let segment = segments.get(vehicle.segment_index % segments.len().max(1));
-    let steps = segment.map_or(1, |segment| segment.len().saturating_sub(1).max(1));
-    let remaining_progress = (1.0 - vehicle.progress).max(0.0);
-    Some((remaining_progress * steps as f64) / tiles_per_second(vehicle.mode))
+    let (_, itinerary) = assigned_line_data(state, vehicle)?;
+    let leg = itinerary.get(vehicle.itinerary_index % itinerary.len())?;
+    let path = leg.current_path.as_ref()?;
+    let current_step = path.step(vehicle.path_step_index)?;
+    let remaining_current = (1.0 - vehicle.step_progress).max(0.0) * current_step.travel_seconds();
+    let remaining_later: f64 = (vehicle.path_step_index + 1..path.step_count())
+        .filter_map(|index| path.step(index))
+        .map(|step| step.travel_seconds())
+        .sum();
+    Some(remaining_current + remaining_later)
 }
 
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
@@ -1084,13 +1073,15 @@ pub(crate) fn park_vehicles_and_invalidate_trips(
             continue;
         }
         if !positions.is_empty() {
-            let parked_at = &positions[vehicle.segment_index % positions.len()];
+            let parked_at = &positions[vehicle.itinerary_index % positions.len()];
             for passenger_id in &vehicle.passenger_ids {
                 parked_position_by_trip_id.insert(passenger_id.clone(), *parked_at);
             }
+            vehicle.parked_position = Some((*parked_at).into());
         }
         vehicle.passenger_ids.clear();
-        vehicle.progress = 0.0;
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
     }
 
     invalidate_trips_for_line(
@@ -1159,7 +1150,7 @@ fn plan_references_line_from(
 fn assigned_line_data(
     state: &GameSnapshot,
     vehicle: &Vehicle,
-) -> Option<(Vec<Point>, Vec<Vec<Point>>)> {
+) -> Option<(HashMap<String, Point>, Vec<RouteLegPath>)> {
     if vehicle.mode == TransitMode::Bus {
         let route = state
             .transit
@@ -1169,18 +1160,13 @@ fn assigned_line_data(
         if !route.active || route.path_broken {
             return None;
         }
-        let stop_by_id: HashMap<&str, &Point> = state
+        let stop_by_id: HashMap<String, Point> = state
             .transit
             .stops
             .iter()
-            .map(|stop| (stop.id.as_str(), &stop.position))
+            .map(|stop| (stop.id.clone(), stop.position))
             .collect();
-        let positions: Option<Vec<Point>> = route
-            .stop_ids
-            .iter()
-            .map(|stop_id| stop_by_id.get(stop_id.as_str()).map(|point| *(*point)))
-            .collect();
-        return positions.map(|positions| (positions, route.segments.clone()));
+        return Some((stop_by_id, route.legs.clone()));
     }
 
     let line = state
@@ -1191,22 +1177,53 @@ fn assigned_line_data(
     if !line.active || line.path_broken {
         return None;
     }
-    let station_by_id: HashMap<&str, &Point> = state
+    let station_by_id: HashMap<String, Point> = state
         .transit
         .stations
         .iter()
-        .map(|station| (station.id.as_str(), &station.position))
+        .map(|station| (station.id.clone(), station.position))
         .collect();
-    let positions: Option<Vec<Point>> = line
-        .station_ids
-        .iter()
-        .map(|station_id| {
-            station_by_id
-                .get(station_id.as_str())
-                .map(|point| *(*point))
-        })
-        .collect();
-    positions.map(|positions| (positions, line.segments.clone()))
+    Some((station_by_id, line.legs.clone()))
+}
+
+fn advance_vehicle_one_step_compat(
+    vehicle: &mut Vehicle,
+    itinerary: &[RouteLegPath],
+    delta_seconds: f64,
+) {
+    let path = itinerary[vehicle.itinerary_index % itinerary.len()]
+        .current_path
+        .as_ref()
+        .expect("operational leg has a path");
+    if path.step_count() == 0 {
+        advance_vehicle_cursor(vehicle, itinerary);
+        return;
+    }
+    let step = path
+        .step(vehicle.path_step_index)
+        .expect("cursor points at a path step");
+    let seconds = step.travel_seconds();
+    if seconds <= f64::EPSILON {
+        advance_vehicle_cursor(vehicle, itinerary);
+        return;
+    }
+    vehicle.step_progress += delta_seconds / seconds;
+    if vehicle.step_progress >= 1.0 {
+        advance_vehicle_cursor(vehicle, itinerary);
+    }
+}
+
+fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {
+    let path = itinerary[vehicle.itinerary_index % itinerary.len()]
+        .current_path
+        .as_ref()
+        .expect("operational leg has a path");
+    vehicle.step_progress = 0.0;
+    vehicle.path_step_index += 1;
+    if vehicle.path_step_index >= path.step_count() {
+        vehicle.path_step_index = 0;
+        vehicle.itinerary_index = (vehicle.itinerary_index + 1) % itinerary.len();
+    }
 }
 
 fn board_vehicle(
@@ -1270,9 +1287,6 @@ fn disembark_vehicle(
     active_trips: &mut [ActiveTrip],
     vehicle: &Vehicle,
     reached_position: &Point,
-    stop_count: usize,
-    current_steps: usize,
-    next_steps: usize,
 ) -> Vehicle {
     let passenger_ids = unique_passenger_ids(&vehicle.passenger_ids);
     let disembarking_ids: HashSet<String> = active_trips
@@ -1307,29 +1321,6 @@ fn disembark_vehicle(
         .into_iter()
         .filter(|passenger_id| !disembarking_ids.contains(passenger_id))
         .collect();
-    next.segment_index = (vehicle.segment_index + 1) % stop_count;
-    next.progress = if next_steps > 0 {
-        // Convert overshoot from the current segment's units to the next
-        // segment's units so the carried distance (in tiles) is preserved
-        // across segments of different lengths. FP round-off at the stop
-        // boundary can leave `vehicle.progress` a hair above or below 1.0;
-        // clamp a sub-`EPSILON` carryover to 0.0 so the vehicle is ready to
-        // board at the stop (boarding fires only when `progress == 0.0`).
-        // Legitimate overshoot (≥ `EPSILON` of a segment) is preserved.
-        let carried = ((vehicle.progress - 1.0) * current_steps as f64) / next_steps as f64;
-        let carried = if carried.abs() < EPSILON {
-            0.0
-        } else {
-            carried
-        };
-        // A vehicle that just reached a stop cannot be "behind" it; drop any
-        // negative residual so the next boarding (which fires only when
-        // `progress == 0.0`) is not blocked. Legitimate overshoot is positive
-        // and preserved.
-        carried.max(0.0)
-    } else {
-        0.0
-    };
     next
 }
 
@@ -1505,14 +1496,6 @@ fn final_route_name(kind: &str, id: &str, name: &str) -> String {
         format!("Bus {}", entity_number_from_id("route", id))
     } else {
         format!("Metro {}", entity_number_from_id("metro", id))
-    }
-}
-
-fn tiles_per_second(mode: TransitMode) -> f64 {
-    if mode == TransitMode::Bus {
-        BUS_TILES_PER_SECOND
-    } else {
-        METRO_TILES_PER_SECOND
     }
 }
 

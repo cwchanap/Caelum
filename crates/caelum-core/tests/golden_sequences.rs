@@ -283,6 +283,7 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
         stepped.time
     );
     let (lv, sv) = (&large.transit.vehicles[0], &stepped.transit.vehicles[0]);
-    assert_eq!(lv.segment_index % 2, sv.segment_index % 2);
-    assert!((lv.progress - sv.progress).abs() < 1e-9);
+    assert_eq!(lv.itinerary_index % 2, sv.itinerary_index % 2);
+    assert_eq!(lv.path_step_index, sv.path_step_index);
+    assert!((lv.step_progress - sv.step_progress).abs() < 1e-9);
 }

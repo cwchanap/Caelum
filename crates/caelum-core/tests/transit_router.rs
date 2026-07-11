@@ -75,13 +75,19 @@ fn bus_route_vehicle_carries_commute_trip() {
         .expect("trip should remain after boarding");
     assert_eq!(boarded_trip.status, TripStatus::Riding);
 
-    let arrived = transit::tick_vehicles(
-        &boarded,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        20.0,
-    );
+    // Task 5's compatibility cursor intentionally consumes at most one tagged
+    // path step per call. Task 6 replaces this loop with remainder-preserving
+    // large-tick advancement.
+    let mut arrived = boarded;
+    for _ in 0..10 {
+        arrived = transit::tick_vehicles(
+            &arrived,
+            RoutingContext {
+                road_topology: &topology,
+            },
+            1.25,
+        );
+    }
     assert!(!arrived.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));

@@ -23,6 +23,7 @@ function ctx(): CanvasRenderingContext2D {
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
+    quadraticCurveTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
     arc: vi.fn(),
@@ -103,30 +104,30 @@ describe("renderTransit highlight", () => {
     let state = busState();
 
     // Sever the road at (11,8), the midpoint of the (7,8)<->(15,8) route, so
-    // both segments become unpathable and the route is marked pathBroken.
+    // both legs become unpathable and the route is marked pathBroken.
     state = removeTestInfrastructureAtTile(state, { x: 11, y: 8 });
     expect(state.transit.routes[0].pathBroken).toBe(true);
 
     const context = ctx();
     renderTransit(context, state, createUiState());
 
-    // segmentIndex=0 -> parked at stop-001 (7,8), centre = (7*32+16, 8*32+16)
+    // itineraryIndex=0 -> parked at stop-001 (7,8), centre = (7*32+16, 8*32+16)
     // = (240, 272). Vehicles are drawn via fillRect(point.x-7, point.y-14, 14, 8).
     expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
   });
 
-  it("interpolates the vehicle position partway along its current segment", () => {
+  it("interpolates the vehicle position partway along its current path step", () => {
     let state = busState();
 
-    // segments[0] for the (7,8)->(15,8) route has 8 steps (9 tiles along
-    // y=8). progress=0.5 -> along = 0.5 * 8 = 4.0 -> tile index 4 = (11,8).
+    // The first tagged step runs from (7,8) to (8,8). stepProgress=0.5
+    // samples the midpoint at (7.5,8).
     state = {
       ...state,
       transit: {
         ...state.transit,
         vehicles: state.transit.vehicles.map((vehicle) => ({
           ...vehicle,
-          progress: 0.5,
+          stepProgress: 0.5,
         })),
       },
     };
@@ -134,9 +135,9 @@ describe("renderTransit highlight", () => {
     const context = ctx();
     renderTransit(context, state, createUiState());
 
-    // Centre of (11,8) = (11*32+16, 8*32+16) = (368, 272).
+    // Centre of (7.5,8) = (7.5*32+16, 8*32+16) = (256, 272).
     // Vehicles are drawn via fillRect(point.x-7, point.y-14, 14, 8).
-    expect(context.fillRect).toHaveBeenCalledWith(361, 258, 14, 8);
+    expect(context.fillRect).toHaveBeenCalledWith(249, 258, 14, 8);
   });
 
   it("parks a metro vehicle at the segment-start station when its line is broken", () => {
