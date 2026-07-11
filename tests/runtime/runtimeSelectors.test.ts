@@ -278,6 +278,8 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: true,
+        status: { primary: "running", pausedAfterRepair: false },
+        failures: [],
       },
       {
         id: "metro-001",
@@ -287,8 +289,95 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: false,
+        status: { primary: "running", pausedAfterRepair: false },
+        failures: [],
       },
     ]);
+  });
+
+  it("prioritizes Broken while preserving paused-after-repair state", () => {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 11, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) =>
+          stop.id === "stop-003" ? { ...stop, status: "missing" } : stop,
+        ),
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+          pathBroken: true,
+          legs: route.legs.map((leg, legIndex) =>
+            legIndex === 1
+              ? { ...leg, status: "missingNode", currentPath: null }
+              : leg,
+          ),
+        })),
+      },
+    };
+
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "broken", pausedAfterRepair: true },
+      failures: [
+        {
+          legIndex: 1,
+          fromWaypointId: "stop-002",
+          toWaypointId: "stop-003",
+          fromLabel: "Stop B",
+          toLabel: "Stop C",
+          reason: "missingNode",
+        },
+      ],
+    });
+  });
+
+  it("maps authoritative road preview cost and route impacts for accessible UI", () => {
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          name: "Route 1",
+        })),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      roadPreviewGeneration: 4,
+      roadMutationPreview: {
+        generation: 4,
+        changedTiles: [{ x: 9, y: 8 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 1_250,
+        skippedTiles: [],
+        routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
+        warnings: [],
+        rejection: null,
+      },
+    };
+
+    expect(selectShellState(state, ui).roadMutationPreview).toEqual({
+      generation: 4,
+      changedTiles: [{ x: 9, y: 8 }],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 1_250,
+      costLabel: "$1,250",
+      routeImpacts: [
+        { routeId: "route-001", routeName: "Route 1", kind: "broken" },
+      ],
+      rejection: null,
+    });
   });
 });
 

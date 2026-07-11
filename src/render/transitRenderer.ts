@@ -34,7 +34,66 @@ function drawTransitPath(
   }
 }
 
+interface RouteStrokeStyle {
+  color: string;
+  lineWidth: number;
+}
+
+function routeLegEndpoints(
+  state: GameState,
+  leg: RouteLegPath,
+): { from?: TripPosition; to?: TripPosition } {
+  const nodes = [...state.transit.stops, ...state.transit.stations];
+  return {
+    from: nodes.find((node) => node.id === leg.fromWaypointId)?.position,
+    to: nodes.find((node) => node.id === leg.toWaypointId)?.position,
+  };
+}
+
+function renderLeg(
+  ctx: CanvasRenderingContext2D,
+  leg: RouteLegPath,
+  endpoints: { from?: TripPosition; to?: TripPosition },
+  style: RouteStrokeStyle,
+): void {
+  const path = leg.status === "connected" ? leg.currentPath : leg.lastValidPath;
+  const dotted = leg.status !== "connected";
+  ctx.setLineDash(dotted ? [6, 5] : []);
+  if (path !== null) {
+    drawTransitPath(ctx, path, style.color, style.lineWidth);
+  } else if (
+    dotted &&
+    endpoints.from !== undefined &&
+    endpoints.to !== undefined
+  ) {
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.lineWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    drawPathGeometry(
+      ctx,
+      { kind: "line", from: endpoints.from, to: endpoints.to },
+      center,
+    );
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
 function drawLegs(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  legs: RouteLegPath[],
+  color: string,
+  lineWidth: number,
+): void {
+  for (const leg of legs) {
+    renderLeg(ctx, leg, routeLegEndpoints(state, leg), { color, lineWidth });
+  }
+}
+
+function drawDraftLegs(
   ctx: CanvasRenderingContext2D,
   legs: RouteLegPath[],
   color: string,
@@ -100,21 +159,21 @@ export function renderTransit(
       (candidate) => candidate.id === ui.selectedRouteId,
     );
     if (route !== undefined) {
-      drawLegs(ctx, route.legs, "#ffffffaa", 9);
+      drawLegs(ctx, state, route.legs, "#ffffffaa", 9);
     }
     const line = state.transit.metroLines.find(
       (candidate) => candidate.id === ui.selectedRouteId,
     );
     if (line !== undefined) {
-      drawLegs(ctx, line.legs, "#ffffffaa", 12);
+      drawLegs(ctx, state, line.legs, "#ffffffaa", 12);
     }
   }
 
   for (const route of state.transit.routes) {
-    drawLegs(ctx, route.legs, route.color, 5);
+    drawLegs(ctx, state, route.legs, route.color, 5);
   }
   for (const line of state.transit.metroLines) {
-    drawLegs(ctx, line.legs, line.color, 8);
+    drawLegs(ctx, state, line.legs, line.color, 8);
   }
 
   const draft = ui.routeDraft;
@@ -127,7 +186,7 @@ export function renderTransit(
   if (draftLegs.length >= 1) {
     ctx.save();
     ctx.setLineDash([6, 6]);
-    drawLegs(ctx, draftLegs, "#f4d35e", 3);
+    drawDraftLegs(ctx, draftLegs, "#f4d35e", 3);
     ctx.restore();
   }
 

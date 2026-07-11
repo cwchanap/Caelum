@@ -4,6 +4,7 @@
   import HudDrawer from "./components/hud/HudDrawer.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
+  import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
   import type { AreaKind, Overlay, Tool } from "./domain/types";
   import type {
     RuntimeCommandResult,
@@ -175,6 +176,12 @@
     }
   }
 
+  function handleFocusRouteFailure(routeId: string, legIndex: number): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.focusRouteFailure(routeId, legIndex));
+    }
+  }
+
   function handleShellError(message: string): void {
     shellError = message;
   }
@@ -341,6 +348,8 @@
         </div>
       {/if}
 
+      <RoadMutationNotice preview={snapshot.shell.roadMutationPreview} />
+
       <GameCanvas {runtime} onShellError={handleShellError} />
 
       <HudDrawer
@@ -372,6 +381,7 @@
         onToggleRouteActive={handleToggleRouteActive}
         onDeleteRoute={handleDeleteRoute}
         onSelectRoute={handleSelectRoute}
+        onFocusRouteFailure={handleFocusRouteFailure}
       />
 
       <BottomHud

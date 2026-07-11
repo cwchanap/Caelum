@@ -59,6 +59,7 @@
     onToggleRouteActive: (routeId: string) => void;
     onDeleteRoute: (routeId: string) => void;
     onSelectRoute: (routeId: string | null) => void;
+    onFocusRouteFailure: (routeId: string, legIndex: number) => void;
   }
 
   let p: Props = $props();
@@ -131,6 +132,7 @@
         onToggleRouteActive={p.onToggleRouteActive}
         onDeleteRoute={p.onDeleteRoute}
         onSelectRoute={p.onSelectRoute}
+        onFocusRouteFailure={p.onFocusRouteFailure}
       />
     {:else if p.category === "data"}
       <DataPanel

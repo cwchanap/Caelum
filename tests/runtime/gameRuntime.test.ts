@@ -1676,6 +1676,19 @@ describe("route creation and management", () => {
     expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
   });
 
+  it("focuses a route failure without toggling route selection", async () => {
+    const backend = backendSpy(routeSnapshotWithRoute(true));
+    const runtime = await createGameRuntime({ backend });
+
+    const snapshot = runtime.focusRouteFailure("route-001", 2);
+
+    expect(snapshot.ui.selectedRouteId).toBe("route-001");
+    expect(snapshot.ui.routeFailureFocus).toEqual({
+      routeId: "route-001",
+      legIndex: 2,
+    });
+  });
+
   it("clears the selected route when it is deleted", async () => {
     const { runtime } = await withTwoStops();
     await runtime.finishRoute();

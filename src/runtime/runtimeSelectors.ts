@@ -1,4 +1,10 @@
-import type { GameState, Overlay } from "../domain/types";
+import type {
+  GameState,
+  MetroLine,
+  Overlay,
+  Route,
+  RouteLegPath,
+} from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
@@ -10,6 +16,9 @@ import type {
   ShellHudState,
   ShellInspectorState,
   ShellPlatform,
+  RouteFailureRow,
+  RouteServiceStatus,
+  RoadMutationPreviewView,
   ShellRouteDraftState,
   ShellRouteListItem,
   ShellRouteListState,
@@ -199,25 +208,111 @@ function buildRouteDraft(
 }
 
 function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
-  const buses: ShellRouteListItem[] = state.transit.routes.map((route) => ({
+  const buses: ShellRouteListItem[] = state.transit.routes.map((route) =>
+    selectRouteRow(state, route, "bus", ui.selectedRouteId === route.id),
+  );
+  const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) =>
+    selectRouteRow(state, line, "metro", ui.selectedRouteId === line.id),
+  );
+  return [...buses, ...metros];
+}
+
+function routeServiceStatus(route: Route | MetroLine): RouteServiceStatus {
+  return route.pathBroken
+    ? { primary: "broken", pausedAfterRepair: !route.active }
+    : route.active
+      ? { primary: "running", pausedAfterRepair: false }
+      : { primary: "paused", pausedAfterRepair: false };
+}
+
+function alphabeticOrdinal(value: number): string {
+  let remainder = Math.max(1, value);
+  let label = "";
+  while (remainder > 0) {
+    remainder -= 1;
+    label = String.fromCharCode(65 + (remainder % 26)) + label;
+    remainder = Math.floor(remainder / 26);
+  }
+  return label;
+}
+
+function waypointLabel(state: GameState, waypointId: string): string {
+  const stop = state.transit.stops.find((node) => node.id === waypointId);
+  const station = state.transit.stations.find((node) => node.id === waypointId);
+  if (stop === undefined && station === undefined) {
+    return waypointId;
+  }
+  const collection =
+    stop === undefined ? state.transit.stations : state.transit.stops;
+  const fallbackOrdinal =
+    collection.findIndex((node) => node.id === waypointId) + 1;
+  const numericSuffix = /-(\d+)$/.exec(waypointId)?.[1];
+  const ordinal =
+    numericSuffix === undefined ? fallbackOrdinal : Number(numericSuffix);
+  return `${stop === undefined ? "Station" : "Stop"} ${alphabeticOrdinal(ordinal)}`;
+}
+
+function routeFailures(
+  state: GameState,
+  legs: RouteLegPath[],
+): RouteFailureRow[] {
+  return legs.flatMap((leg, legIndex) =>
+    leg.status === "connected"
+      ? []
+      : [
+          {
+            legIndex,
+            fromWaypointId: leg.fromWaypointId,
+            toWaypointId: leg.toWaypointId,
+            fromLabel: waypointLabel(state, leg.fromWaypointId),
+            toLabel: waypointLabel(state, leg.toWaypointId),
+            reason: leg.status,
+          },
+        ],
+  );
+}
+
+function selectRouteRow(
+  state: GameState,
+  route: Route | MetroLine,
+  mode: "bus" | "metro",
+  selected: boolean,
+): ShellRouteListItem {
+  return {
     id: route.id,
     name: route.name,
     color: route.color,
-    mode: "bus",
-    stopCount: route.stopIds.length,
+    mode,
+    stopCount:
+      "stopIds" in route ? route.stopIds.length : route.stationIds.length,
     active: route.active,
-    selected: ui.selectedRouteId === route.id,
-  }));
-  const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) => ({
-    id: line.id,
-    name: line.name,
-    color: line.color,
-    mode: "metro",
-    stopCount: line.stationIds.length,
-    active: line.active,
-    selected: ui.selectedRouteId === line.id,
-  }));
-  return [...buses, ...metros];
+    selected,
+    status: routeServiceStatus(route),
+    failures: routeFailures(state, route.legs),
+  };
+}
+
+function buildRoadMutationPreview(
+  state: GameState,
+  ui: UiState,
+): RoadMutationPreviewView | null {
+  const preview = ui.roadMutationPreview;
+  if (preview === null || preview.generation !== ui.roadPreviewGeneration) {
+    return null;
+  }
+  return {
+    generation: preview.generation,
+    changedTiles: preview.changedTiles,
+    authoredTiles: preview.authoredTiles,
+    generatedStructures: preview.generatedStructures,
+    cost: preview.cost,
+    costLabel: formatBudget(preview.cost),
+    routeImpacts: preview.routeImpacts.map((impact) => ({
+      ...impact,
+      routeName: routeNameAndColor(state, impact.routeId).name,
+    })),
+    rejection: preview.rejection,
+  };
 }
 
 export function selectShellState(state: GameState, ui: UiState): ShellState {
@@ -277,5 +372,6 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
     inspector,
     routeDraft: buildRouteDraft(state, ui),
     routes: buildRouteList(state, ui),
+    roadMutationPreview: buildRoadMutationPreview(state, ui),
   };
 }

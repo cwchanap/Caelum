@@ -69,6 +69,7 @@ export interface UiState {
   roadPreviewGeneration: number;
   roadMutationPreview: RoadMutationPreviewResponse | null;
   selectedRouteId: string | null;
+  routeFailureFocus: { routeId: string; legIndex: number } | null;
   activeHudCategory: HudCategory | null;
 }
 
@@ -90,6 +91,7 @@ export function createUiState(): UiState {
     roadPreviewGeneration: 0,
     roadMutationPreview: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     activeHudCategory: "brief",
   };
 }

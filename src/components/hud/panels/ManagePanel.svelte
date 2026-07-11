@@ -9,6 +9,7 @@
     onToggleRouteActive: (routeId: string) => void;
     onDeleteRoute: (routeId: string) => void;
     onSelectRoute: (routeId: string | null) => void;
+    onFocusRouteFailure: (routeId: string, legIndex: number) => void;
   }
 
   let {
@@ -18,6 +19,7 @@
     onToggleRouteActive,
     onDeleteRoute,
     onSelectRoute,
+    onFocusRouteFailure,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -50,6 +52,21 @@
       pendingDeleteId = routeId;
     }
   }
+
+  function statusLabel(primary: "running" | "paused" | "broken"): string {
+    return primary[0].toUpperCase() + primary.slice(1);
+  }
+
+  function failureReason(
+    reason: "missingNode" | "networkDisconnected",
+    fromLabel: string,
+    toLabel: string,
+  ): string {
+    if (reason === "networkDisconnected") return "road disconnected";
+    return fromLabel.startsWith("Station") || toLabel.startsWith("Station")
+      ? "missing station"
+      : "missing stop";
+  }
 </script>
 
 <div class="hud-panel" data-testid="panel-manage">
@@ -60,7 +77,10 @@
     {:else}
       <ul class="route-list">
         {#each routes as route (route.id)}
-          <li class="route-item" class:route-item--inactive={!route.active}>
+          <li
+            class="route-item"
+            class:route-item--inactive={route.status.primary === "paused"}
+          >
             <div class="route-item-head">
               <button
                 type="button"
@@ -103,6 +123,48 @@
                 }}
               />
             </div>
+            <div
+              class="route-service-status"
+              data-testid={`route-status-${route.id}`}
+            >
+              <span
+                class={`route-status route-status--${route.status.primary}`}
+              >
+                {statusLabel(route.status.primary)}
+              </span>
+              {#if route.status.pausedAfterRepair}
+                <span class="route-status-note">Paused after repair</span>
+              {/if}
+            </div>
+            {#if route.failures.length > 0}
+              <ul class="route-failures">
+                {#each route.failures as failure (failure.legIndex)}
+                  <li class="route-failure">
+                    <span class="route-failure-detail">
+                      {failure.fromLabel} → {failure.toLabel}: {failureReason(
+                        failure.reason,
+                        failure.fromLabel,
+                        failure.toLabel,
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      class="route-failure-focus"
+                      aria-label={`Focus ${failure.fromLabel} to ${failure.toLabel}`}
+                      onclick={() =>
+                        onFocusRouteFailure(route.id, failure.legIndex)}
+                    >
+                      Focus
+                    </button>
+                    <span class="route-repair-guidance">
+                      {failure.reason === "missingNode"
+                        ? "Restore the missing node at its former location."
+                        : "Repair the former road alignment."}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             <div class="route-item-controls">
               <button
                 type="button"

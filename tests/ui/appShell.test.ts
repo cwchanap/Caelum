@@ -262,6 +262,9 @@ function createRuntimeHarness(
     toggleRouteActive: vi.fn((_routeId: string) => publish()),
     deleteRoute: vi.fn((_routeId: string) => publish()),
     selectRoute: vi.fn((_routeId: string | null) => publish()),
+    focusRouteFailure: vi.fn((_routeId: string, _legIndex: number) =>
+      publish(),
+    ),
     setHoverTile: vi.fn((point: Point | null) => {
       ui = { ...ui, hoverTile: point };
       return publish();
@@ -761,6 +764,50 @@ describe("App shell bootstrap", () => {
     await fireEvent.click(screen.getByLabelText("Dismiss"));
     expect(runtime.dismissRejection).toHaveBeenCalled();
   });
+
+  it("presents road mutation impacts in an accessible status notice", () => {
+    let state = createTestGameState();
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          name: "Route 1",
+        })),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 8, y: 8 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state, ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("road-mutation-notice")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Route 1 will become broken",
+    );
+  });
 });
 
 describe("App hotkeys", () => {
@@ -955,6 +1002,39 @@ describe("App manage-panel route handlers", () => {
     await fireEvent.click(screen.getByTestId("route-select-route-001"));
 
     expect(runtime.selectRoute).toHaveBeenCalledWith("route-001");
+  });
+
+  it("focuses the exact broken leg from Manage", async () => {
+    const source = routeState();
+    const state = {
+      ...source,
+      transit: {
+        ...source.transit,
+        stops: source.transit.stops.map((stop) =>
+          stop.id === "stop-002"
+            ? { ...stop, status: "missing" as const }
+            : stop,
+        ),
+        routes: source.transit.routes.map((route) => ({
+          ...route,
+          pathBroken: true,
+          legs: route.legs.map((leg, legIndex) =>
+            legIndex === 0
+              ? { ...leg, status: "missingNode" as const, currentPath: null }
+              : leg,
+          ),
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Focus Stop A to Stop B" }),
+    );
+
+    expect(runtime.focusRouteFailure).toHaveBeenCalledWith("route-001", 0);
   });
 
   it("wires deleteRoute through the ManagePanel two-click delete confirm", async () => {

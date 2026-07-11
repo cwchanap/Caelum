@@ -6,11 +6,12 @@ import type {
   Overlay,
   Point,
   RoadPreset,
+  RoadStructure,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
-import type { RoadMutation } from "./backend/types";
+import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
 
 export type { RouteDraft } from "../ui/routeDraft";
 export type { ServicePattern, TransitMode } from "../domain/types";
@@ -94,6 +95,35 @@ export interface ShellRouteDraftState {
   finishHint: string;
 }
 
+export interface RouteServiceStatus {
+  primary: "running" | "paused" | "broken";
+  pausedAfterRepair: boolean;
+}
+
+export interface RouteFailureRow {
+  legIndex: number;
+  fromWaypointId: string;
+  toWaypointId: string;
+  fromLabel: string;
+  toLabel: string;
+  reason: "missingNode" | "networkDisconnected";
+}
+
+export interface RoadMutationPreviewView {
+  generation: number;
+  changedTiles: Point[];
+  authoredTiles: AuthoredRoadTilePreview[];
+  generatedStructures: RoadStructure[];
+  cost: number;
+  costLabel: string;
+  routeImpacts: Array<{
+    routeId: string;
+    routeName: string;
+    kind: "rerouted" | "broken";
+  }>;
+  rejection: GameplayRejection | null;
+}
+
 export interface ShellRouteListItem {
   id: string;
   name: string;
@@ -102,6 +132,8 @@ export interface ShellRouteListItem {
   stopCount: number;
   active: boolean;
   selected: boolean;
+  status: RouteServiceStatus;
+  failures: RouteFailureRow[];
 }
 
 export type ShellRouteListState = ShellRouteListItem[];
@@ -113,6 +145,7 @@ export interface ShellState {
   inspector: ShellInspectorState | null;
   routeDraft: ShellRouteDraftState | null;
   routes: ShellRouteListState;
+  roadMutationPreview: RoadMutationPreviewView | null;
 }
 
 export interface RuntimeSnapshot {
@@ -169,6 +202,7 @@ export interface RuntimeController {
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
+  focusRouteFailure: (routeId: string, legIndex: number) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
+import type { RouteLegPath, TransitPath } from "../../src/domain/types";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import {
@@ -38,6 +39,151 @@ function ctx(): CanvasRenderingContext2D {
     lineCap: "butt",
     lineJoin: "miter",
   } as unknown as CanvasRenderingContext2D;
+}
+
+interface RecordedStroke {
+  dash: number[];
+  strokeStyle: string;
+  path: Array<{ x: number; y: number }>;
+}
+
+function recordingContext(): {
+  ctx: CanvasRenderingContext2D;
+  strokes: RecordedStroke[];
+} {
+  const strokes: RecordedStroke[] = [];
+  let dash: number[] = [];
+  let strokeStyle = "";
+  let path: Array<{ x: number; y: number }> = [];
+  const context = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(() => {
+      path = [];
+    }),
+    moveTo: vi.fn((x: number, y: number) => {
+      path.push({ x, y });
+    }),
+    lineTo: vi.fn((x: number, y: number) => {
+      path.push({ x, y });
+    }),
+    quadraticCurveTo: vi.fn(),
+    stroke: vi.fn(() => {
+      strokes.push({ dash: [...dash], strokeStyle, path: [...path] });
+    }),
+    fill: vi.fn(),
+    arc: vi.fn(),
+    fillRect: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    setLineDash: vi.fn((next: number[]) => {
+      dash = [...next];
+    }),
+    get strokeStyle() {
+      return strokeStyle;
+    },
+    set strokeStyle(next: string) {
+      strokeStyle = next;
+    },
+    fillStyle: "",
+    lineWidth: 0,
+    lineCap: "butt",
+    lineJoin: "miter",
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx: context, strokes };
+}
+
+function linePath(x: number): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x, y: 1 },
+          to: { x: x + 0.5, y: 1 },
+        },
+        travelSeconds: 1,
+      },
+    ],
+    totalTravelSeconds: 1,
+  };
+}
+
+function routeLeg(
+  fromWaypointId: string,
+  toWaypointId: string,
+  status: RouteLegPath["status"],
+  path: TransitPath | null,
+): RouteLegPath {
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop",
+    kind: "service",
+    status,
+    currentPath: status === "connected" ? path : null,
+    lastValidPath: path,
+    estimatedSeconds: path?.totalTravelSeconds ?? null,
+  };
+}
+
+function stateWithLegs(legs: RouteLegPath[]) {
+  const state = createTestGameState();
+  return {
+    ...state,
+    transit: {
+      ...state.transit,
+      stops: [
+        {
+          id: "a",
+          kind: "busStop" as const,
+          status: "present" as const,
+          position: { x: 1, y: 1 },
+          platforms: [],
+        },
+        {
+          id: "b",
+          kind: "busStop" as const,
+          status: "present" as const,
+          position: { x: 2, y: 1 },
+          platforms: [],
+        },
+        {
+          id: "c",
+          kind: "busStop" as const,
+          status: "present" as const,
+          position: { x: 3, y: 1 },
+          platforms: [],
+        },
+        {
+          id: "d",
+          kind: "busStop" as const,
+          status: "present" as const,
+          position: { x: 4, y: 1 },
+          platforms: [],
+        },
+      ],
+      routes: [
+        {
+          id: "route-001",
+          name: "Route 1",
+          color: "#e04f39",
+          stopIds: ["a", "b", "c", "d"],
+          vehicleIds: [],
+          active: true,
+          pattern: "loop" as const,
+          revision: 1,
+          legs,
+          pathBroken: legs.some((leg) => leg.status !== "connected"),
+        },
+      ],
+    },
+  };
 }
 
 describe("renderTransit highlight", () => {
@@ -214,5 +360,74 @@ describe("renderTransit highlight", () => {
 
     // Parked at station-001 (7,8), centre = (7*32+16, 8*32+16) = (240, 272).
     expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
+  });
+
+  it("draws current geometry solid and only the failed last-valid leg dotted", () => {
+    const { ctx: context, strokes } = recordingContext();
+    const state = stateWithLegs([
+      routeLeg("a", "b", "connected", linePath(1)),
+      routeLeg("b", "c", "networkDisconnected", linePath(2)),
+      routeLeg("c", "d", "connected", linePath(3)),
+    ]);
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    const strokesFor = (x: number) =>
+      strokes.filter((stroke) => stroke.path[0]?.x === x * 32 + 16);
+    expect(strokesFor(1).length).toBeGreaterThan(0);
+    expect(strokesFor(1).every((stroke) => stroke.dash.length === 0)).toBe(
+      true,
+    );
+    expect(strokesFor(2).some((stroke) => stroke.dash.length > 0)).toBe(true);
+    expect(strokesFor(3).length).toBeGreaterThan(0);
+    expect(strokesFor(3).every((stroke) => stroke.dash.length === 0)).toBe(
+      true,
+    );
+  });
+
+  it("uses a direct dotted fallback only when no last-valid geometry exists", () => {
+    const { ctx: context, strokes } = recordingContext();
+    const state = stateWithLegs([
+      routeLeg("a", "b", "networkDisconnected", null),
+    ]);
+    state.transit.stops[0].position = { x: 4.5, y: 5.5 };
+    state.transit.stops[1].position = { x: 9.5, y: 8.5 };
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(strokes.at(-1)?.path).toEqual([
+      { x: 160, y: 192 },
+      { x: 320, y: 288 },
+    ]);
+    expect(strokes.at(-1)?.dash).toEqual([6, 5]);
+  });
+
+  it("selected halo repeats each leg dash state", () => {
+    const { ctx: context, strokes } = recordingContext();
+    const state = stateWithLegs([
+      routeLeg("a", "b", "connected", linePath(1)),
+      routeLeg("b", "c", "networkDisconnected", linePath(2)),
+    ]);
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    const haloStrokes = strokes.filter(
+      (stroke) => stroke.strokeStyle === "#ffffffaa",
+    );
+    expect(
+      haloStrokes.find((stroke) => stroke.path[0]?.x === 48)?.dash,
+    ).toEqual([]);
+    expect(
+      haloStrokes.find((stroke) => stroke.path[0]?.x === 80)?.dash,
+    ).toEqual([6, 5]);
   });
 });

@@ -56,6 +56,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
         : null,
     roadMutationPreview: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -76,6 +77,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     routePreviewError: null,
     roadMutationPreview: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -99,6 +101,7 @@ function nextBuildingUiState(
     routePreviewError: null,
     roadMutationPreview: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -1065,7 +1068,11 @@ export async function createGameRuntime({
         { type: "deleteRoute", routeId },
         (applied, currentUi) =>
           applied && currentUi.selectedRouteId === routeId
-            ? { ...currentUi, selectedRouteId: null }
+            ? {
+                ...currentUi,
+                selectedRouteId: null,
+                routeFailureFocus: null,
+              }
             : currentUi,
       );
     },
@@ -1073,8 +1080,17 @@ export async function createGameRuntime({
       const nextId = ui.selectedRouteId === routeId ? null : routeId;
       return commit(
         state,
-        nextId === ui.selectedRouteId ? ui : { ...ui, selectedRouteId: nextId },
+        nextId === ui.selectedRouteId
+          ? ui
+          : { ...ui, selectedRouteId: nextId, routeFailureFocus: null },
       );
+    },
+    focusRouteFailure(routeId, legIndex) {
+      return commit(state, {
+        ...ui,
+        selectedRouteId: routeId,
+        routeFailureFocus: { routeId, legIndex },
+      });
     },
     setHoverTile(point) {
       if (samePoint(point, ui.hoverTile)) {

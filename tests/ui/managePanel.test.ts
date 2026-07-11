@@ -16,6 +16,8 @@ function routes(
       stopCount: 3,
       active: true,
       selected: false,
+      status: { primary: "running", pausedAfterRepair: false },
+      failures: [],
     },
   ];
   return base.map((r, i) => ({ ...r, ...overrides[i] }));
@@ -28,6 +30,7 @@ function callbacks() {
     onToggleRouteActive: vi.fn(),
     onDeleteRoute: vi.fn(),
     onSelectRoute: vi.fn(),
+    onFocusRouteFailure: vi.fn(),
   };
 }
 
@@ -154,5 +157,40 @@ describe("ManagePanel route controls", () => {
     render(ManagePanel, { props: { routes: [], ...callbacks() } });
 
     expect(screen.getByText("No routes yet")).toBeVisible();
+  });
+
+  it("shows broken repair state and focuses the exact failed leg", async () => {
+    const cb = callbacks();
+    render(ManagePanel, {
+      props: {
+        routes: routes([
+          {
+            active: false,
+            status: { primary: "broken", pausedAfterRepair: true },
+            failures: [
+              {
+                legIndex: 1,
+                fromWaypointId: "stop-002",
+                toWaypointId: "stop-003",
+                fromLabel: "Stop B",
+                toLabel: "Stop C",
+                reason: "missingNode",
+              },
+            ],
+          },
+        ]),
+        ...cb,
+      },
+    });
+
+    expect(screen.getByTestId("route-status-route-001")).toHaveTextContent(
+      "Broken",
+    );
+    expect(screen.getByText("Paused after repair")).toBeVisible();
+    expect(screen.getByText("Stop B → Stop C: missing stop")).toBeVisible();
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Focus Stop B to Stop C" }),
+    );
+    expect(cb.onFocusRouteFailure).toHaveBeenCalledWith("route-001", 1);
   });
 });

@@ -4,7 +4,10 @@ import {
   type GameMap,
   type GameState,
   type Point,
+  type RouteLegPath,
   type Tile,
+  type TransitPath,
+  type TripPosition,
 } from "../domain/types";
 import type {
   AuthoredRoadTilePreview,
@@ -21,6 +24,7 @@ import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
 import { drawDirectionArrow } from "./mapRenderer";
+import { pointAndTangentAt } from "./pathRenderer";
 
 const previewStrokeInset = 2;
 
@@ -381,6 +385,108 @@ function renderDragPreview(
   renderRoadMutationPreview(ctx, ui, gesture.tool === "remove");
 }
 
+function transitNode(state: GameState, nodeId: string) {
+  return (
+    state.transit.stops.find((node) => node.id === nodeId) ??
+    state.transit.stations.find((node) => node.id === nodeId)
+  );
+}
+
+function pathMidpoint(path: TransitPath): TripPosition | null {
+  if (path.steps.length === 0) {
+    return null;
+  }
+  const target = path.totalTravelSeconds / 2;
+  let elapsed = 0;
+  for (const step of path.steps) {
+    const next = elapsed + step.travelSeconds;
+    if (target <= next || step === path.steps.at(-1)) {
+      const progress =
+        step.travelSeconds <= 0 ? 0.5 : (target - elapsed) / step.travelSeconds;
+      return pointAndTangentAt(
+        step.geometry,
+        Math.max(0, Math.min(1, progress)),
+      ).point;
+    }
+    elapsed = next;
+  }
+  return null;
+}
+
+function failedLegMarkerPoint(
+  state: GameState,
+  leg: RouteLegPath,
+): TripPosition | null {
+  const from = transitNode(state, leg.fromWaypointId);
+  const to = transitNode(state, leg.toWaypointId);
+  if (leg.status === "missingNode") {
+    return (
+      (from?.status === "missing" ? from.position : undefined) ??
+      (to?.status === "missing" ? to.position : undefined) ??
+      from?.position ??
+      to?.position ??
+      null
+    );
+  }
+  if (leg.lastValidPath !== null) {
+    return pathMidpoint(leg.lastValidPath);
+  }
+  return from !== undefined && to !== undefined
+    ? {
+        x: (from.position.x + to.position.x) / 2,
+        y: (from.position.y + to.position.y) / 2,
+      }
+    : (from?.position ?? to?.position ?? null);
+}
+
+function renderBrokenRouteMarkers(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  if (ui.selectedRouteId === null) {
+    return;
+  }
+  const selected =
+    state.transit.routes.find((route) => route.id === ui.selectedRouteId) ??
+    state.transit.metroLines.find((line) => line.id === ui.selectedRouteId);
+  if (selected === undefined) {
+    return;
+  }
+  selected.legs.forEach((leg, legIndex) => {
+    if (leg.status === "connected") {
+      return;
+    }
+    const marker = failedLegMarkerPoint(state, leg);
+    if (marker === null) {
+      return;
+    }
+    const x = marker.x * tileSize + tileSize / 2;
+    const y = marker.y * tileSize + tileSize / 2;
+    const focused =
+      ui.routeFailureFocus?.routeId === selected.id &&
+      ui.routeFailureFocus.legIndex === legIndex;
+    ctx.save();
+    ctx.lineWidth = focused ? 4 : 3;
+    if (leg.status === "missingNode") {
+      ctx.strokeStyle = colors.unserved;
+      ctx.strokeRect(x - 8, y - 8, 16, 16);
+      ctx.beginPath();
+      ctx.moveTo(x - 5, y - 5);
+      ctx.lineTo(x + 5, y + 5);
+      ctx.moveTo(x + 5, y - 5);
+      ctx.lineTo(x - 5, y + 5);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = colors.late;
+      ctx.beginPath();
+      ctx.arc(x, y, focused ? 8 : 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+}
+
 export function renderOverlays(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -477,6 +583,8 @@ export function renderOverlays(
       }
     }
   }
+
+  renderBrokenRouteMarkers(ctx, state, ui);
 
   if (ui.drag !== null) {
     renderDragPreview(ctx, state, ui);

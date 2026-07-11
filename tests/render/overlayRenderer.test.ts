@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { renderOverlays } from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import type { ActiveTrip, Stop } from "../../src/domain/types";
+import type {
+  ActiveTrip,
+  RouteLegPath,
+  Stop,
+  TransitPath,
+} from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/canvas";
 import { withAreas, withTracks } from "../helpers/mapFixtures";
@@ -187,6 +192,130 @@ describe("Rust trip overlays", () => {
       tileSize,
       tileSize,
     );
+  });
+});
+
+function markerPath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: from,
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: { kind: "line", from, to },
+        travelSeconds: 1,
+      },
+    ],
+    totalTravelSeconds: 1,
+  };
+}
+
+function failedMarkerLeg(
+  fromWaypointId: string,
+  toWaypointId: string,
+  status: RouteLegPath["status"],
+  lastValidPath: TransitPath,
+): RouteLegPath {
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop",
+    kind: "service",
+    status,
+    currentPath: null,
+    lastValidPath,
+    estimatedSeconds: null,
+  };
+}
+
+describe("broken route markers", () => {
+  it("uses distinct missing-node and disconnected-leg markers", () => {
+    const state = createTestGameState();
+    const routeState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: [
+          {
+            id: "a",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 1, y: 1 },
+            platforms: [],
+          },
+          {
+            id: "b",
+            kind: "busStop" as const,
+            status: "missing" as const,
+            position: { x: 2, y: 1 },
+            platforms: [],
+          },
+          {
+            id: "c",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 6, y: 1 },
+            platforms: [],
+          },
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Route 1",
+            color: "#e04f39",
+            stopIds: ["a", "b", "c"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [
+              failedMarkerLeg(
+                "a",
+                "b",
+                "missingNode",
+                markerPath({ x: 1, y: 1 }, { x: 2, y: 1 }),
+              ),
+              failedMarkerLeg(
+                "b",
+                "c",
+                "networkDisconnected",
+                markerPath({ x: 2, y: 1 }, { x: 6, y: 1 }),
+              ),
+            ],
+            pathBroken: true,
+          },
+        ],
+      },
+    };
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      arc: vi.fn(),
+      strokeRect: vi.fn(),
+      fillRect: vi.fn(),
+      strokeStyle: "",
+      fillStyle: "",
+      lineWidth: 0,
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+
+    renderOverlays(context, routeState, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(context.strokeRect).toHaveBeenCalledTimes(1);
+    expect(context.arc).toHaveBeenCalledTimes(1);
   });
 });
 

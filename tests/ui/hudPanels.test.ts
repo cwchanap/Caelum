@@ -70,6 +70,7 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     onToggleRouteActive: vi.fn(),
     onDeleteRoute: vi.fn(),
     onSelectRoute: vi.fn(),
+    onFocusRouteFailure: vi.fn(),
     ...overrides,
   };
 }
@@ -130,6 +131,8 @@ describe("HudDrawer panel routing", () => {
             stopCount: 3,
             active: true,
             selected: false,
+            status: { primary: "running", pausedAfterRepair: false },
+            failures: [],
           },
         ],
       }),
