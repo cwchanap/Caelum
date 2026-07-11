@@ -22,7 +22,6 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
-import { findTilePath } from "../../src/ui/tilePath";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
@@ -96,25 +95,78 @@ function assignRouteToLeastLoaded<
   });
 }
 
-function routeSegments(
-  map: GameMap,
-  positions: Point[],
-  mode: "bus" | "metro",
-): Point[][] {
-  if (positions.length < 2) {
-    return [];
-  }
-  return positions.map((from, index) => {
-    const to = positions[(index + 1) % positions.length];
-    return findTilePath(map, from, to, mode) ?? [];
-  });
-}
-
 function headingBetween(from: Point, to: Point): Heading {
   if (to.x > from.x) return "east";
   if (to.x < from.x) return "west";
   if (to.y > from.y) return "south";
   return "north";
+}
+
+const oppositeHeading: Record<Heading, Heading> = {
+  north: "south",
+  east: "west",
+  south: "north",
+  west: "east",
+};
+
+/** Explicit fixture geometry: horizontal first, then vertical. This helper
+ * never searches for a route; tests that need a different itinerary supply a
+ * RouteLegPath directly. */
+function fixturePointsBetween(from: Point, to: Point): Point[] {
+  const points = [clonePoint(from)];
+  let cursor = clonePoint(from);
+  while (cursor.x !== to.x) {
+    cursor = { x: cursor.x + Math.sign(to.x - cursor.x), y: cursor.y };
+    points.push(cursor);
+  }
+  while (cursor.y !== to.y) {
+    cursor = { x: cursor.x, y: cursor.y + Math.sign(to.y - cursor.y) };
+    points.push(cursor);
+  }
+  return points;
+}
+
+function fixtureSegmentIsAuthored(
+  map: GameMap,
+  points: Point[],
+  mode: "bus" | "metro",
+): boolean {
+  const byPoint = new Map(
+    map.tiles.map((tile) => [`${tile.x},${tile.y}`, tile]),
+  );
+  if (mode === "metro") {
+    return points.every(
+      (point) => byPoint.get(`${point.x},${point.y}`)?.hasTrack === true,
+    );
+  }
+  return points.every((point, index) => {
+    const tile = byPoint.get(`${point.x},${point.y}`);
+    if (tile?.kind !== "road") return false;
+    const next = points[index + 1];
+    if (next === undefined) return true;
+    const heading = headingBetween(point, next);
+    const nextTile = byPoint.get(`${next.x},${next.y}`);
+    return (
+      tile.roadConnections.includes(heading) &&
+      nextTile?.roadConnections.includes(oppositeHeading[heading]) === true &&
+      (tile.oneWay === undefined || tile.oneWay === heading)
+    );
+  });
+}
+
+function routeSegments(
+  map: GameMap,
+  positions: Point[],
+  mode: "bus" | "metro",
+): Point[][] {
+  if (positions.length < 2) return [];
+  return positions.map((from, index) => {
+    const points = fixturePointsBetween(
+      from,
+      positions[(index + 1) % positions.length],
+    );
+    return fixtureSegmentIsAuthored(map, points, mode) ? points : [];
+  });
 }
 
 function roadFixturePath(points: Point[]): TransitPath {

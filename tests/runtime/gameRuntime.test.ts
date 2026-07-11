@@ -12,6 +12,8 @@ import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutationPreviewResponse,
+  RoutePreviewResponse,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
@@ -34,11 +36,6 @@ const EMPTY_DISPATCH_CONTEXT = {
 
 const TEST_REJECTION: GameplayRejection = {
   code: "blockedTile",
-  context: { affectedRouteIds: [] },
-};
-
-const ROUTE_CHANGED_REJECTION: GameplayRejection = {
-  code: "routeChangedWhileEditing",
   context: { affectedRouteIds: [] },
 };
 
@@ -99,6 +96,86 @@ function createStop(id: string, position: Point): Stop {
         routeIds: [],
       },
     ],
+  };
+}
+
+function previewLeg(
+  fromWaypointId: string,
+  toWaypointId: string,
+  status: "connected" | "networkDisconnected" = "connected",
+) {
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop" as const,
+    kind: "service" as const,
+    status,
+    currentPath: null,
+    lastValidPath: null,
+    estimatedSeconds: status === "connected" ? 1 : null,
+  };
+}
+
+function routePreview(
+  generation: number,
+  waypointIds: string[],
+  status: "connected" | "networkDisconnected" = "connected",
+): RoutePreviewResponse {
+  return {
+    generation,
+    legs:
+      waypointIds.length < 2
+        ? []
+        : waypointIds.map((id, index) =>
+            previewLeg(
+              id,
+              waypointIds[(index + 1) % waypointIds.length],
+              status,
+            ),
+          ),
+    totalTravelSeconds: status === "connected" ? waypointIds.length : 0,
+    initialVehicleCost: 8_000,
+    affordable: true,
+    turnSummary: {
+      straight: 0,
+      rightTurn: 0,
+      leftTurn: 0,
+      uTurn: 0,
+      roundaboutEntry: 0,
+    },
+    missingWaypointIds: [],
+    warnings: [],
+    rejection:
+      status === "connected"
+        ? null
+        : {
+            code: "disconnectedLeg",
+            context: { affectedRouteIds: [] },
+          },
+  };
+}
+
+function roadPreview(
+  generation: number,
+  point: Point,
+): RoadMutationPreviewResponse {
+  return {
+    generation,
+    changedTiles: [point],
+    authoredTiles: [
+      {
+        point,
+        oneWay: null,
+        roadConnections: [],
+        roadStructureId: null,
+      },
+    ],
+    generatedStructures: [],
+    cost: 100,
+    skippedTiles: [],
+    routeImpacts: [],
+    warnings: [],
+    rejection: null,
   };
 }
 
@@ -569,7 +646,173 @@ function backendSpy(
   };
 }
 
+function deferredPreviewBackend(initial: RustGameSnapshot) {
+  const base = backendSpy(initial);
+  const routeResolvers = new Map<
+    number,
+    Array<(response: RoutePreviewResponse) => void>
+  >();
+  const roadResolvers = new Map<
+    number,
+    (response: RoadMutationPreviewResponse) => void
+  >();
+  const backend: BackendSpy = {
+    ...base,
+    previewRoute(request) {
+      return new Promise((resolve) => {
+        routeResolvers.set(request.generation, [
+          ...(routeResolvers.get(request.generation) ?? []),
+          resolve,
+        ]);
+      });
+    },
+    previewRoadMutation(request) {
+      return new Promise((resolve) => {
+        roadResolvers.set(request.generation, resolve);
+      });
+    },
+  };
+  return {
+    backend,
+    resolveRoute(
+      generation: number,
+      response: RoutePreviewResponse,
+      requestIndex = 0,
+    ) {
+      const resolve = routeResolvers.get(generation)?.[requestIndex];
+      if (resolve === undefined)
+        throw new Error(`No route generation ${generation}`);
+      resolve(response);
+    },
+    resolveRoad(generation: number, response: RoadMutationPreviewResponse) {
+      const resolve = roadResolvers.get(generation);
+      if (resolve === undefined)
+        throw new Error(`No road generation ${generation}`);
+      resolve(response);
+    },
+  };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("Game Runtime", () => {
+  it("ignores an older route preview that resolves after the current generation", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-0001", { x: 1, y: 1 }),
+          createStop("stop-0002", { x: 2, y: 1 }),
+          createStop("stop-0003", { x: 3, y: 1 }),
+        ],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const routePreviews = deferredPreviewBackend(initial);
+    const runtime = await createGameRuntime({ backend: routePreviews.backend });
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.handleTileClick({ x: 2, y: 1 });
+    runtime.handleTileClick({ x: 3, y: 1 });
+
+    routePreviews.resolveRoute(
+      3,
+      routePreview(3, ["stop-0001", "stop-0002", "stop-0003"]),
+    );
+    routePreviews.resolveRoute(
+      2,
+      routePreview(2, ["stop-0001", "stop-0002"], "networkDisconnected"),
+    );
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.routeDraft?.generation).toBe(3);
+    expect(runtime.getSnapshot().ui.routeDraft?.preview?.generation).toBe(3);
+    expect(runtime.getSnapshot().shell.routeDraft?.canFinish).toBe(true);
+  });
+
+  it("suppresses a response from an older draft instance with the same generation", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [createStop("stop-0001", { x: 1, y: 1 })],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(initial);
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    const firstInstance = runtime.getSnapshot().ui.routeDraft?.instanceId;
+    runtime.cancelRoute();
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    const secondInstance = runtime.getSnapshot().ui.routeDraft?.instanceId;
+    expect(secondInstance).not.toBe(firstInstance);
+
+    // Both requests use generation 1. The response for the cancelled draft
+    // must not be allowed to populate the fresh draft.
+    previews.resolveRoute(1, routePreview(1, ["stop-0001"]), 0);
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.routeDraft?.instanceId).toBe(
+      secondInstance,
+    );
+    expect(runtime.getSnapshot().ui.routeDraft?.preview).toBeNull();
+  });
+
+  it("runs route previews outside the gameplay dispatch queue", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [createStop("stop-0001", { x: 1, y: 1 })],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const base = backendSpy(initial);
+    const dispatch = vi.fn(base.dispatch.bind(base));
+    const previewRoute = vi.fn(
+      () => new Promise<RoutePreviewResponse>(() => undefined),
+    );
+    const runtime = await createGameRuntime({
+      backend: { ...base, dispatch, previewRoute },
+    });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+
+    await expect(runtime.togglePause()).resolves.toMatchObject({
+      state: { paused: false },
+    });
+    expect(previewRoute).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: "setPaused", paused: false });
+  });
+
+  it("ignores road generation 1 after generation 2 is current", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 5, y: 5 } });
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 6, y: 5 } });
+    previews.resolveRoad(2, roadPreview(2, { x: 6, y: 5 }));
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.changedTiles).toEqual([
+      { x: 6, y: 5 },
+    ]);
+  });
+
   it("manages game and UI state with shell-friendly selectors", async () => {
     const runtime = await createGameRuntime({ backend: backendSpy() });
 
@@ -1130,14 +1373,14 @@ describe("route creation and management", () => {
   it("dispatches route finish and clears the draft only after Rust accepts it", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
 
     backend.rejectNextDispatch();
     await runtime.finishRoute();
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
@@ -1148,7 +1391,7 @@ describe("route creation and management", () => {
       type: "addBusRoute",
       stopIds: ["stop-001", "stop-002"],
     });
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([]);
+    expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
   });
 
   it("chains assignVehicle after route creation so the line gets a vehicle", async () => {
@@ -1246,9 +1489,10 @@ describe("route creation and management", () => {
     await Promise.resolve();
 
     runtime.cancelRoute();
+    runtime.setTool("busRoute");
     await runtime.handleTileClick({ x: 14, y: 7 });
     await runtime.handleTileClick({ x: 14, y: 8 });
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
@@ -1259,128 +1503,38 @@ describe("route creation and management", () => {
     await backend.resolveNext();
     await firstFinish;
 
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
   });
 
-  it("revalidates finish conditions against current state and bails when a prior queued dispatch drops budget", async () => {
+  it("leaves queued finish validation to Rust after state changes", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const runtime = await createGameRuntime({ backend });
 
-    // Enqueue a slow prior dispatch (addBusStop) that will resolve before the
-    // finish closure runs, simulating a slow Tauri remove/build dispatch still
-    // in flight when the player drafts and clicks Finish.
     runtime.setTool("busStop");
     runtime.handleTileClick({ x: 20, y: 20 });
-    // Let the prior dispatch start and suspend at its await.
     await Promise.resolve();
 
-    // Draft two stops and enqueue finish behind the prior dispatch.
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 14, y: 7 });
     runtime.handleTileClick({ x: 14, y: 8 });
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
-      "stop-001",
-      "stop-002",
-    ]);
     const finishPromise = runtime.finishRoute();
 
-    // Simulate the prior dispatch resolving with a budget below the bus
-    // vehicle cost (8_000). The finish closure must revalidate against this
-    // state and bail rather than dispatch addBusRoute with insufficient
-    // budget — which would create an unusable line and clear the draft.
+    // The queued state changes after preview. Runtime must still dispatch the
+    // submitted intent so Rust recomputes and accepts/rejects authoritatively.
     backend.setSnapshot({ ...routeSnapshot(), budget: 0 });
     await backend.resolveNext();
-    await finishPromise;
-
-    expect(
-      backend.intents.some((intent) => intent.type === "addBusRoute"),
-    ).toBe(false);
-    expect(runtime.getSnapshot().ui.draftStopIds).toEqual([
-      "stop-001",
-      "stop-002",
-    ]);
-    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
-  });
-
-  it("revalidates that submitted stops still exist before dispatching", async () => {
-    // A prior queued dispatch removes one of the submitted stops between
-    // enqueue and closure entry; the finish must bail with "Route no longer
-    // valid" rather than dispatch addBusRoute with a dangling stop id.
-    const backend = deferredDispatchBackend(routeSnapshot());
-    const runtime = await createGameRuntime({ backend });
-
-    runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 20, y: 20 });
-    await Promise.resolve();
-
-    runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
-    const finishPromise = runtime.finishRoute();
-
-    // Simulate the prior dispatch resolving with a snapshot where stop-001
-    // was removed (e.g. a demolish that ran while the finish was pending).
-    const removedStopSnapshot = {
-      ...routeSnapshot(),
-      transit: {
-        ...routeSnapshot().transit,
-        stops: routeSnapshot().transit.stops.filter(
-          (stop) => stop.id !== "stop-001",
-        ),
-      },
-    };
-    backend.setSnapshot(removedStopSnapshot);
+    await flushPromises();
+    await backend.resolveNext();
+    await flushPromises();
     await backend.resolveNext();
     await finishPromise;
 
     expect(
       backend.intents.some((intent) => intent.type === "addBusRoute"),
-    ).toBe(false);
-    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
-  });
-
-  it("revalidates that the closing loop still closes before dispatching", async () => {
-    // A prior queued dispatch removes the road tiles connecting the two stops,
-    // breaking the closing loop. The finish must bail rather than create a
-    // pathBroken line that rejects assignVehicle. Both road tiles must be
-    // removed because adjacent stops always have a pathable 2-tile hop unless
-    // both endpoints are non-traversable.
-    const backend = deferredDispatchBackend(routeSnapshot());
-    const runtime = await createGameRuntime({ backend });
-
-    runtime.setTool("busStop");
-    runtime.handleTileClick({ x: 20, y: 20 });
-    await Promise.resolve();
-
-    runtime.setTool("busRoute");
-    runtime.handleTileClick({ x: 14, y: 7 });
-    runtime.handleTileClick({ x: 14, y: 8 });
-    const finishPromise = runtime.finishRoute();
-
-    // Remove both road tiles so the closing loop 002->001 cannot path.
-    let brokenMap = updateTile(
-      routeSnapshot().map,
-      { x: 14, y: 7 },
-      (tile) => ({
-        ...tile,
-        kind: "empty" as const,
-      }),
-    );
-    brokenMap = updateTile(brokenMap, { x: 14, y: 8 }, (tile) => ({
-      ...tile,
-      kind: "empty" as const,
-    }));
-    backend.setSnapshot({ ...routeSnapshot(), map: brokenMap });
-    await backend.resolveNext();
-    await finishPromise;
-
-    expect(
-      backend.intents.some((intent) => intent.type === "addBusRoute"),
-    ).toBe(false);
-    expect(runtime.getSnapshot().rejection).toEqual(ROUTE_CHANGED_REJECTION);
+    ).toBe(true);
   });
 
   it("keeps the accepted snapshot when the backend creates a route but surfaces no new id", async () => {
@@ -1437,12 +1591,11 @@ describe("route creation and management", () => {
   it("removes a draft stop and cancels a draft", async () => {
     const { runtime } = await withTwoStops();
     const afterRemove = runtime.removeDraftStop(0);
-    expect(afterRemove.ui.draftStopIds).toEqual(["stop-002"]);
-    expect(afterRemove.ui.draftStopPaths).toEqual([]);
+    expect(afterRemove.ui.routeDraft?.waypointIds).toEqual(["stop-002"]);
+    expect(afterRemove.ui.routeDraft?.preview).toBeNull();
 
     const afterCancel = runtime.cancelRoute();
-    expect(afterCancel.ui.draftStopIds).toEqual([]);
-    expect(afterCancel.ui.draftStopPaths).toEqual([]);
+    expect(afterCancel.ui.routeDraft).toBeNull();
   });
 
   it("renames, recolors, toggles, selects, and deletes a route", async () => {
@@ -1989,7 +2142,7 @@ describe("fake backend applyIntent coverage", () => {
     expect(after.ui).toBe(before.ui);
   });
 
-  it("finishRoute bails when the closing loop is not pathable", async () => {
+  it("finishRoute defers one-way closing validation to Rust", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({ backend });
     // Build a one-way road so the closing loop can't path back.
@@ -2005,11 +2158,13 @@ describe("fake backend applyIntent coverage", () => {
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 7, y: 8 });
     runtime.handleTileClick({ x: 15, y: 8 });
-    const before = runtime.getSnapshot();
     await runtime.finishRoute();
     const after = runtime.getSnapshot();
-    // The draft is preserved (not cleared) because the loop doesn't close.
-    expect(after.ui.draftStopIds).toEqual(before.ui.draftStopIds);
+    expect(backend.intents).toContainEqual({
+      type: "addBusRoute",
+      stopIds: ["stop-001", "stop-002"],
+    });
+    expect(after.ui.routeDraft).toBeNull();
   });
 
   it("toggleRouteActive is a no-op when the route does not exist at call time", async () => {

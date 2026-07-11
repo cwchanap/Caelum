@@ -1,9 +1,17 @@
 import type {
   AreaKind,
   GameState,
+  Heading,
   Point,
   RoadDirection,
 } from "../../src/domain/types";
+
+const authoredDirections: Array<[Heading, Point]> = [
+  ["north", { x: 0, y: -1 }],
+  ["east", { x: 1, y: 0 }],
+  ["south", { x: 0, y: 1 }],
+  ["west", { x: -1, y: 0 }],
+];
 
 function pointKey(point: Point): string {
   return `${point.x},${point.y}`;
@@ -41,7 +49,11 @@ export function withRoads(state: GameState, points: Point[]): GameState {
         return {
           ...rest,
           kind: "road" as const,
-          roadConnections: [],
+          roadConnections: authoredDirections.flatMap(([heading, offset]) =>
+            keys.has(pointKey({ x: tile.x + offset.x, y: tile.y + offset.y }))
+              ? [heading]
+              : [],
+          ),
         };
       }),
     },

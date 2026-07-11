@@ -1,9 +1,8 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
 import {
-  appendDraftStation,
-  appendDraftStop,
+  applyRouteNodeClick,
   cancelDraftRoute,
-  removeDraftNode,
+  removeWaypoint,
   resolveStationAtTile,
   resolveStopAtTile,
 } from "./routeDraft";
@@ -64,19 +63,26 @@ export function applyUiTileClick(
   ui: UiState,
   point: Point,
 ): { state: GameState; ui: UiState } {
-  if (ui.activeTool === "busRoute") {
-    const stop = resolveStopAtTile(state, point);
+  if (
+    (ui.activeTool === "busRoute" || ui.activeTool === "metroLine") &&
+    ui.routeDraft !== null
+  ) {
+    const preferredKind =
+      ui.routeDraft.mode === "bus" ? ("stop" as const) : ("station" as const);
+    const resolved = resolveNodeAtTile(state, point, preferredKind);
+    if (resolved === null) return { state, ui };
+    const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
     return {
       state,
-      ui: stop === undefined ? ui : appendDraftStop(state, ui, stop),
-    };
-  }
-
-  if (ui.activeTool === "metroLine") {
-    const station = resolveStationAtTile(state, point);
-    return {
-      state,
-      ui: station === undefined ? ui : appendDraftStation(state, ui, station),
+      ui:
+        result.draft === ui.routeDraft &&
+        result.rejection === ui.routePreviewError
+          ? ui
+          : {
+              ...ui,
+              routeDraft: result.draft,
+              routePreviewError: result.rejection,
+            },
     };
   }
 
@@ -118,9 +124,16 @@ export function applyUiTileClick(
   return { state, ui };
 }
 
-export {
-  cancelDraftRoute,
-  removeDraftNode,
-  resolveStationAtTile,
-  resolveStopAtTile,
-};
+export function removeDraftNode(
+  _state: GameState,
+  ui: UiState,
+  index: number,
+): UiState {
+  if (ui.routeDraft === null) return ui;
+  const routeDraft = removeWaypoint(ui.routeDraft, index);
+  return routeDraft === ui.routeDraft
+    ? ui
+    : { ...ui, routeDraft, routePreviewError: null };
+}
+
+export { cancelDraftRoute, resolveStationAtTile, resolveStopAtTile };

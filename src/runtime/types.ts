@@ -10,6 +10,10 @@ import type {
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
+import type { RoadMutation } from "./backend/types";
+
+export type { RouteDraft } from "../ui/routeDraft";
+export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {
   budget: string;
@@ -166,6 +170,7 @@ export interface RuntimeController {
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
+  previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;
 }

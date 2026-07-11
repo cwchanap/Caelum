@@ -11,21 +11,7 @@ import {
 } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
-// NOTE: The geometry helpers below (axisLockedLine, lineDirection,
-// oppositeDirection, reverseLanePoints) mirror the authoritative Rust road
-// geometry in `crates/caelum-core/src/transit.rs` (`lay_road_line`,
-// `line_direction`, `opposite_direction`, `reverse_lane_points`). They are
-// read-only preview helpers here — the Rust core is the sole authority for
-// actual tile placement. If the Rust geometry changes, update these to match
-// or the drag preview will drift from what the backend actually places.
-import {
-  axisLockedLine,
-  canonicalLineDirection,
-  lineDirection,
-  oppositeDirection,
-  planDragPreview,
-  reverseLanePoints,
-} from "../ui/roadDrag";
+import { axisLockedLine } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
@@ -209,6 +195,56 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
+function renderRoadMutationPreview(
+  ctx: CanvasRenderingContext2D,
+  ui: UiState,
+  removal: boolean,
+): void {
+  const preview = ui.roadMutationPreview;
+  if (preview === null || preview.generation !== ui.roadPreviewGeneration) {
+    return;
+  }
+  const changed = new Set(
+    preview.changedTiles.map((point) => `${point.x},${point.y}`),
+  );
+  const skipped = new Set(
+    preview.skippedTiles.map((point) => `${point.x},${point.y}`),
+  );
+  for (const point of [...preview.changedTiles, ...preview.skippedTiles]) {
+    const key = `${point.x},${point.y}`;
+    const valid = changed.has(key) && !skipped.has(key);
+    ctx.fillStyle =
+      valid && !removal ? colors.previewValid : colors.previewInvalid;
+    ctx.strokeStyle =
+      valid && !removal
+        ? colors.previewValidStroke
+        : colors.previewInvalidStroke;
+    fillTile(ctx, point);
+    strokeTile(ctx, point);
+  }
+  for (const structure of preview.generatedStructures) {
+    ctx.fillStyle = colors.previewValid;
+    ctx.strokeStyle = colors.previewValidStroke;
+    for (const point of structure.footprint) {
+      fillTile(ctx, point);
+      strokeTile(ctx, point);
+    }
+  }
+  const directed = preview.authoredTiles.filter((tile) => tile.oneWay !== null);
+  if (directed.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = colors.oneWayArrow;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const tile of directed) {
+      if (tile.oneWay !== null) {
+        drawDirectionArrow(ctx, tile.point, tile.oneWay);
+      }
+    }
+    ctx.restore();
+  }
+}
+
 function renderDragPreview(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -239,69 +275,18 @@ function renderDragPreview(
     return;
   }
 
-  const isDelete = gesture.tool === "remove";
   const line = axisLockedLine(gesture.start, gesture.current);
-
-  // Per-tile validity mirrors the commit path: a tile tints green only where a
-  // road/track would actually land, and red where it collides, runs off-map, or
-  // is unaffordable. The remove tool has no per-tile predicate — tint red.
-  if (isDelete) {
-    ctx.fillStyle = colors.previewInvalid;
-    ctx.strokeStyle = colors.previewInvalidStroke;
+  if (gesture.tool === "track") {
+    ctx.fillStyle = colors.previewValid;
+    ctx.strokeStyle = colors.previewValidStroke;
     for (const point of line) {
       fillTile(ctx, point);
       strokeTile(ctx, point);
     }
-  } else {
-    for (const { point, buildable } of planDragPreview(state, ui, line)) {
-      ctx.fillStyle = buildable ? colors.previewValid : colors.previewInvalid;
-      ctx.strokeStyle = buildable
-        ? colors.previewValidStroke
-        : colors.previewInvalidStroke;
-      fillTile(ctx, point);
-      strokeTile(ctx, point);
-    }
+    return;
   }
 
-  // Dual preset direction arrows: the oneWay preset shows the drag-axis
-  // direction (Rust `lay_road_line` commits OneWay with the drag direction);
-  // dualBidirectional uses the canonical axis direction (east/south) and its
-  // opposite, matching the Rust commit which canonicalizes the primary lane
-  // so the reverse carriageway lands on a drag-order-invariant side. Using the
-  // drag direction here would flip both carriageways' arrows on west/north
-  // drags while the committed tiles keep canonical directions.
-  // twoWay / track / remove carry no per-tile direction, so they draw none.
-  if (gesture.tool === "road") {
-    const forward = lineDirection(line);
-    if (forward !== null) {
-      ctx.save();
-      // Set an explicit arrow color: without this the arrows inherit the
-      // strokeStyle left by the last tile of the per-tile preview loop above,
-      // so every arrow would render red/green based on the line's final tile
-      // instead of a stable glyph color. Mirrors renderMap's committed arrows.
-      ctx.strokeStyle = colors.oneWayArrow;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      if (ui.roadPreset === "oneWay") {
-        for (const point of line) {
-          drawDirectionArrow(ctx, point, forward);
-        }
-      } else if (ui.roadPreset === "dualBidirectional") {
-        const canonical = canonicalLineDirection(line);
-        if (canonical !== null) {
-          const reverse = reverseLanePoints(line);
-          const reverseDir = oppositeDirection(canonical);
-          for (const point of line) {
-            drawDirectionArrow(ctx, point, canonical);
-          }
-          for (const point of reverse) {
-            drawDirectionArrow(ctx, point, reverseDir);
-          }
-        }
-      }
-      ctx.restore();
-    }
-  }
+  renderRoadMutationPreview(ctx, ui, gesture.tool === "remove");
 }
 
 export function renderOverlays(
@@ -400,6 +385,13 @@ export function renderOverlays(
   if (ui.drag !== null) {
     renderDragPreview(ctx, state, ui);
     return;
+  }
+
+  if (ui.activeTool === "road" || ui.activeTool === "remove") {
+    renderRoadMutationPreview(ctx, ui, ui.activeTool === "remove");
+    if (ui.roadMutationPreview !== null) {
+      return;
+    }
   }
 
   if (ui.hoverTile !== null && ui.selectedBuilding !== null) {

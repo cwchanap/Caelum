@@ -4,6 +4,8 @@ import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
+import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
   addTestBusRoute,
@@ -159,6 +161,48 @@ describe("selectShellState inspector", () => {
 });
 
 describe("route selectors", () => {
+  function routePreview(
+    waypointIds: string[],
+    affordable = true,
+  ): RoutePreviewResponse {
+    return {
+      generation: 1,
+      legs: waypointIds.map((id, index) => ({
+        fromWaypointId: id,
+        toWaypointId: waypointIds[(index + 1) % waypointIds.length],
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: null,
+        lastValidPath: null,
+        estimatedSeconds: 1,
+      })),
+      totalTravelSeconds: waypointIds.length,
+      initialVehicleCost: COSTS.bus,
+      affordable,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: [],
+      warnings: [],
+      rejection: null,
+    };
+  }
+
+  function busDraft(waypointIds: string[], preview = false) {
+    return {
+      ...createDraft("bus", 1),
+      waypointIds,
+      generation: 1,
+      previewPending: false,
+      preview: preview ? routePreview(waypointIds) : null,
+    };
+  }
+
   function twoStops() {
     let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
@@ -177,7 +221,10 @@ describe("route selectors", () => {
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001"],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001"],
+      },
     };
     const shell = selectShellState(state, ui);
     expect(shell.routeDraft?.mode).toBe("bus");
@@ -193,7 +240,7 @@ describe("route selectors", () => {
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001", "stop-002"],
+      routeDraft: busDraft(["stop-001", "stop-002"], true),
     };
     expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(true);
   });
@@ -203,7 +250,10 @@ describe("route selectors", () => {
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001", "stop-002"],
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"], true),
+        preview: routePreview(["stop-001", "stop-002"], false),
+      },
     };
     const draft = selectShellState(state, ui).routeDraft;
     expect(draft?.canFinish).toBe(false);
@@ -320,7 +370,10 @@ describe("ShellHudState", () => {
       ...createUiState(),
       activeTool: "busRoute" as const,
       activeOverlay: "coverage" as const,
-      draftStopIds: ["stop-001"],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001"],
+      },
     };
     const shell = selectShellState(state, ui);
 

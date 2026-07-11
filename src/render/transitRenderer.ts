@@ -1,6 +1,5 @@
 import type {
   GameState,
-  Point,
   RouteLegPath,
   TransitPath,
   TripPosition,
@@ -16,34 +15,6 @@ function center(point: TripPosition): TripPosition {
     x: point.x * tileSize + tileSize / 2,
     y: point.y * tileSize + tileSize / 2,
   };
-}
-
-function drawPolyline(
-  ctx: CanvasRenderingContext2D,
-  positions: Array<Point | null>,
-  color: string,
-  lineWidth: number,
-): void {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineWidth;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  let previousPoint: Point | null = null;
-  for (const position of positions) {
-    if (position === null) {
-      previousPoint = null;
-      continue;
-    }
-    if (previousPoint !== null) {
-      const from = center(previousPoint);
-      const to = center(position);
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-    }
-    previousPoint = position;
-  }
 }
 
 function drawTransitPath(
@@ -146,16 +117,11 @@ export function renderTransit(
     drawLegs(ctx, line.legs, line.color, 8);
   }
 
-  const draftPaths =
-    ui.activeTool === "busRoute"
-      ? ui.draftStopPaths
-      : ui.activeTool === "metroLine"
-        ? ui.draftStationPaths
-        : [];
-  if (draftPaths.length >= 1) {
+  const draftLegs = ui.routeDraft?.preview?.legs ?? [];
+  if (draftLegs.length >= 1) {
     ctx.save();
     ctx.setLineDash([6, 6]);
-    drawPolyline(ctx, draftPaths.flat(), "#f4d35e", 3);
+    drawLegs(ctx, draftLegs, "#f4d35e", 3);
     ctx.restore();
   }
 

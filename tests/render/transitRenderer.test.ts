@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
 import { createUiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
 import {
   addTestBusRoute,
   addTestBusStop,
@@ -62,19 +63,34 @@ describe("renderTransit highlight", () => {
 
   it("renders a draft preview", () => {
     const mockCtx = ctx();
+    const state = busState();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001", "stop-002"],
-      draftStopPaths: [
-        [
-          { x: 7, y: 8 },
-          { x: 8, y: 8 },
-          { x: 9, y: 8 },
-        ],
-      ],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001", "stop-002"],
+        generation: 1,
+        preview: {
+          generation: 1,
+          legs: state.transit.routes[0].legs,
+          totalTravelSeconds: 1,
+          initialVehicleCost: 8_000,
+          affordable: true,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        },
+      },
     };
-    renderTransit(mockCtx, busState(), ui);
+    renderTransit(mockCtx, state, ui);
     // The draft polyline was drawn — at minimum moveTo + lineTo for the path.
     expect(mockCtx.moveTo).toHaveBeenCalled();
     expect(mockCtx.lineTo).toHaveBeenCalled();

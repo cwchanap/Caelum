@@ -4,7 +4,6 @@ import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import { COSTS } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
-import { closingLoopIsPathable } from "../ui/routeDraft";
 import { pad2 } from "../format";
 import type { UiState } from "../ui/uiState";
 import type {
@@ -158,34 +157,36 @@ function buildRouteDraft(
   state: GameState,
   ui: UiState,
 ): ShellRouteDraftState | null {
-  const isBus = ui.activeTool === "busRoute";
-  const isMetro = ui.activeTool === "metroLine";
-  if (!isBus && !isMetro) {
-    return null;
-  }
-  const ids = isBus ? ui.draftStopIds : ui.draftStationIds;
-  if (ids.length === 0) {
-    return null;
-  }
-  const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
+  const draft = ui.routeDraft;
+  if (draft === null || draft.waypointIds.length === 0) return null;
+  const ids = draft.waypointIds;
+  const vehicleCost =
+    draft.preview?.initialVehicleCost ??
+    (draft.mode === "bus" ? COSTS.bus : COSTS.metro);
   const distinct = new Set(ids).size;
-  const affordable = state.budget >= vehicleCost;
-  // The closing loop (last -> first) must be pathable under directed roads;
-  // otherwise finishing creates a `pathBroken` route whose `assignVehicle`
-  // rejects, leaving an unusable line with no vehicle and a cleared draft.
-  const loopCloses = closingLoopIsPathable(state, ui);
-  const canFinish = distinct >= 2 && affordable && loopCloses;
-  const finishHint =
-    distinct < 2
+  const preview = draft.preview;
+  const canFinish =
+    preview !== null &&
+    preview.generation === draft.generation &&
+    preview.rejection === null &&
+    preview.legs.length > 0 &&
+    (draft.source.kind === "edit" ||
+      preview.legs.every((leg) => leg.status === "connected")) &&
+    preview.affordable;
+  const finishHint = draft.previewPending
+    ? "Checking route…"
+    : preview === null || preview.legs.length === 0
       ? "Add another stop"
-      : !loopCloses
-        ? "Loop cannot close"
-        : affordable
+      : preview.rejection !== null ||
+          (draft.source.kind === "create" &&
+            preview.legs.some((leg) => leg.status !== "connected"))
+        ? "Route cannot connect"
+        : preview.affordable
           ? "Ready"
           : `Need ${formatBudget(vehicleCost)}`;
 
   return {
-    mode: isBus ? "bus" : "metro",
+    mode: draft.mode === "metro" ? "metro" : "bus",
     stops: ids.map((id, index) => {
       const { label, coord } = stopLabel(state, id);
       return { index, label, coord };
@@ -221,8 +222,7 @@ function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
 
 export function selectShellState(state: GameState, ui: UiState): ShellState {
   const inspector = buildInspector(state, ui);
-  const draftActive =
-    ui.draftStopIds.length > 0 || ui.draftStationIds.length > 0;
+  const draftActive = ui.routeDraft !== null;
   // Single derivation of the active-tool label — bound to both the HUD chip
   // and the Brief panel so the two can never drift apart.
   const activeToolLabel = formatActiveTool(ui);

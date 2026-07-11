@@ -2,12 +2,15 @@ import type {
   AreaKind,
   BuildingRotation,
   BuildingType,
+  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
+import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
+import type { RouteDraft } from "./routeDraft";
 
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
@@ -61,12 +64,10 @@ export interface UiState {
   buildingRotation: BuildingRotation;
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
-  draftStopIds: string[];
-  draftStationIds: string[];
-  /** Tile path per consecutive draft pair; paths[i] connects ids[i] -> ids[i+1].
-   *  Invariant: paths.length === max(0, ids.length - 1). */
-  draftStopPaths: Point[][];
-  draftStationPaths: Point[][];
+  routeDraft: RouteDraft | null;
+  routePreviewError: GameplayRejection | null;
+  roadPreviewGeneration: number;
+  roadMutationPreview: RoadMutationPreviewResponse | null;
   selectedRouteId: string | null;
   activeHudCategory: HudCategory | null;
 }
@@ -84,10 +85,10 @@ export function createUiState(): UiState {
     buildCategory: null,
     buildingRotation: 0,
     hoverTile: null,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    roadPreviewGeneration: 0,
+    roadMutationPreview: null,
     selectedRouteId: null,
     activeHudCategory: "brief",
   };

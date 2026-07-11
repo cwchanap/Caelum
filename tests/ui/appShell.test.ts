@@ -30,10 +30,49 @@ import type {
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 
 async function openCategory(name: string): Promise<void> {
   await fireEvent.click(screen.getByTestId(`hud-cat-${name}`));
+}
+
+function busDraft(waypointIds: string[], ready = false) {
+  const generation = waypointIds.length;
+  return {
+    ...createDraft("bus", 1),
+    waypointIds,
+    generation,
+    previewPending: false,
+    preview: ready
+      ? {
+          generation,
+          legs: waypointIds.map((id, index) => ({
+            fromWaypointId: id,
+            toWaypointId: waypointIds[(index + 1) % waypointIds.length],
+            direction: "loop" as const,
+            kind: "service" as const,
+            status: "connected" as const,
+            currentPath: null,
+            lastValidPath: null,
+            estimatedSeconds: 1,
+          })),
+          totalTravelSeconds: waypointIds.length,
+          initialVehicleCost: 8_000,
+          affordable: true,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        }
+      : null,
+  };
 }
 
 function createRuntimeHarness(
@@ -94,10 +133,13 @@ function createRuntimeHarness(
         selectedArea: null,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
-        draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
-        draftStopPaths: tool === "busRoute" ? ui.draftStopPaths : [],
-        draftStationPaths: tool === "metroLine" ? ui.draftStationPaths : [],
+        routeDraft:
+          tool === "busRoute"
+            ? createDraft("bus", 1)
+            : tool === "metroLine"
+              ? createDraft("metro", 1)
+              : null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -114,10 +156,8 @@ function createRuntimeHarness(
         selectedArea: null,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: [],
-        draftStationIds: [],
-        draftStopPaths: [],
-        draftStationPaths: [],
+        routeDraft: null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -134,10 +174,8 @@ function createRuntimeHarness(
         selectedArea: area,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: [],
-        draftStationIds: [],
-        draftStopPaths: [],
-        draftStationPaths: [],
+        routeDraft: null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -228,6 +266,7 @@ function createRuntimeHarness(
       ui = { ...ui, hoverTile: point };
       return publish();
     }),
+    previewRoadMutation: vi.fn((_mutation) => publish()),
     dismissRejection: vi.fn(() => {
       rejection = null;
       return publish();
@@ -519,7 +558,7 @@ describe("App shell bootstrap", () => {
         activeTool: "busRoute",
         activeOverlay: "growth",
         selectedId: "route-001",
-        draftStopIds: ["stop-001"],
+        routeDraft: busDraft(["stop-001"]),
         activeHudCategory: "routes",
       },
     });
@@ -939,7 +978,7 @@ describe("App manage-panel route handlers", () => {
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001"],
+        routeDraft: busDraft(["stop-001"]),
         activeHudCategory: "routes",
       },
     });
@@ -971,7 +1010,7 @@ describe("App manage-panel route handlers", () => {
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001", "stop-002"],
+        routeDraft: busDraft(["stop-001", "stop-002"], true),
         activeHudCategory: "routes",
       },
     });
@@ -988,7 +1027,7 @@ describe("App manage-panel route handlers", () => {
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001", "stop-002"],
+        routeDraft: busDraft(["stop-001", "stop-002"], true),
         activeHudCategory: "routes",
       },
     });

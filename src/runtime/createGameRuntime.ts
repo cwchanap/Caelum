@@ -6,17 +6,17 @@ import type {
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
-import { COSTS } from "../domain/catalog/transit";
 import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
   applyUiTileClick,
   removeDraftNode as applyRemoveDraftNode,
 } from "../ui/actions";
-import { closingLoopIsPathable } from "../ui/routeDraft";
+import { createDraft, type RouteDraft } from "../ui/routeDraft";
 import { axisLockedLine } from "../ui/roadDrag";
 import { createUiState, type UiState } from "../ui/uiState";
-import type { GameBackend, GameIntent } from "./backend";
+import type { GameBackend, GameIntent, RoadMutation } from "./backend";
+import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { normalizeRustSnapshot } from "./snapshotView";
 import type {
@@ -46,11 +46,15 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     selectedArea: null,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
-    draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
-    draftStopPaths: activeTool === "busRoute" ? current.draftStopPaths : [],
-    draftStationPaths:
-      activeTool === "metroLine" ? current.draftStationPaths : [],
+    routeDraft:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routeDraft
+        : null,
+    routePreviewError:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routePreviewError
+        : null,
+    roadMutationPreview: null,
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     drag: null,
@@ -68,10 +72,9 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     selectedArea: area,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    roadMutationPreview: null,
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     drag: null,
@@ -92,10 +95,9 @@ function nextBuildingUiState(
     selectedArea: null,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    roadMutationPreview: null,
     selectedRouteId: null,
     roadPreset: current.roadPreset,
     drag: null,
@@ -111,6 +113,9 @@ export async function createGameRuntime({
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
+  const previewCoordinator = createPreviewCoordinator(backend);
+  let nextRouteDraftInstanceId = 1;
+  let activeRoadMutation: RoadMutation | null = null;
   let running = false;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
@@ -196,6 +201,8 @@ export async function createGameRuntime({
   };
 
   const stop = (): void => {
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
     running = false;
     lastFrameTime = null;
     syncAnimationLoop();
@@ -422,6 +429,9 @@ export async function createGameRuntime({
   const failBackend = (error: unknown): RuntimeSnapshot => {
     backendError = error instanceof Error ? error.message : String(error);
     dead = true;
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
     stop();
     return publish();
   };
@@ -505,6 +515,80 @@ export async function createGameRuntime({
       return commit(normalizeRustSnapshot(result.snapshot), ui);
     });
 
+  const requestRoutePreview = (draft: RouteDraft): void => {
+    if (dead) return;
+    const { instanceId, generation } = draft;
+    const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
+    const expectedRevision =
+      draft.source.kind === "edit" ? draft.source.expectedRevision : null;
+    void previewCoordinator
+      .requestRoute({
+        mode: draft.mode,
+        pattern: draft.pattern,
+        waypointIds: draft.waypointIds,
+        routeId,
+        expectedRevision,
+        generation,
+      })
+      .then((response) => {
+        const current = ui.routeDraft;
+        if (
+          response === null ||
+          current === null ||
+          current.instanceId !== instanceId ||
+          current.generation !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          routeDraft: {
+            ...current,
+            previewPending: false,
+            preview: response,
+          },
+          routePreviewError: response.rejection,
+        });
+      })
+      .catch((error: unknown) => {
+        failBackend(error);
+      });
+  };
+
+  const requestRoadMutationPreview = (
+    mutation: RoadMutation,
+  ): RuntimeSnapshot => {
+    if (dead) return getSnapshot();
+    const generation = ui.roadPreviewGeneration + 1;
+    activeRoadMutation = mutation;
+    const pending = commit(state, {
+      ...ui,
+      roadPreviewGeneration: generation,
+      roadMutationPreview: null,
+    });
+    void previewCoordinator
+      .requestRoadMutation({ mutation, generation })
+      .then((response) => {
+        if (
+          response === null ||
+          activeRoadMutation === null ||
+          ui.roadPreviewGeneration !== generation
+        ) {
+          return;
+        }
+        commit(state, { ...ui, roadMutationPreview: response });
+      })
+      .catch((error: unknown) => {
+        failBackend(error);
+      });
+    return pending;
+  };
+
+  const invalidateRoadPreview = (): void => {
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
+  };
+
   // Road clicks defer the lay-vs-cycle decision to execution time. An earlier
   // queued dispatch (e.g. a road drag still draining, or a prior click) may
   // have turned the clicked tile into a road by the time this closure runs, so
@@ -519,6 +603,39 @@ export async function createGameRuntime({
     return tile?.kind === "road"
       ? { type: "cycleRoadDirection", point }
       : { type: "layRoad", point };
+  };
+
+  const roadClickMutation = (point: Point): RoadMutation => {
+    const intent = roadClickIntent(point);
+    return intent.type === "cycleRoadDirection"
+      ? intent
+      : { type: "layRoad", point };
+  };
+
+  const roadMutationForUi = (candidate: UiState): RoadMutation | null => {
+    const gesture = candidate.drag;
+    if (
+      gesture !== null &&
+      (gesture.tool === "road" || gesture.tool === "remove")
+    ) {
+      const points = axisLockedLine(gesture.start, gesture.current);
+      if (gesture.tool === "remove") {
+        return points.length === 1
+          ? { type: "removeAtTile", point: points[0] }
+          : { type: "removeAtTiles", points };
+      }
+      return points.length === 1
+        ? roadClickMutation(points[0])
+        : { type: "layRoadLine", points, preset: candidate.roadPreset };
+    }
+    if (candidate.hoverTile === null) return null;
+    if (candidate.activeTool === "road") {
+      return roadClickMutation(candidate.hoverTile);
+    }
+    if (candidate.activeTool === "remove") {
+      return { type: "removeAtTile", point: candidate.hoverTile };
+    }
+    return null;
   };
 
   const intentForToolClick = (point: Point): GameIntent | null => {
@@ -565,6 +682,8 @@ export async function createGameRuntime({
       return enqueueTick(deltaSeconds);
     },
     reset() {
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return queueBackend(async () => {
         const snapshot = await backend.reset();
         backendError = null;
@@ -575,22 +694,47 @@ export async function createGameRuntime({
       });
     },
     resetUi() {
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, createUiState());
     },
     setTool(tool) {
-      return commit(state, nextToolUiState(tool, ui));
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      const next = nextToolUiState(tool, ui);
+      if (tool === "busRoute" || tool === "metroLine") {
+        next.routeDraft = createDraft(
+          tool === "busRoute" ? "bus" : "metro",
+          nextRouteDraftInstanceId,
+        );
+        nextRouteDraftInstanceId += 1;
+        next.routePreviewError = null;
+      }
+      const snapshot = commit(state, next);
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
     },
     setBuilding(building) {
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, nextBuildingUiState(building, ui));
     },
     setArea(area) {
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, nextAreaUiState(area, ui));
     },
     setRoadPreset(preset) {
-      return commit(
+      const snapshot = commit(
         state,
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
     },
     // Pure UI mutation; callers (Build panel drill-down) only invoke this while
     // the Build drawer is open. No guard here, so a direct controller call could
@@ -605,10 +749,16 @@ export async function createGameRuntime({
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
-      return commit(state, {
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      const snapshot = commit(state, {
         ...nextToolUiState("road", ui),
         roadPreset: preset,
       });
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
     },
     startDrag(point) {
       // Only drag tools open a gesture; capture the tool so the gesture stays
@@ -627,10 +777,14 @@ export async function createGameRuntime({
       if (tool !== "road" && tool !== "track" && tool !== "remove") {
         return commit(state, ui);
       }
-      return commit(state, {
+      const snapshot = commit(state, {
         ...ui,
         drag: { tool, start: point, current: point },
       });
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
     },
     setDragCurrent(point) {
       // A null (off-map) move is ignored so the preview holds its last tile;
@@ -641,13 +795,23 @@ export async function createGameRuntime({
       if (samePoint(point, ui.drag.current)) {
         return commit(state, ui);
       }
-      return commit(state, {
+      const snapshot = commit(state, {
         ...ui,
         drag: { ...ui.drag, current: point },
       });
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
     },
     cancelDrag() {
-      return commit(state, ui.drag === null ? ui : { ...ui, drag: null });
+      invalidateRoadPreview();
+      return commit(
+        state,
+        ui.drag === null
+          ? ui
+          : { ...ui, drag: null, roadMutationPreview: null },
+      );
     },
     commitDrag() {
       const gesture = ui.drag;
@@ -661,7 +825,8 @@ export async function createGameRuntime({
       // hover instead of resurrecting a stale drag that the deferred clear
       // could no longer match by identity.
       const roadPreset = ui.roadPreset;
-      commit(state, { ...ui, drag: null });
+      invalidateRoadPreview();
+      commit(state, { ...ui, drag: null, roadMutationPreview: null });
       if (gesture.tool === "area") {
         return enqueueDispatch({
           type: "paintAreaRectangle",
@@ -734,8 +899,17 @@ export async function createGameRuntime({
         ui.activeTool === "busRoute" ||
         ui.activeTool === "metroLine"
       ) {
+        const previousDraft = ui.routeDraft;
         const result = applyUiTileClick(state, ui, point);
-        return commit(state, result.ui);
+        const snapshot = commit(state, result.ui);
+        if (
+          ui.routeDraft !== null &&
+          ui.routeDraft !== previousDraft &&
+          ui.routePreviewError === null
+        ) {
+          requestRoutePreview(ui.routeDraft);
+        }
+        return snapshot;
       }
 
       if (ui.activeTool === "road") {
@@ -757,133 +931,63 @@ export async function createGameRuntime({
       });
     },
     removeDraftStop(index) {
-      return commit(state, applyRemoveDraftNode(state, ui, index));
+      const previousDraft = ui.routeDraft;
+      const snapshot = commit(state, applyRemoveDraftNode(state, ui, index));
+      if (ui.routeDraft !== null && ui.routeDraft !== previousDraft) {
+        requestRoutePreview(ui.routeDraft);
+      }
+      return snapshot;
     },
     finishRoute() {
-      // Finishing a draft is a two-step backend transaction: create the line,
-      // then assign a vehicle to it. The old TS `finishDraftRoute` performed
-      // both atomically; the Rust core exposes them as separate intents
-      // (`addBusRoute`/`addMetroLine` then `assignVehicle`), so chain them
-      // inside one queued operation. Without the `assignVehicle` step the new
-      // line has `vehicleIds: []` forever and no transit trip can ever board —
-      // the survival win-gate becomes unwinnable except by walking.
-      const isBus = ui.activeTool === "busRoute";
-      const isMetro = ui.activeTool === "metroLine";
-      if (!isBus && !isMetro) {
+      const submittedDraft = ui.routeDraft;
+      if (
+        submittedDraft === null ||
+        submittedDraft.source.kind !== "create" ||
+        submittedDraft.mode === "walk"
+      ) {
         return commit(state, ui);
       }
-
-      const mode: "bus" | "metro" = isBus ? "bus" : "metro";
-      // Guard the closing loop before dispatching: under one-way roads a
-      // forward-pathable draft can still fail to close, and the Rust core
-      // accepts the line with `path_broken` then rejects `assignVehicle` —
-      // leaving an unusable route and a cleared draft. `canFinish` already
-      // gates the UI button, but `finishRoute` is also callable directly, so
-      // bail here for parity with the legacy `finishDraftRoute` guard.
-      if (!closingLoopIsPathable(state, ui)) {
-        return commit(state, ui);
-      }
-      const createIntent: GameIntent = isBus
-        ? { type: "addBusRoute", stopIds: ui.draftStopIds }
-        : { type: "addMetroLine", stationIds: ui.draftStationIds };
-      const submittedDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
-      const submittedDraftPaths = isBus
-        ? ui.draftStopPaths
-        : ui.draftStationPaths;
+      const { instanceId, generation, mode } = submittedDraft;
+      const createIntent: GameIntent =
+        mode === "bus"
+          ? { type: "addBusRoute", stopIds: submittedDraft.waypointIds }
+          : {
+              type: "addMetroLine",
+              stationIds: submittedDraft.waypointIds,
+            };
 
       return queueBackend(async () => {
-        // Re-read the draft at closure entry: a prior queued finish (e.g. a
-        // double-click that enqueued twice synchronously) will have cleared
-        // the draft after its successful dispatch, so this closure must bail
-        // rather than re-dispatch the same addBusRoute/addMetroLine intent
-        // (which would duplicate the route, double-charge, and mint a second
-        // vehicle). Mirrors commitDrag's synchronous clear-before-dispatch.
-        const currentDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
-        if (currentDraftIds.length === 0) {
-          return commit(state, ui);
-        }
-
-        // Revalidate the full finish conditions against the current state/ui
-        // before dispatching. The synchronous `closingLoopIsPathable` guard
-        // above and the baked-in `createIntent` both captured the state at
-        // enqueue time; a prior queued operation (remove/build/deleteRoute)
-        // that ran between enqueue and this closure may have removed one of
-        // the submitted stops/stations, dropped `state.budget` below the
-        // vehicle cost, or broken the closing loop (e.g. a road tile was
-        // removed). Dispatching anyway leaves an accepted but inactive /
-        // `pathBroken` line that rejects `assignVehicle`, while `commitUi`
-        // below still clears the submitted draft — stranding the player with
-        // an unusable route and no recoverable draft. Mirror the `canFinish`
-        // selector (distinct >= 2, affordable, loop closes) plus submitted
-        // node existence, evaluated against the submitted draft ids (not the
-        // current draft, which the player may have mutated while the dispatch
-        // was pending). Surface a recoverable rejection and bail without
-        // clearing the draft so the player can adjust and retry.
-        const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
-        const submittedDistinct = new Set(submittedDraftIds).size;
-        const submittedNodes = isBus
-          ? state.transit.stops
-          : state.transit.stations;
-        const submittedNodesExist = submittedDraftIds.every((id) =>
-          submittedNodes.some((node) => node.id === id),
-        );
-        // `closingLoopIsPathable` reads `ui.activeTool` and the matching draft
-        // field, so evaluate it against a view that pins the queue-time mode
-        // and the submitted ids — not the current tool/draft, which may have
-        // switched or been mutated while the dispatch was pending.
-        const submittedUi: UiState = {
-          ...ui,
-          activeTool: isBus ? "busRoute" : "metroLine",
-          draftStopIds: isBus ? submittedDraftIds : ui.draftStopIds,
-          draftStationIds: isBus ? ui.draftStationIds : submittedDraftIds,
-        };
-        const loopStillCloses = closingLoopIsPathable(state, submittedUi);
+        const currentDraft = ui.routeDraft;
         if (
-          submittedDistinct < 2 ||
-          state.budget < vehicleCost ||
-          !submittedNodesExist ||
-          !loopStillCloses
+          currentDraft === null ||
+          currentDraft.instanceId !== instanceId ||
+          currentDraft.generation !== generation
         ) {
-          rejection = {
-            code: "routeChangedWhileEditing",
-            context: { affectedRouteIds: [] },
-          };
           return commit(state, ui);
         }
 
         const beforeIds = new Set(
-          (isBus ? state.transit.routes : state.transit.metroLines).map(
-            (entry) => entry.id,
-          ),
+          (mode === "bus"
+            ? state.transit.routes
+            : state.transit.metroLines
+          ).map((entry) => entry.id),
         );
         const createResult = await backend.dispatch(createIntent);
         backendError = null;
         rejection = createResult.rejection;
         const afterCreate = normalizeRustSnapshot(createResult.snapshot);
 
-        // Compute the UI to commit by reading the latest `ui` at commit time
-        // and clearing only the submitted draft fields when the backend
-        // accepted the line and the draft has not been mutated while the
-        // dispatch was in flight. Reading `ui` at commit time (rather than
-        // snapshotting a full `nextUi` before the `assignVehicle` await)
-        // preserves any UI interactions — tool switches, panel changes, hover
-        // updates — that happen while the vehicle assignment is pending.
         const commitUi = (current: UiState): UiState => {
-          const stillSubmitted = isBus
-            ? current.draftStopIds === submittedDraftIds &&
-              current.draftStopPaths === submittedDraftPaths
-            : current.draftStationIds === submittedDraftIds &&
-              current.draftStationPaths === submittedDraftPaths;
+          const draft = current.routeDraft;
+          const stillSubmitted =
+            draft !== null &&
+            draft.instanceId === instanceId &&
+            draft.generation === generation;
           if (!(createResult.applied && stillSubmitted)) {
             return current;
           }
-          return isBus
-            ? { ...current, draftStopIds: [], draftStopPaths: [] }
-            : {
-                ...current,
-                draftStationIds: [],
-                draftStationPaths: [],
-              };
+          previewCoordinator.invalidateRoute();
+          return { ...current, routeDraft: null, routePreviewError: null };
         };
 
         if (!createResult.applied) {
@@ -894,9 +998,10 @@ export async function createGameRuntime({
         // vehicle. If the line cannot be resolved (e.g. the backend accepted
         // but did not surface a new id), keep the accepted snapshot rather
         // than silently dropping the route.
-        const afterRoutes = isBus
-          ? afterCreate.transit.routes
-          : afterCreate.transit.metroLines;
+        const afterRoutes =
+          mode === "bus"
+            ? afterCreate.transit.routes
+            : afterCreate.transit.metroLines;
         const newLine = afterRoutes.find((entry) => !beforeIds.has(entry.id));
         if (newLine === undefined) {
           return commit(afterCreate, commitUi(ui));
@@ -908,11 +1013,6 @@ export async function createGameRuntime({
           lineId: newLine.id,
         });
         if (!vehicleResult.applied) {
-          // The line was created but no vehicle could be assigned to it. The
-          // route is left in place (the player can delete it); surface the
-          // rejection as a recoverable status (not a fatal backendError) so
-          // the player understands why the line has no service without the
-          // runtime halting.
           rejection = vehicleResult.rejection;
           return commit(
             normalizeRustSnapshot(vehicleResult.snapshot),
@@ -927,6 +1027,7 @@ export async function createGameRuntime({
       });
     },
     cancelRoute() {
+      previewCoordinator.invalidateRoute();
       return commit(state, cancelDraftRoute(ui));
     },
     renameRoute(routeId, name) {
@@ -975,10 +1076,24 @@ export async function createGameRuntime({
       );
     },
     setHoverTile(point) {
-      return commit(
-        state,
-        samePoint(point, ui.hoverTile) ? ui : { ...ui, hoverTile: point },
-      );
+      if (samePoint(point, ui.hoverTile)) {
+        return commit(state, ui);
+      }
+      if (point === null) {
+        invalidateRoadPreview();
+      }
+      const snapshot = commit(state, {
+        ...ui,
+        hoverTile: point,
+        ...(point === null ? { roadMutationPreview: null } : {}),
+      });
+      const mutation = roadMutationForUi(ui);
+      return mutation === null
+        ? snapshot
+        : requestRoadMutationPreview(mutation);
+    },
+    previewRoadMutation(mutation) {
+      return requestRoadMutationPreview(mutation);
     },
     dismissRejection() {
       if (rejection === null) {
