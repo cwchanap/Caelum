@@ -181,6 +181,114 @@ fn roundabout_preview_matches_commit_footprint_cost_structure_and_route_impact()
 }
 
 #[test]
+fn already_broken_route_still_reports_a_changed_connected_leg_with_commit_parity() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=20).map(|x| point(x, 5)).collect());
+    for x in [2, 10, 20] {
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 5) });
+    }
+    dispatch(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::RemoveAtTile {
+            point: point(15, 5),
+        },
+    );
+    let before = newest_route(&engine.snapshot()).clone();
+    assert!(before.path_broken);
+    assert_eq!(
+        before.legs[0].status,
+        caelum_core::model::RouteLegStatus::Connected
+    );
+    assert_ne!(
+        before.legs[1].status,
+        caelum_core::model::RouteLegStatus::Connected
+    );
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 53,
+        mutation: RoadMutation::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert_eq!(
+        preview.route_impacts,
+        vec![RouteImpact {
+            route_id: before.id.clone(),
+            kind: RouteImpactKind::Rerouted,
+        }]
+    );
+
+    let committed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(5, 4),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(
+        committed.context.affected_route_ids,
+        vec![before.id.clone()]
+    );
+    let after = newest_route(&committed.snapshot);
+    assert_eq!(after.revision, before.revision + 1);
+    assert!(after.path_broken);
+    assert_eq!(
+        after.legs[0].status,
+        caelum_core::model::RouteLegStatus::Connected
+    );
+    assert_ne!(after.legs[0].current_path, before.legs[0].current_path);
+    assert_ne!(
+        after.legs[1].status,
+        caelum_core::model::RouteLegStatus::Connected
+    );
+}
+
+#[test]
+fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
+    let mut engine = existing_route_engine();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    );
+    let before = newest_route(&engine.snapshot()).clone();
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 54,
+        mutation: RoadMutation::RemoveAtTile { point: point(6, 5) },
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert_eq!(preview.changed_tiles.len(), 9);
+    assert_eq!(
+        preview.route_impacts,
+        vec![RouteImpact {
+            route_id: before.id.clone(),
+            kind: RouteImpactKind::Broken,
+        }]
+    );
+
+    let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
+    assert_eq!(
+        committed.context.affected_route_ids,
+        vec![before.id.clone()]
+    );
+    let after = newest_route(&committed.snapshot);
+    assert_eq!(after.revision, before.revision + 1);
+    assert!(after.path_broken);
+}
+
+#[test]
 fn route_preview_returns_typed_validation_with_generation() {
     let mut engine = editable_network_engine();
     dispatch(&mut engine, GameIntent::LayRoad { point: point(2, 2) });

@@ -588,6 +588,9 @@ fn classify_route_impact(
     previous: &[RouteLegPath],
     candidate: &[RouteLegPath],
 ) -> Option<RouteImpactKind> {
+    if previous == candidate {
+        return None;
+    }
     let was_broken = previous
         .iter()
         .any(|leg| leg.status != RouteLegStatus::Connected);
@@ -597,10 +600,7 @@ fn classify_route_impact(
     if is_broken && !was_broken {
         return Some(RouteImpactKind::Broken);
     }
-    if !is_broken && (was_broken || previous != candidate) {
-        return Some(RouteImpactKind::Rerouted);
-    }
-    None
+    Some(RouteImpactKind::Rerouted)
 }
 
 fn rejected_road_preview(

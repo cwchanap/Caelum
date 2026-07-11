@@ -625,3 +625,88 @@ fn every_roundabout_owned_tile_blocks_other_infrastructure_and_zoning() {
         assert_eq!(result.snapshot, before);
     }
 }
+
+#[test]
+fn removing_roundabout_recomputes_an_adjacent_automatic_junction_in_preview_and_commit() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
+    road_line(&mut engine, (2..=8).map(|y| point(4, y)).collect());
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 4),
+            size: RoundaboutSize::Standard3x3,
+        },
+    );
+    let old_junction = engine
+        .snapshot()
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            structure.is_automatic_junction() && structure.footprint().contains(&point(4, 5))
+        })
+        .expect("adjacent automatic junction")
+        .clone();
+    assert!(old_junction
+        .port_keys()
+        .contains(&(point(4, 5), Heading::East)));
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 52,
+        mutation: RoadMutation::RemoveAtTile { point: point(6, 5) },
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    let regenerated = preview
+        .generated_structures
+        .iter()
+        .find(|structure| {
+            structure.is_automatic_junction() && structure.footprint().contains(&point(4, 5))
+        })
+        .expect("preview regenerates adjacent junction");
+    assert_ne!(regenerated.id(), old_junction.id());
+    assert!(!regenerated
+        .port_keys()
+        .contains(&(point(4, 5), Heading::East)));
+
+    let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+    assert!(committed.applied, "{committed:?}");
+    assert!(committed
+        .snapshot
+        .map
+        .road_structures
+        .iter()
+        .all(|structure| structure.id() != old_junction.id()));
+    assert_eq!(
+        committed
+            .snapshot
+            .map
+            .tile(point(4, 5))
+            .unwrap()
+            .road_structure_id
+            .as_deref(),
+        Some(regenerated.id())
+    );
+}
+
+#[test]
+fn perpendicular_one_way_boundary_lane_rejects_with_the_complete_footprint() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
+    let mut snapshot = engine.snapshot();
+    snapshot.map.tile_mut(point(4, 5)).unwrap().one_way = Some(Heading::North);
+    let before = snapshot.clone();
+    let template = roundabout_template(RoundaboutSize::Standard3x3, point(5, 4));
+
+    let rejection = match caelum_core::roundabouts::place_roundabout(
+        &snapshot,
+        point(5, 4),
+        RoundaboutSize::Standard3x3,
+    ) {
+        Ok(_) => panic!("perpendicular lane is unsafe"),
+        Err(rejection) => rejection,
+    };
+    assert_eq!(rejection.code, RejectionCode::UnsafeRoundaboutPortMapping);
+    assert_eq!(rejection.context.footprint, template.footprint);
+    assert_eq!(snapshot, before);
+}
