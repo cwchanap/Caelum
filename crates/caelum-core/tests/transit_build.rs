@@ -383,7 +383,7 @@ fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
             .tiles
             .iter()
             .find(|tile| tile.x == x && tile.y == y)
-            .and_then(|tile| tile.one_way.clone())
+            .and_then(|tile| tile.one_way)
     };
 
     // Forward carriageway (y=5) and reverse carriageway (y=4, north/left of
@@ -1147,7 +1147,7 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
             .tiles
             .iter()
             .find(|tile| tile.x == x && tile.y == y)
-            .and_then(|tile| tile.one_way.clone())
+            .and_then(|tile| tile.one_way)
     };
 
     for y in 1..=3 {
@@ -1202,7 +1202,7 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .tiles
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
-                .and_then(|tile| tile.one_way.clone())
+                .and_then(|tile| tile.one_way)
                 .as_deref(),
             Some("south")
         );
@@ -1224,7 +1224,7 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .tiles
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
-                .and_then(|tile| tile.one_way.clone())
+                .and_then(|tile| tile.one_way)
                 .as_deref(),
             Some("north")
         );

@@ -123,6 +123,96 @@ pub struct GrowthWave {
     pub actions: Vec<GrowthAction>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Heading {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl std::ops::Deref for Heading {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::North => "north",
+            Self::East => "east",
+            Self::South => "south",
+            Self::West => "west",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoundaboutSize {
+    Compact2x2,
+    Standard3x3,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadPort {
+    pub id: String,
+    pub point: Point,
+    pub edge: Heading,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RoadStructure {
+    AutomaticJunction {
+        id: String,
+        footprint: Vec<Point>,
+        ports: Vec<RoadPort>,
+    },
+    Roundabout {
+        id: String,
+        origin: Point,
+        size: RoundaboutSize,
+        footprint: Vec<Point>,
+        ports: Vec<RoadPort>,
+    },
+}
+
+impl RoadStructure {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::AutomaticJunction { id, .. } | Self::Roundabout { id, .. } => id,
+        }
+    }
+
+    pub fn footprint(&self) -> &[Point] {
+        match self {
+            Self::AutomaticJunction { footprint, .. } | Self::Roundabout { footprint, .. } => {
+                footprint
+            }
+        }
+    }
+
+    pub fn ports(&self) -> &[RoadPort] {
+        match self {
+            Self::AutomaticJunction { ports, .. } | Self::Roundabout { ports, .. } => ports,
+        }
+    }
+
+    pub fn is_automatic_junction(&self) -> bool {
+        matches!(self, Self::AutomaticJunction { .. })
+    }
+
+    pub fn port_keys(&self) -> Vec<(Point, Heading)> {
+        let mut keys: Vec<_> = self
+            .ports()
+            .iter()
+            .map(|port| (port.point, port.edge))
+            .collect();
+        keys.sort();
+        keys
+    }
+}
+
 /// A single growth mutation. Mirrors the corresponding `intent::GameIntent`
 /// variants and their wire spelling so a wave replays the player's own handlers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -150,6 +240,35 @@ pub struct GameMap {
     pub width: u8,
     pub height: u8,
     pub tiles: Vec<Tile>,
+    pub road_structures: Vec<RoadStructure>,
+}
+
+impl GameMap {
+    pub fn tile(&self, point: Point) -> Option<&Tile> {
+        if point.x < 0
+            || point.x >= i32::from(self.width)
+            || point.y < 0
+            || point.y >= i32::from(self.height)
+        {
+            return None;
+        }
+        self.tiles
+            .iter()
+            .find(|tile| tile.x == point.x && tile.y == point.y)
+    }
+
+    pub fn tile_mut(&mut self, point: Point) -> Option<&mut Tile> {
+        if point.x < 0
+            || point.x >= i32::from(self.width)
+            || point.y < 0
+            || point.y >= i32::from(self.height)
+        {
+            return None;
+        }
+        self.tiles
+            .iter_mut()
+            .find(|tile| tile.x == point.x && tile.y == point.y)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -164,7 +283,10 @@ pub struct Tile {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_track: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub one_way: Option<String>,
+    pub one_way: Option<Heading>,
+    pub road_connections: Vec<Heading>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub road_structure_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

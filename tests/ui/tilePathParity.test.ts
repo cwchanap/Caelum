@@ -22,10 +22,21 @@ function createEmptyMap(): GameMap {
   const tiles: Tile[] = [];
   for (let y = 0; y < MAP_HEIGHT; y += 1) {
     for (let x = 0; x < MAP_WIDTH; x += 1) {
-      tiles.push({ id: tileId(x, y), x, y, kind: "empty" });
+      tiles.push({
+        id: tileId(x, y),
+        x,
+        y,
+        kind: "empty",
+        roadConnections: [],
+      });
     }
   }
-  return { width: MAP_WIDTH, height: MAP_HEIGHT, tiles };
+  return {
+    width: MAP_WIDTH,
+    height: MAP_HEIGHT,
+    tiles,
+    roadStructures: [],
+  };
 }
 
 function tileAt(map: GameMap, x: number, y: number): Tile {

@@ -7,7 +7,8 @@ export type AreaKind =
   | "office"
   | "civic"
   | "park";
-export type RoadDirection = "north" | "east" | "south" | "west";
+export type Heading = "north" | "east" | "south" | "west";
+export type RoadDirection = Heading;
 export type TransitMode = "walk" | "bus" | "metro";
 export type BuildingType =
   | "busStop"
@@ -56,6 +57,30 @@ export interface Point {
   x: number;
   y: number;
 }
+
+export type RoundaboutSize = "compact2x2" | "standard3x3";
+
+export interface RoadPort {
+  id: string;
+  point: Point;
+  edge: Heading;
+}
+
+export type RoadStructure =
+  | {
+      kind: "automaticJunction";
+      id: string;
+      footprint: Point[];
+      ports: RoadPort[];
+    }
+  | {
+      kind: "roundabout";
+      id: string;
+      origin: Point;
+      size: RoundaboutSize;
+      footprint: Point[];
+      ports: RoadPort[];
+    };
 
 export type RejectionCode =
   | "insufficientBudget"
@@ -123,12 +148,17 @@ export interface Tile extends Point {
   /** One-way constraint on a road lane. Undefined = two-way (default).
    *  Only meaningful when `kind === "road"`; stripped on non-road kinds. */
   oneWay?: RoadDirection;
+  /** Authored reciprocal road edges in canonical N/E/S/W order. */
+  roadConnections: Heading[];
+  /** Structure ownership is independent of the road tile's visual kind. */
+  roadStructureId?: string;
 }
 
 export interface GameMap {
   width: number;
   height: number;
   tiles: Tile[];
+  roadStructures: RoadStructure[];
 }
 
 export interface PlacedBuilding {

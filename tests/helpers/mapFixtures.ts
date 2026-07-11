@@ -33,8 +33,16 @@ export function withRoads(state: GameState, points: Point[]): GameState {
         if (!keys.has(pointKey(tile))) {
           return tile;
         }
-        const { oneWay: _oneWay, ...rest } = tile;
-        return { ...rest, kind: "road" as const };
+        const {
+          oneWay: _oneWay,
+          roadStructureId: _roadStructureId,
+          ...rest
+        } = tile;
+        return {
+          ...rest,
+          kind: "road" as const,
+          roadConnections: [],
+        };
       }),
     },
   };
@@ -85,7 +93,12 @@ export function withOneWayRoads(
         const oneWay = oneWayByKey.get(pointKey(tile));
         return oneWay === undefined
           ? tile
-          : { ...tile, kind: "road" as const, oneWay };
+          : {
+              ...tile,
+              kind: "road" as const,
+              oneWay,
+              roadConnections: tile.roadConnections ?? [],
+            };
       }),
     },
   };

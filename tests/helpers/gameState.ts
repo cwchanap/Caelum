@@ -30,10 +30,16 @@ function createEmptyMap(width = 28, height = 18): GameMap {
   const tiles: GameMap["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      tiles.push({ id: tileId(x, y), x, y, kind: "empty" });
+      tiles.push({
+        id: tileId(x, y),
+        x,
+        y,
+        kind: "empty",
+        roadConnections: [],
+      });
     }
   }
-  return { width, height, tiles };
+  return { width, height, tiles, roadStructures: [] };
 }
 
 function busPlatforms(id: string, kind: StopKind) {
@@ -291,8 +297,17 @@ export function removeTestInfrastructureAtTile(
       if (tile.x !== point.x || tile.y !== point.y) {
         return tile;
       }
-      const { oneWay: _oneWay, ...rest } = tile;
-      return { ...rest, kind: "empty" as const, hasTrack: false };
+      const {
+        oneWay: _oneWay,
+        roadStructureId: _roadStructureId,
+        ...rest
+      } = tile;
+      return {
+        ...rest,
+        kind: "empty" as const,
+        hasTrack: false,
+        roadConnections: [],
+      };
     }),
   };
   const routeById = new Map(

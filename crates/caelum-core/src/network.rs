@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::model::{GameMap, Point, Tile, TransitMode};
+use crate::model::{GameMap, Heading, Point, Tile, TransitMode};
 
 pub fn find_tile_path(
     map: &GameMap,
@@ -47,7 +47,7 @@ pub fn find_tile_path(
             {
                 let allowed = road_direction_offset(
                     current_tile
-                        .and_then(|tile| tile.one_way.as_deref())
+                        .and_then(|tile| tile.one_way)
                         .expect("checked one-way presence"),
                 );
                 if (dx, dy) != allowed {
@@ -125,12 +125,11 @@ fn is_traversable(tile: &Tile, mode: TransitMode) -> bool {
     }
 }
 
-fn road_direction_offset(direction: &str) -> (i32, i32) {
+fn road_direction_offset(direction: Heading) -> (i32, i32) {
     match direction {
-        "north" => (0, -1),
-        "east" => (1, 0),
-        "south" => (0, 1),
-        "west" => (-1, 0),
-        _ => (0, 0),
+        Heading::North => (0, -1),
+        Heading::East => (1, 0),
+        Heading::South => (0, 1),
+        Heading::West => (-1, 0),
     }
 }

@@ -56,6 +56,7 @@ pub fn is_area_paintable(state: &GameSnapshot, point: &Point) -> bool {
 
     tile.kind == "empty"
         && !tile.has_track
+        && tile.road_structure_id.is_none()
         && !state
             .buildings
             .iter()

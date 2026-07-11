@@ -1,0 +1,845 @@
+use std::collections::{BTreeSet, HashSet, VecDeque};
+
+use serde::{Deserialize, Serialize};
+
+use crate::intent::{DispatchContext, RoadPreset};
+use crate::model::{GameMap, GameSnapshot, Heading, Point, RoadPort, RoadStructure, Tile};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
+use crate::transit::ROAD_COST;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RoadMutation {
+    LayRoad {
+        point: Point,
+    },
+    LayRoadLine {
+        points: Vec<Point>,
+        preset: RoadPreset,
+    },
+    CycleRoadDirection {
+        point: Point,
+    },
+    RemoveAtTile {
+        point: Point,
+    },
+    RemoveAtTiles {
+        points: Vec<Point>,
+    },
+}
+
+pub struct RoadMutationResult {
+    pub snapshot: GameSnapshot,
+    pub changed_tiles: Vec<Point>,
+    pub skipped_tiles: Vec<Point>,
+    pub cost: i32,
+}
+
+impl RoadMutationResult {
+    pub fn dispatch_context(&self) -> DispatchContext {
+        DispatchContext {
+            changed_tiles: self.changed_tiles.clone(),
+            skipped_tiles: self.skipped_tiles.clone(),
+            affected_route_ids: Vec::new(),
+            cost: self.cost,
+        }
+    }
+}
+
+pub fn apply_road_mutation(
+    state: &GameSnapshot,
+    mutation: &RoadMutation,
+) -> GameplayResult<RoadMutationResult> {
+    let mut candidate = state.clone();
+    let mut changed_tiles = Vec::new();
+    let mut skipped_tiles = Vec::new();
+    let cost = apply_linear_tiles_in_order(
+        state,
+        &mut candidate,
+        mutation,
+        &mut changed_tiles,
+        &mut skipped_tiles,
+    )?;
+    refresh_automatic_junctions(&mut candidate.map, &changed_tiles)?;
+    canonicalize_authored_roads(&mut candidate.map);
+    candidate = crate::transit::recompute_route_paths(&candidate);
+    Ok(RoadMutationResult {
+        snapshot: candidate,
+        changed_tiles,
+        skipped_tiles,
+        cost,
+    })
+}
+
+fn apply_linear_tiles_in_order(
+    original: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    mutation: &RoadMutation,
+    changed_tiles: &mut Vec<Point>,
+    skipped_tiles: &mut Vec<Point>,
+) -> GameplayResult<i32> {
+    match mutation {
+        RoadMutation::LayRoad { point } => {
+            lay_single_road(original, candidate, *point)?;
+            changed_tiles.push(*point);
+        }
+        RoadMutation::LayRoadLine { points, preset } => {
+            lay_road_line(
+                original,
+                candidate,
+                points,
+                *preset,
+                changed_tiles,
+                skipped_tiles,
+            )?;
+        }
+        RoadMutation::CycleRoadDirection { point } => {
+            cycle_road_direction(candidate, *point)?;
+            changed_tiles.push(*point);
+        }
+        RoadMutation::RemoveAtTile { point } => {
+            remove_road(candidate, *point)?;
+            changed_tiles.push(*point);
+        }
+        RoadMutation::RemoveAtTiles { points } => {
+            if points.is_empty() {
+                return Err(GameplayRejection::new(RejectionCode::BlockedTile));
+            }
+            for point in points {
+                if remove_road(candidate, *point).is_ok() {
+                    changed_tiles.push(*point);
+                } else {
+                    skipped_tiles.push(*point);
+                }
+            }
+            if changed_tiles.is_empty() {
+                return Err(GameplayRejection::at(RejectionCode::BlockedTile, points[0]));
+            }
+        }
+    }
+
+    Ok(original.budget.saturating_sub(candidate.budget))
+}
+
+fn lay_single_road(
+    original: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    point: Point,
+) -> GameplayResult<()> {
+    if original.budget < ROAD_COST {
+        return Err(GameplayRejection::budget(ROAD_COST, original.budget));
+    }
+    if !is_valid_road_placement(original, point) {
+        let code = if original.map.tile(point).is_none() {
+            RejectionCode::OutOfBounds
+        } else {
+            RejectionCode::BlockedTile
+        };
+        return Err(GameplayRejection::at(code, point));
+    }
+
+    candidate.budget -= ROAD_COST;
+    let tile = candidate.map.tile_mut(point).expect("validated map point");
+    initialize_road_tile(tile, None);
+    connect_neighbor_endpoints(&mut candidate.map, point);
+    Ok(())
+}
+
+fn lay_road_line(
+    original: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    points: &[Point],
+    preset: RoadPreset,
+    changed_tiles: &mut Vec<Point>,
+    skipped_tiles: &mut Vec<Point>,
+) -> GameplayResult<()> {
+    if points.is_empty() {
+        return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
+    }
+
+    let forward = line_direction(points);
+    let dual_direction = canonical_line_direction(points);
+    let direction = match preset {
+        RoadPreset::TwoWay => None,
+        RoadPreset::OneWay => forward,
+        RoadPreset::DualBidirectional => dual_direction,
+    };
+    let forward_points = author_lane_tiles(candidate, original, points, direction, false);
+    connect_authored_sequence(&mut candidate.map, &forward_points);
+    record_line_results(
+        original,
+        candidate,
+        points,
+        &forward_points,
+        changed_tiles,
+        skipped_tiles,
+    );
+
+    if preset == RoadPreset::DualBidirectional {
+        if let Some(canonical) = dual_direction {
+            let reverse_points = reverse_lane_points(points, canonical);
+            let authored = author_lane_tiles(
+                candidate,
+                original,
+                &reverse_points,
+                Some(opposite(canonical)),
+                true,
+            );
+            connect_authored_sequence(&mut candidate.map, &authored);
+            record_line_results(
+                original,
+                candidate,
+                &reverse_points,
+                &authored,
+                changed_tiles,
+                skipped_tiles,
+            );
+        }
+    }
+
+    deduplicate_points(changed_tiles);
+    deduplicate_points(skipped_tiles);
+    skipped_tiles.retain(|point| !changed_tiles.contains(point));
+    if changed_tiles.is_empty() {
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidRoadStroke,
+            points[0],
+        ));
+    }
+    Ok(())
+}
+
+fn author_lane_tiles(
+    candidate: &mut GameSnapshot,
+    original: &GameSnapshot,
+    points: &[Point],
+    direction: Option<Heading>,
+    reverse_lane: bool,
+) -> Vec<Point> {
+    let mut authored = Vec::new();
+    for point in points {
+        let Some(existing) = candidate.map.tile(*point).cloned() else {
+            continue;
+        };
+        if existing.kind == "road" {
+            if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
+                continue;
+            }
+            let tile = candidate.map.tile_mut(*point).expect("tile was found");
+            merge_lane_direction(tile, direction);
+            authored.push(*point);
+            continue;
+        }
+        if candidate.budget < ROAD_COST || !is_valid_road_placement(original, *point) {
+            continue;
+        }
+        candidate.budget -= ROAD_COST;
+        initialize_road_tile(
+            candidate.map.tile_mut(*point).expect("validated map point"),
+            direction,
+        );
+        authored.push(*point);
+    }
+    authored
+}
+
+fn can_overlay_reverse_lane(tile: &Tile, direction: Option<Heading>) -> bool {
+    let Some(direction) = direction else {
+        return false;
+    };
+    tile.road_structure_id.is_some()
+        || tile
+            .road_connections
+            .iter()
+            .any(|connection| !same_axis(*connection, direction))
+}
+
+fn initialize_road_tile(tile: &mut Tile, direction: Option<Heading>) {
+    tile.kind = "road".to_string();
+    tile.one_way = direction;
+    tile.road_connections.clear();
+    tile.road_structure_id = None;
+}
+
+fn merge_lane_direction(tile: &mut Tile, direction: Option<Heading>) {
+    if tile.road_structure_id.is_some() {
+        tile.one_way = None;
+        return;
+    }
+    let intersects_existing_axis = direction.is_some_and(|direction| {
+        tile.road_connections
+            .iter()
+            .any(|connection| !same_axis(*connection, direction))
+    });
+    tile.one_way = if intersects_existing_axis {
+        None
+    } else {
+        direction
+    };
+}
+
+fn record_line_results(
+    original: &GameSnapshot,
+    candidate: &GameSnapshot,
+    requested: &[Point],
+    authored: &[Point],
+    changed_tiles: &mut Vec<Point>,
+    skipped_tiles: &mut Vec<Point>,
+) {
+    for point in requested {
+        let changed =
+            authored.contains(point) && original.map.tile(*point) != candidate.map.tile(*point);
+        if changed {
+            changed_tiles.push(*point);
+        } else {
+            skipped_tiles.push(*point);
+        }
+    }
+}
+
+fn connect_authored_sequence(map: &mut GameMap, points: &[Point]) {
+    for pair in points.windows(2) {
+        if let Some(heading) = heading_between(pair[0], pair[1]) {
+            connect(map, pair[0], heading);
+        }
+    }
+}
+
+fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
+    for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
+        let neighbor_point = offset(point, heading);
+        let Some(neighbor) = map.tile(neighbor_point) else {
+            continue;
+        };
+        if neighbor.kind != "road"
+            || neighbor.road_structure_id.is_some()
+            || neighbor.road_connections.len() >= 2
+        {
+            continue;
+        }
+        connect(map, point, heading);
+    }
+}
+
+fn connect(map: &mut GameMap, point: Point, heading: Heading) {
+    let neighbor_point = offset(point, heading);
+    if !matches!(map.tile(point), Some(tile) if tile.kind == "road")
+        || !matches!(map.tile(neighbor_point), Some(tile) if tile.kind == "road")
+    {
+        return;
+    }
+    if let Some(tile) = map.tile_mut(point) {
+        tile.road_connections.push(heading);
+    }
+    if let Some(neighbor) = map.tile_mut(neighbor_point) {
+        neighbor.road_connections.push(opposite(heading));
+    }
+}
+
+fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()> {
+    let Some(tile) = candidate.map.tile(point) else {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
+    };
+    if tile.kind != "road" {
+        return Err(GameplayRejection::at(RejectionCode::RoadRequired, point));
+    }
+    if tile.road_structure_id.is_some() {
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidDirectionChange,
+            point,
+        ));
+    }
+    let next = match tile.one_way {
+        None => Some(Heading::North),
+        Some(Heading::North) => Some(Heading::East),
+        Some(Heading::East) => Some(Heading::South),
+        Some(Heading::South) => Some(Heading::West),
+        Some(Heading::West) => None,
+    };
+    candidate
+        .map
+        .tile_mut(point)
+        .expect("tile was found")
+        .one_way = next;
+    Ok(())
+}
+
+fn remove_road(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()> {
+    let Some(tile) = candidate.map.tile(point) else {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
+    };
+    if tile.kind != "road" {
+        return Err(GameplayRejection::at(RejectionCode::BlockedTile, point));
+    }
+    let connections = tile.road_connections.clone();
+    for heading in connections {
+        if let Some(neighbor) = candidate.map.tile_mut(offset(point, heading)) {
+            neighbor
+                .road_connections
+                .retain(|edge| *edge != opposite(heading));
+        }
+    }
+    let tile = candidate.map.tile_mut(point).expect("tile was found");
+    tile.kind = "empty".to_string();
+    tile.one_way = None;
+    tile.road_connections.clear();
+    tile.road_structure_id = None;
+    Ok(())
+}
+
+pub fn author_scenario_road_line(map: &mut GameMap, points: &[Point], preset: RoadPreset) {
+    if points.is_empty() {
+        return;
+    }
+    let direction = match preset {
+        RoadPreset::TwoWay => None,
+        RoadPreset::OneWay => line_direction(points),
+        RoadPreset::DualBidirectional => canonical_line_direction(points),
+    };
+    for point in points {
+        if let Some(tile) = map.tile_mut(*point) {
+            if tile.kind == "road" {
+                merge_lane_direction(tile, direction);
+            } else {
+                initialize_road_tile(tile, direction);
+            }
+        }
+    }
+    connect_authored_sequence(map, points);
+
+    if preset == RoadPreset::DualBidirectional {
+        if let Some(direction) = direction {
+            let reverse_points = reverse_lane_points(points, direction);
+            for point in &reverse_points {
+                if let Some(tile) = map.tile_mut(*point) {
+                    if tile.kind == "road" {
+                        if can_overlay_reverse_lane(tile, Some(opposite(direction))) {
+                            merge_lane_direction(tile, Some(opposite(direction)));
+                        }
+                    } else {
+                        initialize_road_tile(tile, Some(opposite(direction)));
+                    }
+                }
+            }
+            connect_authored_sequence(map, &reverse_points);
+        }
+    }
+    canonicalize_authored_roads(map);
+}
+
+pub fn refresh_all_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
+    let all_points: Vec<_> = map
+        .tiles
+        .iter()
+        .map(|tile| Point {
+            x: tile.x,
+            y: tile.y,
+        })
+        .collect();
+    refresh_automatic_junctions(map, &all_points)
+}
+
+fn refresh_automatic_junctions(map: &mut GameMap, _changed_region: &[Point]) -> GameplayResult<()> {
+    canonicalize_authored_roads(map);
+
+    let automatic_ids: HashSet<String> = map
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .map(|structure| structure.id().to_string())
+        .collect();
+    let former_automatic_footprint: Vec<Point> = map
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .flat_map(|structure| structure.footprint().iter().copied())
+        .collect();
+    for tile in &mut map.tiles {
+        if tile
+            .road_structure_id
+            .as_ref()
+            .is_some_and(|id| automatic_ids.contains(id))
+        {
+            tile.road_structure_id = None;
+        }
+    }
+    map.road_structures
+        .retain(|structure| !structure.is_automatic_junction());
+
+    loop {
+        let candidates: BTreeSet<Point> = map
+            .tiles
+            .iter()
+            .filter(|tile| {
+                tile.kind == "road"
+                    && tile.road_structure_id.is_none()
+                    && has_axis(&tile.road_connections, true)
+                    && has_axis(&tile.road_connections, false)
+            })
+            .map(|tile| Point {
+                x: tile.x,
+                y: tile.y,
+            })
+            .collect();
+
+        let mut visited = HashSet::new();
+        let mut structures = Vec::new();
+        let mut prune_edges = Vec::new();
+        for start in &candidates {
+            if visited.contains(start) {
+                continue;
+            }
+            let mut queue = VecDeque::from([*start]);
+            let mut footprint = Vec::new();
+            while let Some(point) = queue.pop_front() {
+                if !visited.insert(point) {
+                    continue;
+                }
+                footprint.push(point);
+                let Some(tile) = map.tile(point) else {
+                    continue;
+                };
+                for heading in &tile.road_connections {
+                    let neighbor = offset(point, *heading);
+                    if candidates.contains(&neighbor)
+                        && reciprocal_connection(map, point, *heading)
+                        && !visited.contains(&neighbor)
+                    {
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+            footprint.sort_by_key(|point| (point.y, point.x));
+            let footprint_set: HashSet<_> = footprint.iter().copied().collect();
+            let mut port_keys = Vec::new();
+            for point in &footprint {
+                let tile = map.tile(*point).expect("junction tile exists");
+                for heading in &tile.road_connections {
+                    if !footprint_set.contains(&offset(*point, *heading))
+                        && reciprocal_connection(map, *point, *heading)
+                    {
+                        port_keys.push((*point, *heading));
+                    }
+                }
+            }
+            port_keys.sort();
+            port_keys.dedup();
+            let has_horizontal_ports = port_keys
+                .iter()
+                .any(|(_, edge)| matches!(edge, Heading::East | Heading::West));
+            let has_vertical_ports = port_keys
+                .iter()
+                .any(|(_, edge)| matches!(edge, Heading::North | Heading::South));
+            if !has_horizontal_ports || !has_vertical_ports {
+                for point in &footprint {
+                    let tile = map.tile(*point).expect("junction tile exists");
+                    for heading in &tile.road_connections {
+                        let horizontal = matches!(heading, Heading::East | Heading::West);
+                        if footprint_set.contains(&offset(*point, *heading))
+                            && ((horizontal && !has_horizontal_ports)
+                                || (!horizontal && !has_vertical_ports))
+                        {
+                            prune_edges.push((*point, *heading));
+                        }
+                    }
+                }
+                continue;
+            }
+            if port_keys.len() < 3 {
+                continue;
+            }
+            let id = junction_id(&footprint, &port_keys);
+            let ports = port_keys
+                .iter()
+                .map(|(point, edge)| RoadPort {
+                    id: format!("{id}-port-{}-{}-{}", point.x, point.y, heading_key(*edge)),
+                    point: *point,
+                    edge: *edge,
+                })
+                .collect();
+            structures.push(RoadStructure::AutomaticJunction {
+                id,
+                footprint,
+                ports,
+            });
+        }
+
+        if !prune_edges.is_empty() {
+            for (point, heading) in prune_edges {
+                disconnect(map, point, heading);
+            }
+            canonicalize_authored_roads(map);
+            continue;
+        }
+
+        for structure in &structures {
+            for point in structure.footprint() {
+                let tile = map.tile_mut(*point).expect("junction tile exists");
+                tile.road_structure_id = Some(structure.id().to_string());
+                tile.one_way = None;
+            }
+        }
+        map.road_structures.extend(structures);
+        break;
+    }
+
+    map.road_structures
+        .sort_by(|left, right| left.id().cmp(right.id()));
+    restore_unowned_lane_directions(map, &former_automatic_footprint);
+    Ok(())
+}
+
+fn disconnect(map: &mut GameMap, point: Point, heading: Heading) {
+    if let Some(tile) = map.tile_mut(point) {
+        tile.road_connections.retain(|edge| *edge != heading);
+    }
+    if let Some(neighbor) = map.tile_mut(offset(point, heading)) {
+        neighbor
+            .road_connections
+            .retain(|edge| *edge != opposite(heading));
+    }
+}
+
+fn restore_unowned_lane_directions(map: &mut GameMap, former_footprint: &[Point]) {
+    for point in former_footprint.iter().copied() {
+        let Some(tile) = map.tile(point) else {
+            continue;
+        };
+        if tile.kind != "road"
+            || tile.road_structure_id.is_some()
+            || tile.one_way.is_some()
+            || tile.road_connections.is_empty()
+            || !(has_axis(&tile.road_connections, true) ^ has_axis(&tile.road_connections, false))
+        {
+            continue;
+        }
+        let mut inferred = BTreeSet::new();
+        for heading in &tile.road_connections {
+            if let Some(direction) = find_lane_direction(map, point, *heading) {
+                inferred.insert(direction);
+            }
+        }
+        if inferred.len() == 1 {
+            map.tile_mut(point).expect("tile was found").one_way = inferred.first().copied();
+        }
+    }
+}
+
+fn find_lane_direction(map: &GameMap, start: Point, initial: Heading) -> Option<Heading> {
+    let horizontal = matches!(initial, Heading::East | Heading::West);
+    let mut previous = start;
+    let mut current = offset(start, initial);
+    let mut visited = HashSet::from([start]);
+    while visited.insert(current) {
+        let tile = map.tile(current)?;
+        if let Some(direction) = tile.one_way {
+            if same_axis(direction, initial) {
+                return Some(direction);
+            }
+        }
+        let next = tile.road_connections.iter().copied().find(|heading| {
+            matches!(*heading, Heading::East | Heading::West) == horizontal
+                && offset(current, *heading) != previous
+        });
+        let Some(next) = next else {
+            break;
+        };
+        previous = current;
+        current = offset(current, next);
+    }
+    None
+}
+
+fn canonicalize_authored_roads(map: &mut GameMap) {
+    for tile in &mut map.tiles {
+        if tile.kind != "road" {
+            tile.one_way = None;
+            tile.road_connections.clear();
+        } else {
+            tile.road_connections
+                .sort_by_key(|heading| road_connection_rank(*heading));
+            tile.road_connections.dedup();
+        }
+    }
+    let connections: Vec<_> = map
+        .tiles
+        .iter()
+        .map(|tile| {
+            (
+                Point {
+                    x: tile.x,
+                    y: tile.y,
+                },
+                tile.road_connections.clone(),
+            )
+        })
+        .collect();
+    for (point, headings) in connections {
+        let valid: Vec<_> = headings
+            .into_iter()
+            .filter(|heading| reciprocal_connection(map, point, *heading))
+            .collect();
+        if let Some(tile) = map.tile_mut(point) {
+            tile.road_connections = valid;
+        }
+    }
+}
+
+fn reciprocal_connection(map: &GameMap, point: Point, heading: Heading) -> bool {
+    map.tile(offset(point, heading)).is_some_and(|neighbor| {
+        neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(heading))
+    })
+}
+
+fn junction_id(footprint: &[Point], port_keys: &[(Point, Heading)]) -> String {
+    let mut sorted_footprint = footprint.to_vec();
+    sorted_footprint.sort();
+    let footprint = sorted_footprint
+        .iter()
+        .map(|point| format!("{},{}", point.x, point.y))
+        .collect::<Vec<_>>()
+        .join(";");
+    let ports = port_keys
+        .iter()
+        .map(|(point, heading)| format!("{},{}:{}", point.x, point.y, heading_key(*heading)))
+        .collect::<Vec<_>>()
+        .join(";");
+    format!("junction-{footprint}-{ports}")
+}
+
+fn heading_key(heading: Heading) -> &'static str {
+    match heading {
+        Heading::North => "north",
+        Heading::East => "east",
+        Heading::South => "south",
+        Heading::West => "west",
+    }
+}
+
+fn road_connection_rank(heading: Heading) -> u8 {
+    match heading {
+        Heading::North => 0,
+        Heading::West => 1,
+        Heading::East => 2,
+        Heading::South => 3,
+    }
+}
+
+fn line_direction(points: &[Point]) -> Option<Heading> {
+    if points.len() < 2 {
+        return None;
+    }
+    heading_between(points[0], points[1])
+}
+
+fn canonical_line_direction(points: &[Point]) -> Option<Heading> {
+    if points.len() < 2 {
+        return None;
+    }
+    let dx = points[1].x - points[0].x;
+    let dy = points[1].y - points[0].y;
+    if dx != 0 {
+        Some(Heading::East)
+    } else if dy != 0 {
+        Some(Heading::South)
+    } else {
+        None
+    }
+}
+
+fn heading_between(from: Point, to: Point) -> Option<Heading> {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Some(Heading::North),
+        (1, 0) => Some(Heading::East),
+        (0, 1) => Some(Heading::South),
+        (-1, 0) => Some(Heading::West),
+        _ => None,
+    }
+}
+
+fn opposite(heading: Heading) -> Heading {
+    match heading {
+        Heading::North => Heading::South,
+        Heading::East => Heading::West,
+        Heading::South => Heading::North,
+        Heading::West => Heading::East,
+    }
+}
+
+fn offset(point: Point, heading: Heading) -> Point {
+    match heading {
+        Heading::North => Point {
+            x: point.x,
+            y: point.y - 1,
+        },
+        Heading::East => Point {
+            x: point.x + 1,
+            y: point.y,
+        },
+        Heading::South => Point {
+            x: point.x,
+            y: point.y + 1,
+        },
+        Heading::West => Point {
+            x: point.x - 1,
+            y: point.y,
+        },
+    }
+}
+
+fn same_axis(left: Heading, right: Heading) -> bool {
+    matches!(left, Heading::North | Heading::South)
+        == matches!(right, Heading::North | Heading::South)
+}
+
+fn has_axis(connections: &[Heading], horizontal: bool) -> bool {
+    connections
+        .iter()
+        .any(|heading| horizontal == matches!(heading, Heading::East | Heading::West))
+}
+
+fn reverse_lane_points(points: &[Point], direction: Heading) -> Vec<Point> {
+    let (offset_x, offset_y) = match direction {
+        Heading::North => (-1, 0),
+        Heading::East => (0, -1),
+        Heading::South => (1, 0),
+        Heading::West => (0, 1),
+    };
+    points
+        .iter()
+        .map(|point| Point {
+            x: point.x + offset_x,
+            y: point.y + offset_y,
+        })
+        .collect()
+}
+
+fn is_valid_road_placement(state: &GameSnapshot, point: Point) -> bool {
+    state.map.tile(point).is_some_and(|tile| {
+        tile.kind == "empty"
+            && tile.road_structure_id.is_none()
+            && !state
+                .buildings
+                .iter()
+                .any(|building| building.occupied_tiles.contains(&point))
+            && !state
+                .transit
+                .stops
+                .iter()
+                .any(|stop| stop.position == point)
+            && !state
+                .transit
+                .stations
+                .iter()
+                .any(|station| station.position == point)
+    })
+}
+
+fn deduplicate_points(points: &mut Vec<Point>) {
+    let mut seen = HashSet::new();
+    points.retain(|point| seen.insert(*point));
+}

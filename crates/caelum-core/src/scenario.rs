@@ -1,4 +1,5 @@
 use crate::ids::tile_id;
+use crate::intent::RoadPreset;
 use crate::model::{
     GameMap, GrowthAction, GrowthWave, ObjectiveThresholds, Point, ScenarioConfig, Tile,
 };
@@ -122,27 +123,30 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
     }]
 }
 
-fn starter_road_direction(x: i32, y: i32) -> Option<String> {
-    let horizontal = y == 8 || y == 9;
-    let vertical = x == 14 || x == 15;
-
-    if horizontal && vertical {
-        None
-    } else if y == 8 {
-        Some("west".to_string())
-    } else if y == 9 {
-        Some("east".to_string())
-    } else if x == 14 {
-        Some("south".to_string())
-    } else if x == 15 {
-        Some("north".to_string())
-    } else {
-        None
-    }
+fn horizontal_westbound_points() -> Vec<Point> {
+    (0..i32::from(MAP_WIDTH))
+        .rev()
+        .map(|x| Point { x, y: 8 })
+        .collect()
 }
 
-fn is_starter_road(x: i32, y: i32) -> bool {
-    y == 8 || y == 9 || x == 14 || x == 15
+fn horizontal_eastbound_points() -> Vec<Point> {
+    (0..i32::from(MAP_WIDTH))
+        .map(|x| Point { x, y: 9 })
+        .collect()
+}
+
+fn vertical_southbound_points() -> Vec<Point> {
+    (0..i32::from(MAP_HEIGHT))
+        .map(|y| Point { x: 14, y })
+        .collect()
+}
+
+fn vertical_northbound_points() -> Vec<Point> {
+    (0..i32::from(MAP_HEIGHT))
+        .rev()
+        .map(|y| Point { x: 15, y })
+        .collect()
 }
 
 pub fn create_growing_suburb_map() -> GameMap {
@@ -154,24 +158,45 @@ pub fn create_growing_suburb_map() -> GameMap {
                 id: tile_id(x, y),
                 x,
                 y,
-                kind: if is_starter_road(x, y) {
-                    "road"
-                } else {
-                    "empty"
-                }
-                .to_string(),
+                kind: "empty".to_string(),
                 area: None,
                 has_track: false,
-                one_way: starter_road_direction(x, y),
+                one_way: None,
+                road_connections: Vec::new(),
+                road_structure_id: None,
             });
         }
     }
 
-    GameMap {
+    let mut map = GameMap {
         width: MAP_WIDTH,
         height: MAP_HEIGHT,
         tiles,
-    }
+        road_structures: Vec::new(),
+    };
+    crate::road::author_scenario_road_line(
+        &mut map,
+        &horizontal_westbound_points(),
+        RoadPreset::OneWay,
+    );
+    crate::road::author_scenario_road_line(
+        &mut map,
+        &horizontal_eastbound_points(),
+        RoadPreset::OneWay,
+    );
+    crate::road::author_scenario_road_line(
+        &mut map,
+        &vertical_southbound_points(),
+        RoadPreset::OneWay,
+    );
+    crate::road::author_scenario_road_line(
+        &mut map,
+        &vertical_northbound_points(),
+        RoadPreset::OneWay,
+    );
+    crate::road::refresh_all_automatic_junctions(&mut map)
+        .expect("authored starter roads must form valid junctions");
+    map
 }
 
 #[cfg(test)]

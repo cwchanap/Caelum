@@ -11,6 +11,7 @@ use crate::model::{
 use crate::network::{compute_route_segments, has_broken_segment};
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+use crate::road::{apply_road_mutation, RoadMutation};
 use crate::trips::WAIT_PATIENCE_SECONDS;
 
 pub const BUS_STOP_COST: i32 = 2_000;
@@ -54,22 +55,8 @@ fn node_rejection(code: RejectionCode, node_id: &str, route_id: Option<&str>) ->
 }
 
 pub fn lay_road(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
-    if state.budget < ROAD_COST {
-        return Err(GameplayRejection::budget(ROAD_COST, state.budget));
-    }
-    if !is_valid_road_placement(state, point) {
-        let code = if get_tile(&state.map, point).is_none() {
-            RejectionCode::OutOfBounds
-        } else {
-            RejectionCode::BlockedTile
-        };
-        return Err(GameplayRejection::at(code, *point));
-    }
-
-    let mut next = state.clone();
-    next.budget -= ROAD_COST;
-    set_tile_kind(&mut next.map, point, "road");
-    Ok(recompute_route_paths(&next))
+    apply_road_mutation(state, &RoadMutation::LayRoad { point: *point })
+        .map(|result| result.snapshot)
 }
 
 pub fn lay_track(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
@@ -96,46 +83,14 @@ pub fn lay_road_line(
     points: &[Point],
     preset: RoadPreset,
 ) -> GameplayResult<GameSnapshot> {
-    if points.is_empty() {
-        return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
-    }
-
-    // OneWay follows the drag direction (start→current) so the arrow points the
-    // way the player dragged. DualBidirectional instead uses a canonical axis
-    // direction (east for horizontal, south for vertical) so the reverse
-    // carriageway always lands on the same physical side of the corridor
-    // regardless of drag order — otherwise dragging start→current vs
-    // current→start would flip the second carriageway to opposite sides.
-    let forward = line_direction(points);
-    let dual_direction = canonical_line_direction(points);
-    let mut next = state.clone();
-    let mut changed = false;
-
-    for point in points {
-        let direction = match preset {
-            RoadPreset::TwoWay => None,
-            RoadPreset::OneWay => forward,
-            RoadPreset::DualBidirectional => dual_direction,
-        };
-        changed |= lay_lane(&mut next, state, point, direction);
-    }
-
-    if preset == RoadPreset::DualBidirectional {
-        if let Some(canonical) = dual_direction {
-            let reverse_direction = opposite_direction(canonical);
-            for point in reverse_lane_points(points, canonical) {
-                changed |= lay_reverse_lane(&mut next, state, &point, reverse_direction);
-            }
-        }
-    }
-
-    if !changed {
-        return Err(GameplayRejection::at(
-            RejectionCode::InvalidRoadStroke,
-            points[0],
-        ));
-    }
-    Ok(recompute_route_paths(&next))
+    apply_road_mutation(
+        state,
+        &RoadMutation::LayRoadLine {
+            points: points.to_vec(),
+            preset,
+        },
+    )
+    .map(|result| result.snapshot)
 }
 
 pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
@@ -656,24 +611,8 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
 }
 
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
-    let Some(tile) = get_tile(&state.map, point) else {
-        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, *point));
-    };
-    if tile.kind != "road" {
-        return Err(GameplayRejection::at(RejectionCode::RoadRequired, *point));
-    }
-
-    let mut next = state.clone();
-    let next_direction = match tile.one_way.as_deref() {
-        None => Some("north"),
-        Some("north") => Some("east"),
-        Some("east") => Some("south"),
-        Some("south") => Some("west"),
-        Some("west") => None,
-        Some(_) => Some("north"),
-    };
-    set_tile_one_way(&mut next.map, point, next_direction);
-    Ok(recompute_route_paths(&next))
+    apply_road_mutation(state, &RoadMutation::CycleRoadDirection { point: *point })
+        .map(|result| result.snapshot)
 }
 
 /// Toggle a route or metro line's `active` flag.
@@ -931,8 +870,8 @@ fn remove_infrastructure_at_tile(
         return Ok(recompute_route_paths(&next));
     }
     if tile.kind == "road" {
-        set_tile_kind(&mut next.map, point, "empty");
-        return Ok(recompute_route_paths(&next));
+        return apply_road_mutation(state, &RoadMutation::RemoveAtTile { point: *point })
+            .map(|result| result.snapshot);
     }
     Err(GameplayRejection::at(RejectionCode::BlockedTile, *point))
 }
@@ -1581,83 +1520,6 @@ fn is_valid_metro_station_placement(state: &GameSnapshot, point: &Point) -> bool
     })
 }
 
-fn line_direction(points: &[Point]) -> Option<&'static str> {
-    if points.len() < 2 {
-        return None;
-    }
-    let dx = points[1].x - points[0].x;
-    let dy = points[1].y - points[0].y;
-    if dx > 0 {
-        Some("east")
-    } else if dx < 0 {
-        Some("west")
-    } else if dy > 0 {
-        Some("south")
-    } else if dy < 0 {
-        Some("north")
-    } else {
-        None
-    }
-}
-
-/// Drag-order-independent axis direction: horizontal lines are "east", vertical
-/// lines are "south". Used by `DualBidirectional` so the reverse carriageway is
-/// offset to a consistent physical side for the same corridor whether the drag
-/// runs start→current or current→start.
-fn canonical_line_direction(points: &[Point]) -> Option<&'static str> {
-    if points.len() < 2 {
-        return None;
-    }
-    let dx = points[1].x - points[0].x;
-    let dy = points[1].y - points[0].y;
-    if dx != 0 {
-        Some("east")
-    } else if dy != 0 {
-        Some("south")
-    } else {
-        None
-    }
-}
-
-fn opposite_direction(direction: &str) -> &'static str {
-    match direction {
-        "north" => "south",
-        "east" => "west",
-        "south" => "north",
-        "west" => "east",
-        _ => "north",
-    }
-}
-
-fn left_of_direction(direction: &str) -> (i32, i32) {
-    match direction {
-        "north" => (-1, 0),
-        "east" => (0, -1),
-        "south" => (1, 0),
-        "west" => (0, 1),
-        _ => (0, 0),
-    }
-}
-
-fn reverse_lane_points(points: &[Point], direction: &str) -> Vec<Point> {
-    let (offset_x, offset_y) = left_of_direction(direction);
-    points
-        .iter()
-        .map(|point| Point {
-            x: point.x + offset_x,
-            y: point.y + offset_y,
-        })
-        .collect()
-}
-
-fn is_valid_road_placement(state: &GameSnapshot, point: &Point) -> bool {
-    get_tile(&state.map, point).is_some_and(|tile| {
-        tile.kind == "empty"
-            && !is_building_occupied(state, point)
-            && !is_transit_node_at(state, point)
-    })
-}
-
 fn is_valid_track_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         (tile.kind == "empty" || tile.kind == "road")
@@ -1687,48 +1549,6 @@ fn is_transit_node_at(state: &GameSnapshot, point: &Point) -> bool {
             .any(|station| station.position == *point)
 }
 
-fn lay_lane(
-    next: &mut GameSnapshot,
-    original: &GameSnapshot,
-    point: &Point,
-    direction: Option<&str>,
-) -> bool {
-    let existing = get_tile(&next.map, point).cloned();
-    if existing.as_ref().is_some_and(|tile| tile.kind == "road") {
-        if existing.and_then(|tile| tile.one_way) != direction.map(str::to_string) {
-            set_tile_one_way(&mut next.map, point, direction);
-            return true;
-        }
-        return false;
-    }
-
-    if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
-        return false;
-    }
-    next.budget -= ROAD_COST;
-    set_tile_kind(&mut next.map, point, "road");
-    set_tile_one_way(&mut next.map, point, direction);
-    true
-}
-
-fn lay_reverse_lane(
-    next: &mut GameSnapshot,
-    original: &GameSnapshot,
-    point: &Point,
-    direction: &str,
-) -> bool {
-    if get_tile(&next.map, point).is_some_and(|tile| tile.kind != "empty") {
-        return false;
-    }
-    if next.budget < ROAD_COST || !is_valid_road_placement(original, point) {
-        return false;
-    }
-    next.budget -= ROAD_COST;
-    set_tile_kind(&mut next.map, point, "road");
-    set_tile_one_way(&mut next.map, point, Some(direction));
-    true
-}
-
 fn get_tile<'a>(map: &'a GameMap, point: &Point) -> Option<&'a Tile> {
     if point.x < 0
         || point.x >= i32::from(map.width)
@@ -1748,26 +1568,9 @@ fn get_tile_mut<'a>(map: &'a mut GameMap, point: &Point) -> Option<&'a mut Tile>
         .find(|tile| tile.x == point.x && tile.y == point.y)
 }
 
-fn set_tile_kind(map: &mut GameMap, point: &Point, kind: &str) {
-    if let Some(tile) = get_tile_mut(map, point) {
-        tile.kind = kind.to_string();
-        if kind != "road" {
-            tile.one_way = None;
-        }
-    }
-}
-
 fn set_tile_track(map: &mut GameMap, point: &Point, has_track: bool) {
     if let Some(tile) = get_tile_mut(map, point) {
         tile.has_track = has_track;
-    }
-}
-
-fn set_tile_one_way(map: &mut GameMap, point: &Point, one_way: Option<&str>) {
-    if let Some(tile) = get_tile_mut(map, point) {
-        if tile.kind == "road" {
-            tile.one_way = one_way.map(str::to_string);
-        }
     }
 }
 

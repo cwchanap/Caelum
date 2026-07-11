@@ -100,6 +100,14 @@ pub fn can_place_building(
             ));
         };
 
+        if tile.road_structure_id.is_some() {
+            return Err(placement_rejection(
+                RejectionCode::BlockedFootprint,
+                *point,
+                &occupied_tiles,
+            ));
+        }
+
         if building_type == "metroStation" {
             if !matches!(tile.kind.as_str(), "empty" | "road") {
                 return Err(placement_rejection(

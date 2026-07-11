@@ -14,7 +14,13 @@ function createEmptyTiles(
   const tiles: RustGameSnapshot["map"]["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      tiles.push({ id: tileId(x, y), x, y, kind: "empty" });
+      tiles.push({
+        id: tileId(x, y),
+        x,
+        y,
+        kind: "empty",
+        roadConnections: [],
+      });
     }
   }
   return tiles;
@@ -35,6 +41,7 @@ export function createRustSnapshot(
       width: MAP_WIDTH,
       height: MAP_HEIGHT,
       tiles: createEmptyTiles(),
+      roadStructures: [],
     },
     buildings: [],
     transit: {

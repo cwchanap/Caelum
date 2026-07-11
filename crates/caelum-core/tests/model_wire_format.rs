@@ -9,14 +9,18 @@
 
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, Metrics, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, Tile,
-    TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, Heading, Metrics, MetricsState, PlacedBuilding, Point, RoadPort, RoadStructure,
+    RoundaboutSize, RouteLeg, RoutePlan, Sim, Tile, TransitMode, TripOutcome, TripOutcomeKind,
+    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{DispatchResult, GameIntent, RoadPreset};
 use serde_json::json;
+
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
 
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
@@ -568,9 +572,49 @@ fn snapshot_round_trips_through_json() {
         area: None,
         has_track: false,
         one_way: None,
+        road_connections: vec![Heading::East, Heading::West],
+        road_structure_id: None,
     };
     let value = serde_json::to_value(&tile).expect("tile should serialize");
     assert_eq!(value["kind"], json!("road"));
+    assert_eq!(value["roadConnections"], json!(["east", "west"]));
+}
+
+#[test]
+fn road_structures_use_stable_camel_case_wire_shapes() {
+    let junction = RoadStructure::AutomaticJunction {
+        id: "junction-1".to_string(),
+        footprint: vec![point(4, 5)],
+        ports: vec![RoadPort {
+            id: "junction-1-port-4-5-west".to_string(),
+            point: point(4, 5),
+            edge: Heading::West,
+        }],
+    };
+    assert_eq!(
+        serde_json::to_value(junction).unwrap(),
+        json!({
+            "kind": "automaticJunction",
+            "id": "junction-1",
+            "footprint": [{ "x": 4, "y": 5 }],
+            "ports": [{
+                "id": "junction-1-port-4-5-west",
+                "point": { "x": 4, "y": 5 },
+                "edge": "west"
+            }]
+        })
+    );
+
+    let roundabout = RoadStructure::Roundabout {
+        id: "roundabout-1".to_string(),
+        origin: point(8, 9),
+        size: RoundaboutSize::Compact2x2,
+        footprint: vec![point(8, 9)],
+        ports: Vec::new(),
+    };
+    let value = serde_json::to_value(roundabout).unwrap();
+    assert_eq!(value["kind"], json!("roundabout"));
+    assert_eq!(value["size"], json!("compact2x2"));
 }
 
 #[test]

@@ -34,6 +34,7 @@ pub mod network;
 pub mod objectives;
 pub mod platforms;
 pub mod rejection;
+pub mod road;
 pub mod router;
 pub mod scenario;
 pub mod state;

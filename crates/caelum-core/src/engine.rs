@@ -3,6 +3,7 @@ use crate::buildings;
 use crate::intent::{DispatchContext, DispatchResult, GameIntent};
 use crate::model::{GameSnapshot, Point};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
+use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::state::create_initial_snapshot;
 use crate::transit;
 use crate::trips;
@@ -59,6 +60,29 @@ fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> 
         .iter()
         .find(|station| station.position == *point);
     before_station != after_station
+}
+
+fn tile_layer_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
+    let before = before
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == point.x && tile.y == point.y);
+    let after = after
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == point.x && tile.y == point.y);
+    match (before, after) {
+        (Some(before), Some(after)) => {
+            before.kind != after.kind
+                || before.area != after.area
+                || before.has_track != after.has_track
+                || before.one_way != after.one_way
+                || before.road_structure_id != after.road_structure_id
+        }
+        _ => before != after,
+    }
 }
 
 fn affected_route_ids(before: &GameSnapshot, after: &GameSnapshot) -> Vec<String> {
@@ -138,7 +162,7 @@ fn dispatch_context(
             x: tile.x,
             y: tile.y,
         };
-        if !changed_tiles.contains(&point) && point_changed(before, after, &point) {
+        if !changed_tiles.contains(&point) && tile_layer_changed(before, after, &point) {
             changed_tiles.push(point);
         }
     }
@@ -217,17 +241,22 @@ impl GameEngine {
             GameIntent::AssignVehicle { mode, line_id } => {
                 self.commit_result(transit::assign_vehicle(&self.snapshot, &mode, &line_id))
             }
-            GameIntent::LayRoad { point } => {
-                self.commit_result_for_tiles(transit::lay_road(&self.snapshot, &point), &[point])
+            GameIntent::LayRoad { point } => self.commit_road_result(road::apply_road_mutation(
+                &self.snapshot,
+                &RoadMutation::LayRoad { point },
+            )),
+            GameIntent::LayRoadLine { points, preset } => {
+                self.commit_road_result(road::apply_road_mutation(
+                    &self.snapshot,
+                    &RoadMutation::LayRoadLine { points, preset },
+                ))
             }
-            GameIntent::LayRoadLine { points, preset } => self.commit_result_for_tiles(
-                transit::lay_road_line(&self.snapshot, &points, preset),
-                &points,
-            ),
-            GameIntent::CycleRoadDirection { point } => self.commit_result_for_tiles(
-                transit::cycle_road_direction(&self.snapshot, &point),
-                &[point],
-            ),
+            GameIntent::CycleRoadDirection { point } => {
+                self.commit_road_result(road::apply_road_mutation(
+                    &self.snapshot,
+                    &RoadMutation::CycleRoadDirection { point },
+                ))
+            }
             GameIntent::LayTrack { point } => {
                 self.commit_result_for_tiles(transit::lay_track(&self.snapshot, &point), &[point])
             }
@@ -298,6 +327,20 @@ impl GameEngine {
 
     fn commit_result(&mut self, result: GameplayResult<GameSnapshot>) -> DispatchResult {
         self.commit_result_for_tiles(result, &[])
+    }
+
+    fn commit_road_result(&mut self, result: GameplayResult<RoadMutationResult>) -> DispatchResult {
+        match result {
+            Ok(result) => {
+                if result.snapshot == self.snapshot {
+                    return DispatchResult::unchanged(self.snapshot());
+                }
+                let context = result.dispatch_context();
+                self.snapshot = result.snapshot;
+                DispatchResult::applied_with_context(self.snapshot(), context)
+            }
+            Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
+        }
     }
 
     fn commit_result_for_tiles(
