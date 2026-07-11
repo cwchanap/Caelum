@@ -543,10 +543,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
 }
 
 #[test]
-fn waiting_trip_that_boards_and_disembarks_across_compat_steps_does_not_advance_walk() {
-    // The compatibility cursor advances one tagged path step per tick. The
-    // final ride step still consumes that whole tick, so the following walk
-    // leg must begin at the alighting stop with zero elapsed walking time.
+fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk() {
+    // Even when a tick ends exactly at the final ride-step boundary, the
+    // following walk leg must begin at the alighting stop with zero elapsed
+    // walking time.
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
@@ -612,7 +612,7 @@ fn waiting_trip_that_boards_and_disembarks_across_compat_steps_does_not_advance_
 }
 
 #[test]
-fn large_tick_consumes_at_most_one_tagged_path_step() {
+fn large_tick_consumes_all_duration_until_the_next_stop() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 5);
     engine.dispatch(GameIntent::AddBusStop {
@@ -651,15 +651,15 @@ fn large_tick_consumes_at_most_one_tagged_path_step() {
         .expect("vehicle has a next stop");
     let next = trips::tick_trips(&state, seconds);
 
-    // Task 5 intentionally consumes at most one tagged step per tick. Task 6
-    // replaces this compatibility boundary with remainder-preserving travel.
-    assert_eq!(next.transit.vehicles[0].path_step_index, 1);
+    assert_eq!(next.transit.vehicles[0].itinerary_index, 1);
+    assert_eq!(next.transit.vehicles[0].path_step_index, 0);
     assert_eq!(next.transit.vehicles[0].step_progress, 0.0);
-    assert_eq!(next.active_trips[0].status, TripStatus::Riding);
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.completed_trips, 1);
 }
 
 #[test]
-fn compat_cursor_resets_progress_at_path_step_boundary() {
+fn cursor_resets_progress_at_path_step_boundary() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 7);
     engine.dispatch(GameIntent::AddBusStop {

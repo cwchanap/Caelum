@@ -1,4 +1,4 @@
-use caelum_core::model::TransitMode;
+use caelum_core::model::{GameSnapshot, TransitMode, TransitPath};
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -30,6 +30,24 @@ fn bus_route_state() -> GameEngine {
         stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine
+}
+
+fn left_turn_trip_fixture() -> GameSnapshot {
+    let mut state = bus_route_state().snapshot();
+    let leg = &mut state.transit.routes[0].legs[0];
+    let TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    } = leg.current_path.as_mut().unwrap()
+    else {
+        panic!("bus fixture has a road path");
+    };
+    let left_turn_delay = 1.0;
+    steps.last_mut().unwrap().travel_seconds += left_turn_delay;
+    *total_travel_seconds += left_turn_delay;
+    leg.estimated_seconds = Some(*total_travel_seconds);
+    leg.last_valid_path = leg.current_path.clone();
+    state
 }
 
 #[test]
@@ -68,6 +86,20 @@ fn creates_bus_route_plan_from_connected_stops() {
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("route-001"));
     assert_eq!(plan.legs[1].from, (2, 5).into());
     assert_eq!(plan.legs[1].to, (12, 5).into());
+}
+
+#[test]
+fn transit_plan_estimate_equals_the_authoritative_leg_duration() {
+    let snapshot = left_turn_trip_fixture();
+    let authoritative_leg_duration = snapshot.transit.routes[0].legs[0]
+        .estimated_seconds
+        .unwrap();
+    let plan = router::find_route_plan(&snapshot, &(2, 5).into(), &(12, 5).into())
+        .expect("bus route should be planned");
+
+    assert_eq!(plan.legs[1].mode, TransitMode::Bus);
+    let transit_seconds = plan.estimated_seconds - 90.0;
+    assert!((transit_seconds - authoritative_leg_duration).abs() < 1e-9);
 }
 
 #[test]

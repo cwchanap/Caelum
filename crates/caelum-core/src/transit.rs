@@ -7,7 +7,7 @@ use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, GameMap, GameSnapshot, MetroLine, Platform, Point, Route, RouteLegPath,
-    ServicePattern, Tile, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ServicePattern, Tile, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -541,7 +541,7 @@ pub(crate) fn tick_vehicles_without_context(
             next_vehicle.step_progress,
         );
         next_vehicle.parked_position = None;
-        advance_vehicle_one_step_compat(&mut next_vehicle, &itinerary, delta_seconds);
+        advance_vehicle_by_seconds(&mut next_vehicle, &itinerary, delta_seconds);
         if previous_cursor
             != (
                 next_vehicle.itinerary_index,
@@ -1190,29 +1190,54 @@ fn assigned_line_data(
     Some((station_by_id, line.legs.clone()))
 }
 
-fn advance_vehicle_one_step_compat(
+fn advance_vehicle_by_seconds(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
-    delta_seconds: f64,
+    mut remaining_seconds: f64,
 ) {
-    let path = itinerary[vehicle.itinerary_index % itinerary.len()]
-        .current_path
-        .as_ref()
-        .expect("operational leg has a path");
-    if path.step_count() == 0 {
-        advance_vehicle_cursor(vehicle, itinerary);
-        return;
-    }
-    let step = path
-        .step(vehicle.path_step_index)
-        .expect("cursor points at a path step");
-    let seconds = step.travel_seconds();
-    if seconds <= f64::EPSILON {
-        advance_vehicle_cursor(vehicle, itinerary);
-        return;
-    }
-    vehicle.step_progress += delta_seconds / seconds;
-    if vehicle.step_progress >= 1.0 {
+    let zero_step_limit = itinerary
+        .iter()
+        .filter_map(|leg| leg.current_path.as_ref())
+        .map(TransitPath::step_count)
+        .sum::<usize>()
+        .max(1);
+    let mut consecutive_zero_steps = 0;
+
+    while remaining_seconds > 0.0 {
+        let leg = &itinerary[vehicle.itinerary_index % itinerary.len()];
+        let path = leg
+            .current_path
+            .as_ref()
+            .expect("operational leg has a path");
+        if path.step_count() == 0 {
+            advance_vehicle_cursor(vehicle, itinerary);
+            consecutive_zero_steps += 1;
+            if consecutive_zero_steps > zero_step_limit {
+                return;
+            }
+            continue;
+        }
+        let step = path
+            .step(vehicle.path_step_index)
+            .expect("operational cursor points at a path step");
+        let step_seconds = step.travel_seconds();
+        if step_seconds <= f64::EPSILON {
+            advance_vehicle_cursor(vehicle, itinerary);
+            consecutive_zero_steps += 1;
+            if consecutive_zero_steps > zero_step_limit {
+                return;
+            }
+            continue;
+        }
+        consecutive_zero_steps = 0;
+        let remaining_step = step_seconds * (1.0 - vehicle.step_progress);
+
+        if remaining_seconds < remaining_step {
+            vehicle.step_progress += remaining_seconds / step_seconds;
+            return;
+        }
+
+        remaining_seconds -= remaining_step;
         advance_vehicle_cursor(vehicle, itinerary);
     }
 }

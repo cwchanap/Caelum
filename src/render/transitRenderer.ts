@@ -9,7 +9,7 @@ import type {
 import type { UiState } from "../ui/uiState";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
-import { drawPathGeometry, pointAt } from "./pathRenderer";
+import { drawPathGeometry, pointAndTangentAt } from "./pathRenderer";
 
 function center(point: TripPosition): TripPosition {
   return {
@@ -92,15 +92,20 @@ function vehicleItinerary(
   );
 }
 
-function vehiclePosition(
+interface VehicleSample {
+  point: TripPosition;
+  tangent: TripPosition | null;
+}
+
+function vehicleSample(
   state: GameState,
   vehicle: Vehicle,
-): TripPosition | null {
+): VehicleSample | null {
   const itinerary = vehicleItinerary(state, vehicle);
   if (itinerary === null || itinerary.length === 0) {
     return vehicle.parkedPosition === null
       ? null
-      : center(vehicle.parkedPosition);
+      : { point: center(vehicle.parkedPosition), tangent: null };
   }
   const leg = itinerary[vehicle.itineraryIndex % itinerary.length];
   const path = leg?.currentPath;
@@ -108,9 +113,10 @@ function vehiclePosition(
   if (step === undefined) {
     return vehicle.parkedPosition === null
       ? null
-      : center(vehicle.parkedPosition);
+      : { point: center(vehicle.parkedPosition), tangent: null };
   }
-  return center(pointAt(step.geometry, vehicle.stepProgress));
+  const sample = pointAndTangentAt(step.geometry, vehicle.stepProgress);
+  return { point: center(sample.point), tangent: sample.tangent };
 }
 
 export function renderTransit(
@@ -166,11 +172,19 @@ export function renderTransit(
     ctx.fill();
   }
   for (const vehicle of state.transit.vehicles) {
-    const point = vehiclePosition(state, vehicle);
-    if (point === null) {
+    const sample = vehicleSample(state, vehicle);
+    if (sample === null) {
       continue;
     }
     ctx.fillStyle = vehicle.mode === "bus" ? colors.bus : colors.metro;
-    ctx.fillRect(point.x - 7, point.y - 14, 14, 8);
+    if (vehicle.mode === "bus" && sample.tangent !== null) {
+      ctx.save();
+      ctx.translate(sample.point.x, sample.point.y);
+      ctx.rotate(Math.atan2(sample.tangent.y, sample.tangent.x));
+      ctx.fillRect(-7, -14, 14, 8);
+      ctx.restore();
+    } else {
+      ctx.fillRect(sample.point.x - 7, sample.point.y - 14, 14, 8);
+    }
   }
 }

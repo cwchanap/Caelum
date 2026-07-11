@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, Sim, TransitMode, TransitPath, TripPurpose, TripStatus,
-    Vehicle, WorkerProfile,
+    ActiveTrip, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding, Point,
+    RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection,
+    ServicePattern, Sim, TransitMode, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -273,6 +273,140 @@ fn two_stop_bus_engine() -> GameEngine {
         line_id: "route-001".to_string(),
     });
     engine
+}
+
+struct RouteTimingFixture {
+    state: GameSnapshot,
+    route_id: String,
+    vehicle_id: String,
+}
+
+fn route<'a>(state: &'a GameSnapshot, route_id: &str) -> &'a Route {
+    state
+        .transit
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+        .expect("fixture route exists")
+}
+
+fn vehicle<'a>(state: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
+    state
+        .transit
+        .vehicles
+        .iter()
+        .find(|vehicle| vehicle.id == vehicle_id)
+        .expect("fixture vehicle exists")
+}
+
+fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    transit::tick_vehicles(
+        state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        delta_seconds,
+    )
+}
+
+fn movement_route_fixture(movement: MovementKind, movement_seconds: f64) -> RouteTimingFixture {
+    let mut state = two_stop_bus_engine().snapshot();
+    let steps = [(MovementKind::Straight, 1.25), (movement, movement_seconds)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (movement, travel_seconds))| RoadPathStep {
+            position: Point {
+                x: 2 + index as i32,
+                y: 5,
+            },
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement,
+            geometry: PathGeometry::Line {
+                from: (2 + index as i32, 5).into(),
+                to: (3 + index as i32, 5).into(),
+            },
+            travel_seconds,
+        })
+        .collect();
+    let total_travel_seconds = 1.25 + movement_seconds;
+    let path = TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    };
+    let leg = &mut state.transit.routes[0].legs[0];
+    leg.current_path = Some(path.clone());
+    leg.last_valid_path = Some(path);
+    leg.estimated_seconds = Some(total_travel_seconds);
+    let route_id = state.transit.routes[0].id.clone();
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    state.transit.vehicles[0].itinerary_index = 0;
+    state.transit.vehicles[0].path_step_index = 0;
+    state.transit.vehicles[0].step_progress = 0.0;
+    RouteTimingFixture {
+        state,
+        route_id,
+        vehicle_id,
+    }
+}
+
+fn straight_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::Straight, 1.25)
+}
+
+fn right_turn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::RightTurn, 1.75)
+}
+
+fn left_turn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::LeftTurn, 2.25)
+}
+
+fn uturn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::UTurn, 2.0)
+}
+
+fn advance_until_itinerary_changes(
+    state: GameSnapshot,
+    vehicle_id: &str,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    assert_eq!(vehicle(&state, vehicle_id).itinerary_index, 0);
+    tick_vehicles(&state, delta_seconds)
+}
+
+fn three_step_vehicle_fixture(durations: [f64; 3]) -> (GameSnapshot, String) {
+    let mut state = two_stop_bus_engine().snapshot();
+    let steps = durations
+        .iter()
+        .enumerate()
+        .map(|(index, travel_seconds)| RoadPathStep {
+            position: Point {
+                x: 2 + index as i32,
+                y: 5,
+            },
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: (2 + index as i32, 5).into(),
+                to: (3 + index as i32, 5).into(),
+            },
+            travel_seconds: *travel_seconds,
+        })
+        .collect();
+    let total_travel_seconds = durations.iter().sum();
+    let path = TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    };
+    let leg = &mut state.transit.routes[0].legs[0];
+    leg.current_path = Some(path.clone());
+    leg.last_valid_path = Some(path);
+    leg.estimated_seconds = Some(total_travel_seconds);
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    (state, vehicle_id)
 }
 
 #[test]
@@ -692,6 +826,34 @@ fn vehicles_advance_by_duration_over_path_steps() {
     assert!(ticked.applied);
     let progress = ticked.snapshot.transit.vehicles[0].step_progress;
     assert!((progress - 0.8).abs() < 0.000_001);
+}
+
+#[test]
+fn actual_bus_time_includes_the_same_turn_delay_as_its_path() {
+    for fixture in [
+        straight_route_fixture(),
+        right_turn_route_fixture(),
+        left_turn_route_fixture(),
+        uturn_route_fixture(),
+    ] {
+        let leg = route(&fixture.state, &fixture.route_id).legs[0].clone();
+        let expected = leg.current_path.as_ref().unwrap().total_travel_seconds();
+        let almost =
+            advance_until_itinerary_changes(fixture.state, &fixture.vehicle_id, expected - 0.001);
+        assert_eq!(vehicle(&almost, &fixture.vehicle_id).itinerary_index, 0);
+        let arrived = tick_vehicles(&almost, 0.001);
+        assert_eq!(vehicle(&arrived, &fixture.vehicle_id).itinerary_index, 1);
+    }
+}
+
+#[test]
+fn one_tick_consumes_multiple_short_steps_without_losing_remainder() {
+    let (state, vehicle_id) = three_step_vehicle_fixture([0.25, 0.50, 1.00]);
+    let next = tick_vehicles(&state, 1.10);
+    let vehicle = vehicle(&next, &vehicle_id);
+
+    assert_eq!(vehicle.path_step_index, 2);
+    assert!((vehicle.step_progress - 0.35).abs() < 1e-9);
 }
 
 #[test]

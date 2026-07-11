@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import type { PathGeometry, TripPosition } from "../../src/domain/types";
-import { drawPathGeometry, pointAt } from "../../src/render/pathRenderer";
+import {
+  drawPathGeometry,
+  pointAndTangentAt,
+  pointAt,
+} from "../../src/render/pathRenderer";
 
 function lineGeometry(): PathGeometry {
   return { kind: "line", from: { x: 1, y: 2 }, to: { x: 3, y: 4 } };
@@ -88,4 +92,35 @@ it("draws every tagged geometry and samples its point", () => {
     "arc",
     "stroke",
   ]);
+});
+
+it("returns position and tangent on a quadratic turn", () => {
+  const geometry: PathGeometry = {
+    kind: "quadraticBezier",
+    from: { x: 0, y: 0 },
+    control: { x: 1, y: 0 },
+    to: { x: 1, y: 1 },
+  };
+
+  expect(pointAndTangentAt(geometry, 0.5)).toEqual({
+    point: { x: 0.75, y: 0.25 },
+    tangent: { x: 1, y: 1 },
+  });
+});
+
+it("follows an arc in its signed sweep direction", () => {
+  const sample = pointAndTangentAt(
+    {
+      kind: "arc",
+      center: { x: 2, y: 2 },
+      radius: 1,
+      startRadians: 0,
+      sweepRadians: Math.PI / 2,
+    },
+    1,
+  );
+  expect(sample.point.x).toBeCloseTo(2);
+  expect(sample.point.y).toBeCloseTo(3);
+  expect(sample.tangent.x).toBeCloseTo(-1);
+  expect(sample.tangent.y).toBeCloseTo(0);
 });

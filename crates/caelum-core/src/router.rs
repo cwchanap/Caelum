@@ -34,8 +34,6 @@ pub fn find_route_plan(
 
                 let board_at = &service.anchors[board_index];
                 let alight_at = &service.anchors[alight_index];
-                let steps = ride_steps(&service.legs, board_index, alight_index);
-
                 candidates.push(RoutePlan {
                     legs: vec![
                         walk_leg(origin, board_at),
@@ -43,7 +41,7 @@ pub fn find_route_plan(
                         walk_leg(alight_at, destination),
                     ],
                     estimated_seconds: walk_seconds(origin, board_at)
-                        + ride_seconds(service.mode, steps)
+                        + ride_seconds(service.mode, &service.legs, board_index, alight_index)
                         + walk_seconds(alight_at, destination),
                 });
             }
@@ -74,9 +72,6 @@ pub fn find_route_plan(
             let second_end = &second.anchors[second_end_index];
             let transfer_first = &first.anchors[transfer_first_index];
             let transfer_second = &second.anchors[transfer_second_index];
-            let first_steps = ride_steps(&first.legs, first_start_index, transfer_first_index);
-            let second_steps = ride_steps(&second.legs, transfer_second_index, second_end_index);
-
             candidates.push(RoutePlan {
                 legs: vec![
                     walk_leg(origin, first_start),
@@ -86,9 +81,19 @@ pub fn find_route_plan(
                     walk_leg(second_end, destination),
                 ],
                 estimated_seconds: walk_seconds(origin, first_start)
-                    + ride_seconds(first.mode, first_steps)
+                    + ride_seconds(
+                        first.mode,
+                        &first.legs,
+                        first_start_index,
+                        transfer_first_index,
+                    )
                     + walk_seconds(transfer_first, transfer_second)
-                    + ride_seconds(second.mode, second_steps)
+                    + ride_seconds(
+                        second.mode,
+                        &second.legs,
+                        transfer_second_index,
+                        second_end_index,
+                    )
                     + walk_seconds(second_end, destination),
             });
         }
@@ -218,37 +223,47 @@ fn best_transfer_indexes(
     best.map(|(first_index, second_index, _)| (first_index, second_index))
 }
 
-fn ride_steps(legs: &[RouteLegPath], from_index: usize, to_index: usize) -> usize {
+fn ride_seconds(
+    mode: TransitMode,
+    legs: &[RouteLegPath],
+    from_index: usize,
+    to_index: usize,
+) -> f64 {
     let count = legs.len();
     if count == 0 || from_index == to_index {
-        return 0;
+        return boarding_seconds(mode);
     }
 
-    let mut steps = 0;
+    let mut seconds = 0.0;
     let mut index = from_index;
     while index != to_index {
-        steps += legs[index]
-            .current_path
-            .as_ref()
-            .map_or(1, |path| path.step_count().max(1));
+        seconds += leg_travel_seconds(mode, &legs[index]);
         index = (index + 1) % count;
     }
 
-    steps
+    boarding_seconds(mode) + seconds
 }
 
-fn ride_seconds(mode: TransitMode, steps: usize) -> f64 {
-    let speed = if mode == TransitMode::Bus {
-        BUS_TILES_PER_SECOND
-    } else {
-        METRO_TILES_PER_SECOND
-    };
-    let boarding = if mode == TransitMode::Bus {
+fn leg_travel_seconds(mode: TransitMode, leg: &RouteLegPath) -> f64 {
+    leg.current_path
+        .as_ref()
+        .map(|path| path.total_travel_seconds())
+        .or(leg.estimated_seconds)
+        .unwrap_or_else(|| {
+            1.0 / if mode == TransitMode::Bus {
+                BUS_TILES_PER_SECOND
+            } else {
+                METRO_TILES_PER_SECOND
+            }
+        })
+}
+
+fn boarding_seconds(mode: TransitMode) -> f64 {
+    if mode == TransitMode::Bus {
         90.0
     } else {
         120.0
-    };
-    boarding + steps as f64 / speed
+    }
 }
 
 fn walk_seconds(from: &Point, to: &Point) -> f64 {

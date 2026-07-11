@@ -28,6 +28,8 @@ function ctx(): CanvasRenderingContext2D {
     fill: vi.fn(),
     arc: vi.fn(),
     fillRect: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
     setLineDash: vi.fn(),
     fillStyle: "",
     strokeStyle: "",
@@ -136,8 +138,10 @@ describe("renderTransit highlight", () => {
     renderTransit(context, state, createUiState());
 
     // Centre of (7.5,8) = (7.5*32+16, 8*32+16) = (256, 272).
-    // Vehicles are drawn via fillRect(point.x-7, point.y-14, 14, 8).
-    expect(context.fillRect).toHaveBeenCalledWith(249, 258, 14, 8);
+    // The bus is drawn in local coordinates after rotating to the path tangent.
+    expect(context.translate).toHaveBeenCalledWith(256, 272);
+    expect(context.rotate).toHaveBeenCalledWith(0);
+    expect(context.fillRect).toHaveBeenCalledWith(-7, -14, 14, 8);
   });
 
   it("parks a metro vehicle at the segment-start station when its line is broken", () => {
