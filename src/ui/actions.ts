@@ -99,6 +99,7 @@ export function applyUiTileClick(
               ...ui,
               routeDraft: result.draft,
               routePreviewError: result.rejection,
+              routePreviewHostError: null,
             },
     };
   }
@@ -155,7 +156,12 @@ export function removeDraftNode(
   const routeDraft = removeWaypoint(selected);
   return routeDraft === ui.routeDraft
     ? ui
-    : { ...ui, routeDraft, routePreviewError: null };
+    : {
+        ...ui,
+        routeDraft,
+        routePreviewError: null,
+        routePreviewHostError: null,
+      };
 }
 
 export { cancelDraftRoute, resolveStationAtTile, resolveStopAtTile };

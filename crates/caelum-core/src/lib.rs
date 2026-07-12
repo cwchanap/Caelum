@@ -27,6 +27,7 @@ pub mod clock;
 pub mod commute;
 pub mod engine;
 pub mod growth;
+pub mod heading;
 pub mod ids;
 pub mod intent;
 pub mod model;

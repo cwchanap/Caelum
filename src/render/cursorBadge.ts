@@ -149,6 +149,15 @@ function badgeText(state: GameState, ui: UiState): string | null {
     }
     case "track":
       return `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`;
+    case "roundabout": {
+      const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
+      const preview = ui.roadMutationPreview;
+      const ok =
+        preview === null ||
+        preview.generation !== ui.roadPreviewGeneration ||
+        preview.rejection === null;
+      return `⦿ Roundabout ${sizeLabel}${ok ? "" : " ⊘"}`;
+    }
     case "area": {
       if (ui.selectedArea === null) {
         return null;

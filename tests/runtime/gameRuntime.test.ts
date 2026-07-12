@@ -767,7 +767,10 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
   const base = backendSpy(initial);
   const routeResolvers = new Map<
     number,
-    Array<(response: RoutePreviewResponse) => void>
+    Array<{
+      resolve: (response: RoutePreviewResponse) => void;
+      reject: (error: Error) => void;
+    }>
   >();
   const roadResolvers = new Map<
     number,
@@ -780,10 +783,11 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
   const backend: BackendSpy = {
     ...base,
     previewRoute(request) {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
+        const entry = { resolve, reject };
         routeResolvers.set(request.generation, [
           ...(routeResolvers.get(request.generation) ?? []),
-          resolve,
+          entry,
         ]);
       });
     },
@@ -802,10 +806,16 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
       response: RoutePreviewResponse,
       requestIndex = 0,
     ) {
-      const resolve = routeResolvers.get(generation)?.[requestIndex];
-      if (resolve === undefined)
+      const entry = routeResolvers.get(generation)?.[requestIndex];
+      if (entry === undefined)
         throw new Error(`No route generation ${generation}`);
-      resolve(response);
+      entry.resolve(response);
+    },
+    rejectRoute(generation: number, error: Error, requestIndex = 0) {
+      const entry = routeResolvers.get(generation)?.[requestIndex];
+      if (entry === undefined)
+        throw new Error(`No route generation ${generation}`);
+      entry.reject(error);
     },
     resolveRoad(generation: number, response: RoadMutationPreviewResponse) {
       const deferred = roadResolvers.get(generation);
@@ -1103,6 +1113,50 @@ describe("Game Runtime", () => {
       type: "setSpeed",
       speed: 2,
     });
+  });
+
+  it("surfaces a current route preview host failure nonfatally and recovers", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-0001", { x: 1, y: 1 }),
+          createStop("stop-0002", { x: 2, y: 1 }),
+        ],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(initial);
+    const runtime = await createGameRuntime({ backend: previews.backend });
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.handleTileClick({ x: 2, y: 1 });
+    previews.rejectRoute(2, new Error("preview host offline"));
+    await flushPromises();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.ui.routePreviewHostError).toBe("preview host offline");
+    expect(snapshot.ui.routeDraft).not.toBeNull();
+    expect(snapshot.ui.routeDraft?.previewPending).toBe(false);
+    // The runtime stays alive — a speed change still dispatches.
+    await runtime.setSpeed(2);
+    expect(previews.backend.intents).toContainEqual({
+      type: "setSpeed",
+      speed: 2,
+    });
+
+    // Editing the draft clears the host error and re-requests a preview.
+    runtime.handleTileClick({ x: 1, y: 1 });
+    expect(runtime.getSnapshot().ui.routePreviewHostError).toBeNull();
+    previews.resolveRoute(3, routePreview(3, ["stop-0001", "stop-0002"]));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.routePreviewHostError).toBeNull();
+    expect(runtime.getSnapshot().ui.routeDraft?.preview?.generation).toBe(3);
   });
 
   it("manages game and UI state with shell-friendly selectors", async () => {

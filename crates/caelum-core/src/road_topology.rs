@@ -1,6 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
 
+use crate::heading::{offset, offset_components, opposite};
 use crate::model::{
     GameMap, Heading, MovementKind, PathGeometry, Point, RoadPathStep, RoadStructure, TransitPath,
     TripPosition,
@@ -556,31 +557,5 @@ fn heading_key(heading: Heading) -> &'static str {
         Heading::East => "east",
         Heading::South => "south",
         Heading::West => "west",
-    }
-}
-
-fn opposite(heading: Heading) -> Heading {
-    match heading {
-        Heading::North => Heading::South,
-        Heading::East => Heading::West,
-        Heading::South => Heading::North,
-        Heading::West => Heading::East,
-    }
-}
-
-fn offset(point: Point, heading: Heading) -> Point {
-    let (dx, dy) = offset_components(heading);
-    Point {
-        x: point.x + dx,
-        y: point.y + dy,
-    }
-}
-
-fn offset_components(heading: Heading) -> (i32, i32) {
-    match heading {
-        Heading::North => (0, -1),
-        Heading::East => (1, 0),
-        Heading::South => (0, 1),
-        Heading::West => (-1, 0),
     }
 }

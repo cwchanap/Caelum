@@ -213,6 +213,9 @@ function routeDraftPreviewMessage(
   if (draft.previewPending) {
     return { status: "empty", message: "Checking route…" };
   }
+  if (ui.routePreviewHostError !== null) {
+    return { status: "rejected", message: ui.routePreviewHostError };
+  }
   const preview = draft.preview;
   if (preview === null || preview.legs.length === 0) {
     if (localError !== null) {

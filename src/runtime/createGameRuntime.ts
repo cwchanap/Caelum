@@ -66,6 +66,10 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
       activeTool === "busRoute" || activeTool === "metroLine"
         ? current.routePreviewError
         : null,
+    routePreviewHostError:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routePreviewHostError
+        : null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
     selectedRouteId: null,
@@ -88,6 +92,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     buildingRotation: 0 as const,
     routeDraft: null,
     routePreviewError: null,
+    routePreviewHostError: null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
     selectedRouteId: null,
@@ -113,6 +118,7 @@ function nextBuildingUiState(
     buildingRotation: 0 as const,
     routeDraft: null,
     routePreviewError: null,
+    routePreviewHostError: null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
     selectedRouteId: null,
@@ -572,10 +578,28 @@ export async function createGameRuntime({
             ui.routePreviewError?.code === "invalidRouteDraftInteraction"
               ? ui.routePreviewError
               : response.rejection,
+          routePreviewHostError: null,
         });
       })
       .catch((error: unknown) => {
-        failBackend(error);
+        const current = ui.routeDraft;
+        if (
+          dead ||
+          current === null ||
+          current.instanceId !== instanceId ||
+          current.generation !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          routeDraft: {
+            ...current,
+            previewPending: false,
+          },
+          routePreviewHostError:
+            error instanceof Error ? error.message : String(error),
+        });
       });
   };
 
@@ -587,6 +611,7 @@ export async function createGameRuntime({
       ...ui,
       routeDraft,
       routePreviewError: null,
+      routePreviewHostError: null,
     });
     requestRoutePreview(routeDraft);
     return result;
@@ -598,6 +623,7 @@ export async function createGameRuntime({
     commit(state, {
       ...ui,
       routePreviewError: error,
+      routePreviewHostError: null,
     });
 
   const startRouteEdit = (routeId: string): RuntimeSnapshot => {
@@ -644,6 +670,7 @@ export async function createGameRuntime({
       buildCategory: null,
       routeDraft,
       routePreviewError: null,
+      routePreviewHostError: null,
       selectedRouteId: routeId,
       routeFailureFocus: null,
       drag: null,
@@ -719,6 +746,7 @@ export async function createGameRuntime({
             ...ui,
             routeDraft: null,
             routePreviewError: null,
+            routePreviewHostError: null,
           });
         }
         return commit(normalizeRustSnapshot(result.snapshot), ui);
@@ -933,6 +961,7 @@ export async function createGameRuntime({
         );
         nextRouteDraftInstanceId += 1;
         next.routePreviewError = null;
+        next.routePreviewHostError = null;
       }
       const snapshot = commit(state, next);
       const mutation = roadMutationForUi(ui);
@@ -1160,7 +1189,12 @@ export async function createGameRuntime({
             state,
             routeDraft === ui.routeDraft
               ? ui
-              : { ...ui, routeDraft, routePreviewError: null },
+              : {
+                  ...ui,
+                  routeDraft,
+                  routePreviewError: null,
+                  routePreviewHostError: null,
+                },
           );
         }
       }

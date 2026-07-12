@@ -301,5 +301,10 @@ export function applyRouteNodeClick(
 
 export function cancelDraftRoute(ui: UiState): UiState {
   if (ui.routeDraft === null && ui.routePreviewError === null) return ui;
-  return { ...ui, routeDraft: null, routePreviewError: null };
+  return {
+    ...ui,
+    routeDraft: null,
+    routePreviewError: null,
+    routePreviewHostError: null,
+  };
 }

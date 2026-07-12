@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+use crate::heading::{offset, opposite};
 use crate::intent::RoadPreset;
 use crate::model::{
     GameMap, GameSnapshot, Heading, Point, RoadPort, RoadStructure, RoundaboutSize, Tile,
@@ -766,36 +767,6 @@ fn heading_between(from: Point, to: Point) -> Option<Heading> {
         (0, 1) => Some(Heading::South),
         (-1, 0) => Some(Heading::West),
         _ => None,
-    }
-}
-
-fn opposite(heading: Heading) -> Heading {
-    match heading {
-        Heading::North => Heading::South,
-        Heading::East => Heading::West,
-        Heading::South => Heading::North,
-        Heading::West => Heading::East,
-    }
-}
-
-fn offset(point: Point, heading: Heading) -> Point {
-    match heading {
-        Heading::North => Point {
-            x: point.x,
-            y: point.y - 1,
-        },
-        Heading::East => Point {
-            x: point.x + 1,
-            y: point.y,
-        },
-        Heading::South => Point {
-            x: point.x,
-            y: point.y + 1,
-        },
-        Heading::West => Point {
-            x: point.x - 1,
-            y: point.y,
-        },
     }
 }
 

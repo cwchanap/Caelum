@@ -68,6 +68,8 @@ export interface UiState {
   hoverTile: Point | null;
   routeDraft: RouteDraft | null;
   routePreviewError: RouteDraftError | null;
+  /** Recoverable host failure for the current route preview request. */
+  routePreviewHostError: string | null;
   roadPreviewGeneration: number;
   roadMutationPreview: RoadMutationPreviewResponse | null;
   /** Recoverable host failure for the current road preview request. */
@@ -93,6 +95,7 @@ export function createUiState(): UiState {
     hoverTile: null,
     routeDraft: null,
     routePreviewError: null,
+    routePreviewHostError: null,
     roadPreviewGeneration: 0,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
