@@ -111,6 +111,7 @@ export type RejectionCode =
   | "routeChangedWhileEditing"
   | "routeRevisionExhausted"
   | "routeNotFound"
+  | "inactiveRoute"
   | "structureNotFound"
   | "invalidPlatform"
   | "invalidBuildingPlacement"

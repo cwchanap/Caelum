@@ -234,9 +234,22 @@ describe("renderMap authored road geometry", () => {
 
     renderMap(context, state);
 
-    expect(context.moveTo).toHaveBeenCalledWith(6.5 * 32, 6.5 * 32);
-    expect(context.lineTo).toHaveBeenCalledWith(6.5 * 32, 6 * 32);
-    expect(context.lineTo).toHaveBeenCalledWith(7 * 32, 6.5 * 32);
+    // Corner tiles draw only the quadratic curve — no stubs. The curve
+    // starts at the first connection edge, curves through the tile center,
+    // and ends at the second connection edge.
+    const tileCenter = { x: 6.5 * 32, y: 6.5 * 32 };
+    const northEdge = { x: 6.5 * 32, y: 6 * 32 };
+    const eastEdge = { x: 7 * 32, y: 6.5 * 32 };
+    expect(context.moveTo).toHaveBeenCalledWith(northEdge.x, northEdge.y);
+    expect(context.quadraticCurveTo).toHaveBeenCalledWith(
+      tileCenter.x,
+      tileCenter.y,
+      eastEdge.x,
+      eastEdge.y,
+    );
     expect(context.quadraticCurveTo).toHaveBeenCalledTimes(1);
+    // No stub lineTo calls for corner tiles.
+    expect(context.lineTo).not.toHaveBeenCalledWith(northEdge.x, northEdge.y);
+    expect(context.lineTo).not.toHaveBeenCalledWith(eastEdge.x, eastEdge.y);
   });
 });

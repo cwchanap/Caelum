@@ -259,10 +259,7 @@ describe("HudDrawer panel routing", () => {
 
 describe("RouteEditor", () => {
   it("renders the same editor controls for creation and committed edits", async () => {
-    const { rerender } = render(RouteEditor, {
-      props: editorProps(createDraftView()),
-    });
-    for (const name of [
+    const editorControls = [
       "Loop",
       "Shuttle",
       "Replace",
@@ -273,7 +270,12 @@ describe("RouteEditor", () => {
       "Remove",
       "Save route",
       "Cancel",
-    ]) {
+    ];
+
+    const { rerender } = render(RouteEditor, {
+      props: editorProps(createDraftView()),
+    });
+    for (const name of editorControls) {
       expect(
         screen.getByRole(
           name === "Loop" || name === "Shuttle" ? "radio" : "button",
@@ -287,6 +289,14 @@ describe("RouteEditor", () => {
     expect(
       screen.getByText("Saved service stays live until Save."),
     ).toBeVisible();
+    for (const name of editorControls) {
+      expect(
+        screen.getByRole(
+          name === "Loop" || name === "Shuttle" ? "radio" : "button",
+          { name },
+        ),
+      ).toBeVisible();
+    }
   });
 
   it("offers Reload after a stale revision and keeps Cancel available", () => {

@@ -1,5 +1,9 @@
 import type { RouteLegPath } from "../../domain/types";
-import type { DispatchResult, RoutePreviewResponse } from "./types";
+import type {
+  DispatchResult,
+  RoadMutationPreviewResponse,
+  RoutePreviewResponse,
+} from "./types";
 
 /** Normalize Rust `Option` fields across serde-wasm-bindgen and Tauri JSON. */
 export function normalizeRouteLegPath(leg: RouteLegPath): RouteLegPath {
@@ -29,4 +33,14 @@ export function normalizeDispatchResult(
   result: DispatchResult,
 ): DispatchResult {
   return { ...result, rejection: result.rejection ?? null };
+}
+
+// Same normalization concern as `normalizeDispatchResult` and
+// `normalizeRoutePreviewResponse`: serde-wasm-bindgen may omit a Rust `None`
+// rejection, while Tauri JSON emits `null`. Normalize to `null` so the runtime
+// can treat `rejection` as a typed nullable value.
+export function normalizeRoadMutationPreviewResponse(
+  response: RoadMutationPreviewResponse,
+): RoadMutationPreviewResponse {
+  return { ...response, rejection: response.rejection ?? null };
 }

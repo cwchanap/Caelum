@@ -1,6 +1,7 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
 import {
   normalizeDispatchResult,
+  normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
 } from "./shared";
 import type {
@@ -72,7 +73,7 @@ export async function createWasmBackend(): Promise<GameBackend> {
       const response = engine.preview_road_mutation(
         request,
       ) as RoadMutationPreviewResponse;
-      return { ...response, rejection: response.rejection ?? null };
+      return normalizeRoadMutationPreviewResponse(response);
     },
   };
 }

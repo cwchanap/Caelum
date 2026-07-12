@@ -54,11 +54,151 @@ export function offsetGeometry(
   canonicalTangent: TripPosition,
 ): PathGeometry {
   const length = Math.hypot(canonicalTangent.x, canonicalTangent.y) || 1;
-  const normal = {
+  const canonicalNormal = {
     x: -canonicalTangent.y / length,
     y: canonicalTangent.x / length,
   };
-  return translateGeometry(geometry, normal.x * pixels, normal.y * pixels);
+  if (geometry.kind === "line") {
+    return translateGeometry(
+      geometry,
+      canonicalNormal.x * pixels,
+      canonicalNormal.y * pixels,
+    );
+  }
+  if (geometry.kind === "arc") {
+    return offsetArc(geometry, pixels, canonicalNormal);
+  }
+  return offsetBezier(geometry, pixels, canonicalNormal);
+}
+
+function unitNormal(tangent: TripPosition): TripPosition {
+  const len = Math.hypot(tangent.x, tangent.y);
+  if (len < 1e-9) return { x: 0, y: 0 };
+  return { x: -tangent.y / len, y: tangent.x / len };
+}
+
+function dot(a: TripPosition, b: TripPosition): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+/** Offset an arc by adjusting its radius rather than translating the center.
+ *  The sign of the radius delta is determined by comparing the canonical
+ *  normal with the radial direction at the canonical endpoint (the endpoint
+ *  whose tangent matches the canonical tangent). */
+function offsetArc(
+  geometry: {
+    kind: "arc";
+    center: TripPosition;
+    radius: number;
+    startRadians: number;
+    sweepRadians: number;
+  },
+  pixels: number,
+  canonicalNormal: TripPosition,
+): PathGeometry {
+  const start = pointAndTangentAt(geometry, 0).point;
+  const end = pointAndTangentAt(geometry, 1).point;
+  const forward = pointKey(start) <= pointKey(end);
+  const referencePoint = forward ? start : end;
+  const radialDir = {
+    x: (referencePoint.x - geometry.center.x) / geometry.radius,
+    y: (referencePoint.y - geometry.center.y) / geometry.radius,
+  };
+  const radiusDelta = dot(canonicalNormal, radialDir) > 0 ? pixels : -pixels;
+  return {
+    ...geometry,
+    radius: Math.max(0.01, geometry.radius + radiusDelta),
+  };
+}
+
+/** Offset a quadratic Bézier by moving each endpoint and the control point
+ *  along its local normal (perpendicular to the tangent at that point),
+ *  rather than translating the whole geometry by one canonical normal. The
+ *  sign of each local normal is chosen to match the canonical normal so all
+ *  routes in a shared corridor offset to the same side. */
+function offsetBezier(
+  geometry: {
+    kind: "quadraticBezier";
+    from: TripPosition;
+    control: TripPosition;
+    to: TripPosition;
+  },
+  pixels: number,
+  canonicalNormal: TripPosition,
+): PathGeometry {
+  const startTangent = pointAndTangentAt(geometry, 0).tangent;
+  const endTangent = pointAndTangentAt(geometry, 1).tangent;
+
+  const startNormal = unitNormal(startTangent);
+  const endNormal = unitNormal(endTangent);
+
+  const startSign = dot(startNormal, canonicalNormal) > 0 ? 1 : -1;
+  const endSign = dot(endNormal, canonicalNormal) > 0 ? 1 : -1;
+
+  const startOffset = {
+    x: startNormal.x * pixels * startSign,
+    y: startNormal.y * pixels * startSign,
+  };
+  const endOffset = {
+    x: endNormal.x * pixels * endSign,
+    y: endNormal.y * pixels * endSign,
+  };
+  const controlOffset = {
+    x: (startOffset.x + endOffset.x) / 2,
+    y: (startOffset.y + endOffset.y) / 2,
+  };
+
+  return {
+    kind: "quadraticBezier",
+    from: translated(geometry.from, startOffset.x, startOffset.y),
+    control: translated(geometry.control, controlOffset.x, controlOffset.y),
+    to: translated(geometry.to, endOffset.x, endOffset.y),
+  };
+}
+
+/** Find the progress parameter t in [0, 1] on `geometry` closest to `point`.
+ *  Used to map waypoint/vehicle positions through the offset geometry. */
+function closestProgressOnGeometry(
+  geometry: PathGeometry,
+  point: TripPosition,
+): number {
+  if (geometry.kind === "line") {
+    const dx = geometry.to.x - geometry.from.x;
+    const dy = geometry.to.y - geometry.from.y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-9) return 0;
+    return Math.max(
+      0,
+      Math.min(
+        1,
+        ((point.x - geometry.from.x) * dx + (point.y - geometry.from.y) * dy) /
+          lenSq,
+      ),
+    );
+  }
+  if (geometry.kind === "arc") {
+    const angle = Math.atan2(
+      point.y - geometry.center.y,
+      point.x - geometry.center.x,
+    );
+    let progress = (angle - geometry.startRadians) / geometry.sweepRadians;
+    // Normalize angle wrapping into [0, 1]
+    progress = ((progress % 1) + 1) % 1;
+    return progress;
+  }
+  // Bézier: sample and find the closest point.
+  let bestT = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i <= 32; i += 1) {
+    const t = i / 32;
+    const sample = pointAndTangentAt(geometry, t).point;
+    const dist = (sample.x - point.x) ** 2 + (sample.y - point.y) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestT = t;
+    }
+  }
+  return bestT;
 }
 
 export interface RoutePathPresentation {
@@ -82,7 +222,13 @@ export function routePathPresentation(
   return {
     geometry: presented,
     translation,
-    translatePoint: (point) => translated(point, translation.x, translation.y),
+    translatePoint: (point) => {
+      if (geometry.kind === "line" || pixels === 0) {
+        return translated(point, translation.x, translation.y);
+      }
+      const t = closestProgressOnGeometry(geometry, point);
+      return pointAndTangentAt(presented, t).point;
+    },
   };
 }
 

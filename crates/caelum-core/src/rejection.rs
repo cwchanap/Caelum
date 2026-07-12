@@ -26,6 +26,7 @@ pub enum RejectionCode {
     RouteChangedWhileEditing,
     RouteRevisionExhausted,
     RouteNotFound,
+    InactiveRoute,
     StructureNotFound,
     InvalidPlatform,
     InvalidBuildingPlacement,

@@ -124,7 +124,7 @@ describe("corridorOffsets", () => {
 });
 
 describe("offsetGeometry", () => {
-  it("translates every authored geometry point along the canonical normal", () => {
+  it("offsets Bézier endpoints along local normals matching the canonical side", () => {
     const offset = offsetGeometry(
       {
         kind: "quadraticBezier",
@@ -136,11 +136,39 @@ describe("offsetGeometry", () => {
       { x: 1, y: 0 },
     );
 
+    // Canonical normal is (0, 1). Start tangent is (2, 2) → unit normal
+    // (-√2/2, √2/2), sign +1. End tangent is (2, -2) → unit normal
+    // (√2/2, √2/2), sign +1. Control offset is the average.
+    const s = Math.sqrt(2) / 8; // 0.25 * √2/2 / 2
     expect(offset).toEqual({
       kind: "quadraticBezier",
-      from: { x: 1, y: 2.25 },
-      control: { x: 2, y: 3.25 },
-      to: { x: 3, y: 2.25 },
+      from: { x: 1 - s, y: 2 + s },
+      control: { x: 2, y: 3 + s },
+      to: { x: 3 + s, y: 2 + s },
+    });
+  });
+
+  it("offsets arcs by adjusting the radius", () => {
+    const offset = offsetGeometry(
+      {
+        kind: "arc",
+        center: { x: 2, y: 2 },
+        radius: 1,
+        startRadians: 0,
+        sweepRadians: Math.PI / 2,
+      },
+      0.25,
+      // Tangent at start (0°, CCW) is (0, 1); canonical normal is (-1, 0).
+      // Radial at start is (1, 0). dot((-1,0), (1,0)) = -1 < 0 → decrease.
+      { x: 0, y: 1 },
+    );
+
+    expect(offset).toEqual({
+      kind: "arc",
+      center: { x: 2, y: 2 },
+      radius: 0.75,
+      startRadians: 0,
+      sweepRadians: Math.PI / 2,
     });
   });
 });

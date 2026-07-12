@@ -7,6 +7,7 @@ use crate::model::{
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::RoadMutationResult;
 use crate::road_topology::{RoadState, RoadTransition, BUS_TILE_MILLIS, ROUNDABOUT_ENTRY_MILLIS};
+use crate::transit_nodes::is_present_node;
 
 pub const COMPACT_ROUNDABOUT_COST: i32 = 1_000;
 pub const STANDARD_ROUNDABOUT_COST: i32 = 2_000;
@@ -159,12 +160,10 @@ fn validate_replaceable_occupancy(
         .transit
         .stops
         .iter()
-        .any(|stop| footprint.contains(&stop.position))
-        || state
-            .transit
-            .stations
-            .iter()
-            .any(|station| footprint.contains(&station.position));
+        .any(|stop| is_present_node(stop.status) && footprint.contains(&stop.position))
+        || state.transit.stations.iter().any(|station| {
+            is_present_node(station.status) && footprint.contains(&station.position)
+        });
     let blocked_tile = template.footprint.iter().any(|point| {
         state
             .map

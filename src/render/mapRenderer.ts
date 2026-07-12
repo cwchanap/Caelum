@@ -48,17 +48,19 @@ function isCorner(headings: readonly Heading[]): boolean {
 }
 
 function drawOrdinaryRoad(ctx: CanvasRenderingContext2D, tile: Tile): void {
+  if (isCorner(tile.roadConnections)) {
+    const from = connectionEndpoint(tile, tile.roadConnections[0]);
+    const to = connectionEndpoint(tile, tile.roadConnections[1]);
+    const tileCenter = center(tile);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.quadraticCurveTo(tileCenter.x, tileCenter.y, to.x, to.y);
+    ctx.stroke();
+    return;
+  }
   for (const heading of tile.roadConnections) {
     drawRoadStub(ctx, tile, heading);
   }
-  if (!isCorner(tile.roadConnections)) return;
-  const from = connectionEndpoint(tile, tile.roadConnections[0]);
-  const to = connectionEndpoint(tile, tile.roadConnections[1]);
-  const tileCenter = center(tile);
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.quadraticCurveTo(tileCenter.x, tileCenter.y, to.x, to.y);
-  ctx.stroke();
 }
 
 function drawAutomaticJunctionApproach(

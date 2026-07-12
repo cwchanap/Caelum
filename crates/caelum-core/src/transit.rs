@@ -349,7 +349,7 @@ pub fn assign_vehicle(
             return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
         };
         if !route.active {
-            return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
+            return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
         }
         if !is_route_operational(route.active, &route.legs) {
             return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
@@ -365,7 +365,7 @@ pub fn assign_vehicle(
             return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
         };
         if !line.active {
-            return Err(route_rejection(RejectionCode::TooFewRouteNodes, line_id));
+            return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
         }
         if !is_route_operational(line.active, &line.legs) {
             return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));

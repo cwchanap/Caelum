@@ -24,7 +24,7 @@ export function draftHandleIndexAtPoint(
     const node =
       state.transit.stops.find((candidate) => candidate.id === id) ??
       state.transit.stations.find((candidate) => candidate.id === id);
-    return node?.position.x === point.x && node.position.y === point.y;
+    return node?.position.x === point.x && node?.position.y === point.y;
   });
   return index >= 0 ? index : null;
 }

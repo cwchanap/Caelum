@@ -125,6 +125,20 @@ pub(crate) fn dispatch_context(
         }
     }
 
+    // Multi-tile PlaceBuilding footprints span tiles beyond the explicit
+    // request anchor (only the origin is passed as a requested tile). Include
+    // occupancy points from both snapshots so the full footprint is
+    // represented. `point_changed` (not `tile_layer_changed`) is required
+    // because placing a building does not modify the tile layer — the
+    // building is a separate layer.
+    for building in before.buildings.iter().chain(after.buildings.iter()) {
+        for point in &building.occupied_tiles {
+            if !changed_tiles.contains(point) && point_changed(before, after, point) {
+                changed_tiles.push(*point);
+            }
+        }
+    }
+
     DispatchContext {
         changed_tiles,
         skipped_tiles,

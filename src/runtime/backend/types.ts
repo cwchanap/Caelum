@@ -207,7 +207,8 @@ export interface AuthoredRoadTilePreview {
   /** serde_wasm_bindgen may omit Rust Option::None; Tauri JSON emits null. */
   oneWay?: Heading | null;
   roadConnections: Heading[];
-  roadStructureId: string | null;
+  /** serde_wasm_bindgen may omit Rust Option::None; Tauri JSON emits null. */
+  roadStructureId?: string | null;
 }
 
 export interface RoadMutationPreviewResponse {

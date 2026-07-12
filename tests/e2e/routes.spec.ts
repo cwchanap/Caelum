@@ -65,6 +65,30 @@ async function newestBusRoute(page: import("@playwright/test").Page) {
   return snapshot.state.transit.routes.at(-1)!;
 }
 
+/** Poll the runtime snapshot until the newest bus route satisfies `predicate`.
+ *  Save-route dispatches and map-mutation intents are async; reading the
+ *  route immediately after a click can race the runtime commit. Returns the
+ *  route that matched so callers can make follow-up assertions. */
+async function pollNewestBusRoute(
+  page: import("@playwright/test").Page,
+  predicate: (route: {
+    id: string;
+    pathBroken: boolean;
+    legs: RouteLegPath[];
+    stopIds: string[];
+  }) => boolean,
+): Promise<NonNullable<Awaited<ReturnType<typeof newestBusRoute>>>> {
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      const route = snapshot.state.transit.routes.at(-1);
+      if (!route) return false;
+      return predicate(route);
+    })
+    .toBe(true);
+  return newestBusRoute(page);
+}
+
 // Read the live Rust-derived transit state exposed on `window` in dev mode.
 // `src/main.ts` only assigns `window.__caelumRuntime` under
 // `import.meta.env.DEV`, so this helper depends on the Playwright webServer
@@ -222,6 +246,20 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await openHudCategory(page, "manage");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
 
+  // Poll for the vehicle assignment — the Save-route dispatch is async and
+  // the runtime commit may lag the DOM appearance of the route name.
+  await expect
+    .poll(async () => {
+      const transit = await readRuntimeTransit(page);
+      return (
+        transit.vehicles.length >= 1 &&
+        transit.vehicles[0].lineId === "route-001" &&
+        transit.vehicles[0].mode === "bus" &&
+        (transit.routes.find((r) => r.id === "route-001")?.vehicleIds.length ??
+          0) >= 1
+      );
+    })
+    .toBe(true);
   const transit = await readRuntimeTransit(page);
   expect(transit.vehicles).toHaveLength(1);
   expect(transit.vehicles[0].lineId).toBe("route-001");
@@ -281,6 +319,20 @@ test("turns between paired roads and edits the committed route", async ({
   );
   await page.getByRole("button", { name: "Save route" }).click();
 
+  // Poll until the committed route has the extra waypoint and turn movements
+  // — the Save dispatch is async and the runtime commit may lag the click.
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.at(-1);
+      if (!route) return false;
+      return (
+        route.stopIds.length === TURN_ROUTE_STOPS.length + 1 &&
+        route.legs
+          .flatMap(roadMovements)
+          .some((movement) => ["leftTurn", "rightTurn"].includes(movement))
+      );
+    })
+    .toBe(true);
   const route = (await runtimeSnapshot(page)).state.transit.routes.at(-1)!;
   expect(route.stopIds).toHaveLength(TURN_ROUTE_STOPS.length + 1);
   expect(
@@ -308,6 +360,13 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await clickMapTile(canvas, second);
   await openHudCategory(page, "routes");
   await page.getByRole("button", { name: "Save route" }).click();
+  // Poll until the metro line is committed — the Save dispatch is async.
+  await expect
+    .poll(async () => {
+      const lines = (await runtimeSnapshot(page)).state.transit.metroLines;
+      return lines.length > 0;
+    })
+    .toBe(true);
   const line = (await runtimeSnapshot(page)).state.transit.metroLines.at(-1)!;
 
   await page.getByTestId("hud-tool-remove").click();
@@ -333,15 +392,31 @@ test("reroutes when possible, then preserves a dotted last-valid leg until repai
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await seedRouteWithPrimaryAndAlternateRoad(page);
   await createDamageRoute(page);
-  const before = await newestBusRoute(page);
+  // Poll until the route is committed — Save dispatch is async.
+  const before = await pollNewestBusRoute(page, (r) =>
+    r.legs.every((leg) => leg.currentPath !== null),
+  );
 
   await removeMapTile(page, canvas, PRIMARY_ROAD_TILE);
-  const rerouted = await newestBusRoute(page);
+  // Poll until the route reroutes to a different path (not just still the
+  // original — the remove dispatch and path re-evaluation are async).
+  const rerouted = await pollNewestBusRoute(
+    page,
+    (r) =>
+      r.pathBroken === false &&
+      r.legs[0].currentPath !== null &&
+      JSON.stringify(r.legs[0].currentPath) !==
+        JSON.stringify(before.legs[0].currentPath),
+  );
   expect(rerouted.pathBroken).toBe(false);
   expect(rerouted.legs[0].currentPath).not.toEqual(before.legs[0].currentPath);
 
   await removeMapTile(page, canvas, ALTERNATE_ROAD_TILE);
-  const broken = await newestBusRoute(page);
+  // Poll until both roads are damaged and the route is broken with no path.
+  const broken = await pollNewestBusRoute(
+    page,
+    (r) => r.pathBroken === true && r.legs[0].currentPath === null,
+  );
   expect(broken.pathBroken).toBe(true);
   expect(broken.legs[0].currentPath).toBeNull();
   expect(broken.legs[0].lastValidPath).toEqual(rerouted.legs[0].lastValidPath);

@@ -123,6 +123,10 @@ export interface RouteFailureRow {
   fromLabel: string;
   toLabel: string;
   reason: "missingNode" | "networkDisconnected";
+  /** Present only when reason is "missingNode": the kind of the missing
+   * waypoint(s) — "station" if either endpoint is a missing station, otherwise
+   * "stop". */
+  missingNodeKind?: "stop" | "station";
 }
 
 export interface RoadMutationPreviewView {

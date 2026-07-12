@@ -58,6 +58,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "Each route waypoint must be distinct.";
     case "routeNotFound":
       return `${context.routeId ?? "That route"} no longer exists.`;
+    case "inactiveRoute":
+      return `${context.routeId ?? "That route"} is inactive.`;
     case "structureNotFound":
       return `${context.structureId ?? "That road structure"} no longer exists.`;
     case "invalidPlatform":

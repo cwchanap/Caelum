@@ -201,6 +201,7 @@ export async function removeMapTile(
   if ((await remove.getAttribute("aria-pressed")) !== "true") {
     await remove.click();
   }
+  await expect(remove).toHaveAttribute("aria-pressed", "true");
   await clickMapTile(canvas, tile);
 }
 

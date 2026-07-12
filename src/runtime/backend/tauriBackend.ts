@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   normalizeDispatchResult,
+  normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
 } from "./shared";
 import type {
@@ -43,9 +44,13 @@ export async function createTauriBackend(): Promise<GameBackend> {
       return normalizeRoutePreviewResponse(response);
     },
     async previewRoadMutation(request: RoadMutationPreviewRequest) {
-      return invoke<RoadMutationPreviewResponse>("game_preview_road_mutation", {
-        request,
-      });
+      const response = await invoke<RoadMutationPreviewResponse>(
+        "game_preview_road_mutation",
+        {
+          request,
+        },
+      );
+      return normalizeRoadMutationPreviewResponse(response);
     },
   };
 }

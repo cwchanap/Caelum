@@ -8,6 +8,7 @@ use crate::model::{
 };
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
 use crate::transit::ROAD_COST;
+use crate::transit_nodes::is_present_node;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -838,12 +839,12 @@ fn is_valid_road_placement(state: &GameSnapshot, point: Point) -> bool {
                 .transit
                 .stops
                 .iter()
-                .any(|stop| stop.position == point)
+                .any(|stop| is_present_node(stop.status) && stop.position == point)
             && !state
                 .transit
                 .stations
                 .iter()
-                .any(|station| station.position == point)
+                .any(|station| is_present_node(station.status) && station.position == point)
     })
 }
 

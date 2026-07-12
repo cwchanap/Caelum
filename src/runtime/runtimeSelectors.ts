@@ -321,9 +321,29 @@ function routeFailures(
             fromLabel: waypointLabel(state, leg.fromWaypointId),
             toLabel: waypointLabel(state, leg.toWaypointId),
             reason: leg.status,
+            missingNodeKind:
+              leg.status === "missingNode"
+                ? missingNodeKindForLeg(state, leg)
+                : undefined,
           },
         ],
   );
+}
+
+function missingNodeKindForLeg(
+  state: GameState,
+  leg: RouteLegPath,
+): "stop" | "station" {
+  const fromStation = state.transit.stations.find(
+    (node) => node.id === leg.fromWaypointId,
+  );
+  const toStation = state.transit.stations.find(
+    (node) => node.id === leg.toWaypointId,
+  );
+  if (fromStation?.status === "missing" || toStation?.status === "missing") {
+    return "station";
+  }
+  return "stop";
 }
 
 function selectRouteRow(

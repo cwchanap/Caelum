@@ -522,6 +522,7 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
+    let coarse = trips::tick_trips(&state, 12.5);
     let mut next = state;
     for _ in 0..10 {
         next = trips::tick_trips(&next, 1.25);
@@ -535,6 +536,22 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         TripOutcomeKind::Arrived
     );
     assert!((next.metrics.trip_outcomes[0].time - 12.5).abs() < 0.000_001);
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert!(coarse.active_trips.is_empty());
+    assert_eq!(coarse.metrics.completed_trips, next.metrics.completed_trips);
+    assert_eq!(
+        coarse.metrics.trip_outcomes.len(),
+        next.metrics.trip_outcomes.len()
+    );
+    assert_eq!(
+        coarse.metrics.trip_outcomes[0].outcome,
+        next.metrics.trip_outcomes[0].outcome
+    );
+    assert!(
+        (coarse.metrics.trip_outcomes[0].time - next.metrics.trip_outcomes[0].time).abs()
+            < 0.000_001
+    );
 }
 
 #[test]
@@ -579,6 +596,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
+    let coarse_disembarked = trips::tick_trips(&state, 12.5);
     let mut disembarked = state;
     for _ in 0..10 {
         disembarked = trips::tick_trips(&disembarked, 1.25);
@@ -590,6 +608,16 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     assert_eq!(walking.position, (12, 5).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert_eq!(
+        coarse_disembarked.active_trips.len(),
+        disembarked.active_trips.len()
+    );
+    assert_eq!(
+        coarse_disembarked.metrics.completed_trips,
+        disembarked.metrics.completed_trips
+    );
 
     let arrived = trips::tick_trips(&disembarked, 20.0);
 
@@ -650,6 +678,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
     assert!(state.transit.vehicles[0].passenger_ids.is_empty());
 
+    let coarse_disembarked = trips::tick_trips(&state, 12.5);
     let mut disembarked = state;
     for _ in 0..10 {
         disembarked = trips::tick_trips(&disembarked, 1.25);
@@ -661,6 +690,16 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     assert_eq!(walking.position, (12, 5).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert_eq!(
+        coarse_disembarked.active_trips.len(),
+        disembarked.active_trips.len()
+    );
+    assert_eq!(
+        coarse_disembarked.metrics.completed_trips,
+        disembarked.metrics.completed_trips
+    );
 
     let arrived = trips::tick_trips(&disembarked, 20.0);
 

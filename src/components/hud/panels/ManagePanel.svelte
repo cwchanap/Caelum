@@ -61,13 +61,10 @@
 
   function failureReason(
     reason: "missingNode" | "networkDisconnected",
-    fromLabel: string,
-    toLabel: string,
+    missingNodeKind: "stop" | "station" | undefined,
   ): string {
     if (reason === "networkDisconnected") return "road disconnected";
-    return fromLabel.startsWith("Station") || toLabel.startsWith("Station")
-      ? "missing station"
-      : "missing stop";
+    return missingNodeKind === "station" ? "missing station" : "missing stop";
   }
 </script>
 
@@ -145,8 +142,7 @@
                     <span class="route-failure-detail">
                       {failure.fromLabel} → {failure.toLabel}: {failureReason(
                         failure.reason,
-                        failure.fromLabel,
-                        failure.toLabel,
+                        failure.missingNodeKind,
                       )}
                     </span>
                     <button
