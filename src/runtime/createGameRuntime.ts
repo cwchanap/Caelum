@@ -707,6 +707,11 @@ export async function createGameRuntime({
         if (tokenIsCurrent) {
           backendError = null;
           rejection = result.rejection;
+        } else if (result.applied) {
+          // A superseded save still succeeded in the backend; clear any prior
+          // rejection so a stale failure does not outlive the successful save.
+          backendError = null;
+          rejection = null;
         }
         if (result.applied && tokenIsCurrent) {
           previewCoordinator.invalidateRoute();

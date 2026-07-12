@@ -48,6 +48,12 @@ pub fn find_route_plan(
         }
     }
 
+    // Two-transfer plans: O(S^2 x E1 x E2) candidates, each allocating one
+    // RoutePlan. S is the number of active services (player-authored routes,
+    // bounded by map size) and E is the ride-edge count per service (bounded
+    // by ordered stop pairs). No explicit cap is enforced; the ceiling is
+    // naturally bounded by the number of routes/stops the player can place on
+    // a 28x18 map. Revisit if route counts grow.
     for first in &services {
         for second in &services {
             if first.line_id == second.line_id {

@@ -2227,6 +2227,43 @@ describe("route creation and management", () => {
     ]);
   });
 
+  it("clears a stale rejection when a superseded save succeeds", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    // First attempt on the current draft: rejected, sets a stale rejection.
+    backend.rejectNextDispatchWith(TEST_REJECTION);
+    const firstAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+    await backend.resolveNext();
+    await firstAttempt;
+    expect(runtime.getSnapshot().rejection).toEqual(TEST_REJECTION);
+
+    // Second attempt on the same draft: deferred, will succeed later.
+    const secondAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+
+    // The draft moves on (new instance) before the second attempt resolves,
+    // so its token is no longer current when the success arrives.
+    runtime.cancelRouteDraft();
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    expect(runtime.getSnapshot().rejection).toEqual(TEST_REJECTION);
+
+    await backend.resolveNext();
+    await secondAttempt;
+
+    // A successful save clears the stale rejection even though the
+    // succeeding token is no longer the current draft, and the newer draft
+    // is preserved.
+    expect(runtime.getSnapshot().rejection).toBeNull();
+    expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
+      "stop-001",
+      "stop-002",
+    ]);
+  });
+
   it("leaves queued finish validation to Rust after state changes", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const runtime = await createGameRuntime({ backend });

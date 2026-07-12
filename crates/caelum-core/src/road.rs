@@ -63,7 +63,7 @@ pub fn apply_road_mutation(
         &mut changed_tiles,
         &mut skipped_tiles,
     )?;
-    refresh_automatic_junctions(&mut candidate.map, &changed_tiles)?;
+    refresh_automatic_junctions(&mut candidate.map)?;
     canonicalize_authored_roads(&mut candidate.map);
     Ok(RoadMutationResult {
         snapshot: candidate,
@@ -441,18 +441,17 @@ pub fn author_scenario_road_line(map: &mut GameMap, points: &[Point], preset: Ro
 }
 
 pub fn refresh_all_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
-    let all_points: Vec<_> = map
-        .tiles
-        .iter()
-        .map(|tile| Point {
-            x: tile.x,
-            y: tile.y,
-        })
-        .collect();
-    refresh_automatic_junctions(map, &all_points)
+    refresh_automatic_junctions(map)
 }
 
-fn refresh_automatic_junctions(map: &mut GameMap, _changed_region: &[Point]) -> GameplayResult<()> {
+/// Recompute every automatic junction on the map.
+///
+/// This performs a whole-map scan (not a localized rebuild): junctions can
+/// span multiple tiles and merge/split as adjacent roads change, so the
+/// affected region is not bounded by the edited tiles. `GameMap::tile` is an
+/// O(N) linear scan, so this is ~O(N²) in the tile count — acceptable at the
+/// current 28x18 scenario size; revisit if the map grows.
+fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
     canonicalize_authored_roads(map);
 
     let automatic_ids: HashSet<String> = map
