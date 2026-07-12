@@ -393,14 +393,29 @@ fn no_live_waypoint_keeps_the_current_world_position_as_out_of_service_parking()
 }
 
 #[test]
-#[should_panic(
-    expected = "vehicle vehicle-001 on route route-001 has no exact world position while breaking service"
-)]
-fn broken_transition_rejects_a_vehicle_without_an_exact_world_position() {
+fn broken_transition_skips_a_vehicle_without_an_exact_world_position() {
     let mut fixture = moving_vehicle_with_rider_fixture();
     fixture.state.transit.vehicles[0].path_step_index = usize::MAX;
 
-    let _ = recompute_after_removal(&fixture.state, point(6, 5));
+    let next = recompute_after_removal(&fixture.state, point(6, 5));
+    let skipped_vehicle = vehicle(&next, &fixture.vehicle_id);
+
+    // The route is still broken — the service transition completed.
+    assert!(route(&next, &fixture.route_id).path_broken);
+    // The vehicle was skipped (not parked): it retains its corrupted state
+    // and has no parked position.
+    assert_eq!(skipped_vehicle.path_step_index, usize::MAX);
+    assert!(skipped_vehicle.parked_position.is_none());
+    // The ghost passenger scrub still cleared its passengers.
+    assert!(skipped_vehicle.passenger_ids.is_empty());
+    // The rider was invalidated even though the vehicle was skipped.
+    let rider = next
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == fixture.rider_id)
+        .expect("rider trip exists");
+    assert_eq!(rider.status, TripStatus::Idle);
+    assert!(rider.route_plan.is_none());
 }
 
 #[test]

@@ -294,19 +294,20 @@ fn break_service(
 
     for vehicle_index in vehicle_indexes {
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
-        let vehicle_world = previous
+        let Some(vehicle_world) = previous
             .transit
             .vehicles
             .iter()
             .find(|vehicle| vehicle.id == candidate_vehicle.id)
             .and_then(|vehicle| vehicle_world_position(previous, mode, route_id, vehicle))
             .or_else(|| candidate_vehicle.parked_position.clone())
-            .unwrap_or_else(|| {
-                panic!(
-                    "vehicle {} on route {} has no exact world position while breaking service",
-                    candidate_vehicle.id, route_id
-                )
-            });
+        else {
+            // The operational-route invariant should guarantee a world
+            // position, but a panic here crashes both WASM and Tauri hosts
+            // irrecoverably. Skip parking this vehicle — its passengers are
+            // still invalidated by `invalidate_trips_for_line` below.
+            continue;
+        };
         let target = parking_target(candidate, mode, &waypoint_ids, &vehicle_world);
         let (itinerary_index, parked_world) = target.map_or_else(
             || (None, vehicle_world),
