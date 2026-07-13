@@ -932,6 +932,39 @@ describe("App shell bootstrap", () => {
     );
   });
 
+  it("surfaces a road preview gameplay rejection in the notice", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: {
+          code: "insufficientBudget" as const,
+          context: {
+            requiredBudget: 8_000,
+            availableBudget: 1_000,
+            affectedRouteIds: [],
+          },
+        },
+      },
+    };
+    const { runtime } = createRuntimeHarness({ ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Needs $8,000",
+    );
+  });
+
   it("surfaces a recoverable road preview host error without replacing the shell", () => {
     const ui = {
       ...createUiState(),

@@ -675,6 +675,16 @@ fn project_onto_step(
             sweep_radians,
             ..
         } => {
+            // Determinism caveat: atan2 is a transcendental function whose
+            // result may differ by an ULP between WASM (libm) and native
+            // (host FPU). This is the only path where serialized gameplay
+            // state (vehicle.step_progress) depends on a transcendental.
+            // In practice the divergence is sub-ULP and self-correcting
+            // because the next tick re-derives step_progress from the
+            // world position, which is itself computed from geometry
+            // arithmetic (add/mul) that IS bit-identical across hosts.
+            // Accepted as a known caveat; a cross-host golden test could
+            // be added if divergence is ever observed.
             let mut candidates = vec![0.0, 1.0];
             if sweep_radians.abs() > f64::EPSILON {
                 let world_radians = (world.y - center.y).atan2(world.x - center.x);

@@ -147,14 +147,22 @@ fn tick_trips_substepped(
         // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
         // source is denser than the budget — a correctness regression that would
         // otherwise silently drop the tail of the tick. Surface it in debug/test
-        // builds rather than returning a truncated snapshot.
+        // builds via debug_assert, and in release via eprintln so the truncation
+        // is not silent.
+        let dropped = final_time - next.time;
         debug_assert!(
-            final_time - next.time <= EPSILON,
+            dropped <= EPSILON,
             "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
             next.time,
             final_time,
-            final_time - next.time
+            dropped
         );
+        if dropped > EPSILON {
+            eprintln!(
+                "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
+                next.time, final_time, dropped
+            );
+        }
 
         crate::growth::apply_due_growth_waves(&mut next);
         reset_daily_commute_flags(&mut next);

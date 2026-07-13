@@ -163,22 +163,11 @@ function offsetPath(
   routeId: string,
   corridors: CorridorGroups,
 ): TransitPath {
-  if (path.kind === "road") {
-    return {
-      ...path,
-      steps: path.steps.map((step) => ({
-        ...step,
-        geometry: offsetForRoute(step.geometry, routeId, corridors),
-      })),
-    };
-  }
-  return {
-    ...path,
-    steps: path.steps.map((step) => ({
-      ...step,
-      geometry: offsetForRoute(step.geometry, routeId, corridors),
-    })),
-  };
+  const steps = path.steps.map((step) => ({
+    ...step,
+    geometry: offsetForRoute(step.geometry, routeId, corridors),
+  }));
+  return { ...path, steps } as TransitPath;
 }
 
 function routeLegEndpoints(
@@ -255,6 +244,7 @@ function drawLegs(
 
 function drawDraftLegs(
   ctx: CanvasRenderingContext2D,
+  state: GameState,
   legs: RouteLegPath[],
   color: string,
   lineWidth: number,
@@ -262,15 +252,24 @@ function drawDraftLegs(
   corridors: CorridorGroups,
 ): void {
   for (const leg of legs) {
-    if (leg.currentPath !== null) {
-      drawTransitPath(
-        ctx,
-        leg.currentPath,
-        color,
-        lineWidth,
-        routeId,
-        corridors,
-      );
+    const path = presentationPath(leg);
+    if (path !== null) {
+      drawTransitPath(ctx, path, color, lineWidth, routeId, corridors);
+    } else {
+      const endpoints = routeLegEndpoints(state, leg);
+      if (endpoints.from !== undefined && endpoints.to !== undefined) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        drawPathGeometry(
+          ctx,
+          { kind: "line", from: endpoints.from, to: endpoints.to },
+          center,
+        );
+        ctx.stroke();
+      }
     }
   }
 }
@@ -479,6 +478,7 @@ function renderTransitContents(
     ctx.setLineDash([6, 6]);
     drawDraftLegs(
       ctx,
+      state,
       draftLegs,
       "#f4d35e",
       3,
