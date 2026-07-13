@@ -534,6 +534,7 @@ describe("route selectors", () => {
     expect(selectShellState(state, ui).roadMutationPreview).toEqual({
       generation: 4,
       changedTiles: [{ x: 9, y: 8 }],
+      skippedTiles: [],
       authoredTiles: [],
       generatedStructures: [],
       cost: 1_250,

@@ -147,8 +147,10 @@ fn tick_trips_substepped(
         // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
         // source is denser than the budget — a correctness regression that would
         // otherwise silently drop the tail of the tick. Surface it in debug/test
-        // builds via debug_assert, and in release via eprintln so the truncation
-        // is not silent.
+        // builds via debug_assert. The release-side eprintln was removed because it
+        // is noisy under WASM (each tick logs to the browser console). The growth
+        // and commute spawns below still run unconditionally so the tail is
+        // processed rather than silently discarded.
         let dropped = final_time - next.time;
         debug_assert!(
             dropped <= EPSILON,
@@ -157,12 +159,6 @@ fn tick_trips_substepped(
             final_time,
             dropped
         );
-        if dropped > EPSILON {
-            eprintln!(
-                "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
-                next.time, final_time, dropped
-            );
-        }
 
         crate::growth::apply_due_growth_waves(&mut next);
         reset_daily_commute_flags(&mut next);

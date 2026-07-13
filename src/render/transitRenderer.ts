@@ -514,6 +514,8 @@ function renderTransitContents(
     if (sample === null) {
       continue;
     }
+    const dimmed = emphasizedIds.size > 0 && !emphasizedIds.has(vehicle.lineId);
+    ctx.globalAlpha = dimmed ? UNRELATED_ROUTE_OPACITY : 1;
     ctx.fillStyle = vehicle.mode === "bus" ? colors.bus : colors.metro;
     if (vehicle.mode === "bus" && sample.tangent !== null) {
       ctx.save();
@@ -525,6 +527,7 @@ function renderTransitContents(
       ctx.fillRect(sample.point.x - 7, sample.point.y - 14, 14, 8);
     }
   }
+  ctx.globalAlpha = 1;
 }
 
 export function renderTransit(

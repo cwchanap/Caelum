@@ -193,6 +193,18 @@ impl NetworkCandidate {
     }
 }
 
+/// Facade for the simulation core. Both the WASM and Tauri hosts drive this
+/// same engine: `tick` advances game time, `dispatch` applies a player intent.
+///
+/// # Schema-version invariant
+///
+/// Every `GameSnapshot` produced by this engine carries
+/// [`crate::model::SNAPSHOT_SCHEMA_VERSION`]. The engine itself never ingests an external
+/// snapshot today (there is no save-load or multiplayer API), so it does not
+/// assert the version on input. When a future API accepts snapshots from an
+/// external source, it MUST reject `schema_version != SNAPSHOT_SCHEMA_VERSION`
+/// rather than heuristically loading a legacy format — the TS host boundary
+/// already enforces this in `normalizeRustSnapshot`.
 #[derive(Clone, Debug)]
 pub struct GameEngine {
     snapshot: GameSnapshot,

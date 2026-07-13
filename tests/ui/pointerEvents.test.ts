@@ -226,7 +226,10 @@ async function flushRuntime(): Promise<void> {
 
 /** Mount the runtime canvas against the real board size and return it. */
 async function mount() {
-  const runtime = await createGameRuntime({ backend: backendSpy() });
+  const runtime = await createGameRuntime({
+    hoverPreviewDebounceMs: 0,
+    backend: backendSpy(),
+  });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;
   const boardHeight = map.height * tileSize;

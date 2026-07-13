@@ -1,7 +1,9 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
 
-use crate::heading::{offset, offset_components, opposite};
+use crate::heading::{
+    canonical_headings, heading_key, heading_rank, offset, offset_components, opposite,
+};
 use crate::model::{
     GameMap, Heading, MovementKind, PathGeometry, Point, RoadPathStep, RoadStructure, TransitPath,
     TripPosition,
@@ -536,26 +538,4 @@ fn is_road(map: &GameMap, point: Point) -> bool {
 
 fn manhattan(first: Point, second: Point) -> u32 {
     first.x.abs_diff(second.x) + first.y.abs_diff(second.y)
-}
-
-fn canonical_headings() -> [Heading; 4] {
-    [Heading::North, Heading::East, Heading::South, Heading::West]
-}
-
-fn heading_rank(heading: Heading) -> u8 {
-    match heading {
-        Heading::North => 0,
-        Heading::East => 1,
-        Heading::South => 2,
-        Heading::West => 3,
-    }
-}
-
-fn heading_key(heading: Heading) -> &'static str {
-    match heading {
-        Heading::North => "north",
-        Heading::East => "east",
-        Heading::South => "south",
-        Heading::West => "west",
-    }
 }

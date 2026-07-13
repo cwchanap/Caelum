@@ -1,5 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { GameplayRejection } from "../../src/domain/types";
+import {
+  SNAPSHOT_SCHEMA_VERSION,
+  type GameplayRejection,
+} from "../../src/domain/types";
 import type {
   DispatchContext,
   DispatchResult,
@@ -117,6 +120,15 @@ describe("Rust backend contract", () => {
     // scenario).
     expect(snapshot.scenario.growthWaves).toEqual([]);
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
+  });
+
+  it("rejects a snapshot with an unsupported schema version", () => {
+    const stale = createRustSnapshot({
+      schemaVersion: 1 as unknown as typeof SNAPSHOT_SCHEMA_VERSION,
+    });
+    expect(() => normalizeRustSnapshot(stale)).toThrow(
+      "Unsupported snapshot schema version: 1",
+    );
   });
 
   it("normalizes committed bus and metro route path options to explicit nulls", () => {

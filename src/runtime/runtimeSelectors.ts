@@ -35,8 +35,10 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   growth: "Growth",
 };
 
+const budgetFormat = new Intl.NumberFormat("en-US");
+
 export function formatBudget(budget: number): string {
-  return `$${budget.toLocaleString()}`;
+  return `$${budgetFormat.format(budget)}`;
 }
 
 function formatSnapshotClock(state: GameState): string {
@@ -369,7 +371,7 @@ function selectRouteRow(
   };
 }
 
-function buildRoadMutationPreview(
+export function buildRoadMutationPreview(
   state: GameState,
   ui: UiState,
 ): RoadMutationPreviewView | null {
@@ -380,6 +382,7 @@ function buildRoadMutationPreview(
   return {
     generation: preview.generation,
     changedTiles: preview.changedTiles,
+    skippedTiles: preview.skippedTiles,
     authoredTiles: preview.authoredTiles,
     generatedStructures: preview.generatedStructures,
     cost: preview.cost,

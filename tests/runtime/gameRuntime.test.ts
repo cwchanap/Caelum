@@ -854,7 +854,10 @@ describe("Game Runtime", () => {
       },
     });
     const routePreviews = deferredPreviewBackend(initial);
-    const runtime = await createGameRuntime({ backend: routePreviews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: routePreviews.backend,
+    });
 
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 1, y: 1 });
@@ -887,7 +890,10 @@ describe("Game Runtime", () => {
       },
     });
     const previews = deferredPreviewBackend(initial);
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 1, y: 1 });
@@ -919,7 +925,10 @@ describe("Game Runtime", () => {
       },
     });
     const previews = deferredPreviewBackend(initial);
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
     const listener = vi.fn();
     runtime.subscribe(listener);
 
@@ -932,7 +941,10 @@ describe("Game Runtime", () => {
     await flushPromises();
 
     expect(runtime.getSnapshot().ui.routeDraft?.preview).toBeNull();
-    expect(listener).not.toHaveBeenCalled();
+    // The invalidated response is ignored (no preview applied), but
+    // previewPending is cleared so the draft is not stranded in
+    // "Checking route…" after stop().
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(false);
   });
 
   it("runs route previews outside the gameplay dispatch queue", async () => {
@@ -951,6 +963,7 @@ describe("Game Runtime", () => {
       () => new Promise<RoutePreviewResponse>(() => undefined),
     );
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, dispatch, previewRoute },
     });
     runtime.setTool("busRoute");
@@ -965,7 +978,10 @@ describe("Game Runtime", () => {
 
   it("ignores road generation 1 after generation 2 is current", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.previewRoadMutation({ type: "layRoad", point: { x: 5, y: 5 } });
     runtime.previewRoadMutation({ type: "layRoad", point: { x: 6, y: 5 } });
@@ -983,6 +999,7 @@ describe("Game Runtime", () => {
     const base = backendSpy();
     const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, previewRoadMutation },
     });
     runtime.armRoundabout("compact2x2");
@@ -1006,6 +1023,7 @@ describe("Game Runtime", () => {
     const base = backendSpy();
     const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, previewRoadMutation },
     });
 
@@ -1027,6 +1045,7 @@ describe("Game Runtime", () => {
     const base = backendSpy();
     const dispatch = vi.fn(base.dispatch.bind(base));
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, dispatch },
     });
     runtime.armRoundabout("standard3x3");
@@ -1040,7 +1059,10 @@ describe("Game Runtime", () => {
 
   it("keeps only the latest roundabout hover preview", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.armRoundabout("compact2x2");
     runtime.setHoverTile({ x: 5, y: 5 });
@@ -1067,7 +1089,10 @@ describe("Game Runtime", () => {
 
   it("ignores a stale road preview failure after a newer hover wins", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.armRoundabout("compact2x2");
     runtime.setHoverTile({ x: 5, y: 5 });
@@ -1085,7 +1110,10 @@ describe("Game Runtime", () => {
 
   it("surfaces a current road preview host failure nonfatally and recovers", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.armRoundabout("standard3x3");
     runtime.setHoverTile({ x: 5, y: 5 });
@@ -1129,7 +1157,10 @@ describe("Game Runtime", () => {
       },
     });
     const previews = deferredPreviewBackend(initial);
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
 
     runtime.setTool("busRoute");
     runtime.handleTileClick({ x: 1, y: 1 });
@@ -1160,7 +1191,10 @@ describe("Game Runtime", () => {
   });
 
   it("manages game and UI state with shell-friendly selectors", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.setTool("busStop");
     await runtime.togglePause();
@@ -1175,7 +1209,10 @@ describe("Game Runtime", () => {
   });
 
   it("publishes state changes to subscribers", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     const snapshots: RuntimeSnapshot[] = [];
 
     const unsubscribe = runtime.subscribe((snapshot) => {
@@ -1193,7 +1230,10 @@ describe("Game Runtime", () => {
 
   it("resets through the backend and resets UI state", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("busRoute");
     await runtime.togglePause();
@@ -1208,7 +1248,10 @@ describe("Game Runtime", () => {
   });
 
   it("resets transient UI state without changing simulation state", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     await runtime.togglePause();
     await runtime.setSpeed(4);
@@ -1240,7 +1283,10 @@ describe("Game Runtime", () => {
   });
 
   it("manages simulation lifecycle", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.start();
     expect(runtime.isRunning()).toBe(true);
@@ -1255,7 +1301,10 @@ describe("Game Runtime", () => {
     vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
 
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.start();
     expect(requestAnimationFrame).not.toHaveBeenCalled();
@@ -1280,7 +1329,10 @@ describe("Game Runtime", () => {
     );
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.start();
     await runtime.togglePause();
 
@@ -1299,7 +1351,10 @@ describe("Game Runtime", () => {
   });
 
   it("handles tool changes", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.setTool("metroStation");
     expect(runtime.getSnapshot().ui.activeTool).toBe("metroStation");
@@ -1309,7 +1364,10 @@ describe("Game Runtime", () => {
   });
 
   it("selects buildings separately from route tools and rotates them", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.setBuilding("busTerminal");
     runtime.rotateBuilding();
@@ -1324,7 +1382,10 @@ describe("Game Runtime", () => {
 
   it("dispatches selected building placement through the backend on tile click", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setBuilding("smallHouse");
     runtime.rotateBuilding();
@@ -1346,7 +1407,10 @@ describe("Game Runtime", () => {
   it.each(["busRoute", "remove", "inspect"] as const)(
     "clears building selection when switching to %s",
     async (tool) => {
-      const runtime = await createGameRuntime({ backend: backendSpy() });
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(),
+      });
 
       runtime.setBuilding("largeHouse");
       runtime.rotateBuilding();
@@ -1361,7 +1425,10 @@ describe("Game Runtime", () => {
   );
 
   it("handles overlay changes", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.setOverlay("coverage");
     expect(runtime.getSnapshot().ui.activeOverlay).toBe("coverage");
@@ -1372,7 +1439,10 @@ describe("Game Runtime", () => {
 
   it("dispatches pause and speed through the Rust backend", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     await runtime.togglePause();
     await runtime.setSpeed(4);
@@ -1388,7 +1458,10 @@ describe("Game Runtime", () => {
 
   it("derives rapid pause toggles from the latest queued state", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     const first = runtime.togglePause();
     const second = runtime.togglePause();
@@ -1404,7 +1477,10 @@ describe("Game Runtime", () => {
   });
 
   it("advances simulation time when ticking and unpaused", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     const beforeTime = runtime.getSnapshot().state.time;
     await runtime.togglePause();
@@ -1415,7 +1491,10 @@ describe("Game Runtime", () => {
   });
 
   it("does not advance time when paused", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     const beforeTime = runtime.getSnapshot().state.time;
     await runtime.tick(1);
@@ -1429,7 +1508,10 @@ describe("Game Runtime", () => {
     backend.tick = vi.fn(async () => {
       throw new Error("backend unavailable");
     });
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.start();
     const snapshot = await runtime.tick(1);
@@ -1459,7 +1541,10 @@ describe("Game Runtime", () => {
       dispatchCalls += 1;
       return baseDispatch(intent);
     });
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.start();
     await runtime.tick(1);
@@ -1495,7 +1580,10 @@ describe("Game Runtime", () => {
       }
       return result;
     });
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     // Enqueue dispatch A (will suspend, then throw when resolved).
     runtime.setTool("busStop");
@@ -1517,7 +1605,10 @@ describe("Game Runtime", () => {
 
   it("handles inspect tile clicks without backend dispatch", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("inspect");
     const snapshot = await runtime.handleTileClick({ x: 5, y: 5 });
@@ -1527,7 +1618,10 @@ describe("Game Runtime", () => {
   });
 
   it("sets HUD category to data", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     const before = runtime.getSnapshot().ui.activeHudCategory;
     runtime.setHudCategory("data");
@@ -1538,7 +1632,10 @@ describe("Game Runtime", () => {
   });
 
   it("collapses the drawer when setHudCategory(null) is dispatched", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setHudCategory("build");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
     runtime.setHudCategory(null);
@@ -1547,6 +1644,7 @@ describe("Game Runtime", () => {
 
   it("auto-opens the inspect drawer when a node is clicked, and collapses it on empty tiles", async () => {
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: backendSpy(
         fullRustSnapshot({
           transit: {
@@ -1575,7 +1673,10 @@ describe("Game Runtime", () => {
 describe("runtime assignRouteToPlatform", () => {
   it("dispatches route platform reassignment through the backend", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     await runtime.assignRouteToPlatform("stop-001", "route-001", "stop-001-p1");
 
@@ -1590,7 +1691,10 @@ describe("runtime assignRouteToPlatform", () => {
 
 describe("runtime road preset", () => {
   it("sets the road preset and preserves it across tool switches", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setRoadPreset("oneWay");
     expect(runtime.getSnapshot().ui.roadPreset).toBe("oneWay");
     runtime.setTool("track");
@@ -1602,7 +1706,10 @@ describe("runtime road preset", () => {
 
 describe("build category navigation", () => {
   it("setBuildCategory changes buildCategory without closing the drawer", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setHudCategory("build");
     const snap = runtime.setBuildCategory("bus");
     expect(snap.ui.buildCategory).toBe("bus");
@@ -1610,13 +1717,19 @@ describe("build category navigation", () => {
   });
 
   it("setBuildCategory(null) returns to the category root", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setBuildCategory("bus");
     expect(runtime.setBuildCategory(null).ui.buildCategory).toBeNull();
   });
 
   it("selecting a tool/area/building resets buildCategory to null", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setBuildCategory("residential");
     expect(runtime.setBuilding("smallHouse").ui.buildCategory).toBeNull();
     runtime.setBuildCategory("road");
@@ -1626,7 +1739,10 @@ describe("build category navigation", () => {
   });
 
   it("leaving the Build category via setHudCategory resets buildCategory to null", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setHudCategory("build");
     runtime.setBuildCategory("bus");
     expect(runtime.setHudCategory("area").ui.buildCategory).toBeNull();
@@ -1637,7 +1753,10 @@ describe("build category navigation", () => {
   });
 
   it("armRoad selects the road tool with the given preset and closes the drawer", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setHudCategory("build");
     const snap = runtime.armRoad("dualBidirectional");
     expect(snap.ui.activeTool).toBe("road");
@@ -1712,7 +1831,10 @@ describe("route creation and management", () => {
   }
 
   async function withTwoStops(backend = backendSpy(routeSnapshot())) {
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("busRoute");
     await runtime.handleTileClick({ x: 14, y: 7 });
     await runtime.handleTileClick({ x: 14, y: 8 });
@@ -1737,7 +1859,10 @@ describe("route creation and management", () => {
 
   it("editing leaves committed service unchanged until Save succeeds", async () => {
     const backend = connectedRouteBackend();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     const committed = runtime.getSnapshot().state.transit.routes[0];
 
     runtime.startRouteEdit(committed.id);
@@ -1779,6 +1904,7 @@ describe("route creation and management", () => {
       routePreview(request.generation, request.waypointIds),
     );
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, previewRoute },
     });
     runtime.startRouteEdit("route-001");
@@ -1801,6 +1927,7 @@ describe("route creation and management", () => {
       routePreview(request.generation, request.waypointIds),
     );
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, previewRoute },
     });
     runtime.startRouteEdit("route-001");
@@ -1826,6 +1953,7 @@ describe("route creation and management", () => {
 
   it("surfaces and clears a typed invalid waypoint selection error", async () => {
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: connectedRouteBackend(),
     });
     runtime.startRouteEdit("route-001");
@@ -1846,7 +1974,10 @@ describe("route creation and management", () => {
 
   it("keeps a local interaction error when an older preview resolves", async () => {
     const previews = deferredPreviewBackend(routeSnapshotWithRoute());
-    const runtime = await createGameRuntime({ backend: previews.backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
     runtime.startRouteEdit("route-001");
     runtime.selectRouteWaypoint(99, "replace");
 
@@ -1861,6 +1992,7 @@ describe("route creation and management", () => {
 
   it("surfaces typed errors for invalid remove and move operations", async () => {
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: connectedRouteBackend(),
     });
     runtime.startRouteEdit("route-001");
@@ -1912,7 +2044,10 @@ describe("route creation and management", () => {
           };
         },
       };
-      const runtime = await createGameRuntime({ backend });
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
       runtime.startRouteEdit("route-001");
       await flushPromises();
       const before = runtime.getSnapshot().ui.routeDraft;
@@ -1934,7 +2069,10 @@ describe("route creation and management", () => {
         return routePreview(request.generation, request.waypointIds);
       },
     };
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     const save = runtime.saveRouteDraft();
@@ -1958,7 +2096,10 @@ describe("route creation and management", () => {
         return routePreview(request.generation, request.waypointIds);
       },
     };
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     const oldInstance = runtime.getSnapshot().ui.routeDraft!.instanceId;
@@ -1980,7 +2121,10 @@ describe("route creation and management", () => {
 
   it("does not attach an old Save rejection to a replacement draft", async () => {
     const saves = deferredDispatchBackend(routeSnapshotWithRoute());
-    const runtime = await createGameRuntime({ backend: saves });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: saves,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     const save = runtime.saveRouteDraft();
@@ -2003,7 +2147,10 @@ describe("route creation and management", () => {
 
   it("does not attach an old Save host error to a replacement draft", async () => {
     const saves = deferredDispatchBackend(routeSnapshotWithRoute());
-    const runtime = await createGameRuntime({ backend: saves });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: saves,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     const save = runtime.saveRouteDraft();
@@ -2027,6 +2174,7 @@ describe("route creation and management", () => {
       (runtime: RuntimeController) => runtime.handleEscape(),
     ]) {
       const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
         backend: connectedRouteBackend(),
       });
       const committed = structuredClone(
@@ -2073,7 +2221,10 @@ describe("route creation and management", () => {
         };
       },
     };
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     await runtime.saveRouteDraft();
@@ -2091,6 +2242,7 @@ describe("route creation and management", () => {
     const base = connectedRouteBackend();
     const previewRoute = vi.fn(base.previewRoute.bind(base));
     const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
       backend: { ...base, previewRoute },
     });
     runtime.startRouteEdit("route-001");
@@ -2136,7 +2288,10 @@ describe("route creation and management", () => {
         };
       },
     };
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.startRouteEdit("route-001");
     await flushPromises();
     await runtime.saveRouteDraft();
@@ -2320,7 +2475,10 @@ describe("route creation and management", () => {
 
   it("leaves queued finish validation to Rust after state changes", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("busStop");
     runtime.handleTileClick({ x: 20, y: 20 });
@@ -2446,7 +2604,10 @@ describe("route creation and management", () => {
 
   it("derives rapid route active toggles from the latest queued state", async () => {
     const backend = backendSpy(routeSnapshotWithRoute(true));
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     const first = runtime.toggleRouteActive("route-001");
     const second = runtime.toggleRouteActive("route-001");
@@ -2470,7 +2631,10 @@ describe("route creation and management", () => {
 
   it("focuses a route failure without toggling route selection", async () => {
     const backend = backendSpy(routeSnapshotWithRoute(true));
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     const snapshot = runtime.focusRouteFailure("route-001", 2);
 
@@ -2492,7 +2656,10 @@ describe("route creation and management", () => {
 
   it("keeps the selected route when the backend rejects the delete", async () => {
     const backend = backendSpy(routeSnapshotWithRoute(true));
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.selectRoute("route-001");
     expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
@@ -2508,7 +2675,10 @@ describe("route creation and management", () => {
 
   it("surfaces gameplay rejections from regular dispatches on the snapshot", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     backend.rejectNextDispatch();
     const snapshot = await runtime.setSpeed(2);
@@ -2523,7 +2693,10 @@ describe("route creation and management", () => {
 
   it("preserves a placement rejection across a tick (not cleared ~16ms later)", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     await runtime.togglePause();
 
     // Surface a rejection via a rejected dispatch.
@@ -2551,7 +2724,10 @@ describe("runtime road drag", () => {
 
   it("commits road drag as one Rust layRoadLine intent", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("road");
     runtime.setRoadPreset("oneWay");
@@ -2573,7 +2749,10 @@ describe("runtime road drag", () => {
 
   it("does not let a slow drag completion clear a newer drag", async () => {
     const backend = deferredDispatchBackend();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
@@ -2596,7 +2775,10 @@ describe("runtime road drag", () => {
 
   it("clears the drag synchronously when committing, before the backend resolves", async () => {
     const backend = deferredDispatchBackend();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
@@ -2614,7 +2796,10 @@ describe("runtime road drag", () => {
   });
 
   it("builds a road line from startDrag -> move -> commitDrag", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
@@ -2627,7 +2812,10 @@ describe("runtime road drag", () => {
   });
 
   it("treats a zero-length drag as a tap (cycles an existing road's direction)", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
@@ -2650,7 +2838,10 @@ describe("runtime road drag", () => {
     // the draining drag had just turned into a road, instead of cycling that
     // road's direction.
     const backend = deferredDispatchBackend();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
@@ -2686,7 +2877,10 @@ describe("runtime road drag", () => {
   });
 
   it("bulldozes a line with the remove tool drag", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
@@ -2702,7 +2896,10 @@ describe("runtime road drag", () => {
   });
 
   it("cancelDrag clears the drag without building", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 4, y: 0 });
@@ -2712,14 +2909,20 @@ describe("runtime road drag", () => {
   });
 
   it("startDrag captures the tool and ignores a non-drag tool", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("inspect");
     runtime.startDrag({ x: 1, y: 0 });
     expect(runtime.getSnapshot().ui.drag).toBeNull();
   });
 
   it("startDrag on the area tool without a selected area is a no-op", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("area");
 
     const before = runtime.getSnapshot();
@@ -2731,7 +2934,10 @@ describe("runtime road drag", () => {
   });
 
   it("setDragCurrent ignores an off-map (null) move so the preview holds", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("road");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 4, y: 0 });
@@ -2750,7 +2956,10 @@ describe("runtime area drag", () => {
   }
 
   it("selects an area independently from buildings and tools", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
 
     runtime.setArea("residential");
 
@@ -2766,7 +2975,10 @@ describe("runtime area drag", () => {
   });
 
   it("paints an area rectangle from startDrag -> move -> commitDrag", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setArea("commercial");
     runtime.startDrag({ x: 1, y: 1 });
     runtime.setDragCurrent({ x: 2, y: 2 });
@@ -2782,7 +2994,10 @@ describe("runtime area drag", () => {
   });
 
   it("paints a single tile area drag", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setArea("office");
     runtime.startDrag({ x: 1, y: 1 });
 
@@ -2792,7 +3007,10 @@ describe("runtime area drag", () => {
   });
 
   it("clears area selection when a building is selected", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setArea("residential");
     runtime.setBuilding("smallHouse");
 
@@ -2802,7 +3020,10 @@ describe("runtime area drag", () => {
 
 describe("build drawer auto-hide", () => {
   it("closes the drawer when a tool, building, or area is selected, but not on preset change", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setHudCategory("build");
     runtime.setTool("road");
     expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
@@ -2893,7 +3114,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("dispatches addBusStop through handleTileClick with the busStop tool", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("busStop");
     await runtime.handleTileClick({ x: 5, y: 5 });
     expect(backend.intents).toContainEqual({
@@ -2904,7 +3128,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("dispatches addMetroStation through handleTileClick with the metroStation tool", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("metroStation");
     await runtime.handleTileClick({ x: 4, y: 4 });
     expect(backend.intents).toContainEqual({
@@ -2915,7 +3142,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("dispatches layTrack through handleTileClick with the track tool", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("track");
     await runtime.handleTileClick({ x: 2, y: 3 });
     expect(backend.intents).toContainEqual({
@@ -2926,7 +3156,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("dispatches removeAtTile through handleTileClick with the remove tool", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("remove");
     await runtime.handleTileClick({ x: 2, y: 3 });
     expect(backend.intents).toContainEqual({
@@ -2936,7 +3169,10 @@ describe("fake backend applyIntent coverage", () => {
   });
 
   it("commitDrag is a no-op when no drag gesture is active", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     const before = runtime.getSnapshot();
     await runtime.commitDrag();
     const after = runtime.getSnapshot();
@@ -2946,7 +3182,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("commits a zero-length track drag as a single layTrack intent", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("track");
     runtime.startDrag({ x: 3, y: 3 });
     await runtime.commitDrag();
@@ -2958,7 +3197,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("commits a multi-tile track drag as a layTrackLine intent", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     runtime.setTool("track");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 3, y: 0 });
@@ -2974,7 +3216,10 @@ describe("fake backend applyIntent coverage", () => {
   });
 
   it("saveRouteDraft is a no-op when the active tool is not a route tool", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     runtime.setTool("inspect");
     const before = runtime.getSnapshot();
     await runtime.saveRouteDraft();
@@ -2985,7 +3230,10 @@ describe("fake backend applyIntent coverage", () => {
 
   it("saveRouteDraft defers one-way closing validation to Rust", async () => {
     const backend = backendSpy();
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
     // Build a one-way road so the closing loop can't path back.
     runtime.setTool("road");
     runtime.setRoadPreset("oneWay");
@@ -3012,7 +3260,10 @@ describe("fake backend applyIntent coverage", () => {
   });
 
   it("toggleRouteActive is a no-op when the route does not exist at call time", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     const before = runtime.getSnapshot();
     await runtime.toggleRouteActive("route-999");
     const after = runtime.getSnapshot();
@@ -3050,7 +3301,10 @@ describe("fake backend applyIntent coverage", () => {
       },
     });
     const backend = deferredDispatchBackend(snapshotWithRoute);
-    const runtime = await createGameRuntime({ backend });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
 
     // Queue a deleteRoute (deferred — won't resolve until resolveNext).
     const deletePromise = runtime.deleteRoute("route-001");
@@ -3075,7 +3329,10 @@ describe("fake backend applyIntent coverage", () => {
   });
 
   it("dismissRejection is a no-op when there is no active rejection", async () => {
-    const runtime = await createGameRuntime({ backend: backendSpy() });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
     const before = runtime.getSnapshot();
     runtime.dismissRejection();
     const after = runtime.getSnapshot();

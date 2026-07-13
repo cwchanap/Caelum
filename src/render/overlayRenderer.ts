@@ -10,12 +10,15 @@ import {
   type TransitPath,
   type TripPosition,
 } from "../domain/types";
+import type { AuthoredRoadTilePreview } from "../runtime/backend/types";
+import {
+  buildRoadMutationPreview,
+  selectRouteEditorView,
+} from "../runtime/runtimeSelectors";
 import type {
-  AuthoredRoadTilePreview,
-  RoadMutationPreviewResponse,
-} from "../runtime/backend/types";
-import { selectRouteEditorView } from "../runtime/runtimeSelectors";
-import type { RouteEditorView } from "../runtime/types";
+  RoadMutationPreviewView,
+  RouteEditorView,
+} from "../runtime/types";
 import {
   BUILDING_CATALOG,
   getBuildingFootprint,
@@ -233,37 +236,36 @@ function drawAuthoredRoadConnections(
 }
 
 function compareRouteImpacts(
-  left: RoadMutationPreviewResponse["routeImpacts"][number],
-  right: RoadMutationPreviewResponse["routeImpacts"][number],
+  left: RoadMutationPreviewView["routeImpacts"][number],
+  right: RoadMutationPreviewView["routeImpacts"][number],
 ): number {
-  if (left.routeId !== right.routeId) {
-    return left.routeId < right.routeId ? -1 : 1;
+  if (left.routeName !== right.routeName) {
+    return left.routeName < right.routeName ? -1 : 1;
   }
   if (left.kind === right.kind) return 0;
   return left.kind < right.kind ? -1 : 1;
 }
 
-function roadPreviewFeedback(preview: RoadMutationPreviewResponse): string {
+function roadPreviewFeedback(preview: RoadMutationPreviewView): string {
   const impacts = [...preview.routeImpacts]
     .sort(compareRouteImpacts)
-    .map((impact) => `${impact.routeId} ${impact.kind}`)
+    .map((impact) => `${impact.routeName} ${impact.kind}`)
     .join(" · ");
-  const cost = `$${preview.cost.toLocaleString()}`;
+  const cost = preview.costLabel;
   return impacts.length === 0 ? cost : `${cost} · ${impacts}`;
 }
 
-function roadPreviewAnchor(preview: RoadMutationPreviewResponse): Point {
+function roadPreviewAnchor(preview: RoadMutationPreviewView): Point {
   return (
     preview.authoredTiles[0]?.point ??
     preview.changedTiles[0] ??
-    preview.skippedTiles[0] ??
     preview.generatedStructures[0]?.footprint[0] ?? { x: 0, y: 0 }
   );
 }
 
 function renderRoadPreviewFeedback(
   ctx: CanvasRenderingContext2D,
-  preview: RoadMutationPreviewResponse,
+  preview: RoadMutationPreviewView,
 ): void {
   const text = roadPreviewFeedback(preview);
   const anchor = roadPreviewAnchor(preview);
@@ -365,11 +367,12 @@ function renderRoundaboutPreviewStructure(
 
 function renderRoadMutationPreview(
   ctx: CanvasRenderingContext2D,
+  state: GameState,
   ui: UiState,
   removal: boolean,
 ): void {
-  const preview = ui.roadMutationPreview;
-  if (preview === null || preview.generation !== ui.roadPreviewGeneration) {
+  const preview = buildRoadMutationPreview(state, ui);
+  if (preview === null) {
     return;
   }
   const changed = new Set(
@@ -489,7 +492,7 @@ function renderDragPreview(
     return;
   }
 
-  renderRoadMutationPreview(ctx, ui, gesture.tool === "remove");
+  renderRoadMutationPreview(ctx, state, ui, gesture.tool === "remove");
 }
 
 function transitNode(state: GameState, nodeId: string) {
@@ -771,7 +774,7 @@ export function renderOverlays(
     ui.activeTool === "roundabout" ||
     ui.activeTool === "remove"
   ) {
-    renderRoadMutationPreview(ctx, ui, ui.activeTool === "remove");
+    renderRoadMutationPreview(ctx, state, ui, ui.activeTool === "remove");
     if (ui.roadMutationPreview !== null) {
       return;
     }

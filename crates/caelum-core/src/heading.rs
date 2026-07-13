@@ -28,3 +28,30 @@ pub fn offset(point: Point, heading: Heading) -> Point {
         y: point.y + dy,
     }
 }
+
+/// All four cardinal headings in canonical (N, E, S, W) order.
+pub fn canonical_headings() -> [Heading; 4] {
+    [Heading::North, Heading::East, Heading::South, Heading::West]
+}
+
+/// Stable rank (0–3) for a heading, used for deterministic tie-breaking in
+/// pathfinding and transition ordering. North < East < South < West.
+pub fn heading_rank(heading: Heading) -> u8 {
+    match heading {
+        Heading::North => 0,
+        Heading::East => 1,
+        Heading::South => 2,
+        Heading::West => 3,
+    }
+}
+
+/// Stable string key for a heading, used in `stable_key` generation so
+/// transition identity is deterministic across runs.
+pub fn heading_key(heading: Heading) -> &'static str {
+    match heading {
+        Heading::North => "north",
+        Heading::East => "east",
+        Heading::South => "south",
+        Heading::West => "west",
+    }
+}

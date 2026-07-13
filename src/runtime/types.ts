@@ -132,6 +132,7 @@ export interface RouteFailureRow {
 export interface RoadMutationPreviewView {
   generation: number;
   changedTiles: Point[];
+  skippedTiles: Point[];
   authoredTiles: AuthoredRoadTilePreview[];
   generatedStructures: RoadStructure[];
   cost: number;

@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
-use crate::heading::{offset, opposite};
+use crate::heading::{canonical_headings, heading_key, heading_rank, offset, opposite};
 use crate::model::{
     GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RoadPort, RoadStructure,
     RoundaboutSize, TripPosition,
@@ -754,27 +754,5 @@ fn heading_between(from: Point, to: Point) -> Heading {
         (0, 1) => Heading::South,
         (-1, 0) => Heading::West,
         delta => unreachable!("roundabout ring points must be adjacent: {delta:?}"),
-    }
-}
-
-fn canonical_headings() -> [Heading; 4] {
-    [Heading::North, Heading::East, Heading::South, Heading::West]
-}
-
-fn heading_rank(heading: Heading) -> u8 {
-    match heading {
-        Heading::North => 0,
-        Heading::East => 1,
-        Heading::South => 2,
-        Heading::West => 3,
-    }
-}
-
-fn heading_key(heading: Heading) -> &'static str {
-    match heading {
-        Heading::North => "north",
-        Heading::East => "east",
-        Heading::South => "south",
-        Heading::West => "west",
     }
 }

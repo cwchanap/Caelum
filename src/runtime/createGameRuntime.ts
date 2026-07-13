@@ -47,6 +47,10 @@ const rotations = [0, 90, 180, 270] as const;
 
 interface CreateGameRuntimeOptions {
   backend: GameBackend;
+  /** Trailing debounce delay for hover-triggered road mutation previews, in
+   *  milliseconds. Defaults to 50ms to coalesce rapid pointermove events on
+   *  Tauri (IPC round-trip per event). Set to 0 to disable debouncing. */
+  hoverPreviewDebounceMs?: number;
 }
 
 function nextToolUiState(activeTool: Tool, current = createUiState()) {
@@ -131,6 +135,7 @@ function nextBuildingUiState(
 
 export async function createGameRuntime({
   backend,
+  hoverPreviewDebounceMs = 50,
 }: CreateGameRuntimeOptions): Promise<RuntimeController> {
   let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
@@ -141,6 +146,7 @@ export async function createGameRuntime({
   let nextRouteDraftInstanceId = 1;
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
+  let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
@@ -225,7 +231,15 @@ export async function createGameRuntime({
     return publish();
   };
 
+  const clearHoverPreviewTimer = (): void => {
+    if (hoverPreviewTimer !== null) {
+      clearTimeout(hoverPreviewTimer);
+      hoverPreviewTimer = null;
+    }
+  };
+
   const stop = (): void => {
+    clearHoverPreviewTimer();
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
@@ -560,11 +574,20 @@ export async function createGameRuntime({
       .then((response) => {
         const current = ui.routeDraft;
         if (
-          response === null ||
           current === null ||
           current.instanceId !== instanceId ||
           current.generation !== generation
         ) {
+          return;
+        }
+        // A null response means the coordinator invalidated the request
+        // (e.g. stop() advanced the epoch). The draft still matches, so clear
+        // previewPending to avoid stranding the UI in "Checking route…".
+        if (response === null) {
+          commit(state, {
+            ...ui,
+            routeDraft: { ...current, previewPending: false },
+          });
           return;
         }
         commit(state, {
@@ -1366,6 +1389,7 @@ export async function createGameRuntime({
         return commit(state, ui);
       }
       if (point === null) {
+        clearHoverPreviewTimer();
         invalidateRoadPreview();
       }
       const snapshot = commit(state, {
@@ -1379,9 +1403,25 @@ export async function createGameRuntime({
           : {}),
       });
       const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
+      if (mutation === null) {
+        return snapshot;
+      }
+      // Debounce the hover-triggered preview so rapid pointermove events
+      // coalesce into a single IPC round-trip (important on Tauri). A delay
+      // of 0 disables debouncing (used in tests).
+      clearHoverPreviewTimer();
+      if (hoverPreviewDebounceMs <= 0) {
+        requestRoadMutationPreview(mutation);
+        return snapshot;
+      }
+      hoverPreviewTimer = setTimeout(() => {
+        hoverPreviewTimer = null;
+        if (dead) return;
+        const currentMutation = roadMutationForUi(ui);
+        if (currentMutation === null) return;
+        requestRoadMutationPreview(currentMutation);
+      }, hoverPreviewDebounceMs);
+      return snapshot;
     },
     previewRoadMutation(mutation) {
       return requestRoadMutationPreview(mutation);
