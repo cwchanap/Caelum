@@ -16,14 +16,12 @@ fn path_points(path: &TransitPath, origin: Point, destination: Point) -> Vec<(i3
     };
     for (position, geometry) in geometries {
         points.push(position);
-        if let caelum_core::model::PathGeometry::Line { to, .. }
-        | caelum_core::model::PathGeometry::QuadraticBezier { to, .. } = geometry
-        {
-            points.push(Point {
-                x: to.x.round() as i32,
-                y: to.y.round() as i32,
-            });
-        }
+        let (caelum_core::model::PathGeometry::Line { to, .. }
+        | caelum_core::model::PathGeometry::QuadraticBezier { to, .. }) = geometry;
+        points.push(Point {
+            x: to.x.round() as i32,
+            y: to.y.round() as i32,
+        });
     }
     points.push(destination);
     points.dedup();

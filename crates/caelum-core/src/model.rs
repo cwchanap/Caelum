@@ -423,12 +423,6 @@ pub enum PathGeometry {
         control: TripPosition,
         to: TripPosition,
     },
-    Arc {
-        center: TripPosition,
-        radius: f64,
-        start_radians: f64,
-        sweep_radians: f64,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -17,6 +17,11 @@ pub const LEFT_TURN_MILLIS: u32 = 1_000;
 pub const U_TURN_MILLIS: u32 = 2_000;
 pub const ROUNDABOUT_ENTRY_MILLIS: u32 = 750;
 
+/// Maximum number of transitions in a multi-step terminal reversal path.
+/// A 3×3 roundabout needs at most entry + 7 circulation + exit = 9 steps,
+/// plus a few approach tiles on each side.
+const MAX_REVERSAL_STEPS: u32 = 20;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RoadState {
     pub position: Point,
@@ -56,33 +61,51 @@ impl RoadTopology {
         previous_exit_heading: Heading,
         next_required_entry_heading: Heading,
     ) -> Option<TransitPath> {
-        let transition = self.transition_for(
-            RoadState {
-                position: terminal,
-                incoming_heading: previous_exit_heading,
-            },
-            next_required_entry_heading,
-        )?;
-        if transition.movement != MovementKind::UTurn {
-            return None;
+        let start = RoadState {
+            position: terminal,
+            incoming_heading: previous_exit_heading,
+        };
+        let goal = RoadState {
+            position: terminal,
+            incoming_heading: next_required_entry_heading,
+        };
+
+        // Same heading in and out: no reversal needed (e.g., one-way roads
+        // where the return path naturally continues in the same direction).
+        if start == goal {
+            return Some(TransitPath::Road {
+                steps: Vec::new(),
+                total_travel_seconds: 0.0,
+            });
         }
-        let geometry = transition_geometry(
-            terminal,
-            previous_exit_heading,
-            terminal,
-            next_required_entry_heading,
-        );
-        Some(TransitPath::Road {
-            steps: vec![RoadPathStep {
-                position: terminal,
-                entering_heading: previous_exit_heading,
-                leaving_heading: next_required_entry_heading,
-                movement: MovementKind::UTurn,
-                geometry,
-                travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
-            }],
-            total_travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
-        })
+
+        // Fast path: direct single-transition U-turn at the terminal tile
+        // (bidirectional roads and automatic junctions).
+        if let Some(transition) = self.transition_for(start, next_required_entry_heading) {
+            if transition.movement == MovementKind::UTurn {
+                let geometry = transition_geometry(
+                    terminal,
+                    previous_exit_heading,
+                    terminal,
+                    next_required_entry_heading,
+                );
+                return Some(TransitPath::Road {
+                    steps: vec![RoadPathStep {
+                        position: terminal,
+                        entering_heading: previous_exit_heading,
+                        leaving_heading: next_required_entry_heading,
+                        movement: MovementKind::UTurn,
+                        geometry,
+                        travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+                    }],
+                    total_travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+                });
+            }
+        }
+
+        // Multi-step reversal: bounded Dijkstra through the road network
+        // (e.g., entry → circulation → exit through a roundabout).
+        self.find_reversal_path(start, goal)
     }
 
     #[doc(hidden)]
@@ -96,6 +119,49 @@ impl RoadTopology {
     #[doc(hidden)]
     pub fn contains_ordinary_state(&self, point: Point) -> bool {
         self.transitions.keys().any(|state| state.position == point)
+    }
+
+    /// Bounded Dijkstra from `start` to `goal` within the road topology,
+    /// accepting any non-empty path (at least one transition). Used for
+    /// multi-step terminal reversals (e.g., through a roundabout).
+    fn find_reversal_path(&self, start: RoadState, goal: RoadState) -> Option<TransitPath> {
+        let mut best: BTreeMap<RoadState, PathRank> = BTreeMap::new();
+        let mut parents: BTreeMap<RoadState, (RoadState, RoadTransition)> = BTreeMap::new();
+        let mut heap = BinaryHeap::new();
+
+        let start_rank = PathRank::zero();
+        best.insert(start, start_rank.clone());
+        heap.push(Reverse((start_rank, start)));
+
+        while let Some(Reverse((rank, state))) = heap.pop() {
+            if best.get(&state) != Some(&rank) {
+                continue;
+            }
+
+            // Goal: reached the goal state with at least one transition.
+            if state == goal && rank.movement_count > 0 {
+                return Some(build_road_path(state, rank.total_millis, &parents));
+            }
+
+            // Bound: don't expand beyond the step limit.
+            if rank.movement_count >= MAX_REVERSAL_STEPS {
+                continue;
+            }
+
+            for transition in self.transitions.get(&state).into_iter().flatten() {
+                let next_rank = rank.with_transition(transition);
+                let should_update = best
+                    .get(&transition.to)
+                    .map_or(true, |existing| next_rank < *existing);
+                if !should_update {
+                    continue;
+                }
+                best.insert(transition.to, next_rank.clone());
+                parents.insert(transition.to, (state, transition.clone()));
+                heap.push(Reverse((next_rank, transition.to)));
+            }
+        }
+        None
     }
 }
 

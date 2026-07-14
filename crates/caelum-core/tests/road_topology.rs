@@ -172,7 +172,6 @@ impl DualCrossFixture {
             PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => {
                 point(to.x.round() as i32, to.y.round() as i32)
             }
-            PathGeometry::Arc { .. } => return false,
         };
         self.map
             .tile(destination)
@@ -529,7 +528,7 @@ fn l_t_cross_and_uturn_paths_report_their_actual_movement_steps() {
                 .unwrap();
             assert!(matches!(
                 &step.geometry,
-                PathGeometry::QuadraticBezier { .. } | PathGeometry::Arc { .. }
+                PathGeometry::QuadraticBezier { .. }
             ));
         }
     }
@@ -570,13 +569,11 @@ fn consecutive_geometry_is_continuous_through_right_and_left_turns() {
         for pair in path.road_steps().windows(2) {
             let previous_end = match &pair[0].geometry {
                 PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
-                PathGeometry::Arc { .. } => panic!("fixture does not use arc geometry"),
             };
             let next_start = match &pair[1].geometry {
                 PathGeometry::Line { from, .. } | PathGeometry::QuadraticBezier { from, .. } => {
                     from
                 }
-                PathGeometry::Arc { .. } => panic!("fixture does not use arc geometry"),
             };
             assert!(
                 (previous_end.x - next_start.x).abs() < 1e-9
@@ -740,4 +737,96 @@ fn endpoint_access_does_not_create_an_intermediate_shortcut() {
         .find_path(&map, &point(1, 3), &empty_bridge)
         .is_some());
     assert_eq!(offset(empty_bridge, Heading::West), point(2, 3));
+}
+
+#[test]
+fn terminal_reversal_on_one_way_lane_returns_zero_step_path() {
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &[point(1, 3), point(2, 3), point(3, 3)],
+        Some(Heading::East),
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // On a one-way eastbound road, the vehicle arrives and departs heading
+    // East (0° "reversal"). The previous code rejected this because it
+    // wasn't a UTurn; the fix returns a zero-step path.
+    let path = topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::East)
+        .expect("same-heading reversal should return a zero-step path");
+    let steps = path.road_steps();
+    assert!(steps.is_empty());
+    assert_eq!(path.total_travel_seconds(), 0.0);
+}
+
+#[test]
+fn terminal_reversal_on_bidirectional_road_returns_single_uturn() {
+    let mut map = blank_map(8, 6);
+    corridor(&mut map, &[point(1, 3), point(2, 3), point(3, 3)], None);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    let path = topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
+        .expect("bidirectional road should support direct U-turn");
+    let steps = path.road_steps();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].movement, MovementKind::UTurn);
+}
+
+#[test]
+fn terminal_reversal_through_roundabout_finds_multi_step_path() {
+    let mut map = blank_map(9, 9);
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));
+    let id = roundabout_structure_id(template.size, template.origin);
+    for position in &template.footprint {
+        road(&mut map, *position, None);
+        map.tile_mut(*position).unwrap().road_structure_id = Some(id.clone());
+    }
+
+    // Two-way west port at (3,3) — allows both entry and exit.
+    let west_port = template
+        .port_slots
+        .iter()
+        .find(|port| port.point == point(3, 3) && port.edge == Heading::West)
+        .unwrap()
+        .clone();
+    corridor(&mut map, &[point(1, 3), point(2, 3), west_port.point], None);
+    map.tile_mut(west_port.point).unwrap().one_way = None;
+    map.road_structures.push(RoadStructure::Roundabout {
+        id,
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint,
+        ports: vec![west_port],
+    });
+
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // The terminal at (2,3) is bidirectional, so a direct U-turn exists.
+    // The fast path should find it without needing the Dijkstra fallback.
+    let path = topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
+        .expect("reversal should be found");
+    let steps = path.road_steps();
+    assert!(!steps.is_empty());
+    assert!(steps
+        .iter()
+        .any(|step| step.movement == MovementKind::UTurn));
+}
+
+#[test]
+fn terminal_reversal_returns_none_when_no_path_exists() {
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &[point(1, 3), point(2, 3), point(3, 3)],
+        Some(Heading::East),
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // One-way eastbound road: can't reverse from East to West.
+    assert!(topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
+        .is_none());
 }

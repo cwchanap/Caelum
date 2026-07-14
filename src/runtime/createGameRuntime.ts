@@ -557,15 +557,22 @@ export async function createGameRuntime({
 
   const reloadRouteDraft = (): RuntimeSnapshot => {
     const draft = ui.routeDraft;
-    if (
-      draft?.source.kind !== "edit" ||
-      rejection?.code !== "routeChangedWhileEditing" ||
-      rejection.context.routeId !== draft.source.routeId
-    ) {
+    if (draft?.source.kind !== "edit") {
       return commit(state, ui);
     }
-    rejection = null;
-    return startRouteEdit(draft.source.routeId);
+    const routeId = draft.source.routeId;
+    const globalStale =
+      rejection?.code === "routeChangedWhileEditing" &&
+      rejection.context.routeId === routeId;
+    const localStale =
+      ui.routePreviewError?.code === "routeChangedWhileEditing" &&
+      ui.routePreviewError.context.routeId === routeId;
+    if (!globalStale && !localStale) {
+      return commit(state, ui);
+    }
+    if (globalStale) rejection = null;
+    // startRouteEdit clears routePreviewError via commit.
+    return startRouteEdit(routeId);
   };
 
   const handleEscape = (): RuntimeSnapshot =>

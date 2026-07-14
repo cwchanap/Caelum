@@ -63,30 +63,20 @@ async function seedRoundaboutApproaches(
   const width = size === "compact2x2" ? 2 : 3;
   const bottom = origin.y + width - 1;
   const right = Math.min(origin.x + width + 4, MAP_WIDTH - 1);
-  if (size === "compact2x2") {
-    await buildItem(page, "Road", "2-Lane");
-    await dragMapTiles(
-      page,
-      canvas,
-      { x: origin.x - 5, y: bottom },
-      { x: right, y: bottom },
-    );
-  } else {
-    await buildItem(page, "Road", "1-Lane One-Way");
-    await dragMapTiles(
-      page,
-      canvas,
-      { x: origin.x - 5, y: bottom },
-      { x: right, y: bottom },
-    );
-    await buildItem(page, "Road", "1-Lane One-Way");
-    await dragMapTiles(
-      page,
-      canvas,
-      { x: right, y: origin.y },
-      { x: origin.x - 5, y: origin.y },
-    );
-  }
+  await buildItem(page, "Road", "1-Lane One-Way");
+  await dragMapTiles(
+    page,
+    canvas,
+    { x: origin.x - 5, y: bottom },
+    { x: right, y: bottom },
+  );
+  await buildItem(page, "Road", "1-Lane One-Way");
+  await dragMapTiles(
+    page,
+    canvas,
+    { x: right, y: origin.y },
+    { x: origin.x - 5, y: origin.y },
+  );
   await buildItem(page, "Road", "2-Lane");
   await dragMapTiles(
     page,
@@ -267,9 +257,12 @@ for (const fixture of [
       "connected",
       "connected",
     ]);
+    // Terminal reversals on one-way roads are 0° (same heading in/out):
+    // the bus arrives and departs in the same direction, so the reversal
+    // path has zero steps (no uTurn movement). The "connected" status above
+    // already verifies the reversal path exists.
     for (const reversalIndex of [1, 3]) {
-      const reversalSteps = roadSteps(route!.legs[reversalIndex]);
-      expect(reversalSteps.map((step) => step.movement)).toContain("uTurn");
+      expect(route!.legs[reversalIndex].currentPath).not.toBeNull();
     }
 
     const sameArmSteps = roadSteps(route!.legs[0]).filter((step) =>

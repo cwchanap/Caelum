@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, Point,
-    RoadPathStep, Route, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
-    TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, PathGeometry, Point, Route, RouteLegStatus,
+    RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus, TransitPath,
+    TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -101,18 +101,6 @@ fn point_at(geometry: &PathGeometry, progress: f64) -> TripPosition {
                 y: inverse * inverse * from.y
                     + 2.0 * inverse * progress * control.y
                     + progress * progress * to.y,
-            }
-        }
-        PathGeometry::Arc {
-            center,
-            radius,
-            start_radians,
-            sweep_radians,
-        } => {
-            let radians = start_radians + sweep_radians * progress;
-            TripPosition {
-                x: center.x + radius * radians.cos(),
-                y: center.y + radius * radians.sin(),
             }
         }
     }
@@ -515,34 +503,6 @@ fn mutations_while_already_broken_do_not_repeat_break_side_effects() {
     );
     assert_eq!(untouched_trip.status, TripStatus::Waiting);
     assert!(untouched_trip.route_plan.is_some());
-}
-
-#[test]
-fn arc_projection_normalizes_authored_angles_before_clamping() {
-    let start_radians = std::f64::consts::TAU * 10.0;
-    let sweep_radians = std::f64::consts::PI;
-    let path = TransitPath::Road {
-        steps: vec![RoadPathStep {
-            position: point(0, 0),
-            entering_heading: Heading::East,
-            leaving_heading: Heading::East,
-            movement: MovementKind::RoundaboutCirculation,
-            geometry: PathGeometry::Arc {
-                center: TripPosition { x: 0.0, y: 0.0 },
-                radius: 2.0,
-                start_radians,
-                sweep_radians,
-            },
-            travel_seconds: 1.0,
-        }],
-        total_travel_seconds: 1.0,
-    };
-    let world = TripPosition { x: 0.0, y: 2.0 };
-
-    let projection = project_position_onto_path(&path, world, Heading::East);
-
-    assert!((projection.step_progress - 0.5).abs() < 1e-12);
-    assert!(projection.distance_squared < 1e-24);
 }
 
 fn shared_stop_route_engine() -> GameEngine {

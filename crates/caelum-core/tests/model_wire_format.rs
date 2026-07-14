@@ -114,21 +114,19 @@ fn snapshot_carries_the_authoritative_schema_version() {
 
 #[test]
 fn path_geometry_struct_variant_fields_use_camel_case() {
-    let geometry = PathGeometry::Arc {
-        center: TripPosition { x: 2.5, y: 3.5 },
-        radius: 1.25,
-        start_radians: 0.5,
-        sweep_radians: 1.75,
+    let geometry = PathGeometry::QuadraticBezier {
+        from: TripPosition { x: 0.0, y: 0.0 },
+        control: TripPosition { x: 1.5, y: 2.5 },
+        to: TripPosition { x: 3.0, y: 0.0 },
     };
 
     assert_eq!(
         serde_json::to_value(geometry).unwrap(),
         json!({
-            "kind": "arc",
-            "center": { "x": 2.5, "y": 3.5 },
-            "radius": 1.25,
-            "startRadians": 0.5,
-            "sweepRadians": 1.75
+            "kind": "quadraticBezier",
+            "from": { "x": 0.0, "y": 0.0 },
+            "control": { "x": 1.5, "y": 2.5 },
+            "to": { "x": 3.0, "y": 0.0 }
         })
     );
 }

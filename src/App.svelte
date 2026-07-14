@@ -381,7 +381,7 @@
         onSetSpeed={handleSetSpeed}
       />
 
-      {#if snapshot.rejection !== null}
+      {#if snapshot.rejection !== null && !(snapshot.rejection.code === "routeChangedWhileEditing" && snapshot.shell.routeDraft?.canReload === true)}
         <div
           class="rejection-banner"
           data-testid="rejection-banner"

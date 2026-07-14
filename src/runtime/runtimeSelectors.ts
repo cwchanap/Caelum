@@ -264,11 +264,21 @@ export function selectRouteEditorView(
 ): RouteEditorView | null {
   const draft = ui.routeDraft;
   if (draft === null) return null;
+  const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
   const staleRejection =
     draft.source.kind === "edit" &&
     rejection?.code === "routeChangedWhileEditing" &&
     rejection.context.routeId === draft.source.routeId
       ? rejection
+      : null;
+  // The routeChangedWhileEditing error can surface either as a global
+  // rejection (failed Save) or as a local preview error (detected during
+  // preview re-evaluation). In both cases the user needs a Reload button.
+  const localStaleError =
+    routeId !== null &&
+    ui.routePreviewError?.code === "routeChangedWhileEditing" &&
+    ui.routePreviewError.context.routeId === routeId
+      ? ui.routePreviewError
       : null;
   const preview =
     staleRejection === null
@@ -277,7 +287,6 @@ export function selectRouteEditorView(
           status: "rejected" as const,
           message: rejectionMessage(staleRejection),
         };
-  const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
   const title =
     routeId === null
       ? draft.mode === "metro"
@@ -306,8 +315,11 @@ export function selectRouteEditorView(
     previewPending: draft.previewPending,
     previewStatus: preview.status,
     previewMessage: preview.message,
-    canSave: staleRejection === null && canSaveRouteDraft(draft),
-    canReload: staleRejection !== null,
+    canSave:
+      staleRejection === null &&
+      localStaleError === null &&
+      canSaveRouteDraft(draft),
+    canReload: staleRejection !== null || localStaleError !== null,
   };
 }
 
