@@ -1,11 +1,12 @@
-import type {
-  GameState,
-  GameplayRejection,
-  Point,
-  ServicePattern,
-  Station,
-  Stop,
-  TransitMode,
+import {
+  samePoint,
+  type GameState,
+  type GameplayRejection,
+  type Point,
+  type ServicePattern,
+  type Station,
+  type Stop,
+  type TransitMode,
 } from "../domain/types";
 import type { RoutePreviewResponse } from "../runtime/backend/types";
 import type { UiState } from "./uiState";
@@ -65,10 +66,6 @@ export function canSaveRouteDraft(
       preview.legs.every((leg) => leg.status === "connected")) &&
     preview.affordable
   );
-}
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
 }
 
 export function resolveStopAtTile(

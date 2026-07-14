@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GameMap, Point } from "../../src/domain/types";
+import { samePoint, type GameMap, type Point } from "../../src/domain/types";
 import type {
   DispatchResult,
   GameBackend,
@@ -132,10 +132,6 @@ afterEach(() => {
   restore = null;
   document.body.innerHTML = "";
 });
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
 
 function updateTile(
   map: GameMap,

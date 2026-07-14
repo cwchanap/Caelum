@@ -6,6 +6,7 @@ import { renderCursorBadge } from "./cursorBadge";
 import { renderMap } from "./mapRenderer";
 import {
   renderOverlays,
+  renderRoadPreviewFeedbackBadge,
   renderRouteDraftHandleOverlay,
 } from "./overlayRenderer";
 import { renderTransit } from "./transitRenderer";
@@ -121,5 +122,6 @@ export function renderGame(
   renderRouteDraftHandleOverlay(ctx, state, ui);
   ctx.restore();
 
+  renderRoadPreviewFeedbackBadge(ctx, state, ui, transform);
   renderCursorBadge(ctx, state, ui, transform);
 }

@@ -25,7 +25,7 @@ import { stopCoverageRadius } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { axisLockedLine } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
-import { tileSize } from "./canvas";
+import { tileSize, type BoardTransform } from "./canvas";
 import { colors } from "./colors";
 import { drawDirectionArrow } from "./mapRenderer";
 import { pointAndTangentAt } from "./pathRenderer";
@@ -185,20 +185,27 @@ function roadPreviewAnchor(preview: RoadMutationPreviewView): Point {
 function renderRoadPreviewFeedback(
   ctx: CanvasRenderingContext2D,
   preview: RoadMutationPreviewView,
+  transform: BoardTransform,
 ): void {
   const text = roadPreviewFeedback(preview);
   const anchor = roadPreviewAnchor(preview);
-  const centerX = anchor.x * tileSize + tileSize / 2;
-  const height = 18;
-  const padding = 4;
+  // Position math bakes in the board transform (offset + scale) so this
+  // can be drawn in the untransformed context (after ctx.restore()), just
+  // like renderCursorBadge. DPR scaling keeps the on-screen size constant.
+  const dpr = globalThis.devicePixelRatio ?? 1;
+  const centerX =
+    transform.offsetX + (anchor.x + 0.5) * tileSize * transform.scale;
+  const height = 18 * dpr;
+  const padding = 4 * dpr;
 
   ctx.save();
-  ctx.font = "11px ui-monospace, monospace";
+  ctx.font = `${11 * dpr}px ui-monospace, monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const width = ctx.measureText(text).width + padding * 2;
   const boxX = centerX - width / 2;
-  const boxY = Math.max(2, anchor.y * tileSize - height - 4);
+  const anchorY = transform.offsetY + anchor.y * tileSize * transform.scale;
+  const boxY = Math.max(2, anchorY - height - 4 * dpr);
   ctx.fillStyle = colors.badgeBackground;
   ctx.fillRect(boxX, boxY, width, height);
   ctx.fillStyle = colors.badgeText;
@@ -367,7 +374,10 @@ function renderRoadMutationPreview(
     }
     ctx.restore();
   }
-  renderRoadPreviewFeedback(ctx, preview);
+  // Road preview feedback text is drawn in the untransformed context by
+  // `renderRoadPreviewFeedbackBadge` (called from `renderGame` after
+  // ctx.restore()) so its on-screen size stays consistent with the cursor
+  // badge regardless of board scale.
 }
 
 function renderDragPreview(
@@ -714,4 +724,22 @@ export function renderOverlays(
       tileSize - 4,
     );
   }
+}
+
+/**
+ * Draws the road-mutation preview feedback badge (cost / route impacts) in
+ * the untransformed context (after `ctx.restore()`), so its on-screen size
+ * stays consistent with the cursor badge regardless of board scale.
+ */
+export function renderRoadPreviewFeedbackBadge(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+  transform: BoardTransform,
+): void {
+  const preview = buildRoadMutationPreview(state, ui);
+  if (preview === null) {
+    return;
+  }
+  renderRoadPreviewFeedback(ctx, preview, transform);
 }

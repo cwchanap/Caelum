@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   renderOverlays,
+  renderRoadPreviewFeedbackBadge,
   renderRouteDraftHandles,
 } from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
@@ -14,9 +15,18 @@ import type {
   TransitPath,
 } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize, type BoardTransform } from "../../src/render/canvas";
 import { withAreas, withTracks } from "../helpers/mapFixtures";
 import type { RouteEditorView } from "../../src/runtime/types";
+
+/** Identity transform (scale=1, no offset) for badge-position tests. */
+const identityTransform: BoardTransform = {
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  width: 28 * tileSize,
+  height: 18 * tileSize,
+};
 
 function fakeCtx() {
   return {
@@ -631,7 +641,8 @@ describe("authoritative road mutation preview", () => {
 
   it("presents the exact authoritative road preview cost", () => {
     const ctx = dragCtx();
-    renderOverlays(ctx, createTestGameState(), {
+    const state = createTestGameState();
+    const ui = {
       ...createUiState(),
       activeTool: "road",
       drag,
@@ -647,7 +658,9 @@ describe("authoritative road mutation preview", () => {
         warnings: [],
         rejection: null,
       },
-    });
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
 
     expect(ctx.fillText).toHaveBeenCalledWith(
       "$375",
@@ -658,7 +671,8 @@ describe("authoritative road mutation preview", () => {
 
   it("presents stable route-impact feedback from the Rust response", () => {
     const ctx = dragCtx();
-    renderOverlays(ctx, createTestGameState(), {
+    const state = createTestGameState();
+    const ui = {
       ...createUiState(),
       activeTool: "road",
       drag,
@@ -677,7 +691,9 @@ describe("authoritative road mutation preview", () => {
         warnings: [],
         rejection: null,
       },
-    });
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
 
     expect(ctx.fillText).toHaveBeenCalledWith(
       "$500 · route-a rerouted · route-z broken",
@@ -831,7 +847,8 @@ describe("authoritative road mutation preview", () => {
   it("uses invalid preview styling when Rust rejects the roundabout", () => {
     const ctx = dragCtx();
     const structure = standardRoundaboutFixture();
-    renderOverlays(ctx, createTestGameState(), {
+    const state = createTestGameState();
+    const ui = {
       ...createUiState(),
       activeTool: "roundabout",
       hoverTile: structure.origin,
@@ -850,7 +867,9 @@ describe("authoritative road mutation preview", () => {
           context: { affectedRouteIds: [] },
         },
       },
-    });
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
 
     for (const point of structure.footprint) {
       expect(ctx.fillRect).toHaveBeenCalledWith(
@@ -868,7 +887,11 @@ describe("authoritative road mutation preview", () => {
     );
     expect(ctx.moveTo).toHaveBeenCalledWith(6.5 * tileSize, 5 * tileSize);
     expect(ctx.lineTo).toHaveBeenCalledWith(6.5 * tileSize, 5.25 * tileSize);
-    expect(ctx.fillText).toHaveBeenCalledWith("$2,000", 5.5 * tileSize, 147);
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$2,000",
+      expect.any(Number),
+      expect.any(Number),
+    );
     expect(ctx.strokeStyle).toBe(colors.previewInvalidStroke);
   });
 

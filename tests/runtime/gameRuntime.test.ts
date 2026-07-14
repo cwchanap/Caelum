@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  GameMap,
-  GameplayRejection,
-  MetroLine,
-  Point,
-  RoadDirection,
-  Route,
-  Stop,
+import {
+  samePoint,
+  type GameMap,
+  type GameplayRejection,
+  type MetroLine,
+  type Point,
+  type RoadDirection,
+  type Route,
+  type Stop,
 } from "../../src/domain/types";
 import type {
   DispatchResult,
@@ -53,10 +54,6 @@ function fullRustSnapshot(
     budget: initial.budget,
     ...overrides,
   });
-}
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
 }
 
 function updateTile(
@@ -1127,6 +1124,105 @@ describe("Game Runtime", () => {
     expect(previews.backend.intents).toContainEqual({
       type: "setSpeed",
       speed: 2,
+    });
+  });
+
+  describe("hover preview debounce", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("coalesces rapid hover moves into a single preview request", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.setHoverTile({ x: 6, y: 5 });
+      runtime.setHoverTile({ x: 7, y: 5 });
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(1);
+    });
+
+    it("fires preview request after debounce delay", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(1);
+    });
+
+    it("cancels pending timer when hover clears to null", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.setHoverTile(null);
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+    });
+
+    it("cancels pending timer on reset", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.reset();
+      await flushPromises();
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+    });
+
+    it("cancels pending timer on resetUi", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.resetUi();
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
     });
   });
 

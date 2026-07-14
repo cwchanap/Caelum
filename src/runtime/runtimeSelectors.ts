@@ -203,15 +203,19 @@ function routeDraftPreviewMessage(
   const draft = ui.routeDraft;
   if (draft === null) return { status: "empty", message: null };
   const localError = ui.routePreviewError;
-  if (localError?.code === "invalidRouteDraftInteraction") {
-    const message =
-      localError.context.operation === "removeWaypoint"
+  // `invalidRouteDraftInteraction` is a transient UI hint (e.g. "select a
+  // waypoint to remove"), not a preview rejection. Determine the real
+  // preview status first, then override only the message so the status
+  // never contradicts an enabled Save button.
+  const interactionMessage =
+    localError?.code === "invalidRouteDraftInteraction"
+      ? localError.context.operation === "removeWaypoint"
         ? "Select a waypoint to remove."
         : localError.context.operation === "moveWaypoint"
           ? "That waypoint cannot move farther."
-          : "That waypoint is no longer available.";
-    return { status: "rejected", message };
-  }
+          : "That waypoint is no longer available."
+      : null;
+
   if (draft.previewPending) {
     return { status: "empty", message: "Checking route…" };
   }
@@ -220,7 +224,10 @@ function routeDraftPreviewMessage(
   }
   const preview = draft.preview;
   if (preview === null || preview.legs.length === 0) {
-    if (localError !== null) {
+    if (
+      localError !== null &&
+      localError.code !== "invalidRouteDraftInteraction"
+    ) {
       const message =
         localError.code === "routeChangedWhileEditing"
           ? "Saved route changed. Reload the latest revision."
@@ -231,7 +238,10 @@ function routeDraftPreviewMessage(
               : "Route preview was rejected.";
       return { status: "rejected", message };
     }
-    return { status: "empty", message: "Add at least two waypoints." };
+    return {
+      status: "empty",
+      message: interactionMessage ?? "Add at least two waypoints.",
+    };
   }
   const rejectedLeg = preview.legs.find((leg) => leg.status !== "connected");
   if (rejectedLeg !== undefined) {
@@ -245,7 +255,10 @@ function routeDraftPreviewMessage(
           : `${from} → ${to} cannot connect.`,
     };
   }
-  if (preview.rejection !== null || localError !== null) {
+  if (
+    preview.rejection !== null ||
+    (localError !== null && localError.code !== "invalidRouteDraftInteraction")
+  ) {
     return { status: "rejected", message: "Route preview was rejected." };
   }
   if (!preview.affordable) {
@@ -254,7 +267,7 @@ function routeDraftPreviewMessage(
       message: `Need ${formatBudget(preview.initialVehicleCost)}.`,
     };
   }
-  return { status: "connected", message: "Connected" };
+  return { status: "connected", message: interactionMessage ?? "Connected" };
 }
 
 export function selectRouteEditorView(

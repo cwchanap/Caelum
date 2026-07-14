@@ -67,6 +67,11 @@ export interface Point {
   y: number;
 }
 
+/** Structural equality for two (possibly null) points. */
+export function samePoint(left: Point | null, right: Point | null): boolean {
+  return left?.x === right?.x && left?.y === right?.y;
+}
+
 export type RoundaboutSize = "compact2x2" | "standard3x3";
 
 export interface RoadPort {

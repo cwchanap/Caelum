@@ -830,3 +830,80 @@ fn terminal_reversal_returns_none_when_no_path_exists() {
         .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
         .is_none());
 }
+
+#[test]
+fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
+    let mut map = blank_map(9, 9);
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));
+    let id = roundabout_structure_id(template.size, template.origin);
+    for position in &template.footprint {
+        road(&mut map, *position, None);
+        map.tile_mut(*position).unwrap().road_structure_id = Some(id.clone());
+    }
+
+    // Bidirectional corridor from (1,3) through the west port at (3,3).
+    // The terminal at (2,3) is then narrowed to one-way eastbound so no
+    // direct U-turn exists — forcing the bounded Dijkstra to find the
+    // multi-step reversal through the roundabout.
+    let mut west_port = template
+        .port_slots
+        .iter()
+        .find(|port| port.point == point(3, 3) && port.edge == Heading::West)
+        .unwrap()
+        .clone();
+    west_port.id.push_str(":twoWay");
+    corridor(&mut map, &[point(1, 3), point(2, 3), west_port.point], None);
+    map.tile_mut(point(2, 3)).unwrap().one_way = Some(Heading::East);
+    map.tile_mut(west_port.point).unwrap().one_way = None;
+
+    map.road_structures.push(RoadStructure::Roundabout {
+        id,
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint,
+        ports: vec![west_port],
+    });
+
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // The terminal at (2,3) is one-way eastbound: no U-turn fast path.
+    // The only reversal route is: ordinary straight → roundabout entry →
+    // circulation → circulation → circulation → roundabout exit, arriving
+    // back at (2,3) heading West. This exercises the bounded-Dijkstra
+    // success path in `find_reversal_path` (the core of aabdcc6).
+    let path = topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
+        .expect("Dijkstra should find multi-step reversal through roundabout");
+    let steps = path.road_steps();
+    assert!(
+        steps.len() > 1,
+        "reversal should be multi-step, not a fast-path U-turn"
+    );
+    assert!(
+        steps
+            .iter()
+            .all(|step| step.movement != MovementKind::UTurn),
+        "reversal should not use U-turn fast path"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.movement == MovementKind::RoundaboutEntry),
+        "reversal should enter the roundabout"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.movement == MovementKind::RoundaboutCirculation),
+        "reversal should circulate within the roundabout"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.movement == MovementKind::RoundaboutExit),
+        "reversal should exit the roundabout"
+    );
+    // The path should start at the terminal and end heading West.
+    assert_eq!(steps.first().unwrap().position, point(2, 3));
+    assert_eq!(steps.last().unwrap().leaving_heading, Heading::West);
+}

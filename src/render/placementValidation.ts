@@ -1,19 +1,16 @@
-import type {
-  BuildingRotation,
-  BuildingType,
-  GameMap,
-  GameState,
-  Point,
-  Tile,
+import {
+  samePoint,
+  type BuildingRotation,
+  type BuildingType,
+  type GameMap,
+  type GameState,
+  type Point,
+  type Tile,
 } from "../domain/types";
 import {
   BUILDING_CATALOG,
   getBuildingFootprint,
 } from "../domain/catalog/buildings";
-
-export function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
 
 export function getTile(map: GameMap, point: Point): Tile | null {
   if (

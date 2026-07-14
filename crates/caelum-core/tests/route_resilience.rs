@@ -390,10 +390,12 @@ fn broken_transition_skips_a_vehicle_without_an_exact_world_position() {
 
     // The route is still broken — the service transition completed.
     assert!(route(&next, &fixture.route_id).path_broken);
-    // The vehicle was skipped (not parked): it retains its corrupted state
-    // and has no parked position.
-    assert_eq!(skipped_vehicle.path_step_index, usize::MAX);
+    // The vehicle was skipped (not parked): it has no parked position.
     assert!(skipped_vehicle.parked_position.is_none());
+    // The cursor is defensively reset so a corrupted step index cannot
+    // survive a skip→restore cycle and trigger a deferred panic.
+    assert_eq!(skipped_vehicle.path_step_index, 0);
+    assert_eq!(skipped_vehicle.step_progress, 0.0);
     // The ghost passenger scrub still cleared its passengers.
     assert!(skipped_vehicle.passenger_ids.is_empty());
     // The rider was invalidated even though the vehicle was skipped.

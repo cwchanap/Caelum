@@ -305,6 +305,11 @@ fn break_service(
             // position, but a panic here crashes both WASM and Tauri hosts
             // irrecoverably. Skip parking this vehicle — its passengers are
             // still invalidated by `invalidate_trips_for_line` below.
+            // Reset the cursor defensively so a corrupted step index cannot
+            // survive a skip→restore cycle and trigger a deferred panic.
+            let vehicle = &mut candidate.transit.vehicles[vehicle_index];
+            vehicle.path_step_index = 0;
+            vehicle.step_progress = 0.0;
             continue;
         };
         let target = parking_target(candidate, mode, &waypoint_ids, &vehicle_world);

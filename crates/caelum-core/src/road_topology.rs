@@ -167,7 +167,8 @@ impl RoadTopology {
 
 impl RoadTransition {
     pub fn base_travel_millis(&self) -> u32 {
-        self.travel_millis - movement_extra_millis(self.movement)
+        self.travel_millis
+            .saturating_sub(movement_extra_millis(self.movement))
     }
 }
 

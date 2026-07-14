@@ -1,10 +1,11 @@
-import type {
-  AreaKind,
-  BuildingType,
-  GameplayRejection,
-  Point,
-  RoundaboutSize,
-  Tool,
+import {
+  samePoint,
+  type AreaKind,
+  type BuildingType,
+  type GameplayRejection,
+  type Point,
+  type RoundaboutSize,
+  type Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import {
@@ -36,10 +37,6 @@ import type {
   RuntimeListener,
   RuntimeSnapshot,
 } from "./types";
-
-function samePoint(left: Point | null, right: Point | null): boolean {
-  return left?.x === right?.x && left?.y === right?.y;
-}
 
 const rotations = [0, 90, 180, 270] as const;
 
@@ -578,18 +575,11 @@ export async function createGameRuntime({
   const handleEscape = (): RuntimeSnapshot =>
     ui.routeDraft === null ? api.resetUi() : cancelRouteDraft();
 
-  const requestRoadMutationPreview = (
+  const sendRoadMutationPreviewRequest = (
     mutation: RoadMutation,
-  ): RuntimeSnapshot => {
-    if (dead) return getSnapshot();
-    const generation = ui.roadPreviewGeneration + 1;
+    generation: number,
+  ): void => {
     activeRoadMutation = mutation;
-    const pending = commit(state, {
-      ...ui,
-      roadPreviewGeneration: generation,
-      roadMutationPreview: null,
-      roadMutationPreviewError: null,
-    });
     void previewCoordinator
       .requestRoadMutation({ mutation, generation })
       .then((response) => {
@@ -621,6 +611,20 @@ export async function createGameRuntime({
             error instanceof Error ? error.message : String(error),
         });
       });
+  };
+
+  const requestRoadMutationPreview = (
+    mutation: RoadMutation,
+  ): RuntimeSnapshot => {
+    if (dead) return getSnapshot();
+    const generation = ui.roadPreviewGeneration + 1;
+    const pending = commit(state, {
+      ...ui,
+      roadPreviewGeneration: generation,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+    });
+    sendRoadMutationPreviewRequest(mutation, generation);
     return pending;
   };
 
@@ -727,6 +731,7 @@ export async function createGameRuntime({
       return enqueueTick(deltaSeconds);
     },
     reset() {
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return queueBackend(async () => {
@@ -739,6 +744,7 @@ export async function createGameRuntime({
       });
     },
     resetUi() {
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, createUiState());
@@ -1162,7 +1168,7 @@ export async function createGameRuntime({
         clearHoverPreviewTimer();
         invalidateRoadPreview();
       }
-      const snapshot = commit(state, {
+      const nextUi: UiState = {
         ...ui,
         hoverTile: point,
         ...(point === null
@@ -1171,19 +1177,33 @@ export async function createGameRuntime({
               roadMutationPreviewError: null,
             }
           : {}),
-      });
-      const mutation = roadMutationForUi(ui);
-      if (mutation === null) {
-        return snapshot;
+      };
+      const mutation = roadMutationForUi(nextUi);
+      // No road mutation applies for this tile — commit the hover change
+      // without bumping the preview generation (one commit, one shell build).
+      if (mutation === null || dead) {
+        return commit(state, nextUi);
       }
       // Debounce the hover-triggered preview so rapid pointermove events
       // coalesce into a single IPC round-trip (important on Tauri). A delay
       // of 0 disables debouncing (used in tests).
       clearHoverPreviewTimer();
       if (hoverPreviewDebounceMs <= 0) {
-        requestRoadMutationPreview(mutation);
+        // Non-debounced: merge the hover change and preview generation bump
+        // into a single commit to avoid a redundant shell-state rebuild.
+        const generation = ui.roadPreviewGeneration + 1;
+        const snapshot = commit(state, {
+          ...nextUi,
+          roadPreviewGeneration: generation,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
+        sendRoadMutationPreviewRequest(mutation, generation);
         return snapshot;
       }
+      // Debounced: commit the hover change now, fire the preview request
+      // after the delay (re-deriving the mutation from current UI state).
+      const snapshot = commit(state, nextUi);
       hoverPreviewTimer = setTimeout(() => {
         hoverPreviewTimer = null;
         if (dead) return;
