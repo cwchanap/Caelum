@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashSet};
 
-use crate::heading::{canonical_headings, heading_key, heading_rank, offset, opposite};
+use crate::heading::{
+    canonical_headings, heading_between, heading_key, heading_rank, offset, opposite,
+};
 use crate::model::{
     GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RoadPort, RoadStructure,
     RoundaboutSize, TripPosition,
@@ -461,15 +463,17 @@ pub fn compile_roundabout_transitions(
         };
         let inbound = port.id.ends_with(":inbound")
             || port.id.ends_with(":twoWay")
-            || (!port.id.ends_with(":outbound") && port_accepts_inbound(&template, canonical_port));
+            || (!port.id.ends_with(":outbound")
+                && port_accepts_inbound(&template, canonical_port)?);
         let outbound = port.id.ends_with(":outbound")
             || port.id.ends_with(":twoWay")
-            || (!port.id.ends_with(":inbound") && port_accepts_outbound(&template, canonical_port));
+            || (!port.id.ends_with(":inbound")
+                && port_accepts_outbound(&template, canonical_port)?);
         if inbound {
-            transitions.push(entry_transition(parts.id, &template, canonical_port));
+            transitions.push(entry_transition(parts.id, &template, canonical_port)?);
         }
         if outbound {
-            transitions.push(exit_transition(parts.id, &template, canonical_port));
+            transitions.push(exit_transition(parts.id, &template, canonical_port)?);
         }
     }
     canonicalize_transitions(&mut transitions);
@@ -595,8 +599,10 @@ fn circulation_edges(id: &str, template: &RoundaboutTemplate) -> Vec<(RoadState,
             let previous = ring[(index + ring.len() - 1) % ring.len()];
             let current = ring[index];
             let next = ring[(index + 1) % ring.len()];
-            let incoming = heading_between(previous, current);
-            let outgoing = heading_between(current, next);
+            let incoming = heading_between(previous, current)
+                .expect("roundabout ring points must be adjacent");
+            let outgoing =
+                heading_between(current, next).expect("roundabout ring points must be adjacent");
             (
                 RoadState {
                     position: current,
@@ -628,11 +634,12 @@ fn entry_transition(
     id: &str,
     template: &RoundaboutTemplate,
     port: &RoadPort,
-) -> (RoadState, RoadTransition) {
-    let (_, next) = ring_neighbors(template, port.point);
+) -> GameplayResult<(RoadState, RoadTransition)> {
+    let (_, next) = ring_neighbors(template, port.point)?;
     let incoming = opposite(port.edge);
-    let outgoing = heading_between(port.point, next);
-    (
+    let outgoing =
+        heading_between(port.point, next).expect("roundabout ring points must be adjacent");
+    Ok((
         RoadState {
             position: port.point,
             incoming_heading: incoming,
@@ -650,18 +657,19 @@ fn entry_transition(
             travel_millis: BUS_TILE_MILLIS + ROUNDABOUT_ENTRY_MILLIS,
             stable_key: format!("{id}:entry:{}", port.id),
         },
-    )
+    ))
 }
 
 fn exit_transition(
     id: &str,
     template: &RoundaboutTemplate,
     port: &RoadPort,
-) -> (RoadState, RoadTransition) {
-    let (previous, _) = ring_neighbors(template, port.point);
-    let incoming = heading_between(previous, port.point);
+) -> GameplayResult<(RoadState, RoadTransition)> {
+    let (previous, _) = ring_neighbors(template, port.point)?;
+    let incoming =
+        heading_between(previous, port.point).expect("roundabout ring points must be adjacent");
     let destination = offset(port.point, port.edge);
-    (
+    Ok((
         RoadState {
             position: port.point,
             incoming_heading: incoming,
@@ -680,29 +688,33 @@ fn exit_transition(
             travel_millis: BUS_TILE_MILLIS,
             stable_key: format!("{id}:exit:{}", port.id),
         },
-    )
+    ))
 }
 
-fn port_accepts_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> bool {
-    let (_, next) = ring_neighbors(template, port.point);
-    opposite(port.edge) == heading_between(port.point, next)
+fn port_accepts_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
+    let (_, next) = ring_neighbors(template, port.point)?;
+    let outgoing =
+        heading_between(port.point, next).expect("roundabout ring points must be adjacent");
+    Ok(opposite(port.edge) == outgoing)
 }
 
-fn port_accepts_outbound(template: &RoundaboutTemplate, port: &RoadPort) -> bool {
-    let (previous, _) = ring_neighbors(template, port.point);
-    port.edge == heading_between(previous, port.point)
+fn port_accepts_outbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
+    let (previous, _) = ring_neighbors(template, port.point)?;
+    let incoming =
+        heading_between(previous, port.point).expect("roundabout ring points must be adjacent");
+    Ok(port.edge == incoming)
 }
 
-fn ring_neighbors(template: &RoundaboutTemplate, point: Point) -> (Point, Point) {
+fn ring_neighbors(template: &RoundaboutTemplate, point: Point) -> GameplayResult<(Point, Point)> {
     let ring = &template.counterclockwise_ring;
     let index = ring
         .iter()
         .position(|candidate| *candidate == point)
-        .expect("canonical roundabout port belongs to the circulation ring");
-    (
+        .ok_or_else(|| unsafe_template_mapping(template))?;
+    Ok((
         ring[(index + ring.len() - 1) % ring.len()],
         ring[(index + 1) % ring.len()],
-    )
+    ))
 }
 
 fn canonicalize_transitions(transitions: &mut Vec<(RoadState, RoadTransition)>) {
@@ -744,15 +756,5 @@ fn midpoint(first: Point, second: Point) -> TripPosition {
     TripPosition {
         x: f64::from(first.x + second.x) / 2.0,
         y: f64::from(first.y + second.y) / 2.0,
-    }
-}
-
-fn heading_between(from: Point, to: Point) -> Heading {
-    match (to.x - from.x, to.y - from.y) {
-        (0, -1) => Heading::North,
-        (1, 0) => Heading::East,
-        (0, 1) => Heading::South,
-        (-1, 0) => Heading::West,
-        delta => unreachable!("roundabout ring points must be adjacent: {delta:?}"),
     }
 }

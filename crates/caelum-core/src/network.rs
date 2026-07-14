@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::engine::RoutingContext;
+use crate::heading::heading_between;
 use crate::model::{
     GameMap, GameSnapshot, Heading, PathGeometry, Point, RouteLegKind, RouteLegPath,
     RouteLegStatus, ServicePattern, Tile, TrackPathStep, TransitMode, TransitPath,
@@ -239,15 +240,5 @@ fn track_path_from_points(points: Vec<Point>, tiles_per_second: f64) -> TransitP
     TransitPath::Track {
         total_travel_seconds: steps.len() as f64 * travel_seconds,
         steps,
-    }
-}
-
-fn heading_between(from: Point, to: Point) -> Option<Heading> {
-    match (to.x - from.x, to.y - from.y) {
-        (0, -1) => Some(Heading::North),
-        (1, 0) => Some(Heading::East),
-        (0, 1) => Some(Heading::South),
-        (-1, 0) => Some(Heading::West),
-        _ => None,
     }
 }

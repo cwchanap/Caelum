@@ -262,6 +262,7 @@ describe("RouteEditor", () => {
     const editorControls = [
       "Loop",
       "Shuttle",
+      "Append",
       "Replace",
       "Insert after",
       "Move up",

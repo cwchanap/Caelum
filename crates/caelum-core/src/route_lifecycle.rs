@@ -683,8 +683,9 @@ fn project_onto_step(
             // because the next tick re-derives step_progress from the
             // world position, which is itself computed from geometry
             // arithmetic (add/mul) that IS bit-identical across hosts.
-            // Accepted as a known caveat; a cross-host golden test could
-            // be added if divergence is ever observed.
+            // A golden test (`arc_step_progress_golden_bits`) pins the
+            // exact f64 bits on native; if WASM diverges, that test
+            // compiled for WASM will surface the mismatch.
             let mut candidates = vec![0.0, 1.0];
             if sweep_radians.abs() > f64::EPSILON {
                 let world_radians = (world.y - center.y).atan2(world.x - center.x);
@@ -885,4 +886,104 @@ pub fn structurally_changed_route_ids(
     affected.sort();
     affected.dedup();
     affected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{MovementKind, Point, RoadPathStep};
+
+    fn arc_path(
+        center: TripPosition,
+        radius: f64,
+        start_radians: f64,
+        sweep_radians: f64,
+    ) -> TransitPath {
+        TransitPath::Road {
+            steps: vec![RoadPathStep {
+                position: Point { x: 0, y: 0 },
+                entering_heading: Heading::East,
+                leaving_heading: Heading::North,
+                movement: MovementKind::LeftTurn,
+                geometry: PathGeometry::Arc {
+                    center,
+                    radius,
+                    start_radians,
+                    sweep_radians,
+                },
+                travel_seconds: 1.0,
+            }],
+            total_travel_seconds: 1.0,
+        }
+    }
+
+    /// Golden test: pin the exact f64 bits of `step_progress` derived from
+    /// `atan2` in the Arc projection path. If WASM (libm) and native (host
+    /// FPU) ever diverge in their `atan2` implementation, this test —
+    /// compiled for the respective target — will fail with a bit mismatch,
+    /// surfacing the determinism violation called out in the caveat comment
+    /// on the Arc branch of `project_onto_step`.
+    #[test]
+    fn arc_step_progress_golden_bits() {
+        // Arc centered at (2.5, 2.5), radius 1.0, sweeping 90° CCW from East.
+        let path = arc_path(
+            TripPosition { x: 2.5, y: 2.5 },
+            1.0,
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+        );
+
+        // World position at 30° (PI/6) on the arc — exercises atan2 with
+        // non-trivial inputs (not 0, not PI/4, not PI/2).
+        let angle = std::f64::consts::FRAC_PI_6;
+        let world = TripPosition {
+            x: 2.5 + angle.cos(),
+            y: 2.5 + angle.sin(),
+        };
+
+        let projection = project_position_onto_path(&path, world, Heading::East);
+
+        // Pin the exact bits. The analytical value is 1/3 (= PI/6 / (PI/2))
+        // but the atan2 round-trip introduces a 2-ULP deviation, yielding
+        // 0x3FD5555555555557 instead of the exact 1/3 (0x3FD5555555555555).
+        // These bits are the native (host FPU) golden reference; WASM must
+        // match. If this test fails on a new target, update the golden bits
+        // deliberately after confirming the divergence is sub-ULP and
+        // self-correcting (per the caveat comment on the Arc branch).
+        let expected_bits: u64 = 0x3FD5_5555_5555_5557;
+        assert_eq!(
+            projection.step_progress.to_bits(),
+            expected_bits,
+            "Arc step_progress bits diverged from golden reference. \
+             This indicates atan2 produced different results than expected. \
+             If this is a new platform, update the golden bits deliberately.",
+        );
+    }
+
+    /// Control: Line geometry step_progress uses only add/mul/div (no
+    /// transcendentals), so it must be bit-identical across all hosts.
+    #[test]
+    fn line_step_progress_is_rational() {
+        let path = TransitPath::Road {
+            steps: vec![RoadPathStep {
+                position: Point { x: 0, y: 0 },
+                entering_heading: Heading::East,
+                leaving_heading: Heading::East,
+                movement: MovementKind::Straight,
+                geometry: PathGeometry::Line {
+                    from: TripPosition { x: 0.0, y: 0.0 },
+                    to: TripPosition { x: 4.0, y: 0.0 },
+                },
+                travel_seconds: 1.0,
+            }],
+            total_travel_seconds: 1.0,
+        };
+
+        let world = TripPosition { x: 1.0, y: 0.0 };
+        let projection = project_position_onto_path(&path, world, Heading::East);
+
+        // 1.0 / 4.0 = 0.25 — exact in f64.
+        assert_eq!(projection.step_progress, 0.25);
+        assert_eq!(projection.step_progress.to_bits(), 0x3FD0_0000_0000_0000);
+    }
 }

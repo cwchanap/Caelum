@@ -97,6 +97,12 @@
   <div class="route-edit-modes" role="group" aria-label="Map click action">
     <button
       type="button"
+      class:active={editor.interaction === "append"}
+      aria-pressed={editor.interaction === "append"}
+      onclick={() => onSelectWaypoint(null, "append")}>Append</button
+    >
+    <button
+      type="button"
       class:active={editor.interaction === "replace"}
       aria-pressed={editor.interaction === "replace"}
       disabled={!hasSelection}

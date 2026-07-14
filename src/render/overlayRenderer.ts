@@ -1,12 +1,10 @@
 import {
   ROAD_DIRECTION_OFFSET,
   type ActiveTrip,
-  type GameMap,
   type GameState,
   type Point,
   type RoadStructure,
   type RouteLegPath,
-  type Tile,
   type TransitPath,
   type TripPosition,
 } from "../domain/types";
@@ -31,80 +29,11 @@ import { tileSize } from "./canvas";
 import { colors } from "./colors";
 import { drawDirectionArrow } from "./mapRenderer";
 import { pointAndTangentAt } from "./pathRenderer";
+import { canPlaceBuilding, isAreaPaintable } from "./placementValidation";
 
 const previewStrokeInset = 2;
 
 type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
-
-function getTile(map: GameMap, point: Point): Tile | null {
-  if (
-    point.x < 0 ||
-    point.x >= map.width ||
-    point.y < 0 ||
-    point.y >= map.height
-  ) {
-    return null;
-  }
-
-  return map.tiles.find((tile) => samePoint(tile, point)) ?? null;
-}
-
-function isBuildingOccupied(state: GameState, point: Point): boolean {
-  return state.buildings.some((building) =>
-    building.occupiedTiles.some((occupiedTile) =>
-      samePoint(occupiedTile, point),
-    ),
-  );
-}
-
-function isTransitNodeAt(state: GameState, point: Point): boolean {
-  return (
-    state.transit.stops.some(
-      (stop) => stop.status === "present" && samePoint(stop.position, point),
-    ) ||
-    state.transit.stations.some(
-      (station) =>
-        station.status === "present" && samePoint(station.position, point),
-    )
-  );
-}
-
-function canPlaceBuilding(
-  state: GameState,
-  type: keyof typeof BUILDING_CATALOG,
-  origin: Point,
-  rotation: 0 | 90 | 180 | 270,
-): boolean {
-  const definition = BUILDING_CATALOG[type];
-  const footprint = getBuildingFootprint(type, origin, rotation);
-
-  return footprint.every((point) => {
-    const tile = getTile(state.map, point);
-    const kindOk =
-      type === "metroStation"
-        ? tile?.kind === "empty" || tile?.kind === "road"
-        : tile?.kind === "empty";
-    const trackOk =
-      type === "metroStation"
-        ? tile?.hasTrack === true
-        : tile?.hasTrack !== true;
-    const areaOk =
-      definition.allowedArea === undefined ||
-      tile?.area === definition.allowedArea;
-
-    return (
-      kindOk &&
-      trackOk &&
-      areaOk &&
-      !isBuildingOccupied(state, point) &&
-      !isTransitNodeAt(state, point)
-    );
-  });
-}
 
 function rectanglePoints(start: Point, end: Point): Point[] {
   const minX = Math.min(start.x, end.x);
@@ -120,16 +49,6 @@ function rectanglePoints(start: Point, end: Point): Point[] {
   }
 
   return points;
-}
-
-function isAreaPaintable(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    tile?.kind === "empty" &&
-    tile.hasTrack !== true &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
 }
 
 function planAreaPaintPreview(

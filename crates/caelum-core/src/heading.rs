@@ -55,3 +55,16 @@ pub fn heading_key(heading: Heading) -> &'static str {
         Heading::West => "west",
     }
 }
+
+/// Returns the cardinal heading from `from` to `to`, or `None` when the two
+/// points are not orthogonally adjacent (differ by exactly one step on one
+/// axis).
+pub fn heading_between(from: Point, to: Point) -> Option<Heading> {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Some(Heading::North),
+        (1, 0) => Some(Heading::East),
+        (0, 1) => Some(Heading::South),
+        (-1, 0) => Some(Heading::West),
+        _ => None,
+    }
+}
