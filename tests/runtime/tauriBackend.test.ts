@@ -15,12 +15,6 @@ import { createRustSnapshot } from "../fixtures/rustSnapshot";
 // TS wrapper passes across the IPC boundary — the contract the Rust
 // `#[tauri::command]` handlers in `src-tauri/src/lib.rs` depend on.
 const invokeMock = vi.fn();
-const emptyContext = {
-  changedTiles: [],
-  skippedTiles: [],
-  affectedRouteIds: [],
-  cost: 0,
-};
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) =>
@@ -58,7 +52,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -82,7 +75,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: undefined,
-      context: emptyContext,
     } as unknown as DispatchResult;
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -102,7 +94,6 @@ describe("createTauriBackend", () => {
         code: "invalidSpeed",
         context: { affectedRouteIds: [] },
       },
-      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -128,7 +119,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: emptyContext,
     };
     invokeMock.mockResolvedValueOnce(raw);
 

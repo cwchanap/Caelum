@@ -1,5 +1,5 @@
 use caelum_core::model::{MetricsState, ServicePattern, TransitMode};
-use caelum_core::{GameEngine, GameIntent, RejectionCode};
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
     let decoded: GameIntent =
@@ -166,6 +166,20 @@ fn new_engine_exposes_initial_snapshot() {
 }
 
 #[test]
+fn no_op_tick_returns_unapplied_snapshot() {
+    // A fresh engine is paused with speed 1; a zero-delta tick must return the
+    // previous snapshot unchanged with `applied == false` (engine.rs contract).
+    let mut engine = GameEngine::new();
+    let before = engine.snapshot();
+
+    let result = engine.tick(0.0);
+
+    assert!(!result.applied);
+    assert!(result.rejection.is_none());
+    assert_eq!(result.snapshot, before);
+}
+
+#[test]
 fn serialized_snapshot_does_not_include_the_engine_topology_cache() {
     let engine = GameEngine::new();
     let value = serde_json::to_value(engine.snapshot()).expect("snapshot should serialize");
@@ -236,4 +250,62 @@ fn set_speed_rejects_invalid_speed_without_changing_snapshot() {
         result.rejection.map(|rejection| rejection.code),
         Some(RejectionCode::InvalidSpeed)
     );
+}
+
+fn replay_intent_sequence() -> Vec<GameIntent> {
+    // A non-trial sequence exercising road topology compilation, transit node
+    // creation, route building, vehicle assignment, and speed/pause mutations —
+    // the paths most likely to leak HashMap-iteration order into serialized state.
+    vec![
+        GameIntent::LayRoadLine {
+            points: (2..=8)
+                .map(|x| caelum_core::model::Point { x, y: 5 })
+                .collect(),
+            preset: RoadPreset::TwoWay,
+        },
+        GameIntent::AddBusStop {
+            point: caelum_core::model::Point { x: 2, y: 5 },
+        },
+        GameIntent::AddBusStop {
+            point: caelum_core::model::Point { x: 8, y: 5 },
+        },
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        },
+        GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        },
+        GameIntent::SetSpeed { speed: 1 },
+        GameIntent::SetPaused { paused: false },
+    ]
+}
+
+#[test]
+fn identical_replay_produces_identical_snapshots() {
+    // Two independent engines fed the same intent sequence (and then the same
+    // tick deltas) must converge to byte-identical snapshots. This guards
+    // against future HashMap-iteration order leaking into serialized state.
+    let intents = replay_intent_sequence();
+
+    let mut engine_a = GameEngine::new();
+    let mut engine_b = GameEngine::new();
+    assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+
+    for intent in intents {
+        let result_a = engine_a.dispatch(intent.clone());
+        let result_b = engine_b.dispatch(intent);
+        assert_eq!(result_a.applied, result_b.applied);
+        assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+    }
+
+    // Tick both engines with identical deltas and confirm they stay in lockstep.
+    for delta in [0.25, 0.5, 1.0, 0.125] {
+        let tick_a = engine_a.tick(delta);
+        let tick_b = engine_b.tick(delta);
+        assert_eq!(tick_a.applied, tick_b.applied);
+        assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+    }
 }

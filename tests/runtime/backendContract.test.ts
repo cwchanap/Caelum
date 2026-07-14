@@ -4,7 +4,6 @@ import {
   type GameplayRejection,
 } from "../../src/domain/types";
 import type {
-  DispatchContext,
   DispatchResult,
   GameBackend,
   GameIntent,
@@ -34,7 +33,6 @@ describe("Rust backend contract", () => {
     expectTypeOf<
       DispatchResult["rejection"]
     >().toEqualTypeOf<GameplayRejection | null>();
-    expectTypeOf<DispatchResult["context"]>().toEqualTypeOf<DispatchContext>();
     expect(rejectionMessage(insufficientBudget)).toBe(
       "Needs $8,000; only $7,999 is available.",
     );
@@ -248,23 +246,11 @@ describe("Rust backend contract", () => {
         },
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       }),
       tick: async () => ({
         snapshot,
         applied: false,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       }),
       reset: async () => snapshot,
     };

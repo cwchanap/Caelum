@@ -27,13 +27,6 @@ import {
 } from "../fixtures/rustSnapshot";
 import { createTestGameState } from "../helpers/gameState";
 
-const EMPTY_DISPATCH_CONTEXT = {
-  changedTiles: [],
-  skippedTiles: [],
-  affectedRouteIds: [],
-  cost: 0,
-};
-
 const TEST_REJECTION: GameplayRejection = {
   code: "blockedTile",
   context: { affectedRouteIds: [] },
@@ -657,7 +650,6 @@ function deferredDispatchBackend(
           snapshot,
           applied: false,
           rejection,
-          context: EMPTY_DISPATCH_CONTEXT,
         };
       }
       snapshot = applyIntent(snapshot, intent);
@@ -665,7 +657,6 @@ function deferredDispatchBackend(
         snapshot,
         applied: true,
         rejection: null,
-        context: EMPTY_DISPATCH_CONTEXT,
       };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
@@ -681,7 +672,6 @@ function deferredDispatchBackend(
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: EMPTY_DISPATCH_CONTEXT,
       };
     },
     async reset() {
@@ -729,7 +719,6 @@ function backendSpy(
           snapshot,
           applied: false,
           rejection: TEST_REJECTION,
-          context: EMPTY_DISPATCH_CONTEXT,
         };
       }
       snapshot = applyIntent(snapshot, intent);
@@ -737,7 +726,6 @@ function backendSpy(
         snapshot,
         applied: true,
         rejection: null,
-        context: EMPTY_DISPATCH_CONTEXT,
       };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
@@ -753,7 +741,6 @@ function backendSpy(
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: EMPTY_DISPATCH_CONTEXT,
       };
     },
     async reset() {
@@ -1533,7 +1520,6 @@ describe("Game Runtime", () => {
         snapshot: await backend.snapshot(),
         applied: true,
         rejection: null,
-        context: EMPTY_DISPATCH_CONTEXT,
       };
     });
     const baseDispatch = backend.dispatch;
@@ -2040,7 +2026,6 @@ describe("route creation and management", () => {
               code: outcome.code,
               context: { affectedRouteIds: ["route-001"] },
             },
-            context: EMPTY_DISPATCH_CONTEXT,
           };
         },
       };
@@ -2217,7 +2202,6 @@ describe("route creation and management", () => {
               affectedRouteIds: ["route-001"],
             },
           },
-          context: EMPTY_DISPATCH_CONTEXT,
         };
       },
     };
@@ -2284,7 +2268,6 @@ describe("route creation and management", () => {
               affectedRouteIds: ["route-001"],
             },
           },
-          context: EMPTY_DISPATCH_CONTEXT,
         };
       },
     };
@@ -2513,7 +2496,6 @@ describe("route creation and management", () => {
             snapshot: await base.snapshot(),
             applied: true,
             rejection: null,
-            context: EMPTY_DISPATCH_CONTEXT,
           };
         }
         return base.dispatch(intent);

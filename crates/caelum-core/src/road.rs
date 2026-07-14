@@ -227,7 +227,7 @@ fn author_lane_tiles(
         let Some(existing) = candidate.map.tile(*point).cloned() else {
             continue;
         };
-        if is_roundabout_owned(&candidate.map, *point) {
+        if crate::roundabouts::is_roundabout_owned(&candidate.map, *point) {
             continue;
         }
         if existing.kind == "road" {
@@ -334,8 +334,8 @@ fn connect(map: &mut GameMap, point: Point, heading: Heading) {
     let neighbor_point = offset(point, heading);
     if !matches!(map.tile(point), Some(tile) if tile.kind == "road")
         || !matches!(map.tile(neighbor_point), Some(tile) if tile.kind == "road")
-        || is_roundabout_owned(map, point)
-        || is_roundabout_owned(map, neighbor_point)
+        || crate::roundabouts::is_roundabout_owned(map, point)
+        || crate::roundabouts::is_roundabout_owned(map, neighbor_point)
     {
         return;
     }
@@ -382,7 +382,7 @@ fn remove_road(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()>
     if tile.kind != "road" {
         return Err(GameplayRejection::at(RejectionCode::BlockedTile, point));
     }
-    if is_roundabout_owned(&candidate.map, point) {
+    if crate::roundabouts::is_roundabout_owned(&candidate.map, point) {
         return Err(GameplayRejection::at(RejectionCode::BlockedTile, point));
     }
     let connections = tile.road_connections.clone();
@@ -565,7 +565,12 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
             let ports = port_keys
                 .iter()
                 .map(|(point, edge)| RoadPort {
-                    id: format!("{id}-port-{}-{}-{}", point.x, point.y, heading_key(*edge)),
+                    id: format!(
+                        "{id}-port-{}-{}-{}",
+                        point.x,
+                        point.y,
+                        crate::heading::heading_key(*edge)
+                    ),
                     point: *point,
                     edge: *edge,
                 })
@@ -714,19 +719,17 @@ fn junction_id(footprint: &[Point], port_keys: &[(Point, Heading)]) -> String {
         .join(";");
     let ports = port_keys
         .iter()
-        .map(|(point, heading)| format!("{},{}:{}", point.x, point.y, heading_key(*heading)))
+        .map(|(point, heading)| {
+            format!(
+                "{},{}:{}",
+                point.x,
+                point.y,
+                crate::heading::heading_key(*heading)
+            )
+        })
         .collect::<Vec<_>>()
         .join(";");
     format!("junction-{footprint}-{ports}")
-}
-
-fn heading_key(heading: Heading) -> &'static str {
-    match heading {
-        Heading::North => "north",
-        Heading::East => "east",
-        Heading::South => "south",
-        Heading::West => "west",
-    }
 }
 
 fn road_connection_rank(heading: Heading) -> u8 {
@@ -805,18 +808,6 @@ fn is_valid_road_placement(state: &GameSnapshot, point: Point) -> bool {
                 .stations
                 .iter()
                 .any(|station| is_present_node(station.status) && station.position == point)
-    })
-}
-
-fn is_roundabout_owned(map: &GameMap, point: Point) -> bool {
-    let Some(structure_id) = map
-        .tile(point)
-        .and_then(|tile| tile.road_structure_id.as_deref())
-    else {
-        return false;
-    };
-    map.road_structures.iter().any(|structure| {
-        structure.id() == structure_id && matches!(structure, RoadStructure::Roundabout { .. })
     })
 }
 

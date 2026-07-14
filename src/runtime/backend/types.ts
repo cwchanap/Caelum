@@ -132,14 +132,6 @@ export interface DispatchResult {
   snapshot: RustGameSnapshot;
   applied: boolean;
   rejection: GameplayRejection | null;
-  context: DispatchContext;
-}
-
-export interface DispatchContext {
-  changedTiles: Point[];
-  skippedTiles: Point[];
-  affectedRouteIds: string[];
-  cost: number;
 }
 
 export type RoadMutation =

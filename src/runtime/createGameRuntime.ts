@@ -7,7 +7,6 @@ import type {
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
-import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
   applyUiTileClick,
@@ -28,6 +27,7 @@ import {
 import { axisLockedLine } from "../ui/roadDrag";
 import { createUiState, type UiState } from "../ui/uiState";
 import type { GameBackend, GameIntent, RoadMutation } from "./backend";
+import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { normalizeRustSnapshot } from "./snapshotView";
@@ -40,8 +40,6 @@ import type {
 function samePoint(left: Point | null, right: Point | null): boolean {
   return left?.x === right?.x && left?.y === right?.y;
 }
-
-const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
 
 const rotations = [0, 90, 180, 270] as const;
 
@@ -147,16 +145,10 @@ export async function createGameRuntime({
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
-  let running = false;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
   let dead = false;
-  let animationFrameId: number | null = null;
-  let lastFrameTime: number | null = null;
-  let canvasHost: HTMLElement | null = null;
-  let canvas: HTMLCanvasElement | null = null;
-  let context: CanvasRenderingContext2D | null = null;
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
@@ -167,48 +159,41 @@ export async function createGameRuntime({
     rejection,
   });
 
-  const canAnimate = (): boolean =>
-    running &&
-    !state.paused &&
-    state.metrics.state === "running" &&
-    state.speed !== 0;
-
-  const syncAnimationLoop = (): void => {
-    if (canAnimate()) {
-      if (
-        animationFrameId === null &&
-        typeof requestAnimationFrame === "function"
-      ) {
-        animationFrameId = requestAnimationFrame(frame);
-      }
-
-      return;
-    }
-
-    if (
-      animationFrameId !== null &&
-      typeof cancelAnimationFrame === "function"
-    ) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-
-    lastFrameTime = null;
-  };
-
-  const render = (): void => {
-    if (canvas === null || context === null) {
-      return;
-    }
-
-    syncCanvasSize(canvas);
-    renderGame(context, state, ui);
-  };
+  // The canvas surface, 2D context, and requestAnimationFrame loop live in a
+  // dedicated host module. The host reads runtime state through these getters
+  // and forwards DOM pointer events back into the controller via callbacks —
+  // it never mutates game/UI state directly. `api` is referenced lazily inside
+  // the callbacks (the host only invokes them after `mount`/`start`, by which
+  // point `api` is initialized), mirroring the prior `frame` -> `api.tick`
+  // forward reference.
+  const canvasHost = createCanvasHost({
+    getState: () => state,
+    getUi: () => ui,
+    onTick: (deltaSeconds) => {
+      void api.tick(deltaSeconds);
+    },
+    onTileClick: (point) => {
+      api.handleTileClick(point);
+    },
+    onHoverTile: (point) => {
+      api.setHoverTile(point);
+    },
+    onDragStart: (point) => api.startDrag(point).ui.drag !== null,
+    onDragCurrent: (point) => {
+      api.setDragCurrent(point);
+    },
+    onDragCommit: () => {
+      api.commitDrag();
+    },
+    onDragCancel: () => {
+      api.cancelDrag();
+    },
+  });
 
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
-    render();
-    syncAnimationLoop();
+    canvasHost.render();
+    canvasHost.syncAnimationLoop();
 
     for (const listener of listeners) {
       listener(snapshot);
@@ -223,8 +208,8 @@ export async function createGameRuntime({
     ui = nextUi;
 
     if (!changed) {
-      render();
-      syncAnimationLoop();
+      canvasHost.render();
+      canvasHost.syncAnimationLoop();
       return getSnapshot();
     }
 
@@ -243,227 +228,7 @@ export async function createGameRuntime({
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
-    running = false;
-    lastFrameTime = null;
-    syncAnimationLoop();
-  };
-
-  const frame = (timestamp: number): void => {
-    animationFrameId = null;
-
-    if (!running) {
-      return;
-    }
-
-    const previousTimestamp = lastFrameTime ?? timestamp;
-    lastFrameTime = timestamp;
-    const deltaSeconds = Math.max(0, (timestamp - previousTimestamp) / 1_000);
-
-    if (deltaSeconds > 0) {
-      void api.tick(deltaSeconds);
-    } else {
-      render();
-      syncAnimationLoop();
-    }
-  };
-
-  const start = (): void => {
-    if (running) {
-      return;
-    }
-
-    running = true;
-    lastFrameTime = null;
-    render();
-    syncAnimationLoop();
-  };
-
-  const mountCanvas = (host: HTMLElement): (() => void) => {
-    if (canvasHost === host && canvas !== null) {
-      render();
-      return () => {
-        if (canvasHost === host) {
-          canvas = null;
-          context = null;
-          canvasHost = null;
-          host.innerHTML = "";
-        }
-      };
-    }
-
-    canvasHost = host;
-    host.innerHTML = "";
-    canvas = document.createElement("canvas");
-    canvas.dataset.runtimeCanvas = "true";
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.style.display = "block";
-    host.appendChild(canvas);
-    context = canvas.getContext("2d");
-
-    if (context === null) {
-      throw new Error("Canvas 2D context unavailable");
-    }
-
-    const handleClick = (event: MouseEvent): void => {
-      if (canvas === null) {
-        return;
-      }
-
-      if (DRAG_TOOLS.has(ui.activeTool)) {
-        return; // drag tools are driven by pointerdown/up below.
-      }
-
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-
-      if (point !== null) {
-        api.handleTileClick(point);
-      }
-    };
-
-    const handlePointerMove = (event: PointerEvent): void => {
-      if (canvas === null) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      // A live drag tracks its own `current`; only idle movement updates the
-      // hover tile (badge / building preview / hover highlight).
-      if (ui.drag !== null) {
-        api.setDragCurrent(point);
-      } else {
-        api.setHoverTile(point);
-      }
-    };
-
-    const capturePointer = (pointerId: number): void => {
-      // Capture so a release a pixel past the board edge still commits instead
-      // of firing pointerleave -> cancelDrag (which would discard the road).
-      if (canvas !== null && typeof canvas.setPointerCapture === "function") {
-        try {
-          canvas.setPointerCapture(pointerId);
-        } catch {
-          // Some engines throw if the pointer is already inactive; a missed
-          // capture only falls back to the pre-capture behavior, so ignore.
-        }
-      }
-    };
-
-    const releasePointer = (pointerId: number): void => {
-      if (
-        canvas !== null &&
-        typeof canvas.hasPointerCapture === "function" &&
-        typeof canvas.releasePointerCapture === "function" &&
-        canvas.hasPointerCapture(pointerId)
-      ) {
-        canvas.releasePointerCapture(pointerId);
-      }
-    };
-
-    const handlePointerDown = (event: PointerEvent): void => {
-      // Only the primary (left) button initiates a drag. Right/middle clicks
-      // would otherwise start a stale drag gesture.
-      if (
-        canvas === null ||
-        event.button !== 0 ||
-        !DRAG_TOOLS.has(ui.activeTool)
-      ) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      if (point === null) {
-        return;
-      }
-      const snapshot = api.startDrag(point);
-      if (snapshot.ui.drag !== null) {
-        capturePointer(event.pointerId);
-      }
-    };
-
-    const handlePointerUp = (event: PointerEvent): void => {
-      // Only the primary button commits; a stray right/middle release mid-drag
-      // must not place the road early.
-      if (canvas === null || ui.drag === null || event.button !== 0) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      // Snap the gesture to the release tile before committing, so a release on
-      // a different tile than the last move builds to where the user let go.
-      api.setDragCurrent(point);
-      api.commitDrag();
-      releasePointer(event.pointerId);
-    };
-
-    const handlePointerLeave = (): void => {
-      // With pointer capture active the browser suppresses leave mid-drag, so
-      // reaching here means the cursor left the board outside a drag — or the
-      // host engine lacks pointer capture, in which case an abandoned drag
-      // should still be cancelled rather than left dangling.
-      if (ui.drag !== null) {
-        api.cancelDrag();
-      }
-      api.setHoverTile(null);
-    };
-
-    const handlePointerCancel = (event: PointerEvent): void => {
-      // pointercancel is a genuine interruption (OS stealing the pointer, etc.)
-      // and still fires under pointer capture: tear the drag down explicitly.
-      if (ui.drag !== null) {
-        api.cancelDrag();
-      }
-      api.setHoverTile(null);
-      releasePointer(event.pointerId);
-    };
-
-    const handleResize = (): void => {
-      render();
-    };
-
-    canvas.addEventListener("click", handleClick);
-    canvas.addEventListener("pointermove", handlePointerMove);
-    canvas.addEventListener("pointerdown", handlePointerDown);
-    canvas.addEventListener("pointerup", handlePointerUp);
-    canvas.addEventListener("pointerleave", handlePointerLeave);
-    canvas.addEventListener("pointercancel", handlePointerCancel);
-    globalThis.window?.addEventListener("resize", handleResize);
-    render();
-
-    return () => {
-      if (canvasHost !== host || canvas === null) {
-        return;
-      }
-
-      canvas.removeEventListener("click", handleClick);
-      canvas.removeEventListener("pointermove", handlePointerMove);
-      canvas.removeEventListener("pointerdown", handlePointerDown);
-      canvas.removeEventListener("pointerup", handlePointerUp);
-      canvas.removeEventListener("pointerleave", handlePointerLeave);
-      canvas.removeEventListener("pointercancel", handlePointerCancel);
-      globalThis.window?.removeEventListener("resize", handleResize);
-      host.innerHTML = "";
-      canvas = null;
-      context = null;
-      canvasHost = null;
-    };
+    canvasHost.stop();
   };
 
   const failBackend = (error: unknown): RuntimeSnapshot => {
@@ -948,11 +713,9 @@ export async function createGameRuntime({
         listeners.delete(listener);
       };
     },
-    start,
+    start: canvasHost.start,
     stop,
-    isRunning() {
-      return running;
-    },
+    isRunning: canvasHost.isRunning,
     tick(deltaSeconds) {
       return enqueueTick(deltaSeconds);
     },
@@ -1433,7 +1196,7 @@ export async function createGameRuntime({
       rejection = null;
       return publish();
     },
-    mountCanvas,
+    mountCanvas: canvasHost.mount,
   };
 
   return api;
