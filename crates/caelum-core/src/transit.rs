@@ -1152,6 +1152,12 @@ where
         // the cursor defensively and stop advancing this vehicle — mirroring
         // the break_service skip in route_lifecycle.rs.
         let Some(path) = leg.current_path.as_ref() else {
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "warning: vehicle {} on route {} leg {} has no current_path; skipping advance",
+                    vehicle.id, vehicle.line_id, itinerary_index
+                );
+            }
             vehicle.path_step_index = 0;
             vehicle.step_progress = 0.0;
             return completion_events_changed;
@@ -1168,6 +1174,12 @@ where
         // Defensive: a corrupted step index should not crash both hosts.
         // Reset the cursor and stop advancing this vehicle.
         let Some(step) = path.step(vehicle.path_step_index) else {
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "warning: vehicle {} on route {} leg {} has corrupted step index {}; skipping advance",
+                    vehicle.id, vehicle.line_id, itinerary_index, vehicle.path_step_index
+                );
+            }
             vehicle.path_step_index = 0;
             vehicle.step_progress = 0.0;
             return completion_events_changed;
@@ -1209,6 +1221,12 @@ fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {
         .current_path
         .as_ref()
     else {
+        if cfg!(debug_assertions) {
+            eprintln!(
+                "warning: vehicle {} on route {} has no current_path in advance_vehicle_cursor; cursor reset",
+                vehicle.id, vehicle.line_id
+            );
+        }
         vehicle.path_step_index = 0;
         vehicle.step_progress = 0.0;
         return;

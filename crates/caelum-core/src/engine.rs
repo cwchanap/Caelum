@@ -508,7 +508,7 @@ impl GameEngine {
             Ok(topology) => topology,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
-        let candidate = match route_lifecycle::recompute_affected_routes(
+        let candidate = match route_lifecycle::recompute_all_routes(
             &self.snapshot,
             network_candidate.snapshot,
             RoutingContext {

@@ -178,7 +178,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
 
     let candidate = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
     let candidate_topology = RoadTopology::compile(&candidate.map).unwrap();
-    let next = route_lifecycle::recompute_affected_routes(
+    let next = route_lifecycle::recompute_all_routes(
         &state,
         candidate,
         RoutingContext {
@@ -192,8 +192,72 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         next.transit.vehicles[0].parked_position,
         Some((10, 5).into())
     );
+    assert_eq!(next.transit.vehicles[0].itinerary_index, 3);
     assert_eq!(next.active_trips[0].position, (10, 5).into());
     assert_eq!(next.active_trips[0].status, TripStatus::Idle);
+}
+
+#[test]
+fn shuttle_break_then_restore_preserves_return_itinerary_index() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for x in [2, 6, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    });
+    let mut state = engine.snapshot();
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let waypoint_ids = state.transit.routes[0].stop_ids.clone();
+    state.transit.routes[0].pattern = ServicePattern::Shuttle;
+    state.transit.routes[0].legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &waypoint_ids,
+        ServicePattern::Shuttle,
+    );
+    state.transit.vehicles[0].itinerary_index = 3;
+
+    // Break: remove road at (8,5) to disconnect stop-002 from stop-003.
+    let broken = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
+    let broken_topology = RoadTopology::compile(&broken.map).unwrap();
+    let broken = route_lifecycle::recompute_all_routes(
+        &state,
+        broken,
+        RoutingContext {
+            road_topology: &broken_topology,
+        },
+    )
+    .expect("fixture route revisions are available");
+    assert!(broken.transit.routes[0].path_broken);
+    assert_eq!(
+        broken.transit.vehicles[0].parked_position,
+        Some((10, 5).into())
+    );
+    assert_eq!(broken.transit.vehicles[0].itinerary_index, 3);
+
+    // Restore: re-add road at (8,5) to reconnect the route.
+    let restored = transit::lay_road(&broken, &(8, 5).into()).unwrap();
+    let restored_topology = RoadTopology::compile(&restored.map).unwrap();
+    let restored = route_lifecycle::recompute_all_routes(
+        &broken,
+        restored,
+        RoutingContext {
+            road_topology: &restored_topology,
+        },
+    )
+    .expect("fixture route revisions are available");
+    assert!(!restored.transit.routes[0].path_broken);
+    assert_eq!(restored.transit.vehicles[0].parked_position, None);
+    assert_eq!(restored.transit.vehicles[0].itinerary_index, 3);
 }
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {

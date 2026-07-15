@@ -432,11 +432,7 @@ fn seed_edit_preview_history(old_legs: &[RouteLegPath], preview_legs: &mut [Rout
         }
         leg.last_valid_path = old_legs
             .iter()
-            .find(|old| {
-                old.from_waypoint_id == leg.from_waypoint_id
-                    && old.to_waypoint_id == leg.to_waypoint_id
-                    && old.direction == leg.direction
-            })
+            .find(|old| old.key() == leg.key())
             .and_then(|old| old.last_valid_path.clone());
     }
 }

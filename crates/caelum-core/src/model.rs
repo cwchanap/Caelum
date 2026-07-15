@@ -297,13 +297,23 @@ pub struct GameMap {
 }
 
 impl GameMap {
-    pub fn tile(&self, point: Point) -> Option<&Tile> {
+    fn tile_index(&self, point: Point) -> Option<usize> {
         if point.x < 0
             || point.x >= i32::from(self.width)
             || point.y < 0
             || point.y >= i32::from(self.height)
         {
             return None;
+        }
+        Some(point.y as usize * usize::from(self.width) + point.x as usize)
+    }
+
+    pub fn tile(&self, point: Point) -> Option<&Tile> {
+        let index = self.tile_index(point)?;
+        if let Some(tile) = self.tiles.get(index) {
+            if tile.x == point.x && tile.y == point.y {
+                return Some(tile);
+            }
         }
         self.tiles
             .iter()
@@ -311,16 +321,18 @@ impl GameMap {
     }
 
     pub fn tile_mut(&mut self, point: Point) -> Option<&mut Tile> {
-        if point.x < 0
-            || point.x >= i32::from(self.width)
-            || point.y < 0
-            || point.y >= i32::from(self.height)
-        {
-            return None;
+        let index = self.tile_index(point)?;
+        let indexed_matches = self
+            .tiles
+            .get(index)
+            .is_some_and(|tile| tile.x == point.x && tile.y == point.y);
+        if indexed_matches {
+            self.tiles.get_mut(index)
+        } else {
+            self.tiles
+                .iter_mut()
+                .find(|tile| tile.x == point.x && tile.y == point.y)
         }
-        self.tiles
-            .iter_mut()
-            .find(|tile| tile.x == point.x && tile.y == point.y)
     }
 }
 

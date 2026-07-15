@@ -155,12 +155,9 @@ fn validate_edit_legs(
         if leg.status == RouteLegStatus::Connected {
             continue;
         }
-        let carried = old_legs.iter().any(|old| {
-            old.status != RouteLegStatus::Connected
-                && old.from_waypoint_id == leg.from_waypoint_id
-                && old.to_waypoint_id == leg.to_waypoint_id
-                && old.direction == leg.direction
-        });
+        let carried = old_legs
+            .iter()
+            .any(|old| old.status != RouteLegStatus::Connected && old.key() == leg.key());
         if !carried {
             return Err(disconnected_leg_rejection(leg, Some(route_id)));
         }
@@ -174,12 +171,10 @@ fn carry_forward_leg_history(old_legs: &[RouteLegPath], new_legs: &mut [RouteLeg
             leg.last_valid_path = leg.current_path.clone();
             continue;
         }
-        if let Some(old) = old_legs.iter().find(|old| {
-            old.status != RouteLegStatus::Connected
-                && old.from_waypoint_id == leg.from_waypoint_id
-                && old.to_waypoint_id == leg.to_waypoint_id
-                && old.direction == leg.direction
-        }) {
+        if let Some(old) = old_legs
+            .iter()
+            .find(|old| old.status != RouteLegStatus::Connected && old.key() == leg.key())
+        {
             leg.last_valid_path = old.last_valid_path.clone();
         }
     }

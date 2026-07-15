@@ -113,7 +113,7 @@ fn recompute_after_removal(previous: &GameSnapshot, removed: Point) -> GameSnaps
 
 fn recompute_after_candidate(previous: &GameSnapshot, candidate: GameSnapshot) -> GameSnapshot {
     let topology = RoadTopology::compile(&candidate.map).expect("candidate topology compiles");
-    route_lifecycle::recompute_affected_routes(
+    route_lifecycle::recompute_all_routes(
         previous,
         candidate,
         RoutingContext {

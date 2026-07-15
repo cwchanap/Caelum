@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::engine::RoutingContext;
 use crate::model::{
-    GameSnapshot, Heading, PathGeometry, Platform, RouteLegPath, RouteLegStatus, TransitMode,
-    TransitPath, TransitPathStepRef, TripPosition, Vehicle,
+    GameSnapshot, Heading, PathGeometry, Platform, RouteLegPath, RouteLegStatus, ServiceDirection,
+    TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
 use crate::rejection::{GameplayRejection, GameplayResult};
+use crate::service_itinerary::{service_visits, ServiceVisit};
 use crate::transit::invalidate_trips_for_line;
 use crate::transit_nodes::is_present_node;
 
@@ -38,6 +39,8 @@ pub fn rebase_edited_route_vehicles_and_riders(
         .iter()
         .filter_map(|id| old_ids.contains(id.as_str()).then_some(id.as_str()))
         .collect();
+    let new_legs = route_data(candidate, mode, route_id).map(|(_, _, legs)| legs.to_vec());
+    let previous_legs = route_data(previous, mode, route_id).map(|(_, _, legs)| legs.to_vec());
     let vehicle_indexes: Vec<usize> = candidate
         .transit
         .vehicles
@@ -49,6 +52,10 @@ pub fn rebase_edited_route_vehicles_and_riders(
 
     for vehicle_index in vehicle_indexes {
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let preferred_direction = previous_legs
+            .as_ref()
+            .and_then(|legs| legs.get(candidate_vehicle.itinerary_index % legs.len()))
+            .map(|leg| leg.direction);
         let vehicle_world = previous
             .transit
             .vehicles
@@ -57,7 +64,15 @@ pub fn rebase_edited_route_vehicles_and_riders(
             .and_then(|vehicle| vehicle_world_position(previous, mode, route_id, vehicle))
             .or_else(|| candidate_vehicle.parked_position.clone());
         let target = vehicle_world.as_ref().and_then(|world| {
-            parking_target_for_retained(candidate, mode, new_waypoint_ids, &retained_ids, world)
+            parking_target_for_retained(
+                candidate,
+                mode,
+                new_legs.as_deref().unwrap_or(&[]),
+                new_waypoint_ids,
+                &retained_ids,
+                world,
+                preferred_direction,
+            )
         });
         let parked_world = target
             .as_ref()
@@ -91,26 +106,24 @@ pub fn rebase_edited_route_vehicles_and_riders(
 fn parking_target_for_retained(
     snapshot: &GameSnapshot,
     mode: TransitMode,
+    legs: &[RouteLegPath],
     waypoint_ids: &[String],
     retained_ids: &HashSet<&str>,
     vehicle_world: &TripPosition,
+    preferred_direction: Option<ServiceDirection>,
 ) -> Option<(usize, String, TripPosition)> {
-    waypoint_ids
-        .iter()
-        .enumerate()
-        .filter(|(_, id)| retained_ids.contains(id.as_str()))
-        .filter_map(|(index, id)| {
-            present_node_world(snapshot, mode, id).map(|world| (index, id.clone(), world))
-        })
-        .min_by(|left, right| {
-            squared_distance(&left.2, vehicle_world)
-                .total_cmp(&squared_distance(&right.2, vehicle_world))
-                .then_with(|| left.0.cmp(&right.0))
-                .then_with(|| left.1.cmp(&right.1))
-        })
+    let visits = service_visits(waypoint_ids, legs);
+    nearest_service_visit(
+        snapshot,
+        mode,
+        &visits,
+        vehicle_world,
+        preferred_direction,
+        |visit| retained_ids.contains(visit.waypoint_id.as_str()),
+    )
 }
 
-pub fn recompute_affected_routes(
+pub fn recompute_all_routes(
     previous: &GameSnapshot,
     mut candidate: GameSnapshot,
     context: RoutingContext<'_>,
@@ -278,10 +291,12 @@ fn break_service(
     mode: TransitMode,
     route_id: &str,
 ) {
-    let Some((_, waypoint_ids, _)) = route_data(candidate, mode, route_id) else {
+    let Some((_, waypoint_ids, legs)) = route_data(candidate, mode, route_id) else {
         return;
     };
     let waypoint_ids = waypoint_ids.to_vec();
+    let legs = legs.to_vec();
+    let previous_legs = route_data(previous, mode, route_id).map(|(_, _, legs)| legs.to_vec());
     let vehicle_indexes: Vec<usize> = candidate
         .transit
         .vehicles
@@ -293,6 +308,10 @@ fn break_service(
 
     for vehicle_index in vehicle_indexes {
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let preferred_direction = previous_legs
+            .as_ref()
+            .and_then(|legs| legs.get(candidate_vehicle.itinerary_index % legs.len()))
+            .map(|leg| leg.direction);
         let Some(vehicle_world) = previous
             .transit
             .vehicles
@@ -307,12 +326,25 @@ fn break_service(
             // still invalidated by `invalidate_trips_for_line` below.
             // Reset the cursor defensively so a corrupted step index cannot
             // survive a skip→restore cycle and trigger a deferred panic.
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "warning: vehicle {} on route {} has no world position; skipping park",
+                    candidate_vehicle.id, route_id
+                );
+            }
             let vehicle = &mut candidate.transit.vehicles[vehicle_index];
             vehicle.path_step_index = 0;
             vehicle.step_progress = 0.0;
             continue;
         };
-        let target = parking_target(candidate, mode, &waypoint_ids, &vehicle_world);
+        let target = parking_target(
+            candidate,
+            mode,
+            &legs,
+            &waypoint_ids,
+            &vehicle_world,
+            preferred_direction,
+        );
         let (itinerary_index, parked_world) = target.map_or_else(
             || (None, vehicle_world),
             |(index, _, world)| (Some(index), world),
@@ -379,6 +411,10 @@ fn rebase_parked_vehicles(
     resume: bool,
     waypoint_ids: &[String],
 ) {
+    let Some((_, _, legs)) = route_data(candidate, mode, route_id) else {
+        return;
+    };
+    let legs = legs.to_vec();
     let vehicle_indexes: Vec<usize> = candidate
         .transit
         .vehicles
@@ -388,6 +424,9 @@ fn rebase_parked_vehicles(
         .collect();
     for vehicle_index in vehicle_indexes {
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
+        let preferred_direction = legs
+            .get(candidate_vehicle.itinerary_index % legs.len())
+            .map(|leg| leg.direction);
         let vehicle_world = candidate_vehicle
             .parked_position
             .clone()
@@ -395,9 +434,14 @@ fn rebase_parked_vehicles(
         let Some(vehicle_world) = vehicle_world else {
             continue;
         };
-        let Some((itinerary_index, _, parked_world)) =
-            parking_target(candidate, mode, waypoint_ids, &vehicle_world)
-        else {
+        let Some((itinerary_index, _, parked_world)) = parking_target(
+            candidate,
+            mode,
+            &legs,
+            waypoint_ids,
+            &vehicle_world,
+            preferred_direction,
+        ) else {
             continue;
         };
         let vehicle = &mut candidate.transit.vehicles[vehicle_index];
@@ -426,20 +470,56 @@ fn vehicle_world_position(
 fn parking_target(
     snapshot: &GameSnapshot,
     mode: TransitMode,
+    legs: &[RouteLegPath],
     waypoint_ids: &[String],
     vehicle_world: &TripPosition,
+    preferred_direction: Option<ServiceDirection>,
 ) -> Option<(usize, String, TripPosition)> {
-    waypoint_ids
+    let visits = service_visits(waypoint_ids, legs);
+    nearest_service_visit(
+        snapshot,
+        mode,
+        &visits,
+        vehicle_world,
+        preferred_direction,
+        |_| true,
+    )
+}
+
+fn nearest_service_visit(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    visits: &[ServiceVisit],
+    vehicle_world: &TripPosition,
+    preferred_direction: Option<ServiceDirection>,
+    filter: impl Fn(&ServiceVisit) -> bool,
+) -> Option<(usize, String, TripPosition)> {
+    visits
         .iter()
-        .enumerate()
-        .filter_map(|(index, id)| {
-            present_node_world(snapshot, mode, id).map(|world| (index, id.clone(), world))
+        .filter(|visit| filter(visit))
+        .filter_map(|visit| {
+            present_node_world(snapshot, mode, &visit.waypoint_id).map(|world| (visit, world))
         })
-        .min_by(|left, right| {
-            squared_distance(&left.2, vehicle_world)
-                .total_cmp(&squared_distance(&right.2, vehicle_world))
-                .then_with(|| left.0.cmp(&right.0))
-                .then_with(|| left.1.cmp(&right.1))
+        .min_by(|(left, left_world), (right, right_world)| {
+            squared_distance(left_world, vehicle_world)
+                .total_cmp(&squared_distance(right_world, vehicle_world))
+                .then_with(|| {
+                    let left_matches = preferred_direction == Some(left.direction);
+                    let right_matches = preferred_direction == Some(right.direction);
+                    (!left_matches).cmp(&!right_matches)
+                })
+                .then_with(|| {
+                    left.departing_itinerary_index
+                        .cmp(&right.departing_itinerary_index)
+                })
+                .then_with(|| left.waypoint_id.cmp(&right.waypoint_id))
+        })
+        .map(|(visit, world)| {
+            (
+                visit.departing_itinerary_index,
+                visit.waypoint_id.clone(),
+                world,
+            )
         })
 }
 

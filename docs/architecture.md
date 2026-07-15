@@ -38,6 +38,8 @@ Road occupancy is not connectivity. Rust serializes reciprocal tile-edge connect
 
 Bus routes use deterministic weighted movement steps (straight, right, left, U-turn, roundabout entry/circulation/exit); metro routes continue to use deterministic track paths. The same Rust-provided step durations drive previews, trip estimates, and vehicle movement.
 
+**Plan deviation — arc vs. bezier geometry.** The route-direction-editing plan called for a `PathGeometry::Arc` variant in the Rust wire format for roundabout curves. The implementation replaced it with `PathGeometry::QuadraticBezier` in the Rust model (`crates/caelum-core/src/model.rs`) to avoid transcendental functions in the deterministic step-progress pipeline. The TypeScript `PathGeometry` type (`src/domain/types.ts`) retains an `arc` variant that is **render-only** — `roundaboutRenderer.ts` generates arc geometry locally for circulation-curve drawing, and `routeGeometry.ts` handles it for offset/projection/keying. The Rust wire format never produces `arc`; route and road path steps from Rust only use `line` and `quadraticBezier`.
+
 ### Route lifecycle and editing
 
 Routes store Loop/Shuttle directional service legs with current and last-valid tagged paths. Missing referenced nodes remain non-physical tombstones; exact same-kind/same-anchor rebuilding restores their identity. Route creation and revision-checked updates are atomic Rust intents. TypeScript owns only the unsaved ordered-ID draft and generation-safe rendering of Rust previews.
