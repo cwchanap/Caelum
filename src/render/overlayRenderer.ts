@@ -296,8 +296,9 @@ function renderRoadMutationPreview(
   state: GameState,
   ui: UiState,
   removal: boolean,
+  precomputed: RoadMutationPreviewView | null | undefined,
 ): void {
-  const preview = buildRoadMutationPreview(state, ui);
+  const preview = precomputed ?? buildRoadMutationPreview(state, ui);
   if (preview === null) {
     return;
   }
@@ -384,6 +385,7 @@ function renderDragPreview(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
+  roadPreview: RoadMutationPreviewView | null | undefined,
 ): void {
   // The gesture is atomic — a non-null `drag` already implies a drag tool and a
   // concrete current tile, so this single check replaces the old three-field
@@ -421,7 +423,13 @@ function renderDragPreview(
     return;
   }
 
-  renderRoadMutationPreview(ctx, state, ui, gesture.tool === "remove");
+  renderRoadMutationPreview(
+    ctx,
+    state,
+    ui,
+    gesture.tool === "remove",
+    roadPreview,
+  );
 }
 
 function transitNode(state: GameState, nodeId: string) {
@@ -598,6 +606,7 @@ export function renderOverlays(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
+  roadPreview: RoadMutationPreviewView | null | undefined = undefined,
 ): void {
   if (ui.activeOverlay === "coverage") {
     ctx.fillStyle = colors.coverage;
@@ -694,7 +703,7 @@ export function renderOverlays(
   renderBrokenRouteMarkers(ctx, state, ui);
 
   if (ui.drag !== null) {
-    renderDragPreview(ctx, state, ui);
+    renderDragPreview(ctx, state, ui, roadPreview);
     return;
   }
 
@@ -703,7 +712,13 @@ export function renderOverlays(
     ui.activeTool === "roundabout" ||
     ui.activeTool === "remove"
   ) {
-    renderRoadMutationPreview(ctx, state, ui, ui.activeTool === "remove");
+    renderRoadMutationPreview(
+      ctx,
+      state,
+      ui,
+      ui.activeTool === "remove",
+      roadPreview,
+    );
     if (ui.roadMutationPreview !== null) {
       return;
     }
@@ -736,8 +751,9 @@ export function renderRoadPreviewFeedbackBadge(
   state: GameState,
   ui: UiState,
   transform: BoardTransform,
+  precomputed: RoadMutationPreviewView | null | undefined = undefined,
 ): void {
-  const preview = buildRoadMutationPreview(state, ui);
+  const preview = precomputed ?? buildRoadMutationPreview(state, ui);
   if (preview === null) {
     return;
   }

@@ -452,7 +452,7 @@ pub fn compile_roundabout_transitions(
 ) -> GameplayResult<Vec<(RoadState, RoadTransition)>> {
     let parts = roundabout_parts(structure)?;
     let template = roundabout_template(parts.size, parts.origin);
-    let mut transitions = circulation_edges(parts.id, &template);
+    let mut transitions = circulation_edges(parts.id, &template)?;
     for port in parts.captured_ports {
         let Some(canonical_port) = template
             .port_slots
@@ -592,7 +592,10 @@ fn roundabout_parts(structure: &RoadStructure) -> GameplayResult<RoundaboutParts
     }
 }
 
-fn circulation_edges(id: &str, template: &RoundaboutTemplate) -> Vec<(RoadState, RoadTransition)> {
+fn circulation_edges(
+    id: &str,
+    template: &RoundaboutTemplate,
+) -> GameplayResult<Vec<(RoadState, RoadTransition)>> {
     let ring = &template.counterclockwise_ring;
     (0..ring.len())
         .map(|index| {
@@ -600,10 +603,10 @@ fn circulation_edges(id: &str, template: &RoundaboutTemplate) -> Vec<(RoadState,
             let current = ring[index];
             let next = ring[(index + 1) % ring.len()];
             let incoming = heading_between(previous, current)
-                .expect("roundabout ring points must be adjacent");
+                .ok_or_else(|| unsafe_template_mapping(template))?;
             let outgoing =
-                heading_between(current, next).expect("roundabout ring points must be adjacent");
-            (
+                heading_between(current, next).ok_or_else(|| unsafe_template_mapping(template))?;
+            Ok((
                 RoadState {
                     position: current,
                     incoming_heading: incoming,
@@ -625,7 +628,7 @@ fn circulation_edges(id: &str, template: &RoundaboutTemplate) -> Vec<(RoadState,
                         current.x, current.y, next.x, next.y
                     ),
                 },
-            )
+            ))
         })
         .collect()
 }
@@ -638,7 +641,7 @@ fn entry_transition(
     let (_, next) = ring_neighbors(template, port.point)?;
     let incoming = opposite(port.edge);
     let outgoing =
-        heading_between(port.point, next).expect("roundabout ring points must be adjacent");
+        heading_between(port.point, next).ok_or_else(|| unsafe_template_mapping(template))?;
     Ok((
         RoadState {
             position: port.point,
@@ -667,7 +670,7 @@ fn exit_transition(
 ) -> GameplayResult<(RoadState, RoadTransition)> {
     let (previous, _) = ring_neighbors(template, port.point)?;
     let incoming =
-        heading_between(previous, port.point).expect("roundabout ring points must be adjacent");
+        heading_between(previous, port.point).ok_or_else(|| unsafe_template_mapping(template))?;
     let destination = offset(port.point, port.edge);
     Ok((
         RoadState {
@@ -694,14 +697,14 @@ fn exit_transition(
 fn port_accepts_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
     let (_, next) = ring_neighbors(template, port.point)?;
     let outgoing =
-        heading_between(port.point, next).expect("roundabout ring points must be adjacent");
+        heading_between(port.point, next).ok_or_else(|| unsafe_template_mapping(template))?;
     Ok(opposite(port.edge) == outgoing)
 }
 
 fn port_accepts_outbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
     let (previous, _) = ring_neighbors(template, port.point)?;
     let incoming =
-        heading_between(previous, port.point).expect("roundabout ring points must be adjacent");
+        heading_between(previous, port.point).ok_or_else(|| unsafe_template_mapping(template))?;
     Ok(port.edge == incoming)
 }
 

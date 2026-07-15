@@ -36,6 +36,7 @@ const TEST_REJECTION: GameplayRejection = {
 type BackendSpy = GameBackend & {
   intents: GameIntent[];
   rejectNextDispatch(): void;
+  noopNextDispatch(): void;
   setSnapshot(next: RustGameSnapshot): void;
 };
 
@@ -615,6 +616,10 @@ function deferredDispatchBackend(
     rejectNextDispatch() {
       nextRejection = TEST_REJECTION;
     },
+    noopNextDispatch() {
+      // Deferred backend doesn't simulate no-op dispatches; provided for
+      // BackendSpy interface conformance.
+    },
     rejectNextDispatchWith(rejection) {
       nextRejection = rejection;
     },
@@ -692,12 +697,16 @@ function backendSpy(
   const intents: GameIntent[] = [];
   let snapshot = initial;
   let rejectNext = false;
+  let noopNext = false;
 
   return {
     ...previewBackendStubs(),
     intents,
     rejectNextDispatch() {
       rejectNext = true;
+    },
+    noopNextDispatch() {
+      noopNext = true;
     },
     setSnapshot(next) {
       snapshot = next;
@@ -716,6 +725,14 @@ function backendSpy(
           snapshot,
           applied: false,
           rejection: TEST_REJECTION,
+        };
+      }
+      if (noopNext) {
+        noopNext = false;
+        return {
+          snapshot,
+          applied: false,
+          rejection: null,
         };
       }
       snapshot = applyIntent(snapshot, intent);
@@ -2793,6 +2810,29 @@ describe("route creation and management", () => {
     // Dismissing still works after a tick.
     runtime.dismissRejection();
     expect(runtime.getSnapshot().rejection).toBeNull();
+  });
+
+  it("preserves a placement rejection across a no-op dispatch (not cleared by unchanged intent)", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    // Surface a rejection via a rejected dispatch.
+    backend.rejectNextDispatch();
+    const rejected = await runtime.setSpeed(2);
+    expect(rejected.rejection).toEqual(TEST_REJECTION);
+
+    // A no-op dispatch (applied === false, rejection === null — e.g. setting
+    // pause to the value it already holds) must NOT clear the prior rejection.
+    backend.noopNextDispatch();
+    const noop = await runtime.setSpeed(4);
+    expect(noop.rejection).toEqual(TEST_REJECTION);
+
+    // A subsequent successful dispatch still clears the rejection.
+    const next = await runtime.setSpeed(1);
+    expect(next.rejection).toBeNull();
   });
 });
 

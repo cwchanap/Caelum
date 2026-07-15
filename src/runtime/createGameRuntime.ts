@@ -283,7 +283,13 @@ export async function createGameRuntime({
     queueBackend(async () => {
       const result = await backend.dispatch(intent);
       backendError = null;
-      rejection = result.rejection;
+      // Preserve a prior rejection on no-op dispatches (applied === false,
+      // rejection === null) — otherwise a no-op intent like re-toggling pause
+      // would clear a placement rejection the player hasn't dismissed yet.
+      // Update only on success (clears) or when a new rejection is present.
+      if (result.applied || result.rejection !== null) {
+        rejection = result.rejection;
+      }
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
@@ -302,7 +308,9 @@ export async function createGameRuntime({
       }
       const result = await backend.dispatch(intent);
       backendError = null;
-      rejection = result.rejection;
+      if (result.applied || result.rejection !== null) {
+        rejection = result.rejection;
+      }
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)

@@ -1,5 +1,7 @@
 import type { GameMap, GameState, Point } from "../domain/types";
 import type { UiState } from "../ui/uiState";
+import { buildRoadMutationPreview } from "../runtime/runtimeSelectors";
+import type { RoadMutationPreviewView } from "../runtime/types";
 import { renderBuildings } from "./buildingRenderer";
 import { renderCitizens } from "./citizenRenderer";
 import { renderCursorBadge } from "./cursorBadge";
@@ -110,18 +112,25 @@ export function renderGame(
 ): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   const transform = getBoardTransform(ctx.canvas, state.map);
+  // Compute the road-mutation preview once per frame and share it between
+  // the overlay renderer (changed/skipped tiles) and the feedback badge
+  // (cost / route impacts) to avoid redundant derivations.
+  const roadPreview: RoadMutationPreviewView | null = buildRoadMutationPreview(
+    state,
+    ui,
+  );
 
   ctx.save();
   ctx.translate(transform.offsetX, transform.offsetY);
   ctx.scale(transform.scale, transform.scale);
   renderMap(ctx, state);
   renderBuildings(ctx, state);
-  renderOverlays(ctx, state, ui);
+  renderOverlays(ctx, state, ui, roadPreview);
   renderTransit(ctx, state, ui);
   renderCitizens(ctx, state);
   renderRouteDraftHandleOverlay(ctx, state, ui);
   ctx.restore();
 
-  renderRoadPreviewFeedbackBadge(ctx, state, ui, transform);
+  renderRoadPreviewFeedbackBadge(ctx, state, ui, transform, roadPreview);
   renderCursorBadge(ctx, state, ui, transform);
 }
