@@ -126,12 +126,21 @@ export type GameIntent =
       buildingType: BuildingType;
       origin: Point;
       rotation: BuildingRotation;
-    };
+    }
+  | { type: "setBudget"; budget: number };
+
+export interface DispatchContext {
+  changedTiles: Point[];
+  skippedTiles: Point[];
+  affectedRouteIds: string[];
+  cost: number;
+}
 
 export interface DispatchResult {
   snapshot: RustGameSnapshot;
   applied: boolean;
   rejection: GameplayRejection | null;
+  context: DispatchContext;
 }
 
 export type RoadMutation =

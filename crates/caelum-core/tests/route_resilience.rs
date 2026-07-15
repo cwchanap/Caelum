@@ -682,3 +682,145 @@ fn incompatible_tombstone_kind_allocates_without_restoring_it() {
     assert_eq!(next.transit.stops[1].kind, BusStopKind::BusStop);
     assert_eq!(next.transit.stops[1].status, TransitNodeStatus::Present);
 }
+
+#[test]
+fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
+    let mut engine = GameEngine::new();
+    // Lay a continuous track line and place two metro stations via the
+    // AddMetroStation intent (not PlaceBuilding), then create a metro line.
+    let track_points: Vec<Point> = (2..=10).map(|x| point(x, 4)).collect();
+    let laid = engine.dispatch(GameIntent::LayTrackLine {
+        points: track_points,
+    });
+    assert!(laid.applied, "fixture track line should apply: {laid:?}");
+    for x in [2, 10] {
+        let added = engine.dispatch(GameIntent::AddMetroStation { point: point(x, 4) });
+        assert!(added.applied, "fixture station should apply: {added:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(
+        created.applied,
+        "fixture metro line should apply: {created:?}"
+    );
+    let original_platforms = engine
+        .snapshot()
+        .transit
+        .stations
+        .iter()
+        .find(|s| s.id == "station-001")
+        .expect("station-001 exists")
+        .platforms
+        .clone();
+
+    // Remove one station — it becomes a tombstone and the line breaks.
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
+    assert!(removed.applied);
+    assert_eq!(
+        removed
+            .snapshot
+            .transit
+            .stations
+            .iter()
+            .find(|s| s.id == "station-001")
+            .expect("station-001 tombstoned")
+            .status,
+        TransitNodeStatus::Missing
+    );
+    assert!(removed.snapshot.transit.metro_lines[0].path_broken);
+
+    // Top up budget (2 stations + 1 metro vehicle exhausted most of 120k).
+    engine.set_budget_for_test(50_000);
+
+    // Rebuild via AddMetroStation intent — the same path the e2e exercises.
+    let restored = engine.dispatch(GameIntent::AddMetroStation { point: point(2, 4) });
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    let station = restored
+        .snapshot
+        .transit
+        .stations
+        .iter()
+        .find(|s| s.id == "station-001")
+        .expect("station-001 restored");
+    assert_eq!(station.status, TransitNodeStatus::Present);
+    assert_eq!(station.platforms, original_platforms);
+    assert!(!restored.snapshot.transit.metro_lines[0].path_broken);
+}
+
+#[test]
+fn shuttle_parking_prefers_visit_matching_previous_leg_direction() {
+    // A Shuttle route with an interior stop produces two service visits at
+    // the same position (outbound + return). When the route breaks, the
+    // vehicle should park at the visit whose direction matches its previous
+    // leg direction — the preferred_direction tie-break — rather than
+    // arbitrarily picking by itinerary index alone.
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 10));
+    for x in [2, 6, 10] {
+        let added = engine.dispatch(GameIntent::AddBusStop { point: point(x, 5) });
+        assert!(added.applied, "fixture stop should apply: {added:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids: vec![
+            "stop-001".to_string(),
+            "stop-002".to_string(),
+            "stop-003".to_string(),
+        ],
+    });
+    assert!(
+        created.applied,
+        "fixture shuttle route should apply: {created:?}"
+    );
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
+
+    // Place the vehicle on the return leg (itinerary index 4 = return
+    // direction) approaching the interior stop (stop-002 at (6,5)).
+    let mut state = assigned.snapshot;
+    let route_ref = &state.transit.routes[0];
+    // Find the return leg that arrives at stop-002.
+    let return_leg_index = route_ref
+        .legs
+        .iter()
+        .position(|leg| {
+            leg.direction == ServiceDirection::Return && leg.to_waypoint_id == "stop-002"
+        })
+        .expect("return leg to interior stop exists");
+    let return_leg = &route_ref.legs[return_leg_index];
+    let path = return_leg
+        .current_path
+        .as_ref()
+        .expect("return leg is connected");
+    let path_step_index = path.step_count().saturating_sub(1);
+    state.transit.vehicles[0].itinerary_index = return_leg_index;
+    state.transit.vehicles[0].path_step_index = path_step_index;
+    state.transit.vehicles[0].step_progress = 0.5;
+
+    // Break the route by removing a road tile between stop-002 and stop-003.
+    let next = recompute_after_removal(&state, point(8, 5));
+    let vehicle = vehicle(&next, "vehicle-001");
+
+    assert!(route(&next, "route-001").path_broken);
+    // The vehicle should park at the interior stop's position (6,5) —
+    // the nearest live waypoint — and its itinerary index should correspond
+    // to the return-direction visit, not the outbound one.
+    assert_eq!(vehicle.parked_position, Some(point(6, 5).into()));
+    let parked_itinerary = vehicle.itinerary_index;
+    let parked_leg = &route(&next, "route-001").legs[parked_itinerary];
+    assert_eq!(
+        parked_leg.direction,
+        ServiceDirection::Return,
+        "parking should prefer the return-direction visit matching the vehicle's previous leg"
+    );
+}

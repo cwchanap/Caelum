@@ -238,5 +238,6 @@ export interface RuntimeController {
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
+  debugSetBudget: (budget: number) => RuntimeCommandResult;
   mountCanvas: (host: HTMLElement) => () => void;
 }

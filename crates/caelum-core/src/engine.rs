@@ -472,6 +472,11 @@ impl GameEngine {
                 );
                 self.commit_network_mutation(candidate)
             }
+            GameIntent::SetBudget { budget } => {
+                let mut next = self.snapshot.clone();
+                next.budget = budget;
+                self.commit_result(Ok(next))
+            }
         }
     }
 

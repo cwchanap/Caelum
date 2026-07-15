@@ -95,7 +95,9 @@ function renderableLines(state: GameState): RenderableLine[] {
       waypointIds: line.stationIds,
       legs: line.legs,
     })),
-  ].sort((left, right) => left.id.localeCompare(right.id));
+  ].sort((left, right) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+  );
 }
 
 function buildCorridorGroups(lines: readonly RenderableLine[]): CorridorGroups {

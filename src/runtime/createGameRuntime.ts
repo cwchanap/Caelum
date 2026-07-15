@@ -1256,6 +1256,9 @@ export async function createGameRuntime({
       rejection = null;
       return publish();
     },
+    debugSetBudget(budget) {
+      return enqueueDispatch({ type: "setBudget", budget });
+    },
     mountCanvas: canvasHost.mount,
   };
 

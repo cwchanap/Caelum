@@ -326,6 +326,7 @@ function createRuntimeHarness(
       rejection = null;
       return publish();
     }),
+    debugSetBudget: vi.fn(() => publish()),
     mountCanvas: vi.fn(() => () => {}),
   };
 

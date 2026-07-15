@@ -52,6 +52,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -75,6 +81,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: undefined,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     } as unknown as DispatchResult;
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -93,6 +105,12 @@ describe("createTauriBackend", () => {
       rejection: {
         code: "invalidSpeed",
         context: { affectedRouteIds: [] },
+      },
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
       },
     };
     invokeMock.mockResolvedValueOnce(raw);
@@ -119,6 +137,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     };
     invokeMock.mockResolvedValueOnce(raw);
 

@@ -735,6 +735,11 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
                 ("size", json!("compact2x2")),
             ],
         ),
+        (
+            GameIntent::SetBudget { budget: 50_000 },
+            "setBudget",
+            vec![("budget", json!(50_000))],
+        ),
     ];
 
     // Exhaustiveness guard: every `GameIntent` variant must be wired up here.
@@ -764,6 +769,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::AssignRouteToPlatform { .. } => "assignRouteToPlatform",
             GameIntent::PaintAreaRectangle { .. } => "paintAreaRectangle",
             GameIntent::PlaceBuilding { .. } => "placeBuilding",
+            GameIntent::SetBudget { .. } => "setBudget",
         }
     }
 
@@ -1208,4 +1214,85 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
         })
     );
     assert!(rejected_value.get("affordable").is_none());
+}
+
+#[test]
+fn rejection_code_camel_case_spellings_are_exhaustive() {
+    // Pin the camelCase wire spelling for every `RejectionCode` variant. A new
+    // variant that is not wired up here will fail the exhaustiveness match so
+    // the TS host boundary cannot silently regress when the enum grows.
+    fn expected_camel(code: &RejectionCode) -> &'static str {
+        match code {
+            RejectionCode::InsufficientBudget => "insufficientBudget",
+            RejectionCode::InvalidSpeed => "invalidSpeed",
+            RejectionCode::BlockedTile => "blockedTile",
+            RejectionCode::OutOfBounds => "outOfBounds",
+            RejectionCode::RoadRequired => "roadRequired",
+            RejectionCode::TrackRequired => "trackRequired",
+            RejectionCode::InvalidRoadStroke => "invalidRoadStroke",
+            RejectionCode::InvalidTrackStroke => "invalidTrackStroke",
+            RejectionCode::InvalidDirectionChange => "invalidDirectionChange",
+            RejectionCode::NodeAlreadyExists => "nodeAlreadyExists",
+            RejectionCode::AmbiguousTransitNode => "ambiguousTransitNode",
+            RejectionCode::MissingRouteNode => "missingRouteNode",
+            RejectionCode::IncompatibleRouteNode => "incompatibleRouteNode",
+            RejectionCode::TooFewRouteNodes => "tooFewRouteNodes",
+            RejectionCode::DuplicateRouteNodes => "duplicateRouteNodes",
+            RejectionCode::DisconnectedLeg => "disconnectedLeg",
+            RejectionCode::RouteChangedWhileEditing => "routeChangedWhileEditing",
+            RejectionCode::RouteRevisionExhausted => "routeRevisionExhausted",
+            RejectionCode::RouteNotFound => "routeNotFound",
+            RejectionCode::InactiveRoute => "inactiveRoute",
+            RejectionCode::StructureNotFound => "structureNotFound",
+            RejectionCode::InvalidPlatform => "invalidPlatform",
+            RejectionCode::InvalidBuildingPlacement => "invalidBuildingPlacement",
+            RejectionCode::BlockedFootprint => "blockedFootprint",
+            RejectionCode::UnsafeRoundaboutPortMapping => "unsafeRoundaboutPortMapping",
+        }
+    }
+
+    let all_codes = [
+        RejectionCode::InsufficientBudget,
+        RejectionCode::InvalidSpeed,
+        RejectionCode::BlockedTile,
+        RejectionCode::OutOfBounds,
+        RejectionCode::RoadRequired,
+        RejectionCode::TrackRequired,
+        RejectionCode::InvalidRoadStroke,
+        RejectionCode::InvalidTrackStroke,
+        RejectionCode::InvalidDirectionChange,
+        RejectionCode::NodeAlreadyExists,
+        RejectionCode::AmbiguousTransitNode,
+        RejectionCode::MissingRouteNode,
+        RejectionCode::IncompatibleRouteNode,
+        RejectionCode::TooFewRouteNodes,
+        RejectionCode::DuplicateRouteNodes,
+        RejectionCode::DisconnectedLeg,
+        RejectionCode::RouteChangedWhileEditing,
+        RejectionCode::RouteRevisionExhausted,
+        RejectionCode::RouteNotFound,
+        RejectionCode::InactiveRoute,
+        RejectionCode::StructureNotFound,
+        RejectionCode::InvalidPlatform,
+        RejectionCode::InvalidBuildingPlacement,
+        RejectionCode::BlockedFootprint,
+        RejectionCode::UnsafeRoundaboutPortMapping,
+    ];
+
+    let mut seen = std::collections::HashSet::new();
+    for code in &all_codes {
+        let rejection = GameplayRejection::new(code.clone());
+        let value = serde_json::to_value(&rejection)
+            .unwrap_or_else(|_| panic!("rejection {code:?} should serialize"));
+        let expected = expected_camel(code);
+        assert_eq!(
+            value["code"],
+            json!(expected),
+            "RejectionCode wire spelling changed for {code:?}"
+        );
+        assert!(
+            seen.insert(expected),
+            "duplicate camelCase spelling: {expected}"
+        );
+    }
 }

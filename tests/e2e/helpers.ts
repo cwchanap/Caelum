@@ -213,3 +213,26 @@ export async function rebuildRoadTile(
   await buildItem(page, "Road", "1-Lane");
   await clickMapTile(canvas, tile);
 }
+
+/**
+ * Set the budget to a specific amount via the debug SetBudget intent.
+ * Used by e2e tests that need to top up the budget when the normal
+ * gameplay flow would exhaust it (e.g. metro tombstone rebuild after
+ * 2 stations + 1 vehicle = 100k of 120k starting budget).
+ */
+export async function debugSetBudget(
+  page: Page,
+  budget: number,
+): Promise<void> {
+  await page.evaluate(
+    (amount) =>
+      (
+        window as unknown as {
+          __caelumRuntime?: {
+            debugSetBudget: (budget: number) => Promise<unknown>;
+          };
+        }
+      ).__caelumRuntime?.debugSetBudget(amount),
+    budget,
+  );
+}

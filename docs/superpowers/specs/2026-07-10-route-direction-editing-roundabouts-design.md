@@ -485,10 +485,13 @@ platform assignments, and edit history. Once every leg reconnects, it resumes
 automatically unless the player had paused it.
 
 Parking chooses the nearest retained live waypoint by squared world-space
-distance, then waypoint order, then stable node ID. If no live waypoint remains,
-the vehicle keeps an explicit out-of-service parked position at its current or
-last valid world position. Riders disembark there and replan. When any waypoint
-is later restored, the vehicle rebases through the normal nearest-waypoint rule.
+distance, then preferred service direction (matching the vehicle's previous leg
+direction to avoid unnecessary reversals, particularly for Shuttle interior
+stops that produce two visits at the same position), then waypoint order
+(itinerary index), then stable node ID. If no live waypoint remains, the vehicle
+keeps an explicit out-of-service parked position at its current or last valid
+world position. Riders disembark there and replan. When any waypoint is later
+restored, the vehicle rebases through the normal nearest-waypoint rule.
 
 ## Transactional route editor
 

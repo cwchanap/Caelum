@@ -101,6 +101,12 @@ pub enum GameIntent {
         origin: Point,
         rotation: u16,
     },
+    /// Debug-only intent to set the budget directly. Used by e2e tests to
+    /// top up the budget when the normal gameplay flow would exhaust it
+    /// (e.g. metro tombstone rebuild after 2 stations + 1 vehicle).
+    SetBudget {
+        budget: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@ import type { MovementKind, RouteLegPath } from "../../src/domain/types";
 import {
   buildItem,
   clickMapTile,
+  debugSetBudget,
   dragMapTiles,
   openHudCategory,
   rebuildRoadTile,
@@ -11,10 +12,10 @@ import {
 } from "./helpers";
 
 const TURN_ROUTE_STOPS = [
-  { x: 8, y: 10 },
-  { x: 9, y: 11 },
+  { x: 8, y: 3 },
+  { x: 9, y: 4 },
 ] as const;
-const EXTRA_TURN_STOP = { x: 8, y: 11 } as const;
+const EXTRA_TURN_STOP = { x: 12, y: 4 } as const;
 const DAMAGE_ROUTE_STOPS = [
   { x: 4, y: 4 },
   { x: 12, y: 4 },
@@ -283,10 +284,10 @@ test("turns between paired roads and edits the committed route", async ({
 }) => {
   await page.goto("/");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
-  await buildItem(page, "Road", "2-Lane");
-  await dragMapTiles(page, canvas, { x: 3, y: 11 }, { x: 13, y: 11 });
-  await buildItem(page, "Road", "2-Lane");
-  await dragMapTiles(page, canvas, { x: 8, y: 6 }, { x: 8, y: 15 });
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 13, y: 4 });
+  await buildItem(page, "Road", "1-Lane");
+  await dragMapTiles(page, canvas, { x: 8, y: 2 }, { x: 8, y: 10 });
   await buildItem(page, "Bus", "Bus Stop");
   for (const stop of [...TURN_ROUTE_STOPS, EXTRA_TURN_STOP]) {
     await clickMapTile(canvas, stop);
@@ -309,8 +310,16 @@ test("turns between paired roads and edits the committed route", async ({
   await page.getByRole("radio", { name: "Loop" }).check();
   await page.getByRole("button", { name: "Save route" }).click();
 
+  // Poll until the route is committed — the Save dispatch is async.
+  await expect
+    .poll(async () => {
+      const routes = (await runtimeSnapshot(page)).state.transit.routes;
+      return routes.length > 0;
+    })
+    .toBe(true);
+
   await openHudCategory(page, "manage");
-  await page.getByRole("button", { name: /Edit Route/ }).click();
+  await page.getByRole("button", { name: /Edit Bus 1/ }).click();
   await page.getByTestId("route-waypoint-0").click();
   await page.getByRole("button", { name: "Insert after" }).click();
   await clickMapTile(canvas, EXTRA_TURN_STOP);
@@ -376,6 +385,11 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
     "Broken",
   );
+
+  // Top up the budget: 2 stations (50k) + 1 metro vehicle (50k) + track
+  // exhausted most of the 120k starting budget, leaving <25k — not enough
+  // for the 25k station rebuild.
+  await debugSetBudget(page, 120_000);
 
   await buildItem(page, "Metro", "Metro Station");
   await clickMapTile(canvas, first);

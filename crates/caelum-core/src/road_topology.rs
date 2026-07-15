@@ -80,25 +80,22 @@ impl RoadTopology {
         }
 
         // Fast path: direct single-transition U-turn at the terminal tile
-        // (bidirectional roads and automatic junctions).
+        // (bidirectional roads and automatic junctions). Use the transition's
+        // actual travel_millis (BUS_TILE_MILLIS + U_TURN_MILLIS) so estimates
+        // and vehicle movement agree on the same U-turn cost.
         if let Some(transition) = self.transition_for(start, next_required_entry_heading) {
             if transition.movement == MovementKind::UTurn {
-                let geometry = transition_geometry(
-                    terminal,
-                    previous_exit_heading,
-                    terminal,
-                    next_required_entry_heading,
-                );
+                let travel_seconds = f64::from(transition.travel_millis) / 1_000.0;
                 return Some(TransitPath::Road {
                     steps: vec![RoadPathStep {
                         position: terminal,
                         entering_heading: previous_exit_heading,
                         leaving_heading: next_required_entry_heading,
                         movement: MovementKind::UTurn,
-                        geometry,
-                        travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+                        geometry: transition.geometry.clone(),
+                        travel_seconds,
                     }],
-                    total_travel_seconds: f64::from(U_TURN_MILLIS) / 1_000.0,
+                    total_travel_seconds: travel_seconds,
                 });
             }
         }

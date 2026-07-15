@@ -184,6 +184,12 @@ function backendSpy(): GameBackend {
         snapshot,
         applied: true,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       };
     },
     async tick(): Promise<DispatchResult> {
@@ -191,6 +197,12 @@ function backendSpy(): GameBackend {
         snapshot,
         applied: false,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       };
     },
     async reset() {

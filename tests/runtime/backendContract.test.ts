@@ -246,11 +246,23 @@ describe("Rust backend contract", () => {
         },
         applied: true,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       }),
       tick: async () => ({
         snapshot,
         applied: false,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       }),
       reset: async () => snapshot,
     };
