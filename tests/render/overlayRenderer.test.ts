@@ -644,7 +644,7 @@ describe("authoritative road mutation preview", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
-      activeTool: "road",
+      activeTool: "road" as const,
       drag,
       roadPreviewGeneration: 1,
       roadMutationPreview: {
@@ -674,7 +674,7 @@ describe("authoritative road mutation preview", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
-      activeTool: "road",
+      activeTool: "road" as const,
       drag,
       roadPreviewGeneration: 1,
       roadMutationPreview: {
@@ -685,8 +685,8 @@ describe("authoritative road mutation preview", () => {
         cost: 500,
         skippedTiles: [],
         routeImpacts: [
-          { routeId: "route-z", kind: "broken" },
-          { routeId: "route-a", kind: "rerouted" },
+          { routeId: "route-z", kind: "broken" as const },
+          { routeId: "route-a", kind: "rerouted" as const },
         ],
         warnings: [],
         rejection: null,
@@ -850,7 +850,7 @@ describe("authoritative road mutation preview", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
-      activeTool: "roundabout",
+      activeTool: "roundabout" as const,
       hoverTile: structure.origin,
       roadPreviewGeneration: 1,
       roadMutationPreview: {
@@ -863,7 +863,7 @@ describe("authoritative road mutation preview", () => {
         routeImpacts: [],
         warnings: [],
         rejection: {
-          code: "unsafeRoundaboutPortMapping",
+          code: "unsafeRoundaboutPortMapping" as const,
           context: { affectedRouteIds: [] },
         },
       },

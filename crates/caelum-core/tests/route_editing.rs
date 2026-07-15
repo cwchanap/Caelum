@@ -638,7 +638,7 @@ fn update_reports_route_not_found_and_uses_world_parking_without_retained_nodes(
         RejectionCode::RouteNotFound
     );
 
-    let mut engine = editable_bus_engine(&[2, 6, 10, 14], BUS_COST);
+    let mut engine = editable_bus_engine(&[2, 6, 10, 13], BUS_COST);
     create_route(
         &mut engine,
         TransitMode::Bus,

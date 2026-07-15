@@ -652,7 +652,11 @@ pub fn project_position_onto_path(
         .into_iter()
         .map(|(index, step)| project_onto_step(index, &step, &world))
         .min_by(compare_projection)
-        .expect("connected path has at least one step")
+        .unwrap_or(PathProjection {
+            path_step_index: 0,
+            step_progress: 0.0,
+            distance_squared: f64::MAX,
+        })
 }
 
 fn project_onto_step(

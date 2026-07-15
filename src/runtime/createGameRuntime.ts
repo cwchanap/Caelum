@@ -235,7 +235,18 @@ export async function createGameRuntime({
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
     stop();
-    return publish();
+    // Clear stale preview UI so a fatal error doesn't leave the road preview
+    // overlay visible or the route draft stuck at previewPending forever.
+    const clearedUi: UiState = {
+      ...ui,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+      routeDraft:
+        ui.routeDraft === null
+          ? ui.routeDraft
+          : { ...ui.routeDraft, previewPending: false },
+    };
+    return commit(state, clearedUi);
   };
 
   const queueBackend = (
@@ -750,6 +761,7 @@ export async function createGameRuntime({
       return commit(state, createUiState());
     },
     setTool(tool) {
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       const next = nextToolUiState(tool, ui);
@@ -769,11 +781,13 @@ export async function createGameRuntime({
         : requestRoadMutationPreview(mutation);
     },
     setBuilding(building) {
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, nextBuildingUiState(building, ui));
     },
     setArea(area) {
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, nextAreaUiState(area, ui));
@@ -801,6 +815,7 @@ export async function createGameRuntime({
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       const snapshot = commit(state, {
@@ -816,6 +831,7 @@ export async function createGameRuntime({
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
       // and invalidates any in-flight road preview so an older footprint can
       // never populate the newly armed stamp.
+      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       const snapshot = commit(state, {

@@ -1393,7 +1393,7 @@ fn is_valid_bus_stop_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         tile.kind == "road"
             && !tile.has_track
-            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
+            && tile.road_structure_id.is_none()
             && !is_building_occupied(state, point)
             && !state
                 .transit
@@ -1407,7 +1407,7 @@ fn is_valid_metro_station_placement(state: &GameSnapshot, point: &Point) -> bool
     get_tile(&state.map, point).is_some_and(|tile| {
         (tile.kind == "road" || tile.kind == "empty")
             && tile.has_track
-            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
+            && tile.road_structure_id.is_none()
             && !is_building_occupied(state, point)
             && !state
                 .transit
@@ -1421,7 +1421,7 @@ fn is_valid_track_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
         (tile.kind == "empty" || tile.kind == "road")
             && !tile.has_track
-            && !crate::roundabouts::is_roundabout_owned(&state.map, *point)
+            && tile.road_structure_id.is_none()
             && !is_building_occupied(state, point)
             && !is_transit_node_at(state, point)
     })

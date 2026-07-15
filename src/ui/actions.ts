@@ -3,10 +3,8 @@ import { isPresentTransitNode } from "../runtime/snapshotView";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,
-  removeWaypoint,
   resolveStationAtTile,
   resolveStopAtTile,
-  selectWaypoint,
   type RouteDraft,
 } from "./routeDraft";
 import type { UiState } from "./uiState";
@@ -140,28 +138,6 @@ export function applyUiTileClick(
   }
 
   return { state, ui };
-}
-
-export function removeDraftNode(
-  _state: GameState,
-  ui: UiState,
-  index: number,
-): UiState {
-  if (ui.routeDraft === null) return ui;
-  const selected = selectWaypoint(
-    ui.routeDraft,
-    index,
-    ui.routeDraft.interaction,
-  );
-  const routeDraft = removeWaypoint(selected);
-  return routeDraft === ui.routeDraft
-    ? ui
-    : {
-        ...ui,
-        routeDraft,
-        routePreviewError: null,
-        routePreviewHostError: null,
-      };
 }
 
 export { cancelDraftRoute, resolveStationAtTile, resolveStopAtTile };

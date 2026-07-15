@@ -4,7 +4,6 @@ import {
   applyUiTileClick,
   cancelDraftRoute,
   draftHandleIndexAtPoint,
-  removeDraftNode,
   resolveNodeAtTile,
   resolveNodesAtTile,
 } from "../../src/ui/actions";
@@ -283,17 +282,6 @@ describe("applyUiTileClick route drafts", () => {
       "station-001",
       "station-002",
     ]);
-  });
-
-  it("removes draft nodes by index and keeps paths in sync", () => {
-    const { state, ui } = busDraftState();
-    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
-    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
-
-    const next = removeDraftNode(state, result.ui, 0);
-
-    expect(next.routeDraft?.waypointIds).toEqual(["stop-002"]);
-    expect(next.routeDraft?.preview).toBeNull();
   });
 
   it("cancels both drafts", () => {
