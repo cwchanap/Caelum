@@ -12,8 +12,8 @@ use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point,
     RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
     RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, Station, Stop,
-    Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -29,7 +29,7 @@ fn point(x: i32, y: i32) -> Point {
 }
 
 #[test]
-fn transit_node_kind_and_status_are_required_schema_v2_fields() {
+fn transit_node_status_defaults_to_present_when_missing() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad { point: point(2, 5) });
     let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
@@ -37,7 +37,8 @@ fn transit_node_kind_and_status_are_required_schema_v2_fields() {
     assert_eq!(stop_value["kind"], json!("busStop"));
     assert_eq!(stop_value["status"], json!("present"));
     stop_value.as_object_mut().unwrap().remove("status");
-    assert!(serde_json::from_value::<Stop>(stop_value).is_err());
+    let restored: Stop = serde_json::from_value(stop_value).expect("missing status defaults");
+    assert_eq!(restored.status, TransitNodeStatus::Present);
 
     engine.dispatch(GameIntent::LayTrack { point: point(5, 5) });
     let station_result = engine.dispatch(GameIntent::AddMetroStation { point: point(5, 5) });
@@ -45,7 +46,8 @@ fn transit_node_kind_and_status_are_required_schema_v2_fields() {
         serde_json::to_value(&station_result.snapshot.transit.stations[0]).unwrap();
     assert_eq!(station_value["status"], json!("present"));
     station_value.as_object_mut().unwrap().remove("status");
-    assert!(serde_json::from_value::<Station>(station_value).is_err());
+    let restored: Station = serde_json::from_value(station_value).expect("missing status defaults");
+    assert_eq!(restored.status, TransitNodeStatus::Present);
 }
 
 fn bus_route_fixture() -> Route {

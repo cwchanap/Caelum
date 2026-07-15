@@ -2,8 +2,7 @@ use caelum_core::model::{
     ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
     TripPurpose, TripStatus,
 };
-use caelum_core::road_topology::RoadTopology;
-use caelum_core::{router, transit, GameEngine, GameIntent, RoutingContext};
+use caelum_core::{router, transit, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -59,14 +58,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         patience_remaining: 30.0,
     });
 
-    let topology = RoadTopology::compile(&snapshot.map).unwrap();
-    let boarded = transit::tick_vehicles(
-        &snapshot,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        0.0,
-    );
+    let boarded = transit::tick_vehicles(&snapshot, 0.0);
     assert!(boarded.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
@@ -80,13 +72,7 @@ fn bus_route_vehicle_carries_commute_trip() {
     let ride_seconds =
         transit::seconds_until_next_vehicle_stop(&boarded, &boarded.transit.vehicles[0])
             .expect("vehicle has a next stop");
-    let arrived = transit::tick_vehicles(
-        &boarded,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        ride_seconds,
-    );
+    let arrived = transit::tick_vehicles(&boarded, ride_seconds);
     assert!(!arrived.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));

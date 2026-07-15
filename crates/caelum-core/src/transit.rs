@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::commute::trip_deadline_seconds;
-use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
@@ -415,18 +414,10 @@ pub(crate) fn initial_vehicle(state: &GameSnapshot, mode: TransitMode, route_id:
 /// "commit only when changed" discipline and is a deliberate "more correct" choice;
 /// a WASM/Tauri consumer must not assume `tick_vehicles` yields a fresh allocation
 /// every call.
-pub fn tick_vehicles(
-    state: &GameSnapshot,
-    _context: RoutingContext<'_>,
-    delta_seconds: f64,
-) -> GameSnapshot {
-    tick_vehicles_without_context(state, delta_seconds)
-}
-
-pub(crate) fn tick_vehicles_without_context(
-    state: &GameSnapshot,
-    delta_seconds: f64,
-) -> GameSnapshot {
+///
+/// Vehicles travel along precomputed `leg.current_path` steps stored in the
+/// snapshot's route/metro-line legs — no live topology compilation is needed.
+pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     let mut active_trips = state.active_trips.clone();
     let mut occupied_passenger_ids: HashSet<String> = state
         .transit

@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, VecDeque};
 use caelum_core::model::{Heading, MovementKind, Point, RoadPort, RoadStructure, RoundaboutSize};
 use caelum_core::preview::RoadMutationPreviewRequest;
 use caelum_core::road::RoadMutation;
-use caelum_core::road_topology::{RoadState, RoadTopology, RoadTransition};
+use caelum_core::road_topology::{RoadState, RoadTransition};
 use caelum_core::roundabouts::{
     compile_roundabout_transitions, roundabout_structure_id, roundabout_template,
     RoundaboutTemplate, COMPACT_ROUNDABOUT_COST, STANDARD_ROUNDABOUT_COST,
@@ -665,13 +665,11 @@ fn unsafe_port_preview_keeps_relevant_boundary_port_and_attempted_structure() {
     road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
     let mut snapshot = engine.snapshot();
     snapshot.map.tile_mut(point(4, 5)).unwrap().one_way = Some(Heading::North);
-    let topology = RoadTopology::compile(&snapshot.map).expect("fixture topology compiles");
     let before = snapshot.clone();
     let template = roundabout_template(RoundaboutSize::Standard3x3, point(5, 4));
 
     let response = caelum_core::preview::preview_road_mutation(
         &snapshot,
-        &topology,
         RoadMutationPreviewRequest {
             generation: 44,
             mutation: RoadMutation::PlaceRoundabout {

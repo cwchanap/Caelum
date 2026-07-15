@@ -126,17 +126,16 @@ fn validate_waypoints(
             waypoint_ids.first().map(String::as_str),
         ));
     }
-    let unique: BTreeSet<_> = waypoint_ids.iter().collect();
-    if unique.len() != waypoint_ids.len() {
-        let mut seen = BTreeSet::new();
-        let duplicate = waypoint_ids
-            .iter()
-            .find(|id| !seen.insert(id.as_str()))
-            .map(String::as_str);
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    if let Some(duplicate) = waypoint_ids
+        .iter()
+        .find(|id| !seen.insert(id.as_str()))
+        .map(String::as_str)
+    {
         return Err(route_validation_rejection(
             RejectionCode::DuplicateRouteNodes,
             route_id,
-            duplicate,
+            Some(duplicate),
         ));
     }
 

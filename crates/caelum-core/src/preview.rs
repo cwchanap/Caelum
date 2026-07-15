@@ -227,7 +227,6 @@ pub fn preview_route(
 
 pub fn preview_road_mutation(
     snapshot: &GameSnapshot,
-    current_topology: &RoadTopology,
     request: RoadMutationPreviewRequest,
 ) -> RoadMutationPreviewResponse {
     let generation = request.generation;
@@ -267,7 +266,7 @@ pub fn preview_road_mutation(
         .filter(|structure| !snapshot.map.road_structures.contains(structure))
         .cloned()
         .collect();
-    let route_impacts = route_impacts(snapshot, current_topology, &candidate.snapshot, &topology);
+    let route_impacts = route_impacts(snapshot, &candidate.snapshot, &topology);
     let mut warnings = Vec::new();
     if !candidate.skipped_tiles.is_empty() {
         warnings.push(GameplayWarning {
@@ -494,25 +493,14 @@ fn preview_network_candidate(
 
 fn route_impacts(
     previous: &GameSnapshot,
-    previous_topology: &RoadTopology,
     candidate: &GameSnapshot,
     candidate_topology: &RoadTopology,
 ) -> Vec<RouteImpact> {
     let context = RoutingContext {
         road_topology: candidate_topology,
     };
-    let previous_context = RoutingContext {
-        road_topology: previous_topology,
-    };
     let mut impacts = Vec::new();
     for route in &previous.transit.routes {
-        let previous_legs = resolve_route_legs(
-            previous,
-            previous_context,
-            TransitMode::Bus,
-            &route.stop_ids,
-            route.pattern,
-        );
         let legs = resolve_route_legs(
             candidate,
             context,
@@ -520,7 +508,7 @@ fn route_impacts(
             &route.stop_ids,
             route.pattern,
         );
-        if let Some(kind) = classify_route_impact(&previous_legs, &legs) {
+        if let Some(kind) = classify_route_impact(&route.legs, &legs) {
             impacts.push(RouteImpact {
                 route_id: route.id.clone(),
                 kind,
@@ -528,13 +516,6 @@ fn route_impacts(
         }
     }
     for line in &previous.transit.metro_lines {
-        let previous_legs = resolve_route_legs(
-            previous,
-            previous_context,
-            TransitMode::Metro,
-            &line.station_ids,
-            line.pattern,
-        );
         let legs = resolve_route_legs(
             candidate,
             context,
@@ -542,7 +523,7 @@ fn route_impacts(
             &line.station_ids,
             line.pattern,
         );
-        if let Some(kind) = classify_route_impact(&previous_legs, &legs) {
+        if let Some(kind) = classify_route_impact(&line.legs, &legs) {
             impacts.push(RouteImpact {
                 route_id: line.id.clone(),
                 kind,

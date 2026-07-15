@@ -288,7 +288,7 @@ impl GameEngine {
         &self,
         request: RoadMutationPreviewRequest,
     ) -> RoadMutationPreviewResponse {
-        preview::preview_road_mutation(&self.snapshot, &self.road_topology, request)
+        preview::preview_road_mutation(&self.snapshot, request)
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current
@@ -297,11 +297,7 @@ impl GameEngine {
     /// snapshot is returned unchanged with `applied == false` — this reference-equality
     /// dispatch is the engine's commit discipline.
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
-        let next = trips::tick_trips_with_objectives(
-            &self.snapshot,
-            self.routing_context(),
-            delta_seconds,
-        );
+        let next = trips::tick_trips_with_objectives(&self.snapshot, delta_seconds);
         if next == self.snapshot {
             return DispatchResult::unchanged(self.snapshot());
         }
@@ -504,9 +500,18 @@ impl GameEngine {
             Ok(candidate) => candidate,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
-        let topology = match RoadTopology::compile(&network_candidate.snapshot.map) {
-            Ok(topology) => topology,
-            Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+        // If the map's road topology inputs are unchanged (e.g. AddBusStop,
+        // AddMetroStation, PlaceBuilding — none of which modify map tiles),
+        // skip the O(N²) topology compile and reuse the cached topology.
+        // Route recompute still runs because transit node changes (stop/station
+        // removal, status changes) can break route legs without altering the map.
+        let topology = if self.snapshot.map == network_candidate.snapshot.map {
+            self.road_topology.clone()
+        } else {
+            match RoadTopology::compile(&network_candidate.snapshot.map) {
+                Ok(topology) => topology,
+                Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+            }
         };
         let candidate = match route_lifecycle::recompute_all_routes(
             &self.snapshot,

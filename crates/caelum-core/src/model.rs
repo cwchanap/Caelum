@@ -12,9 +12,10 @@ pub enum TransitMode {
     Metro,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ServicePattern {
+    #[default]
     Loop,
     Shuttle,
 }
@@ -42,9 +43,10 @@ pub enum RouteLegStatus {
     MissingNode,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TransitNodeStatus {
+    #[default]
     Present,
     Missing,
 }
@@ -349,6 +351,7 @@ pub struct Tile {
     pub has_track: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub one_way: Option<Heading>,
+    #[serde(default)]
     pub road_connections: Vec<Heading>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub road_structure_id: Option<String>,
@@ -576,6 +579,7 @@ pub struct TransitNetwork {
 pub struct Stop {
     pub id: String,
     pub kind: BusStopKind,
+    #[serde(default)]
     pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
@@ -584,6 +588,7 @@ pub struct Stop {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Station {
     pub id: String,
+    #[serde(default)]
     pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
@@ -607,9 +612,13 @@ pub struct Route {
     pub stop_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
+    #[serde(default)]
     pub pattern: ServicePattern,
+    #[serde(default)]
     pub revision: u32,
+    #[serde(default)]
     pub legs: Vec<RouteLegPath>,
+    #[serde(default)]
     pub path_broken: bool,
 }
 
@@ -622,9 +631,13 @@ pub struct MetroLine {
     pub station_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
+    #[serde(default)]
     pub pattern: ServicePattern,
+    #[serde(default)]
     pub revision: u32,
+    #[serde(default)]
     pub legs: Vec<RouteLegPath>,
+    #[serde(default)]
     pub path_broken: bool,
 }
 

@@ -414,14 +414,7 @@ fn vehicle<'a>(state: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
 }
 
 fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    let topology = RoadTopology::compile(&state.map).unwrap();
-    transit::tick_vehicles(
-        state,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        delta_seconds,
-    )
+    transit::tick_vehicles(state, delta_seconds)
 }
 
 fn movement_route_fixture(movement: MovementKind, movement_seconds: f64) -> RouteTimingFixture {

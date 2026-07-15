@@ -189,8 +189,8 @@ function closestProgressOnGeometry(
   // Bézier: sample and find the closest point.
   let bestT = 0;
   let bestDist = Infinity;
-  for (let i = 0; i <= 32; i += 1) {
-    const t = i / 32;
+  for (let i = 0; i <= GEOMETRY_SAMPLE_SEGMENTS; i += 1) {
+    const t = i / GEOMETRY_SAMPLE_SEGMENTS;
     const sample = pointAndTangentAt(geometry, t).point;
     const dist = (sample.x - point.x) ** 2 + (sample.y - point.y) ** 2;
     if (dist < bestDist) {

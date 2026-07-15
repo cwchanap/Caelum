@@ -170,14 +170,7 @@ fn tick_vehicles(
     state: &caelum_core::model::GameSnapshot,
     delta_seconds: f64,
 ) -> caelum_core::model::GameSnapshot {
-    let topology = RoadTopology::compile(&state.map).unwrap();
-    transit::tick_vehicles(
-        state,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        delta_seconds,
-    )
+    transit::tick_vehicles(state, delta_seconds)
 }
 
 #[test]
@@ -573,7 +566,6 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
         state.transit.routes[0].legs[index].last_valid_path = Some(path);
         state.transit.routes[0].legs[index].estimated_seconds = Some(seconds);
     }
-    let topology = RoadTopology::compile(&state.map).unwrap();
     let route = &state.transit.routes[0];
     let visits = service_visits(&route.stop_ids, &route.legs);
     let cross_terminal = enumerate_ride_edges(&visits, &route.legs)
@@ -588,15 +580,7 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
         .sum();
     assert_eq!(cross_terminal_seconds, 7.0 + 3.0 + 11.0 + 13.0);
 
-    let plan = router::plan_route(
-        &state,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        &(12, 5).into(),
-        &(2, 5).into(),
-    )
-    .unwrap();
+    let plan = router::plan_route(&state, &(12, 5).into(), &(2, 5).into()).unwrap();
     let transit_leg = plan
         .legs
         .iter()

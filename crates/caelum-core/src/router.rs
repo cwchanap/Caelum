@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::engine::RoutingContext;
 use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
 use crate::route_lifecycle::is_route_operational;
 use crate::service_itinerary::{enumerate_ride_edges, service_visits, RideEdge};
@@ -89,12 +88,11 @@ pub fn find_route_plan(
     best_candidate(candidates)
 }
 
-pub fn plan_route(
-    state: &GameSnapshot,
-    _context: RoutingContext<'_>,
-    origin: &Point,
-    destination: &Point,
-) -> Option<RoutePlan> {
+/// Plan a multi-modal commute route from `origin` to `destination`.
+///
+/// Uses precomputed `leg.current_path` steps from the snapshot's route/metro-line
+/// legs — no live topology compilation is needed.
+pub fn plan_route(state: &GameSnapshot, origin: &Point, destination: &Point) -> Option<RoutePlan> {
     find_route_plan(state, origin, destination)
 }
 
