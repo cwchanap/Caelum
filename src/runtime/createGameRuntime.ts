@@ -403,13 +403,22 @@ export async function createGameRuntime({
     if (routeDraft === ui.routeDraft) {
       return commit(state, ui);
     }
+    // Only request a new preview when preview-relevant fields changed.
+    // `generation` is bumped exclusively by `changed()` when waypoints or
+    // pattern change; selection-only updates (selectWaypoint) keep the same
+    // generation and would otherwise fire a redundant no-op IPC.
+    const previewRelevantChanged =
+      ui.routeDraft === null ||
+      routeDraft.generation !== ui.routeDraft.generation;
     const result = commit(state, {
       ...ui,
       routeDraft,
       routePreviewError: null,
       routePreviewHostError: null,
     });
-    requestRoutePreview(routeDraft);
+    if (previewRelevantChanged) {
+      requestRoutePreview(routeDraft);
+    }
     return result;
   };
 

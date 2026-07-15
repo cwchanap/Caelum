@@ -2030,7 +2030,10 @@ describe("route creation and management", () => {
       previewPending: true,
       preview: null,
     });
-    expect(previewRoute).toHaveBeenCalledTimes(7);
+    // 5 calls: startRouteEdit (1) + move/reverse/setPattern/remove (4).
+    // The two selectRouteWaypoint calls are selection-only (no generation
+    // bump) and correctly skip the redundant no-op preview IPC.
+    expect(previewRoute).toHaveBeenCalledTimes(5);
   });
 
   it("surfaces and clears a typed invalid waypoint selection error", async () => {

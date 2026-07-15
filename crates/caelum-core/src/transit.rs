@@ -1147,10 +1147,15 @@ where
         let original_itinerary_index = vehicle.itinerary_index;
         let itinerary_index = vehicle.itinerary_index % itinerary.len();
         let leg = &itinerary[itinerary_index];
-        let path = leg
-            .current_path
-            .as_ref()
-            .expect("operational leg has a path");
+        // The operational-route invariant should guarantee a path, but a
+        // panic here crashes both WASM and Tauri hosts irrecoverably. Reset
+        // the cursor defensively and stop advancing this vehicle — mirroring
+        // the break_service skip in route_lifecycle.rs.
+        let Some(path) = leg.current_path.as_ref() else {
+            vehicle.path_step_index = 0;
+            vehicle.step_progress = 0.0;
+            return completion_events_changed;
+        };
         if path.step_count() == 0 {
             advance_vehicle_cursor(vehicle, itinerary);
             completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);
@@ -1160,9 +1165,13 @@ where
             }
             continue;
         }
-        let step = path
-            .step(vehicle.path_step_index)
-            .expect("operational cursor points at a path step");
+        // Defensive: a corrupted step index should not crash both hosts.
+        // Reset the cursor and stop advancing this vehicle.
+        let Some(step) = path.step(vehicle.path_step_index) else {
+            vehicle.path_step_index = 0;
+            vehicle.step_progress = 0.0;
+            return completion_events_changed;
+        };
         let step_seconds = step.travel_seconds();
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
@@ -1193,10 +1202,17 @@ where
 }
 
 fn advance_vehicle_cursor(vehicle: &mut Vehicle, itinerary: &[RouteLegPath]) {
-    let path = itinerary[vehicle.itinerary_index % itinerary.len()]
+    // Defensive: a missing path should not crash both hosts. Reset the
+    // cursor and return without advancing — the caller's cursor-change
+    // check will see no movement.
+    let Some(path) = itinerary[vehicle.itinerary_index % itinerary.len()]
         .current_path
         .as_ref()
-        .expect("operational leg has a path");
+    else {
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
+        return;
+    };
     vehicle.step_progress = 0.0;
     vehicle.path_step_index += 1;
     if vehicle.path_step_index >= path.step_count() {

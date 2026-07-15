@@ -9,10 +9,11 @@
 
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, Heading, Metrics, MetricsState, PathGeometry, PlacedBuilding, Point, RoadPort,
-    RoadStructure, RoundaboutSize, Route, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
-    Sim, Station, Stop, Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, Heading, Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point,
+    RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
+    RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, Station, Stop,
+    Tile, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -77,6 +78,84 @@ fn route_wire_uses_directional_legs_without_legacy_segments() {
     assert_eq!(value["legs"][0]["kind"], json!("service"));
     assert_eq!(value["legs"][0]["status"], json!("connected"));
     assert_eq!(value["legs"][0]["currentPath"]["kind"], json!("road"));
+}
+
+#[test]
+fn movement_kind_serializes_to_camel_case_wire_strings() {
+    for (movement, wire) in [
+        (MovementKind::Straight, "straight"),
+        (MovementKind::RightTurn, "rightTurn"),
+        (MovementKind::LeftTurn, "leftTurn"),
+        (MovementKind::UTurn, "uTurn"),
+        (MovementKind::RoundaboutEntry, "roundaboutEntry"),
+        (MovementKind::RoundaboutCirculation, "roundaboutCirculation"),
+        (MovementKind::RoundaboutExit, "roundaboutExit"),
+    ] {
+        let step = RoadPathStep {
+            position: Point { x: 1, y: 2 },
+            entering_heading: Heading::North,
+            leaving_heading: Heading::East,
+            movement,
+            geometry: PathGeometry::Line {
+                from: TripPosition { x: 0.0, y: 0.0 },
+                to: TripPosition { x: 1.0, y: 0.0 },
+            },
+            travel_seconds: 1.5,
+        };
+        let value = serde_json::to_value(&step).expect("road path step should serialize");
+        assert_eq!(
+            value["movement"],
+            json!(wire),
+            "movement kind wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_status_and_kind_pin_failure_path_wire_strings() {
+    for (status, wire) in [
+        (RouteLegStatus::Connected, "connected"),
+        (RouteLegStatus::NetworkDisconnected, "networkDisconnected"),
+        (RouteLegStatus::MissingNode, "missingNode"),
+    ] {
+        let value = serde_json::to_value(status).expect("status should serialize");
+        assert_eq!(
+            value,
+            json!(wire),
+            "route leg status wire spelling changed: {wire}"
+        );
+    }
+    for (kind, wire) in [
+        (RouteLegKind::Service, "service"),
+        (RouteLegKind::TerminalReversal, "terminalReversal"),
+    ] {
+        let value = serde_json::to_value(kind).expect("kind should serialize");
+        assert_eq!(
+            value,
+            json!(wire),
+            "route leg kind wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_path_serializes_status_and_kind_in_camel_case() {
+    let leg = RouteLegPath {
+        from_waypoint_id: "stop-001".to_string(),
+        to_waypoint_id: "stop-002".to_string(),
+        direction: ServiceDirection::Loop,
+        kind: RouteLegKind::TerminalReversal,
+        status: RouteLegStatus::MissingNode,
+        current_path: None,
+        last_valid_path: None,
+        estimated_seconds: None,
+    };
+    let value = serde_json::to_value(&leg).unwrap();
+    assert_eq!(value["status"], json!("missingNode"));
+    assert_eq!(value["kind"], json!("terminalReversal"));
+    assert_eq!(value["currentPath"], serde_json::Value::Null);
+    assert_eq!(value["lastValidPath"], serde_json::Value::Null);
+    assert_eq!(value["estimatedSeconds"], serde_json::Value::Null);
 }
 
 #[test]
