@@ -32,7 +32,7 @@ pub fn resolve_route_legs(
     {
         return Vec::new();
     }
-    let specs = build_service_itinerary(mode, pattern, waypoint_ids);
+    let specs = build_service_itinerary(pattern, waypoint_ids);
     specs
         .iter()
         .enumerate()

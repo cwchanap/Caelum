@@ -18,11 +18,7 @@ fn ids(values: &[&str]) -> Vec<String> {
 
 #[test]
 fn shuttle_builds_outbound_reversal_return_reversal_in_order() {
-    let specs = build_service_itinerary(
-        TransitMode::Bus,
-        ServicePattern::Shuttle,
-        &ids(&["A", "B", "C"]),
-    );
+    let specs = build_service_itinerary(ServicePattern::Shuttle, &ids(&["A", "B", "C"]));
 
     assert_eq!(
         specs.iter().map(ServiceLegSpec::key).collect::<Vec<_>>(),

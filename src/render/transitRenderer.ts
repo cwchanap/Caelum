@@ -418,7 +418,7 @@ function vehicleSample(
     // park at the terminal waypoint so paused/exact-boundary vehicles remain visible.
     if (
       vehicle.parkedPosition === null &&
-      path !== undefined &&
+      path != null &&
       path.steps.length === 0 &&
       leg !== undefined
     ) {

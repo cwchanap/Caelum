@@ -708,6 +708,38 @@ fn exit_transition(
     ))
 }
 
+pub(crate) fn port_matches_current_map(map: &GameMap, port: &RoadPort) -> bool {
+    let Some(port_tile) = map.tile(port.point) else {
+        return false;
+    };
+    if port_tile.kind != "road" || !port_tile.road_connections.contains(&port.edge) {
+        return false;
+    }
+    let external_point = offset(port.point, port.edge);
+    let Some(external) = map.tile(external_point) else {
+        return false;
+    };
+    if external.kind != "road" || !external.road_connections.contains(&opposite(port.edge)) {
+        return false;
+    }
+    // Captured ports always carry a `:twoWay`/`:inbound`/`:outbound` suffix
+    // encoding the neighbor's one-way direction at capture time. A port
+    // without a recognized suffix falls back to geometry-based acceptance, so
+    // only apply the suffix check when one is present.
+    let has_suffix = port.id.ends_with(":twoWay")
+        || port.id.ends_with(":inbound")
+        || port.id.ends_with(":outbound");
+    if !has_suffix {
+        return true;
+    }
+    match external.one_way {
+        None => port.id.ends_with(":twoWay"),
+        Some(direction) if direction == opposite(port.edge) => port.id.ends_with(":inbound"),
+        Some(direction) if direction == port.edge => port.id.ends_with(":outbound"),
+        Some(_) => false,
+    }
+}
+
 fn port_accepts_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
     let (_, next) = ring_neighbors(template, port.point)?;
     let outgoing =

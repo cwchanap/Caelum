@@ -484,6 +484,13 @@ export async function createGameRuntime({
       nextRouteDraftInstanceId,
     );
     nextRouteDraftInstanceId += 1;
+    // Clear any in-flight road/roundabout preview before entering route
+    // editing. Without this, a stale road cost/impact/rejection badge remains
+    // visible globally and a late preview response can repopulate it while the
+    // route draft is being edited — `invalidateRoadPreview` bumps the
+    // coordinator epoch so in-flight responses resolve null and are dropped,
+    // and the cleared fields remove the stale overlay.
+    invalidateRoadPreview();
     const result = commit(state, {
       ...ui,
       activeTool: route === undefined ? "metroLine" : "busRoute",
@@ -497,6 +504,8 @@ export async function createGameRuntime({
       selectedRouteId: routeId,
       routeFailureFocus: null,
       drag: null,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
     });
     requestRoutePreview(routeDraft);
     return result;

@@ -1,5 +1,5 @@
 use crate::model::RouteLegPath;
-use crate::model::{RouteLegKind, ServiceDirection, ServicePattern, TransitMode};
+use crate::model::{RouteLegKind, ServiceDirection, ServicePattern};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceLegSpec {
@@ -64,7 +64,6 @@ impl ServiceLegSpec {
 }
 
 pub fn build_service_itinerary(
-    mode: TransitMode,
     pattern: ServicePattern,
     waypoint_ids: &[String],
 ) -> Vec<ServiceLegSpec> {
@@ -73,7 +72,7 @@ pub fn build_service_itinerary(
     }
     match pattern {
         ServicePattern::Loop => loop_specs(waypoint_ids),
-        ServicePattern::Shuttle => shuttle_specs(mode, waypoint_ids),
+        ServicePattern::Shuttle => shuttle_specs(waypoint_ids),
     }
 }
 
@@ -133,7 +132,7 @@ fn loop_specs(ids: &[String]) -> Vec<ServiceLegSpec> {
         .collect()
 }
 
-fn shuttle_specs(_mode: TransitMode, ids: &[String]) -> Vec<ServiceLegSpec> {
+fn shuttle_specs(ids: &[String]) -> Vec<ServiceLegSpec> {
     let mut result = Vec::with_capacity(ids.len().saturating_mul(2));
     for pair in ids.windows(2) {
         result.push(service_spec(&pair[0], &pair[1], ServiceDirection::Outbound));

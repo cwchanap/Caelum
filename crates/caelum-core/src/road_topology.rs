@@ -256,8 +256,35 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
             RoadStructure::AutomaticJunction { .. } => {
                 compiled.extend(compile_automatic_junction_transitions(map, structure)?);
             }
-            RoadStructure::Roundabout { .. } => {
-                compiled.extend(compile_roundabout_transitions(structure)?);
+            RoadStructure::Roundabout {
+                id,
+                origin,
+                size,
+                footprint,
+                ports,
+            } => {
+                // Captured ports snapshot the neighboring boundary road's
+                // reciprocal connection and one-way direction at placement
+                // time. If that neighbor is later demolished or its one-way
+                // direction is cycled, the stored port suffix is stale and
+                // must not emit entry/exit transitions through a disconnected
+                // or re-oriented edge. Filter to ports that still match the
+                // live map before compiling, mirroring the per-port
+                // revalidation `compile_automatic_junction_transitions`
+                // performs internally.
+                let current_ports: Vec<_> = ports
+                    .iter()
+                    .filter(|port| crate::roundabouts::port_matches_current_map(map, port))
+                    .cloned()
+                    .collect();
+                let filtered = RoadStructure::Roundabout {
+                    id: id.clone(),
+                    origin: *origin,
+                    size: *size,
+                    footprint: footprint.clone(),
+                    ports: current_ports,
+                };
+                compiled.extend(compile_roundabout_transitions(&filtered)?);
             }
         }
     }

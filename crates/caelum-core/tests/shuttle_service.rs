@@ -541,7 +541,6 @@ fn terminal_and_loop_rules_are_mode_correct() {
         .all(|leg| leg.estimated_seconds == Some(0.0)));
 
     let loop_legs = caelum_core::service_itinerary::build_service_itinerary(
-        TransitMode::Bus,
         ServicePattern::Loop,
         &ids(&["A", "B", "C"]),
     );

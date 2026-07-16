@@ -842,8 +842,11 @@ fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
     }
 
     // Bidirectional corridor from (1,3) through the west port at (3,3).
-    // The terminal at (2,3) is then narrowed to one-way eastbound so no
-    // direct U-turn exists — forcing the bounded Dijkstra to find the
+    // The approach at (1,3) is narrowed to one-way eastbound so no direct
+    // U-turn fast path exists at the terminal (2,3) — its west neighbor
+    // (1,3) rejects westbound traffic, blocking the U-turn transition while
+    // leaving (2,3) two-way so the roundabout's :twoWay port stays valid
+    // against the live map. This forces the bounded Dijkstra to find the
     // multi-step reversal through the roundabout.
     let mut west_port = template
         .port_slots
@@ -853,8 +856,7 @@ fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
         .clone();
     west_port.id.push_str(":twoWay");
     corridor(&mut map, &[point(1, 3), point(2, 3), west_port.point], None);
-    map.tile_mut(point(2, 3)).unwrap().one_way = Some(Heading::East);
-    map.tile_mut(west_port.point).unwrap().one_way = None;
+    map.tile_mut(point(1, 3)).unwrap().one_way = Some(Heading::East);
 
     map.road_structures.push(RoadStructure::Roundabout {
         id,
@@ -866,11 +868,11 @@ fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
 
     let topology = RoadTopology::compile(&map).unwrap();
 
-    // The terminal at (2,3) is one-way eastbound: no U-turn fast path.
-    // The only reversal route is: ordinary straight → roundabout entry →
-    // circulation → circulation → circulation → roundabout exit, arriving
-    // back at (2,3) heading West. This exercises the bounded-Dijkstra
-    // success path in `find_reversal_path` (the core of aabdcc6).
+    // The terminal at (2,3) has no U-turn fast path (its west neighbor is
+    // one-way eastbound). The only reversal route is: ordinary straight →
+    // roundabout entry → circulation → circulation → circulation →
+    // roundabout exit, arriving back at (2,3) heading West. This exercises
+    // the bounded-Dijkstra success path in `find_reversal_path`.
     let path = topology
         .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
         .expect("Dijkstra should find multi-step reversal through roundabout");
