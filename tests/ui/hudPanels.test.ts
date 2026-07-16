@@ -38,6 +38,7 @@ function createDraftView(
     previewPending: false,
     previewStatus: "connected",
     previewMessage: "Connected",
+    previewWarnings: [],
     canSave: true,
     canReload: false,
     ...overrides,

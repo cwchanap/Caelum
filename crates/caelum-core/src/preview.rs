@@ -43,6 +43,7 @@ pub enum WarningCode {
     ExistingBrokenLeg,
     RouteWillReroute,
     RouteWillBreak,
+    InsufficientBudget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,10 +218,23 @@ pub fn preview_route(
         .sum();
     response.turn_summary = summarize_turns(&response.legs);
 
-    if response.rejection.is_none() && !affordable {
-        let mut rejection = GameplayRejection::budget(initial_vehicle_cost, snapshot.budget);
-        rejection.context.expected_revision = request.expected_revision;
-        response.rejection = Some(rejection);
+    if !affordable {
+        if response.rejection.is_none() {
+            let mut rejection = GameplayRejection::budget(initial_vehicle_cost, snapshot.budget);
+            rejection.context.expected_revision = request.expected_revision;
+            response.rejection = Some(rejection);
+        } else {
+            // A disconnected leg already blocks creation; surface the cost as a
+            // warning instead of dropping it, so the player sees both problems.
+            response.warnings.push(GameplayWarning {
+                code: WarningCode::InsufficientBudget,
+                context: RejectionContext {
+                    required_budget: Some(initial_vehicle_cost),
+                    available_budget: Some(snapshot.budget),
+                    ..RejectionContext::default()
+                },
+            });
+        }
     }
     response
 }

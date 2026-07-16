@@ -107,6 +107,7 @@ export interface RouteEditorView {
   previewPending: boolean;
   previewStatus: "empty" | "connected" | "broken" | "rejected";
   previewMessage: string | null;
+  previewWarnings: string[];
   canSave: boolean;
   canReload: boolean;
 }

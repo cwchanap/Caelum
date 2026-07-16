@@ -144,6 +144,14 @@
     {editor.previewMessage ?? editor.previewStatus}
   </p>
 
+  {#if editor.previewWarnings.length > 0}
+    <ul class="route-preview-warnings" data-testid="route-preview-warnings">
+      {#each editor.previewWarnings as warning (warning)}
+        <li>{warning}</li>
+      {/each}
+    </ul>
+  {/if}
+
   <div class="route-editor-actions">
     <button
       type="button"

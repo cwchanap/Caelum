@@ -1,4 +1,5 @@
 import type { GameplayRejection } from "../domain/types";
+import type { GameplayWarning } from "./backend/types";
 
 const numberFormat = new Intl.NumberFormat("en-US");
 const money = (value: number): string => numberFormat.format(value);
@@ -68,6 +69,24 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That building cannot be placed on this footprint.";
     case "blockedFootprint":
       return "The full footprint must contain only empty or replaceable road tiles.";
+    default:
+      return assertNever(code);
+  }
+}
+
+export function warningMessage(warning: GameplayWarning): string {
+  const { code, context } = warning;
+  switch (code) {
+    case "insufficientBudget":
+      return `Need $${money(context.requiredBudget ?? 0)}; only $${money(context.availableBudget ?? 0)} available.`;
+    case "existingBrokenLeg":
+      return "This leg was already disconnected in the saved route.";
+    case "skippedTiles":
+      return "Some tiles were skipped.";
+    case "routeWillReroute":
+      return "This will reroute the saved path.";
+    case "routeWillBreak":
+      return "This will break the saved route.";
     default:
       return assertNever(code);
   }

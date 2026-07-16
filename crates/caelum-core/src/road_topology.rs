@@ -563,6 +563,13 @@ fn transition_geometry(
             }
         }
         MovementKind::UTurn => {
+            // The control point bows the curve to the LEFT of the incoming
+            // heading. `(dy, -dx)` is the left perpendicular of the incoming
+            // direction `(dx, dy)` in screen coordinates (+x east, +y south),
+            // and the `+ 0.5 * (dx, dy)` term nudges it half a tile forward so
+            // the bezier apex sits ahead of `from` rather than directly beside
+            // it. This keeps every U-turn curve on the same side regardless of
+            // heading.
             let (dx, dy) = offset_components(incoming);
             PathGeometry::QuadraticBezier {
                 from: from_position,

@@ -2,7 +2,7 @@ use caelum_core::model::{
     Heading, Point, RoadStructure, RoundaboutSize, Route, ServicePattern, TransitMode,
 };
 use caelum_core::preview::{
-    RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest,
+    RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
 };
 use caelum_core::road::RoadMutation;
 use caelum_core::transit::BUS_COST;
@@ -363,6 +363,32 @@ fn route_preview_reports_cost_affordability_and_revision_context() {
             .expected_revision,
         Some(4)
     );
+}
+
+#[test]
+fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
+    let mut engine = editable_network_engine();
+    // A second, disconnected road island with its own stop.
+    road_line(&mut engine, (2..=10).map(|x| point(x, 9)).collect());
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 9) });
+    engine.set_budget_for_test(BUS_COST - 1);
+
+    let response = engine.preview_route(RoutePreviewRequest {
+        waypoint_ids: ids(&["stop-001", "stop-003"]),
+        generation: 40,
+        ..valid_route_preview(40)
+    });
+
+    // The disconnected leg is the blocking rejection; affordability is not dropped.
+    let rejection = response.rejection.expect("disconnected-leg rejection");
+    assert_eq!(rejection.code, RejectionCode::DisconnectedLeg);
+    let budget_warning = response
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::InsufficientBudget)
+        .expect("insufficient budget warning");
+    assert_eq!(budget_warning.context.required_budget, Some(BUS_COST));
+    assert_eq!(budget_warning.context.available_budget, Some(BUS_COST - 1));
 }
 
 #[test]

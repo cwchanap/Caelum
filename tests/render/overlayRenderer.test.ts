@@ -75,6 +75,7 @@ function editDraftView(): RouteEditorView {
     previewPending: false,
     previewStatus: "broken",
     previewMessage: "Missing Bus Stop to Stop C cannot connect",
+    previewWarnings: [],
     canSave: true,
     canReload: false,
   };

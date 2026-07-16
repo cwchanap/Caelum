@@ -12,7 +12,7 @@ import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
-import { rejectionMessage } from "./rejectionMessages";
+import { rejectionMessage, warningMessage } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
@@ -328,6 +328,7 @@ export function selectRouteEditorView(
     previewPending: draft.previewPending,
     previewStatus: preview.status,
     previewMessage: preview.message,
+    previewWarnings: draft.preview?.warnings.map(warningMessage) ?? [],
     canSave:
       staleRejection === null &&
       localStaleError === null &&

@@ -172,7 +172,8 @@ export type WarningCode =
   | "skippedTiles"
   | "existingBrokenLeg"
   | "routeWillReroute"
-  | "routeWillBreak";
+  | "routeWillBreak"
+  | "insufficientBudget";
 
 export interface GameplayWarning {
   code: WarningCode;

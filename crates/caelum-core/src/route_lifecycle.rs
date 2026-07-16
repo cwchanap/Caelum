@@ -123,6 +123,9 @@ fn parking_target_for_retained(
     )
 }
 
+/// Re-resolve every bus route and metro line after a network mutation. Runs on
+/// each `commit_network_mutation` and is O(routes × legs × routing) in the map
+/// size — acceptable at the current 28×18 scenario; revisit if the map grows.
 pub fn recompute_all_routes(
     previous: &GameSnapshot,
     mut candidate: GameSnapshot,

@@ -1156,6 +1156,15 @@ body {
   color: var(--red);
 }
 
+.route-preview-warnings {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 .route-list {
   list-style: none;
   margin: 0;
