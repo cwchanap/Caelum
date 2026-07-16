@@ -283,6 +283,19 @@ fn replay_intent_sequence() -> Vec<GameIntent> {
     ]
 }
 
+fn assert_snapshots_byte_identical(
+    left: caelum_core::model::GameSnapshot,
+    right: caelum_core::model::GameSnapshot,
+) {
+    assert_eq!(left, right);
+    let left_bytes = serde_json::to_vec(&left).expect("left snapshot should serialize");
+    let right_bytes = serde_json::to_vec(&right).expect("right snapshot should serialize");
+    assert_eq!(
+        left_bytes, right_bytes,
+        "replay snapshots must be byte-identical after serialization"
+    );
+}
+
 #[test]
 fn identical_replay_produces_identical_snapshots() {
     // Two independent engines fed the same intent sequence (and then the same
@@ -292,13 +305,13 @@ fn identical_replay_produces_identical_snapshots() {
 
     let mut engine_a = GameEngine::new();
     let mut engine_b = GameEngine::new();
-    assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+    assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
 
     for intent in intents {
         let result_a = engine_a.dispatch(intent.clone());
         let result_b = engine_b.dispatch(intent);
         assert_eq!(result_a.applied, result_b.applied);
-        assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+        assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
     }
 
     // Tick both engines with identical deltas and confirm they stay in lockstep.
@@ -306,6 +319,6 @@ fn identical_replay_produces_identical_snapshots() {
         let tick_a = engine_a.tick(delta);
         let tick_b = engine_b.tick(delta);
         assert_eq!(tick_a.applied, tick_b.applied);
-        assert_eq!(engine_a.snapshot(), engine_b.snapshot());
+        assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
     }
 }

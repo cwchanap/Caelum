@@ -224,15 +224,17 @@ export async function debugSetBudget(
   page: Page,
   budget: number,
 ): Promise<void> {
-  await page.evaluate(
-    (amount) =>
-      (
-        window as unknown as {
-          __caelumRuntime?: {
-            debugSetBudget: (budget: number) => Promise<unknown>;
-          };
-        }
-      ).__caelumRuntime?.debugSetBudget(amount),
-    budget,
-  );
+  await page.evaluate((amount) => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          debugSetBudget?: (budget: number) => Promise<unknown>;
+        };
+      }
+    ).__caelumRuntime;
+    if (runtime?.debugSetBudget === undefined) {
+      throw new Error("debugSetBudget is unavailable on window.__caelumRuntime");
+    }
+    return runtime.debugSetBudget(amount);
+  }, budget);
 }

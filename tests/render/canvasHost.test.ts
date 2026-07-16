@@ -389,12 +389,23 @@ describe("createCanvasHost", () => {
     expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
   });
 
-  it("cleanup removes event listeners", () => {
+  it("cleanup removes event listeners and clears interaction state", () => {
     const { canvas, callbacks, cleanup } = createFixture({
-      ui: { activeTool: "inspect" },
+      ui: {
+        activeTool: "road",
+        drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 2, y: 0 } },
+        hoverTile: { x: 2, y: 0 },
+      },
     });
 
     cleanup();
+
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+    expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
+
+    callbacks.onTileClick.mockClear();
+    callbacks.onHoverTile.mockClear();
+    callbacks.onDragCancel.mockClear();
 
     canvas.dispatchEvent(
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
@@ -404,6 +415,7 @@ describe("createCanvasHost", () => {
 
     expect(callbacks.onTileClick).not.toHaveBeenCalled();
     expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+    expect(callbacks.onDragCancel).not.toHaveBeenCalled();
   });
 
   it("syncAnimationLoop starts rAF when animatable", () => {

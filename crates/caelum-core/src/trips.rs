@@ -131,12 +131,10 @@ fn tick_trips_substepped(
     if !early_termination {
         // The substep cap is an upper bound on legitimate boundary events (see
         // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
-        // source is denser than the budget — a correctness regression that would
-        // otherwise silently drop the tail of the tick. Surface it in debug/test
-        // builds via debug_assert. The release-side eprintln was removed because it
-        // is noisy under WASM (each tick logs to the browser console). The growth
-        // and commute spawns below still run unconditionally so the tail is
-        // processed rather than silently discarded.
+        // source is denser than the budget — a correctness regression. Surface it
+        // in debug/test builds via debug_assert, but still process the remaining
+        // time through normal boundary progression so release builds never return
+        // a partially advanced tick.
         let dropped = final_time - next.time;
         debug_assert!(
             dropped <= EPSILON,
@@ -146,9 +144,36 @@ fn tick_trips_substepped(
             dropped
         );
 
-        crate::growth::apply_due_growth_waves(&mut next);
-        reset_daily_commute_flags(&mut next);
-        spawn_due_commute_trips(&mut next);
+        while final_time - next.time > EPSILON {
+            crate::growth::apply_due_growth_waves(&mut next);
+            reset_daily_commute_flags(&mut next);
+            spawn_due_commute_trips(&mut next);
+
+            let substep_end = next_boundary_after(&next)
+                .map(|boundary| boundary.min(final_time))
+                .unwrap_or(final_time);
+            let mut substep_delta = (substep_end - next.time).max(0.0);
+            if substep_delta <= EPSILON {
+                // No forward boundary: still consume residual time so the tick
+                // contract (advance by delta) holds in release builds.
+                substep_delta = final_time - next.time;
+                if substep_delta <= EPSILON {
+                    break;
+                }
+            }
+
+            next = advance_tick_substep(&next, substep_delta);
+            if on_substep(&mut next) {
+                early_termination = true;
+                break;
+            }
+        }
+
+        if !early_termination {
+            crate::growth::apply_due_growth_waves(&mut next);
+            reset_daily_commute_flags(&mut next);
+            spawn_due_commute_trips(&mut next);
+        }
     }
 
     next

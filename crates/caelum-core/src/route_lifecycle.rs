@@ -54,6 +54,7 @@ pub fn rebase_edited_route_vehicles_and_riders(
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
         let preferred_direction = previous_legs
             .as_ref()
+            .filter(|legs| !legs.is_empty())
             .and_then(|legs| legs.get(candidate_vehicle.itinerary_index % legs.len()))
             .map(|leg| leg.direction);
         let vehicle_world = previous
@@ -313,6 +314,7 @@ fn break_service(
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
         let preferred_direction = previous_legs
             .as_ref()
+            .filter(|legs| !legs.is_empty())
             .and_then(|legs| legs.get(candidate_vehicle.itinerary_index % legs.len()))
             .map(|leg| leg.direction);
         let Some(vehicle_world) = previous
@@ -427,8 +429,9 @@ fn rebase_parked_vehicles(
         .collect();
     for vehicle_index in vehicle_indexes {
         let candidate_vehicle = &candidate.transit.vehicles[vehicle_index];
-        let preferred_direction = legs
-            .get(candidate_vehicle.itinerary_index % legs.len())
+        let preferred_direction = (!legs.is_empty())
+            .then(|| legs.get(candidate_vehicle.itinerary_index % legs.len()))
+            .flatten()
             .map(|leg| leg.direction);
         let vehicle_world = candidate_vehicle
             .parked_position

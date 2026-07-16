@@ -300,6 +300,13 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
         return;
       }
 
+      // Clear interaction state so a remount does not inherit a live drag or
+      // hover from the destroyed canvas.
+      if (ctx.getUi().drag !== null) {
+        ctx.onDragCancel();
+      }
+      ctx.onHoverTile(null);
+
       canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerdown", handlePointerDown);

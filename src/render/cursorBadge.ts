@@ -50,11 +50,12 @@ function badgeText(state: GameState, ui: UiState): string | null {
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const preview = ui.roadMutationPreview;
-      const ok =
-        preview === null ||
-        preview.generation !== ui.roadPreviewGeneration ||
-        preview.rejection === null;
-      return `⦿ Roundabout ${sizeLabel}${ok ? "" : " ⊘"}`;
+      const matching =
+        preview !== null && preview.generation === ui.roadPreviewGeneration;
+      if (!matching) {
+        return `⦿ Roundabout ${sizeLabel} …`;
+      }
+      return `⦿ Roundabout ${sizeLabel}${preview.rejection === null ? "" : " ⊘"}`;
     }
     case "area": {
       if (ui.selectedArea === null) {

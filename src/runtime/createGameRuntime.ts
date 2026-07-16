@@ -418,11 +418,21 @@ export async function createGameRuntime({
     const previewRelevantChanged =
       ui.routeDraft === null ||
       routeDraft.generation !== ui.routeDraft.generation;
+    // Generation-stable updates preserve host/preview rejections; only clear
+    // local interaction errors that a successful selection resolves.
+    const routePreviewError = previewRelevantChanged
+      ? null
+      : ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+        ? null
+        : ui.routePreviewError;
+    const routePreviewHostError = previewRelevantChanged
+      ? null
+      : ui.routePreviewHostError;
     const result = commit(state, {
       ...ui,
       routeDraft,
-      routePreviewError: null,
-      routePreviewHostError: null,
+      routePreviewError,
+      routePreviewHostError,
     });
     if (previewRelevantChanged) {
       requestRoutePreview(routeDraft);
@@ -1017,17 +1027,9 @@ export async function createGameRuntime({
             handleIndex,
             ui.routeDraft.interaction,
           );
-          return commit(
-            state,
-            routeDraft === ui.routeDraft
-              ? ui
-              : {
-                  ...ui,
-                  routeDraft,
-                  routePreviewError: null,
-                  routePreviewHostError: null,
-                },
-          );
+          return routeDraft === ui.routeDraft
+            ? commit(state, ui)
+            : commitRouteDraft(routeDraft);
         }
       }
       if (
@@ -1057,6 +1059,7 @@ export async function createGameRuntime({
 
       if (ui.activeTool === "roundabout") {
         const size = ui.roundaboutSize;
+        clearHoverPreviewTimer();
         invalidateRoadPreview();
         commit(state, {
           ...ui,
