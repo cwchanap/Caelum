@@ -915,7 +915,7 @@ fn cycling_road_direction_breaks_and_restores_route() {
             .find(|tile| tile.x == 4 && tile.y == 5)
             .unwrap()
             .one_way
-            .as_deref(),
+            .map(|h| h.as_str()),
         Some("north")
     );
     assert!(broken.snapshot.transit.routes[0].path_broken);
@@ -955,7 +955,7 @@ fn lay_road_line_one_way_sets_axis_direction_and_charges_new_tiles() {
         .tiles
         .iter()
         .filter(|tile| tile.y == 1 && (1..=3).contains(&tile.x))
-        .map(|tile| tile.one_way.as_deref())
+        .map(|tile| tile.one_way.map(|h| h.as_str()))
         .collect();
     assert_eq!(directions, vec![Some("east"), Some("east"), Some("east")]);
 }
@@ -982,12 +982,12 @@ fn lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_exi
             .find(|tile| tile.x == x && tile.y == y)
             .expect("tile exists")
     };
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(1, 0).one_way.as_deref(), None);
-    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), None);
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
 }
 
 #[test]
@@ -1024,22 +1024,22 @@ fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
     // east) carry the same directions in both drag orders.
     for x in 1..=3 {
         assert_eq!(
-            one_way_at(&east.snapshot, x, 5).as_deref(),
+            one_way_at(&east.snapshot, x, 5).map(|h| h.as_str()),
             Some("east"),
             "eastward forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 5).as_deref(),
+            one_way_at(&west.snapshot, x, 5).map(|h| h.as_str()),
             Some("east"),
             "westward drag must still place east forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&east.snapshot, x, 4).as_deref(),
+            one_way_at(&east.snapshot, x, 4).map(|h| h.as_str()),
             Some("west"),
             "eastward reverse lane at ({x},4)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 4).as_deref(),
+            one_way_at(&west.snapshot, x, 4).map(|h| h.as_str()),
             Some("west"),
             "westward drag must place the reverse lane on the SAME side (north) at ({x},4)"
         );
@@ -1858,14 +1858,14 @@ fn lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied() {
             .expect("tile exists")
     };
     // Forward lane (y=1) is one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // The pre-existing road at (2,0) keeps its two-way (None) direction — the
     // reverse lane did not overwrite it. (1,0) and (3,0) get the reverse lane.
-    assert_eq!(tile(2, 0).one_way.as_deref(), None);
-    assert_eq!(tile(1, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), None);
+    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
 }
 
 #[test]
@@ -1899,23 +1899,23 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
     for y in 1..=3 {
         // Forward lane (x=5) is south in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 5, y).as_deref(),
+            one_way_at(&south.snapshot, 5, y).map(|h| h.as_str()),
             Some("south"),
             "southward forward lane at (5,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 5, y).as_deref(),
+            one_way_at(&north.snapshot, 5, y).map(|h| h.as_str()),
             Some("south"),
             "northward drag must still place south forward lane at (5,{y})"
         );
         // Reverse lane (x=6, east/right of south) is north in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 6, y).as_deref(),
+            one_way_at(&south.snapshot, 6, y).map(|h| h.as_str()),
             Some("north"),
             "southward reverse lane at (6,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 6, y).as_deref(),
+            one_way_at(&north.snapshot, 6, y).map(|h| h.as_str()),
             Some("north"),
             "northward drag must place the reverse lane on the SAME side at (6,{y})"
         );
@@ -1949,7 +1949,7 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
                 .and_then(|tile| tile.one_way)
-                .as_deref(),
+                .map(|h| h.as_str()),
             Some("south")
         );
     }
@@ -1971,7 +1971,7 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
                 .and_then(|tile| tile.one_way)
-                .as_deref(),
+                .map(|h| h.as_str()),
             Some("north")
         );
     }
@@ -2093,9 +2093,9 @@ fn lay_road_line_one_way_over_two_way_road_updates_direction() {
             .expect("tile exists")
     };
     // The pre-existing two-way road is flipped to one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // The initial LayRoad charged one tile; the line charges the two newly
     // placed tiles (the flipped (1,1) tile is an update, not a new placement).
     assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
@@ -2264,14 +2264,14 @@ fn lay_road_line_dual_bidirectional_skips_building_occupied_reverse_tile() {
             .expect("tile exists")
     };
     // Forward lane (y=1) is one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // Reverse lane (y=0): (1,0) is skipped (building-occupied), (2,0)/(3,0)
     // get the westbound reverse carriageway.
     assert_ne!(tile(1, 0).kind.as_str(), "road");
-    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
     // Three forward tiles + two reverse tiles charged.
     assert_eq!(result.budget, 120_000 - 5 * 100);
 }

@@ -1,4 +1,5 @@
 use caelum_core::clock::{clock_minutes, day_index, scaled_delta, GAME_DAY_SECONDS};
+use caelum_core::model::Heading;
 use caelum_core::state::create_initial_snapshot;
 
 #[test]
@@ -34,7 +35,10 @@ fn initial_map_matches_growing_suburb_surface() {
         .iter()
         .find(|tile| tile.x == 2 && tile.y == 8)
         .unwrap();
-    assert_eq!(west_lane.one_way.as_deref(), Some("west"));
+    assert_eq!(
+        west_lane.one_way.as_ref().map(Heading::as_str),
+        Some("west")
+    );
 
     let east_lane = snapshot
         .map
@@ -42,5 +46,8 @@ fn initial_map_matches_growing_suburb_surface() {
         .iter()
         .find(|tile| tile.x == 2 && tile.y == 9)
         .unwrap();
-    assert_eq!(east_lane.one_way.as_deref(), Some("east"));
+    assert_eq!(
+        east_lane.one_way.as_ref().map(Heading::as_str),
+        Some("east")
+    );
 }

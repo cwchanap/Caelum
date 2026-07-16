@@ -178,10 +178,9 @@ pub enum Heading {
     West,
 }
 
-impl std::ops::Deref for Heading {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
+impl Heading {
+    /// Lowercase canonical name used in wire/preview keys and assertions.
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::North => "north",
             Self::East => "east",

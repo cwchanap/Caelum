@@ -166,6 +166,7 @@ fn best_candidate(candidates: Vec<RoutePlan>) -> Option<RoutePlan> {
     let mut best: Option<RoutePlan> = None;
 
     for candidate in candidates {
+        // Strict `<` is a deterministic first-found tie-break (snapshot/enumeration order); intentionally simpler than the road pathfinder's canonical tie-break.
         if best.as_ref().map_or(true, |current| {
             candidate.estimated_seconds < current.estimated_seconds
         }) {

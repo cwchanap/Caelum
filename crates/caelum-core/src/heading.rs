@@ -48,12 +48,7 @@ pub fn heading_rank(heading: Heading) -> u8 {
 /// Stable string key for a heading, used in `stable_key` generation so
 /// transition identity is deterministic across runs.
 pub fn heading_key(heading: Heading) -> &'static str {
-    match heading {
-        Heading::North => "north",
-        Heading::East => "east",
-        Heading::South => "south",
-        Heading::West => "west",
-    }
+    heading.as_str()
 }
 
 /// Returns the cardinal heading from `from` to `to`, or `None` when the two
