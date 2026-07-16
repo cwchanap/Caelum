@@ -665,6 +665,37 @@ fn unaffordable_road_preview_preserves_required_cost_and_engine_state() {
     assert_eq!(rejection.code, RejectionCode::InsufficientBudget);
     assert_eq!(rejection.context.required_budget, Some(100));
     assert_eq!(rejection.context.available_budget, Some(99));
+    // Attempted tile is retained so the host can render invalid feedback and
+    // anchor the badge (empty changed_tiles would suppress hover fallback).
+    assert_eq!(response.changed_tiles, vec![point(2, 2)]);
     assert_eq!(engine.snapshot(), before_snapshot);
     assert_eq!(engine.road_topology_for_test(), &before_topology);
+}
+
+#[test]
+fn rejected_road_preview_preserves_attempted_points() {
+    let engine = GameEngine::new();
+    // Direction-cycle on a non-road tile rejects; keep the attempted point so
+    // the host can highlight invalid targets and anchor the feedback badge.
+    let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::CycleRoadDirection {
+            point: point(3, 3),
+        },
+        generation: 82,
+    });
+    assert!(response.rejection.is_some());
+    assert_eq!(response.changed_tiles, vec![point(3, 3)]);
+
+    let line = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: vec![point(20, 20), point(21, 20), point(22, 20)],
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 83,
+    });
+    assert!(line.rejection.is_some());
+    assert_eq!(
+        line.changed_tiles,
+        vec![point(20, 20), point(21, 20), point(22, 20)]
+    );
 }

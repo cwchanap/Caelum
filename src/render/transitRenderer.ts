@@ -385,6 +385,20 @@ interface VehicleSample {
   tangent: TripPosition | null;
 }
 
+function terminalWaypointPosition(
+  state: GameState,
+  vehicle: Vehicle,
+  leg: RouteLegPath,
+): TripPosition | null {
+  const nodes =
+    vehicle.mode === "bus" ? state.transit.stops : state.transit.stations;
+  const node = nodes.find(
+    (candidate) =>
+      candidate.id === leg.fromWaypointId && candidate.status === "present",
+  );
+  return node?.position ?? null;
+}
+
 function vehicleSample(
   state: GameState,
   vehicle: Vehicle,
@@ -400,6 +414,19 @@ function vehicleSample(
   const path = leg?.currentPath;
   const step = path?.steps[vehicle.pathStepIndex];
   if (step === undefined) {
+    // Zero-step terminal reversals have a connected empty path and no step;
+    // park at the terminal waypoint so paused/exact-boundary vehicles remain visible.
+    if (
+      vehicle.parkedPosition === null &&
+      path !== undefined &&
+      path.steps.length === 0 &&
+      leg !== undefined
+    ) {
+      const terminal = terminalWaypointPosition(state, vehicle, leg);
+      if (terminal !== null) {
+        return { point: center(terminal), tangent: null };
+      }
+    }
     if (vehicle.parkedPosition === null) return null;
     const geometry =
       leg === undefined ? undefined : presentationPath(leg)?.steps[0]?.geometry;

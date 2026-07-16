@@ -576,6 +576,18 @@ fn classify_route_impact(
     Some(RouteImpactKind::Rerouted)
 }
 
+fn attempted_mutation_tiles(mutation: &RoadMutation) -> Vec<Point> {
+    match mutation {
+        RoadMutation::LayRoad { point }
+        | RoadMutation::CycleRoadDirection { point }
+        | RoadMutation::RemoveAtTile { point } => vec![*point],
+        RoadMutation::LayRoadLine { points, .. } | RoadMutation::RemoveAtTiles { points } => {
+            points.clone()
+        }
+        RoadMutation::PlaceRoundabout { origin, .. } => vec![*origin],
+    }
+}
+
 fn rejected_road_preview(
     snapshot: &GameSnapshot,
     generation: u64,
@@ -593,8 +605,10 @@ fn rejected_road_preview(
                 None => (vec![*origin], Vec::new(), roundabout_cost(*size)),
             }
         }
+        // Keep the attempted point/line so the host can render invalid feedback
+        // and anchor the badge (empty tiles suppress the hover fallback).
         _ => (
-            Vec::new(),
+            attempted_mutation_tiles(mutation),
             Vec::new(),
             if rejection.code == RejectionCode::InsufficientBudget {
                 rejection.context.required_budget.unwrap_or(0)

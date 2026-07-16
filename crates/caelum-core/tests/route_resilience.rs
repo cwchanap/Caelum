@@ -409,6 +409,32 @@ fn broken_transition_skips_a_vehicle_without_an_exact_world_position() {
 }
 
 #[test]
+fn break_service_parks_vehicle_at_zero_step_terminal_reversal() {
+    // Zero-step terminal reversals (same-heading / metro) have an empty path.
+    // Sampling path.step(0) returns None; fall back to the terminal waypoint so
+    // break_service can still park the vehicle at the terminal location.
+    let mut fixture = moving_vehicle_with_rider_fixture();
+    let terminal = point(10, 5);
+    let empty_path = TransitPath::Road {
+        steps: Vec::new(),
+        total_travel_seconds: 0.0,
+    };
+    fixture.state.transit.routes[0].legs[0].current_path = Some(empty_path.clone());
+    fixture.state.transit.routes[0].legs[0].last_valid_path = Some(empty_path);
+    fixture.state.transit.routes[0].legs[0].from_waypoint_id = "stop-002".into();
+    fixture.state.transit.routes[0].legs[0].to_waypoint_id = "stop-002".into();
+    fixture.state.transit.vehicles[0].itinerary_index = 0;
+    fixture.state.transit.vehicles[0].path_step_index = 0;
+    fixture.state.transit.vehicles[0].step_progress = 0.0;
+    fixture.state.transit.vehicles[0].parked_position = None;
+
+    let next = recompute_after_removal(&fixture.state, point(6, 5));
+    let parked = vehicle(&next, &fixture.vehicle_id);
+    assert!(route(&next, &fixture.route_id).path_broken);
+    assert_eq!(parked.parked_position, Some(terminal.into()));
+}
+
+#[test]
 fn repaired_active_route_rebases_and_resumes_without_flipping_active() {
     let fixture = moving_vehicle_with_rider_fixture();
     let broken = recompute_after_removal(&fixture.state, point(6, 5));

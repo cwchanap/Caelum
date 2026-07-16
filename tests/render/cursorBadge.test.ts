@@ -495,6 +495,32 @@ describe("renderCursorBadge", () => {
     expect(calls.join("")).not.toContain("⊘");
   });
 
+  it("marks the road cursor blocked over a structure-owned road tile", () => {
+    // Junction/roundabout roads reject cycleRoadDirection; the existing-road
+    // fallback must not promise a click that Rust will reject.
+    const { ctx, calls } = badgeCtx();
+    let state = withRoads(createTestGameState(), [{ x: 5, y: 5 }]);
+    state = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 5 && tile.y === 5
+            ? { ...tile, roadStructureId: "junction-test" }
+            : tile,
+        ),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 5 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Road");
+    expect(calls.join("")).toContain("⊘");
+  });
+
   it("marks the road cursor blocked over an out-of-bounds tile", () => {
     // An off-map hover tile makes getTile return null (the out-of-bounds
     // branch), so both isValidRoadPlacement and the road-kind fallback are

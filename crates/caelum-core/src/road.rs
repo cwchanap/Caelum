@@ -191,6 +191,14 @@ fn lay_road_line(
 
     if preset == RoadPreset::DualBidirectional {
         if let Some(canonical) = dual_direction {
+            // Reverse-lane offsets can overflow i32 even when consecutive stroke
+            // subtraction is fine (e.g. South reverse +1 on x=i32::MAX).
+            if reverse_lane_offset_overflows(points, canonical) {
+                return Err(GameplayRejection::at(
+                    RejectionCode::InvalidRoadStroke,
+                    points[0],
+                ));
+            }
             let reverse_points = reverse_lane_points(points, canonical);
             let authored = author_lane_tiles(
                 candidate,
@@ -757,10 +765,21 @@ fn line_direction(points: &[Point]) -> Option<Heading> {
 }
 
 fn stroke_direction_overflows(points: &[Point]) -> bool {
-    if points.len() < 2 {
-        return false;
-    }
-    points[1].x.checked_sub(points[0].x).is_none() || points[1].y.checked_sub(points[0].y).is_none()
+    points.windows(2).any(|pair| {
+        pair[1].x.checked_sub(pair[0].x).is_none() || pair[1].y.checked_sub(pair[0].y).is_none()
+    })
+}
+
+fn reverse_lane_offset_overflows(points: &[Point], direction: Heading) -> bool {
+    let (offset_x, offset_y) = match direction {
+        Heading::North => (-1, 0),
+        Heading::East => (0, -1),
+        Heading::South => (1, 0),
+        Heading::West => (0, 1),
+    };
+    points
+        .iter()
+        .any(|point| point.x.checked_add(offset_x).is_none() || point.y.checked_add(offset_y).is_none())
 }
 
 fn canonical_line_direction(points: &[Point]) -> Option<Heading> {
@@ -796,11 +815,15 @@ fn reverse_lane_points(points: &[Point], direction: Heading) -> Vec<Point> {
         Heading::South => (1, 0),
         Heading::West => (0, 1),
     };
+    // Callers validate reverse_lane_offset_overflows first; checked_add is a
+    // defensive belt so host-sent extremes never panic in debug builds.
     points
         .iter()
-        .map(|point| Point {
-            x: point.x + offset_x,
-            y: point.y + offset_y,
+        .filter_map(|point| {
+            Some(Point {
+                x: point.x.checked_add(offset_x)?,
+                y: point.y.checked_add(offset_y)?,
+            })
         })
         .collect()
 }

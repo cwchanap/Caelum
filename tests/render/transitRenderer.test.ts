@@ -512,6 +512,54 @@ describe("renderTransit highlight", () => {
     expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
   });
 
+  it("renders a vehicle on a zero-step terminal reversal at the terminal waypoint", () => {
+    // Connected empty paths (same-heading / metro terminal reversals) have no
+    // steps, so path.steps[pathStepIndex] is undefined while parkedPosition is
+    // still null. Resolve the empty leg to its terminal waypoint instead of
+    // treating the vehicle as absent.
+    let state = busState();
+    const emptyPath: TransitPath = {
+      kind: "road",
+      steps: [],
+      totalTravelSeconds: 0,
+    };
+    const terminalLeg: RouteLegPath = {
+      fromWaypointId: "stop-002",
+      toWaypointId: "stop-002",
+      direction: "return",
+      kind: "terminalReversal",
+      status: "connected",
+      currentPath: emptyPath,
+      lastValidPath: emptyPath,
+      estimatedSeconds: 0,
+    };
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) =>
+          route.id === "route-001"
+            ? { ...route, legs: [terminalLeg, ...route.legs] }
+            : route,
+        ),
+        vehicles: state.transit.vehicles.map((vehicle) => ({
+          ...vehicle,
+          itineraryIndex: 0,
+          pathStepIndex: 0,
+          stepProgress: 0,
+          parkedPosition: null,
+        })),
+      },
+    };
+
+    const context = ctx();
+    renderTransit(context, state, createUiState());
+
+    // stop-002 is at (15,8); centre = (15*32+16, 8*32+16) = (496, 272).
+    // No path tangent → axis-aligned fillRect at point - (7, 14).
+    expect(context.fillRect).toHaveBeenCalledWith(489, 258, 14, 8);
+  });
+
   it("draws current geometry solid and only the failed last-valid leg dotted", () => {
     const { ctx: context, strokes } = recordingContext();
     const state = stateWithLegs([

@@ -40,9 +40,12 @@ function badgeText(state: GameState, ui: UiState): string | null {
           : ui.roadPreset === "dualBidirectional"
             ? " ⇄"
             : "";
+      const tile = getTile(state.map, cursor);
+      // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
+      // reject cycleRoadDirection, so exclude them from the existing-road fallback.
       const ok =
         isValidRoadPlacement(state, cursor) ||
-        getTile(state.map, cursor)?.kind === "road";
+        (tile?.kind === "road" && tile.roadStructureId === undefined);
       return `⦿ Road${glyph}${ok ? "" : " ⊘"}`;
     }
     case "track":

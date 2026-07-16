@@ -2005,6 +2005,39 @@ fn lay_road_line_rejects_direction_overflow_coordinates() {
     );
 }
 
+// Later pairs must be validated too — the first-pair-only guard lets a payload
+// whose second consecutive subtraction overflows through unchecked arithmetic.
+#[test]
+fn lay_road_line_rejects_overflow_on_later_stroke_pairs() {
+    let mut engine = GameEngine::new();
+    // First pair (0,0)->(1,0) is fine; second pair (1,0)->(i32::MIN,0) overflows.
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(0, 0).into(), (1, 0).into(), (i32::MIN, 0).into()],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
+}
+
+// DualBidirectional reverse-lane offsets can overflow even when consecutive
+// pair subtraction is fine — e.g. South reverse offset (+1,0) on x=i32::MAX.
+#[test]
+fn lay_road_line_rejects_reverse_lane_offset_overflow() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(0, 0).into(), (0, 1).into(), (i32::MAX, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
+}
+
 #[test]
 fn lay_road_line_single_point_is_a_no_op_unchanged() {
     // A single-point line has no direction (line_direction returns None) and

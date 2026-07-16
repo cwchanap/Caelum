@@ -468,9 +468,20 @@ fn vehicle_world_position(
         return Some(parked_position.clone());
     }
     let (_, _, legs) = route_data(snapshot, mode, route_id)?;
+    if legs.is_empty() {
+        return None;
+    }
     let leg = legs.get(vehicle.itinerary_index % legs.len())?;
     let path = leg.current_path.as_ref().or(leg.last_valid_path.as_ref())?;
-    vehicle_world_sample(path, vehicle).map(|(world, _)| world)
+    if let Some((world, _)) = vehicle_world_sample(path, vehicle) {
+        return Some(world);
+    }
+    // Zero-step terminal reversals (same-heading bus / metro) have an empty
+    // path; fall back to the terminal waypoint so break_service can still park.
+    if path.step_count() == 0 {
+        return present_node_world(snapshot, mode, &leg.from_waypoint_id);
+    }
+    None
 }
 
 fn parking_target(
