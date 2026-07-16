@@ -162,6 +162,14 @@ fn lay_road_line(
     if points.is_empty() {
         return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
     }
+    // Direction helpers subtract consecutive stroke coordinates. Host-sent
+    // points near i32 extremes can overflow before per-tile map validation.
+    if stroke_direction_overflows(points) {
+        return Err(GameplayRejection::at(
+            RejectionCode::InvalidRoadStroke,
+            points[0],
+        ));
+    }
 
     let forward = line_direction(points);
     let dual_direction = canonical_line_direction(points);
@@ -748,12 +756,19 @@ fn line_direction(points: &[Point]) -> Option<Heading> {
     heading_between(points[0], points[1])
 }
 
+fn stroke_direction_overflows(points: &[Point]) -> bool {
+    if points.len() < 2 {
+        return false;
+    }
+    points[1].x.checked_sub(points[0].x).is_none() || points[1].y.checked_sub(points[0].y).is_none()
+}
+
 fn canonical_line_direction(points: &[Point]) -> Option<Heading> {
     if points.len() < 2 {
         return None;
     }
-    let dx = points[1].x - points[0].x;
-    let dy = points[1].y - points[0].y;
+    let dx = points[1].x.checked_sub(points[0].x)?;
+    let dy = points[1].y.checked_sub(points[0].y)?;
     if dx != 0 {
         Some(Heading::East)
     } else if dy != 0 {

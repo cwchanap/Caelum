@@ -101,9 +101,10 @@ pub enum GameIntent {
         origin: Point,
         rotation: u16,
     },
-    /// Debug-only intent to set the budget directly. Used by e2e tests to
-    /// top up the budget when the normal gameplay flow would exhaust it
-    /// (e.g. metro tombstone rebuild after 2 stations + 1 vehicle).
+    /// Debug/e2e helper to set the budget directly. Deserialized on the wire
+    /// for dev WASM/e2e, but `GameEngine::dispatch` only applies it under
+    /// `debug_assertions` — release builds leave the snapshot unchanged.
+    /// Prefer `GameEngine::set_budget_for_test` in unit tests.
     SetBudget {
         budget: i32,
     },

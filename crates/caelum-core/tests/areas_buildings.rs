@@ -335,6 +335,82 @@ fn assign_workplaces_skips_a_workers_home_tile_when_alternatives_exist() {
     assert_eq!(state.sims[0].workplace, Some(other));
 }
 
+// Regression: a referenced bus-stop demolition leaves a Missing tombstone at
+// the former building anchor. Missing nodes are non-physical elsewhere, so
+// once the road is cleared the empty tile must be zoneable (not skipped while
+// other placement paths treat the tombstone as non-physical).
+#[test]
+fn paint_area_rectangle_zones_missing_transit_node_anchor() {
+    let mut engine = GameEngine::new();
+
+    let road = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(4, 4).into(), (5, 4).into(), (6, 4).into()],
+        preset: caelum_core::RoadPreset::TwoWay,
+    });
+    assert!(road.applied, "{road:?}");
+    for x in [5, 6] {
+        let stop = engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 4).into(),
+        });
+        assert!(stop.applied, "{stop:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: caelum_core::model::TransitMode::Bus,
+        pattern: caelum_core::model::ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+    });
+    assert!(created.applied, "{created:?}");
+
+    // Demolish the stop (tombstone + road remains), then clear the road so the
+    // anchor is empty while the Missing node still occupies the position.
+    let stop_removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (5, 4).into(),
+    });
+    assert!(stop_removed.applied, "{stop_removed:?}");
+    let road_removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (5, 4).into(),
+    });
+    assert!(road_removed.applied, "{road_removed:?}");
+    let tombstone = road_removed
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("referenced stop remains as a tombstone");
+    assert_eq!(
+        tombstone.status,
+        caelum_core::model::TransitNodeStatus::Missing
+    );
+    assert_eq!(tombstone.position, (5, 4).into());
+    let cleared = road_removed
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == 5 && tile.y == 4)
+        .expect("map tile");
+    assert_eq!(cleared.kind, "empty");
+
+    let painted = engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: (5, 4).into(),
+        end: (5, 4).into(),
+    });
+    assert!(
+        painted.applied,
+        "missing stop anchor should be paintable: {painted:?}"
+    );
+    let tile = painted
+        .snapshot
+        .map
+        .tiles
+        .iter()
+        .find(|tile| tile.x == 5 && tile.y == 4)
+        .expect("map tile");
+    assert_eq!(tile.area.as_deref(), Some("residential"));
+}
+
 // Regression: a PaintAreaRectangle intent is deserialized from the host/JS
 // boundary, so `start`/`end` can carry arbitrary i32 values. The engine must
 // clip the rectangle to map bounds before enumerating points; an off-map

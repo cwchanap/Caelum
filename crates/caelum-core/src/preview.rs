@@ -11,7 +11,8 @@ use crate::network::resolve_route_legs;
 use crate::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
-use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost, roundabout_template};
+use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost};
+use crate::route_lifecycle::merge_resolved_legs;
 use crate::transit::{self, BUS_COST, METRO_COST};
 use crate::transit_nodes::validate_present_compatible_node;
 
@@ -515,12 +516,17 @@ fn route_impacts(
     };
     let mut impacts = Vec::new();
     for route in &previous.transit.routes {
-        let legs = resolve_route_legs(
-            candidate,
-            context,
-            TransitMode::Bus,
-            &route.stop_ids,
-            route.pattern,
+        // Merge with stored history so broken legs keep `last_valid_path` and
+        // classify the same way as commit's `recompute_all_routes`.
+        let legs = merge_resolved_legs(
+            Some(&route.legs),
+            resolve_route_legs(
+                candidate,
+                context,
+                TransitMode::Bus,
+                &route.stop_ids,
+                route.pattern,
+            ),
         );
         if let Some(kind) = classify_route_impact(&route.legs, &legs) {
             impacts.push(RouteImpact {
@@ -530,12 +536,15 @@ fn route_impacts(
         }
     }
     for line in &previous.transit.metro_lines {
-        let legs = resolve_route_legs(
-            candidate,
-            context,
-            TransitMode::Metro,
-            &line.station_ids,
-            line.pattern,
+        let legs = merge_resolved_legs(
+            Some(&line.legs),
+            resolve_route_legs(
+                candidate,
+                context,
+                TransitMode::Metro,
+                &line.station_ids,
+                line.pattern,
+            ),
         );
         if let Some(kind) = classify_route_impact(&line.legs, &legs) {
             impacts.push(RouteImpact {
@@ -575,16 +584,14 @@ fn rejected_road_preview(
 ) -> RoadMutationPreviewResponse {
     let (changed_tiles, generated_structures, cost) = match mutation {
         RoadMutation::PlaceRoundabout { origin, size } => {
-            let template = roundabout_template(*size, *origin);
-            (
-                template.footprint,
-                vec![attempted_roundabout_structure(
-                    &snapshot.map,
-                    *origin,
-                    *size,
-                )],
-                roundabout_cost(*size),
-            )
+            match attempted_roundabout_structure(&snapshot.map, *origin, *size) {
+                Some(structure) => {
+                    let footprint = structure.footprint().to_vec();
+                    (footprint, vec![structure], roundabout_cost(*size))
+                }
+                // Overflowing origins never produce a template; surface cost only.
+                None => (vec![*origin], Vec::new(), roundabout_cost(*size)),
+            }
         }
         _ => (
             Vec::new(),

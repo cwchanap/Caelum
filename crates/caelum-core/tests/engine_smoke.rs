@@ -322,3 +322,20 @@ fn identical_replay_produces_identical_snapshots() {
         assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
     }
 }
+
+// SetBudget is a debug/e2e helper. Debug builds apply it; release builds no-op so
+// production hosts cannot bypass construction costs. Tests always use
+// `set_budget_for_test` for deterministic budget control.
+#[test]
+fn set_budget_intent_is_debug_only() {
+    let mut engine = GameEngine::new();
+    let before = engine.snapshot().budget;
+    let result = engine.dispatch(GameIntent::SetBudget { budget: before + 1 });
+    if cfg!(debug_assertions) {
+        assert!(result.applied);
+        assert_eq!(result.snapshot.budget, before + 1);
+    } else {
+        assert!(!result.applied);
+        assert_eq!(result.snapshot.budget, before);
+    }
+}

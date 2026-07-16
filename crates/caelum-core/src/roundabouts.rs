@@ -66,20 +66,25 @@ pub fn roundabout_cost(size: RoundaboutSize) -> i32 {
 /// of off-map tiles and unsafe boundary mappings: previews must preserve the
 /// attempted footprint and any reciprocal road ports even when the mutation
 /// cannot be committed.
+///
+/// Returns `None` when the origin/size would overflow while building the
+/// template (same check as `place_roundabout`), so callers can fall back to an
+/// empty attempt visualization.
 pub fn attempted_roundabout_structure(
     map: &GameMap,
     origin: Point,
     size: RoundaboutSize,
-) -> RoadStructure {
+) -> Option<RoadStructure> {
+    validate_roundabout_origin(origin, size).ok()?;
     let template = roundabout_template(size, origin);
     let ports = attempted_boundary_connections(map, &template);
-    RoadStructure::Roundabout {
+    Some(RoadStructure::Roundabout {
         id: roundabout_structure_id(size, origin),
         origin,
         size,
         footprint: template.footprint,
         ports,
-    }
+    })
 }
 
 pub fn place_roundabout(
@@ -87,6 +92,9 @@ pub fn place_roundabout(
     origin: Point,
     size: RoundaboutSize,
 ) -> GameplayResult<RoadMutationResult> {
+    // Host-sent origins near i32 extremes overflow while building the footprint
+    // template; reject before any arithmetic in `translate`.
+    validate_roundabout_origin(origin, size)?;
     let template = roundabout_template(size, origin);
     validate_bounds(&state.map, &template.footprint)?;
     validate_replaceable_occupancy(state, &template)?;
@@ -561,8 +569,14 @@ fn boundary_port_slots(
 fn edge_is_on_boundary(point: Point, edge: Heading, origin: Point, width: i32) -> bool {
     match edge {
         Heading::North => point.y == origin.y,
-        Heading::East => point.x == origin.x + width - 1,
-        Heading::South => point.y == origin.y + width - 1,
+        Heading::East => origin
+            .x
+            .checked_add(width - 1)
+            .is_some_and(|far| point.x == far),
+        Heading::South => origin
+            .y
+            .checked_add(width - 1)
+            .is_some_and(|far| point.y == far),
         Heading::West => point.x == origin.x,
     }
 }
@@ -748,10 +762,39 @@ fn unsafe_port_mapping(structure_id: &str) -> GameplayRejection {
     }
 }
 
+fn size_width(size: RoundaboutSize) -> i32 {
+    match size {
+        RoundaboutSize::Compact2x2 => 2,
+        RoundaboutSize::Standard3x3 => 3,
+    }
+}
+
+/// Rejects origins whose footprint or exterior neighbors would overflow i32
+/// before any template arithmetic runs.
+fn validate_roundabout_origin(origin: Point, size: RoundaboutSize) -> GameplayResult<()> {
+    let width = size_width(size);
+    // Footprint spans origin..(origin+width-1); exterior neighbors reach
+    // origin-1 and origin+width.
+    let extent_ok = origin.x.checked_add(width).is_some()
+        && origin.y.checked_add(width).is_some()
+        && origin.x.checked_sub(1).is_some()
+        && origin.y.checked_sub(1).is_some();
+    if !extent_ok {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, origin));
+    }
+    Ok(())
+}
+
 fn translate(origin: Point, offset: (i32, i32)) -> Point {
     Point {
-        x: origin.x + offset.0,
-        y: origin.y + offset.1,
+        x: origin
+            .x
+            .checked_add(offset.0)
+            .expect("roundabout origin must be validated before template construction"),
+        y: origin
+            .y
+            .checked_add(offset.1)
+            .expect("roundabout origin must be validated before template construction"),
     }
 }
 

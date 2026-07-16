@@ -472,7 +472,13 @@ impl GameEngine {
                 );
                 self.commit_network_mutation(candidate)
             }
+            // Debug/test-only: production release builds ignore this intent so a
+            // host cannot bypass construction costs via `{ "type": "setBudget" }`.
+            // Unit tests use `set_budget_for_test`; e2e uses debug WASM builds.
             GameIntent::SetBudget { budget } => {
+                if !cfg!(debug_assertions) {
+                    return DispatchResult::unchanged(self.snapshot());
+                }
                 let mut next = self.snapshot.clone();
                 next.budget = budget;
                 self.commit_result(Ok(next))

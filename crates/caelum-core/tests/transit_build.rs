@@ -1988,6 +1988,23 @@ fn lay_road_line_empty_points_is_rejected() {
     assert!(result.rejection.is_some());
 }
 
+// Regression: direction computation subtracts consecutive stroke points before
+// per-tile map validation. Coordinates that overflow i32 subtraction must
+// reject as InvalidRoadStroke rather than panic (debug) or wrap (release).
+#[test]
+fn lay_road_line_rejects_direction_overflow_coordinates() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(i32::MIN, 0).into(), (i32::MAX, 0).into()],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
+}
+
 #[test]
 fn lay_road_line_single_point_is_a_no_op_unchanged() {
     // A single-point line has no direction (line_direction returns None) and

@@ -260,6 +260,62 @@ fn already_broken_route_still_reports_a_changed_connected_leg_with_commit_parity
     );
 }
 
+// Regression: once a leg is disconnected, raw resolve drops `last_valid_path`.
+// Preview must merge candidate legs with stored history so an unrelated road
+// mutation does not falsely report `Rerouted` while commit leaves the route
+// unchanged.
+#[test]
+fn unrelated_road_preview_does_not_reroute_already_broken_route() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=20).map(|x| point(x, 5)).collect());
+    for x in [2, 10, 20] {
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 5) });
+    }
+    dispatch(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::RemoveAtTile {
+            point: point(15, 5),
+        },
+    );
+    let before = newest_route(&engine.snapshot()).clone();
+    assert!(before.path_broken);
+    assert!(before.legs.iter().any(|leg| {
+        leg.status != caelum_core::model::RouteLegStatus::Connected && leg.last_valid_path.is_some()
+    }));
+
+    // Road far from the route corridor: commit must leave the broken route
+    // (including last_valid_path history) identical.
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        generation: 61,
+        mutation: RoadMutation::LayRoad {
+            point: point(3, 12),
+        },
+    });
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert!(
+        preview.route_impacts.is_empty(),
+        "unrelated road must not classify a broken route as rerouted: {:?}",
+        preview.route_impacts
+    );
+
+    let committed = engine.dispatch(GameIntent::LayRoad {
+        point: point(3, 12),
+    });
+    assert!(committed.applied, "{committed:?}");
+    assert!(committed.context.affected_route_ids.is_empty());
+    let after = newest_route(&committed.snapshot);
+    assert_eq!(after.legs, before.legs);
+    assert_eq!(after.revision, before.revision);
+}
+
 #[test]
 fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
     let mut engine = existing_route_engine();

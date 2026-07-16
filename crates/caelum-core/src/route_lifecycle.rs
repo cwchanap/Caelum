@@ -610,7 +610,10 @@ fn route_structure_changed<T: PartialEq>(
         || previous_platforms != candidate_platforms
 }
 
-fn merge_resolved_legs(
+/// Merge freshly resolved legs with any stored history from the previous route.
+/// Connected legs refresh `last_valid_path` from the live path; broken legs keep
+/// the prior `last_valid_path` so previews classify impacts the same way commit does.
+pub(crate) fn merge_resolved_legs(
     previous: Option<&[RouteLegPath]>,
     resolved: Vec<RouteLegPath>,
 ) -> Vec<RouteLegPath> {

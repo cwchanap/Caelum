@@ -458,6 +458,16 @@ fn invalid_footprint_rejections_are_all_or_nothing() {
         }),
     ));
 
+    // Origins near i32 extremes must reject before template arithmetic overflows.
+    let mut overflowing = GameEngine::new();
+    fixtures.push((
+        overflowing.snapshot(),
+        overflowing.dispatch(GameIntent::PlaceRoundabout {
+            origin: point(i32::MAX, i32::MAX),
+            size: RoundaboutSize::Standard3x3,
+        }),
+    ));
+
     let mut insufficient = GameEngine::new();
     insufficient.set_budget_for_test(999);
     fixtures.push((
