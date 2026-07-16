@@ -1209,52 +1209,43 @@ export async function createGameRuntime({
       if (samePoint(point, ui.hoverTile)) {
         return commit(state, ui);
       }
-      if (point === null) {
-        clearHoverPreviewTimer();
-        invalidateRoadPreview();
-      }
+      clearHoverPreviewTimer();
+      invalidateRoadPreview();
+      // Every hover change (including non-null moves) invalidates generation and
+      // clears the cached overlay so a resolved preview cannot stick on a tile
+      // with no mutation, and late responses cannot pass a stale generation.
+      const generation = ui.roadPreviewGeneration + 1;
       const nextUi: UiState = {
         ...ui,
         hoverTile: point,
-        ...(point === null
-          ? {
-              roadMutationPreview: null,
-              roadMutationPreviewError: null,
-            }
-          : {}),
+        roadPreviewGeneration: generation,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
       };
+      if (point === null || dead) {
+        return commit(state, nextUi);
+      }
       const mutation = roadMutationForUi(nextUi);
-      // No road mutation applies for this tile — commit the hover change
-      // without bumping the preview generation (one commit, one shell build).
-      if (mutation === null || dead) {
+      if (mutation === null) {
         return commit(state, nextUi);
       }
       // Debounce the hover-triggered preview so rapid pointermove events
       // coalesce into a single IPC round-trip (important on Tauri). A delay
       // of 0 disables debouncing (used in tests).
-      clearHoverPreviewTimer();
       if (hoverPreviewDebounceMs <= 0) {
-        // Non-debounced: merge the hover change and preview generation bump
-        // into a single commit to avoid a redundant shell-state rebuild.
-        const generation = ui.roadPreviewGeneration + 1;
-        const snapshot = commit(state, {
-          ...nextUi,
-          roadPreviewGeneration: generation,
-          roadMutationPreview: null,
-          roadMutationPreviewError: null,
-        });
+        const snapshot = commit(state, nextUi);
         sendRoadMutationPreviewRequest(mutation, generation);
         return snapshot;
       }
-      // Debounced: commit the hover change now, fire the preview request
-      // after the delay (re-deriving the mutation from current UI state).
+      // Debounced: commit the cleared hover state now; fire the request after
+      // the delay using the generation already reserved for this hover.
       const snapshot = commit(state, nextUi);
       hoverPreviewTimer = setTimeout(() => {
         hoverPreviewTimer = null;
-        if (dead) return;
+        if (dead || ui.roadPreviewGeneration !== generation) return;
         const currentMutation = roadMutationForUi(ui);
         if (currentMutation === null) return;
-        requestRoadMutationPreview(currentMutation);
+        sendRoadMutationPreviewRequest(currentMutation, generation);
       }, hoverPreviewDebounceMs);
       return snapshot;
     },

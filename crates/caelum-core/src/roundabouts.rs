@@ -401,6 +401,131 @@ pub fn is_roundabout_owned(map: &GameMap, point: Point) -> bool {
     roundabout_id_at(map, point).is_some()
 }
 
+/// Attach a newly laid approach road tile to a neighboring roundabout port.
+///
+/// `heading` is the direction from `approach` toward the roundabout-owned tile.
+/// Only template port slots accept attachments; structure ownership is preserved.
+pub fn attach_approach_to_roundabout(map: &mut GameMap, approach: Point, heading: Heading) {
+    let port_point = offset(approach, heading);
+    let port_edge = opposite(heading);
+    let Some(structure) = map.road_structures.iter().find(|structure| {
+        matches!(structure, RoadStructure::Roundabout { .. })
+            && structure.footprint().contains(&port_point)
+    }) else {
+        return;
+    };
+    let (size, origin) = match structure {
+        RoadStructure::Roundabout { size, origin, .. } => (*size, *origin),
+        RoadStructure::AutomaticJunction { .. } => return,
+    };
+    let template = roundabout_template(size, origin);
+    if !template
+        .port_slots
+        .iter()
+        .any(|slot| slot.point == port_point && slot.edge == port_edge)
+    {
+        return;
+    }
+    let Some(approach_tile) = map.tile(approach) else {
+        return;
+    };
+    if approach_tile.kind != "road" || approach_tile.road_connections.contains(&heading) {
+        return;
+    }
+    let Some(port_tile) = map.tile(port_point) else {
+        return;
+    };
+    if port_tile.kind != "road" {
+        return;
+    }
+    if let Some(tile) = map.tile_mut(approach) {
+        tile.road_connections.push(heading);
+    }
+    if let Some(tile) = map.tile_mut(port_point) {
+        if !tile.road_connections.contains(&port_edge) {
+            tile.road_connections.push(port_edge);
+        }
+    }
+}
+
+/// Rebuild every roundabout's persisted ports from live reciprocal boundary
+/// edges. Call after road mutations that may attach or detach approaches so
+/// topology, routing, and rendering share one attachment source of truth.
+pub fn sync_roundabout_ports(map: &mut GameMap) {
+    let updates: Vec<(String, Vec<RoadPort>)> = map
+        .road_structures
+        .iter()
+        .filter_map(|structure| match structure {
+            RoadStructure::Roundabout {
+                id, origin, size, ..
+            } => {
+                let template = roundabout_template(*size, *origin);
+                Some((id.clone(), recapture_boundary_ports(map, &template)))
+            }
+            RoadStructure::AutomaticJunction { .. } => None,
+        })
+        .collect();
+    for (id, ports) in updates {
+        if let Some(structure) = map
+            .road_structures
+            .iter_mut()
+            .find(|structure| structure.id() == id)
+        {
+            match structure {
+                RoadStructure::Roundabout {
+                    ports: stored_ports, ..
+                } => {
+                    *stored_ports = ports;
+                }
+                RoadStructure::AutomaticJunction { .. } => {}
+            }
+        }
+    }
+}
+
+fn recapture_boundary_ports(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
+    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
+    let mut captured = Vec::new();
+    for point in &template.footprint {
+        let Some(tile) = map.tile(*point) else {
+            continue;
+        };
+        if tile.kind != "road" {
+            continue;
+        }
+        for edge in &tile.road_connections {
+            let outside = offset(*point, *edge);
+            if footprint.contains(&outside) {
+                continue;
+            }
+            let Some(external) = map.tile(outside).filter(|neighbor| {
+                neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(*edge))
+            }) else {
+                continue;
+            };
+            let Some(slot) = template
+                .port_slots
+                .iter()
+                .find(|slot| slot.point == *point && slot.edge == *edge)
+            else {
+                continue;
+            };
+            let mut captured_port = slot.clone();
+            let suffix = match external.one_way {
+                None => ":twoWay",
+                Some(direction) if direction == opposite(*edge) => ":inbound",
+                Some(direction) if direction == *edge => ":outbound",
+                Some(_) => continue,
+            };
+            captured_port.id.push_str(suffix);
+            captured.push(captured_port);
+        }
+    }
+    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    captured
+}
+
 fn remove_roundabout_structure(map: &mut GameMap, id: &str) {
     let Some(structure) = map
         .road_structures

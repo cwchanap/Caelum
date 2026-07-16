@@ -252,6 +252,42 @@ fn partial_stroke_skips_invalid_tiles_in_input_order() {
 }
 
 #[test]
+fn laying_a_road_against_an_automatic_junction_extends_its_ports() {
+    let (mut engine, _junction_id) = crossing_engine();
+    // Drop the north arm, then re-lay one approach tile against the junction.
+    remove_points(&mut engine, &[point(14, 7), point(15, 7)]);
+    let after_removal = engine
+        .snapshot()
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| structure.is_automatic_junction())
+        .map(|structure| structure.ports().len());
+
+    let result = engine.dispatch(GameIntent::LayRoad { point: point(14, 7) });
+    assert!(result.applied, "{result:?}");
+    let after_snapshot = engine.snapshot();
+    let after_ports = after_snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| structure.is_automatic_junction())
+        .expect("junction should still exist or regenerate with the new arm")
+        .ports()
+        .len();
+    assert!(
+        after_ports >= after_removal.unwrap_or(0),
+        "re-laid approach must connect into the junction (after_removal={after_removal:?}, after={after_ports})"
+    );
+    assert!(after_snapshot
+        .map
+        .tile(point(14, 7))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::South));
+}
+
+#[test]
 fn single_point_road_connects_only_neighbor_endpoints() {
     let state = isolated_parallel_lane_fixture();
     let result =

@@ -64,6 +64,7 @@ pub fn apply_road_mutation(
         &mut changed_tiles,
         &mut skipped_tiles,
     )?;
+    crate::roundabouts::sync_roundabout_ports(&mut candidate.map);
     refresh_automatic_junctions(&mut candidate.map)?;
     canonicalize_authored_roads(&mut candidate.map);
     Ok(RoadMutationResult {
@@ -180,6 +181,9 @@ fn lay_road_line(
     };
     let forward_points = author_lane_tiles(candidate, original, points, direction, false);
     connect_authored_sequence(&mut candidate.map, &forward_points);
+    for point in &forward_points {
+        connect_neighbor_endpoints(&mut candidate.map, *point);
+    }
     record_line_results(
         original,
         candidate,
@@ -208,6 +212,9 @@ fn lay_road_line(
                 true,
             );
             connect_authored_sequence(&mut candidate.map, &authored);
+            for point in &authored {
+                connect_neighbor_endpoints(&mut candidate.map, *point);
+            }
             record_line_results(
                 original,
                 candidate,
@@ -336,10 +343,22 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
         let Some(neighbor) = map.tile(neighbor_point) else {
             continue;
         };
-        if neighbor.kind != "road"
-            || neighbor.road_structure_id.is_some()
-            || neighbor.road_connections.len() >= 2
-        {
+        if neighbor.kind != "road" {
+            continue;
+        }
+        if crate::roundabouts::is_roundabout_owned(map, neighbor_point) {
+            // Approach roads laid after placement attach through a valid port
+            // slot; structure ownership stays on the footprint tile.
+            crate::roundabouts::attach_approach_to_roundabout(map, point, heading);
+            continue;
+        }
+        if neighbor.road_structure_id.is_some() {
+            // Automatic junctions are rebuilt from reciprocal edges; allow the
+            // new arm to connect even when the junction tile already has degree ≥2.
+            connect(map, point, heading);
+            continue;
+        }
+        if neighbor.road_connections.len() >= 2 {
             continue;
         }
         connect(map, point, heading);
@@ -354,6 +373,11 @@ fn connect(map: &mut GameMap, point: Point, heading: Heading) {
         || crate::roundabouts::is_roundabout_owned(map, neighbor_point)
     {
         return;
+    }
+    if let Some(tile) = map.tile(point) {
+        if tile.road_connections.contains(&heading) {
+            return;
+        }
     }
     if let Some(tile) = map.tile_mut(point) {
         tile.road_connections.push(heading);

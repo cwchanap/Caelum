@@ -1249,6 +1249,29 @@ describe("Game Runtime", () => {
       expect(previews.roadRequestGenerations).toHaveLength(0);
     });
 
+    it("clears a resolved preview when hover moves to a tile with no mutation", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      // Explicit preview while the default inspect tool has no hover mutation.
+      runtime.previewRoadMutation({ type: "layRoad", point: { x: 5, y: 5 } });
+      previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+      await flushPromises();
+      expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+      runtime.setHoverTile({ x: 6, y: 6 });
+
+      expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+      expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(2);
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+      // No new road-tool request: inspect hover has no mutation.
+      expect(previews.roadRequestGenerations).toEqual([1]);
+    });
+
     it("cancels pending timer on reset", async () => {
       const previews = deferredPreviewBackend(fullRustSnapshot());
       const runtime = await createGameRuntime({

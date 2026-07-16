@@ -187,6 +187,26 @@ describe("Rust backend contract", () => {
     });
   });
 
+  it("normalizes omitted vehicle parkedPosition to explicit null", () => {
+    const snapshot = createRustSnapshot();
+    snapshot.transit.vehicles.push({
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 30,
+      passengerIds: [],
+      itineraryIndex: 0,
+      pathStepIndex: 0,
+      stepProgress: 0,
+      // WASM path: Rust Option::None arrives as undefined, not null.
+      parkedPosition: undefined as unknown as null,
+    });
+
+    const normalized = normalizeRustSnapshot(snapshot);
+
+    expect(normalized.transit.vehicles[0].parkedPosition).toBeNull();
+  });
+
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
     // Guards against the drift that motivated this contract: a previous TS shim
     // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.

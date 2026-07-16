@@ -25,6 +25,12 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
         ...line,
         legs: line.legs.map(normalizeRouteLegPath),
       })),
+      // serde-wasm-bindgen omits Rust `None` as `undefined`; keep explicit null
+      // so renderers can use strict null checks without throwing on park sites.
+      vehicles: snapshot.transit.vehicles.map((vehicle) => ({
+        ...vehicle,
+        parkedPosition: vehicle.parkedPosition ?? null,
+      })),
     },
     metrics: {
       ...snapshot.metrics,

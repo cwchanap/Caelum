@@ -801,6 +801,104 @@ fn removing_roundabout_recomputes_an_adjacent_automatic_junction_in_preview_and_
 }
 
 #[test]
+fn laying_an_approach_after_empty_placement_attaches_a_boundary_port() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    assert!(only_roundabout(&engine.snapshot()).ports().is_empty());
+
+    // North of the NW footprint tile (5,5): approach (5,4) attaches south→north port.
+    dispatch(&mut engine, GameIntent::LayRoad { point: point(5, 4) });
+
+    let snapshot = engine.snapshot();
+    let structure = only_roundabout(&snapshot);
+    assert_eq!(
+        structure.port_keys(),
+        vec![(point(5, 5), Heading::North)]
+    );
+    assert!(snapshot
+        .map
+        .tile(point(5, 4))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::South));
+    assert!(snapshot
+        .map
+        .tile(point(5, 5))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::North));
+    assert_eq!(
+        snapshot
+            .map
+            .tile(point(5, 5))
+            .unwrap()
+            .road_structure_id
+            .as_deref(),
+        Some(structure.id())
+    );
+}
+
+#[test]
+fn demolishing_an_approach_drops_the_detached_port_from_the_structure() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    dispatch(&mut engine, GameIntent::LayRoad { point: point(5, 4) });
+    assert_eq!(only_roundabout(&engine.snapshot()).ports().len(), 1);
+
+    dispatch(
+        &mut engine,
+        GameIntent::RemoveAtTile { point: point(5, 4) },
+    );
+
+    let snapshot = engine.snapshot();
+    assert!(only_roundabout(&snapshot).ports().is_empty());
+    assert!(!snapshot
+        .map
+        .tile(point(5, 5))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::North));
+}
+
+#[test]
+fn approach_line_ending_at_roundabout_attaches_and_is_routable() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    // Line from further north down to the approach cell.
+    road_line(&mut engine, (2..=4).map(|y| point(5, y)).collect());
+
+    let snapshot = engine.snapshot();
+    assert_eq!(
+        only_roundabout(&snapshot).port_keys(),
+        vec![(point(5, 5), Heading::North)]
+    );
+    let topology = caelum_core::road_topology::RoadTopology::compile(&snapshot.map)
+        .expect("topology must compile after approach attach");
+    let path = topology
+        .find_path(&snapshot.map, &point(5, 2), &point(5, 5))
+        .expect("approach must reach the attached port tile");
+    assert!(path.total_travel_seconds() > 0.0);
+}
+
+#[test]
 fn perpendicular_one_way_boundary_lane_rejects_with_the_complete_footprint() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
