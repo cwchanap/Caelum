@@ -144,7 +144,10 @@ fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
     });
 
     assert!(result.applied, "{result:?}");
-    assert_eq!(result.context.affected_route_ids, vec!["route-001".to_string()]);
+    assert_eq!(
+        result.context.affected_route_ids,
+        vec!["route-001".to_string()]
+    );
     assert_eq!(result.snapshot.transit.routes.len(), 1);
     assert_eq!(result.snapshot.transit.vehicles.len(), 1);
     assert_eq!(result.snapshot.budget, before.budget - BUS_COST);

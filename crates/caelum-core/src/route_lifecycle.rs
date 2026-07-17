@@ -610,10 +610,7 @@ pub(crate) fn platform_assignments_for_route(
     route_id: &str,
 ) -> Vec<(String, String)> {
     let mut assignments = platform_assignments(&snapshot.transit.stops, route_id);
-    assignments.extend(platform_assignments(
-        &snapshot.transit.stations,
-        route_id,
-    ));
+    assignments.extend(platform_assignments(&snapshot.transit.stations, route_id));
     assignments
 }
 

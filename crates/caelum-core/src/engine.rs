@@ -15,6 +15,24 @@ use crate::state::create_initial_snapshot;
 use crate::transit;
 use crate::trips;
 
+/// Compile the road topology for an initial/reset snapshot without panicking.
+/// The initial map has no roads or road structures, so `compile` succeeds
+/// trivially; the `debug_assert!` surfaces any unexpected failure in dev
+/// builds, while release builds fall back to an empty topology instead of
+/// poisoning a host `Mutex`.
+fn compile_initial_topology(map: &crate::model::GameMap) -> RoadTopology {
+    match RoadTopology::compile(map) {
+        Ok(topology) => topology,
+        Err(rejection) => {
+            debug_assert!(
+                false,
+                "initial/reset road topology compile failed: {rejection:?}"
+            );
+            RoadTopology::empty()
+        }
+    }
+}
+
 fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
     let before_tile = before
         .map
@@ -220,8 +238,13 @@ impl Default for GameEngine {
 impl GameEngine {
     pub fn new() -> Self {
         let snapshot = create_initial_snapshot();
-        let road_topology =
-            RoadTopology::compile(&snapshot.map).expect("initial road topology must compile");
+        // The initial snapshot carries no roads or road structures, so
+        // `compile` is infallible here in practice. Use a panic-free fallback
+        // (+ `debug_assert!` to surface unexpected failures in dev) so a
+        // future change to the initial map cannot poison a host `Mutex` via
+        // a panic — `reset()` is reachable from `game_reset` under
+        // `Mutex::lock()` in the Tauri host.
+        let road_topology = compile_initial_topology(&snapshot.map);
         Self {
             snapshot,
             road_topology,
@@ -234,8 +257,7 @@ impl GameEngine {
 
     pub fn reset(&mut self) -> GameSnapshot {
         let snapshot = create_initial_snapshot();
-        let road_topology =
-            RoadTopology::compile(&snapshot.map).expect("reset road topology must compile");
+        let road_topology = compile_initial_topology(&snapshot.map);
         self.snapshot = snapshot;
         self.road_topology = road_topology;
         self.snapshot()
@@ -297,7 +319,30 @@ impl GameEngine {
     /// snapshot is returned unchanged with `applied == false` — this reference-equality
     /// dispatch is the engine's commit discipline.
     pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
+        // Topology invariant: `tick` never recompiles `self.road_topology`
+        // because the tick pipeline (trips + growth waves) never modifies road
+        // fields. Growth waves only paint areas and place buildings
+        // (`growth::apply_due_growth_waves`); neither action touches
+        // `road_connections`, `one_way`, `road_structure_id`, or
+        // `road_structures`. If a future tick-time mutation touches any road
+        // field, the topology must be recompiled here — the debug_assert below
+        // catches that regression by flagging a stale topology.
         let next = trips::tick_trips_with_objectives(&self.snapshot, delta_seconds);
+        // O(N) check (tiles are never reordered, so same index = same position):
+        // if a future tick-time mutation touches any road field, this fires.
+        debug_assert!(
+            next.map.road_structures == self.snapshot.map.road_structures
+                && next.map.tiles.len() == self.snapshot.map.tiles.len()
+                && next
+                    .map
+                    .tiles
+                    .iter()
+                    .zip(self.snapshot.map.tiles.iter())
+                    .all(|(new, prev)| new.road_connections == prev.road_connections
+                        && new.one_way == prev.one_way
+                        && new.road_structure_id == prev.road_structure_id),
+            "tick modified road fields without recompiling topology"
+        );
         if next == self.snapshot {
             return DispatchResult::unchanged(self.snapshot());
         }

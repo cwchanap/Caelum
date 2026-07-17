@@ -38,6 +38,18 @@ pub struct RoadTopology {
 }
 
 impl RoadTopology {
+    /// An empty topology with no transitions. Used as a panic-free fallback
+    /// when `compile` fails on a snapshot that is expected to be trivially
+    /// compilable (e.g. the initial/reset snapshot, which carries no roads or
+    /// road structures). A `debug_assert!` at the call site catches the
+    /// unexpected failure during development; in release builds the engine
+    /// degrades gracefully instead of poisoning a host `Mutex` via a panic.
+    pub fn empty() -> Self {
+        Self {
+            transitions: BTreeMap::new(),
+        }
+    }
+
     pub fn compile(map: &GameMap) -> GameplayResult<Self> {
         let ordinary = compile_reciprocal_lane_transitions(map)?;
         let structures = compile_structure_transitions(map)?;

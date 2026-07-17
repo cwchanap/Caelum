@@ -29,6 +29,11 @@ pub struct RideEdge {
 
 impl RideEdge {
     fn from_visits(board: &ServiceVisit, alight: &ServiceVisit, legs: &[RouteLegPath]) -> Self {
+        // Invariant: every `ServiceVisit` produced by `service_visits` has an
+        // arriving service leg (the cyclic itinerary guarantees a predecessor
+        // service leg for every departure). The `expect` is safe for any
+        // itinerary built by `build_service_itinerary` + `service_visits`;
+        // a `None` here would indicate a malformed (non-cyclic) itinerary.
         let alight_itinerary_index = alight
             .arriving_itinerary_index
             .expect("a cyclic service visit has an arriving service leg");

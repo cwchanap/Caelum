@@ -211,60 +211,34 @@ fn validate_complete_structure_overlap(
     Ok(())
 }
 
-fn capture_boundary_connections(
-    map: &GameMap,
-    template: &RoundaboutTemplate,
-) -> GameplayResult<Vec<RoadPort>> {
-    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
-    let mut captured = Vec::new();
-    for point in &template.footprint {
-        let tile = map
-            .tile(*point)
-            .expect("roundabout footprint was validated");
-        for edge in &tile.road_connections {
-            let outside = offset(*point, *edge);
-            if footprint.contains(&outside) {
-                continue;
-            }
-            let reciprocal = map.tile(outside).is_some_and(|neighbor| {
-                neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(*edge))
-            });
-            if !reciprocal {
-                continue;
-            }
-            let Some(slot) = template
-                .port_slots
-                .iter()
-                .find(|slot| slot.point == *point && slot.edge == *edge)
-            else {
-                return Err(unsafe_template_mapping(template));
-            };
-            let mut captured_port = slot.clone();
-            let external = map
-                .tile(outside)
-                .expect("reciprocal boundary connection has an external tile");
-            captured_port.id.push_str(match external.one_way {
-                None => ":twoWay",
-                Some(direction) if direction == opposite(*edge) => ":inbound",
-                Some(direction) if direction == *edge => ":outbound",
-                Some(_) => return Err(unsafe_template_mapping(template)),
-            });
-            captured.push(captured_port);
-        }
-    }
-    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
-    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
-    Ok(captured)
+/// A reciprocal boundary connection candidate discovered by scanning the
+/// template footprint. Each caller applies its own slot-lookup and
+/// one-way-suffix policy to produce a `RoadPort`.
+struct BoundaryPortCandidate {
+    point: Point,
+    edge: Heading,
+    external_one_way: Option<Heading>,
 }
 
-fn attempted_boundary_connections(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
+/// Scan the template footprint for reciprocal boundary road connections.
+/// Returns one `BoundaryPortCandidate` per (footprint tile, edge) where the
+/// edge leads to an external road tile that reciprocally connects back. This
+/// is the shared core of `capture_boundary_connections`,
+/// `attempted_boundary_connections`, and `recapture_boundary_ports` — each
+/// caller resolves the port slot and one-way suffix with its own strictness.
+fn scan_boundary_port_candidates(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+) -> Vec<BoundaryPortCandidate> {
     let footprint: HashSet<_> = template.footprint.iter().copied().collect();
-    let structure_id = roundabout_structure_id(template.size, template.origin);
-    let mut captured = Vec::new();
+    let mut candidates = Vec::new();
     for point in &template.footprint {
         let Some(tile) = map.tile(*point) else {
             continue;
         };
+        if tile.kind != "road" {
+            continue;
+        }
         for edge in &tile.road_connections {
             let outside = offset(*point, *edge);
             if footprint.contains(&outside) {
@@ -275,32 +249,84 @@ fn attempted_boundary_connections(map: &GameMap, template: &RoundaboutTemplate) 
             }) else {
                 continue;
             };
-            let mut port = template
-                .port_slots
-                .iter()
-                .find(|slot| slot.point == *point && slot.edge == *edge)
-                .cloned()
-                .unwrap_or_else(|| RoadPort {
-                    id: format!(
-                        "{structure_id}:attempted-port:{},{}:{}",
-                        point.x,
-                        point.y,
-                        heading_key(*edge)
-                    ),
-                    point: *point,
-                    edge: *edge,
-                });
-            port.id.push_str(match external.one_way {
-                None => ":twoWay",
-                Some(direction) if direction == opposite(*edge) => ":inbound",
-                Some(direction) if direction == *edge => ":outbound",
-                Some(_) => ":incompatible",
+            candidates.push(BoundaryPortCandidate {
+                point: *point,
+                edge: *edge,
+                external_one_way: external.one_way,
             });
-            captured.push(port);
         }
     }
-    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
-    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    candidates
+}
+
+/// Compute the one-way suffix for a boundary port's external neighbor.
+/// Returns `Some(":twoWay" | ":inbound" | ":outbound")` for compatible
+/// directions, or `None` for an incompatible one-way that the caller must
+/// handle (reject, label `:incompatible`, or skip).
+fn boundary_port_suffix(edge: Heading, external_one_way: Option<Heading>) -> Option<&'static str> {
+    match external_one_way {
+        None => Some(":twoWay"),
+        Some(direction) if direction == opposite(edge) => Some(":inbound"),
+        Some(direction) if direction == edge => Some(":outbound"),
+        Some(_) => None,
+    }
+}
+
+/// Sort and dedup boundary ports by (point, edge). Shared by all three
+/// boundary-port scanners to keep their output ordering identical.
+fn sort_and_dedup_ports(ports: &mut Vec<RoadPort>) {
+    ports.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    ports.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+}
+
+fn capture_boundary_connections(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+) -> GameplayResult<Vec<RoadPort>> {
+    let mut captured = Vec::new();
+    for candidate in scan_boundary_port_candidates(map, template) {
+        let Some(slot) = template
+            .port_slots
+            .iter()
+            .find(|slot| slot.point == candidate.point && slot.edge == candidate.edge)
+        else {
+            return Err(unsafe_template_mapping(template));
+        };
+        let suffix = boundary_port_suffix(candidate.edge, candidate.external_one_way)
+            .ok_or_else(|| unsafe_template_mapping(template))?;
+        let mut captured_port = slot.clone();
+        captured_port.id.push_str(suffix);
+        captured.push(captured_port);
+    }
+    sort_and_dedup_ports(&mut captured);
+    Ok(captured)
+}
+
+fn attempted_boundary_connections(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
+    let structure_id = roundabout_structure_id(template.size, template.origin);
+    let mut captured = Vec::new();
+    for candidate in scan_boundary_port_candidates(map, template) {
+        let mut port = template
+            .port_slots
+            .iter()
+            .find(|slot| slot.point == candidate.point && slot.edge == candidate.edge)
+            .cloned()
+            .unwrap_or_else(|| RoadPort {
+                id: format!(
+                    "{structure_id}:attempted-port:{},{}:{}",
+                    candidate.point.x,
+                    candidate.point.y,
+                    heading_key(candidate.edge)
+                ),
+                point: candidate.point,
+                edge: candidate.edge,
+            });
+        let suffix = boundary_port_suffix(candidate.edge, candidate.external_one_way)
+            .unwrap_or(":incompatible");
+        port.id.push_str(suffix);
+        captured.push(port);
+    }
+    sort_and_dedup_ports(&mut captured);
     captured
 }
 
@@ -485,45 +511,23 @@ pub fn sync_roundabout_ports(map: &mut GameMap) {
 }
 
 fn recapture_boundary_ports(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
-    let footprint: HashSet<_> = template.footprint.iter().copied().collect();
     let mut captured = Vec::new();
-    for point in &template.footprint {
-        let Some(tile) = map.tile(*point) else {
+    for candidate in scan_boundary_port_candidates(map, template) {
+        let Some(slot) = template
+            .port_slots
+            .iter()
+            .find(|slot| slot.point == candidate.point && slot.edge == candidate.edge)
+        else {
             continue;
         };
-        if tile.kind != "road" {
+        let Some(suffix) = boundary_port_suffix(candidate.edge, candidate.external_one_way) else {
             continue;
-        }
-        for edge in &tile.road_connections {
-            let outside = offset(*point, *edge);
-            if footprint.contains(&outside) {
-                continue;
-            }
-            let Some(external) = map.tile(outside).filter(|neighbor| {
-                neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(*edge))
-            }) else {
-                continue;
-            };
-            let Some(slot) = template
-                .port_slots
-                .iter()
-                .find(|slot| slot.point == *point && slot.edge == *edge)
-            else {
-                continue;
-            };
-            let mut captured_port = slot.clone();
-            let suffix = match external.one_way {
-                None => ":twoWay",
-                Some(direction) if direction == opposite(*edge) => ":inbound",
-                Some(direction) if direction == *edge => ":outbound",
-                Some(_) => continue,
-            };
-            captured_port.id.push_str(suffix);
-            captured.push(captured_port);
-        }
+        };
+        let mut captured_port = slot.clone();
+        captured_port.id.push_str(suffix);
+        captured.push(captured_port);
     }
-    captured.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
-    captured.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    sort_and_dedup_ports(&mut captured);
     captured
 }
 

@@ -545,7 +545,22 @@ fn tracks_transit_nodes_and_buildings_reject_the_whole_placement() {
 
 #[test]
 fn removing_any_member_removes_the_structure_once_and_never_restores_old_roads() {
-    let mut engine = crossing_engine();
+    // Paint a residential area over the roundabout footprint BEFORE laying
+    // roads, so the latent area is non-`None`. Without this, the latent-area
+    // assertion below is a tautology (`None == None`) because `crossing_engine`
+    // never paints areas. Painting first means road tiles carry the area as
+    // latent state; the roundabout preserves it; removal must restore it.
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PaintAreaRectangle {
+            area: "residential".to_string(),
+            start: point(5, 4),
+            end: point(7, 6),
+        },
+    );
+    road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
+    road_line(&mut engine, (1..=9).map(|y| point(6, y)).collect());
     dispatch(&mut engine, place_standard_roundabout());
     let structure = only_roundabout(&engine.snapshot()).clone();
     let budget_after_placement = engine.snapshot().budget;
@@ -554,6 +569,14 @@ fn removing_any_member_removes_the_structure_once_and_never_restores_old_roads()
         .iter()
         .map(|point| engine.snapshot().map.tile(*point).unwrap().area.clone())
         .collect();
+    // Verify the latent areas are actually non-None (the test would be
+    // vacuous otherwise).
+    assert!(
+        latent_areas
+            .iter()
+            .all(|area| area.as_deref() == Some("residential")),
+        "footprint tiles should carry residential latent area, got {latent_areas:?}"
+    );
     let result = engine.dispatch(GameIntent::RemoveAtTiles {
         points: vec![structure.footprint()[0], structure.footprint()[4]],
     });

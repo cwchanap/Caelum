@@ -105,6 +105,13 @@ pub fn update_route(
         legs,
         next_revision,
     );
+    // Invariant: `validate_edit_legs` above rejects any leg that is newly
+    // broken (was `Connected` in `current.legs` but is now non-`Connected`
+    // with no matching carried key). Only previously-broken legs (carried
+    // forward by `carry_forward_leg_history`) survive into `legs`. This
+    // guarantees `rebase_edited_route_vehicles_and_riders` never observes a
+    // leg that was connected before the edit but disconnected after it —
+    // riders/vehicles on such a leg would be silently stranded.
     rebase_edited_route_vehicles_and_riders(
         state,
         &mut candidate,

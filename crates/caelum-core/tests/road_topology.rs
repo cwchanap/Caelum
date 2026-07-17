@@ -958,3 +958,161 @@ fn terminal_reversal_finds_paths_longer_than_former_step_cap() {
     assert_eq!(steps.first().unwrap().position, terminal);
     assert_eq!(steps.last().unwrap().leaving_heading, Heading::North);
 }
+
+/// When both a direct U-turn at the terminal and a multi-step roundabout
+/// reversal exist, the U-turn shortcut in `find_terminal_reversal` must pick
+/// the cheaper path. With current constants, an ordinary U-turn costs
+/// `BUS_TILE_MILLIS + U_TURN_MILLIS = 3250ms`, while a compact roundabout
+/// reversal (entry + 2× circulation + exit) costs ≥5750ms — so the shortcut
+/// is optimal. This test verifies that property explicitly.
+///
+/// Known edge case: a multi-tile automatic-junction U-turn (where
+/// `structure_tiles > 3`) can cost more than a nearby roundabout reversal.
+/// The shortcut does not compare both paths in that case — it returns the
+/// U-turn immediately for its in-place geometry correctness (no backward
+/// jump when the next service leg resumes). This trade-off is accepted
+/// because such junctions are rare and the geometry correctness outweighs
+/// the small optimality gap.
+#[test]
+fn terminal_reversal_uturn_shortcut_is_cheaper_than_roundabout_reversal() {
+    let mut map = blank_map(9, 9);
+    let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));
+    let id = roundabout_structure_id(template.size, template.origin);
+    for position in &template.footprint {
+        road(&mut map, *position, None);
+        map.tile_mut(*position).unwrap().road_structure_id = Some(id.clone());
+    }
+
+    // Bidirectional west port — allows both entry and exit through the
+    // roundabout, providing a multi-step reversal path.
+    let west_port = template
+        .port_slots
+        .iter()
+        .find(|port| port.point == point(3, 3) && port.edge == Heading::West)
+        .unwrap()
+        .clone();
+    // Bidirectional approach corridor: (1,3) — (2,3) — (3,3). The terminal
+    // at (2,3) supports a direct U-turn (bidirectional neighbor at (1,3)).
+    corridor(&mut map, &[point(1, 3), point(2, 3), west_port.point], None);
+    map.tile_mut(west_port.point).unwrap().one_way = None;
+    map.road_structures.push(RoadStructure::Roundabout {
+        id,
+        origin: template.origin,
+        size: template.size,
+        footprint: template.footprint,
+        ports: vec![west_port],
+    });
+
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // Both paths are available: the direct U-turn shortcut and the
+    // multi-step roundabout reversal (via Dijkstra). The shortcut must win.
+    let path = topology
+        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
+        .expect("reversal should be found");
+
+    let steps = path.road_steps();
+    assert_eq!(
+        steps.len(),
+        1,
+        "shortcut should pick the 1-step U-turn, not the multi-step roundabout path"
+    );
+    assert_eq!(steps[0].movement, MovementKind::UTurn);
+    assert_eq!(steps[0].position, point(2, 3));
+
+    // U-turn cost: BUS_TILE_MILLIS (1250) + U_TURN_MILLIS (2000) = 3250ms.
+    // Roundabout reversal would cost ≥5750ms (entry 2000 + 2× circulation
+    // 1250 + exit 1250). Verify the shortcut cost is strictly cheaper.
+    let uturn_cost_ms = (path.total_travel_seconds() * 1_000.0).round() as u64;
+    assert_eq!(
+        uturn_cost_ms, 3_250,
+        "U-turn shortcut cost should be 3250ms"
+    );
+    assert!(
+        uturn_cost_ms < 5_750,
+        "U-turn shortcut must be cheaper than roundabout reversal (≥5750ms)"
+    );
+
+    // Verify geometry stays in-place on the terminal (the correctness
+    // reason for the shortcut — no backward jump to the neighbor tile).
+    match &steps[0].geometry {
+        caelum_core::model::PathGeometry::QuadraticBezier { from, to, .. } => {
+            assert_eq!(from.x, 2.0);
+            assert_eq!(from.y, 3.0);
+            assert_eq!(to.x, 2.0);
+            assert_eq!(to.y, 3.0);
+        }
+        other => panic!("expected in-place quadratic U-turn, got {other:?}"),
+    }
+}
+
+/// Verify that geometry is continuous (each step's end matches the next
+/// step's start) through a 2×2 multi-tile automatic junction. Single-tile
+/// junctions are already covered by `consecutive_geometry_is_continuous_*`;
+/// this exercises the multi-tile case where `structure_tiles > 1` and the
+/// junction transition spans two footprint tiles.
+#[test]
+fn multi_tile_automatic_junction_geometry_is_continuous() {
+    let mut map = blank_map(8, 8);
+    // 2×2 junction footprint: (2,2), (3,2), (2,3), (3,3)
+    let footprint = vec![point(2, 2), point(2, 3), point(3, 2), point(3, 3)];
+    // Internal connections (form a 2×2 grid)
+    connect(&mut map, point(2, 2), point(3, 2));
+    connect(&mut map, point(2, 2), point(2, 3));
+    connect(&mut map, point(3, 2), point(3, 3));
+    connect(&mut map, point(2, 3), point(3, 3));
+    // External approach roads (west, north, east — 3 ports with both axes)
+    connect(&mut map, point(1, 2), point(2, 2));
+    connect(&mut map, point(2, 1), point(2, 2));
+    connect(&mut map, point(3, 2), point(4, 2));
+    // Extend the east approach so the path has an ordinary step after the junction
+    connect(&mut map, point(4, 2), point(5, 2));
+
+    automatic_junction(
+        &mut map,
+        "junction-2x2",
+        footprint,
+        &[
+            (point(2, 2), Heading::West),
+            (point(2, 2), Heading::North),
+            (point(3, 2), Heading::East),
+        ],
+    );
+
+    let topology = RoadTopology::compile(&map).unwrap();
+    let path = topology
+        .find_path(&map, &point(1, 2), &point(5, 2))
+        .expect("west-to-east path through 2×2 junction should exist");
+
+    let steps = path.road_steps();
+    assert!(
+        steps.len() >= 2,
+        "path should have at least 2 steps, got {}",
+        steps.len()
+    );
+
+    // Verify geometry continuity: each step's end matches the next step's start.
+    for pair in steps.windows(2) {
+        let previous_end = match &pair[0].geometry {
+            PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
+        };
+        let next_start = match &pair[1].geometry {
+            PathGeometry::Line { from, .. } | PathGeometry::QuadraticBezier { from, .. } => from,
+        };
+        assert!(
+            (previous_end.x - next_start.x).abs() < 1e-9
+                && (previous_end.y - next_start.y).abs() < 1e-9,
+            "geometry discontinuity through 2×2 junction: previous end={previous_end:?}, next start={next_start:?}"
+        );
+    }
+
+    // Verify the path actually traverses the junction (at least one step
+    // spans from a junction entry port to an exit outside tile).
+    assert!(
+        steps.iter().any(|step| {
+            (step.position == point(2, 2) || step.position == point(3, 2))
+                && step.leaving_heading == Heading::East
+        }),
+        "path should traverse the 2×2 junction eastward, steps={steps:?}"
+    );
+}

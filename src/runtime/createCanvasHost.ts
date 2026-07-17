@@ -99,7 +99,15 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
 
     const previousTimestamp = lastFrameTime ?? timestamp;
     lastFrameTime = timestamp;
-    const deltaSeconds = Math.max(0, (timestamp - previousTimestamp) / 1_000);
+    // Clamp the delta to [0, 0.25] seconds. The floor prevents negative
+    // deltas from clock skew; the ceiling prevents a tab-switch or
+    // throttled-background spike (browsers can pause RAF for seconds) from
+    // jumping the sim forward by a large step that breaks determinism
+    // expectations and growth-wave substepping.
+    const deltaSeconds = Math.min(
+      Math.max(0, (timestamp - previousTimestamp) / 1_000),
+      0.25,
+    );
 
     if (deltaSeconds > 0) {
       ctx.onTick(deltaSeconds);

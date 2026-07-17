@@ -2377,3 +2377,61 @@ fn lay_road_line_dual_bidirectional_duplicate_points_yield_no_reverse_lane() {
     assert!(reverse_offset.is_none_or(|tile| tile.kind != "road"));
     assert_eq!(result.snapshot.budget, 120_000 - 100);
 }
+
+/// `AddMetroStation` must reject placement on a structure-owned tile (e.g.,
+/// an automatic junction). The `is_valid_metro_station_placement` check
+/// requires `road_structure_id.is_none()`, but this rejection path was
+/// previously untested. The fixture lays track on an empty tile before roads
+/// form a cross-junction over it — `refresh_automatic_junctions` does not
+/// clear `has_track`, so the tile ends up with both track and a
+/// `road_structure_id`, which is the only state where the structure-owned
+/// guard can fire. Using `LayRoadLine` (not individual `LayRoad`) is required
+/// because `connect_neighbor_endpoints` skips neighbors with ≥2 existing
+/// connections — only `connect_authored_sequence` in a road line can add
+/// the third and fourth connections to the crossing tile.
+#[test]
+fn add_metro_station_rejects_structure_owned_tile() {
+    let mut engine = GameEngine::new();
+    let center = Point { x: 5, y: 5 };
+
+    // Lay track on an empty tile first (track is valid on empty tiles).
+    engine.dispatch(GameIntent::LayTrack { point: center });
+
+    // Lay a horizontal road line through the center, then a vertical road
+    // line. The horizontal line makes (5,5) a road with E/W connections;
+    // the vertical line's `connect_authored_sequence` adds N/S connections
+    // (individual LayRoad would be blocked by the ≥2-connection guard).
+    // The cross triggers `refresh_automatic_junctions` which stamps
+    // `road_structure_id` on the center tile without clearing `has_track`.
+    road_line(&mut engine, 5, 4, 6);
+    engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![
+            Point { x: 5, y: 4 },
+            Point { x: 5, y: 5 },
+            Point { x: 5, y: 6 },
+        ],
+        preset: RoadPreset::TwoWay,
+    });
+
+    // Verify the fixture: center tile has track AND is structure-owned.
+    let snapshot = engine.snapshot();
+    let tile = snapshot.map.tile(center).expect("center tile exists");
+    assert!(tile.has_track, "fixture: center tile must have track");
+    assert!(
+        tile.road_structure_id.is_some(),
+        "fixture: center tile must be structure-owned (junction), got {:?}",
+        tile.road_structure_id
+    );
+
+    // AddMetroStation must be rejected — the tile is structure-owned.
+    let result = engine.dispatch(GameIntent::AddMetroStation { point: center });
+    assert!(
+        !result.applied,
+        "metro station on structure-owned tile should be rejected"
+    );
+    assert_eq!(
+        result.rejection.unwrap().code,
+        RejectionCode::BlockedTile,
+        "structure-owned rejection should use BlockedTile"
+    );
+}

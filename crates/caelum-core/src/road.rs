@@ -522,7 +522,24 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
     map.road_structures
         .retain(|structure| !structure.is_automatic_junction());
 
+    // Loop invariant: each iteration either discovers junction structures
+    // and breaks, or disconnects a set of `prune_edges` (internal edges of a
+    // candidate footprint that lack both horizontal and vertical boundary
+    // ports) and continues. Disconnecting an edge removes it from both the
+    // tile and its reciprocal neighbor, strictly shrinking the candidate set
+    // (a tile with a pruned edge can no longer satisfy `has_axis` for both
+    // axes, or its reciprocal neighbor can't). The candidate set is finite
+    // (bounded by the map), so the loop terminates in at most as many
+    // iterations as there are road tiles. The `debug_assert!` cap below
+    // catches a regression that could hang a dispatch.
+    let mut iteration = 0usize;
+    let max_iterations = map.tiles.len().saturating_add(1);
     loop {
+        debug_assert!(
+            iteration < max_iterations,
+            "refresh_automatic_junctions exceeded iteration cap"
+        );
+        iteration += 1;
         let candidates: BTreeSet<Point> = map
             .tiles
             .iter()
