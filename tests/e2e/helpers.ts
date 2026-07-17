@@ -233,7 +233,9 @@ export async function debugSetBudget(
       }
     ).__caelumRuntime;
     if (runtime?.debugSetBudget === undefined) {
-      throw new Error("debugSetBudget is unavailable on window.__caelumRuntime");
+      throw new Error(
+        "debugSetBudget is unavailable on window.__caelumRuntime",
+      );
     }
     return runtime.debugSetBudget(amount);
   }, budget);

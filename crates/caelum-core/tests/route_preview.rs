@@ -678,9 +678,7 @@ fn rejected_road_preview_preserves_attempted_points() {
     // Direction-cycle on a non-road tile rejects; keep the attempted point so
     // the host can highlight invalid targets and anchor the feedback badge.
     let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
-        mutation: RoadMutation::CycleRoadDirection {
-            point: point(3, 3),
-        },
+        mutation: RoadMutation::CycleRoadDirection { point: point(3, 3) },
         generation: 82,
     });
     assert!(response.rejection.is_some());

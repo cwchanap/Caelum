@@ -817,10 +817,7 @@ fn laying_an_approach_after_empty_placement_attaches_a_boundary_port() {
 
     let snapshot = engine.snapshot();
     let structure = only_roundabout(&snapshot);
-    assert_eq!(
-        structure.port_keys(),
-        vec![(point(5, 5), Heading::North)]
-    );
+    assert_eq!(structure.port_keys(), vec![(point(5, 5), Heading::North)]);
     assert!(snapshot
         .map
         .tile(point(5, 4))
@@ -857,10 +854,7 @@ fn demolishing_an_approach_drops_the_detached_port_from_the_structure() {
     dispatch(&mut engine, GameIntent::LayRoad { point: point(5, 4) });
     assert_eq!(only_roundabout(&engine.snapshot()).ports().len(), 1);
 
-    dispatch(
-        &mut engine,
-        GameIntent::RemoveAtTile { point: point(5, 4) },
-    );
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(5, 4) });
 
     let snapshot = engine.snapshot();
     assert!(only_roundabout(&snapshot).ports().is_empty());

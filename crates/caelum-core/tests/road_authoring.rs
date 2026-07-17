@@ -264,7 +264,9 @@ fn laying_a_road_against_an_automatic_junction_extends_its_ports() {
         .find(|structure| structure.is_automatic_junction())
         .map(|structure| structure.ports().len());
 
-    let result = engine.dispatch(GameIntent::LayRoad { point: point(14, 7) });
+    let result = engine.dispatch(GameIntent::LayRoad {
+        point: point(14, 7),
+    });
     assert!(result.applied, "{result:?}");
     let after_snapshot = engine.snapshot();
     let after_ports = after_snapshot

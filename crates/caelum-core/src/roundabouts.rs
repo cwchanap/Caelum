@@ -473,7 +473,8 @@ pub fn sync_roundabout_ports(map: &mut GameMap) {
         {
             match structure {
                 RoadStructure::Roundabout {
-                    ports: stored_ports, ..
+                    ports: stored_ports,
+                    ..
                 } => {
                     *stored_ports = ports;
                 }

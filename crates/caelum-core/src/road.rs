@@ -801,9 +801,9 @@ fn reverse_lane_offset_overflows(points: &[Point], direction: Heading) -> bool {
         Heading::South => (1, 0),
         Heading::West => (0, 1),
     };
-    points
-        .iter()
-        .any(|point| point.x.checked_add(offset_x).is_none() || point.y.checked_add(offset_y).is_none())
+    points.iter().any(|point| {
+        point.x.checked_add(offset_x).is_none() || point.y.checked_add(offset_y).is_none()
+    })
 }
 
 fn canonical_line_direction(points: &[Point]) -> Option<Heading> {
