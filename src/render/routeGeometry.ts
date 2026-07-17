@@ -182,9 +182,17 @@ function closestProgressOnGeometry(
       point.y - geometry.center.y,
       point.x - geometry.center.x,
     );
-    let progress = (angle - geometry.startRadians) / geometry.sweepRadians;
-    progress = ((progress % 1) + 1) % 1;
-    return progress;
+    const rawProgress = (angle - geometry.startRadians) / geometry.sweepRadians;
+    // Equivalent angles differ by 2π, i.e. by multiples of the sweep period in
+    // progress space. Normalize into the arc's [0, 1] range along the sweep
+    // direction so an endpoint whose raw progress is exactly 1 stays 1 instead
+    // of wrapping back to 0.
+    const period = (Math.PI * 2) / Math.abs(geometry.sweepRadians);
+    const tolerance = 1e-9;
+    const progress = ((rawProgress % period) + period) % period;
+    if (Math.abs(progress - 1) < tolerance) return 1;
+    if (progress < tolerance || progress > period - tolerance) return 0;
+    return Math.max(0, Math.min(1, progress));
   }
   // Bézier: sample and find the closest point.
   let bestT = 0;

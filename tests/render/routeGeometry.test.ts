@@ -141,6 +141,53 @@ describe("routePathPresentation", () => {
     expect(Number.isFinite(mapped.x)).toBe(true);
     expect(Number.isFinite(mapped.y)).toBe(true);
   });
+
+  it("maps an arc endpoint to the offset endpoint, not the offset start", () => {
+    // Quarter arc from angle 0 (point {3,2}) to angle pi/2 (point {2,3}).
+    // Canonical tangent at the start is {0,1}; offset shrinks the radius to
+    // 0.75, so the offset start is {2.75,2} and the offset end is {2,2.75}.
+    const arc = {
+      kind: "arc" as const,
+      center: { x: 2, y: 2 },
+      radius: 1,
+      startRadians: 0,
+      sweepRadians: Math.PI / 2,
+    };
+    const presentation = routePathPresentation(arc, 0.25, { x: 0, y: 1 });
+
+    const startMapped = presentation.translatePoint({ x: 3, y: 2 });
+    expect(startMapped.x).toBeCloseTo(2.75, 8);
+    expect(startMapped.y).toBeCloseTo(2, 8);
+
+    const endMapped = presentation.translatePoint({ x: 2, y: 3 });
+    expect(endMapped.x).toBeCloseTo(2, 8);
+    expect(endMapped.y).toBeCloseTo(2.75, 8);
+  });
+
+  it("maps an arc endpoint whose raw progress wraps across the atan2 seam", () => {
+    // Start at 3pi/2 (point {2,1}), sweep +pi/2 to angle 2pi == 0 (point
+    // {3,2}). atan2 of the endpoint returns 0, so the raw progress is
+    // (0 - 3pi/2) / (pi/2) = -3, which is equivalent to 1 once normalized by
+    // the sweep period (2pi / (pi/2) = 4).
+    const arc = {
+      kind: "arc" as const,
+      center: { x: 2, y: 2 },
+      radius: 1,
+      startRadians: (3 * Math.PI) / 2,
+      sweepRadians: Math.PI / 2,
+    };
+    // Tangent at start (angle 3pi/2, CCW) is (-sin(3pi/2), cos(3pi/2)) = (1, 0).
+    const presentation = routePathPresentation(arc, 0.25, { x: 1, y: 0 });
+
+    const endMapped = presentation.translatePoint({ x: 3, y: 2 });
+    // Offset grows the radius (radial at start is {0,-1}, canonical normal is
+    // {0,1}, dot = -1 < 0 -> shrink; radial at the canonical endpoint {2,1} is
+    // {0,-1}). The canonical endpoint is the start {2,1} (pointKey "2,1" <=
+    // "3,2"), radial {0,-1}, dot({0,1},{0,-1}) = -1 < 0 -> radius 0.75.
+    // End (angle 0) on the offset arc: {2 + 0.75, 2} = {2.75, 2}.
+    expect(endMapped.x).toBeCloseTo(2.75, 8);
+    expect(endMapped.y).toBeCloseTo(2, 8);
+  });
 });
 
 describe("offsetGeometry", () => {
