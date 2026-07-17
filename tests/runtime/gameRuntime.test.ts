@@ -2599,6 +2599,24 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
+  it("surfaces a current Save rejection into the route draft panel", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+    expect(runtime.getSnapshot().shell.routeDraft?.previewStatus).toBe(
+      "connected",
+    );
+
+    backend.rejectNextDispatch();
+    await runtime.saveRouteDraft();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.routeDraft).not.toBeNull();
+    expect(snapshot.rejection).toEqual(TEST_REJECTION);
+    expect(snapshot.ui.routePreviewError).toEqual(TEST_REJECTION);
+    expect(snapshot.shell.routeDraft?.previewStatus).not.toBe("connected");
+  });
+
   it("does not let a slow route finish clear a newer draft", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);

@@ -163,18 +163,29 @@ fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
 }
 
 fn best_candidate(candidates: Vec<RoutePlan>) -> Option<RoutePlan> {
-    let mut best: Option<RoutePlan> = None;
+    candidates.into_iter().min_by(|left, right| {
+        left.estimated_seconds
+            .total_cmp(&right.estimated_seconds)
+            .then_with(|| plan_identity_key(left).cmp(&plan_identity_key(right)))
+    })
+}
 
-    for candidate in candidates {
-        // Strict `<` is a deterministic first-found tie-break (snapshot/enumeration order); intentionally simpler than the road pathfinder's canonical tie-break.
-        if best.as_ref().map_or(true, |current| {
-            candidate.estimated_seconds < current.estimated_seconds
-        }) {
-            best = Some(candidate);
-        }
-    }
-
-    best
+/// Identity ladder for equal-time plans: transit legs by line id, then board /
+/// alight itinerary indexes. Independent of Vec enumeration order so reordering
+/// routes in the snapshot cannot flip which equal-time service a citizen picks.
+fn plan_identity_key(plan: &RoutePlan) -> Vec<(String, Option<usize>, Option<usize>)> {
+    plan.legs
+        .iter()
+        .filter_map(|leg| {
+            leg.line_id.as_ref().map(|line_id| {
+                (
+                    line_id.clone(),
+                    leg.board_itinerary_index,
+                    leg.alight_itinerary_index,
+                )
+            })
+        })
+        .collect()
 }
 
 fn ride_seconds(mode: TransitMode, legs: &[RouteLegPath], edge: &RideEdge) -> f64 {

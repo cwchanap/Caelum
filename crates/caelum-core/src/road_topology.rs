@@ -79,10 +79,11 @@ impl RoadTopology {
             });
         }
 
-        // Fast path: direct single-transition U-turn at the terminal tile
-        // (bidirectional roads and automatic junctions). Use the transition's
-        // actual travel_millis (BUS_TILE_MILLIS + U_TURN_MILLIS) so estimates
-        // and vehicle movement agree on the same U-turn cost.
+        // Direct U-turn at the terminal: ordinary lane U-turns end on the
+        // neighbor tile, so reuse the transition's cost/headings but keep
+        // geometry in-place on the terminal (no backward jump when the next
+        // service leg resumes). Dead-end terminals have no multi-step path
+        // that returns with the reversed heading.
         if let Some(transition) = self.transition_for(start, next_required_entry_heading) {
             if transition.movement == MovementKind::UTurn {
                 let travel_seconds = f64::from(transition.travel_millis) / 1_000.0;
@@ -92,7 +93,7 @@ impl RoadTopology {
                         entering_heading: previous_exit_heading,
                         leaving_heading: next_required_entry_heading,
                         movement: MovementKind::UTurn,
-                        geometry: transition.geometry.clone(),
+                        geometry: in_place_uturn_geometry(terminal, previous_exit_heading),
                         travel_seconds,
                     }],
                     total_travel_seconds: travel_seconds,
@@ -100,8 +101,8 @@ impl RoadTopology {
             }
         }
 
-        // Multi-step reversal: bounded Dijkstra through the road network
-        // (e.g., entry → circulation → exit through a roundabout).
+        // Multi-step reversal: bounded Dijkstra (e.g. entry → circulation →
+        // exit through a roundabout when no direct U-turn exists).
         self.find_reversal_path(start, goal)
     }
 
@@ -613,6 +614,22 @@ fn transition_geometry(
             from: from_position,
             to: to_position,
         },
+    }
+}
+
+/// Terminal-reversal U-turn that stays on the terminal tile. Same left-bow
+/// control as ordinary U-turns, but both endpoints are the terminal so vehicle
+/// progress ends where the next service leg begins.
+fn in_place_uturn_geometry(terminal: Point, incoming: Heading) -> PathGeometry {
+    let (dx, dy) = offset_components(incoming);
+    let at = TripPosition::from(terminal);
+    PathGeometry::QuadraticBezier {
+        from: at.clone(),
+        control: TripPosition {
+            x: f64::from(terminal.x + dy) + f64::from(dx) * 0.5,
+            y: f64::from(terminal.y - dx) + f64::from(dy) * 0.5,
+        },
+        to: at,
     }
 }
 

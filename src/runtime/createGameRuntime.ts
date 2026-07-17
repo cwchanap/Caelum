@@ -581,8 +581,26 @@ export async function createGameRuntime({
             routePreviewHostError: null,
           });
         }
+        // Non-fatal rejection with a current token: surface into the draft
+        // panel so the editor does not keep showing a stale "Connected"
+        // preview while only the global banner carries the failure.
+        if (
+          !result.applied &&
+          tokenIsCurrent &&
+          result.rejection !== null &&
+          current !== null
+        ) {
+          return commit(normalizeRustSnapshot(result.snapshot), {
+            ...ui,
+            routePreviewError: result.rejection,
+            routePreviewHostError: null,
+          });
+        }
         return commit(normalizeRustSnapshot(result.snapshot), ui);
       },
+      // Superseded-save host errors must not kill the runtime: the user may
+      // already be on a replacement draft. A truly dead backend is still
+      // caught by the next tick/dispatch failBackend path.
       (error) => {
         if (isCurrent(ui.routeDraft)) {
           return failBackend(error);

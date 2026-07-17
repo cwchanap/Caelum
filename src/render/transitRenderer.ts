@@ -172,14 +172,24 @@ function offsetPath(
   return { ...path, steps } as TransitPath;
 }
 
+function nodePositionMap(state: GameState): Map<string, TripPosition> {
+  const positions = new Map<string, TripPosition>();
+  for (const stop of state.transit.stops) {
+    positions.set(stop.id, stop.position);
+  }
+  for (const station of state.transit.stations) {
+    positions.set(station.id, station.position);
+  }
+  return positions;
+}
+
 function routeLegEndpoints(
-  state: GameState,
+  nodes: Map<string, TripPosition>,
   leg: RouteLegPath,
 ): { from?: TripPosition; to?: TripPosition } {
-  const nodes = [...state.transit.stops, ...state.transit.stations];
   return {
-    from: nodes.find((node) => node.id === leg.fromWaypointId)?.position,
-    to: nodes.find((node) => node.id === leg.toWaypointId)?.position,
+    from: nodes.get(leg.fromWaypointId),
+    to: nodes.get(leg.toWaypointId),
   };
 }
 
@@ -225,7 +235,7 @@ function renderLeg(
 
 function drawLegs(
   ctx: CanvasRenderingContext2D,
-  state: GameState,
+  nodes: Map<string, TripPosition>,
   legs: RouteLegPath[],
   color: string,
   lineWidth: number,
@@ -236,7 +246,7 @@ function drawLegs(
     renderLeg(
       ctx,
       leg,
-      routeLegEndpoints(state, leg),
+      routeLegEndpoints(nodes, leg),
       { color, lineWidth },
       routeId,
       corridors,
@@ -246,7 +256,7 @@ function drawLegs(
 
 function drawDraftLegs(
   ctx: CanvasRenderingContext2D,
-  state: GameState,
+  nodes: Map<string, TripPosition>,
   legs: RouteLegPath[],
   color: string,
   lineWidth: number,
@@ -258,7 +268,7 @@ function drawDraftLegs(
     if (path !== null) {
       drawTransitPath(ctx, path, color, lineWidth, routeId, corridors);
     } else {
-      const endpoints = routeLegEndpoints(state, leg);
+      const endpoints = routeLegEndpoints(nodes, leg);
       if (endpoints.from !== undefined && endpoints.to !== undefined) {
         ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;
@@ -456,6 +466,7 @@ function renderTransitContents(
 ): void {
   const lines = renderableLines(state);
   const corridors = buildCorridorGroups(lines);
+  const nodes = nodePositionMap(state);
   const editedRouteId =
     ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
   const emphasizedIds = new Set(
@@ -469,7 +480,7 @@ function renderTransitContents(
     ctx.globalAlpha = 1;
     drawLegs(
       ctx,
-      state,
+      nodes,
       line.legs,
       "#ffffffaa",
       line.lineWidth + 4,
@@ -485,7 +496,7 @@ function renderTransitContents(
         : UNRELATED_ROUTE_OPACITY;
     drawLegs(
       ctx,
-      state,
+      nodes,
       line.legs,
       line.color,
       line.lineWidth,
@@ -507,7 +518,7 @@ function renderTransitContents(
     ctx.setLineDash([6, 6]);
     drawDraftLegs(
       ctx,
-      state,
+      nodes,
       draftLegs,
       "#f4d35e",
       3,

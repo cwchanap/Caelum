@@ -761,17 +761,29 @@ fn terminal_reversal_on_one_way_lane_returns_zero_step_path() {
 }
 
 #[test]
-fn terminal_reversal_on_bidirectional_road_returns_single_uturn() {
+fn terminal_reversal_on_bidirectional_road_returns_in_place_uturn() {
     let mut map = blank_map(8, 6);
     corridor(&mut map, &[point(1, 3), point(2, 3), point(3, 3)], None);
     let topology = RoadTopology::compile(&map).unwrap();
 
     let path = topology
         .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
-        .expect("bidirectional road should support direct U-turn");
+        .expect("bidirectional road should support terminal reversal");
     let steps = path.road_steps();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].movement, MovementKind::UTurn);
+    assert_eq!(steps[0].position, point(2, 3));
+    assert_eq!(steps[0].leaving_heading, Heading::West);
+    // Geometry stays on the terminal — ordinary U-turns would end one tile away.
+    match &steps[0].geometry {
+        caelum_core::model::PathGeometry::QuadraticBezier { from, to, .. } => {
+            assert_eq!(from.x, 2.0);
+            assert_eq!(from.y, 3.0);
+            assert_eq!(to.x, 2.0);
+            assert_eq!(to.y, 3.0);
+        }
+        other => panic!("expected in-place quadratic U-turn, got {other:?}"),
+    }
 }
 
 #[test]
@@ -803,8 +815,7 @@ fn terminal_reversal_through_roundabout_finds_multi_step_path() {
 
     let topology = RoadTopology::compile(&map).unwrap();
 
-    // The terminal at (2,3) is bidirectional, so a direct U-turn exists.
-    // The fast path should find it without needing the Dijkstra fallback.
+    // Bidirectional approach supports a direct in-place U-turn at the terminal.
     let path = topology
         .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
         .expect("reversal should be found");
