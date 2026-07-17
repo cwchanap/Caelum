@@ -177,12 +177,12 @@ function closestProgressOnGeometry(
     );
   }
   if (geometry.kind === "arc") {
+    if (Math.abs(geometry.sweepRadians) < 1e-9) return 0;
     const angle = Math.atan2(
       point.y - geometry.center.y,
       point.x - geometry.center.x,
     );
     let progress = (angle - geometry.startRadians) / geometry.sweepRadians;
-    // Normalize angle wrapping into [0, 1]
     progress = ((progress % 1) + 1) % 1;
     return progress;
   }

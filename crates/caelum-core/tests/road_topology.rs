@@ -920,3 +920,41 @@ fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
     assert_eq!(steps.first().unwrap().position, point(2, 3));
     assert_eq!(steps.last().unwrap().leaving_heading, Heading::West);
 }
+
+#[test]
+fn terminal_reversal_finds_paths_longer_than_former_step_cap() {
+    // One-way racetrack: arrive at the NW corner heading East, leave only after
+    // circulating and re-entering heading North. That forces >20 transitions;
+    // the old step cap would false-negative. Finite tile×heading state space
+    // still terminates the search. Corner tiles stay two-way so each approach
+    // leg can enter the next one-way side.
+    let mut map = blank_map(24, 8);
+    let terminal = point(2, 2);
+    let se = point(20, 2);
+    let sw = point(20, 5);
+    let nw_south = point(2, 5);
+    let east: Vec<_> = (2..=20).map(|x| point(x, 2)).collect();
+    let south: Vec<_> = (2..=5).map(|y| point(20, y)).collect();
+    let west: Vec<_> = (2..=20).rev().map(|x| point(x, 5)).collect();
+    let north: Vec<_> = (2..=5).rev().map(|y| point(2, y)).collect();
+    corridor(&mut map, &east, Some(Heading::East));
+    corridor(&mut map, &south, Some(Heading::South));
+    corridor(&mut map, &west, Some(Heading::West));
+    corridor(&mut map, &north, Some(Heading::North));
+    for corner in [terminal, se, sw, nw_south] {
+        map.tile_mut(corner).unwrap().one_way = None;
+    }
+
+    let topology = RoadTopology::compile(&map).unwrap();
+    let path = topology
+        .find_terminal_reversal(terminal, Heading::East, Heading::North)
+        .expect("long one-way loop must still yield a terminal reversal");
+    let steps = path.road_steps();
+    assert!(
+        steps.len() > 20,
+        "fixture must require more than 20 steps, got {}",
+        steps.len()
+    );
+    assert_eq!(steps.first().unwrap().position, terminal);
+    assert_eq!(steps.last().unwrap().leaving_heading, Heading::North);
+}

@@ -189,9 +189,17 @@ describe("ManagePanel route controls", () => {
     );
     expect(screen.getByText("Paused after repair")).toBeVisible();
     expect(screen.getByText("Stop B → Stop C: missing stop")).toBeVisible();
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Focus Stop B to Stop C" }),
+    const focus = screen.getByRole("button", {
+      name: "Focus Stop B to Stop C",
+    });
+    expect(focus).toHaveAttribute(
+      "aria-describedby",
+      "route-repair-route-001-1",
     );
+    expect(
+      document.getElementById("route-repair-route-001-1"),
+    ).toHaveTextContent("Restore the missing node at its former location.");
+    await fireEvent.click(focus);
     expect(cb.onFocusRouteFailure).toHaveBeenCalledWith("route-001", 1);
   });
 

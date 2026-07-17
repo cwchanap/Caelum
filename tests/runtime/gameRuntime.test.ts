@@ -1038,6 +1038,63 @@ describe("Game Runtime", () => {
     ]);
   });
 
+  it("keeps route and road preview counters independent when resolves interleave out of order", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [
+          createStop("stop-0001", { x: 1, y: 1 }),
+          createStop("stop-0002", { x: 2, y: 1 }),
+          createStop("stop-0003", { x: 3, y: 1 }),
+        ],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(initial);
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.handleTileClick({ x: 2, y: 1 });
+    // route gen 2 pending (two appends)
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 5, y: 5 } });
+    // road gen 1 pending
+    runtime.handleTileClick({ x: 3, y: 1 });
+    // route gen 3 pending
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 6, y: 5 } });
+    // road gen 2 pending
+
+    expect(runtime.getSnapshot().ui.routeDraft?.generation).toBe(3);
+    expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(2);
+
+    // Resolve in reverse/mixed order: older route, older road, then current of each.
+    previews.resolveRoute(
+      2,
+      routePreview(2, ["stop-0001", "stop-0002"], "networkDisconnected"),
+    );
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    previews.resolveRoute(
+      3,
+      routePreview(3, ["stop-0001", "stop-0002", "stop-0003"]),
+    );
+    previews.resolveRoad(2, roadPreview(2, { x: 6, y: 5 }));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.routeDraft?.generation).toBe(3);
+    expect(runtime.getSnapshot().ui.routeDraft?.preview?.generation).toBe(3);
+    expect(runtime.getSnapshot().ui.routeDraft?.preview?.legs).toHaveLength(3);
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.changedTiles).toEqual([
+      { x: 6, y: 5 },
+    ]);
+    expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
+  });
+
   it("arms a click tool and never starts a drag gesture", async () => {
     const base = backendSpy();
     const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));

@@ -129,6 +129,11 @@ export type GameIntent =
     }
   | { type: "setBudget"; budget: number };
 
+/**
+ * Per-dispatch impact metadata from Rust. Reserved for future UI (e.g. post-
+ * apply feedback); production TypeScript currently reads impact only from
+ * route/road *preview* responses, not from `DispatchResult.context`.
+ */
 export interface DispatchContext {
   changedTiles: Point[];
   skippedTiles: Point[];
@@ -140,6 +145,7 @@ export interface DispatchResult {
   snapshot: RustGameSnapshot;
   applied: boolean;
   rejection: GameplayRejection | null;
+  /** Wire-complete impact context; reserved — not consumed by the runtime yet. */
   context: DispatchContext;
 }
 

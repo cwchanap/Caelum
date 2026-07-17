@@ -8,13 +8,14 @@ use crate::model::{
 use crate::network::resolve_route_legs;
 use crate::platforms::{apply_route_platform_delta, assign_added_waypoint_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
-use crate::route_lifecycle::rebase_edited_route_vehicles_and_riders;
+use crate::route_lifecycle::{self, rebase_edited_route_vehicles_and_riders};
 use crate::transit::{initial_vehicle, vehicle_cost};
 use crate::transit_nodes::{garbage_collect_missing_nodes, validate_present_compatible_node};
 
 #[derive(Clone)]
 struct RouteView {
     mode: TransitMode,
+    pattern: ServicePattern,
     waypoint_ids: Vec<String>,
     revision: u32,
     legs: Vec<RouteLegPath>,
@@ -74,10 +75,6 @@ pub fn update_route(
     let mut legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
     validate_edit_legs(&current.legs, &legs, route_id)?;
     carry_forward_leg_history(&current.legs, &mut legs);
-    let next_revision = current
-        .revision
-        .checked_add(1)
-        .ok_or_else(|| exhausted_revision(route_id, current.revision))?;
 
     let mut candidate = state.clone();
     apply_route_platform_delta(
@@ -87,6 +84,19 @@ pub fn update_route(
         &current.waypoint_ids,
         &waypoint_ids,
     )?;
+    let structure_changed = current.waypoint_ids != waypoint_ids
+        || current.pattern != pattern
+        || current.legs != legs
+        || route_lifecycle::platform_assignments_for_route(state, route_id)
+            != route_lifecycle::platform_assignments_for_route(&candidate, route_id);
+    let next_revision = if structure_changed {
+        current
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| exhausted_revision(route_id, current.revision))?
+    } else {
+        current.revision
+    };
     write_structural_route_fields(
         &mut candidate,
         route_id,
@@ -251,6 +261,7 @@ fn route_view(snapshot: &GameSnapshot, route_id: &str) -> Option<RouteView> {
     {
         return Some(RouteView {
             mode: TransitMode::Bus,
+            pattern: route.pattern,
             waypoint_ids: route.stop_ids.clone(),
             revision: route.revision,
             legs: route.legs.clone(),
@@ -263,6 +274,7 @@ fn route_view(snapshot: &GameSnapshot, route_id: &str) -> Option<RouteView> {
         .find(|line| line.id == route_id)
         .map(|line| RouteView {
             mode: TransitMode::Metro,
+            pattern: line.pattern,
             waypoint_ids: line.station_ids.clone(),
             revision: line.revision,
             legs: line.legs.clone(),

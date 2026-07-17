@@ -5,6 +5,7 @@ import {
   corridorOffsets,
   directionArrowSamples,
   offsetGeometry,
+  routePathPresentation,
 } from "../../src/render/routeGeometry";
 
 function curvedMovementPath(): TransitPath {
@@ -120,6 +121,25 @@ describe("corridorOffsets", () => {
       forwardArc.canonicalTangent.y,
       10,
     );
+  });
+});
+
+describe("routePathPresentation", () => {
+  it("maps points on a zero-sweep arc without dividing by zero", () => {
+    const presentation = routePathPresentation(
+      {
+        kind: "arc",
+        center: { x: 2, y: 2 },
+        radius: 1,
+        startRadians: 0,
+        sweepRadians: 0,
+      },
+      0.5,
+      { x: 0, y: 1 },
+    );
+    const mapped = presentation.translatePoint({ x: 3, y: 2 });
+    expect(Number.isFinite(mapped.x)).toBe(true);
+    expect(Number.isFinite(mapped.y)).toBe(true);
   });
 });
 

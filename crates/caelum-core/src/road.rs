@@ -383,7 +383,10 @@ fn connect(map: &mut GameMap, point: Point, heading: Heading) {
         tile.road_connections.push(heading);
     }
     if let Some(neighbor) = map.tile_mut(neighbor_point) {
-        neighbor.road_connections.push(opposite(heading));
+        let reciprocal = opposite(heading);
+        if !neighbor.road_connections.contains(&reciprocal) {
+            neighbor.road_connections.push(reciprocal);
+        }
     }
 }
 

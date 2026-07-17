@@ -149,12 +149,16 @@
                       type="button"
                       class="route-failure-focus"
                       aria-label={`Focus ${failure.fromLabel} to ${failure.toLabel}`}
+                      aria-describedby={`route-repair-${route.id}-${failure.legIndex}`}
                       onclick={() =>
                         onFocusRouteFailure(route.id, failure.legIndex)}
                     >
                       Focus
                     </button>
-                    <span class="route-repair-guidance">
+                    <span
+                      class="route-repair-guidance"
+                      id={`route-repair-${route.id}-${failure.legIndex}`}
+                    >
                       {failure.reason === "missingNode"
                         ? "Restore the missing node at its former location."
                         : "Repair the former road alignment."}

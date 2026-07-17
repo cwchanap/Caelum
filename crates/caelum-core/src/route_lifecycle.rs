@@ -604,6 +604,19 @@ fn platform_assignments<T: PlatformNode>(nodes: &[T], line_id: &str) -> Vec<(Str
         .collect()
 }
 
+/// Platform assignments for `route_id` across bus stops and metro stations.
+pub(crate) fn platform_assignments_for_route(
+    snapshot: &GameSnapshot,
+    route_id: &str,
+) -> Vec<(String, String)> {
+    let mut assignments = platform_assignments(&snapshot.transit.stops, route_id);
+    assignments.extend(platform_assignments(
+        &snapshot.transit.stations,
+        route_id,
+    ));
+    assignments
+}
+
 #[allow(clippy::too_many_arguments)]
 fn route_structure_changed<T: PartialEq>(
     previous_waypoint_ids: &[String],

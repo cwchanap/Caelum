@@ -550,13 +550,14 @@ pattern, and waypoint IDs. Rust:
 - Removes assignments from removed nodes
 - Assigns added nodes to their least-loaded compatible platforms
 - Rebuilds directional legs
-- Increments the route revision
+- Increments the route revision only when structure changed
 
 The revision is structural. It increments when waypoint order or service pattern
-changes, a route leg path/status changes after topology mutation, a referenced
-node becomes missing or present, or a platform assignment changes. Rename,
-recolor, active toggle, and vehicle assignment do not increment it because
-UpdateRoute does not overwrite those fields. Deletion still rejects as
+changes, a route leg path/status changes (including after topology mutation), a
+referenced node becomes missing or present, or a platform assignment changes.
+An identical Save that rewrites the same structural fields leaves the revision
+unchanged. Rename, recolor, active toggle, and vehicle assignment do not
+increment it because UpdateRoute does not overwrite those fields. Deletion still rejects as
 route-not-found. This makes an open edit stale whenever its routing or platform
 base changes without rejecting harmless presentation changes.
 

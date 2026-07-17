@@ -144,6 +144,7 @@ fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
     });
 
     assert!(result.applied, "{result:?}");
+    assert_eq!(result.context.affected_route_ids, vec!["route-001".to_string()]);
     assert_eq!(result.snapshot.transit.routes.len(), 1);
     assert_eq!(result.snapshot.transit.vehicles.len(), 1);
     assert_eq!(result.snapshot.budget, before.budget - BUS_COST);
@@ -294,6 +295,31 @@ fn update_preserves_latest_name_color_active_and_vehicle_set() {
 }
 
 #[test]
+fn identical_update_leaves_structural_revision_unchanged() {
+    let mut engine = editable_bus_engine(&[2, 6, 10], BUS_COST);
+    create_route(
+        &mut engine,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    let before = route(&engine.snapshot(), "route-001").clone();
+
+    let result = engine.dispatch(GameIntent::UpdateRoute {
+        route_id: before.id.clone(),
+        expected_revision: before.revision,
+        pattern: before.pattern,
+        waypoint_ids: before.stop_ids.clone(),
+    });
+    assert!(result.applied, "{result:?}");
+    let updated = route(&result.snapshot, &before.id);
+    assert_eq!(updated.revision, before.revision);
+    assert_eq!(updated.stop_ids, before.stop_ids);
+    assert_eq!(updated.pattern, before.pattern);
+    assert_eq!(updated.legs, before.legs);
+}
+
+#[test]
 fn update_applies_platform_delta_and_one_revision_increment() {
     let mut engine = editable_metro_engine(&[2, 6, 10], METRO_COST * 2);
     create_route(
@@ -434,7 +460,11 @@ fn only_identical_preexisting_broken_directional_legs_may_carry_forward() {
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
-    assert!(unchanged.applied, "{unchanged:?}");
+    // Identical Save is not a DisconnectedLeg rejection; pure structural no-op
+    // may report applied=false and leaves the revision alone.
+    assert!(unchanged.rejection.is_none(), "{unchanged:?}");
+    assert_eq!(route(&unchanged.snapshot, "route-001").revision, revision);
+    assert!(route(&unchanged.snapshot, "route-001").path_broken);
 
     for (pattern, waypoint_ids) in [
         (ServicePattern::Loop, ids(&["stop-003", "stop-002"])),

@@ -1,4 +1,4 @@
-import type { RouteLegPath } from "../../domain/types";
+import type { GameplayRejection, RouteLegPath } from "../../domain/types";
 import type {
   DispatchResult,
   RoadMutationPreviewResponse,
@@ -15,13 +15,26 @@ export function normalizeRouteLegPath(leg: RouteLegPath): RouteLegPath {
   };
 }
 
+function normalizeGameplayRejection(
+  rejection: GameplayRejection | null | undefined,
+): GameplayRejection | null {
+  if (rejection == null) return null;
+  return {
+    ...rejection,
+    context: {
+      ...rejection.context,
+      affectedRouteIds: rejection.context.affectedRouteIds ?? [],
+    },
+  };
+}
+
 export function normalizeRoutePreviewResponse(
   response: RoutePreviewResponse,
 ): RoutePreviewResponse {
   return {
     ...response,
     legs: response.legs.map(normalizeRouteLegPath),
-    rejection: response.rejection ?? null,
+    rejection: normalizeGameplayRejection(response.rejection),
   };
 }
 
@@ -32,7 +45,14 @@ export function normalizeRoutePreviewResponse(
 export function normalizeDispatchResult(
   result: DispatchResult,
 ): DispatchResult {
-  return { ...result, rejection: result.rejection ?? null };
+  return {
+    ...result,
+    rejection: normalizeGameplayRejection(result.rejection),
+    context: {
+      ...result.context,
+      affectedRouteIds: result.context.affectedRouteIds ?? [],
+    },
+  };
 }
 
 // Same normalization concern as `normalizeDispatchResult` and
@@ -42,5 +62,8 @@ export function normalizeDispatchResult(
 export function normalizeRoadMutationPreviewResponse(
   response: RoadMutationPreviewResponse,
 ): RoadMutationPreviewResponse {
-  return { ...response, rejection: response.rejection ?? null };
+  return {
+    ...response,
+    rejection: normalizeGameplayRejection(response.rejection),
+  };
 }

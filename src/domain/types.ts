@@ -135,7 +135,8 @@ export interface RejectionContext {
   actualRevision?: number;
   requiredBudget?: number;
   availableBudget?: number;
-  affectedRouteIds: string[];
+  /** Present on every Rust rejection; optional so omitted serde payloads normalize cleanly. */
+  affectedRouteIds?: string[];
 }
 
 export interface GameplayRejection {

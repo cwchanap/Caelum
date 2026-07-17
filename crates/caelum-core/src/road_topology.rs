@@ -17,11 +17,6 @@ pub const LEFT_TURN_MILLIS: u32 = 1_000;
 pub const U_TURN_MILLIS: u32 = 2_000;
 pub const ROUNDABOUT_ENTRY_MILLIS: u32 = 750;
 
-/// Maximum number of transitions in a multi-step terminal reversal path.
-/// A 3×3 roundabout needs at most entry + 7 circulation + exit = 9 steps,
-/// plus a few approach tiles on each side.
-const MAX_REVERSAL_STEPS: u32 = 20;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RoadState {
     pub position: Point,
@@ -101,8 +96,9 @@ impl RoadTopology {
             }
         }
 
-        // Multi-step reversal: bounded Dijkstra (e.g. entry → circulation →
-        // exit through a roundabout when no direct U-turn exists).
+        // Multi-step reversal: Dijkstra over the finite (tile × heading)
+        // state space (e.g. entry → circulation → exit through a roundabout
+        // when no direct U-turn exists).
         self.find_reversal_path(start, goal)
     }
 
@@ -119,9 +115,11 @@ impl RoadTopology {
         self.transitions.keys().any(|state| state.position == point)
     }
 
-    /// Bounded Dijkstra from `start` to `goal` within the road topology,
-    /// accepting any non-empty path (at least one transition). Used for
-    /// multi-step terminal reversals (e.g., through a roundabout).
+    /// Dijkstra from `start` to `goal` within the road topology, accepting
+    /// any non-empty path (at least one transition). Used for multi-step
+    /// terminal reversals (e.g., through a roundabout). The state space is
+    /// finite (`RoadState` = tile × heading), so the search self-terminates
+    /// without an artificial step cap that would false-negative long loops.
     fn find_reversal_path(&self, start: RoadState, goal: RoadState) -> Option<TransitPath> {
         let mut best: BTreeMap<RoadState, PathRank> = BTreeMap::new();
         let mut parents: BTreeMap<RoadState, (RoadState, RoadTransition)> = BTreeMap::new();
@@ -139,11 +137,6 @@ impl RoadTopology {
             // Goal: reached the goal state with at least one transition.
             if state == goal && rank.movement_count > 0 {
                 return Some(build_road_path(state, rank.total_millis, &parents));
-            }
-
-            // Bound: don't expand beyond the step limit.
-            if rank.movement_count >= MAX_REVERSAL_STEPS {
-                continue;
             }
 
             for transition in self.transitions.get(&state).into_iter().flatten() {
