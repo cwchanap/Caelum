@@ -53,6 +53,138 @@ describe("Rust backend contract", () => {
     );
   });
 
+  it.each([
+    {
+      code: "invalidSpeed" as const,
+      context: { affectedRouteIds: [] },
+      message: "That simulation speed is not supported.",
+    },
+    {
+      code: "blockedTile" as const,
+      context: { affectedRouteIds: [] },
+      message: "That tile is blocked.",
+    },
+    {
+      code: "outOfBounds" as const,
+      context: { affectedRouteIds: [] },
+      message: "That location is outside the map.",
+    },
+    {
+      code: "roadRequired" as const,
+      context: { affectedRouteIds: [] },
+      message: "Build a road here first.",
+    },
+    {
+      code: "trackRequired" as const,
+      context: { affectedRouteIds: [] },
+      message: "Build track here first.",
+    },
+    {
+      code: "invalidRoadStroke" as const,
+      context: { affectedRouteIds: [] },
+      message: "That road stroke has no valid tiles.",
+    },
+    {
+      code: "invalidTrackStroke" as const,
+      context: { affectedRouteIds: [] },
+      message: "That track stroke has no valid tiles.",
+    },
+    {
+      code: "invalidDirectionChange" as const,
+      context: { affectedRouteIds: [] },
+      message: "Change the approach lane; structure directions are automatic.",
+    },
+    {
+      code: "nodeAlreadyExists" as const,
+      context: { affectedRouteIds: [] },
+      message: "A compatible transit node already occupies that anchor.",
+    },
+    {
+      code: "ambiguousTransitNode" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "More than one missing node matches this anchor; edit the route first.",
+    },
+    {
+      code: "missingRouteNode" as const,
+      context: { nodeId: "stop-001", affectedRouteIds: [] },
+      message: "stop-001 is missing.",
+    },
+    {
+      code: "incompatibleRouteNode" as const,
+      context: { nodeId: "stop-001", affectedRouteIds: [] },
+      message: "stop-001 is not compatible with this route mode.",
+    },
+    {
+      code: "tooFewRouteNodes" as const,
+      context: { affectedRouteIds: [] },
+      message: "A route needs at least two distinct live nodes.",
+    },
+    {
+      code: "duplicateRouteNodes" as const,
+      context: { affectedRouteIds: [] },
+      message: "Each route waypoint must be distinct.",
+    },
+    {
+      code: "disconnectedLeg" as const,
+      context: {
+        fromWaypointId: "stop-001",
+        toWaypointId: "stop-002",
+        affectedRouteIds: [],
+      },
+      message: "No legal path connects stop-001 to stop-002.",
+    },
+    {
+      code: "routeChangedWhileEditing" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "This route changed while you were editing it. Reload the saved route.",
+    },
+    {
+      code: "routeNotFound" as const,
+      context: { routeId: "route-001", affectedRouteIds: [] },
+      message: "route-001 no longer exists.",
+    },
+    {
+      code: "inactiveRoute" as const,
+      context: { routeId: "route-001", affectedRouteIds: [] },
+      message: "route-001 is inactive.",
+    },
+    {
+      code: "structureNotFound" as const,
+      context: { structureId: "junction-001", affectedRouteIds: [] },
+      message: "junction-001 no longer exists.",
+    },
+    {
+      code: "invalidPlatform" as const,
+      context: { affectedRouteIds: [] },
+      message: "That platform cannot serve this route.",
+    },
+    {
+      code: "invalidBuildingPlacement" as const,
+      context: { affectedRouteIds: [] },
+      message: "That building cannot be placed on this footprint.",
+    },
+    {
+      code: "blockedFootprint" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "The full footprint must contain only empty or replaceable road tiles.",
+    },
+    {
+      code: "unsafeRoundaboutPortMapping" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "The roads crossing this footprint cannot map safely to roundabout ports.",
+    },
+  ])("maps rejection code $code through the TS message layer", ({
+    code,
+    context,
+    message,
+  }) => {
+    expect(rejectionMessage({ code, context })).toBe(message);
+  });
+
   it("normalizes a Rust snapshot into shell-readable frontend state", () => {
     const rustSnapshot = createRustSnapshot({
       day: 1,

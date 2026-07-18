@@ -62,13 +62,13 @@ pub fn validate_present_compatible_node(
     })
 }
 
-pub fn canonical_node_anchor(snapshot: &GameSnapshot, clicked: Point) -> Option<Point> {
+pub fn canonical_node_anchor(snapshot: &GameSnapshot, clicked: Point) -> Point {
     snapshot
         .buildings
         .iter()
         .find(|building| building.occupied_tiles.contains(&clicked))
         .map(|building| building.origin)
-        .or(Some(clicked))
+        .unwrap_or(clicked)
 }
 
 pub fn remove_or_tombstone_node(state: &GameSnapshot, node_id: &str) -> GameSnapshot {

@@ -1450,6 +1450,24 @@ describe("Game Runtime", () => {
     unsubscribe();
   });
 
+  it("skips subscriber publish when commit receives identical state and ui references", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    listener.mockClear();
+
+    // dismissRejection with no rejection calls commit(state, ui) with the same
+    // references; the nextState !== state / nextUi !== ui guard must skip publish.
+    runtime.dismissRejection();
+    expect(listener).not.toHaveBeenCalled();
+
+    runtime.setTool("busStop");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("resets through the backend and resets UI state", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({

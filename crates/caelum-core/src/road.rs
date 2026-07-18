@@ -530,15 +530,22 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
     // (a tile with a pruned edge can no longer satisfy `has_axis` for both
     // axes, or its reciprocal neighbor can't). The candidate set is finite
     // (bounded by the map), so the loop terminates in at most as many
-    // iterations as there are road tiles. The `debug_assert!` cap below
-    // catches a regression that could hang a dispatch.
+    // iterations as there are road tiles. The cap below catches a regression
+    // that could hang a dispatch: debug_assert in dev, release degrades by
+    // stopping the loop (same pattern as trips::tick substep cap).
     let mut iteration = 0usize;
     let max_iterations = map.tiles.len().saturating_add(1);
     loop {
-        debug_assert!(
-            iteration < max_iterations,
-            "refresh_automatic_junctions exceeded iteration cap"
-        );
+        if iteration >= max_iterations {
+            // Release degradation: leave the map without further automatic
+            // junctions rather than hang every road dispatch. Former automatic
+            // junctions were already cleared above; restore directions below.
+            debug_assert!(
+                false,
+                "refresh_automatic_junctions exceeded iteration cap"
+            );
+            break;
+        }
         iteration += 1;
         let candidates: BTreeSet<Point> = map
             .tiles

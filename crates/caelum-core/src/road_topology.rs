@@ -87,10 +87,11 @@ impl RoadTopology {
         }
 
         // Direct U-turn at the terminal: ordinary lane U-turns end on the
-        // neighbor tile, so reuse the transition's cost/headings but keep
-        // geometry in-place on the terminal (no backward jump when the next
-        // service leg resumes). Dead-end terminals have no multi-step path
-        // that returns with the reversed heading.
+        // neighbor tile (`transition.to.position`), so reuse the transition's
+        // cost/headings but keep `RoadPathStep.position` as the service anchor
+        // (the terminal), not the transition's to.position — avoids a backward
+        // jump when the next service leg resumes. Dead-end terminals have no
+        // multi-step path that returns with the reversed heading.
         if let Some(transition) = self.transition_for(start, next_required_entry_heading) {
             if transition.movement == MovementKind::UTurn {
                 let travel_seconds = f64::from(transition.travel_millis) / 1_000.0;

@@ -152,7 +152,7 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         crate::road::refresh_all_automatic_junctions(&mut roundabout_candidate.map)?;
         return Ok(roundabout_candidate);
     }
-    let anchor = canonical_node_anchor(state, *point).unwrap_or(*point);
+    let anchor = canonical_node_anchor(state, *point);
     let removed_building = state
         .buildings
         .iter()

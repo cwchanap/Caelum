@@ -7,7 +7,7 @@ use crate::model::{
     TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
-use crate::rejection::{GameplayRejection, GameplayResult};
+use crate::rejection::GameplayResult;
 use crate::service_itinerary::{service_visits, ServiceVisit};
 use crate::transit::invalidate_trips_for_line;
 use crate::transit_nodes::is_present_node;
@@ -176,7 +176,7 @@ fn recompute_bus_routes(
                 platform_assignments(&candidate.transit.stops, &route.id),
             ) {
                 candidate.transit.routes[route_index].revision =
-                    next_revision(&route.id, previous_route.revision)?;
+                    next_revision(previous_route.revision);
             }
         }
 
@@ -226,7 +226,7 @@ fn recompute_metro_lines(
                 platform_assignments(&candidate.transit.stations, &line.id),
             ) {
                 candidate.transit.metro_lines[line_index].revision =
-                    next_revision(&line.id, previous_line.revision)?;
+                    next_revision(previous_line.revision);
             }
         }
 
@@ -237,10 +237,14 @@ fn recompute_metro_lines(
     Ok(())
 }
 
-fn next_revision(route_id: &str, revision: u32) -> GameplayResult<u32> {
-    revision
-        .checked_add(1)
-        .ok_or_else(|| GameplayRejection::route_revision_exhausted(route_id, revision))
+/// Bump a route revision after a network-driven structural change.
+///
+/// Saturates at `u32::MAX` instead of rejecting: a single exhausted route must
+/// not brick unrelated road/stop/track mutations for the whole network.
+/// Explicit route edits still use `checked_add` in `route_editor` /
+/// `transit::increment_route_revision` and surface `RouteRevisionExhausted`.
+fn next_revision(revision: u32) -> u32 {
+    revision.saturating_add(1)
 }
 
 fn transition_route_service(

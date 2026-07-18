@@ -185,11 +185,15 @@ export async function dragMapTiles(
   await page.mouse.move(end.x, end.y, { steps: 8 });
   await page.mouse.up();
   // `page.mouse` methods dispatch low-level events without waiting for the
-  // browser to fully process handlers. A single animation-frame pause gives
-  // the runtime's commitDrag (pointerup → paint/render) a chance to settle
-  // before the test proceeds, preventing the next action from racing with
-  // the drag commit — especially on slower CI runners.
-  await page.waitForTimeout(0);
+  // browser to fully process handlers. Yield one animation frame so the
+  // runtime's commitDrag (pointerup → paint/render) settles before the next
+  // action — especially on slower CI runners.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
 }
 
 export async function removeMapTile(

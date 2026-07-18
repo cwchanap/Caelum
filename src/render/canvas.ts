@@ -54,17 +54,21 @@ export function getBoardTransform(
   };
 }
 
-export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
-  const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.round(rect.width));
-  const cssHeight = Math.max(1, Math.round(rect.height));
-  const devicePixelRatio = globalThis.devicePixelRatio ?? 1;
-  const width = Math.max(1, Math.round(rect.width * devicePixelRatio));
-  const height = Math.max(1, Math.round(rect.height * devicePixelRatio));
+/** Apply canvas backing-store size from known CSS dimensions (no layout read). */
+export function applyCanvasPixelSize(
+  canvas: CanvasSizeTarget,
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number = globalThis.devicePixelRatio ?? 1,
+): boolean {
+  const roundedCssWidth = Math.max(1, Math.round(cssWidth));
+  const roundedCssHeight = Math.max(1, Math.round(cssHeight));
+  const width = Math.max(1, Math.round(cssWidth * devicePixelRatio));
+  const height = Math.max(1, Math.round(cssHeight * devicePixelRatio));
 
   if (canvas.style !== undefined) {
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
+    canvas.style.width = `${roundedCssWidth}px`;
+    canvas.style.height = `${roundedCssHeight}px`;
   }
 
   if (canvas.width === width && canvas.height === height) {
@@ -74,6 +78,12 @@ export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
   canvas.width = width;
   canvas.height = height;
   return true;
+}
+
+/** One-shot size sync via layout read. Prefer ResizeObserver + applyCanvasPixelSize in the frame loop. */
+export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
+  const rect = canvas.getBoundingClientRect();
+  return applyCanvasPixelSize(canvas, rect.width, rect.height);
 }
 
 export function canvasToTile(

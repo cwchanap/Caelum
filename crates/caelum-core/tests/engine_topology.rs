@@ -122,7 +122,7 @@ fn previewed_candidate_topology_is_never_committed() {
 }
 
 #[test]
-fn exhausted_route_revision_rejects_network_mutation_without_committing_snapshot_or_cache() {
+fn exhausted_route_revision_clamps_on_network_mutation_without_rejecting_unrelated_edits() {
     let mut engine = GameEngine::new();
     let road = engine.dispatch(GameIntent::LayRoadLine {
         points: (2..=10).map(|x| point(x, 5)).collect(),
@@ -140,17 +140,18 @@ fn exhausted_route_revision_rejects_network_mutation_without_committing_snapshot
     });
     assert!(route.applied, "{route:?}");
     engine.set_route_revision_for_test("route-001", u32::MAX);
-    let before_snapshot = engine.snapshot();
-    let before_topology = engine.road_topology_for_test().clone();
 
     let result = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
 
-    assert!(!result.applied);
-    assert_eq!(
-        result.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::RouteRevisionExhausted)
-    );
-    assert_eq!(result.snapshot, before_snapshot);
-    assert_eq!(engine.snapshot(), before_snapshot);
-    assert_eq!(engine.road_topology_for_test(), &before_topology);
+    assert!(result.applied, "{result:?}");
+    assert!(result.rejection.is_none());
+    let snapshot = engine.snapshot();
+    let route = snapshot
+        .transit
+        .routes
+        .iter()
+        .find(|route| route.id == "route-001")
+        .expect("route survives network mutation");
+    assert_eq!(route.revision, u32::MAX);
+    assert!(route.path_broken);
 }

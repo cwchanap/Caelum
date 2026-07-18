@@ -194,8 +194,17 @@ pub fn create_growing_suburb_map() -> GameMap {
         &vertical_northbound_points(),
         RoadPreset::OneWay,
     );
-    crate::road::refresh_all_automatic_junctions(&mut map)
-        .expect("authored starter roads must form valid junctions");
+    // Panic-free: `create_initial_snapshot` / `GameEngine::new` / `reset` run
+    // under the Tauri host's `State<Mutex<GameEngine>>`. An `.expect` here
+    // would poison the mutex and brick the desktop session. Starter roads are
+    // authored to form valid junctions; surface unexpected failure in dev and
+    // leave the map without automatic junctions in release (engine.rs:23).
+    if let Err(rejection) = crate::road::refresh_all_automatic_junctions(&mut map) {
+        debug_assert!(
+            false,
+            "authored starter roads must form valid junctions: {rejection:?}"
+        );
+    }
     map
 }
 

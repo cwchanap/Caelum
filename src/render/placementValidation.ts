@@ -45,6 +45,14 @@ export function isTransitNodeAt(state: GameState, point: Point): boolean {
   );
 }
 
+/**
+ * Best-effort client-side building hover validation (cheap footprint check).
+ *
+ * Authoritative placement rules live in Rust (`buildings::place_building`).
+ * This mirror can drift green-hover → Rust-reject; treat green as optimistic
+ * only, never as a commit guarantee. Prefer a Rust preview if tighter parity
+ * is required later.
+ */
 export function canPlaceBuilding(
   state: GameState,
   type: BuildingType,

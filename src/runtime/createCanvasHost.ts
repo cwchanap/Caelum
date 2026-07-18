@@ -1,6 +1,11 @@
 import type { GameState, Point, Tool } from "../domain/types";
 import type { UiState } from "../ui/uiState";
-import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
+import {
+  applyCanvasPixelSize,
+  canvasToTile,
+  renderGame,
+  syncCanvasSize,
+} from "../render/canvas";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
@@ -47,6 +52,22 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
   let running = false;
   let animationFrameId: number | null = null;
   let lastFrameTime: number | null = null;
+  /** CSS box size from ResizeObserver (avoids getBoundingClientRect every frame). */
+  let observedCssWidth = 0;
+  let observedCssHeight = 0;
+  let hasObservedSize = false;
+  let resizeObserver: ResizeObserver | null = null;
+
+  const cancelPendingFrame = (): void => {
+    if (
+      animationFrameId !== null &&
+      typeof cancelAnimationFrame === "function"
+    ) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    lastFrameTime = null;
+  };
 
   const canAnimate = (): boolean => {
     const state = ctx.getState();
@@ -70,15 +91,7 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       return;
     }
 
-    if (
-      animationFrameId !== null &&
-      typeof cancelAnimationFrame === "function"
-    ) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-
-    lastFrameTime = null;
+    cancelPendingFrame();
   };
 
   const render = (): void => {
@@ -86,7 +99,12 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       return;
     }
 
-    syncCanvasSize(canvas);
+    if (hasObservedSize) {
+      applyCanvasPixelSize(canvas, observedCssWidth, observedCssHeight);
+    } else {
+      // Fallback when ResizeObserver is unavailable: one layout read per paint.
+      syncCanvasSize(canvas);
+    }
     renderGame(context, ctx.getState(), ctx.getUi());
   };
 
@@ -139,6 +157,10 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       render();
       return () => {
         if (canvasHost === host) {
+          cancelPendingFrame();
+          resizeObserver?.disconnect();
+          resizeObserver = null;
+          hasObservedSize = false;
           canvas = null;
           context = null;
           canvasHost = null;
@@ -291,8 +313,37 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     };
 
     const handleResize = (): void => {
+      // Window resize is a fallback when ResizeObserver is missing; with an
+      // observer the size cache updates from contentRect without layout thrash.
+      if (!hasObservedSize && canvas !== null) {
+        const rect = canvas.getBoundingClientRect();
+        observedCssWidth = rect.width;
+        observedCssHeight = rect.height;
+        hasObservedSize = true;
+      }
       render();
     };
+
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry === undefined) {
+          return;
+        }
+        observedCssWidth = entry.contentRect.width;
+        observedCssHeight = entry.contentRect.height;
+        hasObservedSize = true;
+        render();
+      });
+      resizeObserver.observe(canvas);
+    } else {
+      // Seed once so the first paint still gets a correct backing store.
+      const rect = canvas.getBoundingClientRect();
+      observedCssWidth = rect.width;
+      observedCssHeight = rect.height;
+      hasObservedSize = true;
+      globalThis.window?.addEventListener("resize", handleResize);
+    }
 
     canvas.addEventListener("click", handleClick);
     canvas.addEventListener("pointermove", handlePointerMove);
@@ -300,7 +351,6 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     canvas.addEventListener("pointerup", handlePointerUp);
     canvas.addEventListener("pointerleave", handlePointerLeave);
     canvas.addEventListener("pointercancel", handlePointerCancel);
-    globalThis.window?.addEventListener("resize", handleResize);
     render();
 
     return () => {
@@ -308,12 +358,23 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
         return;
       }
 
+      // Cancel any pending frame so unmount cannot leave a dangling rAF that
+      // touches a detached canvas (contract: teardown is self-contained even
+      // when the controller remains marked running until an explicit stop()).
+      cancelPendingFrame();
+
       // Clear interaction state so a remount does not inherit a live drag or
       // hover from the destroyed canvas.
       if (ctx.getUi().drag !== null) {
         ctx.onDragCancel();
       }
       ctx.onHoverTile(null);
+
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      hasObservedSize = false;
+      observedCssWidth = 0;
+      observedCssHeight = 0;
 
       canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("pointermove", handlePointerMove);
