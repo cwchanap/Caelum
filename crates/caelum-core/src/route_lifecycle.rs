@@ -815,7 +815,11 @@ fn project_onto_quadratic(
             )
         })
         .min_by(compare_projection)
-        .expect("quadratic sampling always has candidates");
+        // `(0..SAMPLE_COUNT)` is never empty (SAMPLE_COUNT = 64), so this
+        // always resolves to a sample. Fall back to the t=0 projection so a
+        // future regression (e.g. SAMPLE_COUNT = 0) degrades instead of
+        // panicking under the Tauri Mutex.
+        .unwrap_or_else(|| projection_at(path_step_index, geometry, 0.0, world));
     let sample_index = (best_sample.step_progress * denominator).round() as usize;
     let mut lower = sample_index.saturating_sub(1) as f64 / denominator;
     let mut upper = (sample_index + 1).min(SAMPLE_COUNT - 1) as f64 / denominator;
@@ -836,7 +840,9 @@ fn project_onto_quadratic(
     [best_sample, refined]
         .into_iter()
         .min_by(compare_projection)
-        .expect("sample and refinement always provide candidates")
+        // The slice always has two elements. Fall back to `best_sample` so a
+        // future regression never panics under the Tauri Mutex.
+        .unwrap_or(best_sample)
 }
 
 fn projection_at(

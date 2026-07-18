@@ -1,4 +1,6 @@
-use caelum_core::model::{MetricsState, ServicePattern, TransitMode, WorkerProfile};
+use caelum_core::model::{
+    MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
+};
 use caelum_core::{clock, transit, trips, GameEngine, GameIntent};
 
 #[test]
@@ -280,4 +282,132 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
     assert_eq!(lv.itinerary_index % 2, sv.itinerary_index % 2);
     assert_eq!(lv.path_step_index, sv.path_step_index);
     assert!((lv.step_progress - sv.step_progress).abs() < 1e-9);
+}
+
+// --- Roundabout route goldens ------------------------------------------------
+//
+// These pin the roundabout routing/circulation path that the earlier goldens
+// (walking commutes, short metro segments) do not cover. The bus route below
+// runs from (2,5) to (10,5) through a Standard3x3 roundabout at (5,4), so its
+// `RoadPathStep` sequence includes a `RoundaboutEntry`/circulation/exit block —
+// the new movement kinds this branch introduced. The asserts are deliberately
+// baked in so any regression in roundabout geometry, router tie-break, or the
+// substep pipeline surfaces as a test failure; they are NOT to be "fixed" by
+// adjusting the constants.
+
+/// Bus route fixture whose path enters, circulates, and exits a Standard3x3
+/// roundabout. Mirrors the setup in
+/// `transit_build::vehicle_time_through_roundabout_matches_authoritative_path_duration`,
+/// but returns the post-creation snapshot (unpaused) so tick goldens can drive
+/// it directly through `trips::tick_trips`.
+fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
+    let mut engine = GameEngine::new();
+    // Horizontal arterial at y=5 carrying the bus from x=2 to x=10.
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (x, 5).into(),
+        });
+    }
+    // Vertical road at x=6 gives the roundabout a north/south port to capture.
+    for y in 1..=9 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (6, y).into(),
+        });
+    }
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (10, 5).into(),
+    });
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(
+        created.applied,
+        "roundabout bus route should create its vehicle"
+    );
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: (5, 4).into(),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(placed.applied, "roundabout should place on the arterial");
+
+    // Sanity: the route really does circulate through the roundabout — without
+    // this, the golden below would silently degrade to a straight-line bus test
+    // and stop pinning the new movement kinds.
+    let route = &placed.snapshot.transit.routes[0];
+    let path = route.legs[0]
+        .current_path
+        .as_ref()
+        .expect("roundabout bus leg has a resolved path");
+    assert!(
+        path.road_steps()
+            .iter()
+            .any(|step| step.movement == MovementKind::RoundaboutEntry),
+        "bus path must enter the roundabout"
+    );
+
+    let mut state = placed.snapshot;
+    state.paused = false;
+    state
+}
+
+/// Determinism golden: a single large tick and many 1s stepped ticks must land
+/// the roundabout-circulating bus at the same (itinerary_index mod 2,
+/// path_step_index, step_progress). This is the roundabout analogue of
+/// `short_metro_segment_large_tick_matches_stepped_tick` and pins that the
+/// substep pipeline is granularity-independent across the roundabout
+/// entry/circulation/exit block, not just straight segments.
+#[test]
+fn roundabout_bus_large_tick_matches_stepped_tick() {
+    let large = trips::tick_trips(&roundabout_bus_snapshot(), 200.0);
+
+    let mut stepped = roundabout_bus_snapshot();
+    for _ in 0..200 {
+        stepped = trips::tick_trips(&stepped, 1.0);
+    }
+
+    assert!(
+        (large.time - stepped.time).abs() < 1e-6,
+        "large and stepped ticks must agree on time: large={} stepped={}",
+        large.time,
+        stepped.time
+    );
+    let (lv, sv) = (&large.transit.vehicles[0], &stepped.transit.vehicles[0]);
+    assert_eq!(lv.itinerary_index % 2, sv.itinerary_index % 2);
+    assert_eq!(lv.path_step_index, sv.path_step_index);
+    assert!(
+        (lv.step_progress - sv.step_progress).abs() < 1e-9,
+        "vehicle step_progress must match: large={} stepped={}",
+        lv.step_progress,
+        sv.step_progress
+    );
+}
+
+/// Metric golden: after a fixed 120s of real ticks the roundabout-circulating
+/// bus is at a stable, baked-in (itinerary_index, path_step_index,
+/// step_progress). This pins the roundabout circulation rate and the leg-advance
+/// accounting against regressions in `PathGeometry` arc parametrization or the
+/// `RoundaboutEntry`/`RoundaboutCirculation`/`RoundaboutExit` step durations.
+/// The constants are captured from the current Rust core; a change here means
+/// behaviour changed.
+#[test]
+fn roundabout_bus_vehicle_has_stable_golden_state_after_fixed_duration() {
+    let state = roundabout_bus_snapshot();
+    let after = trips::tick_trips(&state, 120.0);
+    let vehicle = &after.transit.vehicles[0];
+
+    // After 120s the bus has completed leg 0 (one stop-to-stop pass through the
+    // roundabout) and is 60% through the first step of leg 1. The exact values
+    // are deterministic given the roundabout step durations; bake them in.
+    assert_eq!(vehicle.itinerary_index, 1);
+    assert_eq!(vehicle.path_step_index, 0);
+    assert!(
+        (vehicle.step_progress - 0.6).abs() < 1e-9,
+        "step_progress must be 0.6, got {}",
+        vehicle.step_progress
+    );
 }

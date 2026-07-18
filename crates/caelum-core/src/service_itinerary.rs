@@ -28,15 +28,18 @@ pub struct RideEdge {
 }
 
 impl RideEdge {
-    fn from_visits(board: &ServiceVisit, alight: &ServiceVisit, legs: &[RouteLegPath]) -> Self {
+    fn from_visits(
+        board: &ServiceVisit,
+        alight: &ServiceVisit,
+        legs: &[RouteLegPath],
+    ) -> Option<Self> {
         // Invariant: every `ServiceVisit` produced by `service_visits` has an
         // arriving service leg (the cyclic itinerary guarantees a predecessor
-        // service leg for every departure). The `expect` is safe for any
-        // itinerary built by `build_service_itinerary` + `service_visits`;
-        // a `None` here would indicate a malformed (non-cyclic) itinerary.
-        let alight_itinerary_index = alight
-            .arriving_itinerary_index
-            .expect("a cyclic service visit has an arriving service leg");
+        // service leg for every departure). Returning `None` instead of
+        // `expect`-ing keeps a malformed (non-cyclic) itinerary from panicking
+        // under the Tauri Mutex during a tick; `enumerate_ride_edges` drops the
+        // degenerate edge so the rider simply cannot board that leg.
+        let alight_itinerary_index = alight.arriving_itinerary_index?;
         let mut itinerary_leg_indexes = Vec::new();
         let mut index = board.departing_itinerary_index;
         loop {
@@ -46,14 +49,14 @@ impl RideEdge {
             }
             index = (index + 1) % legs.len();
         }
-        Self {
+        Some(Self {
             board_waypoint_id: board.waypoint_id.clone(),
             alight_waypoint_id: alight.waypoint_id.clone(),
             service_direction: board.direction,
             board_itinerary_index: board.departing_itinerary_index,
             alight_itinerary_index,
             itinerary_leg_indexes,
-        }
+        })
     }
 }
 
@@ -108,7 +111,7 @@ pub fn enumerate_ride_edges(visits: &[ServiceVisit], legs: &[RouteLegPath]) -> V
         .enumerate()
         .flat_map(|(board_order, board)| {
             downstream_visits_before_repeat(visits, board_order)
-                .map(move |alight| RideEdge::from_visits(board, alight, legs))
+                .filter_map(move |alight| RideEdge::from_visits(board, alight, legs))
         })
         .collect()
 }
@@ -142,10 +145,14 @@ fn shuttle_specs(ids: &[String]) -> Vec<ServiceLegSpec> {
     for pair in ids.windows(2) {
         result.push(service_spec(&pair[0], &pair[1], ServiceDirection::Outbound));
     }
-    result.push(reversal_spec(
-        ids.last().expect("validated itinerary has a terminal"),
-        ServiceDirection::Return,
-    ));
+    // `build_service_itinerary` returns an empty vec for `< 2` waypoints, so
+    // `ids.last()` is always `Some` here. Guard defensively so a future caller
+    // that bypasses that check returns an empty itinerary instead of panicking
+    // under the Tauri Mutex.
+    let Some(terminal) = ids.last() else {
+        return result;
+    };
+    result.push(reversal_spec(terminal, ServiceDirection::Return));
     for pair in ids.windows(2).rev() {
         result.push(service_spec(&pair[1], &pair[0], ServiceDirection::Return));
     }

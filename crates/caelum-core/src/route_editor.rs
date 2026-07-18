@@ -38,7 +38,7 @@ pub fn create_route(
     }
 
     let mut candidate = state.clone();
-    let route_id = next_route_id(&candidate, mode);
+    let route_id = next_route_id(&candidate, mode)?;
     assign_added_waypoint_platforms(&mut candidate, mode, &route_id, &waypoint_ids)?;
     let vehicle = initial_vehicle(&candidate, mode, &route_id);
     let vehicle_id = vehicle.id.clone();
@@ -50,7 +50,7 @@ pub fn create_route(
         waypoint_ids,
         legs,
         vehicle_id,
-    );
+    )?;
     candidate.transit.vehicles.push(vehicle);
     candidate.budget -= cost;
     Ok(candidate)
@@ -374,21 +374,24 @@ fn route_view(snapshot: &GameSnapshot, route_id: &str) -> Option<RouteView> {
         })
 }
 
-fn next_route_id(snapshot: &GameSnapshot, mode: TransitMode) -> String {
+fn next_route_id(snapshot: &GameSnapshot, mode: TransitMode) -> GameplayResult<String> {
     match mode {
-        TransitMode::Bus => next_entity_id(
+        TransitMode::Bus => Ok(next_entity_id(
             "route",
             snapshot.transit.routes.iter().map(|route| route.id.clone()),
-        ),
-        TransitMode::Metro => next_entity_id(
+        )),
+        TransitMode::Metro => Ok(next_entity_id(
             "metro",
             snapshot
                 .transit
                 .metro_lines
                 .iter()
                 .map(|line| line.id.clone()),
-        ),
-        TransitMode::Walk => unreachable!("walk route rejected during validation"),
+        )),
+        // Walk routes are rejected by `validate_waypoints` (IncompatibleRouteNode)
+        // before this point. Surface the same rejection instead of panicking so
+        // a future dispatch-routing regression does not poison the Tauri Mutex.
+        TransitMode::Walk => Err(GameplayRejection::new(RejectionCode::IncompatibleRouteNode)),
     }
 }
 
@@ -401,7 +404,7 @@ fn insert_route(
     waypoint_ids: Vec<String>,
     legs: Vec<RouteLegPath>,
     vehicle_id: String,
-) {
+) -> GameplayResult<()> {
     let number = route_id
         .rsplit('-')
         .next()
@@ -432,8 +435,14 @@ fn insert_route(
             legs,
             path_broken: false,
         }),
-        TransitMode::Walk => unreachable!("walk route rejected during validation"),
+        // Walk routes are rejected by `validate_waypoints` before this point.
+        // Surface the same rejection (IncompatibleRouteNode) instead of
+        // panicking under the Tauri Mutex.
+        TransitMode::Walk => {
+            return Err(GameplayRejection::new(RejectionCode::IncompatibleRouteNode))
+        }
     }
+    Ok(())
 }
 
 fn write_structural_route_fields(

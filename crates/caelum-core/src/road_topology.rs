@@ -640,12 +640,15 @@ fn in_place_uturn_geometry(terminal: Point, incoming: Heading) -> PathGeometry {
 }
 
 fn classify_movement(incoming: Heading, outgoing: Heading) -> MovementKind {
+    // The expression is `% 4`, so it is always in `0..=3`. The wildcard arm
+    // covers `3` (LeftTurn) and any hypothetical out-of-range value from a
+    // future regression, classifying it as a left turn instead of panicking
+    // under the Tauri Mutex.
     match (heading_rank(outgoing) + 4 - heading_rank(incoming)) % 4 {
         0 => MovementKind::Straight,
         1 => MovementKind::RightTurn,
         2 => MovementKind::UTurn,
-        3 => MovementKind::LeftTurn,
-        _ => unreachable!("heading ranks are modulo four"),
+        _ => MovementKind::LeftTurn,
     }
 }
 

@@ -380,9 +380,13 @@ fn install_roundabout(
 ) {
     let id = roundabout_structure_id(template.size, template.origin);
     for point in &template.footprint {
-        let tile = map
-            .tile_mut(*point)
-            .expect("roundabout footprint was validated");
+        // Footprint was validated before template construction; a missing tile
+        // here would indicate a validation regression. Skip it rather than
+        // panicking under the Tauri Mutex (which would poison the engine lock
+        // for the rest of the session).
+        let Some(tile) = map.tile_mut(*point) else {
+            continue;
+        };
         tile.kind = if template.circulation_tiles.contains(point) {
             "road".to_string()
         } else {
@@ -393,10 +397,9 @@ fn install_roundabout(
         tile.road_structure_id = Some(id.clone());
     }
     for port in &captured_ports {
-        map.tile_mut(port.point)
-            .expect("captured port belongs to footprint")
-            .road_connections
-            .push(port.edge);
+        if let Some(tile) = map.tile_mut(port.point) {
+            tile.road_connections.push(port.edge);
+        }
     }
     for point in &template.footprint {
         if let Some(tile) = map.tile_mut(*point) {
@@ -950,16 +953,18 @@ fn validate_roundabout_origin(origin: Point, size: RoundaboutSize) -> GameplayRe
 }
 
 fn translate(origin: Point, offset: (i32, i32)) -> Point {
-    Point {
-        x: origin
-            .x
-            .checked_add(offset.0)
-            .expect("roundabout origin must be validated before template construction"),
-        y: origin
-            .y
-            .checked_add(offset.1)
-            .expect("roundabout origin must be validated before template construction"),
-    }
+    // `validate_origin` guarantees the origin is in-bounds and the template
+    // offsets are small (-1..=3 for the largest 3x3 stamp), so the sum cannot
+    // overflow i32 for any real map. Saturating (rather than `expect`) keeps a
+    // hypothetical future validation regression from poisoning the Tauri Mutex;
+    // `debug_assert!` still surfaces the invariant in test builds.
+    let x = origin.x.saturating_add(offset.0);
+    let y = origin.y.saturating_add(offset.1);
+    debug_assert!(
+        origin.x.checked_add(offset.0).is_some() && origin.y.checked_add(offset.1).is_some(),
+        "roundabout origin must be validated before template construction"
+    );
+    Point { x, y }
 }
 
 fn midpoint(first: Point, second: Point) -> TripPosition {

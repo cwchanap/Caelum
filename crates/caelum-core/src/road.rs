@@ -102,7 +102,11 @@ fn apply_linear_tiles_in_order(
             changed_tiles.push(*point);
         }
         RoadMutation::PlaceRoundabout { .. } => {
-            unreachable!("roundabout mutations are handled atomically")
+            // Roundabout mutations are handled atomically by a dedicated path
+            // and never reach this per-tile reducer. Surface a typed rejection
+            // instead of panicking so a future dispatch-routing regression does
+            // not poison the Tauri engine Mutex.
+            return Err(GameplayRejection::new(RejectionCode::BlockedTile));
         }
         RoadMutation::RemoveAtTile { point } => {
             remove_road(candidate, *point)?;
@@ -146,7 +150,12 @@ fn lay_single_road(
     }
 
     candidate.budget -= ROAD_COST;
-    let tile = candidate.map.tile_mut(point).expect("validated map point");
+    // The tile's existence was checked above; `expect` would poison the Tauri
+    // Mutex if a future regression invalidated the tile between the check and
+    // this point. Surface an `OutOfBounds` rejection instead.
+    let Some(tile) = candidate.map.tile_mut(point) else {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
+    };
     initialize_road_tile(tile, None);
     connect_neighbor_endpoints(&mut candidate.map, point);
     Ok(())
@@ -257,7 +266,11 @@ fn author_lane_tiles(
             if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
                 continue;
             }
-            let tile = candidate.map.tile_mut(*point).expect("tile was found");
+            // `existing` was just fetched from this tile, so it is present; skip
+            // defensively rather than panicking under the Tauri Mutex.
+            let Some(tile) = candidate.map.tile_mut(*point) else {
+                continue;
+            };
             merge_lane_direction(tile, direction);
             authored.push(*point);
             continue;
@@ -266,10 +279,12 @@ fn author_lane_tiles(
             continue;
         }
         candidate.budget -= ROAD_COST;
-        initialize_road_tile(
-            candidate.map.tile_mut(*point).expect("validated map point"),
-            direction,
-        );
+        // `is_valid_road_placement` checked the point; skip defensively if a
+        // future regression invalidates it between the check and this write.
+        let Some(tile) = candidate.map.tile_mut(*point) else {
+            continue;
+        };
+        initialize_road_tile(tile, direction);
         authored.push(*point);
     }
     authored
@@ -410,11 +425,13 @@ fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayR
         Some(Heading::South) => Some(Heading::West),
         Some(Heading::West) => None,
     };
-    candidate
-        .map
-        .tile_mut(point)
-        .expect("tile was found")
-        .one_way = next;
+    // The tile's existence was checked at the top of this function; surface an
+    // `OutOfBounds` rejection if a future regression invalidates it before the
+    // write instead of panicking under the Tauri Mutex.
+    let Some(tile) = candidate.map.tile_mut(point) else {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
+    };
+    tile.one_way = next;
     Ok(())
 }
 
@@ -436,7 +453,12 @@ fn remove_road(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()>
                 .retain(|edge| *edge != opposite(heading));
         }
     }
-    let tile = candidate.map.tile_mut(point).expect("tile was found");
+    // The tile's existence was checked at the top of this function; treat a
+    // missing tile as already-removed (no-op) instead of panicking under the
+    // Tauri Mutex.
+    let Some(tile) = candidate.map.tile_mut(point) else {
+        return Ok(());
+    };
     tile.kind = "empty".to_string();
     tile.one_way = None;
     tile.road_connections.clear();
@@ -590,7 +612,11 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
             let footprint_set: HashSet<_> = footprint.iter().copied().collect();
             let mut port_keys = Vec::new();
             for point in &footprint {
-                let tile = map.tile(*point).expect("junction tile exists");
+                // Footprint tiles were just walked; a missing tile here is a
+                // logic regression. Skip rather than panic under the Tauri Mutex.
+                let Some(tile) = map.tile(*point) else {
+                    continue;
+                };
                 for heading in &tile.road_connections {
                     if !footprint_set.contains(&offset(*point, *heading))
                         && reciprocal_connection(map, *point, *heading)
@@ -609,7 +635,9 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
                 .any(|(_, edge)| matches!(edge, Heading::North | Heading::South));
             if !has_horizontal_ports || !has_vertical_ports {
                 for point in &footprint {
-                    let tile = map.tile(*point).expect("junction tile exists");
+                    let Some(tile) = map.tile(*point) else {
+                        continue;
+                    };
                     for heading in &tile.road_connections {
                         let horizontal = matches!(heading, Heading::East | Heading::West);
                         if footprint_set.contains(&offset(*point, *heading))
@@ -657,7 +685,11 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
 
         for structure in &structures {
             for point in structure.footprint() {
-                let tile = map.tile_mut(*point).expect("junction tile exists");
+                // Footprint was validated before structure construction; skip a
+                // missing tile defensively instead of panicking under the Mutex.
+                let Some(tile) = map.tile_mut(*point) else {
+                    continue;
+                };
                 tile.road_structure_id = Some(structure.id().to_string());
                 tile.one_way = None;
             }
@@ -703,7 +735,12 @@ fn restore_unowned_lane_directions(map: &mut GameMap, former_footprint: &[Point]
             }
         }
         if inferred.len() == 1 {
-            map.tile_mut(point).expect("tile was found").one_way = inferred.first().copied();
+            // `tile` was fetched above; skip defensively if it vanished between
+            // the read and this write (should be impossible, but a panic here
+            // would poison the Tauri Mutex).
+            if let Some(tile) = map.tile_mut(point) {
+                tile.one_way = inferred.first().copied();
+            }
         }
     }
 }

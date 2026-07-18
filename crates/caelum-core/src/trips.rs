@@ -807,7 +807,26 @@ fn tick_trip(
         route_plan = Some(planned_route);
     }
 
-    let route_plan = route_plan.expect("route plan is set after planning");
+    // Invariant: the block above guarantees `route_plan` is `Some` here — it
+    // either was already set, or planning just succeeded, or planning failed
+    // and we early-returned. Guard defensively so a future regression that
+    // leaves `route_plan` empty marks the trip unserved instead of panicking
+    // under the Tauri Mutex mid-tick (which would brick the game for the
+    // remainder of the session).
+    let Some(route_plan) = route_plan else {
+        return TripTickResult {
+            trip: mark_unserved(next_trip),
+            completed_trips: 0,
+            late_trips: 0,
+            unserved_trips: 1,
+            wait_seconds: 0.0,
+            outcome: Some(trip_outcome(
+                TripOutcomeKind::Unserved,
+                0.0,
+                tick_start_time,
+            )),
+        };
+    };
     if is_walking_only(&route_plan)
         && state.time > next_trip.deadline
         && state.time + route_plan.estimated_seconds > next_trip.deadline
