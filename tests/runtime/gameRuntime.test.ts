@@ -598,7 +598,43 @@ function applyIntent(
       },
     };
   }
-  return snapshot;
+  if (intent.type === "placeRoundabout") {
+    const span = intent.size === "compact2x2" ? 2 : 3;
+    const footprint = Array.from({ length: span * span }, (_, index) => ({
+      x: intent.origin.x + (index % span),
+      y: intent.origin.y + Math.floor(index / span),
+    }));
+    const structureId = `roundabout-${snapshot.map.roadStructures.length + 1}`;
+    const inFootprint = new Set(footprint.map((p) => `${p.x},${p.y}`));
+    return {
+      ...snapshot,
+      map: {
+        ...snapshot.map,
+        tiles: snapshot.map.tiles.map((tile) =>
+          inFootprint.has(`${tile.x},${tile.y}`)
+            ? { ...tile, kind: "road" as const, roadStructureId: structureId }
+            : tile,
+        ),
+        roadStructures: [
+          ...snapshot.map.roadStructures,
+          {
+            kind: "roundabout" as const,
+            id: structureId,
+            origin: intent.origin,
+            size: intent.size,
+            footprint,
+            ports: [],
+          },
+        ],
+      },
+    };
+  }
+  if (intent.type === "setBudget") {
+    return { ...snapshot, budget: intent.budget };
+  }
+  throw new Error(
+    `fake backend applyIntent: unhandled intent type "${intent.type}" — add a handler or the dispatch silently no-ops`,
+  );
 }
 
 function deferredDispatchBackend(

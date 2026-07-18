@@ -459,14 +459,40 @@ function vehicleSample(
   return { point: center(sample.point), tangent: sample.tangent };
 }
 
+interface TransitRenderCache {
+  lines: RenderableLine[];
+  corridors: CorridorGroups;
+  nodes: Map<string, TripPosition>;
+}
+
+/** Memoizes the state-derived transit render structures (`renderableLines`,
+ *  `buildCorridorGroups`, `nodePositionMap`) on GameState identity. Since
+ *  GameState is immutable and the runtime uses reference-equality dispatch,
+ *  the cache hits on every re-render that doesn't follow a sim tick — e.g.
+ *  paused canvas redraws, hover-only updates, and drag previews. Sim ticks
+ *  produce a new GameState, so the cache misses once per tick and rebuilds. */
+const transitRenderCache = new WeakMap<GameState, TransitRenderCache>();
+
+function getTransitRenderCache(state: GameState): TransitRenderCache {
+  let cached = transitRenderCache.get(state);
+  if (cached === undefined) {
+    const lines = renderableLines(state);
+    cached = {
+      lines,
+      corridors: buildCorridorGroups(lines),
+      nodes: nodePositionMap(state),
+    };
+    transitRenderCache.set(state, cached);
+  }
+  return cached;
+}
+
 function renderTransitContents(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
 ): void {
-  const lines = renderableLines(state);
-  const corridors = buildCorridorGroups(lines);
-  const nodes = nodePositionMap(state);
+  const { lines, corridors, nodes } = getTransitRenderCache(state);
   const editedRouteId =
     ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
   const emphasizedIds = new Set(

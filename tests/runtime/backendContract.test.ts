@@ -177,13 +177,12 @@ describe("Rust backend contract", () => {
       message:
         "The roads crossing this footprint cannot map safely to roundabout ports.",
     },
-  ])("maps rejection code $code through the TS message layer", ({
-    code,
-    context,
-    message,
-  }) => {
-    expect(rejectionMessage({ code, context })).toBe(message);
-  });
+  ])(
+    "maps rejection code $code through the TS message layer",
+    ({ code, context, message }) => {
+      expect(rejectionMessage({ code, context })).toBe(message);
+    },
+  );
 
   it("normalizes a Rust snapshot into shell-readable frontend state", () => {
     const rustSnapshot = createRustSnapshot({

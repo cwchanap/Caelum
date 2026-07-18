@@ -4,8 +4,8 @@ use crate::heading::{
     canonical_headings, heading_between, heading_key, heading_rank, offset, opposite,
 };
 use crate::model::{
-    GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RoadPort, RoadStructure,
-    RoundaboutSize, TripPosition,
+    GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, PortDirection, RoadPort,
+    RoadStructure, RoundaboutSize, TripPosition,
 };
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::RoadMutationResult;
@@ -259,15 +259,18 @@ fn scan_boundary_port_candidates(
     candidates
 }
 
-/// Compute the one-way suffix for a boundary port's external neighbor.
-/// Returns `Some(":twoWay" | ":inbound" | ":outbound")` for compatible
-/// directions, or `None` for an incompatible one-way that the caller must
-/// handle (reject, label `:incompatible`, or skip).
-fn boundary_port_suffix(edge: Heading, external_one_way: Option<Heading>) -> Option<&'static str> {
+/// Compute the one-way direction class for a boundary port's external neighbor.
+/// Returns `Some(TwoWay | Inbound | Outbound)` for compatible directions, or
+/// `None` for an incompatible one-way that the caller must handle (reject,
+/// label as incompatible, or skip).
+fn boundary_port_direction(
+    edge: Heading,
+    external_one_way: Option<Heading>,
+) -> Option<PortDirection> {
     match external_one_way {
-        None => Some(":twoWay"),
-        Some(direction) if direction == opposite(edge) => Some(":inbound"),
-        Some(direction) if direction == edge => Some(":outbound"),
+        None => Some(PortDirection::TwoWay),
+        Some(direction) if direction == opposite(edge) => Some(PortDirection::Inbound),
+        Some(direction) if direction == edge => Some(PortDirection::Outbound),
         Some(_) => None,
     }
 }
@@ -292,10 +295,10 @@ fn capture_boundary_connections(
         else {
             return Err(unsafe_template_mapping(template));
         };
-        let suffix = boundary_port_suffix(candidate.edge, candidate.external_one_way)
+        let direction = boundary_port_direction(candidate.edge, candidate.external_one_way)
             .ok_or_else(|| unsafe_template_mapping(template))?;
         let mut captured_port = slot.clone();
-        captured_port.id.push_str(suffix);
+        captured_port.direction = Some(direction);
         captured.push(captured_port);
     }
     sort_and_dedup_ports(&mut captured);
@@ -320,10 +323,9 @@ fn attempted_boundary_connections(map: &GameMap, template: &RoundaboutTemplate) 
                 ),
                 point: candidate.point,
                 edge: candidate.edge,
+                direction: None,
             });
-        let suffix = boundary_port_suffix(candidate.edge, candidate.external_one_way)
-            .unwrap_or(":incompatible");
-        port.id.push_str(suffix);
+        port.direction = boundary_port_direction(candidate.edge, candidate.external_one_way);
         captured.push(port);
     }
     sort_and_dedup_ports(&mut captured);
@@ -340,11 +342,11 @@ fn validate_port_mapping(
         let external = map
             .tile(external_point)
             .ok_or_else(|| unsafe_template_mapping(template))?;
-        let compatible = match external.one_way {
-            None => port.id.ends_with(":twoWay"),
-            Some(direction) if direction == opposite(port.edge) => port.id.ends_with(":inbound"),
-            Some(direction) if direction == port.edge => port.id.ends_with(":outbound"),
-            Some(_) => false,
+        let compatible = match (port.direction, external.one_way) {
+            (Some(PortDirection::TwoWay), None) => true,
+            (Some(PortDirection::Inbound), Some(dir)) if dir == opposite(port.edge) => true,
+            (Some(PortDirection::Outbound), Some(dir)) if dir == port.edge => true,
+            _ => false,
         };
         if !compatible {
             return Err(unsafe_template_mapping(template));
@@ -520,11 +522,12 @@ fn recapture_boundary_ports(map: &GameMap, template: &RoundaboutTemplate) -> Vec
         else {
             continue;
         };
-        let Some(suffix) = boundary_port_suffix(candidate.edge, candidate.external_one_way) else {
+        let Some(direction) = boundary_port_direction(candidate.edge, candidate.external_one_way)
+        else {
             continue;
         };
         let mut captured_port = slot.clone();
-        captured_port.id.push_str(suffix);
+        captured_port.direction = Some(direction);
         captured.push(captured_port);
     }
     sort_and_dedup_ports(&mut captured);
@@ -599,14 +602,16 @@ pub fn compile_roundabout_transitions(
         else {
             continue;
         };
-        let inbound = port.id.ends_with(":inbound")
-            || port.id.ends_with(":twoWay")
-            || (!port.id.ends_with(":outbound")
-                && port_accepts_inbound(&template, canonical_port)?);
-        let outbound = port.id.ends_with(":outbound")
-            || port.id.ends_with(":twoWay")
-            || (!port.id.ends_with(":inbound")
-                && port_accepts_outbound(&template, canonical_port)?);
+        let inbound = match port.direction {
+            Some(PortDirection::Inbound) | Some(PortDirection::TwoWay) => true,
+            Some(PortDirection::Outbound) => false,
+            None => port_accepts_inbound(&template, canonical_port)?,
+        };
+        let outbound = match port.direction {
+            Some(PortDirection::Outbound) | Some(PortDirection::TwoWay) => true,
+            Some(PortDirection::Inbound) => false,
+            None => port_accepts_outbound(&template, canonical_port)?,
+        };
         if inbound {
             transitions.push(entry_transition(parts.id, &template, canonical_port)?);
         }
@@ -688,6 +693,7 @@ fn boundary_port_slots(
                     ),
                     point: *point,
                     edge,
+                    direction: None,
                 });
             }
         }
@@ -852,21 +858,17 @@ pub(crate) fn port_matches_current_map(map: &GameMap, port: &RoadPort) -> bool {
     if external.kind != "road" || !external.road_connections.contains(&opposite(port.edge)) {
         return false;
     }
-    // Captured ports always carry a `:twoWay`/`:inbound`/`:outbound` suffix
-    // encoding the neighbor's one-way direction at capture time. A port
-    // without a recognized suffix falls back to geometry-based acceptance, so
-    // only apply the suffix check when one is present.
-    let has_suffix = port.id.ends_with(":twoWay")
-        || port.id.ends_with(":inbound")
-        || port.id.ends_with(":outbound");
-    if !has_suffix {
-        return true;
-    }
-    match external.one_way {
-        None => port.id.ends_with(":twoWay"),
-        Some(direction) if direction == opposite(port.edge) => port.id.ends_with(":inbound"),
-        Some(direction) if direction == port.edge => port.id.ends_with(":outbound"),
-        Some(_) => false,
+    // Captured ports carry a typed `direction` encoding the neighbor's one-way
+    // direction at capture time. A port without a direction (`None`) falls back
+    // to geometry-based acceptance, so only apply the direction check when set.
+    match port.direction {
+        None => true,
+        Some(direction) => match external.one_way {
+            None => direction == PortDirection::TwoWay,
+            Some(dir) if dir == opposite(port.edge) => direction == PortDirection::Inbound,
+            Some(dir) if dir == port.edge => direction == PortDirection::Outbound,
+            Some(_) => false,
+        },
     }
 }
 

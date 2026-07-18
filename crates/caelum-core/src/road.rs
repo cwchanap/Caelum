@@ -540,10 +540,7 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
             // Release degradation: leave the map without further automatic
             // junctions rather than hang every road dispatch. Former automatic
             // junctions were already cleared above; restore directions below.
-            debug_assert!(
-                false,
-                "refresh_automatic_junctions exceeded iteration cap"
-            );
+            debug_assert!(false, "refresh_automatic_junctions exceeded iteration cap");
             break;
         }
         iteration += 1;
@@ -640,6 +637,7 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
                     ),
                     point: *point,
                     edge: *edge,
+                    direction: None,
                 })
                 .collect();
             structures.push(RoadStructure::AutomaticJunction {

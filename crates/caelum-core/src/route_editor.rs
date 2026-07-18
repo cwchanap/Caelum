@@ -90,6 +90,11 @@ pub fn update_route(
         || route_lifecycle::platform_assignments_for_route(state, route_id)
             != route_lifecycle::platform_assignments_for_route(&candidate, route_id);
     let next_revision = if structure_changed {
+        // Explicit edits reject on overflow (`RouteRevisionExhausted`) so the
+        // player learns the route is stuck. This is asymmetric with
+        // `route_lifecycle::next_revision`, which saturates instead — network-
+        // driven bumps must never block an unrelated road/stop mutation. See
+        // the doc comment on `route_lifecycle::next_revision` for the rationale.
         current
             .revision
             .checked_add(1)

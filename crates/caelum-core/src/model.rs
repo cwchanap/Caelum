@@ -206,12 +206,25 @@ impl RoundaboutSize {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortDirection {
+    TwoWay,
+    Inbound,
+    Outbound,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoadPort {
     pub id: String,
     pub point: Point,
     pub edge: Heading,
+    /// One-way direction of the external neighbor at capture time. `None` for
+    /// template slots and ports that have not been validated against an
+    /// external tile; consumers fall back to geometry-based acceptance.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub direction: Option<PortDirection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

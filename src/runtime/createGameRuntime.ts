@@ -407,17 +407,27 @@ export async function createGameRuntime({
       });
   };
 
+  /** Whether a draft transition should trigger a new route preview request.
+   *  Preview-relevant changes (waypoint add/remove, pattern flip) bump the
+   *  `generation`; selection-only updates keep it. Shared by
+   *  `commitRouteDraft` and `handleTileClick` so the preview-request decision
+   *  lives in one place rather than two divergent heuristics. */
+  const hasPreviewRelevantChange = (
+    previous: RouteDraft | null,
+    next: RouteDraft | null,
+  ): boolean =>
+    next !== null &&
+    next !== previous &&
+    (previous === null || next.generation !== previous.generation);
+
   const commitRouteDraft = (routeDraft: RouteDraft): RuntimeSnapshot => {
     if (routeDraft === ui.routeDraft) {
       return commit(state, ui);
     }
-    // Only request a new preview when preview-relevant fields changed.
-    // `generation` is bumped exclusively by `changed()` when waypoints or
-    // pattern change; selection-only updates (selectWaypoint) keep the same
-    // generation and would otherwise fire a redundant no-op IPC.
-    const previewRelevantChanged =
-      ui.routeDraft === null ||
-      routeDraft.generation !== ui.routeDraft.generation;
+    const previewRelevantChanged = hasPreviewRelevantChange(
+      ui.routeDraft,
+      routeDraft,
+    );
     // Generation-stable updates preserve host/preview rejections; only clear
     // local interaction errors that a successful selection resolves.
     const routePreviewError = previewRelevantChanged
@@ -693,6 +703,27 @@ export async function createGameRuntime({
     return pending;
   };
 
+  /** Commit a UI transition and, if the resulting state implies a road mutation,
+   *  fold the preview-generation bump and preview-clear into the SAME commit so
+   *  only one `publish` fires. Replaces the prior pattern of committing the UI,
+   *  then calling `requestRoadMutationPreview` (which committed a second time).
+   *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
+  const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
+    const mutation = dead ? null : roadMutationForUi(nextUi);
+    if (mutation === null) {
+      return commit(state, nextUi);
+    }
+    const generation = nextUi.roadPreviewGeneration + 1;
+    const snapshot = commit(state, {
+      ...nextUi,
+      roadPreviewGeneration: generation,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+    });
+    sendRoadMutationPreviewRequest(mutation, generation);
+    return snapshot;
+  };
+
   const invalidateRoadPreview = (): void => {
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
@@ -828,11 +859,7 @@ export async function createGameRuntime({
         next.routePreviewError = null;
         next.routePreviewHostError = null;
       }
-      const snapshot = commit(state, next);
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
+      return commitWithRoadPreview(next);
     },
     setBuilding(building) {
       clearHoverPreviewTimer();
@@ -847,14 +874,9 @@ export async function createGameRuntime({
       return commit(state, nextAreaUiState(area, ui));
     },
     setRoadPreset(preset) {
-      const snapshot = commit(
-        state,
+      return commitWithRoadPreview(
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
     },
     // Pure UI mutation; callers (Build panel drill-down) only invoke this while
     // the Build drawer is open. No guard here, so a direct controller call could
@@ -872,14 +894,10 @@ export async function createGameRuntime({
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
-      const snapshot = commit(state, {
+      return commitWithRoadPreview({
         ...nextToolUiState("road", ui),
         roadPreset: preset,
       });
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
     },
     armRoundabout(size: RoundaboutSize) {
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
@@ -888,15 +906,11 @@ export async function createGameRuntime({
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
-      const snapshot = commit(state, {
+      return commitWithRoadPreview({
         ...nextToolUiState("roundabout", ui),
         roundaboutSize: size,
         drag: null,
       });
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
     },
     startDrag(point) {
       // Only drag tools open a gesture; capture the tool so the gesture stays
@@ -915,14 +929,10 @@ export async function createGameRuntime({
       if (tool !== "road" && tool !== "track" && tool !== "remove") {
         return commit(state, ui);
       }
-      const snapshot = commit(state, {
+      return commitWithRoadPreview({
         ...ui,
         drag: { tool, start: point, current: point },
       });
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
     },
     setDragCurrent(point) {
       // A null (off-map) move is ignored so the preview holds its last tile;
@@ -933,14 +943,10 @@ export async function createGameRuntime({
       if (samePoint(point, ui.drag.current)) {
         return commit(state, ui);
       }
-      const snapshot = commit(state, {
+      return commitWithRoadPreview({
         ...ui,
         drag: { ...ui.drag, current: point },
       });
-      const mutation = roadMutationForUi(ui);
-      return mutation === null
-        ? snapshot
-        : requestRoadMutationPreview(mutation);
     },
     cancelDrag() {
       invalidateRoadPreview();
@@ -1067,12 +1073,14 @@ export async function createGameRuntime({
         const previousDraft = ui.routeDraft;
         const result = applyUiTileClick(state, ui, point);
         const snapshot = commit(state, result.ui);
+        // Defer to the same generation-based decision `commitRouteDraft` uses,
+        // but also skip when `applyUiTileClick` set a local rejection (e.g.
+        // duplicate waypoint) — the backend must not preview an invalid draft.
         if (
-          ui.routeDraft !== null &&
-          ui.routeDraft !== previousDraft &&
-          ui.routePreviewError === null
+          hasPreviewRelevantChange(previousDraft, result.ui.routeDraft) &&
+          result.ui.routePreviewError === null
         ) {
-          requestRoutePreview(ui.routeDraft);
+          requestRoutePreview(result.ui.routeDraft!);
         }
         return snapshot;
       }

@@ -22,6 +22,7 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
@@ -29,7 +30,7 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function createEmptyMap(width = 28, height = 18): GameMap {
+function createEmptyMap(width = MAP_WIDTH, height = MAP_HEIGHT): GameMap {
   const tiles: GameMap["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {

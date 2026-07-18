@@ -418,6 +418,35 @@ describe("createCanvasHost", () => {
     expect(callbacks.onDragCancel).not.toHaveBeenCalled();
   });
 
+  it("remounting onto a different host tears down the prior mount", () => {
+    const {
+      host,
+      canvas: firstCanvas,
+      container: firstHost,
+      callbacks,
+    } = createFixture({ ui: { activeTool: "inspect" } });
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+
+    expect(firstHost.querySelector("canvas")).toBeNull();
+    const secondCanvas = secondHost.querySelector("canvas");
+    expect(secondCanvas).not.toBeNull();
+    expect(secondCanvas).not.toBe(firstCanvas);
+
+    callbacks.onTileClick.mockClear();
+    firstCanvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+
+    secondCanvas!.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+  });
+
   it("syncAnimationLoop starts rAF when animatable", () => {
     const raf = globalThis.requestAnimationFrame as unknown as {
       mock: { calls: unknown[][] };

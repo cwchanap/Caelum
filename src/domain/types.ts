@@ -74,10 +74,13 @@ export function samePoint(left: Point | null, right: Point | null): boolean {
 
 export type RoundaboutSize = "compact2x2" | "standard3x3";
 
+export type PortDirection = "twoWay" | "inbound" | "outbound";
+
 export interface RoadPort {
   id: string;
   point: Point;
   edge: Heading;
+  direction?: PortDirection;
 }
 
 export type RoadStructure =

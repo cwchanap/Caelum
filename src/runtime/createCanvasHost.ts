@@ -57,6 +57,7 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
   let observedCssHeight = 0;
   let hasObservedSize = false;
   let resizeObserver: ResizeObserver | null = null;
+  let activeTeardown: (() => void) | null = null;
 
   const cancelPendingFrame = (): void => {
     if (
@@ -153,21 +154,16 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
   };
 
   const mount = (host: HTMLElement): (() => void) => {
+    // Same host with an existing canvas: just refresh, reuse the teardown.
     if (canvasHost === host && canvas !== null) {
       render();
-      return () => {
-        if (canvasHost === host) {
-          cancelPendingFrame();
-          resizeObserver?.disconnect();
-          resizeObserver = null;
-          hasObservedSize = false;
-          canvas = null;
-          context = null;
-          canvasHost = null;
-          host.innerHTML = "";
-        }
-      };
+      return activeTeardown ?? (() => {});
     }
+
+    // Different host (or first mount): tear down any prior mount so its
+    // event listeners, ResizeObserver, and window listener don't leak.
+    activeTeardown?.();
+    activeTeardown = null;
 
     canvasHost = host;
     host.innerHTML = "";
@@ -353,7 +349,7 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     canvas.addEventListener("pointercancel", handlePointerCancel);
     render();
 
-    return () => {
+    const teardown = (): void => {
       if (canvasHost !== host || canvas === null) {
         return;
       }
@@ -387,7 +383,11 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       canvas = null;
       context = null;
       canvasHost = null;
+      activeTeardown = null;
     };
+
+    activeTeardown = teardown;
+    return teardown;
   };
 
   return {

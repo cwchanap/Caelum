@@ -104,6 +104,7 @@ fn automatic_junction(
             id: format!("{id}-port-{index}"),
             point: *position,
             edge: *edge,
+            direction: None,
         })
         .collect();
     map.road_structures.push(RoadStructure::AutomaticJunction {
@@ -865,7 +866,7 @@ fn terminal_reversal_dijkstra_finds_multi_step_roundabout_path() {
         .find(|port| port.point == point(3, 3) && port.edge == Heading::West)
         .unwrap()
         .clone();
-    west_port.id.push_str(":twoWay");
+    west_port.direction = Some(caelum_core::model::PortDirection::TwoWay);
     corridor(&mut map, &[point(1, 3), point(2, 3), west_port.point], None);
     map.tile_mut(point(1, 3)).unwrap().one_way = Some(Heading::East);
 

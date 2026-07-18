@@ -174,6 +174,13 @@ pub fn create_growing_suburb_map() -> GameMap {
         tiles,
         road_structures: Vec::new(),
     };
+    // Scenario roads use `author_scenario_road_line`, which connects only the
+    // authored sequence — it does NOT call `connect_neighbor_endpoints`, so the
+    // four one-way arterials here do not form reciprocal edge connections at
+    // the cross intersection. `refresh_all_automatic_junctions` below attempts
+    // to heal that, but its failure is non-fatal (debug_assert only). This is
+    // intentional: the starter cross is a visual scaffold, not a routable
+    // junction — players must re-lay or connect roads to enable turns.
     crate::road::author_scenario_road_line(
         &mut map,
         &horizontal_westbound_points(),

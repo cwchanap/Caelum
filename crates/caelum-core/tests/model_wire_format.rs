@@ -896,6 +896,7 @@ fn road_structures_use_stable_camel_case_wire_shapes() {
             id: "junction-1-port-4-5-west".to_string(),
             point: point(4, 5),
             edge: Heading::West,
+            direction: None,
         }],
     };
     assert_eq!(
