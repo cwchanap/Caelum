@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::engine::RoutingContext;
-use crate::heading::heading_between;
+use crate::heading::{canonical_headings, heading_between, offset};
 use crate::model::{
     GameMap, GameSnapshot, Heading, PathGeometry, Point, RouteLegKind, RouteLegPath,
     RouteLegStatus, ServicePattern, Tile, TrackPathStep, TransitMode, TransitPath,
@@ -99,11 +99,77 @@ fn resolve_terminal_reversal(
     let next = &specs[(index + 1) % specs.len()];
     let previous_path = resolve_spec_service_path(snapshot, context, mode, previous)?;
     let next_path = resolve_spec_service_path(snapshot, context, mode, next)?;
-    context.road_topology.find_terminal_reversal(
-        terminal,
-        road_exit_heading(&previous_path)?,
-        road_entry_heading(&next_path)?,
-    )
+    let exit_heading = road_exit_heading(&previous_path)?;
+    let entry_heading = road_entry_heading(&next_path)?;
+    // On-road stops reverse at the stop tile. Off-road anchors (roadside stops,
+    // bus-terminal buildings) are not RoadStates — reverse on an adjacent road
+    // access tile that supports the arrival/departure headings instead.
+    for access in terminal_reversal_access_points(snapshot, terminal, &previous_path, &next_path) {
+        if let Some(path) =
+            context
+                .road_topology
+                .find_terminal_reversal(access, exit_heading, entry_heading)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Candidate tiles for a terminal reversal, preferring the road access derived
+/// from the bounding service legs and falling back to orthogonally adjacent
+/// road tiles when the terminal anchor itself is off-network.
+fn terminal_reversal_access_points(
+    snapshot: &GameSnapshot,
+    terminal: Point,
+    previous_path: &TransitPath,
+    next_path: &TransitPath,
+) -> Vec<Point> {
+    let mut points = Vec::new();
+    if let Some(access) = shared_service_access_tile(previous_path, next_path) {
+        points.push(access);
+    }
+    if snapshot
+        .map
+        .tile(terminal)
+        .is_some_and(|tile| tile.kind == "road")
+    {
+        points.push(terminal);
+    }
+    for heading in canonical_headings() {
+        let adjacent = offset(terminal, heading);
+        if snapshot
+            .map
+            .tile(adjacent)
+            .is_some_and(|tile| tile.kind == "road")
+        {
+            points.push(adjacent);
+        }
+    }
+    points.sort_by_key(|point| (point.y, point.x));
+    points.dedup();
+    points
+}
+
+/// When both bounding service legs touch the same road tile (typical single-
+/// access off-road stop), reverse there — that tile is the real RoadState.
+fn shared_service_access_tile(
+    previous_path: &TransitPath,
+    next_path: &TransitPath,
+) -> Option<Point> {
+    let arrival = road_path_arrival_tile(previous_path)?;
+    let departure = next_path.road_steps().first().map(|step| step.position)?;
+    (arrival == departure).then_some(arrival)
+}
+
+fn road_path_arrival_tile(path: &TransitPath) -> Option<Point> {
+    let last = path.road_steps().last()?;
+    match &last.geometry {
+        PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => Some(Point {
+            x: to.x.round() as i32,
+            y: to.y.round() as i32,
+        }),
+    }
 }
 
 fn resolve_spec_service_path(

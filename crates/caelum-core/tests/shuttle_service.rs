@@ -551,6 +551,47 @@ fn terminal_and_loop_rules_are_mode_correct() {
 }
 
 #[test]
+fn shuttle_with_off_road_terminal_resolves_reversal_on_adjacent_road_access() {
+    let mut engine = GameEngine::new();
+    // Corridor on y=5; after placement, move stop anchors off-road to y=4 so
+    // the terminal tile itself is not a RoadState (bus-terminal / roadside).
+    road_line(&mut engine, 5, 2, 10);
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    let mut state = engine.snapshot();
+    for stop in &mut state.transit.stops {
+        stop.position.y = 4;
+    }
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &ids(&["stop-001", "stop-002"]),
+        ServicePattern::Shuttle,
+    );
+
+    assert!(
+        legs.iter()
+            .all(|leg| leg.status == RouteLegStatus::Connected),
+        "off-road shuttle terminals must reverse via adjacent road access: {legs:?}"
+    );
+    let reversals: Vec<_> = legs
+        .iter()
+        .filter(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .collect();
+    assert_eq!(reversals.len(), 2);
+    for leg in reversals {
+        assert!(leg.current_path.is_some());
+    }
+}
+
+#[test]
 fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
     let mut state = shuttle_state();
     for (stop, x) in state.transit.stops.iter_mut().zip([2, 12, 22]) {

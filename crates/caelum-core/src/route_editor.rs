@@ -4,6 +4,7 @@ use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::model::{
     GameSnapshot, MetroLine, Route, RouteLegPath, RouteLegStatus, ServicePattern, TransitMode,
+    TransitNodeStatus,
 };
 use crate::network::resolve_route_legs;
 use crate::platforms::{apply_route_platform_delta, assign_added_waypoint_platforms};
@@ -28,7 +29,7 @@ pub fn create_route(
     pattern: ServicePattern,
     waypoint_ids: Vec<String>,
 ) -> GameplayResult<GameSnapshot> {
-    validate_waypoints(state, mode, &waypoint_ids, None)?;
+    validate_waypoints(state, mode, &waypoint_ids, None, None)?;
     let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
     require_all_connected(&legs, None)?;
     let cost = vehicle_cost(mode);
@@ -71,9 +72,17 @@ pub fn update_route(
             current.revision,
         ));
     }
-    validate_waypoints(state, current.mode, &waypoint_ids, Some(route_id))?;
+    validate_waypoints(
+        state,
+        current.mode,
+        &waypoint_ids,
+        Some(route_id),
+        Some(current.waypoint_ids.as_slice()),
+    )?;
     let mut legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
-    validate_edit_legs(&current.legs, &legs, route_id)?;
+    let retained_missing_ids =
+        retained_missing_waypoint_ids(state, current.mode, &current.waypoint_ids, &waypoint_ids);
+    validate_edit_legs(&current.legs, &legs, route_id, &retained_missing_ids)?;
     carry_forward_leg_history(&current.legs, &mut legs);
 
     let mut candidate = state.clone();
@@ -117,14 +126,20 @@ pub fn update_route(
     // guarantees `rebase_edited_route_vehicles_and_riders` never observes a
     // leg that was connected before the edit but disconnected after it —
     // riders/vehicles on such a leg would be silently stranded.
-    rebase_edited_route_vehicles_and_riders(
-        state,
-        &mut candidate,
-        current.mode,
-        route_id,
-        &current.waypoint_ids,
-        &waypoint_ids,
-    );
+    //
+    // Skip the rebase when the save is a pure structural no-op: otherwise a
+    // Save with the same pattern/waypoints still parks every vehicle and
+    // invalidates active trips.
+    if structure_changed {
+        rebase_edited_route_vehicles_and_riders(
+            state,
+            &mut candidate,
+            current.mode,
+            route_id,
+            &current.waypoint_ids,
+            &waypoint_ids,
+        );
+    }
     Ok(garbage_collect_missing_nodes(&candidate))
 }
 
@@ -133,6 +148,7 @@ fn validate_waypoints(
     mode: TransitMode,
     waypoint_ids: &[String],
     route_id: Option<&str>,
+    previous_waypoint_ids: Option<&[String]>,
 ) -> GameplayResult<()> {
     if mode == TransitMode::Walk {
         return Err(route_validation_rejection(
@@ -162,15 +178,55 @@ fn validate_waypoints(
     }
 
     for waypoint_id in waypoint_ids {
-        validate_present_compatible_node(snapshot, mode, waypoint_id, route_id)?;
+        match validate_present_compatible_node(snapshot, mode, waypoint_id, route_id) {
+            Ok(()) => {}
+            Err(rejection)
+                if rejection.code == RejectionCode::MissingRouteNode
+                    && is_retained_missing_waypoint(
+                        snapshot,
+                        mode,
+                        waypoint_id,
+                        previous_waypoint_ids,
+                    ) => {}
+            Err(rejection) => return Err(rejection),
+        }
     }
     Ok(())
+}
+
+/// Edits may keep a pre-existing tombstoned waypoint so the broken-route editor
+/// can change other stops without first replacing every missing node. Newly
+/// introduced missing IDs (not already on the route) stay rejected.
+fn is_retained_missing_waypoint(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    waypoint_id: &str,
+    previous_waypoint_ids: Option<&[String]>,
+) -> bool {
+    let Some(previous) = previous_waypoint_ids else {
+        return false;
+    };
+    if !previous.iter().any(|id| id == waypoint_id) {
+        return false;
+    }
+    match mode {
+        TransitMode::Bus => snapshot
+            .transit
+            .stops
+            .iter()
+            .any(|stop| stop.id == waypoint_id && stop.status == TransitNodeStatus::Missing),
+        TransitMode::Metro => snapshot.transit.stations.iter().any(|station| {
+            station.id == waypoint_id && station.status == TransitNodeStatus::Missing
+        }),
+        TransitMode::Walk => false,
+    }
 }
 
 fn validate_edit_legs(
     old_legs: &[RouteLegPath],
     new_legs: &[RouteLegPath],
     route_id: &str,
+    retained_missing_ids: &BTreeSet<&str>,
 ) -> GameplayResult<()> {
     for leg in new_legs {
         if leg.status == RouteLegStatus::Connected {
@@ -179,11 +235,36 @@ fn validate_edit_legs(
         let carried = old_legs
             .iter()
             .any(|old| old.status != RouteLegStatus::Connected && old.key() == leg.key());
-        if !carried {
-            return Err(disconnected_leg_rejection(leg, Some(route_id)));
+        if carried {
+            continue;
         }
+        // Changing other waypoints around a retained tombstone creates new leg
+        // keys that are MissingNode solely because that tombstone remains.
+        // Those are allowed; network-disconnected or brand-new missing IDs are not.
+        if leg.status == RouteLegStatus::MissingNode
+            && (retained_missing_ids.contains(leg.from_waypoint_id.as_str())
+                || retained_missing_ids.contains(leg.to_waypoint_id.as_str()))
+        {
+            continue;
+        }
+        return Err(disconnected_leg_rejection(leg, Some(route_id)));
     }
     Ok(())
+}
+
+fn retained_missing_waypoint_ids<'a>(
+    snapshot: &'a GameSnapshot,
+    mode: TransitMode,
+    previous_waypoint_ids: &'a [String],
+    waypoint_ids: &'a [String],
+) -> BTreeSet<&'a str> {
+    waypoint_ids
+        .iter()
+        .filter_map(|waypoint_id| {
+            is_retained_missing_waypoint(snapshot, mode, waypoint_id, Some(previous_waypoint_ids))
+                .then_some(waypoint_id.as_str())
+        })
+        .collect()
 }
 
 fn carry_forward_leg_history(old_legs: &[RouteLegPath], new_legs: &mut [RouteLegPath]) {

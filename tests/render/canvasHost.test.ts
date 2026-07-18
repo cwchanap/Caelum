@@ -447,6 +447,34 @@ describe("createCanvasHost", () => {
     expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
   });
 
+  it("remounting a running unpaused host reschedules the animation loop", () => {
+    const raf = globalThis.requestAnimationFrame as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const cancel = globalThis.cancelAnimationFrame as unknown as {
+      mock: { calls: number[][] };
+    };
+    const fixture = createFixture({
+      state: { ...createTestGameState(), paused: false, speed: 1 },
+    });
+
+    fixture.host.start();
+    const rafAfterStart = raf.mock.calls.length;
+    expect(rafAfterStart).toBeGreaterThanOrEqual(1);
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    fixture.host.mount(secondHost);
+
+    // Teardown cancels the prior frame; mount must request a fresh one while
+    // running stays true so ticks/renders continue without a later commit.
+    expect(cancel.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(fixture.host.isRunning()).toBe(true);
+    expect(raf.mock.calls.length).toBeGreaterThan(rafAfterStart);
+
+    fixture.host.stop();
+  });
+
   it("syncAnimationLoop starts rAF when animatable", () => {
     const raf = globalThis.requestAnimationFrame as unknown as {
       mock: { calls: unknown[][] };

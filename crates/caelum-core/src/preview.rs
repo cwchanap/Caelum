@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::{dispatch_context, RoutingContext};
 use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
-    ServicePattern, TransitMode,
+    ServicePattern, TransitMode, TransitNodeStatus,
 };
 use crate::network::resolve_route_legs;
 use crate::rejection::{GameplayRejection, RejectionCode, RejectionContext};
@@ -181,6 +181,20 @@ pub fn preview_route(
         seed_edit_preview_history(existing.legs, &mut response.legs);
     }
 
+    let previous_waypoint_ids = existing_route_waypoint_ids(snapshot, &request);
+    let retained_missing: HashSet<&str> = request
+        .waypoint_ids
+        .iter()
+        .filter_map(|waypoint_id| {
+            is_retained_missing_waypoint(
+                snapshot,
+                request.mode,
+                waypoint_id,
+                previous_waypoint_ids.as_deref(),
+            )
+            .then_some(waypoint_id.as_str())
+        })
+        .collect();
     for leg in &response.legs {
         if leg.status == RouteLegStatus::Connected {
             continue;
@@ -192,13 +206,16 @@ pub fn preview_route(
                 .find(|old| old.key() == leg.key())
                 .is_some_and(|old| old.status != RouteLegStatus::Connected)
         });
+        let retained_missing_break = leg.status == RouteLegStatus::MissingNode
+            && (retained_missing.contains(leg.from_waypoint_id.as_str())
+                || retained_missing.contains(leg.to_waypoint_id.as_str()));
         let context = RejectionContext {
             route_id: request.route_id.clone(),
             from_waypoint_id: Some(leg.from_waypoint_id.clone()),
             to_waypoint_id: Some(leg.to_waypoint_id.clone()),
             ..RejectionContext::default()
         };
-        if existing_broken {
+        if existing_broken || retained_missing_break {
             response.warnings.push(GameplayWarning {
                 code: WarningCode::ExistingBrokenLeg,
                 context,
@@ -391,18 +408,77 @@ fn validate_waypoints(
             Some(duplicate),
         ));
     }
+    let previous_waypoint_ids = existing_route_waypoint_ids(snapshot, request);
     for waypoint_id in &request.waypoint_ids {
-        if let Err(mut rejection) = validate_present_compatible_node(
+        match validate_present_compatible_node(
             snapshot,
             request.mode,
             waypoint_id,
             request.route_id.as_deref(),
         ) {
-            rejection.context.expected_revision = request.expected_revision;
-            return Some(rejection);
+            Ok(()) => {}
+            Err(rejection)
+                if rejection.code == RejectionCode::MissingRouteNode
+                    && is_retained_missing_waypoint(
+                        snapshot,
+                        request.mode,
+                        waypoint_id,
+                        previous_waypoint_ids.as_deref(),
+                    ) => {}
+            Err(mut rejection) => {
+                rejection.context.expected_revision = request.expected_revision;
+                return Some(rejection);
+            }
         }
     }
     None
+}
+
+fn existing_route_waypoint_ids(
+    snapshot: &GameSnapshot,
+    request: &RoutePreviewRequest,
+) -> Option<Vec<String>> {
+    let route_id = request.route_id.as_deref()?;
+    match request.mode {
+        TransitMode::Bus => snapshot
+            .transit
+            .routes
+            .iter()
+            .find(|route| route.id == route_id)
+            .map(|route| route.stop_ids.clone()),
+        TransitMode::Metro => snapshot
+            .transit
+            .metro_lines
+            .iter()
+            .find(|line| line.id == route_id)
+            .map(|line| line.station_ids.clone()),
+        TransitMode::Walk => None,
+    }
+}
+
+fn is_retained_missing_waypoint(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    waypoint_id: &str,
+    previous_waypoint_ids: Option<&[String]>,
+) -> bool {
+    let Some(previous) = previous_waypoint_ids else {
+        return false;
+    };
+    if !previous.iter().any(|id| id == waypoint_id) {
+        return false;
+    }
+    match mode {
+        TransitMode::Bus => snapshot
+            .transit
+            .stops
+            .iter()
+            .any(|stop| stop.id == waypoint_id && stop.status == TransitNodeStatus::Missing),
+        TransitMode::Metro => snapshot.transit.stations.iter().any(|station| {
+            station.id == waypoint_id && station.status == TransitNodeStatus::Missing
+        }),
+        TransitMode::Walk => false,
+    }
 }
 
 fn route_validation_rejection(

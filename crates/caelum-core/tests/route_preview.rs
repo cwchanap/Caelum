@@ -467,7 +467,7 @@ fn edit_preview_is_free_and_rejects_stale_revision_with_full_context() {
 }
 
 #[test]
-fn same_mode_tombstone_is_missing_in_preview_and_commit() {
+fn retained_tombstone_is_missing_in_preview_but_edit_save_is_allowed() {
     let mut engine = existing_route_engine();
     dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 5) });
     let before = engine.snapshot();
@@ -487,6 +487,68 @@ fn same_mode_tombstone_is_missing_in_preview_and_commit() {
     });
 
     assert_eq!(preview.missing_waypoint_ids, vec!["stop-001"]);
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert!(preview
+        .warnings
+        .iter()
+        .any(|warning| warning.code == caelum_core::preview::WarningCode::ExistingBrokenLeg));
+
+    let committed = engine.dispatch(GameIntent::UpdateRoute {
+        route_id: route.id,
+        expected_revision: route.revision,
+        pattern: route.pattern,
+        waypoint_ids: route.stop_ids,
+    });
+    assert!(committed.rejection.is_none(), "{committed:?}");
+    assert!(newest_route(&committed.snapshot).path_broken);
+    assert_eq!(
+        committed.snapshot.transit.stops[0].status,
+        caelum_core::model::TransitNodeStatus::Missing
+    );
+}
+
+#[test]
+fn edit_preview_and_commit_reject_newly_introduced_missing_nodes() {
+    let mut engine = existing_route_engine();
+    // Third present stop on the existing corridor so a second route can try to
+    // introduce route-001's tombstone as a brand-new waypoint.
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(6, 5) });
+    dispatch(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: ids(&["stop-002", "stop-003"]),
+        },
+    );
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 5) });
+    let snapshot = engine.snapshot();
+    let route = snapshot
+        .transit
+        .routes
+        .iter()
+        .find(|route| route.id == "route-002")
+        .expect("second route")
+        .clone();
+    assert_eq!(
+        snapshot
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == "stop-001")
+            .map(|stop| stop.status),
+        Some(caelum_core::model::TransitNodeStatus::Missing)
+    );
+
+    let waypoint_ids = ids(&["stop-001", "stop-002", "stop-003"]);
+    let preview = engine.preview_route(RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: route.pattern,
+        waypoint_ids: waypoint_ids.clone(),
+        route_id: Some(route.id.clone()),
+        expected_revision: Some(route.revision),
+        generation: 83,
+    });
     assert_eq!(
         preview.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::MissingRouteNode)
@@ -496,7 +558,7 @@ fn same_mode_tombstone_is_missing_in_preview_and_commit() {
         route_id: route.id,
         expected_revision: route.revision,
         pattern: route.pattern,
-        waypoint_ids: route.stop_ids,
+        waypoint_ids,
     });
     assert!(!committed.applied);
     assert_eq!(
@@ -506,7 +568,6 @@ fn same_mode_tombstone_is_missing_in_preview_and_commit() {
             .map(|rejection| &rejection.code),
         Some(&RejectionCode::MissingRouteNode)
     );
-    assert_eq!(committed.snapshot, before);
 }
 
 fn alternate_path_engine() -> GameEngine {

@@ -314,7 +314,9 @@ fn identical_update_leaves_structural_revision_unchanged() {
         pattern: before.pattern,
         waypoint_ids: before.stop_ids.clone(),
     });
-    assert!(result.applied, "{result:?}");
+    // True structural no-ops leave the snapshot equal (no vehicle rebase), so
+    // the engine may report applied=false while still accepting the save.
+    assert!(result.rejection.is_none(), "{result:?}");
     let updated = route(&result.snapshot, &before.id);
     assert_eq!(updated.revision, before.revision);
     assert_eq!(updated.stop_ids, before.stop_ids);
@@ -586,6 +588,78 @@ fn update_direct(
         waypoint_ids,
     )
     .expect("fixture update should apply")
+}
+
+#[test]
+fn identical_save_skips_vehicle_rebase_and_trip_invalidation() {
+    let mut engine = editable_bus_engine(&[2, 10], BUS_COST);
+    create_route(
+        &mut engine,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    let mut state = engine.snapshot();
+    state.transit.vehicles[0].path_step_index = 2;
+    state.transit.vehicles[0].step_progress = 0.4;
+    state.transit.vehicles[0].passenger_ids = ids(&["trip-001"]);
+    state.active_trips = vec![riding_trip("route-001", "trip-001")];
+    let revision = route(&state, "route-001").revision;
+    let before_vehicle = state.transit.vehicles[0].clone();
+    let before_trip = state.active_trips[0].clone();
+
+    let result = update_direct(
+        &state,
+        "route-001",
+        revision,
+        ids(&["stop-001", "stop-002"]),
+    );
+
+    assert_eq!(route(&result, "route-001").revision, revision);
+    let vehicle = vehicle(&result, "vehicle-001");
+    assert_eq!(vehicle.path_step_index, before_vehicle.path_step_index);
+    assert_eq!(vehicle.step_progress, before_vehicle.step_progress);
+    assert_eq!(vehicle.passenger_ids, before_vehicle.passenger_ids);
+    assert_eq!(vehicle.parked_position, before_vehicle.parked_position);
+    assert_eq!(result.active_trips[0].status, before_trip.status);
+    assert_eq!(result.active_trips[0].route_plan, before_trip.route_plan);
+}
+
+#[test]
+fn edit_may_retain_preexisting_missing_waypoint_while_changing_another() {
+    let mut engine = editable_bus_engine(&[2, 6, 10, 12], BUS_COST);
+    create_route(
+        &mut engine,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002", "stop-003"]),
+    );
+    let mut state = engine.snapshot();
+    state = transit::remove_at_tile(&state, &point(6, 5)).expect("tombstone middle stop");
+    assert!(state
+        .transit
+        .stops
+        .iter()
+        .any(|stop| stop.id == "stop-002" && stop.status == TransitNodeStatus::Missing));
+    let revision = route(&state, "route-001").revision;
+
+    let result = update_direct(
+        &state,
+        "route-001",
+        revision,
+        ids(&["stop-001", "stop-002", "stop-004"]),
+    );
+
+    assert_eq!(
+        route(&result, "route-001").stop_ids,
+        ids(&["stop-001", "stop-002", "stop-004"])
+    );
+    assert!(route(&result, "route-001").path_broken);
+    assert!(result
+        .transit
+        .stops
+        .iter()
+        .any(|stop| stop.id == "stop-002" && stop.status == TransitNodeStatus::Missing));
 }
 
 #[test]

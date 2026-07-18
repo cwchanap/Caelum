@@ -348,6 +348,9 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     canvas.addEventListener("pointerleave", handlePointerLeave);
     canvas.addEventListener("pointercancel", handlePointerCancel);
     render();
+    // Prior teardown cancels any pending rAF while leaving `running` true.
+    // Reschedule so a remount of an already-started host keeps ticking.
+    syncAnimationLoop();
 
     const teardown = (): void => {
       if (canvasHost !== host || canvas === null) {
