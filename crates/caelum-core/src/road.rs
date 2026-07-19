@@ -353,6 +353,10 @@ fn connect_authored_sequence(map: &mut GameMap, points: &[Point]) {
 }
 
 fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
+    let Some(current_tile) = map.tile(point) else {
+        return;
+    };
+    let current_one_way = current_tile.one_way;
     for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
         let neighbor_point = offset(point, heading);
         let Some(neighbor) = map.tile(neighbor_point) else {
@@ -372,6 +376,16 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
             // new arm to connect even when the junction tile already has degree ≥2.
             connect(map, point, heading);
             continue;
+        }
+        // Skip cross-lane connections between the two opposing one-way lanes of
+        // a dual-bidirectional road. These perpendicular endpoint links are
+        // not T-junction arms — they are U-turn slots that give endpoint tiles
+        // both horizontal and vertical axes, pulling them into an automatic-
+        // junction cluster whose pruning logic then destroys the through road.
+        if let (Some(current_dir), Some(neighbor_dir)) = (current_one_way, neighbor.one_way) {
+            if neighbor_dir == opposite(current_dir) && !same_axis(heading, current_dir) {
+                continue;
+            }
         }
         if neighbor.road_connections.len() >= 2 {
             continue;

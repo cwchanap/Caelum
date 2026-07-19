@@ -209,6 +209,14 @@ fn road_path_arrival_tile(path: &TransitPath) -> Option<Point> {
         if to.x == f64::from(last.position.x) && to.y == f64::from(last.position.y) {
             return Some(last.position);
         }
+        // Junction U-turns traverse from the entry port to the exit-outside
+        // tile, which can differ from `offset(position, leaving_heading)`.
+        // The geometry `to` point is the actual destination tile (integer
+        // coordinates), so round it to get the arrival.
+        return Some(Point {
+            x: to.x.round() as i32,
+            y: to.y.round() as i32,
+        });
     }
     // For service-path steps the destination tile is the heading-adjacent
     // tile of the step's source (`position`), encoded by `leaving_heading`.
