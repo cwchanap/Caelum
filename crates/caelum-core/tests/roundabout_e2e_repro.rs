@@ -114,13 +114,10 @@ fn assert_roundabout_e2e_preview_is_connected(
     let map = &engine.snapshot().map;
     let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
     assert!(
-        crossing
-            .road_connections
-            .iter()
-            .any(|heading| matches!(
-                heading,
-                caelum_core::model::Heading::North | caelum_core::model::Heading::South
-            )),
+        crossing.road_connections.iter().any(|heading| matches!(
+            heading,
+            caelum_core::model::Heading::North | caelum_core::model::Heading::South
+        )),
         "vertical crossing must remain connected before roundabout placement"
     );
 
@@ -129,13 +126,10 @@ fn assert_roundabout_e2e_preview_is_connected(
     let map = &engine.snapshot().map;
     let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
     assert!(
-        crossing
-            .road_connections
-            .iter()
-            .any(|heading| matches!(
-                heading,
-                caelum_core::model::Heading::North | caelum_core::model::Heading::South
-            )),
+        crossing.road_connections.iter().any(|heading| matches!(
+            heading,
+            caelum_core::model::Heading::North | caelum_core::model::Heading::South
+        )),
         "vertical crossing must remain connected after roundabout placement"
     );
 
