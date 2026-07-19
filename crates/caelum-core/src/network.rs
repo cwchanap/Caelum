@@ -104,21 +104,53 @@ fn resolve_terminal_reversal(
     // On-road stops reverse at the stop tile. Off-road anchors (roadside stops,
     // bus-terminal buildings) are not RoadStates — reverse on an adjacent road
     // access tile that supports the arrival/departure headings instead.
-    for access in terminal_reversal_access_points(snapshot, terminal, &previous_path, &next_path) {
-        if let Some(path) =
-            context
-                .road_topology
-                .find_terminal_reversal(access, exit_heading, entry_heading)
-        {
-            return Some(path);
+    //
+    // Route between the actual arrival and departure road tiles derived from
+    // the bounding service legs. When both legs share the same access tile,
+    // this reduces to an in-place reversal (U-turn, roundabout loop, or
+    // zero-step on same-heading one-way roads). When they differ, the bus
+    // must physically travel from the arrival tile to the departure tile —
+    // no zero-step shortcut, and no jumping through an unrelated adjacent
+    // road that happens to support a U-turn.
+    let arrival = road_path_arrival_tile(&previous_path);
+    let departure = next_path.road_steps().first().map(|step| step.position);
+    match (arrival, departure) {
+        (Some(access), Some(departure_tile)) if access == departure_tile => context
+            .road_topology
+            .find_terminal_reversal(access, exit_heading, entry_heading),
+        (Some(arrival_tile), Some(departure_tile)) => context.road_topology.find_reversal_between(
+            arrival_tile,
+            exit_heading,
+            departure_tile,
+            entry_heading,
+        ),
+        _ => {
+            // Degenerate: a service leg has no road steps (e.g., co-located
+            // waypoints). Fall back to adjacent road access tiles, preferring
+            // the shared access tile when one can be derived.
+            for access in
+                terminal_reversal_access_points(snapshot, terminal, &previous_path, &next_path)
+            {
+                if let Some(path) = context.road_topology.find_terminal_reversal(
+                    access,
+                    exit_heading,
+                    entry_heading,
+                ) {
+                    return Some(path);
+                }
+            }
+            None
         }
     }
-    None
 }
 
 /// Candidate tiles for a terminal reversal, preferring the road access derived
 /// from the bounding service legs and falling back to orthogonally adjacent
-/// road tiles when the terminal anchor itself is off-network.
+/// road tiles when the terminal anchor itself is off-network. Preference
+/// order is preserved (shared access first, then the terminal tile itself,
+/// then remaining adjacent roads in canonical heading order) — the list is
+/// not re-sorted by position, so the first candidate that yields a reversal
+/// is the most preferred, not an arbitrary one.
 fn terminal_reversal_access_points(
     snapshot: &GameSnapshot,
     terminal: Point,
@@ -127,12 +159,15 @@ fn terminal_reversal_access_points(
 ) -> Vec<Point> {
     let mut points = Vec::new();
     if let Some(access) = shared_service_access_tile(previous_path, next_path) {
-        points.push(access);
+        if !points.contains(&access) {
+            points.push(access);
+        }
     }
     if snapshot
         .map
         .tile(terminal)
         .is_some_and(|tile| tile.kind == "road")
+        && !points.contains(&terminal)
     {
         points.push(terminal);
     }
@@ -142,12 +177,11 @@ fn terminal_reversal_access_points(
             .map
             .tile(adjacent)
             .is_some_and(|tile| tile.kind == "road")
+            && !points.contains(&adjacent)
         {
             points.push(adjacent);
         }
     }
-    points.sort_by_key(|point| (point.y, point.x));
-    points.dedup();
     points
 }
 

@@ -635,3 +635,83 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
     assert_eq!(transit_leg.alight_itinerary_index, Some(4));
     assert_eq!(plan.estimated_seconds, 90.0 + 13.0);
 }
+
+#[test]
+fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
+    let mut engine = GameEngine::new();
+    // North corridor on y=3 (will be one-way eastbound) and south corridor on
+    // y=5 (will be one-way westbound). Stops are placed on the y=3 road, then
+    // moved off-road to y=4 so each terminal is adjacent to both corridors.
+    road_line(&mut engine, 3, 1, 3);
+    road_line(&mut engine, 5, 1, 3);
+    for x in [1, 3] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 3).into(),
+        });
+    }
+    // Isolated bidirectional pair at (4,4)-(5,4), adjacent to the terminal at
+    // (3,4) but not connected to either corridor. A U-turn is possible here
+    // (drive to (5,4) and back to (4,4) heading West), so the old fallback
+    // that iterated adjacent roads would falsely mark the reversal Connected.
+    engine.dispatch(GameIntent::LayRoad {
+        point: (4, 4).into(),
+    });
+    engine.dispatch(GameIntent::LayRoad {
+        point: (5, 4).into(),
+    });
+
+    let mut state = engine.snapshot();
+    // Move stops off-road to y=4, between the two corridors.
+    for stop in &mut state.transit.stops {
+        stop.position.y = 4;
+    }
+    // Make y=3 one-way eastbound and y=5 one-way westbound so the forward leg
+    // (stop-001 → stop-002) arrives via (3,3) heading East and the return leg
+    // departs via (3,5) heading West — different access tiles for the same
+    // terminal.
+    for x in 1..=3 {
+        state.map.tile_mut((x, 3).into()).unwrap().one_way = Some(Heading::East);
+        state.map.tile_mut((x, 5).into()).unwrap().one_way = Some(Heading::West);
+    }
+
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &ids(&["stop-001", "stop-002"]),
+        ServicePattern::Shuttle,
+    );
+
+    // Both service legs must be connected (the corridors themselves work).
+    let service_legs: Vec<_> = legs
+        .iter()
+        .filter(|leg| leg.kind == RouteLegKind::Service)
+        .collect();
+    assert_eq!(service_legs.len(), 2);
+    assert!(
+        service_legs
+            .iter()
+            .all(|leg| leg.status == RouteLegStatus::Connected),
+        "service legs must be connected: {legs:?}"
+    );
+
+    // The terminal reversal at stop-002 (3,4) arrives at (3,3) heading East
+    // and departs from (3,5) heading West. The (4,4)-(5,4) pair can U-turn
+    // but is disconnected from both corridors. The reversal must NOT be
+    // marked Connected — that would let the bus jump between separate access
+    // lanes via an unrelated tile.
+    let reversal = legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::TerminalReversal && leg.from_waypoint_id == "stop-002"
+        })
+        .expect("terminal reversal at stop-002");
+    assert_eq!(
+        reversal.status,
+        RouteLegStatus::NetworkDisconnected,
+        "reversal must not jump between separate access lanes: {legs:?}"
+    );
+}
