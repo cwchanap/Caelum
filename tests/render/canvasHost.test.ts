@@ -520,4 +520,45 @@ describe("createCanvasHost", () => {
 
     fixture.host.stop();
   });
+
+  it("observes the board host so a host resize updates the canvas backing store", () => {
+    // jsdom ships no ResizeObserver; stub one that records observe targets
+    // and lets the test fire the callback manually.
+    const observed: Element[] = [];
+    let observerCallback:
+      | ((
+          entries: { contentRect: { width: number; height: number } }[],
+        ) => void)
+      | null = null;
+    class FakeResizeObserver {
+      constructor(
+        cb: (
+          entries: { contentRect: { width: number; height: number } }[],
+        ) => void,
+      ) {
+        observerCallback = cb;
+      }
+      observe(target: Element): void {
+        observed.push(target);
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    const fixture = createFixture();
+    const { container, canvas } = fixture;
+
+    // The observer must watch the board host, not the canvas. The canvas's
+    // fixed pixel style (set by applyCanvasPixelSize) would stop firing on a
+    // window/board resize if the observer watched the canvas itself.
+    expect(observed).toContain(container);
+    expect(observed).not.toContain(canvas);
+
+    // Simulate a host resize: the backing store must follow the new size.
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    observerCallback!([{ contentRect: { width: 400, height: 300 } }]);
+    expect(canvas.width).toBe(Math.max(1, Math.round(400 * dpr)));
+    expect(canvas.height).toBe(Math.max(1, Math.round(300 * dpr)));
+  });
 });

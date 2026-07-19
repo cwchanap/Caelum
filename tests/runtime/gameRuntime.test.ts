@@ -2790,6 +2790,86 @@ describe("route creation and management", () => {
     ]);
   });
 
+  it("invalidates and re-requests the current draft preview when a superseded save bumps the revision", async () => {
+    // A save is in flight on the original edit draft; before it resolves the
+    // user re-opens the same route, so the replacement draft's preview is
+    // computed against the pre-save revision. When the superseded save
+    // succeeds and bumps the route revision, the replacement draft's preview
+    // must be invalidated and re-requested — otherwise Save stays enabled on
+    // the stale expectedRevision and the next save is rejected with
+    // `routeChangedWhileEditing` without any UI signal.
+    const initial = routeSnapshotWithRoute();
+    let routeRevision = 0;
+    const saves = deferredDispatchBackend(initial);
+    const backend: GameBackend = {
+      ...saves,
+      async previewRoute(request) {
+        if (
+          request.routeId === "route-001" &&
+          request.expectedRevision !== null &&
+          request.expectedRevision !== routeRevision
+        ) {
+          return {
+            ...routePreview(request.generation, request.waypointIds),
+            rejection: {
+              code: "routeChangedWhileEditing" as const,
+              context: {
+                routeId: "route-001",
+                expectedRevision: request.expectedRevision,
+                actualRevision: routeRevision,
+                affectedRouteIds: ["route-001"],
+              },
+            },
+          };
+        }
+        return routePreview(request.generation, request.waypointIds);
+      },
+    };
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
+
+    const firstSave = runtime.saveRouteDraft();
+    await Promise.resolve();
+
+    // Re-open the same route before the save resolves. The route revision is
+    // still 0, so the replacement draft carries expectedRevision 0 and its
+    // preview resolves connected.
+    runtime.cancelRouteDraft();
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const replacement = runtime.getSnapshot().ui.routeDraft!;
+    expect(replacement.source).toEqual({
+      kind: "edit",
+      routeId: "route-001",
+      expectedRevision: 0,
+    });
+    expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
+
+    // The superseded save succeeds and bumps the route revision to 1.
+    routeRevision = 1;
+    await saves.resolveNext();
+    await firstSave;
+    await flushPromises();
+
+    // The replacement draft is preserved, but its preview is re-requested
+    // against the post-save snapshot. The stale expectedRevision (0) now
+    // mismatches the actual revision (1), so the fresh preview surfaces
+    // `routeChangedWhileEditing`, disabling Save and enabling Reload.
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.routeDraft?.instanceId).toBe(replacement.instanceId);
+    expect(snapshot.ui.routePreviewError?.code).toBe(
+      "routeChangedWhileEditing",
+    );
+    expect(snapshot.shell.routeDraft?.canSave).toBe(false);
+    expect(snapshot.shell.routeDraft?.canReload).toBe(true);
+  });
+
   it("leaves queued finish validation to Rust after state changes", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const runtime = await createGameRuntime({

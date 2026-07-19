@@ -606,6 +606,30 @@ export async function createGameRuntime({
             routePreviewHostError: null,
           });
         }
+        // A superseded save changed the snapshot. The current draft's preview
+        // was computed against the pre-save snapshot and may carry a stale
+        // expected revision (e.g. an edit draft opened before the save bumped
+        // the route's revision). Invalidate and re-request so the fresh
+        // preview surfaces `routeChangedWhileEditing` instead of leaving Save
+        // enabled on a stale revision that the next save would reject.
+        if (result.applied && !tokenIsCurrent) {
+          previewCoordinator.invalidateRoute();
+          const supersededSnapshot = normalizeRustSnapshot(result.snapshot);
+          if (current !== null) {
+            const refreshedDraft: RouteDraft = {
+              ...current,
+              preview: null,
+              previewPending: true,
+            };
+            const supersededResult = commit(supersededSnapshot, {
+              ...ui,
+              routeDraft: refreshedDraft,
+            });
+            requestRoutePreview(refreshedDraft);
+            return supersededResult;
+          }
+          return commit(supersededSnapshot, ui);
+        }
         return commit(normalizeRustSnapshot(result.snapshot), ui);
       },
       // Superseded-save host errors must not kill the runtime: the user may

@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::engine::RoutingContext;
 use crate::heading::{canonical_headings, heading_between, offset};
 use crate::model::{
-    GameMap, GameSnapshot, Heading, PathGeometry, Point, RouteLegKind, RouteLegPath,
+    GameMap, GameSnapshot, Heading, MovementKind, PathGeometry, Point, RouteLegKind, RouteLegPath,
     RouteLegStatus, ServicePattern, Tile, TrackPathStep, TransitMode, TransitPath,
 };
 use crate::service_itinerary::{build_service_itinerary, ServiceLegSpec};
@@ -198,12 +198,27 @@ fn shared_service_access_tile(
 
 fn road_path_arrival_tile(path: &TransitPath) -> Option<Point> {
     let last = path.road_steps().last()?;
-    match &last.geometry {
-        PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => Some(Point {
-            x: to.x.round() as i32,
-            y: to.y.round() as i32,
-        }),
+    // In-place terminal U-turns (constructed by `find_terminal_reversal`)
+    // anchor the bus at the terminal: `position` is the terminal and both
+    // geometry endpoints equal it. The arrival is the terminal itself, not
+    // the heading-adjacent tile the U-turn faces.
+    if last.movement == MovementKind::UTurn {
+        let to = match &last.geometry {
+            PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
+        };
+        if to.x == f64::from(last.position.x) && to.y == f64::from(last.position.y) {
+            return Some(last.position);
+        }
     }
+    // For service-path steps the destination tile is the heading-adjacent
+    // tile of the step's source (`position`), encoded by `leaving_heading`.
+    // Deriving from the heading state avoids rounding paint-geometry
+    // endpoints: roundabout entry/circulation steps end at a half-tile
+    // midpoint between the source and destination, which `f64::round` can
+    // resolve to the source tile (e.g. midpoint (5.5, 5) rounds to (6, 5)
+    // when the destination is (5, 5)), selecting the wrong access tile and
+    // skewing the Shuttle reversal.
+    Some(offset(last.position, last.leaving_heading))
 }
 
 fn resolve_spec_service_path(
@@ -340,5 +355,97 @@ fn track_path_from_points(points: Vec<Point>, tiles_per_second: f64) -> TransitP
     TransitPath::Track {
         total_travel_seconds: steps.len() as f64 * travel_seconds,
         steps,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{MovementKind, RoadPathStep, TripPosition};
+
+    fn step(
+        position: (i32, i32),
+        entering: Heading,
+        leaving: Heading,
+        movement: MovementKind,
+        to: (f64, f64),
+    ) -> RoadPathStep {
+        RoadPathStep {
+            position: Point {
+                x: position.0,
+                y: position.1,
+            },
+            entering_heading: entering,
+            leaving_heading: leaving,
+            movement,
+            geometry: PathGeometry::Line {
+                from: TripPosition {
+                    x: f64::from(position.0),
+                    y: f64::from(position.1),
+                },
+                to: TripPosition { x: to.0, y: to.1 },
+            },
+            travel_seconds: 1.0,
+        }
+    }
+
+    fn road_path(steps: Vec<RoadPathStep>) -> TransitPath {
+        TransitPath::Road {
+            total_travel_seconds: steps.len() as f64,
+            steps,
+        }
+    }
+
+    #[test]
+    fn arrival_tile_derives_from_leaving_heading_not_geometry_midpoint() {
+        // Roundabout entry ending at the midpoint between port (6,5) and the
+        // ring neighbor (5,5). The midpoint (5.5, 5) rounds to (6, 5) — the
+        // source port — but the destination is (5, 5). The arrival must be
+        // derived from `leaving_heading` (West), not the paint geometry.
+        let path = road_path(vec![step(
+            (6, 5),
+            Heading::East,
+            Heading::West,
+            MovementKind::RoundaboutEntry,
+            (5.5, 5.0),
+        )]);
+        assert_eq!(
+            road_path_arrival_tile(&path),
+            Some(Point { x: 5, y: 5 }),
+            "arrival must be the heading-adjacent destination, not the rounded midpoint"
+        );
+    }
+
+    #[test]
+    fn arrival_tile_falls_back_to_position_for_in_place_uturn() {
+        // In-place terminal U-turn: position is the terminal and geometry.to
+        // equals it. The arrival is the terminal, not the heading-adjacent
+        // neighbor the U-turn faces.
+        let path = road_path(vec![step(
+            (2, 3),
+            Heading::East,
+            Heading::West,
+            MovementKind::UTurn,
+            (2.0, 3.0),
+        )]);
+        assert_eq!(
+            road_path_arrival_tile(&path),
+            Some(Point { x: 2, y: 3 }),
+            "in-place U-turn arrival is the terminal tile itself"
+        );
+    }
+
+    #[test]
+    fn arrival_tile_uses_leaving_heading_for_ordinary_step() {
+        // Ordinary straight step: geometry.to is exact, but the arrival
+        // should still derive from `leaving_heading` for consistency.
+        let path = road_path(vec![step(
+            (4, 5),
+            Heading::East,
+            Heading::East,
+            MovementKind::Straight,
+            (5.0, 5.0),
+        )]);
+        assert_eq!(road_path_arrival_tile(&path), Some(Point { x: 5, y: 5 }));
     }
 }

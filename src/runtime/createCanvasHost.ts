@@ -331,7 +331,14 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
         hasObservedSize = true;
         render();
       });
-      resizeObserver.observe(canvas);
+      // Observe the board host, not the canvas: `applyCanvasPixelSize`
+      // converts the canvas's `100%` CSS size to fixed pixel dimensions on
+      // the first render, so the canvas's own content box stops tracking the
+      // host afterwards. A window/board resize would no longer fire the
+      // observer if it watched the canvas, leaving the map at its old size or
+      // overflowing. The host's content box follows the layout, so observing
+      // it keeps the backing store in sync with the available space.
+      resizeObserver.observe(host);
     } else {
       // Seed once so the first paint still gets a correct backing store.
       const rect = canvas.getBoundingClientRect();
