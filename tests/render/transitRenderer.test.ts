@@ -450,6 +450,85 @@ describe("renderTransit highlight", () => {
     expect(context.lineTo).toHaveBeenCalledWith(496, 272);
   });
 
+  it("draws a connector from an off-road stop to its road access path", () => {
+    // A bus stop on a building tile (off-road): Rust's RoadPath starts at the
+    // adjacent access road, not the stop. The renderer must bridge the gap so
+    // the route stroke visually reaches the stop.
+    const { ctx: context, strokes } = recordingContext();
+    const offRoadStop = { x: 1, y: 1 };
+    const accessRoad = { x: 2, y: 1 };
+    const onRoadStop = { x: 5, y: 1 };
+    const path: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: accessRoad,
+          enteringHeading: "east",
+          leavingHeading: "east",
+          movement: "straight",
+          geometry: { kind: "line", from: accessRoad, to: onRoadStop },
+          travelSeconds: 3,
+        },
+      ],
+      totalTravelSeconds: 3,
+    };
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        ...createTestGameState().transit,
+        stops: [
+          {
+            id: "stop-a",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: offRoadStop,
+            platforms: [],
+          },
+          {
+            id: "stop-b",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: onRoadStop,
+            platforms: [],
+          },
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Route 1",
+            color: "#e04f39",
+            stopIds: ["stop-a", "stop-b"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [routeLeg("stop-a", "stop-b", "connected", path)],
+            pathBroken: false,
+          },
+        ],
+      },
+    };
+
+    renderTransit(context, state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    // Connector from off-road stop (1,1) to access road (2,1):
+    // centre (1,1) = (48,48); centre (2,1) = (80,48).
+    expect(
+      strokes.some(
+        (stroke) =>
+          stroke.strokeStyle === "#e04f39" &&
+          stroke.path.length === 2 &&
+          stroke.path[0]?.x === 48 &&
+          stroke.path[0]?.y === 48 &&
+          stroke.path[1]?.x === 80 &&
+          stroke.path[1]?.y === 48,
+      ),
+    ).toBe(true);
+  });
+
   it("parks the vehicle at the segment-start stop when the route is broken", () => {
     let state = busState();
 

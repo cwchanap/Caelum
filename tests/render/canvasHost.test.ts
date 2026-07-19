@@ -561,4 +561,84 @@ describe("createCanvasHost", () => {
     expect(canvas.width).toBe(Math.max(1, Math.round(400 * dpr)));
     expect(canvas.height).toBe(Math.max(1, Math.round(300 * dpr)));
   });
+
+  it("refreshes the backing store on every fallback window resize", () => {
+    // Without a ResizeObserver (jsdom default), the host seeds the size once
+    // at mount and listens for window resize. `applyCanvasPixelSize` pins the
+    // canvas to fixed pixel dimensions after the first paint, so the canvas's
+    // own content box stops tracking the layout — the fallback must read the
+    // board host's content box on every resize, not the canvas's frozen box,
+    // and must not freeze after the first refresh.
+    const fixture = createFixture();
+    const { container, canvas } = fixture;
+    const dpr = globalThis.devicePixelRatio ?? 1;
+
+    // After mount the backing store matches the host's board size.
+    const initialWidth = canvas.width;
+    expect(initialWidth).toBe(
+      Math.max(1, Math.round(fixture.getState().map.width * tileSize * dpr)),
+    );
+
+    // Simulate the canvas's content box freezing at the pinned pixel size
+    // (applyCanvasPixelSize sets style.width/height to fixed px) while the
+    // board host resizes to a new layout size. The fallback must read the
+    // host, not the canvas.
+    const frozenRect = {
+      width: initialWidth / dpr,
+      height: canvas.height / dpr,
+      left: 0,
+      top: 0,
+      right: initialWidth / dpr,
+      bottom: canvas.height / dpr,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+    canvas.getBoundingClientRect = vi.fn(() => frozenRect);
+    container.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 400,
+          height: 300,
+          left: 0,
+          top: 0,
+          right: 400,
+          bottom: 300,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+
+    globalThis.window?.dispatchEvent(new Event("resize"));
+
+    expect(canvas.width).toBe(Math.max(1, Math.round(400 * dpr)));
+    expect(canvas.height).toBe(Math.max(1, Math.round(300 * dpr)));
+    // The canvas's frozen rect was NOT consulted for the new size.
+    expect(canvas.getBoundingClientRect).not.toHaveBeenCalled();
+
+    // A second resize to a different size must also refresh (the prior
+    // `!hasObservedSize` guard froze the cache after the first fallback
+    // resize).
+    container.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 500,
+          height: 360,
+          left: 0,
+          top: 0,
+          right: 500,
+          bottom: 360,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    globalThis.window?.dispatchEvent(new Event("resize"));
+
+    expect(canvas.width).toBe(Math.max(1, Math.round(500 * dpr)));
+    expect(canvas.height).toBe(Math.max(1, Math.round(360 * dpr)));
+
+    fixture.cleanup();
+  });
 });

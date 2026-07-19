@@ -311,8 +311,14 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     const handleResize = (): void => {
       // Window resize is a fallback when ResizeObserver is missing; with an
       // observer the size cache updates from contentRect without layout thrash.
-      if (!hasObservedSize && canvas !== null) {
-        const rect = canvas.getBoundingClientRect();
+      // `applyCanvasPixelSize` pins the canvas to fixed pixel dimensions after
+      // the first paint, so the canvas's own content box no longer tracks the
+      // layout — read the board host's content box instead, on every resize,
+      // so the backing store, board transform, and pointer mapping stay in
+      // sync. The prior `!hasObservedSize` guard froze the cache after the
+      // first fallback resize and left subsequent window resizes stale.
+      if (canvasHost !== null) {
+        const rect = canvasHost.getBoundingClientRect();
         observedCssWidth = rect.width;
         observedCssHeight = rect.height;
         hasObservedSize = true;

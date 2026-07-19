@@ -1112,7 +1112,18 @@ export async function createGameRuntime({
       if (ui.activeTool === "road") {
         // Defer the lay-vs-cycle decision to execution time so the tile kind is
         // re-read against the latest map state after earlier queued updates
-        // drain (see `roadClickIntent`).
+        // drain (see `roadClickIntent`). Clear and invalidate any resolved
+        // hover preview before enqueueing: the dispatch will change the map, so
+        // the old changed-tiles/cost/route-impacts overlay is stale, and
+        // invalidating `activeRoadMutation` prevents an in-flight preview
+        // response from repopulating it after the click.
+        clearHoverPreviewTimer();
+        invalidateRoadPreview();
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
         return enqueueComputedDispatch(() => roadClickIntent(point));
       }
 

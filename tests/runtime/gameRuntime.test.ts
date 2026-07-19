@@ -1131,6 +1131,42 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
   });
 
+  it("clears and invalidates the road hover preview on click so a stale response cannot repopulate it", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    // Resolve a road hover preview so the overlay is showing stale changed
+    // tiles / cost / route impacts at the moment of the click.
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    // The click dispatches a road mutation that changes the map. The resolved
+    // hover preview is now stale and must be cleared synchronously, before the
+    // dispatch enqueues, so renderOverlays does not draw the old overlay over
+    // the new map.
+    runtime.handleTileClick({ x: 5, y: 5 });
+    const afterClick = runtime.getSnapshot();
+    expect(afterClick.ui.roadMutationPreview).toBeNull();
+    expect(afterClick.ui.roadMutationPreviewError).toBeNull();
+
+    // An in-flight preview response for the invalidated request must not
+    // repopulate the stale preview. Hover a new tile to start gen 2, click to
+    // invalidate it, then resolve gen 2 — the preview must stay null.
+    runtime.setHoverTile({ x: 6, y: 5 });
+    expect(previews.roadRequestGenerations).toContain(2);
+    runtime.handleTileClick({ x: 6, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+    previews.resolveRoad(2, roadPreview(2, { x: 6, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+  });
+
   it("arms a click tool and never starts a drag gesture", async () => {
     const base = backendSpy();
     const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));

@@ -52,6 +52,52 @@ function drawTransitPath(
   }
 }
 
+/** Extract the start/end tile position of a step's geometry. Arcs are
+ *  render-only roundabout circulation curves with no from/to endpoint, so
+ *  they return undefined and skip the connector. Rust road/track path steps
+ *  only emit line/quadraticBezier. */
+function geometryEndpoint(
+  geometry: PathGeometry,
+  end: "start" | "end",
+): TripPosition | undefined {
+  if (geometry.kind === "line" || geometry.kind === "quadraticBezier") {
+    return end === "start" ? geometry.from : geometry.to;
+  }
+  return undefined;
+}
+
+function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
+  return a.x === b.x && a.y === b.y;
+}
+
+/** Draw a short connector between an off-road node (bus stop / terminal
+ *  anchor on a building tile) and its road access tile. Rust's `RoadPath`
+ *  starts/ends at the adjacent road tile, not the stop, so without this the
+ *  route stroke begins at the access road and leaves building-backed
+ *  terminals visually disconnected. The road-side endpoint uses the
+ *  corridor-offset step geometry so the connector meets the offset stroke in
+ *  shared corridors. Zero-length connectors (on-road stops where the path
+ *  already reaches the node) are skipped. */
+function drawEndpointConnector(
+  ctx: CanvasRenderingContext2D,
+  nodePosition: TripPosition,
+  pathEndpoint: TripPosition,
+  style: RouteStrokeStyle,
+): void {
+  if (sameTripPosition(nodePosition, pathEndpoint)) return;
+  ctx.strokeStyle = style.color;
+  ctx.lineWidth = style.lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  drawPathGeometry(
+    ctx,
+    { kind: "line", from: nodePosition, to: pathEndpoint },
+    center,
+  );
+  ctx.stroke();
+}
+
 interface RouteStrokeStyle {
   color: string;
   lineWidth: number;
@@ -213,6 +259,32 @@ function renderLeg(
       routeId,
       corridors,
     );
+    // Off-road anchors (roadside stops, bus-terminal buildings) route between
+    // adjacent road access tiles, so the path's first/last geometry endpoints
+    // are the access road, not the stop. Bridge the gap so building-backed
+    // terminals are visually connected to their route. Use the corridor-offset
+    // step endpoint so the connector meets the offset stroke in shared
+    // corridors.
+    const firstStep = path.steps[0];
+    const lastStep = path.steps[path.steps.length - 1];
+    if (endpoints.from !== undefined && firstStep !== undefined) {
+      const pathStart = geometryEndpoint(
+        offsetForRoute(firstStep.geometry, routeId, corridors),
+        "start",
+      );
+      if (pathStart !== undefined) {
+        drawEndpointConnector(ctx, endpoints.from, pathStart, style);
+      }
+    }
+    if (endpoints.to !== undefined && lastStep !== undefined) {
+      const pathEnd = geometryEndpoint(
+        offsetForRoute(lastStep.geometry, routeId, corridors),
+        "end",
+      );
+      if (pathEnd !== undefined) {
+        drawEndpointConnector(ctx, pathEnd, endpoints.to, style);
+      }
+    }
   } else if (
     dotted &&
     endpoints.from !== undefined &&
@@ -265,23 +337,47 @@ function drawDraftLegs(
 ): void {
   for (const leg of legs) {
     const path = presentationPath(leg);
+    const endpoints = routeLegEndpoints(nodes, leg);
     if (path !== null) {
       drawTransitPath(ctx, path, color, lineWidth, routeId, corridors);
-    } else {
-      const endpoints = routeLegEndpoints(nodes, leg);
-      if (endpoints.from !== undefined && endpoints.to !== undefined) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = lineWidth;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        drawPathGeometry(
-          ctx,
-          { kind: "line", from: endpoints.from, to: endpoints.to },
-          center,
+      const firstStep = path.steps[0];
+      const lastStep = path.steps[path.steps.length - 1];
+      if (endpoints.from !== undefined && firstStep !== undefined) {
+        const pathStart = geometryEndpoint(
+          offsetForRoute(firstStep.geometry, routeId, corridors),
+          "start",
         );
-        ctx.stroke();
+        if (pathStart !== undefined) {
+          drawEndpointConnector(ctx, endpoints.from, pathStart, {
+            color,
+            lineWidth,
+          });
+        }
       }
+      if (endpoints.to !== undefined && lastStep !== undefined) {
+        const pathEnd = geometryEndpoint(
+          offsetForRoute(lastStep.geometry, routeId, corridors),
+          "end",
+        );
+        if (pathEnd !== undefined) {
+          drawEndpointConnector(ctx, pathEnd, endpoints.to, {
+            color,
+            lineWidth,
+          });
+        }
+      }
+    } else if (endpoints.from !== undefined && endpoints.to !== undefined) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      drawPathGeometry(
+        ctx,
+        { kind: "line", from: endpoints.from, to: endpoints.to },
+        center,
+      );
+      ctx.stroke();
     }
   }
 }
