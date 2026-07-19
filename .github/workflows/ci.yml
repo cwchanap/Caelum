@@ -113,8 +113,11 @@ jobs:
         with:
           tool: wasm-pack@0.13.0
 
-      - name: Build WASM artifacts
-        run: bun run wasm:build:release
+      # Playwright uses the debug-only SetBudget hook to construct expensive
+      # route-repair scenarios. Release WASM intentionally ignores that intent;
+      # release behavior remains covered by the build, unit, and Tauri jobs.
+      - name: Build dev WASM artifacts
+        run: bun run wasm:build
 
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
