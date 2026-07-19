@@ -38,115 +38,22 @@ fn add_bus_stop(engine: &mut GameEngine, point: Point) -> String {
         .expect("stop must exist after placement")
 }
 
-/// Reproduces the e2e roundabouts.spec.ts scenario for compact2x2.
-/// The e2e test lays a 2-lane vertical road that crosses two 1-way horizontal
-/// roads. The 2-lane road's endpoint cross-lane connections cause the junction
-/// detector to include endpoint tiles in the cluster, which then has no
-/// vertical ports, triggering pruning of ALL vertical internal edges.
-#[test]
-fn compact_roundabout_e2e_preview_is_connected() {
-    let mut engine = GameEngine::new();
-    engine.set_budget_for_test(500_000);
-
-    let origin = point(6, 12);
-    let width = 2;
-    let bottom_y = origin.y + width - 1; // 13
-    let right = 12;
-
-    // 1. Paint latent residential area on roundabout footprint.
-    paint_area(
-        &mut engine,
-        origin,
-        point(origin.x + width - 1, origin.y + width - 1),
-        "residential",
-    );
-
-    // 2. Seed approach roads — matching e2e test exactly.
-    // One-way east at y=bottom (y=13)
-    road_line(
-        &mut engine,
-        (1..=right).map(|x| point(x, bottom_y)).collect(),
-        RoadPreset::OneWay,
-    );
-    // One-way west at y=origin.y (y=12)
-    road_line(
-        &mut engine,
-        (1..=right).rev().map(|x| point(x, origin.y)).collect(),
-        RoadPreset::OneWay,
-    );
-    // 2-Lane (dualBidirectional) vertical at x=1
-    road_line(
-        &mut engine,
-        (origin.y - 1..=bottom_y + 1)
-            .map(|y| point(origin.x - 5, y))
-            .collect(),
-        RoadPreset::DualBidirectional,
-    );
-
-    // Verify vertical road connectivity before roundabout placement.
-    let map = &engine.snapshot().map;
-    let tile_1_12 = map.tile(point(1, 12)).unwrap();
-    let tile_1_13 = map.tile(point(1, 13)).unwrap();
-    eprintln!(
-        "Before roundabout: (1,12) connections={:?} oneWay={:?}",
-        tile_1_12.road_connections, tile_1_12.one_way
-    );
-    eprintln!(
-        "Before roundabout: (1,13) connections={:?} oneWay={:?}",
-        tile_1_13.road_connections, tile_1_13.one_way
-    );
-    assert!(
-        tile_1_12.road_connections.iter().any(|h| {
-            matches!(
-                h,
-                caelum_core::model::Heading::North | caelum_core::model::Heading::South
-            )
-        }),
-        "vertical road at (1,12) must have vertical connections before roundabout"
-    );
-
-    // 3. Place the roundabout.
-    place_roundabout(&mut engine, origin, RoundaboutSize::Compact2x2);
-
-    // Verify vertical road connectivity AFTER roundabout placement.
-    let map = &engine.snapshot().map;
-    let tile_1_12 = map.tile(point(1, 12)).unwrap();
-    let tile_1_13 = map.tile(point(1, 13)).unwrap();
-    eprintln!(
-        "After roundabout: (1,12) connections={:?} oneWay={:?}",
-        tile_1_12.road_connections, tile_1_12.one_way
-    );
-    eprintln!(
-        "After roundabout: (1,13) connections={:?} oneWay={:?}",
-        tile_1_13.road_connections, tile_1_13.one_way
-    );
-    assert!(
-        tile_1_12.road_connections.iter().any(|h| {
-            matches!(
-                h,
-                caelum_core::model::Heading::North | caelum_core::model::Heading::South
-            )
-        }),
-        "vertical road at (1,12) must have vertical connections after roundabout"
-    );
-
-    // 4. Place bus stops at the e2e positions.
-    let first_stop = point(origin.x - 3, bottom_y); // (3, 13)
-    let second_stop = point(origin.x - 2, origin.y); // (4, 12)
-    let first_id = add_bus_stop(&mut engine, first_stop);
-    let second_id = add_bus_stop(&mut engine, second_stop);
-
-    // 5. Preview a Loop route.
+fn assert_preview_connected(
+    engine: &GameEngine,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+    generation: u64,
+) {
     let response = engine.preview_route(RoutePreviewRequest {
         mode: TransitMode::Bus,
-        pattern: ServicePattern::Loop,
-        waypoint_ids: vec![first_id.clone(), second_id.clone()],
+        pattern,
+        waypoint_ids,
         route_id: None,
         expected_revision: None,
-        generation: 1,
+        generation,
     });
 
-    eprintln!("Loop preview rejection: {:?}", response.rejection);
+    eprintln!("{pattern:?} preview rejection: {:?}", response.rejection);
     for leg in &response.legs {
         eprintln!(
             "  leg: {:?} -> {:?} kind={:?} status={:?}",
@@ -155,24 +62,112 @@ fn compact_roundabout_e2e_preview_is_connected() {
     }
     assert!(
         response.rejection.is_none(),
-        "Loop preview must not be rejected: {:?}",
+        "{pattern:?} preview must not be rejected: {:?}",
         response.rejection
     );
+}
 
-    // 6. Preview a Shuttle route.
-    let response = engine.preview_route(RoutePreviewRequest {
-        mode: TransitMode::Bus,
-        pattern: ServicePattern::Shuttle,
-        waypoint_ids: vec![first_id, second_id],
-        route_id: None,
-        expected_revision: None,
-        generation: 2,
-    });
+/// Reproduces the browser scenario for both roundabout sizes: two opposing
+/// one-way approaches cross a dual-bidirectional vertical road before entering
+/// the roundabout. The Shuttle return service reaches its first terminal through
+/// an automatic-junction transition that can span more than one tile.
+fn assert_roundabout_e2e_preview_is_connected(
+    origin: Point,
+    size: RoundaboutSize,
+    width: i32,
+    right: i32,
+) {
+    let mut engine = GameEngine::new();
+    engine.set_budget_for_test(500_000);
 
-    eprintln!("Shuttle preview rejection: {:?}", response.rejection);
+    let bottom_y = origin.y + width - 1;
+    let vertical_x = origin.x - 5;
+
+    paint_area(
+        &mut engine,
+        origin,
+        point(origin.x + width - 1, origin.y + width - 1),
+        "residential",
+    );
+
+    road_line(
+        &mut engine,
+        (vertical_x..=right).map(|x| point(x, bottom_y)).collect(),
+        RoadPreset::OneWay,
+    );
+    road_line(
+        &mut engine,
+        (vertical_x..=right)
+            .rev()
+            .map(|x| point(x, origin.y))
+            .collect(),
+        RoadPreset::OneWay,
+    );
+    road_line(
+        &mut engine,
+        (origin.y - 1..=bottom_y + 1)
+            .map(|y| point(vertical_x, y))
+            .collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let map = &engine.snapshot().map;
+    let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
     assert!(
-        response.rejection.is_none(),
-        "Shuttle preview must not be rejected: {:?}",
-        response.rejection
+        crossing.road_connections.iter().any(|heading| matches!(
+            heading,
+            caelum_core::model::Heading::North | caelum_core::model::Heading::South
+        )),
+        "vertical crossing must remain connected before roundabout placement"
+    );
+
+    place_roundabout(&mut engine, origin, size);
+
+    let map = &engine.snapshot().map;
+    let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
+    assert!(
+        crossing.road_connections.iter().any(|heading| matches!(
+            heading,
+            caelum_core::model::Heading::North | caelum_core::model::Heading::South
+        )),
+        "vertical crossing must remain connected after roundabout placement"
+    );
+
+    let first_stop = point(origin.x - 3, bottom_y);
+    let second_stop = point(origin.x - 2, origin.y);
+    let first_id = add_bus_stop(&mut engine, first_stop);
+    let second_id = add_bus_stop(&mut engine, second_stop);
+
+    assert_preview_connected(
+        &engine,
+        ServicePattern::Loop,
+        vec![first_id.clone(), second_id.clone()],
+        1,
+    );
+    assert_preview_connected(
+        &engine,
+        ServicePattern::Shuttle,
+        vec![first_id, second_id],
+        2,
+    );
+}
+
+#[test]
+fn compact_roundabout_e2e_preview_is_connected() {
+    assert_roundabout_e2e_preview_is_connected(
+        point(6, 12),
+        RoundaboutSize::Compact2x2,
+        2,
+        12,
+    );
+}
+
+#[test]
+fn standard_roundabout_e2e_preview_is_connected() {
+    assert_roundabout_e2e_preview_is_connected(
+        point(21, 12),
+        RoundaboutSize::Standard3x3,
+        3,
+        28,
     );
 }
