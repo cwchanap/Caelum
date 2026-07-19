@@ -114,10 +114,13 @@ fn assert_roundabout_e2e_preview_is_connected(
     let map = &engine.snapshot().map;
     let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
     assert!(
-        crossing.road_connections.iter().any(|heading| matches!(
-            heading,
-            caelum_core::model::Heading::North | caelum_core::model::Heading::South
-        )),
+        crossing
+            .road_connections
+            .iter()
+            .any(|heading| matches!(
+                heading,
+                caelum_core::model::Heading::North | caelum_core::model::Heading::South
+            )),
         "vertical crossing must remain connected before roundabout placement"
     );
 
@@ -126,10 +129,13 @@ fn assert_roundabout_e2e_preview_is_connected(
     let map = &engine.snapshot().map;
     let crossing = map.tile(point(vertical_x, origin.y)).unwrap();
     assert!(
-        crossing.road_connections.iter().any(|heading| matches!(
-            heading,
-            caelum_core::model::Heading::North | caelum_core::model::Heading::South
-        )),
+        crossing
+            .road_connections
+            .iter()
+            .any(|heading| matches!(
+                heading,
+                caelum_core::model::Heading::North | caelum_core::model::Heading::South
+            )),
         "vertical crossing must remain connected after roundabout placement"
     );
 
@@ -154,20 +160,10 @@ fn assert_roundabout_e2e_preview_is_connected(
 
 #[test]
 fn compact_roundabout_e2e_preview_is_connected() {
-    assert_roundabout_e2e_preview_is_connected(
-        point(6, 12),
-        RoundaboutSize::Compact2x2,
-        2,
-        12,
-    );
+    assert_roundabout_e2e_preview_is_connected(point(6, 12), RoundaboutSize::Compact2x2, 2, 12);
 }
 
 #[test]
 fn standard_roundabout_e2e_preview_is_connected() {
-    assert_roundabout_e2e_preview_is_connected(
-        point(21, 12),
-        RoundaboutSize::Standard3x3,
-        3,
-        28,
-    );
+    assert_roundabout_e2e_preview_is_connected(point(21, 12), RoundaboutSize::Standard3x3, 3, 28);
 }
