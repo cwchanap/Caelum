@@ -4,8 +4,15 @@ import type { GameplayWarning } from "./backend/types";
 const numberFormat = new Intl.NumberFormat("en-US");
 const money = (value: number): string => numberFormat.format(value);
 
-function assertNever(value: never): never {
-  throw new Error("Unhandled rejection code: " + String(value));
+function assertNever(value: never): string {
+  // In dev/test, surface unknown codes immediately so a Rust/TS enum drift is
+  // caught loudly. In production, fall back to a generic message instead of
+  // throwing — a rejection toast must never crash the UI over an unrecognized
+  // code that Rust may have added before TS caught up.
+  if (import.meta.env.DEV) {
+    throw new Error("Unhandled rejection code: " + String(value));
+  }
+  return "This action could not be completed.";
 }
 
 export function rejectionMessage(rejection: GameplayRejection): string {
