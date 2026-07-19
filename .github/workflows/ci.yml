@@ -166,8 +166,20 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
+      - name: Format Rust sources for diagnosis
+        run: cargo +stable fmt --all
+
+      - name: Upload rustfmt output
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-output
+          path: |
+            crates/caelum-core/src/network.rs
+            crates/caelum-core/tests/roundabout_e2e_repro.rs
+          retention-days: 1
+
       - name: Check Rust formatting
-        run: cargo +stable fmt --all --check
+        run: git diff --exit-code
 
       - name: Run Clippy
         run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
