@@ -198,35 +198,27 @@ fn shared_service_access_tile(
 
 fn road_path_arrival_tile(path: &TransitPath) -> Option<Point> {
     let last = path.road_steps().last()?;
-    // In-place terminal U-turns (constructed by `find_terminal_reversal`)
-    // anchor the bus at the terminal: `position` is the terminal and both
-    // geometry endpoints equal it. The arrival is the terminal itself, not
-    // the heading-adjacent tile the U-turn faces.
-    if last.movement == MovementKind::UTurn {
-        let to = match &last.geometry {
-            PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
-        };
-        if to.x == f64::from(last.position.x) && to.y == f64::from(last.position.y) {
-            return Some(last.position);
-        }
-        // Junction U-turns traverse from the entry port to the exit-outside
-        // tile, which can differ from `offset(position, leaving_heading)`.
-        // The geometry `to` point is the actual destination tile (integer
-        // coordinates), so round it to get the arrival.
-        return Some(Point {
-            x: to.x.round() as i32,
-            y: to.y.round() as i32,
-        });
+    // Roundabout entry/circulation geometry ends at a half-tile paint point.
+    // Derive the actual next RoadState from the heading instead of rounding a
+    // midpoint back to the source tile.
+    if matches!(
+        last.movement,
+        MovementKind::RoundaboutEntry | MovementKind::RoundaboutCirculation
+    ) {
+        return Some(offset(last.position, last.leaving_heading));
     }
-    // For service-path steps the destination tile is the heading-adjacent
-    // tile of the step's source (`position`), encoded by `leaving_heading`.
-    // Deriving from the heading state avoids rounding paint-geometry
-    // endpoints: roundabout entry/circulation steps end at a half-tile
-    // midpoint between the source and destination, which `f64::round` can
-    // resolve to the source tile (e.g. midpoint (5.5, 5) rounds to (6, 5)
-    // when the destination is (5, 5)), selecting the wrong access tile and
-    // skewing the Shuttle reversal.
-    Some(offset(last.position, last.leaving_heading))
+
+    // All other compiled transitions encode their actual destination RoadState
+    // in the geometry endpoint. This matters for automatic-junction transitions,
+    // which can span multiple footprint tiles rather than ending one tile from
+    // `position` (and also covers in-place/junction U-turns and roundabout exits).
+    let to = match &last.geometry {
+        PathGeometry::Line { to, .. } | PathGeometry::QuadraticBezier { to, .. } => to,
+    };
+    Some(Point {
+        x: to.x.round() as i32,
+        y: to.y.round() as i32,
+    })
 }
 
 fn resolve_spec_service_path(
@@ -444,9 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn arrival_tile_uses_leaving_heading_for_ordinary_step() {
-        // Ordinary straight step: geometry.to is exact, but the arrival
-        // should still derive from `leaving_heading` for consistency.
+    fn arrival_tile_uses_geometry_for_ordinary_step() {
         let path = road_path(vec![step(
             (4, 5),
             Heading::East,
@@ -455,5 +445,24 @@ mod tests {
             (5.0, 5.0),
         )]);
         assert_eq!(road_path_arrival_tile(&path), Some(Point { x: 5, y: 5 }));
+    }
+
+    #[test]
+    fn arrival_tile_uses_structure_geometry_destination_for_multi_tile_turn() {
+        // An automatic-junction transition can enter at one footprint port and
+        // leave beyond another, so the destination can be multiple tiles from
+        // the step's source. This is the Standard Roundabout e2e return leg.
+        let path = road_path(vec![step(
+            (16, 14),
+            Heading::South,
+            Heading::East,
+            MovementKind::LeftTurn,
+            (18.0, 14.0),
+        )]);
+        assert_eq!(
+            road_path_arrival_tile(&path),
+            Some(Point { x: 18, y: 14 }),
+            "arrival must use the compiled transition destination"
+        );
     }
 }
