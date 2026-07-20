@@ -34,6 +34,12 @@ fn compile_initial_topology(map: &crate::model::GameMap) -> RoadTopology {
 }
 
 fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
+    // Whole-map linear scans: tiles, buildings, stops, and stations are each
+    // searched by coordinate in both snapshots for every queried point. This is
+    // O(points * (tiles + buildings + stops + stations)) — acceptable today
+    // because callers pass only the small set of tiles a single mutation
+    // touched, but it would not scale to a full-map diff. If a future caller
+    // grows the point set, introduce a coordinate index instead of scanning.
     let before_tile = before
         .map
         .tiles
@@ -223,7 +229,7 @@ impl NetworkCandidate {
 /// external source, it MUST reject `schema_version != SNAPSHOT_SCHEMA_VERSION`
 /// rather than heuristically loading a legacy format — the TS host boundary
 /// already enforces this in `normalizeRustSnapshot`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GameEngine {
     snapshot: GameSnapshot,
     road_topology: RoadTopology,

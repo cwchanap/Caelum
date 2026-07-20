@@ -1116,6 +1116,27 @@ fn assigned_line_data(
     Some((station_by_id, line.legs.clone()))
 }
 
+/// Advance one vehicle along its itinerary by `remaining_seconds` of simulated
+/// travel time, firing `on_itinerary_leg_completed` whenever the cursor crosses
+/// a leg boundary. Returns whether any completion event changed state.
+///
+/// # Zero-step terminal reversals
+///
+/// A terminal reversal between two road access tiles that share the same
+/// heading (same-direction bus terminal, or a metro stop whose entry and exit
+/// headings match) produces an *empty* path — `step_count() == 0` — so the
+/// vehicle "completes" the leg without moving. `road_topology::find_terminal_reversal`
+/// deliberately returns these zero-step paths for same-heading reversals
+/// (see `road_topology.rs` and the `terminal_reversal_on_one_way_lane_returns_zero_step_path`
+/// test) and a multi-step U-turn/roundabout path otherwise.
+///
+/// Because an itinerary can contain several consecutive zero-step legs,
+/// advancing would otherwise loop forever consuming no time. The
+/// `consecutive_zero_steps` guard caps the run at `zero_step_limit` (the total
+/// real step count of the itinerary, at least one): once a zero-step run exceeds
+/// the number of genuine steps in the loop, the vehicle cannot make progress
+/// this tick and we stop advancing it. A non-zero-step leg resets the counter.
+/// The same guard also covers the degenerate `step_seconds <= EPSILON` case.
 fn advance_vehicle_by_seconds<F>(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
