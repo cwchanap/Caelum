@@ -559,16 +559,18 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
         .retain(|structure| !structure.is_automatic_junction());
 
     // Loop invariant: each iteration either discovers junction structures
-    // and breaks, or disconnects a set of `prune_edges` (internal edges of a
-    // candidate footprint that lack both horizontal and vertical boundary
-    // ports) and continues. Disconnecting an edge removes it from both the
-    // tile and its reciprocal neighbor, strictly shrinking the candidate set
-    // (a tile with a pruned edge can no longer satisfy `has_axis` for both
-    // axes, or its reciprocal neighbor can't). The candidate set is finite
-    // (bounded by the map), so the loop terminates in at most as many
-    // iterations as there are road tiles. The cap below catches a regression
-    // that could hang a dispatch: debug_assert in dev, release degrades by
-    // stopping the loop (same pattern as trips::tick substep cap).
+    // and breaks, disconnects a set of `prune_edges` (internal edges of an
+    // incomplete junction artifact that has boundary ports on one axis but
+    // not the other) and continues, or skips every candidate as a closed
+    // component (no boundary ports) and falls through to the `break`.
+    // Disconnecting an edge removes it from both the tile and its reciprocal
+    // neighbor, strictly shrinking the candidate set (a tile with a pruned
+    // edge can no longer satisfy `has_axis` for both axes, or its reciprocal
+    // neighbor can't). The candidate set is finite (bounded by the map), so
+    // the loop terminates in at most as many iterations as there are road
+    // tiles. The cap below catches a regression that could hang a dispatch:
+    // debug_assert in dev, release degrades by stopping the loop (same
+    // pattern as trips::tick substep cap).
     let mut iteration = 0usize;
     let max_iterations = map.tiles.len().saturating_add(1);
     loop {
@@ -647,6 +649,15 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
             let has_vertical_ports = port_keys
                 .iter()
                 .any(|(_, edge)| matches!(edge, Heading::North | Heading::South));
+            // A component with no external ports is a closed loop (e.g. a 2x2
+            // road ring used by a Loop route) — every edge is internal and
+            // valid. Pruning here would sever the loop and disconnect the
+            // network. The cleanup below targets incomplete junction artifacts
+            // that have at least one boundary port but are missing an axis, so
+            // skip closed components entirely.
+            if port_keys.is_empty() {
+                continue;
+            }
             if !has_horizontal_ports || !has_vertical_ports {
                 for point in &footprint {
                     let Some(tile) = map.tile(*point) else {
