@@ -507,11 +507,22 @@ fn deterministic_dijkstra(
         if best.get(&state) != Some(&rank) {
             continue;
         }
-        if target_is_road && state.position == *to {
-            return Some(build_road_path(state, rank.total_millis, &parents));
-        }
-        if !target_is_road && manhattan(state.position, *to) == 1 {
-            return Some(build_road_path(state, rank.total_millis, &parents));
+        // Require at least one road transition before accepting the goal. The
+        // start states for an off-road endpoint are seeded at adjacent road
+        // access tiles with `PathRank::zero()`; without this guard, a target
+        // that is manhattan-1 from a seeded access tile (or that IS the
+        // seeded tile, for an on-road target) would be accepted on the first
+        // pop with empty parents, producing a connected, zero-duration,
+        // zero-step service leg. The bus must physically enter the road
+        // network before the endpoint is reached. Mirrors the
+        // `movement_count > 0` guard in `find_reversal_path`.
+        if rank.movement_count > 0 {
+            if target_is_road && state.position == *to {
+                return Some(build_road_path(state, rank.total_millis, &parents));
+            }
+            if !target_is_road && manhattan(state.position, *to) == 1 {
+                return Some(build_road_path(state, rank.total_millis, &parents));
+            }
         }
 
         for transition in topology.transitions.get(&state).into_iter().flatten() {

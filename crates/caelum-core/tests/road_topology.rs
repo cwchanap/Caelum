@@ -649,6 +649,61 @@ fn off_road_endpoint_access_is_not_serialized_as_zero_duration_geometry() {
 }
 
 #[test]
+fn off_road_stops_sharing_one_access_tile_are_not_connected_by_a_zero_step_path() {
+    // Two off-road stops on opposite sides of a single road tile. The seeded
+    // access state is manhattan-1 from both stops, so without a transition
+    // guard the dijkstra goal check fires on the first pop with empty parents
+    // — producing a connected, zero-duration, zero-step service leg. The bus
+    // must take at least one road transition before the off-road target is
+    // accepted; otherwise the leg is NetworkDisconnected.
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &(2..=6).map(|x| point(x, 3)).collect::<Vec<_>>(),
+        None,
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    let stop_north = point(3, 2);
+    let stop_south = point(3, 4);
+    // Sanity: both stops are off-road and share (3, 3) as their access tile.
+    assert_ne!(map.tile(stop_north).unwrap().kind, "road");
+    assert_ne!(map.tile(stop_south).unwrap().kind, "road");
+    assert_eq!(map.tile(point(3, 3)).unwrap().kind, "road");
+    // No road transition connects the two stops through the shared access
+    // tile alone, so the pathfinder must not return a zero-step path.
+    let path = topology.find_path(&map, &stop_north, &stop_south);
+    assert!(
+        path.is_none(),
+        "zero-transition off-road leg must not be reported as connected: {path:?}"
+    );
+}
+
+#[test]
+fn off_road_stop_adjacent_to_on_road_target_requires_a_transition() {
+    // Off-road `from` whose seeded access tile IS the on-road `to`. Without a
+    // transition guard the on-road goal check fires on the first pop with
+    // empty parents, yielding a zero-step connected path. Require a
+    // transition here too — the bus must enter the road network before the
+    // target tile is accepted.
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &(2..=6).map(|x| point(x, 3)).collect::<Vec<_>>(),
+        None,
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+    let stop = point(3, 2);
+    let adjacent_road_target = point(3, 3);
+    assert_ne!(map.tile(stop).unwrap().kind, "road");
+    assert_eq!(map.tile(adjacent_road_target).unwrap().kind, "road");
+    let path = topology.find_path(&map, &stop, &adjacent_road_target);
+    assert!(
+        path.is_none(),
+        "zero-transition on-road target must not be reported as connected: {path:?}"
+    );
+}
+
+#[test]
 fn structure_transition_keys_are_stable_when_authored_order_changes() {
     let mut first = dual_cross_fixture();
     let first_path = first
