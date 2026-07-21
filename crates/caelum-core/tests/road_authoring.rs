@@ -269,17 +269,23 @@ fn laying_a_road_against_an_automatic_junction_extends_its_ports() {
     });
     assert!(result.applied, "{result:?}");
     let after_snapshot = engine.snapshot();
-    let after_ports = after_snapshot
+    let junction = after_snapshot
         .map
         .road_structures
         .iter()
         .find(|structure| structure.is_automatic_junction())
-        .expect("junction should still exist or regenerate with the new arm")
-        .ports()
-        .len();
+        .expect("junction should still exist or regenerate with the new arm");
+    let after_ports = junction.ports().len();
     assert!(
         after_ports >= after_removal.unwrap_or(0),
         "re-laid approach must connect into the junction (after_removal={after_removal:?}, after={after_ports})"
+    );
+    assert!(
+        junction
+            .port_keys()
+            .contains(&(point(14, 8), Heading::North)),
+        "re-laid approach must restore the north-facing port adjoining (14, 7), got {:?}",
+        junction.port_keys()
     );
     assert!(after_snapshot
         .map
@@ -287,6 +293,7 @@ fn laying_a_road_against_an_automatic_junction_extends_its_ports() {
         .unwrap()
         .road_connections
         .contains(&Heading::South));
+    assert_reciprocal_connections(&after_snapshot.map);
 }
 
 #[test]
