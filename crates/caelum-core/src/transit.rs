@@ -121,6 +121,7 @@ pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult
     let mut next = state.clone();
     let removed_roundabouts = crate::roundabouts::remove_owned_roundabouts(&mut next, points);
     if !removed_roundabouts.ids.is_empty() {
+        crate::roundabouts::sync_roundabout_ports(&mut next.map);
         crate::road::refresh_all_automatic_junctions(&mut next.map)?;
     }
     let mut changed = !removed_roundabouts.ids.is_empty();
@@ -149,6 +150,7 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         std::slice::from_ref(point),
     );
     if !removed.ids.is_empty() {
+        crate::roundabouts::sync_roundabout_ports(&mut roundabout_candidate.map);
         crate::road::refresh_all_automatic_junctions(&mut roundabout_candidate.map)?;
         return Ok(roundabout_candidate);
     }

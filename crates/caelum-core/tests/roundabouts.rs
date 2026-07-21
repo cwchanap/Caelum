@@ -378,6 +378,30 @@ fn only_roundabout(snapshot: &caelum_core::GameSnapshot) -> &RoadStructure {
     roundabouts[0]
 }
 
+fn roundabout_with_id<'a>(snapshot: &'a caelum_core::GameSnapshot, id: &str) -> &'a RoadStructure {
+    snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            matches!(structure, RoadStructure::Roundabout { .. }) && structure.id() == id
+        })
+        .expect("roundabout with id should exist")
+}
+
+fn only_roundabout_a(snapshot: &caelum_core::GameSnapshot) -> &RoadStructure {
+    // A is the roundabout whose footprint contains (5,5).
+    snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            matches!(structure, RoadStructure::Roundabout { .. })
+                && structure.footprint().contains(&point(5, 5))
+        })
+        .expect("roundabout A should exist")
+}
+
 #[test]
 fn compact_and_standard_charge_rust_authoritative_flat_costs() {
     for (origin, size, expected) in [
@@ -887,6 +911,59 @@ fn demolishing_an_approach_drops_the_detached_port_from_the_structure() {
         .unwrap()
         .road_connections
         .contains(&Heading::North));
+}
+
+#[test]
+fn removing_a_roundabout_built_on_a_neighbors_approach_drops_the_stale_port() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    // Approach road on (5,4) attaches a north port to A at (5,5).
+    dispatch(&mut engine, GameIntent::LayRoad { point: point(5, 4) });
+    assert_eq!(
+        only_roundabout(&engine.snapshot()).port_keys(),
+        vec![(point(5, 5), Heading::North)]
+    );
+
+    // Build roundabout B whose footprint replaces A's approach road tile (5,4).
+    // B's footprint (5,3),(6,3),(5,4),(6,4) captures a reciprocal south port at
+    // (5,4) facing A's (5,5); A's existing north port now points at B's tile.
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 3),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    let a_id = only_roundabout_a(&engine.snapshot()).id().to_string();
+    assert_eq!(
+        roundabout_with_id(&engine.snapshot(), &a_id).port_keys(),
+        vec![(point(5, 5), Heading::North)],
+        "A's port should still target B's footprint tile while B exists"
+    );
+
+    // Remove B. Without `sync_roundabout_ports`, A's north port would remain
+    // pointing at the now-empty (5,4) tile, leaving a stale port in the
+    // serialized snapshot and a dangling renderer stub.
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(5, 3) });
+
+    let snapshot = engine.snapshot();
+    assert!(
+        roundabout_with_id(&snapshot, &a_id).ports().is_empty(),
+        "surviving roundabout ports must be resynced after neighbor removal"
+    );
+    assert!(!snapshot
+        .map
+        .tile(point(5, 5))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::North));
+    assert_eq!(snapshot.map.tile(point(5, 4)).unwrap().kind, "empty");
 }
 
 #[test]
