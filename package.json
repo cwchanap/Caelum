@@ -8,7 +8,7 @@
     "predev": "bun run ensure-wasm",
     "clean:wasm": "bun run scripts/clean-wasm.mjs",
     "prebuild": "bun run clean:wasm && bun run wasm:build:release",
-    "build": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit && vite build; code=$?; bun run clean:wasm; exit $code",
+    "build": "bun run scripts/build.mjs",
     "precheck": "bun run ensure-wasm",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "lint": "bun run lint:svelte && bun run lint:rust",
