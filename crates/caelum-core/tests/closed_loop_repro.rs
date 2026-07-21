@@ -1,4 +1,4 @@
-use caelum_core::model::Point;
+use caelum_core::model::{Heading, Point};
 use caelum_core::{GameEngine, GameIntent};
 
 fn point(x: i32, y: i32) -> Point {
@@ -18,16 +18,29 @@ fn closed_2x2_loop_preserves_internal_connections() {
     }
 
     let map = &engine.snapshot().map;
-    // Every loop tile should have exactly two connections (its loop neighbors).
-    for p in [(5, 5), (6, 5), (6, 6), (5, 6)] {
+    // Every loop tile should connect to its two actual loop neighbors.
+    let expected = [
+        ((5, 5), [Heading::East, Heading::South]),
+        ((6, 5), [Heading::West, Heading::South]),
+        ((6, 6), [Heading::North, Heading::West]),
+        ((5, 6), [Heading::North, Heading::East]),
+    ];
+    for (p, headings) in expected {
         let tile = map
             .tile(point(p.0, p.1))
             .unwrap_or_else(|| panic!("loop tile {p:?} missing"));
         assert_eq!(
             tile.road_connections.len(),
-            2,
-            "loop tile {p:?} should retain 2 connections, got {:?}",
+            headings.len(),
+            "loop tile {p:?} should retain connections {headings:?}, got {:?}",
             tile.road_connections
         );
+        for heading in headings {
+            assert!(
+                tile.road_connections.contains(&heading),
+                "loop tile {p:?} should connect {heading:?}, got {:?}",
+                tile.road_connections
+            );
+        }
     }
 }
