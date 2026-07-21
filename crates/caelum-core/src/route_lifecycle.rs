@@ -75,6 +75,25 @@ pub fn rebase_edited_route_vehicles_and_riders(
                 preferred_direction,
             )
         });
+        // When no old waypoint is retained (e.g. every waypoint was replaced),
+        // `parking_target_for_retained` returns `None`. Falling back to the old
+        // world coordinate would teleport the vehicle on the next `tick_vehicles`
+        // call, which clears `parked_position` and advances the reset itinerary
+        // from a position that no longer lies on the new route. Rebase to the
+        // nearest present stop on the new operational route instead, mirroring
+        // `break_service`/`restore_service`.
+        let target = target.or_else(|| {
+            vehicle_world.as_ref().and_then(|world| {
+                parking_target(
+                    candidate,
+                    mode,
+                    new_legs.as_deref().unwrap_or(&[]),
+                    new_waypoint_ids,
+                    world,
+                    preferred_direction,
+                )
+            })
+        });
         let parked_world = target
             .as_ref()
             .map(|(_, _, world)| world.clone())

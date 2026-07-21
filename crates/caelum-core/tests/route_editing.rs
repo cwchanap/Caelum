@@ -732,7 +732,7 @@ fn live_update_replans_trip_with_edited_route_only_in_a_future_remaining_leg() {
 }
 
 #[test]
-fn update_reports_route_not_found_and_uses_world_parking_without_retained_nodes() {
+fn update_reports_route_not_found_and_rebases_to_new_live_stop_without_retained_nodes() {
     let mut missing_engine = editable_bus_engine(&[2, 10], BUS_COST);
     let missing = missing_engine.dispatch(GameIntent::UpdateRoute {
         route_id: "route-999".into(),
@@ -766,10 +766,23 @@ fn update_reports_route_not_found_and_uses_world_parking_without_retained_nodes(
         revision,
         ids(&["stop-003", "stop-004"]),
     );
-    assert_eq!(
-        vehicle(&result, "vehicle-001").parked_position,
-        Some(before_world)
-    );
+    // With no retained waypoints, the vehicle is rebased to the nearest present
+    // stop on the new operational route (stop-003 at x=10) rather than parked at
+    // its old world coordinate, which would teleport on the next tick when
+    // `tick_vehicles` clears `parked_position` and advances the reset itinerary.
+    let stop_003 = result
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-003")
+        .expect("stop-003 present");
+    let parked = vehicle(&result, "vehicle-001")
+        .parked_position
+        .as_ref()
+        .expect("vehicle is parked at a new live stop");
+    assert_eq!(parked.x, f64::from(stop_003.position.x));
+    assert_eq!(parked.y, f64::from(stop_003.position.y));
+    assert_ne!(parked, &before_world);
 }
 
 fn route_lifecycle_world_position(

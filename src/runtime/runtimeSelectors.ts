@@ -331,7 +331,9 @@ export function selectRouteEditorView(
     previewWarnings: draft.preview?.warnings.map(warningMessage) ?? [],
     canSave:
       staleRejection === null &&
-      localStaleError === null &&
+      (ui.routePreviewError === null ||
+        ui.routePreviewError.code === "invalidRouteDraftInteraction") &&
+      ui.routePreviewHostError === null &&
       canSaveRouteDraft(draft),
     canReload: staleRejection !== null || localStaleError !== null,
   };
