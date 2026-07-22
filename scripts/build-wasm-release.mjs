@@ -13,6 +13,9 @@
 // `debugSetBudget`) are no-ops, causing e2e to fail with misleading budget
 // errors.
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
+
+const generatedWasmDirectory = "src/generated/caelum_wasm";
 
 function runBun(args) {
   return new Promise((resolve) => {
@@ -38,11 +41,33 @@ function runBun(args) {
   });
 }
 
+function removeGeneratedWasmDirectly() {
+  try {
+    rmSync(generatedWasmDirectory, { recursive: true, force: true });
+    console.error(
+      `[build-wasm-release] removed ${generatedWasmDirectory} with direct fallback`,
+    );
+    return true;
+  } catch (error) {
+    console.error(
+      `[build-wasm-release] direct fallback could not remove ${generatedWasmDirectory}:`,
+      error,
+    );
+    return false;
+  }
+}
+
 const status = await runBun(["run", "wasm:build:release"]);
 if (status !== 0) {
   console.error(
     "[build-wasm-release] wasm:build:release failed — removing generated WASM to prevent release-profile reuse by ensure-wasm",
   );
-  await runBun(["run", "clean:wasm"]);
+  const cleanupStatus = await runBun(["run", "clean:wasm"]);
+  if (cleanupStatus !== 0) {
+    console.error(
+      `[build-wasm-release] clean:wasm failed with status ${cleanupStatus}; using direct filesystem fallback`,
+    );
+    removeGeneratedWasmDirectly();
+  }
   process.exitCode = status;
 }
