@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "predev": "bun run ensure-wasm",
     "clean:wasm": "bun run scripts/clean-wasm.mjs",
-    "prebuild": "bun run clean:wasm && bun run wasm:build:release",
+    "prebuild": "bun run clean:wasm && bun run scripts/build-wasm-release.mjs",
     "build": "bun run scripts/build.mjs",
     "precheck": "bun run ensure-wasm",
     "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
