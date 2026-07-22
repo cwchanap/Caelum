@@ -7,13 +7,275 @@
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
 
+use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, Metrics, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, Tile,
-    TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, Heading, Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point,
+    RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
+    RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, Station, Stop,
+    Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::{DispatchResult, GameIntent, RoadPreset};
+use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
+use caelum_core::road::RoadMutation;
+use caelum_core::state::create_initial_snapshot;
+use caelum_core::{
+    DispatchResult, GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset,
+    RoutePreviewRequest,
+};
 use serde_json::json;
+
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+#[test]
+fn transit_node_status_defaults_to_present_when_missing() {
+    let mut engine = GameEngine::new();
+    engine.dispatch(GameIntent::LayRoad { point: point(2, 5) });
+    let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    let mut stop_value = serde_json::to_value(&stop_result.snapshot.transit.stops[0]).unwrap();
+    assert_eq!(stop_value["kind"], json!("busStop"));
+    assert_eq!(stop_value["status"], json!("present"));
+    stop_value.as_object_mut().unwrap().remove("status");
+    let restored: Stop = serde_json::from_value(stop_value).expect("missing status defaults");
+    assert_eq!(restored.status, TransitNodeStatus::Present);
+
+    engine.dispatch(GameIntent::LayTrack { point: point(5, 5) });
+    let station_result = engine.dispatch(GameIntent::AddMetroStation { point: point(5, 5) });
+    let mut station_value =
+        serde_json::to_value(&station_result.snapshot.transit.stations[0]).unwrap();
+    assert_eq!(station_value["status"], json!("present"));
+    station_value.as_object_mut().unwrap().remove("status");
+    let restored: Station = serde_json::from_value(station_value).expect("missing status defaults");
+    assert_eq!(restored.status, TransitNodeStatus::Present);
+}
+
+fn bus_route_fixture() -> Route {
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
+    }
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: point(10, 5),
+    });
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    engine.snapshot().transit.routes[0].clone()
+}
+
+#[test]
+fn route_wire_uses_directional_legs_without_legacy_segments() {
+    let route = bus_route_fixture();
+    let value = serde_json::to_value(route).unwrap();
+
+    assert_eq!(value["pattern"], json!("loop"));
+    assert_eq!(value["revision"], json!(0));
+    assert!(value.get("legs").is_some());
+    assert!(value.get("segments").is_none());
+    assert_eq!(value["legs"][0]["direction"], json!("loop"));
+    assert_eq!(value["legs"][0]["kind"], json!("service"));
+    assert_eq!(value["legs"][0]["status"], json!("connected"));
+    assert_eq!(value["legs"][0]["currentPath"]["kind"], json!("road"));
+}
+
+#[test]
+fn movement_kind_serializes_to_camel_case_wire_strings() {
+    for (movement, wire) in [
+        (MovementKind::Straight, "straight"),
+        (MovementKind::RightTurn, "rightTurn"),
+        (MovementKind::LeftTurn, "leftTurn"),
+        (MovementKind::UTurn, "uTurn"),
+        (MovementKind::RoundaboutEntry, "roundaboutEntry"),
+        (MovementKind::RoundaboutCirculation, "roundaboutCirculation"),
+        (MovementKind::RoundaboutExit, "roundaboutExit"),
+    ] {
+        let step = RoadPathStep {
+            position: Point { x: 1, y: 2 },
+            entering_heading: Heading::North,
+            leaving_heading: Heading::East,
+            movement,
+            geometry: PathGeometry::Line {
+                from: TripPosition { x: 0.0, y: 0.0 },
+                to: TripPosition { x: 1.0, y: 0.0 },
+            },
+            travel_seconds: 1.5,
+        };
+        let value = serde_json::to_value(&step).expect("road path step should serialize");
+        assert_eq!(
+            value["movement"],
+            json!(wire),
+            "movement kind wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_status_and_kind_pin_failure_path_wire_strings() {
+    for (status, wire) in [
+        (RouteLegStatus::Connected, "connected"),
+        (RouteLegStatus::NetworkDisconnected, "networkDisconnected"),
+        (RouteLegStatus::MissingNode, "missingNode"),
+    ] {
+        let value = serde_json::to_value(status).expect("status should serialize");
+        assert_eq!(
+            value,
+            json!(wire),
+            "route leg status wire spelling changed: {wire}"
+        );
+    }
+    for (kind, wire) in [
+        (RouteLegKind::Service, "service"),
+        (RouteLegKind::TerminalReversal, "terminalReversal"),
+    ] {
+        let value = serde_json::to_value(kind).expect("kind should serialize");
+        assert_eq!(
+            value,
+            json!(wire),
+            "route leg kind wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_path_serializes_status_and_kind_in_camel_case() {
+    let leg = RouteLegPath {
+        from_waypoint_id: "stop-001".to_string(),
+        to_waypoint_id: "stop-002".to_string(),
+        direction: ServiceDirection::Loop,
+        kind: RouteLegKind::TerminalReversal,
+        status: RouteLegStatus::MissingNode,
+        current_path: None,
+        last_valid_path: None,
+        estimated_seconds: None,
+    };
+    let value = serde_json::to_value(&leg).unwrap();
+    assert_eq!(value["status"], json!("missingNode"));
+    assert_eq!(value["kind"], json!("terminalReversal"));
+    assert_eq!(value["currentPath"], serde_json::Value::Null);
+    assert_eq!(value["lastValidPath"], serde_json::Value::Null);
+    assert_eq!(value["estimatedSeconds"], serde_json::Value::Null);
+}
+
+#[test]
+fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
+    let vehicle = Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-001".to_string(),
+        capacity: 18,
+        passenger_ids: Vec::new(),
+        itinerary_index: 1,
+        path_step_index: 2,
+        step_progress: 0.25,
+        parked_position: Some(TripPosition { x: 3.0, y: 4.0 }),
+    };
+    let value = serde_json::to_value(vehicle).unwrap();
+
+    assert_eq!(value["itineraryIndex"], json!(1));
+    assert_eq!(value["pathStepIndex"], json!(2));
+    assert_eq!(value["stepProgress"], json!(0.25));
+    assert_eq!(value["parkedPosition"], json!({ "x": 3.0, "y": 4.0 }));
+    assert!(value.get("segmentIndex").is_none());
+    assert!(value.get("progress").is_none());
+}
+
+#[test]
+fn snapshot_carries_the_authoritative_schema_version() {
+    let snapshot = create_initial_snapshot();
+    assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["schemaVersion"],
+        json!(2)
+    );
+}
+
+#[test]
+fn path_geometry_struct_variant_fields_use_camel_case() {
+    let geometry = PathGeometry::QuadraticBezier {
+        from: TripPosition { x: 0.0, y: 0.0 },
+        control: TripPosition { x: 1.5, y: 2.5 },
+        to: TripPosition { x: 3.0, y: 0.0 },
+    };
+
+    assert_eq!(
+        serde_json::to_value(geometry).unwrap(),
+        json!({
+            "kind": "quadraticBezier",
+            "from": { "x": 0.0, "y": 0.0 },
+            "control": { "x": 1.5, "y": 2.5 },
+            "to": { "x": 3.0, "y": 0.0 }
+        })
+    );
+}
+
+#[test]
+fn transit_path_struct_variant_fields_use_camel_case() {
+    let path = TransitPath::Road {
+        steps: Vec::new(),
+        total_travel_seconds: 3.75,
+    };
+
+    assert_eq!(
+        serde_json::to_value(path).unwrap(),
+        json!({
+            "kind": "road",
+            "steps": [],
+            "totalTravelSeconds": 3.75
+        })
+    );
+}
+
+#[test]
+fn gameplay_rejection_uses_stable_camel_case_wire_names() {
+    let rejection = GameplayRejection {
+        code: RejectionCode::InsufficientBudget,
+        context: RejectionContext {
+            required_budget: Some(8_000),
+            available_budget: Some(7_999),
+            ..RejectionContext::default()
+        },
+    };
+
+    assert_eq!(
+        serde_json::to_value(rejection).unwrap(),
+        json!({
+            "code": "insufficientBudget",
+            "context": {
+                "requiredBudget": 8000,
+                "availableBudget": 7999,
+                "affectedRouteIds": []
+            }
+        })
+    );
+}
+
+#[test]
+fn route_revision_exhausted_rejection_uses_stable_camel_case_wire_name() {
+    let rejection = GameplayRejection {
+        code: RejectionCode::RouteRevisionExhausted,
+        context: RejectionContext {
+            route_id: Some("route-001".into()),
+            actual_revision: Some(u32::MAX),
+            ..RejectionContext::default()
+        },
+    };
+
+    assert_eq!(
+        serde_json::to_value(rejection).unwrap(),
+        json!({
+            "code": "routeRevisionExhausted",
+            "context": {
+                "routeId": "route-001",
+                "actualRevision": 4294967295_u64,
+                "affectedRouteIds": []
+            }
+        })
+    );
+}
 
 fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
     ActiveTrip {
@@ -81,8 +343,10 @@ fn vehicle_and_route_leg_mode_serializes_to_legacy_strings() {
             line_id: "route-001".to_string(),
             capacity: 18,
             passenger_ids: Vec::new(),
-            segment_index: 0,
-            progress: 0.0,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
         };
         let value = serde_json::to_value(&vehicle).expect("vehicle should serialize");
         assert_eq!(
@@ -96,12 +360,59 @@ fn vehicle_and_route_leg_mode_serializes_to_legacy_strings() {
             from: (0, 0).into(),
             to: (1, 0).into(),
             line_id: Some("route-001".to_string()),
+            service_direction: (mode != TransitMode::Walk).then_some(ServiceDirection::Loop),
+            board_itinerary_index: (mode != TransitMode::Walk).then_some(0),
+            alight_itinerary_index: (mode != TransitMode::Walk).then_some(0),
         };
         let value = serde_json::to_value(&leg).expect("leg should serialize");
         assert_eq!(
             value["mode"],
             json!(wire),
             "route leg mode wire spelling changed: {wire}"
+        );
+    }
+}
+
+#[test]
+fn route_leg_visit_fields_are_required_and_walk_fields_serialize_as_null() {
+    let walk = RouteLeg {
+        mode: TransitMode::Walk,
+        from: (0, 0).into(),
+        to: (1, 0).into(),
+        line_id: None,
+        service_direction: None,
+        board_itinerary_index: None,
+        alight_itinerary_index: None,
+    };
+    let walk_value = serde_json::to_value(&walk).unwrap();
+    assert_eq!(walk_value["serviceDirection"], serde_json::Value::Null);
+    assert_eq!(walk_value["boardItineraryIndex"], serde_json::Value::Null);
+    assert_eq!(walk_value["alightItineraryIndex"], serde_json::Value::Null);
+
+    let transit = RouteLeg {
+        mode: TransitMode::Bus,
+        from: (2, 5).into(),
+        to: (6, 5).into(),
+        line_id: Some("route-001".to_string()),
+        service_direction: Some(ServiceDirection::Return),
+        board_itinerary_index: Some(4),
+        alight_itinerary_index: Some(4),
+    };
+    let transit_value = serde_json::to_value(&transit).unwrap();
+    assert_eq!(transit_value["serviceDirection"], json!("return"));
+    assert_eq!(transit_value["boardItineraryIndex"], json!(4));
+    assert_eq!(transit_value["alightItineraryIndex"], json!(4));
+
+    for field in [
+        "serviceDirection",
+        "boardItineraryIndex",
+        "alightItineraryIndex",
+    ] {
+        let mut missing = transit_value.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<RouteLeg>(missing).is_err(),
+            "schema-v2 RouteLeg field {field} must be required"
         );
     }
 }
@@ -313,18 +624,32 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             vec![("point", json!({ "x": 5, "y": 6 }))],
         ),
         (
-            GameIntent::AddBusRoute {
-                stop_ids: vec!["stop-1".to_string(), "stop-2".to_string()],
+            GameIntent::CreateRoute {
+                mode: TransitMode::Bus,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["stop-1".to_string(), "stop-2".to_string()],
             },
-            "addBusRoute",
-            vec![("stopIds", json!(["stop-1", "stop-2"]))],
+            "createRoute",
+            vec![
+                ("mode", json!("bus")),
+                ("pattern", json!("loop")),
+                ("waypointIds", json!(["stop-1", "stop-2"])),
+            ],
         ),
         (
-            GameIntent::AddMetroLine {
-                station_ids: vec!["station-1".to_string()],
+            GameIntent::UpdateRoute {
+                route_id: "metro-001".to_string(),
+                expected_revision: 7,
+                pattern: ServicePattern::Shuttle,
+                waypoint_ids: vec!["station-1".to_string(), "station-2".to_string()],
             },
-            "addMetroLine",
-            vec![("stationIds", json!(["station-1"]))],
+            "updateRoute",
+            vec![
+                ("routeId", json!("metro-001")),
+                ("expectedRevision", json!(7)),
+                ("pattern", json!("shuttle")),
+                ("waypointIds", json!(["station-1", "station-2"])),
+            ],
         ),
         (
             GameIntent::SetRouteActive {
@@ -399,6 +724,22 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
                 ("rotation", json!(90)),
             ],
         ),
+        (
+            GameIntent::PlaceRoundabout {
+                origin: p(5, 6),
+                size: RoundaboutSize::Compact2x2,
+            },
+            "placeRoundabout",
+            vec![
+                ("origin", json!({ "x": 5, "y": 6 })),
+                ("size", json!("compact2x2")),
+            ],
+        ),
+        (
+            GameIntent::SetBudget { budget: 50_000 },
+            "setBudget",
+            vec![("budget", json!(50_000))],
+        ),
     ];
 
     // Exhaustiveness guard: every `GameIntent` variant must be wired up here.
@@ -412,14 +753,15 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
+            GameIntent::PlaceRoundabout { .. } => "placeRoundabout",
             GameIntent::LayTrack { .. } => "layTrack",
             GameIntent::LayTrackLine { .. } => "layTrackLine",
             GameIntent::RemoveAtTile { .. } => "removeAtTile",
             GameIntent::RemoveAtTiles { .. } => "removeAtTiles",
             GameIntent::AddBusStop { .. } => "addBusStop",
             GameIntent::AddMetroStation { .. } => "addMetroStation",
-            GameIntent::AddBusRoute { .. } => "addBusRoute",
-            GameIntent::AddMetroLine { .. } => "addMetroLine",
+            GameIntent::CreateRoute { .. } => "createRoute",
+            GameIntent::UpdateRoute { .. } => "updateRoute",
             GameIntent::SetRouteActive { .. } => "setRouteActive",
             GameIntent::RenameRoute { .. } => "renameRoute",
             GameIntent::RecolorRoute { .. } => "recolorRoute",
@@ -427,6 +769,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::AssignRouteToPlatform { .. } => "assignRouteToPlatform",
             GameIntent::PaintAreaRectangle { .. } => "paintAreaRectangle",
             GameIntent::PlaceBuilding { .. } => "placeBuilding",
+            GameIntent::SetBudget { .. } => "setBudget",
         }
     }
 
@@ -467,8 +810,6 @@ fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
     // the objective copy from them), and they must match the TS domain
     // `Scenario.objectives` shape exactly — including `rollingWindowSeconds`,
     // which a previous TS shim had drifted to 600 while the core evaluates 300.
-    use caelum_core::state::create_initial_snapshot;
-
     let snapshot = create_initial_snapshot();
     let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
     assert_eq!(value["name"], json!("Growing Suburb"));
@@ -502,8 +843,10 @@ fn snapshot_round_trips_through_json() {
         line_id: "metro-001".to_string(),
         capacity: 90,
         passenger_ids: vec!["sim-001".to_string()],
-        segment_index: 2,
-        progress: 0.25,
+        itinerary_index: 2,
+        path_step_index: 3,
+        step_progress: 0.25,
+        parked_position: Some(TripPosition { x: 4.0, y: 5.0 }),
     };
     let json = serde_json::to_value(&vehicle).expect("serialize");
     let back: Vehicle = serde_json::from_value(json).expect("deserialize");
@@ -514,6 +857,9 @@ fn snapshot_round_trips_through_json() {
         from: (0, 0).into(),
         to: (1, 0).into(),
         line_id: None,
+        service_direction: None,
+        board_itinerary_index: None,
+        alight_itinerary_index: None,
     };
     let plan = RoutePlan {
         legs: vec![leg],
@@ -533,9 +879,79 @@ fn snapshot_round_trips_through_json() {
         area: None,
         has_track: false,
         one_way: None,
+        road_connections: vec![Heading::East, Heading::West],
+        road_structure_id: None,
     };
     let value = serde_json::to_value(&tile).expect("tile should serialize");
     assert_eq!(value["kind"], json!("road"));
+    assert_eq!(value["roadConnections"], json!(["east", "west"]));
+}
+
+#[test]
+fn road_structures_use_stable_camel_case_wire_shapes() {
+    let junction = RoadStructure::AutomaticJunction {
+        id: "junction-1".to_string(),
+        footprint: vec![point(4, 5)],
+        ports: vec![RoadPort {
+            id: "junction-1-port-4-5-west".to_string(),
+            point: point(4, 5),
+            edge: Heading::West,
+            direction: None,
+        }],
+    };
+    assert_eq!(
+        serde_json::to_value(junction).unwrap(),
+        json!({
+            "kind": "automaticJunction",
+            "id": "junction-1",
+            "footprint": [{ "x": 4, "y": 5 }],
+            "ports": [{
+                "id": "junction-1-port-4-5-west",
+                "point": { "x": 4, "y": 5 },
+                "edge": "west"
+            }]
+        })
+    );
+
+    let roundabout = RoadStructure::Roundabout {
+        id: "roundabout-1".to_string(),
+        origin: point(8, 9),
+        size: RoundaboutSize::Compact2x2,
+        footprint: vec![point(8, 9)],
+        ports: Vec::new(),
+    };
+    let value = serde_json::to_value(roundabout).unwrap();
+    assert_eq!(value["kind"], json!("roundabout"));
+    assert_eq!(value["size"], json!("compact2x2"));
+}
+
+#[test]
+fn place_roundabout_intent_and_preview_mutation_use_camel_case_wire() {
+    let intent = GameIntent::PlaceRoundabout {
+        origin: point(5, 6),
+        size: RoundaboutSize::Compact2x2,
+    };
+    assert_eq!(
+        serde_json::to_value(intent).unwrap(),
+        json!({
+            "type": "placeRoundabout",
+            "origin": { "x": 5, "y": 6 },
+            "size": "compact2x2"
+        })
+    );
+
+    let mutation = RoadMutation::PlaceRoundabout {
+        origin: point(8, 9),
+        size: RoundaboutSize::Standard3x3,
+    };
+    assert_eq!(
+        serde_json::to_value(mutation).unwrap(),
+        json!({
+            "type": "placeRoundabout",
+            "origin": { "x": 8, "y": 9 },
+            "size": "standard3x3"
+        })
+    );
 }
 
 #[test]
@@ -593,18 +1009,14 @@ fn dispatch_result_round_trips_through_serde_json() {
     // cannot silently drop or rename a field that the WASM path handles.
     //
     // Both the applied (rejection = None) and rejected (rejection = Some) cases
-    // are covered, since `Option<String>` is the field most likely to diverge
+    // are covered, since `Option<GameplayRejection>` is the field most likely to diverge
     // between serializers.
     use caelum_core::state::create_initial_snapshot;
 
     let snapshot = create_initial_snapshot();
 
     // Applied case: rejection is None -> serializes to JSON `null`.
-    let applied = DispatchResult {
-        snapshot: snapshot.clone(),
-        applied: true,
-        rejection: None,
-    };
+    let applied = DispatchResult::applied(snapshot.clone());
     let value = serde_json::to_value(&applied).expect("applied result should serialize");
     assert_eq!(value["applied"], json!(true));
     assert_eq!(value["rejection"], json!(null));
@@ -613,21 +1025,32 @@ fn dispatch_result_round_trips_through_serde_json() {
         serde_json::from_value(value).expect("applied result should deserialize back");
     assert_eq!(back, applied);
 
-    // Rejected case: rejection is Some -> serializes to a JSON string.
-    let rejected = DispatchResult {
-        snapshot: snapshot.clone(),
-        applied: false,
-        rejection: Some("invalid speed: 3".to_string()),
-    };
+    // Rejected case: rejection is Some -> serializes to structured JSON.
+    let rejected = DispatchResult::rejected(
+        snapshot.clone(),
+        GameplayRejection::new(RejectionCode::InvalidSpeed),
+    );
     let value = serde_json::to_value(&rejected).expect("rejected result should serialize");
     assert_eq!(value["applied"], json!(false));
-    assert_eq!(value["rejection"], json!("invalid speed: 3"));
+    assert_eq!(
+        value["rejection"],
+        json!({ "code": "invalidSpeed", "context": { "affectedRouteIds": [] } })
+    );
+    assert_eq!(
+        value["context"],
+        json!({
+            "changedTiles": [],
+            "skippedTiles": [],
+            "affectedRouteIds": [],
+            "cost": 0
+        })
+    );
     let back: DispatchResult =
         serde_json::from_value(value.clone()).expect("rejected result should deserialize back");
     assert_eq!(back, rejected);
 
     // Cross-check: the serialized JSON shape matches what the TS `DispatchResult`
-    // interface expects (`{ snapshot, applied, rejection }`), so a Tauri IPC
+    // interface expects (`{ snapshot, applied, rejection, context }`), so a Tauri IPC
     // response is structurally identical to a WASM `engine.dispatch()` return.
     let keys: std::collections::HashSet<String> = value
         .as_object()
@@ -637,7 +1060,7 @@ fn dispatch_result_round_trips_through_serde_json() {
         .collect();
     assert_eq!(
         keys,
-        ["snapshot", "applied", "rejection"]
+        ["snapshot", "applied", "rejection", "context"]
             .into_iter()
             .map(String::from)
             .collect(),
@@ -701,4 +1124,176 @@ fn scenario_config_growth_waves_defaults_to_empty_when_omitted() {
     let config: ScenarioConfig =
         serde_json::from_value(value).expect("scenario without growthWaves deserializes");
     assert!(config.growth_waves.is_empty());
+}
+
+#[test]
+fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
+    let route_request = RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+        route_id: None,
+        expected_revision: None,
+        generation: 61,
+    };
+    assert_eq!(
+        serde_json::to_value(&route_request).unwrap(),
+        json!({
+            "mode": "bus",
+            "pattern": "loop",
+            "waypointIds": ["stop-001", "stop-002"],
+            "routeId": null,
+            "expectedRevision": null,
+            "generation": 61
+        })
+    );
+
+    let road_request = RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 62,
+    };
+    assert_eq!(
+        serde_json::to_value(&road_request).unwrap(),
+        json!({
+            "mutation": {
+                "type": "layRoadLine",
+                "points": [{ "x": 2, "y": 2 }, { "x": 3, "y": 2 }],
+                "preset": "twoWay"
+            },
+            "generation": 62
+        })
+    );
+
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
+    }
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: point(10, 5),
+    });
+    let route_response = engine.preview_route(route_request);
+    let route_value = serde_json::to_value(route_response).unwrap();
+    assert_eq!(route_value["generation"], json!(61));
+    assert_eq!(route_value["rejection"], json!(null));
+    assert_eq!(route_value["initialVehicleCost"], json!(8_000));
+    assert!(route_value.get("total_travel_seconds").is_none());
+
+    let road_response = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(3, 3) },
+        generation: 63,
+    });
+    let road_value = serde_json::to_value(road_response).unwrap();
+    assert_eq!(road_value["generation"], json!(63));
+    assert_eq!(road_value["rejection"], json!(null));
+    assert_eq!(road_value["authoredTiles"][0]["oneWay"], json!(null));
+    assert_eq!(
+        road_value["authoredTiles"][0]["roadStructureId"],
+        json!(null)
+    );
+
+    engine.set_budget_for_test(99);
+    let rejected_road = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(4, 3) },
+        generation: 64,
+    });
+    let rejected_value = serde_json::to_value(rejected_road).unwrap();
+    assert_eq!(rejected_value["generation"], json!(64));
+    assert_eq!(rejected_value["cost"], json!(100));
+    assert_eq!(
+        rejected_value["rejection"],
+        json!({
+            "code": "insufficientBudget",
+            "context": {
+                "requiredBudget": 100,
+                "availableBudget": 99,
+                "affectedRouteIds": []
+            }
+        })
+    );
+    assert!(rejected_value.get("affordable").is_none());
+}
+
+#[test]
+fn rejection_code_camel_case_spellings_are_exhaustive() {
+    // Pin the camelCase wire spelling for every `RejectionCode` variant. A new
+    // variant that is not wired up here will fail the exhaustiveness match so
+    // the TS host boundary cannot silently regress when the enum grows.
+    fn expected_camel(code: &RejectionCode) -> &'static str {
+        match code {
+            RejectionCode::InsufficientBudget => "insufficientBudget",
+            RejectionCode::InvalidSpeed => "invalidSpeed",
+            RejectionCode::BlockedTile => "blockedTile",
+            RejectionCode::OutOfBounds => "outOfBounds",
+            RejectionCode::RoadRequired => "roadRequired",
+            RejectionCode::TrackRequired => "trackRequired",
+            RejectionCode::InvalidRoadStroke => "invalidRoadStroke",
+            RejectionCode::InvalidTrackStroke => "invalidTrackStroke",
+            RejectionCode::InvalidDirectionChange => "invalidDirectionChange",
+            RejectionCode::NodeAlreadyExists => "nodeAlreadyExists",
+            RejectionCode::AmbiguousTransitNode => "ambiguousTransitNode",
+            RejectionCode::MissingRouteNode => "missingRouteNode",
+            RejectionCode::IncompatibleRouteNode => "incompatibleRouteNode",
+            RejectionCode::TooFewRouteNodes => "tooFewRouteNodes",
+            RejectionCode::DuplicateRouteNodes => "duplicateRouteNodes",
+            RejectionCode::DisconnectedLeg => "disconnectedLeg",
+            RejectionCode::RouteChangedWhileEditing => "routeChangedWhileEditing",
+            RejectionCode::RouteRevisionExhausted => "routeRevisionExhausted",
+            RejectionCode::RouteNotFound => "routeNotFound",
+            RejectionCode::InactiveRoute => "inactiveRoute",
+            RejectionCode::StructureNotFound => "structureNotFound",
+            RejectionCode::InvalidPlatform => "invalidPlatform",
+            RejectionCode::InvalidBuildingPlacement => "invalidBuildingPlacement",
+            RejectionCode::BlockedFootprint => "blockedFootprint",
+            RejectionCode::UnsafeRoundaboutPortMapping => "unsafeRoundaboutPortMapping",
+        }
+    }
+
+    let all_codes = [
+        RejectionCode::InsufficientBudget,
+        RejectionCode::InvalidSpeed,
+        RejectionCode::BlockedTile,
+        RejectionCode::OutOfBounds,
+        RejectionCode::RoadRequired,
+        RejectionCode::TrackRequired,
+        RejectionCode::InvalidRoadStroke,
+        RejectionCode::InvalidTrackStroke,
+        RejectionCode::InvalidDirectionChange,
+        RejectionCode::NodeAlreadyExists,
+        RejectionCode::AmbiguousTransitNode,
+        RejectionCode::MissingRouteNode,
+        RejectionCode::IncompatibleRouteNode,
+        RejectionCode::TooFewRouteNodes,
+        RejectionCode::DuplicateRouteNodes,
+        RejectionCode::DisconnectedLeg,
+        RejectionCode::RouteChangedWhileEditing,
+        RejectionCode::RouteRevisionExhausted,
+        RejectionCode::RouteNotFound,
+        RejectionCode::InactiveRoute,
+        RejectionCode::StructureNotFound,
+        RejectionCode::InvalidPlatform,
+        RejectionCode::InvalidBuildingPlacement,
+        RejectionCode::BlockedFootprint,
+        RejectionCode::UnsafeRoundaboutPortMapping,
+    ];
+
+    let mut seen = std::collections::HashSet::new();
+    for code in &all_codes {
+        let rejection = GameplayRejection::new(code.clone());
+        let value = serde_json::to_value(&rejection)
+            .unwrap_or_else(|_| panic!("rejection {code:?} should serialize"));
+        let expected = expected_camel(code);
+        assert_eq!(
+            value["code"],
+            json!(expected),
+            "RejectionCode wire spelling changed for {code:?}"
+        );
+        assert!(
+            seen.insert(expected),
+            "duplicate camelCase spelling: {expected}"
+        );
+    }
 }

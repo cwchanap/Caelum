@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{GameSnapshot, Point};
+use crate::model::{GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode};
+use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,10 @@ pub enum GameIntent {
     CycleRoadDirection {
         point: Point,
     },
+    PlaceRoundabout {
+        origin: Point,
+        size: RoundaboutSize,
+    },
     LayTrack {
         point: Point,
     },
@@ -55,11 +60,16 @@ pub enum GameIntent {
     AddMetroStation {
         point: Point,
     },
-    AddBusRoute {
-        stop_ids: Vec<String>,
+    CreateRoute {
+        mode: TransitMode,
+        pattern: ServicePattern,
+        waypoint_ids: Vec<String>,
     },
-    AddMetroLine {
-        station_ids: Vec<String>,
+    UpdateRoute {
+        route_id: String,
+        expected_revision: u32,
+        pattern: ServicePattern,
+        waypoint_ids: Vec<String>,
     },
     SetRouteActive {
         route_id: String,
@@ -91,6 +101,13 @@ pub enum GameIntent {
         origin: Point,
         rotation: u16,
     },
+    /// Debug/e2e helper to set the budget directly. Deserialized on the wire
+    /// for dev WASM/e2e, but `GameEngine::dispatch` only applies it under
+    /// `debug_assertions` — release builds leave the snapshot unchanged.
+    /// Prefer `GameEngine::set_budget_for_test` in unit tests.
+    SetBudget {
+        budget: i32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,5 +115,53 @@ pub enum GameIntent {
 pub struct DispatchResult {
     pub snapshot: GameSnapshot,
     pub applied: bool,
-    pub rejection: Option<String>,
+    pub rejection: Option<GameplayRejection>,
+    pub context: DispatchContext,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DispatchContext {
+    pub changed_tiles: Vec<Point>,
+    pub skipped_tiles: Vec<Point>,
+    pub affected_route_ids: Vec<String>,
+    pub cost: i32,
+}
+
+impl DispatchResult {
+    pub fn applied(snapshot: GameSnapshot) -> Self {
+        Self {
+            snapshot,
+            applied: true,
+            rejection: None,
+            context: DispatchContext::default(),
+        }
+    }
+
+    pub fn applied_with_context(snapshot: GameSnapshot, context: DispatchContext) -> Self {
+        Self {
+            snapshot,
+            applied: true,
+            rejection: None,
+            context,
+        }
+    }
+
+    pub fn unchanged(snapshot: GameSnapshot) -> Self {
+        Self {
+            snapshot,
+            applied: false,
+            rejection: None,
+            context: DispatchContext::default(),
+        }
+    }
+
+    pub fn rejected(snapshot: GameSnapshot, rejection: GameplayRejection) -> Self {
+        Self {
+            snapshot,
+            applied: false,
+            rejection: Some(rejection),
+            context: DispatchContext::default(),
+        }
+    }
 }

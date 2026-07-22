@@ -1,4 +1,4 @@
-use caelum_core::{GameEngine, GameIntent};
+use caelum_core::{GameEngine, GameIntent, RoadMutationPreviewRequest, RoutePreviewRequest};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -36,6 +36,19 @@ impl WasmGameEngine {
 
     pub fn reset(&mut self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.inner.reset()).map_err(to_js_error)
+    }
+
+    pub fn preview_route(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request: RoutePreviewRequest =
+            serde_wasm_bindgen::from_value(request).map_err(to_js_error)?;
+        serde_wasm_bindgen::to_value(&self.inner.preview_route(request)).map_err(to_js_error)
+    }
+
+    pub fn preview_road_mutation(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request: RoadMutationPreviewRequest =
+            serde_wasm_bindgen::from_value(request).map_err(to_js_error)?;
+        serde_wasm_bindgen::to_value(&self.inner.preview_road_mutation(request))
+            .map_err(to_js_error)
     }
 }
 

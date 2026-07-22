@@ -1,4 +1,5 @@
 export type TileKind = "empty" | "road";
+export const SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export type AreaKind =
   | "residential"
   | "commercial"
@@ -6,8 +7,16 @@ export type AreaKind =
   | "office"
   | "civic"
   | "park";
-export type RoadDirection = "north" | "east" | "south" | "west";
+export type Heading = "north" | "east" | "south" | "west";
+export type RoadDirection = Heading;
 export type TransitMode = "walk" | "bus" | "metro";
+export type ServicePattern = "loop" | "shuttle";
+export type ServiceDirection = "loop" | "outbound" | "return";
+export type RouteLegKind = "service" | "terminalReversal";
+export type RouteLegStatus =
+  | "connected"
+  | "networkDisconnected"
+  | "missingNode";
 export type BuildingType =
   | "busStop"
   | "busTerminal"
@@ -25,6 +34,7 @@ export type BuildingType =
   | "parkPlaza";
 export type BuildingRotation = 0 | 90 | 180 | 270;
 export type StopKind = "busStop" | "busTerminal";
+export type TransitNodeStatus = "present" | "missing";
 export type CitizenStatus =
   | "idle"
   | "walking"
@@ -41,6 +51,7 @@ export type Tool =
   | "metroLine"
   | "area"
   | "road"
+  | "roundabout"
   | "track"
   | "remove";
 export type RoadPreset = "twoWay" | "oneWay" | "dualBidirectional";
@@ -54,6 +65,86 @@ export type Overlay =
 export interface Point {
   x: number;
   y: number;
+}
+
+/** Structural equality for two (possibly null) points. */
+export function samePoint(left: Point | null, right: Point | null): boolean {
+  return left?.x === right?.x && left?.y === right?.y;
+}
+
+export type RoundaboutSize = "compact2x2" | "standard3x3";
+
+export type PortDirection = "twoWay" | "inbound" | "outbound";
+
+export interface RoadPort {
+  id: string;
+  point: Point;
+  edge: Heading;
+  direction?: PortDirection;
+}
+
+export type RoadStructure =
+  | {
+      kind: "automaticJunction";
+      id: string;
+      footprint: Point[];
+      ports: RoadPort[];
+    }
+  | {
+      kind: "roundabout";
+      id: string;
+      origin: Point;
+      size: RoundaboutSize;
+      footprint: Point[];
+      ports: RoadPort[];
+    };
+
+export type RejectionCode =
+  | "insufficientBudget"
+  | "invalidSpeed"
+  | "blockedTile"
+  | "outOfBounds"
+  | "roadRequired"
+  | "trackRequired"
+  | "invalidRoadStroke"
+  | "invalidTrackStroke"
+  | "invalidDirectionChange"
+  | "nodeAlreadyExists"
+  | "ambiguousTransitNode"
+  | "missingRouteNode"
+  | "incompatibleRouteNode"
+  | "tooFewRouteNodes"
+  | "duplicateRouteNodes"
+  | "disconnectedLeg"
+  | "routeChangedWhileEditing"
+  | "routeRevisionExhausted"
+  | "routeNotFound"
+  | "inactiveRoute"
+  | "structureNotFound"
+  | "invalidPlatform"
+  | "invalidBuildingPlacement"
+  | "blockedFootprint"
+  | "unsafeRoundaboutPortMapping";
+
+export interface RejectionContext {
+  routeId?: string;
+  nodeId?: string;
+  structureId?: string;
+  fromWaypointId?: string;
+  toWaypointId?: string;
+  point?: Point;
+  footprint?: Point[];
+  expectedRevision?: number;
+  actualRevision?: number;
+  requiredBudget?: number;
+  availableBudget?: number;
+  /** Present on every Rust rejection; optional so omitted serde payloads normalize cleanly. */
+  affectedRouteIds?: string[];
+}
+
+export interface GameplayRejection {
+  code: RejectionCode;
+  context: RejectionContext;
 }
 
 /** Unit direction vector for each road arrow (canonical direction -> vector). */
@@ -77,12 +168,17 @@ export interface Tile extends Point {
   /** One-way constraint on a road lane. Undefined = two-way (default).
    *  Only meaningful when `kind === "road"`; stripped on non-road kinds. */
   oneWay?: RoadDirection;
+  /** Authored reciprocal road edges in canonical N/E/S/W order. */
+  roadConnections: Heading[];
+  /** Structure ownership is independent of the road tile's visual kind. */
+  roadStructureId?: string;
 }
 
 export interface GameMap {
   width: number;
   height: number;
   tiles: Tile[];
+  roadStructures: RoadStructure[];
 }
 
 export interface PlacedBuilding {
@@ -104,14 +200,76 @@ export interface Platform {
 export interface Stop {
   id: string;
   kind: StopKind;
+  status: TransitNodeStatus;
   position: Point;
   platforms: Platform[];
 }
 
 export interface Station {
   id: string;
+  status: TransitNodeStatus;
   position: Point;
   platforms: Platform[];
+}
+
+export type MovementKind =
+  | "straight"
+  | "rightTurn"
+  | "leftTurn"
+  | "uTurn"
+  | "roundaboutEntry"
+  | "roundaboutCirculation"
+  | "roundaboutExit";
+
+export type PathGeometry =
+  | { kind: "line"; from: TripPosition; to: TripPosition }
+  | {
+      kind: "quadraticBezier";
+      from: TripPosition;
+      control: TripPosition;
+      to: TripPosition;
+    }
+  // Render-only: roundabout circulation curves. Constructed by
+  // roundaboutRenderer's visual template and offset by routeGeometry;
+  // Rust road/track path geometry never emits arcs (it uses line and
+  // quadraticBezier for movement steps).
+  | {
+      kind: "arc";
+      center: TripPosition;
+      radius: number;
+      startRadians: number;
+      sweepRadians: number;
+    };
+
+export interface RoadPathStep {
+  position: Point;
+  enteringHeading: Heading;
+  leavingHeading: Heading;
+  movement: MovementKind;
+  geometry: PathGeometry;
+  travelSeconds: number;
+}
+
+export interface TrackPathStep {
+  position: Point;
+  heading: Heading;
+  geometry: PathGeometry;
+  travelSeconds: number;
+}
+
+export type TransitPath =
+  | { kind: "road"; steps: RoadPathStep[]; totalTravelSeconds: number }
+  | { kind: "track"; steps: TrackPathStep[]; totalTravelSeconds: number };
+
+export interface RouteLegPath {
+  fromWaypointId: string;
+  toWaypointId: string;
+  direction: ServiceDirection;
+  kind: RouteLegKind;
+  status: RouteLegStatus;
+  currentPath: TransitPath | null;
+  lastValidPath: TransitPath | null;
+  estimatedSeconds: number | null;
 }
 
 export interface Route {
@@ -121,11 +279,9 @@ export interface Route {
   stopIds: string[];
   vehicleIds: string[];
   active: boolean;
-  /** Tile path per consecutive stop pair, closing the loop (last -> first).
-   *  An unpathable pair is an empty array. */
-  segments: Point[][];
-  /** True when any segment is unpathable. Runs only when active && !pathBroken;
-   *  network damage never touches the player's `active` toggle. */
+  pattern: ServicePattern;
+  revision: number;
+  legs: RouteLegPath[];
   pathBroken: boolean;
 }
 
@@ -136,11 +292,9 @@ export interface MetroLine {
   stationIds: string[];
   vehicleIds: string[];
   active: boolean;
-  /** Tile path per consecutive station pair, closing the loop (last -> first).
-   *  An unpathable pair is an empty array. */
-  segments: Point[][];
-  /** True when any segment is unpathable. Runs only when active && !pathBroken;
-   *  network damage never touches the player's `active` toggle. */
+  pattern: ServicePattern;
+  revision: number;
+  legs: RouteLegPath[];
   pathBroken: boolean;
 }
 
@@ -150,8 +304,10 @@ export interface Vehicle {
   lineId: string;
   capacity: number;
   passengerIds: string[];
-  segmentIndex: number;
-  progress: number;
+  itineraryIndex: number;
+  pathStepIndex: number;
+  stepProgress: number;
+  parkedPosition: TripPosition | null;
 }
 
 export type WorkerProfile = "worker" | "nonWorker";
@@ -195,6 +351,9 @@ export interface RouteLeg {
   from: Point;
   to: Point;
   lineId?: string;
+  serviceDirection: ServiceDirection | null;
+  boardItineraryIndex: number | null;
+  alightItineraryIndex: number | null;
 }
 
 export interface RoutePlan {
@@ -261,6 +420,7 @@ export interface TransitNetwork {
 }
 
 export interface GameState {
+  schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
   time: number;
   day: number;
   clockMinutes: number;

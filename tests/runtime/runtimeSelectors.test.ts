@@ -4,6 +4,12 @@ import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
+import {
+  canSaveRouteDraft,
+  createDraft,
+  editDraft,
+} from "../../src/ui/routeDraft";
+import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
   addTestBusRoute,
@@ -37,7 +43,17 @@ function waitingBusTrip(
     deadline: 9_999,
     routePlan: {
       estimatedSeconds: 100,
-      legs: [{ mode: "bus", from: position, to: { x: 0, y: 0 }, lineId }],
+      legs: [
+        {
+          mode: "bus",
+          from: position,
+          to: { x: 0, y: 0 },
+          lineId,
+          serviceDirection: "loop",
+          boardItineraryIndex: 0,
+          alightItineraryIndex: 0,
+        },
+      ],
     },
     currentLegIndex: 0,
     patienceRemaining: 100,
@@ -159,6 +175,48 @@ describe("selectShellState inspector", () => {
 });
 
 describe("route selectors", () => {
+  function routePreview(
+    waypointIds: string[],
+    affordable = true,
+  ): RoutePreviewResponse {
+    return {
+      generation: 1,
+      legs: waypointIds.map((id, index) => ({
+        fromWaypointId: id,
+        toWaypointId: waypointIds[(index + 1) % waypointIds.length],
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: null,
+        lastValidPath: null,
+        estimatedSeconds: 1,
+      })),
+      totalTravelSeconds: waypointIds.length,
+      initialVehicleCost: COSTS.bus,
+      affordable,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: [],
+      warnings: [],
+      rejection: null,
+    };
+  }
+
+  function busDraft(waypointIds: string[], preview = false) {
+    return {
+      ...createDraft("bus", 1),
+      waypointIds,
+      generation: 1,
+      previewPending: false,
+      preview: preview ? routePreview(waypointIds) : null,
+    };
+  }
+
   function twoStops() {
     let state = createTestGameState();
     state = withRoads(state, pointsOnRow(8, 7, 15));
@@ -172,42 +230,199 @@ describe("route selectors", () => {
     expect(shell.routeDraft).toBe(null);
   });
 
-  it("derives a bus draft with stop labels and a finish gate", () => {
+  it("derives a bus editor with waypoint labels and a Save gate", () => {
     const state = twoStops();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001"],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001"],
+      },
     };
     const shell = selectShellState(state, ui);
     expect(shell.routeDraft?.mode).toBe("bus");
-    expect(shell.routeDraft?.stops).toEqual([
-      { index: 0, label: "Bus Stop", coord: "(7,8)" },
+    expect(shell.routeDraft?.waypoints).toEqual([
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: false,
+      },
     ]);
-    expect(shell.routeDraft?.canFinish).toBe(false);
-    expect(shell.routeDraft?.finishHint).toBe("Add another stop");
+    expect(shell.routeDraft?.canSave).toBe(false);
+    expect(shell.routeDraft?.previewMessage).toBe(
+      "Add at least two waypoints.",
+    );
   });
 
-  it("enables finish at two affordable stops", () => {
+  it("enables Save at two affordable stops", () => {
     const state = twoStops();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001", "stop-002"],
+      routeDraft: busDraft(["stop-001", "stop-002"], true),
     };
-    expect(selectShellState(state, ui).routeDraft?.canFinish).toBe(true);
+    expect(selectShellState(state, ui).routeDraft?.canSave).toBe(true);
   });
 
-  it("blocks finish when unaffordable with a cost hint", () => {
+  it("keeps the selector Save gate in parity with the shared predicate", () => {
+    const state = twoStops();
+    const routeDraft = busDraft(["stop-001", "stop-002"], true);
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft,
+    };
+
+    expect(selectShellState(state, ui).routeDraft?.canSave).toBe(
+      canSaveRouteDraft(routeDraft),
+    );
+  });
+
+  it("blocks Save when unaffordable with a cost hint", () => {
     const state = { ...twoStops(), budget: 1_000 };
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      draftStopIds: ["stop-001", "stop-002"],
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"], true),
+        preview: routePreview(["stop-001", "stop-002"], false),
+      },
     };
     const draft = selectShellState(state, ui).routeDraft;
-    expect(draft?.canFinish).toBe(false);
-    expect(draft?.finishHint).toBe("Need $8,000");
+    expect(draft?.canSave).toBe(false);
+    expect(draft?.previewMessage).toBe("Need $8,000.");
+  });
+
+  it("offers Reload after a stale edit rejection", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        previewPending: false,
+        preview: routePreview(["stop-001", "stop-002"]),
+      },
+    };
+
+    const draft = selectShellState(state, ui, {
+      code: "routeChangedWhileEditing",
+      context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+    }).routeDraft;
+
+    expect(draft).toMatchObject({
+      canReload: true,
+      canSave: false,
+      previewStatus: "rejected",
+      previewMessage:
+        "This route changed while you were editing it. Reload the saved route.",
+    });
+  });
+
+  it("does not apply another route's stale rejection to the active editor", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        previewPending: false,
+        preview: routePreview(["stop-001", "stop-002"]),
+      },
+    };
+
+    expect(
+      selectShellState(state, ui, {
+        code: "routeChangedWhileEditing",
+        context: {
+          routeId: "route-999",
+          affectedRouteIds: ["route-999"],
+        },
+      }).routeDraft,
+    ).toMatchObject({
+      canReload: false,
+      canSave: true,
+      previewStatus: "connected",
+      previewMessage: "Connected",
+    });
+  });
+
+  it("builds an edit view that retains missing-node labels and names rejected endpoints", () => {
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((node) =>
+          node.id === "stop-002"
+            ? { ...node, status: "missing" as const }
+            : node,
+        ),
+      },
+    };
+    const preview = routePreview(["stop-001", "stop-002"]);
+    preview.legs[0] = {
+      ...preview.legs[0],
+      status: "missingNode",
+      currentPath: null,
+    };
+    preview.missingWaypointIds = ["stop-002"];
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        previewPending: false,
+        preview,
+      },
+    };
+
+    const editor = selectShellState(state, ui).routeDraft;
+    expect(editor).toMatchObject({
+      source: "edit",
+      title: "Editing Bus 1",
+      previewStatus: "broken",
+    });
+    expect(editor?.waypoints[1]).toMatchObject({
+      id: "stop-002",
+      status: "missing",
+      label: "Missing Bus Stop",
+    });
+    expect(editor?.previewMessage).toContain("Stop A");
+    expect(editor?.previewMessage).toContain("Missing Bus Stop");
   });
 
   it("lists routes and metro lines with selection state", () => {
@@ -228,6 +443,8 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: true,
+        status: { primary: "running", pausedAfterRepair: false },
+        failures: [],
       },
       {
         id: "metro-001",
@@ -237,8 +454,96 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: false,
+        status: { primary: "running", pausedAfterRepair: false },
+        failures: [],
       },
     ]);
+  });
+
+  it("prioritizes Broken while preserving paused-after-repair state", () => {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 11, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002", "stop-003"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) =>
+          stop.id === "stop-003" ? { ...stop, status: "missing" } : stop,
+        ),
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+          pathBroken: true,
+          legs: route.legs.map((leg, legIndex) =>
+            legIndex === 1
+              ? { ...leg, status: "missingNode", currentPath: null }
+              : leg,
+          ),
+        })),
+      },
+    };
+
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "broken", pausedAfterRepair: true },
+      failures: [
+        {
+          legIndex: 1,
+          fromWaypointId: "stop-002",
+          toWaypointId: "stop-003",
+          fromLabel: "Stop B",
+          toLabel: "Missing Bus Stop",
+          reason: "missingNode",
+        },
+      ],
+    });
+  });
+
+  it("maps authoritative road preview cost and route impacts for accessible UI", () => {
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          name: "Route 1",
+        })),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      roadPreviewGeneration: 4,
+      roadMutationPreview: {
+        generation: 4,
+        changedTiles: [{ x: 9, y: 8 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 1_250,
+        skippedTiles: [],
+        routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
+        warnings: [],
+        rejection: null,
+      },
+    };
+
+    expect(selectShellState(state, ui).roadMutationPreview).toEqual({
+      generation: 4,
+      changedTiles: [{ x: 9, y: 8 }],
+      skippedTiles: [],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 1_250,
+      costLabel: "$1,250",
+      routeImpacts: [
+        { routeId: "route-001", routeName: "Route 1", kind: "broken" },
+      ],
+      rejection: null,
+    });
   });
 });
 
@@ -320,7 +625,10 @@ describe("ShellHudState", () => {
       ...createUiState(),
       activeTool: "busRoute" as const,
       activeOverlay: "coverage" as const,
-      draftStopIds: ["stop-001"],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001"],
+      },
     };
     const shell = selectShellState(state, ui);
 

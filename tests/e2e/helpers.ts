@@ -1,7 +1,22 @@
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import type { RuntimeSnapshot } from "../../src/runtime/types";
+
+export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
+  return page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: { getSnapshot: () => RuntimeSnapshot };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    return runtime.getSnapshot();
+  });
+}
 
 export async function openHudCategory(
   page: Page,
@@ -14,7 +29,11 @@ export async function openHudCategory(
     | "brief"
     | "inspect",
 ): Promise<void> {
-  await page.getByTestId(`hud-cat-${category}`).click();
+  const trigger = page.getByTestId(`hud-cat-${category}`);
+  if ((await trigger.getAttribute("aria-pressed")) !== "true") {
+    await trigger.click();
+  }
+  await expect(trigger).toHaveAttribute("aria-pressed", "true");
 }
 
 /**
@@ -166,9 +185,62 @@ export async function dragMapTiles(
   await page.mouse.move(end.x, end.y, { steps: 8 });
   await page.mouse.up();
   // `page.mouse` methods dispatch low-level events without waiting for the
-  // browser to fully process handlers. A single animation-frame pause gives
-  // the runtime's commitDrag (pointerup → paint/render) a chance to settle
-  // before the test proceeds, preventing the next action from racing with
-  // the drag commit — especially on slower CI runners.
-  await page.waitForTimeout(0);
+  // browser to fully process handlers. Yield one animation frame so the
+  // runtime's commitDrag (pointerup → paint/render) settles before the next
+  // action — especially on slower CI runners.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
+}
+
+export async function removeMapTile(
+  page: Page,
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<void> {
+  const remove = page.getByTestId("hud-tool-remove");
+  if ((await remove.getAttribute("aria-pressed")) !== "true") {
+    await remove.click();
+  }
+  await expect(remove).toHaveAttribute("aria-pressed", "true");
+  await clickMapTile(canvas, tile);
+}
+
+export async function rebuildRoadTile(
+  page: Page,
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<void> {
+  await buildItem(page, "Road", "1-Lane");
+  await clickMapTile(canvas, tile);
+}
+
+/**
+ * Set the budget to a specific amount via the debug SetBudget intent.
+ * Used by e2e tests that need to top up the budget when the normal
+ * gameplay flow would exhaust it (e.g. metro tombstone rebuild after
+ * 2 stations + 1 vehicle = 100k of 120k starting budget).
+ */
+export async function debugSetBudget(
+  page: Page,
+  budget: number,
+): Promise<void> {
+  await page.evaluate((amount) => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          debugSetBudget?: (budget: number) => Promise<unknown>;
+        };
+      }
+    ).__caelumRuntime;
+    if (runtime?.debugSetBudget === undefined) {
+      throw new Error(
+        "debugSetBudget is unavailable on window.__caelumRuntime",
+      );
+    }
+    return runtime.debugSetBudget(amount);
+  }, budget);
 }

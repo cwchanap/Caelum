@@ -32,7 +32,9 @@ export function selectPlatformOccupancy(
 ): Map<string, { count: number; capacity: number }> {
   const occupancy = new Map<string, { count: number; capacity: number }>();
   const platformByPositionAndRoute = new Map<string, string>();
-  const nodes = [...state.transit.stops, ...state.transit.stations];
+  const nodes = [...state.transit.stops, ...state.transit.stations].filter(
+    (node) => node.status === "present",
+  );
 
   for (const node of nodes) {
     const posKey = positionKey(node.position.x, node.position.y);

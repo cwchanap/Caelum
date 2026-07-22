@@ -1,16 +1,35 @@
-import type { AreaKind, BuildingType, Point, Tool } from "../domain/types";
+import {
+  samePoint,
+  type AreaKind,
+  type BuildingType,
+  type GameplayRejection,
+  type Point,
+  type RoundaboutSize,
+  type Tool,
+} from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
-import { COSTS } from "../domain/catalog/transit";
-import { canvasToTile, renderGame, syncCanvasSize } from "../render/canvas";
 import {
   cancelDraftRoute,
   applyUiTileClick,
-  removeDraftNode as applyRemoveDraftNode,
+  draftHandleIndexAtPoint,
 } from "../ui/actions";
-import { closingLoopIsPathable } from "../ui/routeDraft";
+import {
+  canSaveRouteDraft,
+  createDraft,
+  editDraft,
+  moveWaypoint,
+  removeWaypoint,
+  reverseRoute,
+  selectWaypoint,
+  setPattern,
+  type RouteDraft,
+  type RouteDraftInteractionError,
+} from "../ui/routeDraft";
 import { axisLockedLine } from "../ui/roadDrag";
 import { createUiState, type UiState } from "../ui/uiState";
-import type { GameBackend, GameIntent } from "./backend";
+import type { GameBackend, GameIntent, RoadMutation } from "./backend";
+import { createCanvasHost } from "./createCanvasHost";
+import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { normalizeRustSnapshot } from "./snapshotView";
 import type {
@@ -19,16 +38,14 @@ import type {
   RuntimeSnapshot,
 } from "./types";
 
-function samePoint(left: Point | null, right: Point | null): boolean {
-  return left?.x === right?.x && left?.y === right?.y;
-}
-
-const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
-
 const rotations = [0, 90, 180, 270] as const;
 
 interface CreateGameRuntimeOptions {
   backend: GameBackend;
+  /** Trailing debounce delay for hover-triggered road mutation previews, in
+   *  milliseconds. Defaults to 50ms to coalesce rapid pointermove events on
+   *  Tauri (IPC round-trip per event). Set to 0 to disable debouncing. */
+  hoverPreviewDebounceMs?: number;
 }
 
 function nextToolUiState(activeTool: Tool, current = createUiState()) {
@@ -40,12 +57,22 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     selectedArea: null,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: activeTool === "busRoute" ? current.draftStopIds : [],
-    draftStationIds: activeTool === "metroLine" ? current.draftStationIds : [],
-    draftStopPaths: activeTool === "busRoute" ? current.draftStopPaths : [],
-    draftStationPaths:
-      activeTool === "metroLine" ? current.draftStationPaths : [],
+    routeDraft:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routeDraft
+        : null,
+    routePreviewError:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routePreviewError
+        : null,
+    routePreviewHostError:
+      activeTool === "busRoute" || activeTool === "metroLine"
+        ? current.routePreviewHostError
+        : null,
+    roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -62,11 +89,13 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     selectedArea: area,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    routePreviewHostError: null,
+    roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -86,11 +115,13 @@ function nextBuildingUiState(
     selectedArea: null,
     buildCategory: null,
     buildingRotation: 0 as const,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    routePreviewHostError: null,
+    roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
     activeHudCategory: null,
@@ -99,74 +130,67 @@ function nextBuildingUiState(
 
 export async function createGameRuntime({
   backend,
+  hoverPreviewDebounceMs = 50,
 }: CreateGameRuntimeOptions): Promise<RuntimeController> {
   let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
   let backendError: string | null = null;
-  let rejection: string | null = null;
+  let rejection: GameplayRejection | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
-  let running = false;
+  const previewCoordinator = createPreviewCoordinator(backend);
+  let nextRouteDraftInstanceId = 1;
+  const activeRouteSaveTokens = new Set<string>();
+  let activeRoadMutation: RoadMutation | null = null;
+  let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
   let dead = false;
-  let animationFrameId: number | null = null;
-  let lastFrameTime: number | null = null;
-  let canvasHost: HTMLElement | null = null;
-  let canvas: HTMLCanvasElement | null = null;
-  let context: CanvasRenderingContext2D | null = null;
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
     state,
     ui,
-    shell: selectShellState(state, ui),
+    shell: selectShellState(state, ui, rejection),
     backendError,
     rejection,
   });
 
-  const canAnimate = (): boolean =>
-    running &&
-    !state.paused &&
-    state.metrics.state === "running" &&
-    state.speed !== 0;
-
-  const syncAnimationLoop = (): void => {
-    if (canAnimate()) {
-      if (
-        animationFrameId === null &&
-        typeof requestAnimationFrame === "function"
-      ) {
-        animationFrameId = requestAnimationFrame(frame);
-      }
-
-      return;
-    }
-
-    if (
-      animationFrameId !== null &&
-      typeof cancelAnimationFrame === "function"
-    ) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-
-    lastFrameTime = null;
-  };
-
-  const render = (): void => {
-    if (canvas === null || context === null) {
-      return;
-    }
-
-    syncCanvasSize(canvas);
-    renderGame(context, state, ui);
-  };
+  // The canvas surface, 2D context, and requestAnimationFrame loop live in a
+  // dedicated host module. The host reads runtime state through these getters
+  // and forwards DOM pointer events back into the controller via callbacks —
+  // it never mutates game/UI state directly. `api` is referenced lazily inside
+  // the callbacks (the host only invokes them after `mount`/`start`, by which
+  // point `api` is initialized), mirroring the prior `frame` -> `api.tick`
+  // forward reference.
+  const canvasHost = createCanvasHost({
+    getState: () => state,
+    getUi: () => ui,
+    onTick: (deltaSeconds) => {
+      void api.tick(deltaSeconds);
+    },
+    onTileClick: (point) => {
+      api.handleTileClick(point);
+    },
+    onHoverTile: (point) => {
+      api.setHoverTile(point);
+    },
+    onDragStart: (point) => api.startDrag(point).ui.drag !== null,
+    onDragCurrent: (point) => {
+      api.setDragCurrent(point);
+    },
+    onDragCommit: () => {
+      api.commitDrag();
+    },
+    onDragCancel: () => {
+      api.cancelDrag();
+    },
+  });
 
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
-    render();
-    syncAnimationLoop();
+    canvasHost.render();
+    canvasHost.syncAnimationLoop();
 
     for (const listener of listeners) {
       listener(snapshot);
@@ -181,247 +205,53 @@ export async function createGameRuntime({
     ui = nextUi;
 
     if (!changed) {
-      render();
-      syncAnimationLoop();
+      canvasHost.render();
+      canvasHost.syncAnimationLoop();
       return getSnapshot();
     }
 
     return publish();
   };
 
+  const clearHoverPreviewTimer = (): void => {
+    if (hoverPreviewTimer !== null) {
+      clearTimeout(hoverPreviewTimer);
+      hoverPreviewTimer = null;
+    }
+  };
+
   const stop = (): void => {
-    running = false;
-    lastFrameTime = null;
-    syncAnimationLoop();
-  };
-
-  const frame = (timestamp: number): void => {
-    animationFrameId = null;
-
-    if (!running) {
-      return;
-    }
-
-    const previousTimestamp = lastFrameTime ?? timestamp;
-    lastFrameTime = timestamp;
-    const deltaSeconds = Math.max(0, (timestamp - previousTimestamp) / 1_000);
-
-    if (deltaSeconds > 0) {
-      void api.tick(deltaSeconds);
-    } else {
-      render();
-      syncAnimationLoop();
-    }
-  };
-
-  const start = (): void => {
-    if (running) {
-      return;
-    }
-
-    running = true;
-    lastFrameTime = null;
-    render();
-    syncAnimationLoop();
-  };
-
-  const mountCanvas = (host: HTMLElement): (() => void) => {
-    if (canvasHost === host && canvas !== null) {
-      render();
-      return () => {
-        if (canvasHost === host) {
-          canvas = null;
-          context = null;
-          canvasHost = null;
-          host.innerHTML = "";
-        }
-      };
-    }
-
-    canvasHost = host;
-    host.innerHTML = "";
-    canvas = document.createElement("canvas");
-    canvas.dataset.runtimeCanvas = "true";
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.style.display = "block";
-    host.appendChild(canvas);
-    context = canvas.getContext("2d");
-
-    if (context === null) {
-      throw new Error("Canvas 2D context unavailable");
-    }
-
-    const handleClick = (event: MouseEvent): void => {
-      if (canvas === null) {
-        return;
-      }
-
-      if (DRAG_TOOLS.has(ui.activeTool)) {
-        return; // drag tools are driven by pointerdown/up below.
-      }
-
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-
-      if (point !== null) {
-        api.handleTileClick(point);
-      }
-    };
-
-    const handlePointerMove = (event: PointerEvent): void => {
-      if (canvas === null) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      // A live drag tracks its own `current`; only idle movement updates the
-      // hover tile (badge / building preview / hover highlight).
-      if (ui.drag !== null) {
-        api.setDragCurrent(point);
-      } else {
-        api.setHoverTile(point);
-      }
-    };
-
-    const capturePointer = (pointerId: number): void => {
-      // Capture so a release a pixel past the board edge still commits instead
-      // of firing pointerleave -> cancelDrag (which would discard the road).
-      if (canvas !== null && typeof canvas.setPointerCapture === "function") {
-        try {
-          canvas.setPointerCapture(pointerId);
-        } catch {
-          // Some engines throw if the pointer is already inactive; a missed
-          // capture only falls back to the pre-capture behavior, so ignore.
-        }
-      }
-    };
-
-    const releasePointer = (pointerId: number): void => {
-      if (
-        canvas !== null &&
-        typeof canvas.hasPointerCapture === "function" &&
-        typeof canvas.releasePointerCapture === "function" &&
-        canvas.hasPointerCapture(pointerId)
-      ) {
-        canvas.releasePointerCapture(pointerId);
-      }
-    };
-
-    const handlePointerDown = (event: PointerEvent): void => {
-      // Only the primary (left) button initiates a drag. Right/middle clicks
-      // would otherwise start a stale drag gesture.
-      if (
-        canvas === null ||
-        event.button !== 0 ||
-        !DRAG_TOOLS.has(ui.activeTool)
-      ) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      if (point === null) {
-        return;
-      }
-      const snapshot = api.startDrag(point);
-      if (snapshot.ui.drag !== null) {
-        capturePointer(event.pointerId);
-      }
-    };
-
-    const handlePointerUp = (event: PointerEvent): void => {
-      // Only the primary button commits; a stray right/middle release mid-drag
-      // must not place the road early.
-      if (canvas === null || ui.drag === null || event.button !== 0) {
-        return;
-      }
-      const point = canvasToTile(
-        canvas,
-        event.clientX,
-        event.clientY,
-        state.map,
-      );
-      // Snap the gesture to the release tile before committing, so a release on
-      // a different tile than the last move builds to where the user let go.
-      api.setDragCurrent(point);
-      api.commitDrag();
-      releasePointer(event.pointerId);
-    };
-
-    const handlePointerLeave = (): void => {
-      // With pointer capture active the browser suppresses leave mid-drag, so
-      // reaching here means the cursor left the board outside a drag — or the
-      // host engine lacks pointer capture, in which case an abandoned drag
-      // should still be cancelled rather than left dangling.
-      if (ui.drag !== null) {
-        api.cancelDrag();
-      }
-      api.setHoverTile(null);
-    };
-
-    const handlePointerCancel = (event: PointerEvent): void => {
-      // pointercancel is a genuine interruption (OS stealing the pointer, etc.)
-      // and still fires under pointer capture: tear the drag down explicitly.
-      if (ui.drag !== null) {
-        api.cancelDrag();
-      }
-      api.setHoverTile(null);
-      releasePointer(event.pointerId);
-    };
-
-    const handleResize = (): void => {
-      render();
-    };
-
-    canvas.addEventListener("click", handleClick);
-    canvas.addEventListener("pointermove", handlePointerMove);
-    canvas.addEventListener("pointerdown", handlePointerDown);
-    canvas.addEventListener("pointerup", handlePointerUp);
-    canvas.addEventListener("pointerleave", handlePointerLeave);
-    canvas.addEventListener("pointercancel", handlePointerCancel);
-    globalThis.window?.addEventListener("resize", handleResize);
-    render();
-
-    return () => {
-      if (canvasHost !== host || canvas === null) {
-        return;
-      }
-
-      canvas.removeEventListener("click", handleClick);
-      canvas.removeEventListener("pointermove", handlePointerMove);
-      canvas.removeEventListener("pointerdown", handlePointerDown);
-      canvas.removeEventListener("pointerup", handlePointerUp);
-      canvas.removeEventListener("pointerleave", handlePointerLeave);
-      canvas.removeEventListener("pointercancel", handlePointerCancel);
-      globalThis.window?.removeEventListener("resize", handleResize);
-      host.innerHTML = "";
-      canvas = null;
-      context = null;
-      canvasHost = null;
-    };
+    clearHoverPreviewTimer();
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
+    canvasHost.stop();
   };
 
   const failBackend = (error: unknown): RuntimeSnapshot => {
     backendError = error instanceof Error ? error.message : String(error);
     dead = true;
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
     stop();
-    return publish();
+    // Clear stale preview UI so a fatal error doesn't leave the road preview
+    // overlay visible or the route draft stuck at previewPending forever.
+    const clearedUi: UiState = {
+      ...ui,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+      routeDraft:
+        ui.routeDraft === null
+          ? ui.routeDraft
+          : { ...ui.routeDraft, previewPending: false },
+    };
+    return commit(state, clearedUi);
   };
 
   const queueBackend = (
     operation: () => Promise<RuntimeSnapshot>,
+    onError: (error: unknown) => RuntimeSnapshot = failBackend,
   ): Promise<RuntimeSnapshot> => {
     if (dead) {
       // The backend is fatally failed; do not attempt further operations.
@@ -443,7 +273,7 @@ export async function createGameRuntime({
       () => undefined,
       () => undefined,
     );
-    return run.catch(failBackend);
+    return run.catch(onError);
   };
 
   const enqueueDispatch = (
@@ -453,7 +283,13 @@ export async function createGameRuntime({
     queueBackend(async () => {
       const result = await backend.dispatch(intent);
       backendError = null;
-      rejection = result.rejection;
+      // Preserve a prior rejection on no-op dispatches (applied === false,
+      // rejection === null) — otherwise a no-op intent like re-toggling pause
+      // would clear a placement rejection the player hasn't dismissed yet.
+      // Update only on success (clears) or when a new rejection is present.
+      if (result.applied || result.rejection !== null) {
+        rejection = result.rejection;
+      }
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
@@ -472,7 +308,9 @@ export async function createGameRuntime({
       }
       const result = await backend.dispatch(intent);
       backendError = null;
-      rejection = result.rejection;
+      if (result.applied || result.rejection !== null) {
+        rejection = result.rejection;
+      }
       const resolvedUi =
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
@@ -499,6 +337,422 @@ export async function createGameRuntime({
       return commit(normalizeRustSnapshot(result.snapshot), ui);
     });
 
+  const requestRoutePreview = (draft: RouteDraft): void => {
+    if (dead) return;
+    const { instanceId, generation } = draft;
+    const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
+    const expectedRevision =
+      draft.source.kind === "edit" ? draft.source.expectedRevision : null;
+    void previewCoordinator
+      .requestRoute({
+        mode: draft.mode,
+        pattern: draft.pattern,
+        waypointIds: draft.waypointIds,
+        routeId,
+        expectedRevision,
+        generation,
+      })
+      .then((response) => {
+        const current = ui.routeDraft;
+        if (
+          current === null ||
+          current.instanceId !== instanceId ||
+          current.generation !== generation
+        ) {
+          return;
+        }
+        // A null response means the coordinator invalidated the request
+        // (e.g. stop() advanced the epoch). The draft still matches, so clear
+        // previewPending to avoid stranding the UI in "Checking route…".
+        if (response === null) {
+          commit(state, {
+            ...ui,
+            routeDraft: { ...current, previewPending: false },
+          });
+          return;
+        }
+        commit(state, {
+          ...ui,
+          routeDraft: {
+            ...current,
+            previewPending: false,
+            preview: response,
+          },
+          routePreviewError:
+            ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+              ? ui.routePreviewError
+              : response.rejection,
+          routePreviewHostError: null,
+        });
+      })
+      .catch((error: unknown) => {
+        const current = ui.routeDraft;
+        if (
+          dead ||
+          current === null ||
+          current.instanceId !== instanceId ||
+          current.generation !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          routeDraft: {
+            ...current,
+            previewPending: false,
+          },
+          routePreviewHostError:
+            error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
+
+  /** Whether a draft transition should trigger a new route preview request.
+   *  Preview-relevant changes (waypoint add/remove, pattern flip) bump the
+   *  `generation`; selection-only updates keep it. Shared by
+   *  `commitRouteDraft` and `handleTileClick` so the preview-request decision
+   *  lives in one place rather than two divergent heuristics. */
+  const hasPreviewRelevantChange = (
+    previous: RouteDraft | null,
+    next: RouteDraft | null,
+  ): boolean =>
+    next !== null &&
+    next !== previous &&
+    (previous === null || next.generation !== previous.generation);
+
+  const commitRouteDraft = (routeDraft: RouteDraft): RuntimeSnapshot => {
+    if (routeDraft === ui.routeDraft) {
+      return commit(state, ui);
+    }
+    const previewRelevantChanged = hasPreviewRelevantChange(
+      ui.routeDraft,
+      routeDraft,
+    );
+    // Generation-stable updates preserve host/preview rejections; only clear
+    // local interaction errors that a successful selection resolves.
+    const routePreviewError = previewRelevantChanged
+      ? null
+      : ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+        ? null
+        : ui.routePreviewError;
+    const routePreviewHostError = previewRelevantChanged
+      ? null
+      : ui.routePreviewHostError;
+    const result = commit(state, {
+      ...ui,
+      routeDraft,
+      routePreviewError,
+      routePreviewHostError,
+    });
+    if (previewRelevantChanged) {
+      requestRoutePreview(routeDraft);
+    }
+    return result;
+  };
+
+  const rejectRouteDraftInteraction = (
+    error: RouteDraftInteractionError,
+  ): RuntimeSnapshot =>
+    commit(state, {
+      ...ui,
+      routePreviewError: error,
+      routePreviewHostError: null,
+    });
+
+  const startRouteEdit = (routeId: string): RuntimeSnapshot => {
+    const route = state.transit.routes.find(
+      (candidate) => candidate.id === routeId,
+    );
+    const line = state.transit.metroLines.find(
+      (candidate) => candidate.id === routeId,
+    );
+    if (route === undefined && line === undefined) {
+      return commit(state, ui);
+    }
+    if (
+      rejection?.code === "routeChangedWhileEditing" &&
+      rejection.context.routeId === routeId
+    ) {
+      rejection = null;
+    }
+    const routeDraft = editDraft(
+      route !== undefined
+        ? {
+            routeId: route.id,
+            expectedRevision: route.revision,
+            mode: "bus",
+            pattern: route.pattern,
+            waypointIds: route.stopIds,
+          }
+        : {
+            routeId: line!.id,
+            expectedRevision: line!.revision,
+            mode: "metro",
+            pattern: line!.pattern,
+            waypointIds: line!.stationIds,
+          },
+      nextRouteDraftInstanceId,
+    );
+    nextRouteDraftInstanceId += 1;
+    // Clear any in-flight road/roundabout preview before entering route
+    // editing. Without this, a stale road cost/impact/rejection badge remains
+    // visible globally and a late preview response can repopulate it while the
+    // route draft is being edited — `invalidateRoadPreview` bumps the
+    // coordinator epoch so in-flight responses resolve null and are dropped,
+    // and the cleared fields remove the stale overlay.
+    invalidateRoadPreview();
+    const result = commit(state, {
+      ...ui,
+      activeTool: route === undefined ? "metroLine" : "busRoute",
+      selectedNodeKind: null,
+      selectedBuilding: null,
+      selectedArea: null,
+      buildCategory: null,
+      routeDraft,
+      routePreviewError: null,
+      routePreviewHostError: null,
+      selectedRouteId: routeId,
+      routeFailureFocus: null,
+      drag: null,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+    });
+    requestRoutePreview(routeDraft);
+    return result;
+  };
+
+  const saveRouteDraft = async (): Promise<RuntimeSnapshot> => {
+    const draft = ui.routeDraft;
+    if (!draft || !canSaveRouteDraft(draft)) {
+      return getSnapshot();
+    }
+    const token = {
+      instanceId: draft.instanceId,
+      generation: draft.generation,
+      source:
+        draft.source.kind === "create"
+          ? "create"
+          : `edit:${draft.source.routeId}:${draft.source.expectedRevision}`,
+    };
+    const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
+    if (activeRouteSaveTokens.has(tokenKey)) {
+      return getSnapshot();
+    }
+    activeRouteSaveTokens.add(tokenKey);
+    const intent: GameIntent =
+      draft.source.kind === "create"
+        ? {
+            type: "createRoute",
+            mode: draft.mode,
+            pattern: draft.pattern,
+            waypointIds: draft.waypointIds,
+          }
+        : {
+            type: "updateRoute",
+            routeId: draft.source.routeId,
+            expectedRevision: draft.source.expectedRevision,
+            pattern: draft.pattern,
+            waypointIds: draft.waypointIds,
+          };
+    const isCurrent = (current: RouteDraft | null): boolean => {
+      const source =
+        current?.source.kind === "create"
+          ? "create"
+          : current
+            ? `edit:${current.source.routeId}:${current.source.expectedRevision}`
+            : "none";
+      return (
+        current !== null &&
+        current.instanceId === token.instanceId &&
+        current.generation === token.generation &&
+        source === token.source
+      );
+    };
+    return queueBackend(
+      async () => {
+        const result = await backend.dispatch(intent);
+        const current = ui.routeDraft;
+        const tokenIsCurrent = isCurrent(current);
+        if (tokenIsCurrent) {
+          backendError = null;
+          rejection = result.rejection;
+        } else if (result.applied) {
+          // A superseded save still succeeded in the backend; clear any prior
+          // rejection so a stale failure does not outlive the successful save.
+          backendError = null;
+          rejection = null;
+        }
+        if (result.applied && tokenIsCurrent) {
+          previewCoordinator.invalidateRoute();
+          return commit(normalizeRustSnapshot(result.snapshot), {
+            ...ui,
+            routeDraft: null,
+            routePreviewError: null,
+            routePreviewHostError: null,
+          });
+        }
+        // Non-fatal rejection with a current token: surface into the draft
+        // panel so the editor does not keep showing a stale "Connected"
+        // preview while only the global banner carries the failure.
+        if (
+          !result.applied &&
+          tokenIsCurrent &&
+          result.rejection !== null &&
+          current !== null
+        ) {
+          return commit(normalizeRustSnapshot(result.snapshot), {
+            ...ui,
+            routePreviewError: result.rejection,
+            routePreviewHostError: null,
+          });
+        }
+        // A superseded save changed the snapshot. The current draft's preview
+        // was computed against the pre-save snapshot and may carry a stale
+        // expected revision (e.g. an edit draft opened before the save bumped
+        // the route's revision). Invalidate and re-request so the fresh
+        // preview surfaces `routeChangedWhileEditing` instead of leaving Save
+        // enabled on a stale revision that the next save would reject.
+        if (result.applied && !tokenIsCurrent) {
+          previewCoordinator.invalidateRoute();
+          const supersededSnapshot = normalizeRustSnapshot(result.snapshot);
+          if (current !== null) {
+            const refreshedDraft: RouteDraft = {
+              ...current,
+              preview: null,
+              previewPending: true,
+            };
+            const supersededResult = commit(supersededSnapshot, {
+              ...ui,
+              routeDraft: refreshedDraft,
+            });
+            requestRoutePreview(refreshedDraft);
+            return supersededResult;
+          }
+          return commit(supersededSnapshot, ui);
+        }
+        return commit(normalizeRustSnapshot(result.snapshot), ui);
+      },
+      // Superseded-save host errors must not kill the runtime: the user may
+      // already be on a replacement draft. A truly dead backend is still
+      // caught by the next tick/dispatch failBackend path.
+      (error) => {
+        if (isCurrent(ui.routeDraft)) {
+          return failBackend(error);
+        }
+        return getSnapshot();
+      },
+    ).finally(() => {
+      activeRouteSaveTokens.delete(tokenKey);
+    });
+  };
+
+  const cancelRouteDraft = (): RuntimeSnapshot => {
+    previewCoordinator.invalidateRoute();
+    return commit(state, cancelDraftRoute(ui));
+  };
+
+  const reloadRouteDraft = (): RuntimeSnapshot => {
+    const draft = ui.routeDraft;
+    if (draft?.source.kind !== "edit") {
+      return commit(state, ui);
+    }
+    const routeId = draft.source.routeId;
+    const globalStale =
+      rejection?.code === "routeChangedWhileEditing" &&
+      rejection.context.routeId === routeId;
+    const localStale =
+      ui.routePreviewError?.code === "routeChangedWhileEditing" &&
+      ui.routePreviewError.context.routeId === routeId;
+    if (!globalStale && !localStale) {
+      return commit(state, ui);
+    }
+    if (globalStale) rejection = null;
+    // startRouteEdit clears routePreviewError via commit.
+    return startRouteEdit(routeId);
+  };
+
+  const handleEscape = (): RuntimeSnapshot =>
+    ui.routeDraft === null ? api.resetUi() : cancelRouteDraft();
+
+  const sendRoadMutationPreviewRequest = (
+    mutation: RoadMutation,
+    generation: number,
+  ): void => {
+    activeRoadMutation = mutation;
+    void previewCoordinator
+      .requestRoadMutation({ mutation, generation })
+      .then((response) => {
+        if (
+          response === null ||
+          activeRoadMutation === null ||
+          ui.roadPreviewGeneration !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          roadMutationPreview: response,
+          roadMutationPreviewError: null,
+        });
+      })
+      .catch((error: unknown) => {
+        if (
+          dead ||
+          activeRoadMutation === null ||
+          ui.roadPreviewGeneration !== generation
+        ) {
+          return;
+        }
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError:
+            error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
+
+  const requestRoadMutationPreview = (
+    mutation: RoadMutation,
+  ): RuntimeSnapshot => {
+    if (dead) return getSnapshot();
+    const generation = ui.roadPreviewGeneration + 1;
+    const pending = commit(state, {
+      ...ui,
+      roadPreviewGeneration: generation,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+    });
+    sendRoadMutationPreviewRequest(mutation, generation);
+    return pending;
+  };
+
+  /** Commit a UI transition and, if the resulting state implies a road mutation,
+   *  fold the preview-generation bump and preview-clear into the SAME commit so
+   *  only one `publish` fires. Replaces the prior pattern of committing the UI,
+   *  then calling `requestRoadMutationPreview` (which committed a second time).
+   *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
+  const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
+    const mutation = dead ? null : roadMutationForUi(nextUi);
+    if (mutation === null) {
+      return commit(state, nextUi);
+    }
+    const generation = nextUi.roadPreviewGeneration + 1;
+    const snapshot = commit(state, {
+      ...nextUi,
+      roadPreviewGeneration: generation,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+    });
+    sendRoadMutationPreviewRequest(mutation, generation);
+    return snapshot;
+  };
+
+  const invalidateRoadPreview = (): void => {
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
+  };
+
   // Road clicks defer the lay-vs-cycle decision to execution time. An earlier
   // queued dispatch (e.g. a road drag still draining, or a prior click) may
   // have turned the clicked tile into a road by the time this closure runs, so
@@ -513,6 +767,46 @@ export async function createGameRuntime({
     return tile?.kind === "road"
       ? { type: "cycleRoadDirection", point }
       : { type: "layRoad", point };
+  };
+
+  const roadClickMutation = (point: Point): RoadMutation => {
+    const intent = roadClickIntent(point);
+    return intent.type === "cycleRoadDirection"
+      ? intent
+      : { type: "layRoad", point };
+  };
+
+  const roadMutationForUi = (candidate: UiState): RoadMutation | null => {
+    const gesture = candidate.drag;
+    if (
+      gesture !== null &&
+      (gesture.tool === "road" || gesture.tool === "remove")
+    ) {
+      const points = axisLockedLine(gesture.start, gesture.current);
+      if (gesture.tool === "remove") {
+        return points.length === 1
+          ? { type: "removeAtTile", point: points[0] }
+          : { type: "removeAtTiles", points };
+      }
+      return points.length === 1
+        ? roadClickMutation(points[0])
+        : { type: "layRoadLine", points, preset: candidate.roadPreset };
+    }
+    if (candidate.hoverTile === null) return null;
+    if (candidate.activeTool === "road") {
+      return roadClickMutation(candidate.hoverTile);
+    }
+    if (candidate.activeTool === "roundabout") {
+      return {
+        type: "placeRoundabout",
+        origin: candidate.hoverTile,
+        size: candidate.roundaboutSize,
+      };
+    }
+    if (candidate.activeTool === "remove") {
+      return { type: "removeAtTile", point: candidate.hoverTile };
+    }
+    return null;
   };
 
   const intentForToolClick = (point: Point): GameIntent | null => {
@@ -550,15 +844,16 @@ export async function createGameRuntime({
         listeners.delete(listener);
       };
     },
-    start,
+    start: canvasHost.start,
     stop,
-    isRunning() {
-      return running;
-    },
+    isRunning: canvasHost.isRunning,
     tick(deltaSeconds) {
       return enqueueTick(deltaSeconds);
     },
     reset() {
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return queueBackend(async () => {
         const snapshot = await backend.reset();
         backendError = null;
@@ -569,20 +864,41 @@ export async function createGameRuntime({
       });
     },
     resetUi() {
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, createUiState());
     },
     setTool(tool) {
-      return commit(state, nextToolUiState(tool, ui));
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      const next = nextToolUiState(tool, ui);
+      if (tool === "busRoute" || tool === "metroLine") {
+        next.routeDraft = createDraft(
+          tool === "busRoute" ? "bus" : "metro",
+          nextRouteDraftInstanceId,
+        );
+        nextRouteDraftInstanceId += 1;
+        next.routePreviewError = null;
+        next.routePreviewHostError = null;
+      }
+      return commitWithRoadPreview(next);
     },
     setBuilding(building) {
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, nextBuildingUiState(building, ui));
     },
     setArea(area) {
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
       return commit(state, nextAreaUiState(area, ui));
     },
     setRoadPreset(preset) {
-      return commit(
-        state,
+      return commitWithRoadPreview(
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
     },
@@ -599,9 +915,25 @@ export async function createGameRuntime({
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
-      return commit(state, {
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      return commitWithRoadPreview({
         ...nextToolUiState("road", ui),
         roadPreset: preset,
+      });
+    },
+    armRoundabout(size: RoundaboutSize) {
+      // Roundabouts are fixed click stamps. Switching sizes is one UI commit
+      // and invalidates any in-flight road preview so an older footprint can
+      // never populate the newly armed stamp.
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      return commitWithRoadPreview({
+        ...nextToolUiState("roundabout", ui),
+        roundaboutSize: size,
+        drag: null,
       });
     },
     startDrag(point) {
@@ -621,7 +953,7 @@ export async function createGameRuntime({
       if (tool !== "road" && tool !== "track" && tool !== "remove") {
         return commit(state, ui);
       }
-      return commit(state, {
+      return commitWithRoadPreview({
         ...ui,
         drag: { tool, start: point, current: point },
       });
@@ -635,13 +967,24 @@ export async function createGameRuntime({
       if (samePoint(point, ui.drag.current)) {
         return commit(state, ui);
       }
-      return commit(state, {
+      return commitWithRoadPreview({
         ...ui,
         drag: { ...ui.drag, current: point },
       });
     },
     cancelDrag() {
-      return commit(state, ui.drag === null ? ui : { ...ui, drag: null });
+      invalidateRoadPreview();
+      return commit(
+        state,
+        ui.drag === null
+          ? ui
+          : {
+              ...ui,
+              drag: null,
+              roadMutationPreview: null,
+              roadMutationPreviewError: null,
+            },
+      );
     },
     commitDrag() {
       const gesture = ui.drag;
@@ -655,7 +998,13 @@ export async function createGameRuntime({
       // hover instead of resurrecting a stale drag that the deferred clear
       // could no longer match by identity.
       const roadPreset = ui.roadPreset;
-      commit(state, { ...ui, drag: null });
+      invalidateRoadPreview();
+      commit(state, {
+        ...ui,
+        drag: null,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+      });
       if (gesture.tool === "area") {
         return enqueueDispatch({
           type: "paintAreaRectangle",
@@ -723,20 +1072,75 @@ export async function createGameRuntime({
       return commit(state, nextUi);
     },
     handleTileClick(point) {
+      if (ui.routeDraft?.source.kind === "edit") {
+        const handleIndex = draftHandleIndexAtPoint(
+          ui.routeDraft,
+          state,
+          point,
+        );
+        if (handleIndex !== null) {
+          const routeDraft = selectWaypoint(
+            ui.routeDraft,
+            handleIndex,
+            ui.routeDraft.interaction,
+          );
+          return routeDraft === ui.routeDraft
+            ? commit(state, ui)
+            : commitRouteDraft(routeDraft);
+        }
+      }
       if (
         (ui.activeTool === "inspect" && ui.selectedBuilding === null) ||
         ui.activeTool === "busRoute" ||
         ui.activeTool === "metroLine"
       ) {
+        const previousDraft = ui.routeDraft;
         const result = applyUiTileClick(state, ui, point);
-        return commit(state, result.ui);
+        const snapshot = commit(state, result.ui);
+        // Defer to the same generation-based decision `commitRouteDraft` uses,
+        // but also skip when `applyUiTileClick` set a local rejection (e.g.
+        // duplicate waypoint) — the backend must not preview an invalid draft.
+        if (
+          hasPreviewRelevantChange(previousDraft, result.ui.routeDraft) &&
+          result.ui.routePreviewError === null
+        ) {
+          requestRoutePreview(result.ui.routeDraft!);
+        }
+        return snapshot;
       }
 
       if (ui.activeTool === "road") {
         // Defer the lay-vs-cycle decision to execution time so the tile kind is
         // re-read against the latest map state after earlier queued updates
-        // drain (see `roadClickIntent`).
+        // drain (see `roadClickIntent`). Clear and invalidate any resolved
+        // hover preview before enqueueing: the dispatch will change the map, so
+        // the old changed-tiles/cost/route-impacts overlay is stale, and
+        // invalidating `activeRoadMutation` prevents an in-flight preview
+        // response from repopulating it after the click.
+        clearHoverPreviewTimer();
+        invalidateRoadPreview();
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
         return enqueueComputedDispatch(() => roadClickIntent(point));
+      }
+
+      if (ui.activeTool === "roundabout") {
+        const size = ui.roundaboutSize;
+        clearHoverPreviewTimer();
+        invalidateRoadPreview();
+        commit(state, {
+          ...ui,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
+        return enqueueDispatch({
+          type: "placeRoundabout",
+          origin: point,
+          size,
+        });
       }
 
       const intent = intentForToolClick(point);
@@ -750,176 +1154,60 @@ export async function createGameRuntime({
         platformId,
       });
     },
-    removeDraftStop(index) {
-      return commit(state, applyRemoveDraftNode(state, ui, index));
+    startRouteEdit,
+    selectRouteWaypoint(index, interaction) {
+      if (ui.routeDraft === null) return commit(state, ui);
+      const routeDraft = selectWaypoint(ui.routeDraft, index, interaction);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: { operation: "selectWaypoint", waypointIndex: index },
+          })
+        : commitRouteDraft(routeDraft);
     },
-    finishRoute() {
-      // Finishing a draft is a two-step backend transaction: create the line,
-      // then assign a vehicle to it. The old TS `finishDraftRoute` performed
-      // both atomically; the Rust core exposes them as separate intents
-      // (`addBusRoute`/`addMetroLine` then `assignVehicle`), so chain them
-      // inside one queued operation. Without the `assignVehicle` step the new
-      // line has `vehicleIds: []` forever and no transit trip can ever board —
-      // the survival win-gate becomes unwinnable except by walking.
-      const isBus = ui.activeTool === "busRoute";
-      const isMetro = ui.activeTool === "metroLine";
-      if (!isBus && !isMetro) {
-        return commit(state, ui);
-      }
-
-      const mode: "bus" | "metro" = isBus ? "bus" : "metro";
-      // Guard the closing loop before dispatching: under one-way roads a
-      // forward-pathable draft can still fail to close, and the Rust core
-      // accepts the line with `path_broken` then rejects `assignVehicle` —
-      // leaving an unusable route and a cleared draft. `canFinish` already
-      // gates the UI button, but `finishRoute` is also callable directly, so
-      // bail here for parity with the legacy `finishDraftRoute` guard.
-      if (!closingLoopIsPathable(state, ui)) {
-        return commit(state, ui);
-      }
-      const createIntent: GameIntent = isBus
-        ? { type: "addBusRoute", stopIds: ui.draftStopIds }
-        : { type: "addMetroLine", stationIds: ui.draftStationIds };
-      const submittedDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
-      const submittedDraftPaths = isBus
-        ? ui.draftStopPaths
-        : ui.draftStationPaths;
-
-      return queueBackend(async () => {
-        // Re-read the draft at closure entry: a prior queued finish (e.g. a
-        // double-click that enqueued twice synchronously) will have cleared
-        // the draft after its successful dispatch, so this closure must bail
-        // rather than re-dispatch the same addBusRoute/addMetroLine intent
-        // (which would duplicate the route, double-charge, and mint a second
-        // vehicle). Mirrors commitDrag's synchronous clear-before-dispatch.
-        const currentDraftIds = isBus ? ui.draftStopIds : ui.draftStationIds;
-        if (currentDraftIds.length === 0) {
-          return commit(state, ui);
-        }
-
-        // Revalidate the full finish conditions against the current state/ui
-        // before dispatching. The synchronous `closingLoopIsPathable` guard
-        // above and the baked-in `createIntent` both captured the state at
-        // enqueue time; a prior queued operation (remove/build/deleteRoute)
-        // that ran between enqueue and this closure may have removed one of
-        // the submitted stops/stations, dropped `state.budget` below the
-        // vehicle cost, or broken the closing loop (e.g. a road tile was
-        // removed). Dispatching anyway leaves an accepted but inactive /
-        // `pathBroken` line that rejects `assignVehicle`, while `commitUi`
-        // below still clears the submitted draft — stranding the player with
-        // an unusable route and no recoverable draft. Mirror the `canFinish`
-        // selector (distinct >= 2, affordable, loop closes) plus submitted
-        // node existence, evaluated against the submitted draft ids (not the
-        // current draft, which the player may have mutated while the dispatch
-        // was pending). Surface a recoverable rejection and bail without
-        // clearing the draft so the player can adjust and retry.
-        const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
-        const submittedDistinct = new Set(submittedDraftIds).size;
-        const submittedNodes = isBus
-          ? state.transit.stops
-          : state.transit.stations;
-        const submittedNodesExist = submittedDraftIds.every((id) =>
-          submittedNodes.some((node) => node.id === id),
-        );
-        // `closingLoopIsPathable` reads `ui.activeTool` and the matching draft
-        // field, so evaluate it against a view that pins the queue-time mode
-        // and the submitted ids — not the current tool/draft, which may have
-        // switched or been mutated while the dispatch was pending.
-        const submittedUi: UiState = {
-          ...ui,
-          activeTool: isBus ? "busRoute" : "metroLine",
-          draftStopIds: isBus ? submittedDraftIds : ui.draftStopIds,
-          draftStationIds: isBus ? ui.draftStationIds : submittedDraftIds,
-        };
-        const loopStillCloses = closingLoopIsPathable(state, submittedUi);
-        if (
-          submittedDistinct < 2 ||
-          state.budget < vehicleCost ||
-          !submittedNodesExist ||
-          !loopStillCloses
-        ) {
-          rejection = "Route no longer valid";
-          return commit(state, ui);
-        }
-
-        const beforeIds = new Set(
-          (isBus ? state.transit.routes : state.transit.metroLines).map(
-            (entry) => entry.id,
-          ),
-        );
-        const createResult = await backend.dispatch(createIntent);
-        backendError = null;
-        rejection = createResult.rejection;
-        const afterCreate = normalizeRustSnapshot(createResult.snapshot);
-
-        // Compute the UI to commit by reading the latest `ui` at commit time
-        // and clearing only the submitted draft fields when the backend
-        // accepted the line and the draft has not been mutated while the
-        // dispatch was in flight. Reading `ui` at commit time (rather than
-        // snapshotting a full `nextUi` before the `assignVehicle` await)
-        // preserves any UI interactions — tool switches, panel changes, hover
-        // updates — that happen while the vehicle assignment is pending.
-        const commitUi = (current: UiState): UiState => {
-          const stillSubmitted = isBus
-            ? current.draftStopIds === submittedDraftIds &&
-              current.draftStopPaths === submittedDraftPaths
-            : current.draftStationIds === submittedDraftIds &&
-              current.draftStationPaths === submittedDraftPaths;
-          if (!(createResult.applied && stillSubmitted)) {
-            return current;
-          }
-          return isBus
-            ? { ...current, draftStopIds: [], draftStopPaths: [] }
-            : {
-                ...current,
-                draftStationIds: [],
-                draftStationPaths: [],
-              };
-        };
-
-        if (!createResult.applied) {
-          return commit(afterCreate, commitUi(ui));
-        }
-
-        // Identify the freshly created line by diffing ids, then assign a
-        // vehicle. If the line cannot be resolved (e.g. the backend accepted
-        // but did not surface a new id), keep the accepted snapshot rather
-        // than silently dropping the route.
-        const afterRoutes = isBus
-          ? afterCreate.transit.routes
-          : afterCreate.transit.metroLines;
-        const newLine = afterRoutes.find((entry) => !beforeIds.has(entry.id));
-        if (newLine === undefined) {
-          return commit(afterCreate, commitUi(ui));
-        }
-
-        const vehicleResult = await backend.dispatch({
-          type: "assignVehicle",
-          mode,
-          lineId: newLine.id,
-        });
-        if (!vehicleResult.applied) {
-          // The line was created but no vehicle could be assigned to it. The
-          // route is left in place (the player can delete it); surface the
-          // rejection as a recoverable status (not a fatal backendError) so
-          // the player understands why the line has no service without the
-          // runtime halting.
-          rejection = vehicleResult.rejection ?? "assignVehicle rejected";
-          return commit(
-            normalizeRustSnapshot(vehicleResult.snapshot),
-            commitUi(ui),
-          );
-        }
-        rejection = null;
-        return commit(
-          normalizeRustSnapshot(vehicleResult.snapshot),
-          commitUi(ui),
-        );
-      });
+    removeRouteWaypoint() {
+      if (ui.routeDraft === null) return commit(state, ui);
+      const selectedIndex = ui.routeDraft.selectedIndex;
+      const routeDraft = removeWaypoint(ui.routeDraft);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: {
+              operation: "removeWaypoint",
+              waypointIndex: selectedIndex,
+            },
+          })
+        : commitRouteDraft(routeDraft);
     },
-    cancelRoute() {
-      return commit(state, cancelDraftRoute(ui));
+    moveRouteWaypoint(delta) {
+      if (ui.routeDraft === null) return commit(state, ui);
+      const selectedIndex = ui.routeDraft.selectedIndex;
+      const routeDraft = moveWaypoint(ui.routeDraft, delta);
+      return routeDraft === ui.routeDraft
+        ? rejectRouteDraftInteraction({
+            code: "invalidRouteDraftInteraction",
+            context: {
+              operation: "moveWaypoint",
+              waypointIndex: selectedIndex,
+              delta,
+            },
+          })
+        : commitRouteDraft(routeDraft);
     },
+    reverseRouteDraft() {
+      return ui.routeDraft === null
+        ? commit(state, ui)
+        : commitRouteDraft(reverseRoute(ui.routeDraft));
+    },
+    setRoutePattern(pattern) {
+      return ui.routeDraft === null
+        ? commit(state, ui)
+        : commitRouteDraft(setPattern(ui.routeDraft, pattern));
+    },
+    saveRouteDraft,
+    cancelRouteDraft,
+    reloadRouteDraft,
+    handleEscape,
     renameRoute(routeId, name) {
       return enqueueDispatch({ type: "renameRoute", routeId, name });
     },
@@ -949,12 +1237,16 @@ export async function createGameRuntime({
     deleteRoute(routeId) {
       // Only clear the selection when the backend actually applied the delete;
       // a rejected delete leaves the route in place, so its selection must
-      // survive (parity with `finishRoute`'s `applied` gate).
+      // survive (parity with route Save's `applied` gate).
       return enqueueDispatch(
         { type: "deleteRoute", routeId },
         (applied, currentUi) =>
           applied && currentUi.selectedRouteId === routeId
-            ? { ...currentUi, selectedRouteId: null }
+            ? {
+                ...currentUi,
+                selectedRouteId: null,
+                routeFailureFocus: null,
+              }
             : currentUi,
       );
     },
@@ -962,14 +1254,64 @@ export async function createGameRuntime({
       const nextId = ui.selectedRouteId === routeId ? null : routeId;
       return commit(
         state,
-        nextId === ui.selectedRouteId ? ui : { ...ui, selectedRouteId: nextId },
+        nextId === ui.selectedRouteId
+          ? ui
+          : { ...ui, selectedRouteId: nextId, routeFailureFocus: null },
       );
     },
+    focusRouteFailure(routeId, legIndex) {
+      return commit(state, {
+        ...ui,
+        selectedRouteId: routeId,
+        routeFailureFocus: { routeId, legIndex },
+      });
+    },
     setHoverTile(point) {
-      return commit(
-        state,
-        samePoint(point, ui.hoverTile) ? ui : { ...ui, hoverTile: point },
-      );
+      if (samePoint(point, ui.hoverTile)) {
+        return commit(state, ui);
+      }
+      clearHoverPreviewTimer();
+      invalidateRoadPreview();
+      // Every hover change (including non-null moves) invalidates generation and
+      // clears the cached overlay so a resolved preview cannot stick on a tile
+      // with no mutation, and late responses cannot pass a stale generation.
+      const generation = ui.roadPreviewGeneration + 1;
+      const nextUi: UiState = {
+        ...ui,
+        hoverTile: point,
+        roadPreviewGeneration: generation,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+      };
+      if (point === null || dead) {
+        return commit(state, nextUi);
+      }
+      const mutation = roadMutationForUi(nextUi);
+      if (mutation === null) {
+        return commit(state, nextUi);
+      }
+      // Debounce the hover-triggered preview so rapid pointermove events
+      // coalesce into a single IPC round-trip (important on Tauri). A delay
+      // of 0 disables debouncing (used in tests).
+      if (hoverPreviewDebounceMs <= 0) {
+        const snapshot = commit(state, nextUi);
+        sendRoadMutationPreviewRequest(mutation, generation);
+        return snapshot;
+      }
+      // Debounced: commit the cleared hover state now; fire the request after
+      // the delay using the generation already reserved for this hover.
+      const snapshot = commit(state, nextUi);
+      hoverPreviewTimer = setTimeout(() => {
+        hoverPreviewTimer = null;
+        if (dead || ui.roadPreviewGeneration !== generation) return;
+        const currentMutation = roadMutationForUi(ui);
+        if (currentMutation === null) return;
+        sendRoadMutationPreviewRequest(currentMutation, generation);
+      }, hoverPreviewDebounceMs);
+      return snapshot;
+    },
+    previewRoadMutation(mutation) {
+      return requestRoadMutationPreview(mutation);
     },
     dismissRejection() {
       if (rejection === null) {
@@ -978,7 +1320,10 @@ export async function createGameRuntime({
       rejection = null;
       return publish();
     },
-    mountCanvas,
+    debugSetBudget(budget) {
+      return enqueueDispatch({ type: "setBudget", budget });
+    },
+    mountCanvas: canvasHost.mount,
   };
 
   return api;

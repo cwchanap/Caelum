@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RoutePlan, Sim, TransitMode,
-    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome,
+    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
 use caelum_core::{GameEngine, GameIntent};
@@ -9,7 +9,7 @@ use caelum_core::{GameEngine, GameIntent};
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
         id: id.to_string(),
-        home: home.clone(),
+        home,
         position: home,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
@@ -46,6 +46,9 @@ fn walk_plan(from: Point, to: Point, estimated_seconds: f64) -> RoutePlan {
             from,
             to,
             line_id: None,
+            service_direction: None,
+            board_itinerary_index: None,
+            alight_itinerary_index: None,
         }],
     }
 }
@@ -58,6 +61,9 @@ fn bus_plan(from: Point, to: Point, line_id: &str) -> RoutePlan {
             from,
             to,
             line_id: Some(line_id.to_string()),
+            service_direction: Some(ServiceDirection::Loop),
+            board_itinerary_index: Some(0),
+            alight_itinerary_index: Some(0),
         }],
     }
 }
@@ -66,7 +72,7 @@ fn destination_building(point: Point) -> PlacedBuilding {
     PlacedBuilding {
         id: "building-001".to_string(),
         building_type: "supermarket".to_string(),
-        origin: point.clone(),
+        origin: point,
         rotation: 0,
         occupied_tiles: vec![point],
         transit_node_id: None,
@@ -80,14 +86,20 @@ fn bus_then_walk_plan(bus_from: Point, bus_to: Point, walk_to: Point, line_id: &
             RouteLeg {
                 mode: TransitMode::Bus,
                 from: bus_from,
-                to: bus_to.clone(),
+                to: bus_to,
                 line_id: Some(line_id.to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: bus_to,
                 to: walk_to,
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
         ],
     }
@@ -160,8 +172,10 @@ fn riding_trips_stay_attached_to_vehicles_until_disembarked() {
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string()],
-        segment_index: 0,
-        progress: 0.5,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.5,
+        parked_position: None,
     }];
 
     let next = trips::advance_active_trips(&state, 10.0);
@@ -201,6 +215,44 @@ fn riding_trip_without_vehicle_replans_from_current_position() {
         recovered.route_plan.as_ref().unwrap().legs[0].from,
         Point { x: 15, y: 8 }
     );
+}
+
+#[test]
+fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+    });
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    let mut state = assigned.snapshot;
+    state.transit.routes[0].path_broken = false;
+    state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
+    state.transit.routes[0].legs[0].current_path = None;
+    let mut waiting = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (2, 5).into(),
+        (12, 5).into(),
+    );
+    waiting.route_plan = Some(bus_plan((2, 5).into(), (12, 5).into(), "route-001"));
+    state.active_trips = vec![waiting];
+
+    let next = transit::tick_vehicles(&state, 0.0);
+
+    assert!(next.transit.vehicles[0].passenger_ids.is_empty());
+    assert_eq!(next.active_trips[0].status, TripStatus::Waiting);
 }
 
 #[test]
@@ -435,8 +487,10 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -460,7 +514,11 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let next = trips::tick_trips(&state, 20.0);
+    let coarse = trips::tick_trips(&state, 12.5);
+    let mut next = state;
+    for _ in 0..10 {
+        next = trips::tick_trips(&next, 1.25);
+    }
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
@@ -470,6 +528,22 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         TripOutcomeKind::Arrived
     );
     assert!((next.metrics.trip_outcomes[0].time - 12.5).abs() < 0.000_001);
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert!(coarse.active_trips.is_empty());
+    assert_eq!(coarse.metrics.completed_trips, next.metrics.completed_trips);
+    assert_eq!(
+        coarse.metrics.trip_outcomes.len(),
+        next.metrics.trip_outcomes.len()
+    );
+    assert_eq!(
+        coarse.metrics.trip_outcomes[0].outcome,
+        next.metrics.trip_outcomes[0].outcome
+    );
+    assert!(
+        (coarse.metrics.trip_outcomes[0].time - next.metrics.trip_outcomes[0].time).abs()
+            < 0.000_001
+    );
 }
 
 #[test]
@@ -482,8 +556,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -512,7 +588,11 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let disembarked = trips::tick_trips(&state, 12.5);
+    let coarse_disembarked = trips::tick_trips(&state, 12.5);
+    let mut disembarked = state;
+    for _ in 0..10 {
+        disembarked = trips::tick_trips(&disembarked, 1.25);
+    }
     let walking = &disembarked.active_trips[0];
 
     assert_eq!(walking.status, TripStatus::Walking);
@@ -520,6 +600,16 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     assert_eq!(walking.position, (12, 5).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert_eq!(
+        coarse_disembarked.active_trips.len(),
+        disembarked.active_trips.len()
+    );
+    assert_eq!(
+        coarse_disembarked.metrics.completed_trips,
+        disembarked.metrics.completed_trips
+    );
 
     let arrived = trips::tick_trips(&disembarked, 20.0);
 
@@ -534,14 +624,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
 }
 
 #[test]
-fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk() {
-    // A trip that is `Waiting` at a stop, boards at the start of a substep, and
-    // reaches its alighting stop in that same substep goes `Waiting → Riding →
-    // Walking` inside `tick_vehicles`. The ride consumes the whole substep, so
-    // the following walk leg must start at the alighting stop with zero elapsed
-    // time this substep. `just_disembarked_trip_ids` must treat this as a
-    // zero-delta disembark; otherwise `advance_active_trips` spends the full
-    // substep delta on the walk leg and the commute arrives early.
+fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk() {
+    // Even when a tick ends exactly at the final ride-step boundary, the
+    // following walk leg must begin at the alighting stop with zero elapsed
+    // walking time.
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
@@ -550,8 +636,10 @@ fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk(
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -578,12 +666,15 @@ fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk(
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
-    // Vehicle starts at the boarding stop (progress 0) with a free seat; it
-    // boards the waiting trip and reaches stop-002 in the same substep.
-    assert_eq!(state.transit.vehicles[0].progress, 0.0);
+    // Vehicle starts at the boarding stop with a free seat.
+    assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
     assert!(state.transit.vehicles[0].passenger_ids.is_empty());
 
-    let disembarked = trips::tick_trips(&state, 12.5);
+    let coarse_disembarked = trips::tick_trips(&state, 12.5);
+    let mut disembarked = state;
+    for _ in 0..10 {
+        disembarked = trips::tick_trips(&disembarked, 1.25);
+    }
     let walking = &disembarked.active_trips[0];
 
     assert_eq!(walking.status, TripStatus::Walking);
@@ -591,6 +682,16 @@ fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk(
     assert_eq!(walking.position, (12, 5).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
+
+    // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
+    assert_eq!(
+        coarse_disembarked.active_trips.len(),
+        disembarked.active_trips.len()
+    );
+    assert_eq!(
+        coarse_disembarked.metrics.completed_trips,
+        disembarked.metrics.completed_trips
+    );
 
     let arrived = trips::tick_trips(&disembarked, 20.0);
 
@@ -605,18 +706,7 @@ fn waiting_trip_that_boards_and_disembarks_in_one_substep_does_not_advance_walk(
 }
 
 #[test]
-fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
-    // FP under-shoot: a substep scheduled via `seconds_until_next_vehicle_stop`
-    // to land exactly on the next stop can compute a progress of
-    // 0.9999999999999999 instead of 1.0. The strict `progress < 1.0` check then
-    // leaves the vehicle on the old segment, so riders do not disembark and the
-    // next-stop boundary (a hair after `state.time`) is skipped by
-    // `track_next_boundary`, delaying the arrival until some later substep. An
-    // epsilon clamp at the stop boundary must treat proximity as a reach.
-    //
-    // A 4-tile segment gives `steps = 3`; a prior 0.25s advance leaves progress
-    // at `(0.8 * 0.25) / 3`, whose exact-to-stop round-trip lands a hair under
-    // 1.0 for this step count.
+fn large_tick_consumes_all_duration_until_the_next_stop() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 5);
     engine.dispatch(GameIntent::AddBusStop {
@@ -625,8 +715,10 @@ fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (5, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -635,7 +727,7 @@ fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
 
     let mut state = vehicle.snapshot;
     state.paused = false;
-    state.transit.vehicles[0].progress = (transit::BUS_TILES_PER_SECOND * 0.25) / 3.0;
+    state.transit.vehicles[0].step_progress = 0.2;
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -653,34 +745,17 @@ fn vehicle_reaches_stop_when_substep_progress_lands_just_under_one_via_fp() {
 
     let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
         .expect("vehicle has a next stop");
-    // Sanity: the unscaled round-trip is inexact and lands a hair under 1.0, so
-    // this setup actually exercises the under-shoot path.
-    let raw_progress =
-        state.transit.vehicles[0].progress + (transit::BUS_TILES_PER_SECOND * seconds) / 3.0;
-    assert!(
-        raw_progress < 1.0,
-        "test setup must trigger the FP under-shoot, got raw_progress = {raw_progress}"
-    );
-
     let next = trips::tick_trips(&state, seconds);
 
-    // The trip must disembark and arrive despite the FP under-shoot; without
-    // the clamp it stays `Riding` (the arrival is delayed to a later substep).
+    assert_eq!(next.transit.vehicles[0].itinerary_index, 1);
+    assert_eq!(next.transit.vehicles[0].path_step_index, 0);
+    assert_eq!(next.transit.vehicles[0].step_progress, 0.0);
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
 }
 
 #[test]
-fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_via_fp() {
-    // FP over-shoot: the same round-trip can land at 1.0000000000000002 instead
-    // of 1.0. The vehicle reaches the stop (>= 1.0) and disembarks, but the
-    // carried progress on the next segment is a tiny positive residual
-    // (≈ 2e-16). Because boarding fires only when `vehicle.progress == 0.0`,
-    // that residual silently blocks the next boarding. `disembark_vehicle` must
-    // clamp a sub-epsilon carryover to 0.0.
-    //
-    // A 6-tile segment gives `steps = 5`; progress `(0.8 * 0.5) / 5 = 0.08`
-    // whose exact-to-stop round-trip lands a hair over 1.0 for this step count.
+fn cursor_resets_progress_at_path_step_boundary() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 7);
     engine.dispatch(GameIntent::AddBusStop {
@@ -689,8 +764,10 @@ fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_vi
     engine.dispatch(GameIntent::AddBusStop {
         point: (7, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     let vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
@@ -699,7 +776,7 @@ fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_vi
 
     let mut state = vehicle.snapshot;
     state.paused = false;
-    state.transit.vehicles[0].progress = (transit::BUS_TILES_PER_SECOND * 0.5) / 5.0;
+    state.transit.vehicles[0].step_progress = 0.6;
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -715,23 +792,11 @@ fn vehicle_carryover_clamps_to_zero_when_substep_progress_lands_just_over_one_vi
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
-        .expect("vehicle has a next stop");
-    let raw_progress =
-        state.transit.vehicles[0].progress + (transit::BUS_TILES_PER_SECOND * seconds) / 5.0;
-    assert!(
-        raw_progress > 1.0,
-        "test setup must trigger the FP over-shoot, got raw_progress = {raw_progress}"
-    );
+    let next = transit::tick_vehicles(&state, 0.5);
 
-    let next = trips::tick_trips(&state, seconds);
-
-    // The trip alights/arrives; the vehicle is back at a stop and ready to
-    // board (progress exactly 0.0). Without the clamp the carryover is a tiny
-    // positive residual that blocks the next boarding.
-    assert!(next.active_trips.is_empty());
-    assert_eq!(next.metrics.completed_trips, 1);
-    assert_eq!(next.transit.vehicles[0].progress, 0.0);
+    assert_eq!(next.transit.vehicles[0].path_step_index, 1);
+    assert_eq!(next.transit.vehicles[0].step_progress, 0.0);
+    assert_eq!(next.active_trips[0].status, TripStatus::Riding);
 }
 
 #[test]
@@ -741,7 +806,7 @@ fn outbound_home_fallback_trip_stays_dormant_when_away_from_home() {
     let away_position = TripPosition { x: 5.0, y: 3.0 };
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
+        home,
         position: Point { x: 5, y: 3 },
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
@@ -756,7 +821,7 @@ fn outbound_home_fallback_trip_stays_dormant_when_away_from_home() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
+        origin: home,
         destination: home,
         position: away_position.clone(),
         status: TripStatus::Idle,
@@ -791,26 +856,26 @@ fn retarget_home_fallback_trips_repoints_stale_dormant_outbound_onto_promoted_wo
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 9, y: 4 };
     state.buildings = vec![
-        destination_building(home.clone()),
+        destination_building(home),
         PlacedBuilding {
             id: "building-002".to_string(),
             building_type: "factory".to_string(),
-            origin: workplace.clone(),
+            origin: workplace,
             rotation: 0,
-            occupied_tiles: vec![workplace.clone()],
+            occupied_tiles: vec![workplace],
             transit_node_id: None,
         },
     ];
     // The sim has just been promoted to a real non-home workplace by
     // `assign_workplaces`, but its previously-spawned outbound trip is still the
     // dormant home-fallback (destination == home, sitting at home).
-    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.sims = vec![sim("sim-001", home, Some(workplace))];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
-        destination: home.clone(),
+        origin: home,
+        destination: home,
         position: TripPosition { x: 2.0, y: 3.0 },
         status: TripStatus::Idle,
         deadline: 500.0,
@@ -850,13 +915,13 @@ fn retarget_home_fallback_trips_refreshes_stale_cross_day_trip_id() {
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 9, y: 4 };
     state.buildings = vec![
-        destination_building(home.clone()),
+        destination_building(home),
         PlacedBuilding {
             id: "building-002".to_string(),
             building_type: "factory".to_string(),
-            origin: workplace.clone(),
+            origin: workplace,
             rotation: 0,
-            occupied_tiles: vec![workplace.clone()],
+            occupied_tiles: vec![workplace],
             transit_node_id: None,
         },
     ];
@@ -865,13 +930,13 @@ fn retarget_home_fallback_trips_refreshes_stale_cross_day_trip_id() {
     state.day = clock::day_index(state.time);
     // Leave trip_sequence_day on day 0 so the first regenerated id is the first
     // sequence of day 1 after the day-rollover reset.
-    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.sims = vec![sim("sim-001", home, Some(workplace))];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
-        destination: home.clone(),
+        origin: home,
+        destination: home,
         position: TripPosition { x: 2.0, y: 3.0 },
         status: TripStatus::Idle,
         deadline: 500.0,
@@ -902,14 +967,14 @@ fn retarget_home_fallback_trips_leaves_genuine_home_fallback_dormant() {
     let mut state = create_initial_snapshot();
     let home = Point { x: 2, y: 3 };
     // The only destination is the home tile itself; the sim's workplace is home.
-    state.buildings = vec![destination_building(home.clone())];
-    state.sims = vec![sim("sim-001", home.clone(), Some(home.clone()))];
+    state.buildings = vec![destination_building(home)];
+    state.sims = vec![sim("sim-001", home, Some(home))];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
-        destination: home.clone(),
+        origin: home,
+        destination: home,
         position: TripPosition { x: 2.0, y: 3.0 },
         status: TripStatus::Idle,
         deadline: 500.0,
@@ -976,11 +1041,11 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
     state.paused = false;
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
-        position: home.clone(),
+        home,
+        position: home,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
-        workplace: Some(workplace.clone()),
+        workplace: Some(workplace),
         commute_day: 1,
         outbound_resolved_today: false,
         outbound_arrived_today: false,
@@ -992,11 +1057,11 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: home,
-        destination: workplace.clone(),
-        position: workplace.clone().into(),
+        destination: workplace,
+        position: workplace.into(),
         status: TripStatus::Walking,
         deadline: 2_000.0,
-        route_plan: Some(walk_plan(workplace.clone(), workplace.clone(), 0.0)),
+        route_plan: Some(walk_plan(workplace, workplace, 0.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
@@ -1076,8 +1141,8 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
     state.day = 0;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    state.buildings = vec![destination_building(workplace.clone())];
-    state.sims = vec![sim("sim-001", home.clone(), Some(workplace.clone()))];
+    state.buildings = vec![destination_building(workplace)];
+    state.sims = vec![sim("sim-001", home, Some(workplace))];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -1120,11 +1185,11 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
     state.paused = false;
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
-        position: workplace.clone(),
+        home,
+        position: workplace,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
-        workplace: Some(workplace.clone()),
+        workplace: Some(workplace),
         commute_day: 0,
         outbound_resolved_today: true,
         outbound_arrived_today: true,
@@ -1135,9 +1200,9 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteReturn,
-        origin: workplace.clone(),
+        origin: workplace,
         destination: home,
-        position: workplace.clone().into(),
+        position: workplace.into(),
         status: TripStatus::Waiting,
         deadline: return_time + 900.0,
         route_plan: Some(bus_plan(workplace, Point { x: 7, y: 8 }, "route-001")),
@@ -1177,17 +1242,17 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
     state.day = 1;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    state.buildings = vec![destination_building(workplace.clone())];
+    state.buildings = vec![destination_building(workplace)];
     // Sim stranded at the workplace after day-0 return was unserved. Day-0
     // flags are set as they would be after the unserved return resolved;
     // `commute_day` is still 0 so the day-1 reset clears them.
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
-        position: workplace.clone(),
+        home,
+        position: workplace,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
-        workplace: Some(workplace.clone()),
+        workplace: Some(workplace),
         commute_day: 0,
         outbound_resolved_today: true,
         outbound_arrived_today: true,
@@ -1238,16 +1303,16 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
     state.day = 1;
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.buildings = vec![destination_building(workplace.clone())];
+    state.buildings = vec![destination_building(workplace)];
     // Day-0 flags are set as they would be after the outbound completed and the
     // return spawned; `commute_day` is still 0 so the day-1 reset clears them.
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
-        position: workplace.clone(),
+        home,
+        position: workplace,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
-        workplace: Some(workplace.clone()),
+        workplace: Some(workplace),
         commute_day: 0,
         outbound_resolved_today: true,
         outbound_arrived_today: true,
@@ -1259,12 +1324,12 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteReturn,
-        origin: workplace.clone(),
-        destination: home.clone(),
+        origin: workplace,
+        destination: home,
         position: Point { x: 3, y: 3 }.into(),
         status: TripStatus::Walking,
         deadline: 2_000.0,
-        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home.clone(), 20.0)),
+        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
@@ -1312,14 +1377,14 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     state.day = 1;
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.buildings = vec![destination_building(workplace.clone())];
+    state.buildings = vec![destination_building(workplace)];
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
-        home: home.clone(),
-        position: workplace.clone(),
+        home,
+        position: workplace,
         worker_profile: WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
-        workplace: Some(workplace.clone()),
+        workplace: Some(workplace),
         commute_day: 0,
         outbound_resolved_today: true,
         outbound_arrived_today: true,
@@ -1331,12 +1396,12 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteReturn,
-        origin: workplace.clone(),
-        destination: home.clone(),
+        origin: workplace,
+        destination: home,
         position: Point { x: 3, y: 3 }.into(),
         status: TripStatus::Walking,
         deadline: 2_000.0,
-        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home.clone(), 20.0)),
+        route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
@@ -1461,12 +1526,18 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Bus,
                 from: (5, 3).into(),
                 to: (22, 3).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
         ],
     };
@@ -1544,12 +1615,18 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: (5, 3).into(),
                 to: (5, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
         ],
     });
@@ -1600,18 +1677,27 @@ fn zero_length_transfer_walk_collapses_between_transit_legs() {
                 from: (5, 3).into(),
                 to: (8, 3).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
             RouteLeg {
                 mode: TransitMode::Walk,
                 from: (8, 3).into(),
                 to: (8, 3).into(),
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             },
             RouteLeg {
                 mode: TransitMode::Bus,
                 from: (8, 3).into(),
                 to: (22, 3).into(),
                 line_id: Some("route-002".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             },
         ],
     });

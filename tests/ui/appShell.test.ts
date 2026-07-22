@@ -11,9 +11,11 @@ import type {
   AreaKind,
   BuildingType,
   GameState,
+  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
+  RoundaboutSize,
   Tool,
 } from "../../src/domain/types";
 import {
@@ -29,10 +31,49 @@ import type {
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 
 async function openCategory(name: string): Promise<void> {
   await fireEvent.click(screen.getByTestId(`hud-cat-${name}`));
+}
+
+function busDraft(waypointIds: string[], ready = false) {
+  const generation = waypointIds.length;
+  return {
+    ...createDraft("bus", 1),
+    waypointIds,
+    generation,
+    previewPending: false,
+    preview: ready
+      ? {
+          generation,
+          legs: waypointIds.map((id, index) => ({
+            fromWaypointId: id,
+            toWaypointId: waypointIds[(index + 1) % waypointIds.length],
+            direction: "loop" as const,
+            kind: "service" as const,
+            status: "connected" as const,
+            currentPath: null,
+            lastValidPath: null,
+            estimatedSeconds: 1,
+          })),
+          totalTravelSeconds: waypointIds.length,
+          initialVehicleCost: 8_000,
+          affordable: true,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        }
+      : null,
+  };
 }
 
 function createRuntimeHarness(
@@ -40,7 +81,7 @@ function createRuntimeHarness(
     state?: GameState;
     ui?: UiState;
     backendError?: string | null;
-    rejection?: string | null;
+    rejection?: GameplayRejection | null;
   } = {},
 ): { runtime: RuntimeController } {
   let state = options.state ?? createTestGameState();
@@ -52,7 +93,7 @@ function createRuntimeHarness(
   const getSnapshot = (): RuntimeSnapshot => ({
     state,
     ui,
-    shell: selectShellState(state, ui),
+    shell: selectShellState(state, ui, rejection),
     backendError,
     rejection,
   });
@@ -93,10 +134,13 @@ function createRuntimeHarness(
         selectedArea: null,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: tool === "busRoute" ? ui.draftStopIds : [],
-        draftStationIds: tool === "metroLine" ? ui.draftStationIds : [],
-        draftStopPaths: tool === "busRoute" ? ui.draftStopPaths : [],
-        draftStationPaths: tool === "metroLine" ? ui.draftStationPaths : [],
+        routeDraft:
+          tool === "busRoute"
+            ? createDraft("bus", 1)
+            : tool === "metroLine"
+              ? createDraft("metro", 1)
+              : null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -113,10 +157,8 @@ function createRuntimeHarness(
         selectedArea: null,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: [],
-        draftStationIds: [],
-        draftStopPaths: [],
-        draftStationPaths: [],
+        routeDraft: null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -133,10 +175,8 @@ function createRuntimeHarness(
         selectedArea: area,
         buildCategory: null,
         buildingRotation: 0,
-        draftStopIds: [],
-        draftStationIds: [],
-        draftStopPaths: [],
-        draftStationPaths: [],
+        routeDraft: null,
+        routePreviewError: null,
         selectedRouteId: null,
         drag: null,
         activeHudCategory: null,
@@ -160,6 +200,20 @@ function createRuntimeHarness(
         buildCategory: null,
         buildingRotation: 0,
         roadPreset: preset,
+        activeHudCategory: null,
+      };
+      return publish();
+    }),
+    armRoundabout: vi.fn((size: RoundaboutSize) => {
+      ui = {
+        ...ui,
+        activeTool: "roundabout",
+        selectedBuilding: null,
+        selectedArea: null,
+        buildCategory: null,
+        buildingRotation: 0,
+        roundaboutSize: size,
+        drag: null,
         activeHudCategory: null,
       };
       return publish();
@@ -215,22 +269,64 @@ function createRuntimeHarness(
     assignRouteToPlatform: vi.fn(
       (_nodeId: string, _routeId: string, _platformId: string) => publish(),
     ),
-    removeDraftStop: vi.fn((_index: number) => publish()),
-    finishRoute: vi.fn(() => publish()),
-    cancelRoute: vi.fn(() => publish()),
+    startRouteEdit: vi.fn((_routeId: string) => publish()),
+    selectRouteWaypoint: vi.fn((index, interaction) => {
+      if (ui.routeDraft !== null) {
+        ui = {
+          ...ui,
+          routeDraft: { ...ui.routeDraft, selectedIndex: index, interaction },
+        };
+      }
+      return publish();
+    }),
+    removeRouteWaypoint: vi.fn(() => {
+      if (ui.routeDraft?.selectedIndex !== null && ui.routeDraft !== null) {
+        const selectedIndex = ui.routeDraft.selectedIndex;
+        const waypointIds = ui.routeDraft.waypointIds.filter(
+          (_, index) => index !== selectedIndex,
+        );
+        ui = {
+          ...ui,
+          routeDraft: {
+            ...ui.routeDraft,
+            waypointIds,
+            selectedIndex: null,
+          },
+        };
+      }
+      return publish();
+    }),
+    moveRouteWaypoint: vi.fn((_delta) => publish()),
+    reverseRouteDraft: vi.fn(() => publish()),
+    setRoutePattern: vi.fn((_pattern) => publish()),
+    saveRouteDraft: vi.fn(async () => publish()),
+    cancelRouteDraft: vi.fn(() => publish()),
+    reloadRouteDraft: vi.fn(() => publish()),
+    handleEscape: vi.fn(() => {
+      ui =
+        ui.routeDraft === null
+          ? createUiState()
+          : { ...ui, routeDraft: null, routePreviewError: null };
+      return publish();
+    }),
     renameRoute: vi.fn((_routeId: string, _name: string) => publish()),
     recolorRoute: vi.fn((_routeId: string, _color: string) => publish()),
     toggleRouteActive: vi.fn((_routeId: string) => publish()),
     deleteRoute: vi.fn((_routeId: string) => publish()),
     selectRoute: vi.fn((_routeId: string | null) => publish()),
+    focusRouteFailure: vi.fn((_routeId: string, _legIndex: number) =>
+      publish(),
+    ),
     setHoverTile: vi.fn((point: Point | null) => {
       ui = { ...ui, hoverTile: point };
       return publish();
     }),
+    previewRoadMutation: vi.fn((_mutation) => publish()),
     dismissRejection: vi.fn(() => {
       rejection = null;
       return publish();
     }),
+    debugSetBudget: vi.fn(() => publish()),
     mountCanvas: vi.fn(() => () => {}),
   };
 
@@ -412,6 +508,18 @@ describe("App shell bootstrap", () => {
     ).toBeEnabled();
   });
 
+  it("arms bus stops as a road-node tool from the Build drill-down", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Bus" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Bus Stop" }));
+
+    expect(runtime.setTool).toHaveBeenCalledWith("busStop");
+    expect(runtime.setBuilding).not.toHaveBeenCalledWith("busStop");
+  });
+
   it("wires area selection into the runtime", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
@@ -437,6 +545,17 @@ describe("App shell bootstrap", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Road" }));
     await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
     expect(runtime.armRoad).toHaveBeenCalledWith("dualBidirectional");
+  });
+
+  it("arms the standard click tool from Build → Road", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+    await openCategory("build");
+    await fireEvent.click(screen.getByRole("button", { name: "Road" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Standard Roundabout" }),
+    );
+    expect(runtime.armRoundabout).toHaveBeenCalledWith("standard3x3");
   });
 
   it("paints a zone from the Area category", async () => {
@@ -511,14 +630,14 @@ describe("App shell bootstrap", () => {
     expect(drawer).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("resets transient ui state when Escape is pressed", async () => {
+  it("cancels only the active route draft when Escape is pressed", async () => {
     const { runtime } = createRuntimeHarness({
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
         activeOverlay: "growth",
         selectedId: "route-001",
-        draftStopIds: ["stop-001"],
+        routeDraft: busDraft(["stop-001"]),
         activeHudCategory: "routes",
       },
     });
@@ -527,13 +646,39 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
-      "brief",
+      "routes",
     );
-    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
-    expect(screen.getByText("—")).toBeVisible();
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("BUSROUTE");
+    expect(screen.queryByTestId("route-draft")).toBeNull();
+  });
+
+  it("gives Cancel · Esc the same draft-only semantics as keyboard Escape", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        activeOverlay: "growth",
+        selectedId: "route-001",
+        routeDraft: busDraft(["stop-001"]),
+        activeHudCategory: "routes",
+      },
+    });
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByTestId("hud-cancel"));
+
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
+    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "busRoute",
+      activeOverlay: "growth",
+      selectedId: "route-001",
+      activeHudCategory: "routes",
+      routeDraft: null,
+    });
   });
 
   it("does not reset on Escape when Cancel is disabled (bare inspect)", async () => {
@@ -555,7 +700,7 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.handleEscape).not.toHaveBeenCalled();
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
       "manage",
@@ -582,7 +727,7 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("hud-badge-overlay")).toBeNull();
   });
 
@@ -605,7 +750,7 @@ describe("App shell bootstrap", () => {
     await fireEvent.keyDown(window, { key: "Escape" });
 
     expect(runtime.cancelDrag).toHaveBeenCalledTimes(1);
-    expect(runtime.resetUi).not.toHaveBeenCalled();
+    expect(runtime.handleEscape).not.toHaveBeenCalled();
     // Tool + preset survive; only the drag is dropped.
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("ROAD");
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
@@ -616,7 +761,7 @@ describe("App shell bootstrap", () => {
     // A second Escape now performs the full reset.
     await fireEvent.keyDown(window, { key: "Escape" });
 
-    expect(runtime.resetUi).toHaveBeenCalledTimes(1);
+    expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("INSPECT");
     expect(screen.getByTestId("game-shell")).toHaveAttribute(
       "data-hud-category",
@@ -696,14 +841,22 @@ describe("App shell bootstrap", () => {
   });
 
   it("surfaces gameplay rejection as a dismissible banner without stopping the runtime", async () => {
+    const insufficientBudget: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 8_000,
+        availableBudget: 7_999,
+        affectedRouteIds: [],
+      },
+    };
     const { runtime } = createRuntimeHarness({
-      rejection: "Cannot afford vehicle",
+      rejection: insufficientBudget,
     });
 
     render(App, { props: { runtime } });
 
     const banner = await screen.findByTestId("rejection-banner");
-    expect(banner).toHaveTextContent("Cannot afford vehicle");
+    expect(banner).toHaveTextContent("Needs $8,000; only $7,999 is available.");
     expect(banner).toHaveAttribute("role", "status");
     // A rejection must not stop the runtime (unlike a fatal backendError).
     expect(runtime.stop).not.toHaveBeenCalled();
@@ -712,6 +865,127 @@ describe("App shell bootstrap", () => {
 
     await fireEvent.click(screen.getByLabelText("Dismiss"));
     expect(runtime.dismissRejection).toHaveBeenCalled();
+  });
+
+  it("presents roundabout cost and route impacts in an accessible status notice", () => {
+    let state = createTestGameState();
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          name: "Route 1",
+        })),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [
+          { x: 8, y: 8 },
+          { x: 9, y: 8 },
+          { x: 8, y: 9 },
+          { x: 9, y: 9 },
+        ],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "roundabout" as const,
+            id: "roundabout-001",
+            origin: { x: 8, y: 8 },
+            size: "compact2x2" as const,
+            footprint: [
+              { x: 8, y: 8 },
+              { x: 9, y: 8 },
+              { x: 8, y: 9 },
+              { x: 9, y: 9 },
+            ],
+            ports: [],
+          },
+        ],
+        cost: 2_000,
+        skippedTiles: [],
+        routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state, ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("road-mutation-notice")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Route 1 will become broken",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "$2,000",
+    );
+  });
+
+  it("surfaces a road preview gameplay rejection in the notice", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: {
+          code: "insufficientBudget" as const,
+          context: {
+            requiredBudget: 8_000,
+            availableBudget: 1_000,
+            affectedRouteIds: [],
+          },
+        },
+      },
+    };
+    const { runtime } = createRuntimeHarness({ ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Needs $8,000",
+    );
+  });
+
+  it("surfaces a recoverable road preview host error without replacing the shell", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadMutationPreviewError: "preview host offline",
+    };
+    const { runtime } = createRuntimeHarness({ ui });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("game-shell")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("road-mutation-notice")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.getByTestId("road-mutation-notice")).toHaveTextContent(
+      "Road preview unavailable: preview host offline",
+    );
+    expect(screen.getByTestId("hud-tool-chip")).toHaveTextContent("ROUNDABOUT");
   });
 });
 
@@ -909,6 +1183,41 @@ describe("App manage-panel route handlers", () => {
     expect(runtime.selectRoute).toHaveBeenCalledWith("route-001");
   });
 
+  it("focuses the exact broken leg from Manage", async () => {
+    const source = routeState();
+    const state = {
+      ...source,
+      transit: {
+        ...source.transit,
+        stops: source.transit.stops.map((stop) =>
+          stop.id === "stop-002"
+            ? { ...stop, status: "missing" as const }
+            : stop,
+        ),
+        routes: source.transit.routes.map((route) => ({
+          ...route,
+          pathBroken: true,
+          legs: route.legs.map((leg, legIndex) =>
+            legIndex === 0
+              ? { ...leg, status: "missingNode" as const, currentPath: null }
+              : leg,
+          ),
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await openCategory("manage");
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: "Focus Stop A to Missing Bus Stop",
+      }),
+    );
+
+    expect(runtime.focusRouteFailure).toHaveBeenCalledWith("route-001", 0);
+  });
+
   it("wires deleteRoute through the ManagePanel two-click delete confirm", async () => {
     const { runtime } = createRuntimeHarness({ state: routeState() });
     render(App, { props: { runtime } });
@@ -924,26 +1233,24 @@ describe("App manage-panel route handlers", () => {
     expect(runtime.deleteRoute).toHaveBeenCalledWith("route-001");
   });
 
-  it("wires cancelRoute through the RoutesPanel draft-cancel button", async () => {
+  it("wires cancelRouteDraft through the shared editor Cancel button", async () => {
     const { runtime } = createRuntimeHarness({
       state: routeState(),
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001"],
+        routeDraft: busDraft(["stop-001"]),
         activeHudCategory: "routes",
       },
     });
     render(App, { props: { runtime } });
 
-    // The drawer is already open on "routes" via the initial UI state. The
-    // draft-cancel button ("Cancel Route") lives inside the RoutesPanel.
-    const cancelBtn = screen.getByRole("button", { name: /Cancel Route/i });
+    const cancelBtn = screen.getByRole("button", { name: "Cancel" });
     await fireEvent.click(cancelBtn);
-    expect(runtime.cancelRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.cancelRouteDraft).toHaveBeenCalledTimes(1);
   });
 
-  it("wires finishRoute through the Finish Route button during a draft", async () => {
+  it("wires saveRouteDraft through the Save route button during a draft", async () => {
     let state = routeState();
     // Add roads so the closing loop is pathable.
     state = {
@@ -962,33 +1269,36 @@ describe("App manage-panel route handlers", () => {
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001", "stop-002"],
+        routeDraft: busDraft(["stop-001", "stop-002"], true),
         activeHudCategory: "routes",
       },
     });
     render(App, { props: { runtime } });
 
-    const finishBtn = screen.getByRole("button", { name: /Finish Route/i });
+    const finishBtn = screen.getByRole("button", { name: "Save route" });
     await fireEvent.click(finishBtn);
-    expect(runtime.finishRoute).toHaveBeenCalledTimes(1);
+    expect(runtime.saveRouteDraft).toHaveBeenCalledTimes(1);
   });
 
-  it("wires removeDraftStop through the draft stop list remove button", async () => {
+  it("wires selected waypoint removal through the shared editor", async () => {
     const { runtime } = createRuntimeHarness({
       state: routeState(),
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        draftStopIds: ["stop-001", "stop-002"],
+        routeDraft: busDraft(["stop-001", "stop-002"], true),
         activeHudCategory: "routes",
       },
     });
     render(App, { props: { runtime } });
 
-    // The routes drawer renders the draft stop list with per-stop remove
-    // buttons. The test id is `remove-draft-stop-${index}`.
-    const removeBtn = screen.getByTestId("remove-draft-stop-1");
-    await fireEvent.click(removeBtn);
-    expect(runtime.removeDraftStop).toHaveBeenCalledWith(1);
+    await fireEvent.click(screen.getByTestId("route-waypoint-1"));
+    expect(runtime.selectRouteWaypoint).toHaveBeenCalledWith(1, "append");
+    await fireEvent.click(
+      within(screen.getByTestId("route-draft")).getByRole("button", {
+        name: "Remove",
+      }),
+    );
+    expect(runtime.removeRouteWaypoint).toHaveBeenCalledTimes(1);
   });
 });

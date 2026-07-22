@@ -7,7 +7,12 @@ import { _boardTransformForTest as boardTransform } from "../e2e/helpers";
 // The Growing Suburb scenario map dimensions, taken from the TS-side mirror of
 // the Rust constants in `crates/caelum-core/src/scenario.rs`. getBoardTransform
 // only reads width/height, so an empty tiles array is fine.
-const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles: [] };
+const map: GameMap = {
+  width: MAP_WIDTH,
+  height: MAP_HEIGHT,
+  tiles: [],
+  roadStructures: [],
+};
 
 describe("e2e boardTransform", () => {
   it("matches getBoardTransform (the render source of truth)", () => {

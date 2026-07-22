@@ -3,13 +3,24 @@ import type { GameBackend } from "./types";
 import { createWasmBackend } from "./wasmBackend";
 
 export type {
+  AuthoredRoadTilePreview,
   DispatchResult,
   GameBackend,
+  GameplayWarning,
   GameIntent,
+  RoadMutation,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
   RoadPresetIntent,
+  RouteImpact,
+  RouteImpactKind,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
   RustGameSnapshot,
   RustMetrics,
   RustTripOutcome,
+  TurnSummary,
+  WarningCode,
 } from "./types";
 
 type TauriRuntimeSource = {

@@ -1,4 +1,6 @@
 use crate::model::{GameSnapshot, Point};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
+use crate::transit_nodes::is_present_node;
 
 pub const AREAS: &[&str] = &[
     "residential",
@@ -55,20 +57,19 @@ pub fn is_area_paintable(state: &GameSnapshot, point: &Point) -> bool {
 
     tile.kind == "empty"
         && !tile.has_track
+        && tile.road_structure_id.is_none()
         && !state
             .buildings
             .iter()
             .any(|building| building.occupied_tiles.iter().any(|tile| tile == point))
-        && !state
-            .transit
-            .stops
-            .iter()
-            .any(|stop| stop.position == *point)
-        && !state
-            .transit
-            .stations
-            .iter()
-            .any(|station| station.position == *point)
+        // Missing-node tombstones are non-physical: their anchors are free for
+        // zoning (and other placement paths) until the node is rebuilt.
+        && !state.transit.stops.iter().any(|stop| {
+            is_present_node(stop.status) && stop.position == *point
+        })
+        && !state.transit.stations.iter().any(|station| {
+            is_present_node(station.status) && station.position == *point
+        })
 }
 
 pub fn paint_area_rectangle(
@@ -76,15 +77,19 @@ pub fn paint_area_rectangle(
     area: &str,
     start: &Point,
     end: &Point,
-) -> Option<GameSnapshot> {
+) -> GameplayResult<GameSnapshot> {
     if !AREAS.contains(&area) {
-        return None;
+        return Err(GameplayRejection::at(RejectionCode::BlockedTile, *start));
     }
 
     let mut next = state.clone();
     let mut changed = false;
+    let points = rectangle_points(start, end, state.map.width, state.map.height);
+    if points.is_empty() {
+        return Err(GameplayRejection::at(RejectionCode::OutOfBounds, *start));
+    }
 
-    for point in rectangle_points(start, end, state.map.width, state.map.height) {
+    for point in points {
         if !is_area_paintable(state, &point) {
             continue;
         }
@@ -102,5 +107,9 @@ pub fn paint_area_rectangle(
         }
     }
 
-    changed.then_some(next)
+    if changed {
+        Ok(next)
+    } else {
+        Err(GameplayRejection::at(RejectionCode::BlockedTile, *start))
+    }
 }

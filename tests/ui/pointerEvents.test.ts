@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GameMap, Point } from "../../src/domain/types";
+import { samePoint, type GameMap, type Point } from "../../src/domain/types";
 import type {
   DispatchResult,
   GameBackend,
@@ -10,7 +10,10 @@ import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/canvas";
 import { createTestGameState } from "../helpers/gameState";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
 
 // jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
 // returns null. The runtime guards all of those, but to exercise the real
@@ -130,10 +133,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
-
 function updateTile(
   map: GameMap,
   point: Point,
@@ -175,15 +174,36 @@ function backendSpy(): GameBackend {
   });
 
   return {
+    ...previewBackendStubs(),
     async snapshot() {
       return snapshot;
     },
     async dispatch(intent): Promise<DispatchResult> {
       snapshot = applyIntent(snapshot, intent);
-      return { snapshot, applied: true, rejection: null };
+      return {
+        snapshot,
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      };
     },
     async tick(): Promise<DispatchResult> {
-      return { snapshot, applied: false, rejection: null };
+      return {
+        snapshot,
+        applied: false,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      };
     },
     async reset() {
       snapshot = createRustSnapshot({
@@ -202,7 +222,10 @@ async function flushRuntime(): Promise<void> {
 
 /** Mount the runtime canvas against the real board size and return it. */
 async function mount() {
-  const runtime = await createGameRuntime({ backend: backendSpy() });
+  const runtime = await createGameRuntime({
+    hoverPreviewDebounceMs: 0,
+    backend: backendSpy(),
+  });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;
   const boardHeight = map.height * tileSize;
