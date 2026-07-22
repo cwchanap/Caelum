@@ -1,9 +1,189 @@
-import { describe, expect, it } from "vitest";
-import type { GameBackend, GameIntent } from "../../src/runtime/backend/types";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  SNAPSHOT_SCHEMA_VERSION,
+  type GameplayRejection,
+} from "../../src/domain/types";
+import type {
+  DispatchResult,
+  GameBackend,
+  GameIntent,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
+} from "../../src/runtime/backend/types";
+import { rejectionMessage } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
 
 describe("Rust backend contract", () => {
+  it("uses structured gameplay rejections and success context", () => {
+    const insufficientBudget: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 8_000,
+        availableBudget: 7_999,
+        affectedRouteIds: [],
+      },
+    };
+
+    expectTypeOf<
+      DispatchResult["rejection"]
+    >().toEqualTypeOf<GameplayRejection | null>();
+    expect(rejectionMessage(insufficientBudget)).toBe(
+      "Needs $8,000; only $7,999 is available.",
+    );
+  });
+
+  it("describes an exhausted route revision with route and revision context", () => {
+    const exhaustedRevision: GameplayRejection = {
+      code: "routeRevisionExhausted",
+      context: {
+        routeId: "route-001",
+        actualRevision: 4_294_967_295,
+        affectedRouteIds: [],
+      },
+    };
+
+    expect(rejectionMessage(exhaustedRevision)).toBe(
+      "route-001 cannot be edited because its revision 4,294,967,295 is exhausted.",
+    );
+  });
+
+  it.each([
+    {
+      code: "invalidSpeed" as const,
+      context: { affectedRouteIds: [] },
+      message: "That simulation speed is not supported.",
+    },
+    {
+      code: "blockedTile" as const,
+      context: { affectedRouteIds: [] },
+      message: "That tile is blocked.",
+    },
+    {
+      code: "outOfBounds" as const,
+      context: { affectedRouteIds: [] },
+      message: "That location is outside the map.",
+    },
+    {
+      code: "roadRequired" as const,
+      context: { affectedRouteIds: [] },
+      message: "Build a road here first.",
+    },
+    {
+      code: "trackRequired" as const,
+      context: { affectedRouteIds: [] },
+      message: "Build track here first.",
+    },
+    {
+      code: "invalidRoadStroke" as const,
+      context: { affectedRouteIds: [] },
+      message: "That road stroke has no valid tiles.",
+    },
+    {
+      code: "invalidTrackStroke" as const,
+      context: { affectedRouteIds: [] },
+      message: "That track stroke has no valid tiles.",
+    },
+    {
+      code: "invalidDirectionChange" as const,
+      context: { affectedRouteIds: [] },
+      message: "Change the approach lane; structure directions are automatic.",
+    },
+    {
+      code: "nodeAlreadyExists" as const,
+      context: { affectedRouteIds: [] },
+      message: "A compatible transit node already occupies that anchor.",
+    },
+    {
+      code: "ambiguousTransitNode" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "More than one missing node matches this anchor; edit the route first.",
+    },
+    {
+      code: "missingRouteNode" as const,
+      context: { nodeId: "stop-001", affectedRouteIds: [] },
+      message: "stop-001 is missing.",
+    },
+    {
+      code: "incompatibleRouteNode" as const,
+      context: { nodeId: "stop-001", affectedRouteIds: [] },
+      message: "stop-001 is not compatible with this route mode.",
+    },
+    {
+      code: "tooFewRouteNodes" as const,
+      context: { affectedRouteIds: [] },
+      message: "A route needs at least two distinct live nodes.",
+    },
+    {
+      code: "duplicateRouteNodes" as const,
+      context: { affectedRouteIds: [] },
+      message: "Each route waypoint must be distinct.",
+    },
+    {
+      code: "disconnectedLeg" as const,
+      context: {
+        fromWaypointId: "stop-001",
+        toWaypointId: "stop-002",
+        affectedRouteIds: [],
+      },
+      message: "No legal path connects stop-001 to stop-002.",
+    },
+    {
+      code: "routeChangedWhileEditing" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "This route changed while you were editing it. Reload the saved route.",
+    },
+    {
+      code: "routeNotFound" as const,
+      context: { routeId: "route-001", affectedRouteIds: [] },
+      message: "route-001 no longer exists.",
+    },
+    {
+      code: "inactiveRoute" as const,
+      context: { routeId: "route-001", affectedRouteIds: [] },
+      message: "route-001 is inactive.",
+    },
+    {
+      code: "structureNotFound" as const,
+      context: { structureId: "junction-001", affectedRouteIds: [] },
+      message: "junction-001 no longer exists.",
+    },
+    {
+      code: "invalidPlatform" as const,
+      context: { affectedRouteIds: [] },
+      message: "That platform cannot serve this route.",
+    },
+    {
+      code: "invalidBuildingPlacement" as const,
+      context: { affectedRouteIds: [] },
+      message: "That building cannot be placed on this footprint.",
+    },
+    {
+      code: "blockedFootprint" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "The full footprint must contain only empty or replaceable road tiles.",
+    },
+    {
+      code: "unsafeRoundaboutPortMapping" as const,
+      context: { affectedRouteIds: [] },
+      message:
+        "The roads crossing this footprint cannot map safely to roundabout ports.",
+    },
+  ])(
+    "maps rejection code $code through the TS message layer",
+    ({ code, context, message }) => {
+      expect(rejectionMessage({ code, context })).toBe(message);
+    },
+  );
+
   it("normalizes a Rust snapshot into shell-readable frontend state", () => {
     const rustSnapshot = createRustSnapshot({
       day: 1,
@@ -71,6 +251,93 @@ describe("Rust backend contract", () => {
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
 
+  it("rejects a snapshot with an unsupported schema version", () => {
+    const stale = createRustSnapshot({
+      schemaVersion: 1 as unknown as typeof SNAPSHOT_SCHEMA_VERSION,
+    });
+    expect(() => normalizeRustSnapshot(stale)).toThrow(
+      "Unsupported snapshot schema version: 1",
+    );
+  });
+
+  it("normalizes committed bus and metro route path options to explicit nulls", () => {
+    const snapshot = createRustSnapshot();
+    const brokenBusLeg = {
+      fromWaypointId: "stop-001",
+      toWaypointId: "stop-002",
+      direction: "loop" as const,
+      kind: "service" as const,
+      status: "networkDisconnected" as const,
+      currentPath: undefined as unknown as null,
+      lastValidPath: undefined as unknown as null,
+      estimatedSeconds: undefined as unknown as null,
+    };
+    snapshot.transit.routes.push({
+      id: "route-001",
+      name: "Bus 1",
+      color: "#00aaff",
+      stopIds: ["stop-001", "stop-002"],
+      vehicleIds: [],
+      active: true,
+      pattern: "loop",
+      revision: 1,
+      legs: [brokenBusLeg],
+      pathBroken: true,
+    });
+    snapshot.transit.metroLines.push({
+      id: "metro-001",
+      name: "Metro 1",
+      color: "#aa00ff",
+      stationIds: ["station-001", "station-002"],
+      vehicleIds: [],
+      active: true,
+      pattern: "shuttle",
+      revision: 1,
+      legs: [
+        {
+          ...brokenBusLeg,
+          fromWaypointId: "station-001",
+          toWaypointId: "station-002",
+          direction: "outbound",
+        },
+      ],
+      pathBroken: true,
+    });
+
+    const normalized = normalizeRustSnapshot(snapshot);
+
+    expect(normalized.transit.routes[0].legs[0]).toMatchObject({
+      currentPath: null,
+      lastValidPath: null,
+      estimatedSeconds: null,
+    });
+    expect(normalized.transit.metroLines[0].legs[0]).toMatchObject({
+      currentPath: null,
+      lastValidPath: null,
+      estimatedSeconds: null,
+    });
+  });
+
+  it("normalizes omitted vehicle parkedPosition to explicit null", () => {
+    const snapshot = createRustSnapshot();
+    snapshot.transit.vehicles.push({
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      capacity: 30,
+      passengerIds: [],
+      itineraryIndex: 0,
+      pathStepIndex: 0,
+      stepProgress: 0,
+      // WASM path: Rust Option::None arrives as undefined, not null.
+      parkedPosition: undefined as unknown as null,
+    });
+
+    const normalized = normalizeRustSnapshot(snapshot);
+
+    expect(normalized.transit.vehicles[0].parkedPosition).toBeNull();
+  });
+
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
     // Guards against the drift that motivated this contract: a previous TS shim
     // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.
@@ -120,6 +387,7 @@ describe("Rust backend contract", () => {
     const intent: GameIntent = { type: "setPaused", paused: false };
     const snapshot = createRustSnapshot();
     const backend: GameBackend = {
+      ...previewBackendStubs(),
       snapshot: async () => snapshot,
       dispatch: async (received) => ({
         snapshot: {
@@ -129,14 +397,61 @@ describe("Rust backend contract", () => {
         },
         applied: true,
         rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
       }),
-      tick: async () => ({ snapshot, applied: false, rejection: null }),
+      tick: async () => ({
+        snapshot,
+        applied: false,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      }),
       reset: async () => snapshot,
     };
 
     await expect(backend.dispatch(intent)).resolves.toMatchObject({
       applied: true,
       snapshot: { paused: false },
+    });
+
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 7,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "layRoad", point: { x: 2, y: 2 } },
+      generation: 8,
+    };
+    expectTypeOf<GameBackend["previewRoute"]>().toEqualTypeOf<
+      (request: RoutePreviewRequest) => Promise<RoutePreviewResponse>
+    >();
+    expectTypeOf<GameBackend["previewRoadMutation"]>().toEqualTypeOf<
+      (
+        request: RoadMutationPreviewRequest,
+      ) => Promise<RoadMutationPreviewResponse>
+    >();
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: routeRequest.generation,
+      rejection: null,
+    });
+    await expect(
+      backend.previewRoadMutation(roadRequest),
+    ).resolves.toMatchObject({
+      generation: roadRequest.generation,
+      rejection: null,
     });
   });
 

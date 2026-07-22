@@ -5,9 +5,16 @@ import type {
   BuildingType,
   GameMap,
   GrowthWave,
+  GameplayRejection,
+  Heading,
   PlacedBuilding,
   Point,
+  RoundaboutSize,
+  RoadStructure,
+  RouteLegPath,
+  ServicePattern,
   Sim,
+  TransitMode,
   TripOutcomeKind,
   TransitNetwork,
 } from "../../domain/types";
@@ -53,6 +60,7 @@ export interface RustScenarioConfig {
 }
 
 export interface RustGameSnapshot {
+  schemaVersion: 2;
   time: number;
   day: number;
   clockMinutes: number;
@@ -77,14 +85,26 @@ export type GameIntent =
   | { type: "layRoad"; point: Point }
   | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
   | { type: "cycleRoadDirection"; point: Point }
+  | { type: "placeRoundabout"; origin: Point; size: RoundaboutSize }
   | { type: "layTrack"; point: Point }
   | { type: "layTrackLine"; points: Point[] }
   | { type: "removeAtTile"; point: Point }
   | { type: "removeAtTiles"; points: Point[] }
   | { type: "addBusStop"; point: Point }
   | { type: "addMetroStation"; point: Point }
-  | { type: "addBusRoute"; stopIds: string[] }
-  | { type: "addMetroLine"; stationIds: string[] }
+  | {
+      type: "createRoute";
+      mode: "bus" | "metro";
+      pattern: ServicePattern;
+      waypointIds: string[];
+    }
+  | {
+      type: "updateRoute";
+      routeId: string;
+      expectedRevision: number;
+      pattern: ServicePattern;
+      waypointIds: string[];
+    }
   | { type: "setRouteActive"; routeId: string; active: boolean }
   | { type: "renameRoute"; routeId: string; name: string }
   | { type: "recolorRoute"; routeId: string; color: string }
@@ -106,12 +126,109 @@ export type GameIntent =
       buildingType: BuildingType;
       origin: Point;
       rotation: BuildingRotation;
-    };
+    }
+  | { type: "setBudget"; budget: number };
+
+/**
+ * Per-dispatch impact metadata from Rust. Reserved for future UI (e.g. post-
+ * apply feedback); production TypeScript currently reads impact only from
+ * route/road *preview* responses, not from `DispatchResult.context`.
+ */
+export interface DispatchContext {
+  changedTiles: Point[];
+  skippedTiles: Point[];
+  affectedRouteIds: string[];
+  cost: number;
+}
 
 export interface DispatchResult {
   snapshot: RustGameSnapshot;
   applied: boolean;
-  rejection: string | null;
+  rejection: GameplayRejection | null;
+  /** Wire-complete impact context; reserved — not consumed by the runtime yet. */
+  context: DispatchContext;
+}
+
+export type RoadMutation =
+  | { type: "layRoad"; point: Point }
+  | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
+  | { type: "cycleRoadDirection"; point: Point }
+  | { type: "placeRoundabout"; origin: Point; size: RoundaboutSize }
+  | { type: "removeAtTile"; point: Point }
+  | { type: "removeAtTiles"; points: Point[] };
+
+export interface RoutePreviewRequest {
+  mode: TransitMode;
+  pattern: ServicePattern;
+  waypointIds: string[];
+  routeId: string | null;
+  expectedRevision: number | null;
+  generation: number;
+}
+
+export interface TurnSummary {
+  straight: number;
+  rightTurn: number;
+  leftTurn: number;
+  uTurn: number;
+  roundaboutEntry: number;
+}
+
+export type WarningCode =
+  | "skippedTiles"
+  | "existingBrokenLeg"
+  | "routeWillReroute"
+  | "routeWillBreak"
+  | "insufficientBudget";
+
+export interface GameplayWarning {
+  code: WarningCode;
+  context: GameplayRejection["context"];
+}
+
+export interface RoutePreviewResponse {
+  generation: number;
+  legs: RouteLegPath[];
+  totalTravelSeconds: number;
+  initialVehicleCost: number;
+  affordable: boolean;
+  turnSummary: TurnSummary;
+  missingWaypointIds: string[];
+  warnings: GameplayWarning[];
+  rejection: GameplayRejection | null;
+}
+
+export interface RoadMutationPreviewRequest {
+  mutation: RoadMutation;
+  generation: number;
+}
+
+export type RouteImpactKind = "rerouted" | "broken";
+
+export interface RouteImpact {
+  routeId: string;
+  kind: RouteImpactKind;
+}
+
+export interface AuthoredRoadTilePreview {
+  point: Point;
+  /** serde_wasm_bindgen may omit Rust Option::None; Tauri JSON emits null. */
+  oneWay?: Heading | null;
+  roadConnections: Heading[];
+  /** serde_wasm_bindgen may omit Rust Option::None; Tauri JSON emits null. */
+  roadStructureId?: string | null;
+}
+
+export interface RoadMutationPreviewResponse {
+  generation: number;
+  changedTiles: Point[];
+  authoredTiles: AuthoredRoadTilePreview[];
+  generatedStructures: RoadStructure[];
+  cost: number;
+  skippedTiles: Point[];
+  routeImpacts: RouteImpact[];
+  warnings: GameplayWarning[];
+  rejection: GameplayRejection | null;
 }
 
 export interface GameBackend {
@@ -119,4 +236,8 @@ export interface GameBackend {
   dispatch(intent: GameIntent): Promise<DispatchResult>;
   tick(deltaSeconds: number): Promise<DispatchResult>;
   reset(): Promise<RustGameSnapshot>;
+  previewRoute(request: RoutePreviewRequest): Promise<RoutePreviewResponse>;
+  previewRoadMutation(
+    request: RoadMutationPreviewRequest,
+  ): Promise<RoadMutationPreviewResponse>;
 }

@@ -8,17 +8,21 @@ import type {
   BuildingType,
   GameMap,
   GameState,
+  Heading,
   MetroLine,
   PlacedBuilding,
   Point,
   Route,
+  RouteLegPath,
   Station,
   Stop,
   StopKind,
+  TransitMode,
+  TransitPath,
   Vehicle,
 } from "../../src/domain/types";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
-import { findTilePath } from "../../src/ui/tilePath";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
@@ -26,14 +30,20 @@ function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function createEmptyMap(width = 28, height = 18): GameMap {
+function createEmptyMap(width = MAP_WIDTH, height = MAP_HEIGHT): GameMap {
   const tiles: GameMap["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      tiles.push({ id: tileId(x, y), x, y, kind: "empty" });
+      tiles.push({
+        id: tileId(x, y),
+        x,
+        y,
+        kind: "empty",
+        roadConnections: [],
+      });
     }
   }
-  return { width, height, tiles };
+  return { width, height, tiles, roadStructures: [] };
 }
 
 function busPlatforms(id: string, kind: StopKind) {
@@ -86,18 +96,164 @@ function assignRouteToLeastLoaded<
   });
 }
 
+function headingBetween(from: Point, to: Point): Heading {
+  if (to.x > from.x) return "east";
+  if (to.x < from.x) return "west";
+  if (to.y > from.y) return "south";
+  return "north";
+}
+
+const oppositeHeading: Record<Heading, Heading> = {
+  north: "south",
+  east: "west",
+  south: "north",
+  west: "east",
+};
+
+/** Explicit fixture geometry: horizontal first, then vertical. This helper
+ * never searches for a route; tests that need a different itinerary supply a
+ * RouteLegPath directly. */
+function fixturePointsBetween(from: Point, to: Point): Point[] {
+  const points = [clonePoint(from)];
+  let cursor = clonePoint(from);
+  while (cursor.x !== to.x) {
+    cursor = { x: cursor.x + Math.sign(to.x - cursor.x), y: cursor.y };
+    points.push(cursor);
+  }
+  while (cursor.y !== to.y) {
+    cursor = { x: cursor.x, y: cursor.y + Math.sign(to.y - cursor.y) };
+    points.push(cursor);
+  }
+  return points;
+}
+
+function fixtureSegmentIsAuthored(
+  map: GameMap,
+  points: Point[],
+  mode: "bus" | "metro",
+): boolean {
+  const byPoint = new Map(
+    map.tiles.map((tile) => [`${tile.x},${tile.y}`, tile]),
+  );
+  if (mode === "metro") {
+    return points.every(
+      (point) => byPoint.get(`${point.x},${point.y}`)?.hasTrack === true,
+    );
+  }
+  return points.every((point, index) => {
+    const tile = byPoint.get(`${point.x},${point.y}`);
+    if (tile?.kind !== "road") return false;
+    const next = points[index + 1];
+    if (next === undefined) return true;
+    const heading = headingBetween(point, next);
+    const nextTile = byPoint.get(`${next.x},${next.y}`);
+    return (
+      tile.roadConnections.includes(heading) &&
+      nextTile?.roadConnections.includes(oppositeHeading[heading]) === true &&
+      (tile.oneWay === undefined || tile.oneWay === heading)
+    );
+  });
+}
+
 function routeSegments(
   map: GameMap,
   positions: Point[],
   mode: "bus" | "metro",
 ): Point[][] {
-  if (positions.length < 2) {
-    return [];
-  }
+  if (positions.length < 2) return [];
   return positions.map((from, index) => {
-    const to = positions[(index + 1) % positions.length];
-    return findTilePath(map, from, to, mode) ?? [];
+    const points = fixturePointsBetween(
+      from,
+      positions[(index + 1) % positions.length],
+    );
+    return fixtureSegmentIsAuthored(map, points, mode) ? points : [];
   });
+}
+
+function roadFixturePath(points: Point[]): TransitPath {
+  const steps = points.slice(0, -1).map((position, index) => {
+    const to = points[index + 1];
+    const heading = headingBetween(position, to);
+    return {
+      position: clonePoint(position),
+      enteringHeading: heading,
+      leavingHeading: heading,
+      movement: "straight" as const,
+      geometry: {
+        kind: "line" as const,
+        from: clonePoint(position),
+        to: clonePoint(to),
+      },
+      travelSeconds: 1.25,
+    };
+  });
+  return {
+    kind: "road",
+    steps,
+    totalTravelSeconds: steps.length * 1.25,
+  };
+}
+
+function trackFixturePath(points: Point[]): TransitPath {
+  const steps = points.slice(0, -1).map((position, index) => {
+    const to = points[index + 1];
+    return {
+      position: clonePoint(position),
+      heading: headingBetween(position, to),
+      geometry: {
+        kind: "line" as const,
+        from: clonePoint(position),
+        to: clonePoint(to),
+      },
+      travelSeconds: 0.625,
+    };
+  });
+  return {
+    kind: "track",
+    steps,
+    totalTravelSeconds: steps.length * 0.625,
+  };
+}
+
+function legFromLegacyFixture(
+  mode: TransitMode,
+  fromWaypointId: string,
+  toWaypointId: string,
+  points: Point[],
+): RouteLegPath {
+  const path =
+    points.length === 0
+      ? null
+      : mode === "bus"
+        ? roadFixturePath(points)
+        : trackFixturePath(points);
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop",
+    kind: "service",
+    status: path ? "connected" : "networkDisconnected",
+    currentPath: path,
+    lastValidPath: path,
+    estimatedSeconds: path?.totalTravelSeconds ?? null,
+  };
+}
+
+function routeLegs(
+  map: GameMap,
+  waypointIds: string[],
+  positions: Point[],
+  mode: "bus" | "metro",
+): RouteLegPath[] {
+  const segments = routeSegments(map, positions, mode);
+  return segments.map((points, index) =>
+    legFromLegacyFixture(
+      mode,
+      waypointIds[index],
+      waypointIds[(index + 1) % waypointIds.length],
+      points,
+    ),
+  );
 }
 
 export function createTestGameState(
@@ -135,6 +291,7 @@ export function addTestBusStop(
   const stop: Stop = {
     id,
     kind,
+    status: "present",
     position: clonePoint(position),
     platforms: busPlatforms(id, kind),
   };
@@ -154,6 +311,7 @@ export function addTestMetroStation(
   const id = nextId("station", state.transit.stations.length);
   const station: Station = {
     id,
+    status: "present",
     position: clonePoint(position),
     platforms: metroPlatforms(id),
   };
@@ -178,7 +336,7 @@ export function addTestBusRoute(
     const position = stopById.get(stopId);
     return position === undefined ? [] : [position];
   });
-  const segments = routeSegments(state.map, positions, "bus");
+  const legs = routeLegs(state.map, stopIds, positions, "bus");
   const route: Route = {
     id,
     name: `Bus ${state.transit.routes.length + 1}`,
@@ -189,8 +347,10 @@ export function addTestBusRoute(
     stopIds,
     vehicleIds: [],
     active: true,
-    segments,
-    pathBroken: segments.some((segment) => segment.length === 0),
+    pattern: "loop",
+    revision: 0,
+    legs,
+    pathBroken: legs.some((leg) => leg.status !== "connected"),
   };
   return {
     ...state,
@@ -214,7 +374,7 @@ export function addTestMetroLine(
     const position = stationById.get(stationId);
     return position === undefined ? [] : [position];
   });
-  const segments = routeSegments(state.map, positions, "metro");
+  const legs = routeLegs(state.map, stationIds, positions, "metro");
   const line: MetroLine = {
     id,
     name: `Metro ${state.transit.metroLines.length + 1}`,
@@ -225,8 +385,10 @@ export function addTestMetroLine(
     stationIds,
     vehicleIds: [],
     active: true,
-    segments,
-    pathBroken: segments.some((segment) => segment.length === 0),
+    pattern: "loop",
+    revision: 0,
+    legs,
+    pathBroken: legs.some((leg) => leg.status !== "connected"),
   };
   return {
     ...state,
@@ -254,8 +416,10 @@ export function assignTestVehicle(
     lineId,
     capacity: mode === "bus" ? 30 : 120,
     passengerIds: [],
-    segmentIndex: 0,
-    progress: 0,
+    itineraryIndex: 0,
+    pathStepIndex: 0,
+    stepProgress: 0,
+    parkedPosition: null,
   };
   const transit =
     mode === "bus"
@@ -291,8 +455,17 @@ export function removeTestInfrastructureAtTile(
       if (tile.x !== point.x || tile.y !== point.y) {
         return tile;
       }
-      const { oneWay: _oneWay, ...rest } = tile;
-      return { ...rest, kind: "empty" as const, hasTrack: false };
+      const {
+        oneWay: _oneWay,
+        roadStructureId: _roadStructureId,
+        ...rest
+      } = tile;
+      return {
+        ...rest,
+        kind: "empty" as const,
+        hasTrack: false,
+        roadConnections: [],
+      };
     }),
   };
   const routeById = new Map(
@@ -315,11 +488,11 @@ export function removeTestInfrastructureAtTile(
           const position = stopById.get(stopId);
           return position === undefined ? [] : [position];
         });
-        const segments = routeSegments(nextMap, positions, "bus");
+        const legs = routeLegs(nextMap, route.stopIds, positions, "bus");
         return {
           ...(routeById.get(route.id) ?? route),
-          segments,
-          pathBroken: segments.some((segment) => segment.length === 0),
+          legs,
+          pathBroken: legs.some((leg) => leg.status !== "connected"),
         };
       }),
       metroLines: nextState.transit.metroLines.map((line) => {
@@ -333,12 +506,38 @@ export function removeTestInfrastructureAtTile(
           const position = stationById.get(stationId);
           return position === undefined ? [] : [position];
         });
-        const segments = routeSegments(nextMap, positions, "metro");
+        const legs = routeLegs(nextMap, line.stationIds, positions, "metro");
         return {
           ...(lineById.get(line.id) ?? line),
-          segments,
-          pathBroken: segments.some((segment) => segment.length === 0),
+          legs,
+          pathBroken: legs.some((leg) => leg.status !== "connected"),
         };
+      }),
+      vehicles: nextState.transit.vehicles.map((vehicle) => {
+        const line =
+          vehicle.mode === "bus"
+            ? nextState.transit.routes.find(
+                (route) => route.id === vehicle.lineId,
+              )
+            : nextState.transit.metroLines.find(
+                (candidate) => candidate.id === vehicle.lineId,
+              );
+        const waypointId = line?.legs[vehicle.itineraryIndex]?.fromWaypointId;
+        const parkedPosition =
+          vehicle.mode === "bus"
+            ? nextState.transit.stops.find((stop) => stop.id === waypointId)
+                ?.position
+            : nextState.transit.stations.find(
+                (station) => station.id === waypointId,
+              )?.position;
+        return parkedPosition === undefined
+          ? vehicle
+          : {
+              ...vehicle,
+              pathStepIndex: 0,
+              stepProgress: 0,
+              parkedPosition: clonePoint(parkedPosition),
+            };
       }),
     },
   };
@@ -367,6 +566,7 @@ export function placeTestBuilding(
         {
           id: stopId,
           kind: definition.effect,
+          status: "present",
           position: clonePoint(origin),
           platforms: busPlatforms(stopId, definition.effect),
         },
@@ -383,6 +583,7 @@ export function placeTestBuilding(
         ...transit.stations,
         {
           id: stationId,
+          status: "present",
           position: clonePoint(origin),
           platforms: metroPlatforms(stationId),
         },

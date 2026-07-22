@@ -26,7 +26,7 @@ pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
         for action in actions {
             match action {
                 GrowthAction::PaintAreaRectangle { area, start, end } => {
-                    if let Some(next) = areas::paint_area_rectangle(state, &area, &start, &end) {
+                    if let Ok(next) = areas::paint_area_rectangle(state, &area, &start, &end) {
                         *state = next;
                     }
                 }

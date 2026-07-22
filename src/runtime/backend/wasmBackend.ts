@@ -1,9 +1,17 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
-import { normalizeDispatchResult } from "./shared";
+import {
+  normalizeDispatchResult,
+  normalizeRoadMutationPreviewResponse,
+  normalizeRoutePreviewResponse,
+} from "./shared";
 import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoadMutationPreviewResponse,
+  RoutePreviewRequest,
+  RoutePreviewResponse,
   RustGameSnapshot,
 } from "./types";
 
@@ -56,6 +64,16 @@ export async function createWasmBackend(): Promise<GameBackend> {
     },
     async reset() {
       return engine.reset() as RustGameSnapshot;
+    },
+    async previewRoute(request: RoutePreviewRequest) {
+      const response = engine.preview_route(request) as RoutePreviewResponse;
+      return normalizeRoutePreviewResponse(response);
+    },
+    async previewRoadMutation(request: RoadMutationPreviewRequest) {
+      const response = engine.preview_road_mutation(
+        request,
+      ) as RoadMutationPreviewResponse;
+      return normalizeRoadMutationPreviewResponse(response);
     },
   };
 }

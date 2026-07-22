@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 2;
 
 /// How a transit leg is travelled. Serialized as the lowercase TS-parity strings
 /// `walk` / `bus` / `metro` (see `tests/model_wire_format.rs`).
@@ -8,6 +10,52 @@ pub enum TransitMode {
     Walk,
     Bus,
     Metro,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServicePattern {
+    #[default]
+    Loop,
+    Shuttle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ServiceDirection {
+    Loop,
+    Outbound,
+    Return,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RouteLegKind {
+    Service,
+    TerminalReversal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RouteLegStatus {
+    Connected,
+    NetworkDisconnected,
+    MissingNode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitNodeStatus {
+    #[default]
+    Present,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BusStopKind {
+    BusStop,
+    BusTerminal,
 }
 
 /// Lifecycle state of an active trip. Serialized as the lowercase TS-parity strings
@@ -55,6 +103,7 @@ pub enum WorkerProfile {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameSnapshot {
+    pub schema_version: u16,
     pub time: f64,
     pub day: u32,
     pub clock_minutes: u16,
@@ -120,6 +169,117 @@ pub struct GrowthWave {
     pub actions: Vec<GrowthAction>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Heading {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl Heading {
+    /// Lowercase canonical name used in wire/preview keys and assertions.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::North => "north",
+            Self::East => "east",
+            Self::South => "south",
+            Self::West => "west",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoundaboutSize {
+    Compact2x2,
+    Standard3x3,
+}
+
+impl RoundaboutSize {
+    pub(crate) fn stable_id_key(self) -> &'static str {
+        match self {
+            Self::Compact2x2 => "compact2x2",
+            Self::Standard3x3 => "standard3x3",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortDirection {
+    TwoWay,
+    Inbound,
+    Outbound,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadPort {
+    pub id: String,
+    pub point: Point,
+    pub edge: Heading,
+    /// One-way direction of the external neighbor at capture time. `None` for
+    /// template slots and ports that have not been validated against an
+    /// external tile; consumers fall back to geometry-based acceptance.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub direction: Option<PortDirection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RoadStructure {
+    AutomaticJunction {
+        id: String,
+        footprint: Vec<Point>,
+        ports: Vec<RoadPort>,
+    },
+    Roundabout {
+        id: String,
+        origin: Point,
+        size: RoundaboutSize,
+        footprint: Vec<Point>,
+        ports: Vec<RoadPort>,
+    },
+}
+
+impl RoadStructure {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::AutomaticJunction { id, .. } | Self::Roundabout { id, .. } => id,
+        }
+    }
+
+    pub fn footprint(&self) -> &[Point] {
+        match self {
+            Self::AutomaticJunction { footprint, .. } | Self::Roundabout { footprint, .. } => {
+                footprint
+            }
+        }
+    }
+
+    pub fn ports(&self) -> &[RoadPort] {
+        match self {
+            Self::AutomaticJunction { ports, .. } | Self::Roundabout { ports, .. } => ports,
+        }
+    }
+
+    pub fn is_automatic_junction(&self) -> bool {
+        matches!(self, Self::AutomaticJunction { .. })
+    }
+
+    pub fn port_keys(&self) -> Vec<(Point, Heading)> {
+        let mut keys: Vec<_> = self
+            .ports()
+            .iter()
+            .map(|port| (port.point, port.edge))
+            .collect();
+        keys.sort();
+        keys
+    }
+}
+
 /// A single growth mutation. Mirrors the corresponding `intent::GameIntent`
 /// variants and their wire spelling so a wave replays the player's own handlers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,6 +307,47 @@ pub struct GameMap {
     pub width: u8,
     pub height: u8,
     pub tiles: Vec<Tile>,
+    pub road_structures: Vec<RoadStructure>,
+}
+
+impl GameMap {
+    fn tile_index(&self, point: Point) -> Option<usize> {
+        if point.x < 0
+            || point.x >= i32::from(self.width)
+            || point.y < 0
+            || point.y >= i32::from(self.height)
+        {
+            return None;
+        }
+        Some(point.y as usize * usize::from(self.width) + point.x as usize)
+    }
+
+    pub fn tile(&self, point: Point) -> Option<&Tile> {
+        let index = self.tile_index(point)?;
+        if let Some(tile) = self.tiles.get(index) {
+            if tile.x == point.x && tile.y == point.y {
+                return Some(tile);
+            }
+        }
+        self.tiles
+            .iter()
+            .find(|tile| tile.x == point.x && tile.y == point.y)
+    }
+
+    pub fn tile_mut(&mut self, point: Point) -> Option<&mut Tile> {
+        let index = self.tile_index(point)?;
+        let indexed_matches = self
+            .tiles
+            .get(index)
+            .is_some_and(|tile| tile.x == point.x && tile.y == point.y);
+        if indexed_matches {
+            self.tiles.get_mut(index)
+        } else {
+            self.tiles
+                .iter_mut()
+                .find(|tile| tile.x == point.x && tile.y == point.y)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -161,7 +362,11 @@ pub struct Tile {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_track: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub one_way: Option<String>,
+    pub one_way: Option<Heading>,
+    #[serde(default)]
+    pub road_connections: Vec<Heading>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub road_structure_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,7 +382,7 @@ pub struct PlacedBuilding {
     pub transit_node_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Point {
     pub x: i32,
     pub y: i32,
@@ -217,6 +422,160 @@ impl From<Point> for TripPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MovementKind {
+    Straight,
+    RightTurn,
+    LeftTurn,
+    UTurn,
+    RoundaboutEntry,
+    RoundaboutCirculation,
+    RoundaboutExit,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PathGeometry {
+    Line {
+        from: TripPosition,
+        to: TripPosition,
+    },
+    QuadraticBezier {
+        from: TripPosition,
+        control: TripPosition,
+        to: TripPosition,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadPathStep {
+    pub position: Point,
+    pub entering_heading: Heading,
+    pub leaving_heading: Heading,
+    pub movement: MovementKind,
+    pub geometry: PathGeometry,
+    pub travel_seconds: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackPathStep {
+    pub position: Point,
+    pub heading: Heading,
+    pub geometry: PathGeometry,
+    pub travel_seconds: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransitPath {
+    Road {
+        steps: Vec<RoadPathStep>,
+        total_travel_seconds: f64,
+    },
+    Track {
+        steps: Vec<TrackPathStep>,
+        total_travel_seconds: f64,
+    },
+}
+
+pub enum TransitPathStepRef<'a> {
+    Road(&'a RoadPathStep),
+    Track(&'a TrackPathStep),
+}
+
+impl TransitPathStepRef<'_> {
+    pub fn travel_seconds(&self) -> f64 {
+        match self {
+            Self::Road(step) => step.travel_seconds,
+            Self::Track(step) => step.travel_seconds,
+        }
+    }
+
+    pub fn accepts_heading(&self, heading: Heading) -> bool {
+        match self {
+            Self::Road(step) => step.entering_heading == heading || step.leaving_heading == heading,
+            Self::Track(step) => step.heading == heading,
+        }
+    }
+}
+
+impl TransitPath {
+    pub fn total_travel_seconds(&self) -> f64 {
+        match self {
+            Self::Road {
+                total_travel_seconds,
+                ..
+            }
+            | Self::Track {
+                total_travel_seconds,
+                ..
+            } => *total_travel_seconds,
+        }
+    }
+
+    pub fn step_count(&self) -> usize {
+        match self {
+            Self::Road { steps, .. } => steps.len(),
+            Self::Track { steps, .. } => steps.len(),
+        }
+    }
+
+    pub fn step(&self, index: usize) -> Option<TransitPathStepRef<'_>> {
+        match self {
+            Self::Road { steps, .. } => steps.get(index).map(TransitPathStepRef::Road),
+            Self::Track { steps, .. } => steps.get(index).map(TransitPathStepRef::Track),
+        }
+    }
+
+    pub fn step_refs(&self) -> Vec<TransitPathStepRef<'_>> {
+        (0..self.step_count())
+            .filter_map(|index| self.step(index))
+            .collect()
+    }
+
+    pub fn road_steps(&self) -> &[RoadPathStep] {
+        match self {
+            Self::Road { steps, .. } => steps,
+            Self::Track { .. } => &[],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteLegPath {
+    pub from_waypoint_id: String,
+    pub to_waypoint_id: String,
+    pub direction: ServiceDirection,
+    pub kind: RouteLegKind,
+    pub status: RouteLegStatus,
+    pub current_path: Option<TransitPath>,
+    pub last_valid_path: Option<TransitPath>,
+    pub estimated_seconds: Option<f64>,
+}
+
+impl RouteLegPath {
+    pub fn key(&self) -> (&str, &str, ServiceDirection, RouteLegKind) {
+        (
+            &self.from_waypoint_id,
+            &self.to_waypoint_id,
+            self.direction,
+            self.kind,
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitNetwork {
@@ -231,7 +590,9 @@ pub struct TransitNetwork {
 #[serde(rename_all = "camelCase")]
 pub struct Stop {
     pub id: String,
-    pub kind: String,
+    pub kind: BusStopKind,
+    #[serde(default)]
+    pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
 }
@@ -239,6 +600,8 @@ pub struct Stop {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Station {
     pub id: String,
+    #[serde(default)]
+    pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
 }
@@ -261,7 +624,13 @@ pub struct Route {
     pub stop_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
-    pub segments: Vec<Vec<Point>>,
+    #[serde(default)]
+    pub pattern: ServicePattern,
+    #[serde(default)]
+    pub revision: u32,
+    #[serde(default)]
+    pub legs: Vec<RouteLegPath>,
+    #[serde(default)]
     pub path_broken: bool,
 }
 
@@ -274,7 +643,13 @@ pub struct MetroLine {
     pub station_ids: Vec<String>,
     pub vehicle_ids: Vec<String>,
     pub active: bool,
-    pub segments: Vec<Vec<Point>>,
+    #[serde(default)]
+    pub pattern: ServicePattern,
+    #[serde(default)]
+    pub revision: u32,
+    #[serde(default)]
+    pub legs: Vec<RouteLegPath>,
+    #[serde(default)]
     pub path_broken: bool,
 }
 
@@ -286,8 +661,10 @@ pub struct Vehicle {
     pub line_id: String,
     pub capacity: u16,
     pub passenger_ids: Vec<String>,
-    pub segment_index: usize,
-    pub progress: f64,
+    pub itinerary_index: usize,
+    pub path_step_index: usize,
+    pub step_progress: f64,
+    pub parked_position: Option<TripPosition>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -343,6 +720,20 @@ pub struct RouteLeg {
     pub to: Point,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub service_direction: Option<ServiceDirection>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub board_itinerary_index: Option<usize>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub alight_itinerary_index: Option<usize>,
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 /// Terminal outcome of a completed/failed trip. Serialized as the lowercase TS-parity

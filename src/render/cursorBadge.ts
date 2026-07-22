@@ -1,114 +1,17 @@
-import type {
-  BuildingRotation,
-  BuildingType,
-  GameMap,
-  GameState,
-  Point,
-  Tile,
-} from "../domain/types";
+import type { GameState } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
-import {
-  BUILDING_CATALOG,
-  getBuildingFootprint,
-} from "../domain/catalog/buildings";
+import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import type { UiState } from "../ui/uiState";
 import type { BoardTransform } from "./canvas";
 import { tileSize } from "./canvas";
 import { colors } from "./colors";
-
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
-
-function getTile(map: GameMap, point: Point): Tile | null {
-  if (
-    point.x < 0 ||
-    point.x >= map.width ||
-    point.y < 0 ||
-    point.y >= map.height
-  ) {
-    return null;
-  }
-
-  return map.tiles.find((tile) => samePoint(tile, point)) ?? null;
-}
-
-function isBuildingOccupied(state: GameState, point: Point): boolean {
-  return state.buildings.some((building) =>
-    building.occupiedTiles.some((occupiedTile) =>
-      samePoint(occupiedTile, point),
-    ),
-  );
-}
-
-function isTransitNodeAt(state: GameState, point: Point): boolean {
-  return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
-  );
-}
-
-function canPlaceBuilding(
-  state: GameState,
-  type: BuildingType,
-  origin: Point,
-  rotation: BuildingRotation,
-): boolean {
-  const definition = BUILDING_CATALOG[type];
-  const footprint = getBuildingFootprint(type, origin, rotation);
-
-  return footprint.every((point) => {
-    const tile = getTile(state.map, point);
-    const kindOk =
-      type === "metroStation"
-        ? tile?.kind === "empty" || tile?.kind === "road"
-        : tile?.kind === "empty";
-    const trackOk =
-      type === "metroStation"
-        ? tile?.hasTrack === true
-        : tile?.hasTrack !== true;
-    const areaOk =
-      definition.allowedArea === undefined ||
-      tile?.area === definition.allowedArea;
-
-    return (
-      kindOk &&
-      trackOk &&
-      areaOk &&
-      !isBuildingOccupied(state, point) &&
-      !isTransitNodeAt(state, point)
-    );
-  });
-}
-
-function isValidRoadPlacement(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    tile?.kind === "empty" &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
-}
-
-function isValidTrackPlacement(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    (tile?.kind === "empty" || tile?.kind === "road") &&
-    tile?.hasTrack !== true &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
-}
-
-function isAreaPaintable(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    tile?.kind === "empty" &&
-    tile.hasTrack !== true &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
-}
+import {
+  canPlaceBuilding,
+  getTile,
+  isAreaPaintable,
+  isValidRoadPlacement,
+  isValidTrackPlacement,
+} from "./placementValidation";
 
 /** The tile under the pointer: the drag's current tile while a gesture is
  *  active, otherwise the idle hover tile. */
@@ -137,13 +40,26 @@ function badgeText(state: GameState, ui: UiState): string | null {
           : ui.roadPreset === "dualBidirectional"
             ? " ⇄"
             : "";
+      const tile = getTile(state.map, cursor);
+      // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
+      // reject cycleRoadDirection, so exclude them from the existing-road fallback.
       const ok =
         isValidRoadPlacement(state, cursor) ||
-        getTile(state.map, cursor)?.kind === "road";
+        (tile?.kind === "road" && tile.roadStructureId === undefined);
       return `⦿ Road${glyph}${ok ? "" : " ⊘"}`;
     }
     case "track":
       return `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`;
+    case "roundabout": {
+      const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
+      const preview = ui.roadMutationPreview;
+      const matching =
+        preview !== null && preview.generation === ui.roadPreviewGeneration;
+      if (!matching) {
+        return `⦿ Roundabout ${sizeLabel} …`;
+      }
+      return `⦿ Roundabout ${sizeLabel}${preview.rejection === null ? "" : " ⊘"}`;
+    }
     case "area": {
       if (ui.selectedArea === null) {
         return null;

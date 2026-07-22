@@ -1,17 +1,27 @@
-import type { GameState, Overlay } from "../domain/types";
+import type {
+  GameState,
+  GameplayRejection,
+  MetroLine,
+  Overlay,
+  Route,
+  RouteLegPath,
+} from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
-import { COSTS } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
-import { closingLoopIsPathable } from "../ui/routeDraft";
+import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
+import { rejectionMessage, warningMessage } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
   ShellInspectorState,
   ShellPlatform,
-  ShellRouteDraftState,
+  RouteFailureRow,
+  RouteEditorView,
+  RouteServiceStatus,
+  RoadMutationPreviewView,
   ShellRouteListItem,
   ShellRouteListState,
   ShellState,
@@ -25,8 +35,10 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   growth: "Growth",
 };
 
+const budgetFormat = new Intl.NumberFormat("en-US");
+
 export function formatBudget(budget: number): string {
-  return `$${budget.toLocaleString()}`;
+  return `$${budgetFormat.format(budget)}`;
 }
 
 function formatSnapshotClock(state: GameState): string {
@@ -133,96 +145,291 @@ function buildInspector(
   };
 }
 
-function stopLabel(
-  state: GameState,
-  stopId: string,
-): { label: string; coord: string } {
-  const stop = state.transit.stops.find((s) => s.id === stopId);
-  if (stop !== undefined) {
-    return {
-      label: stop.kind === "busTerminal" ? "Bus Terminal" : "Bus Stop",
-      coord: `(${stop.position.x},${stop.position.y})`,
-    };
-  }
-  const station = state.transit.stations.find((s) => s.id === stopId);
-  if (station !== undefined) {
-    return {
-      label: "Metro Station",
-      coord: `(${station.position.x},${station.position.y})`,
-    };
-  }
-  return { label: stopId, coord: "" };
-}
-
-function buildRouteDraft(
-  state: GameState,
-  ui: UiState,
-): ShellRouteDraftState | null {
-  const isBus = ui.activeTool === "busRoute";
-  const isMetro = ui.activeTool === "metroLine";
-  if (!isBus && !isMetro) {
-    return null;
-  }
-  const ids = isBus ? ui.draftStopIds : ui.draftStationIds;
-  if (ids.length === 0) {
-    return null;
-  }
-  const vehicleCost = isBus ? COSTS.bus : COSTS.metro;
-  const distinct = new Set(ids).size;
-  const affordable = state.budget >= vehicleCost;
-  // The closing loop (last -> first) must be pathable under directed roads;
-  // otherwise finishing creates a `pathBroken` route whose `assignVehicle`
-  // rejects, leaving an unusable line with no vehicle and a cleared draft.
-  const loopCloses = closingLoopIsPathable(state, ui);
-  const canFinish = distinct >= 2 && affordable && loopCloses;
-  const finishHint =
-    distinct < 2
-      ? "Add another stop"
-      : !loopCloses
-        ? "Loop cannot close"
-        : affordable
-          ? "Ready"
-          : `Need ${formatBudget(vehicleCost)}`;
-
-  return {
-    mode: isBus ? "bus" : "metro",
-    stops: ids.map((id, index) => {
-      const { label, coord } = stopLabel(state, id);
-      return { index, label, coord };
-    }),
-    distinctCount: distinct,
-    vehicleCost,
-    canFinish,
-    finishHint,
-  };
-}
-
 function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
-  const buses: ShellRouteListItem[] = state.transit.routes.map((route) => ({
-    id: route.id,
-    name: route.name,
-    color: route.color,
-    mode: "bus",
-    stopCount: route.stopIds.length,
-    active: route.active,
-    selected: ui.selectedRouteId === route.id,
-  }));
-  const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) => ({
-    id: line.id,
-    name: line.name,
-    color: line.color,
-    mode: "metro",
-    stopCount: line.stationIds.length,
-    active: line.active,
-    selected: ui.selectedRouteId === line.id,
-  }));
+  const buses: ShellRouteListItem[] = state.transit.routes.map((route) =>
+    selectRouteRow(state, route, "bus", ui.selectedRouteId === route.id),
+  );
+  const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) =>
+    selectRouteRow(state, line, "metro", ui.selectedRouteId === line.id),
+  );
   return [...buses, ...metros];
 }
 
-export function selectShellState(state: GameState, ui: UiState): ShellState {
+function routeServiceStatus(route: Route | MetroLine): RouteServiceStatus {
+  return route.pathBroken
+    ? { primary: "broken", pausedAfterRepair: !route.active }
+    : route.active
+      ? { primary: "running", pausedAfterRepair: false }
+      : { primary: "paused", pausedAfterRepair: false };
+}
+
+function alphabeticOrdinal(value: number): string {
+  let remainder = Math.max(1, value);
+  let label = "";
+  while (remainder > 0) {
+    remainder -= 1;
+    label = String.fromCharCode(65 + (remainder % 26)) + label;
+    remainder = Math.floor(remainder / 26);
+  }
+  return label;
+}
+
+function waypointLabel(state: GameState, waypointId: string): string {
+  const stop = state.transit.stops.find((node) => node.id === waypointId);
+  const station = state.transit.stations.find((node) => node.id === waypointId);
+  if (stop === undefined && station === undefined) {
+    return waypointId;
+  }
+  const collection =
+    stop === undefined ? state.transit.stations : state.transit.stops;
+  const fallbackOrdinal =
+    collection.findIndex((node) => node.id === waypointId) + 1;
+  const numericSuffix = /-(\d+)$/.exec(waypointId)?.[1];
+  const ordinal =
+    numericSuffix === undefined ? fallbackOrdinal : Number(numericSuffix);
+  if ((stop ?? station)?.status === "missing") {
+    if (station !== undefined) return "Missing Metro Station";
+    return stop?.kind === "busTerminal"
+      ? "Missing Bus Terminal"
+      : "Missing Bus Stop";
+  }
+  return `${stop === undefined ? "Station" : "Stop"} ${alphabeticOrdinal(ordinal)}`;
+}
+
+function routeDraftPreviewMessage(
+  state: GameState,
+  ui: UiState,
+): { status: RouteEditorView["previewStatus"]; message: string | null } {
+  const draft = ui.routeDraft;
+  if (draft === null) return { status: "empty", message: null };
+  const localError = ui.routePreviewError;
+  // `invalidRouteDraftInteraction` is a transient UI hint (e.g. "select a
+  // waypoint to remove"), not a preview rejection. Determine the real
+  // preview status first, then override only the message so the status
+  // never contradicts an enabled Save button.
+  const interactionMessage =
+    localError?.code === "invalidRouteDraftInteraction"
+      ? localError.context.operation === "removeWaypoint"
+        ? "Select a waypoint to remove."
+        : localError.context.operation === "moveWaypoint"
+          ? "That waypoint cannot move farther."
+          : "That waypoint is no longer available."
+      : null;
+
+  if (draft.previewPending) {
+    return { status: "empty", message: "Checking route…" };
+  }
+  if (ui.routePreviewHostError !== null) {
+    return { status: "rejected", message: ui.routePreviewHostError };
+  }
+  const preview = draft.preview;
+  if (preview === null || preview.legs.length === 0) {
+    if (
+      localError !== null &&
+      localError.code !== "invalidRouteDraftInteraction"
+    ) {
+      const message =
+        localError.code === "routeChangedWhileEditing"
+          ? "Saved route changed. Reload the latest revision."
+          : localError.code === "incompatibleRouteNode"
+            ? "Choose a stop or station that matches this route."
+            : localError.code === "missingRouteNode"
+              ? "That route node is missing."
+              : "Route preview was rejected.";
+      return { status: "rejected", message };
+    }
+    return {
+      status: "empty",
+      message: interactionMessage ?? "Add at least two waypoints.",
+    };
+  }
+  const rejectedLeg = preview.legs.find((leg) => leg.status !== "connected");
+  if (rejectedLeg !== undefined) {
+    const from = waypointLabel(state, rejectedLeg.fromWaypointId);
+    const to = waypointLabel(state, rejectedLeg.toWaypointId);
+    return {
+      status: "broken",
+      message:
+        rejectedLeg.status === "missingNode"
+          ? `${from} → ${to} includes a missing waypoint.`
+          : `${from} → ${to} cannot connect.`,
+    };
+  }
+  if (
+    preview.rejection !== null ||
+    (localError !== null && localError.code !== "invalidRouteDraftInteraction")
+  ) {
+    return { status: "rejected", message: "Route preview was rejected." };
+  }
+  if (!preview.affordable) {
+    return {
+      status: "rejected",
+      message: `Need ${formatBudget(preview.initialVehicleCost)}.`,
+    };
+  }
+  return { status: "connected", message: interactionMessage ?? "Connected" };
+}
+
+export function selectRouteEditorView(
+  state: GameState,
+  ui: UiState,
+  rejection: GameplayRejection | null,
+): RouteEditorView | null {
+  const draft = ui.routeDraft;
+  if (draft === null) return null;
+  const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
+  const staleRejection =
+    draft.source.kind === "edit" &&
+    rejection?.code === "routeChangedWhileEditing" &&
+    rejection.context.routeId === draft.source.routeId
+      ? rejection
+      : null;
+  // The routeChangedWhileEditing error can surface either as a global
+  // rejection (failed Save) or as a local preview error (detected during
+  // preview re-evaluation). In both cases the user needs a Reload button.
+  const localStaleError =
+    routeId !== null &&
+    ui.routePreviewError?.code === "routeChangedWhileEditing" &&
+    ui.routePreviewError.context.routeId === routeId
+      ? ui.routePreviewError
+      : null;
+  const preview =
+    staleRejection === null
+      ? routeDraftPreviewMessage(state, ui)
+      : {
+          status: "rejected" as const,
+          message: rejectionMessage(staleRejection),
+        };
+  const title =
+    routeId === null
+      ? draft.mode === "metro"
+        ? "New Metro Line"
+        : "New Bus Route"
+      : `Editing ${routeNameAndColor(state, routeId).name}`;
+  return {
+    source: draft.source.kind,
+    title,
+    mode: draft.mode,
+    pattern: draft.pattern,
+    waypoints: draft.waypointIds.map((id, index) => {
+      const node =
+        state.transit.stops.find((candidate) => candidate.id === id) ??
+        state.transit.stations.find((candidate) => candidate.id === id);
+      return {
+        id,
+        index,
+        label: waypointLabel(state, id),
+        status: node?.status ?? "missing",
+        selected: draft.selectedIndex === index,
+      };
+    }),
+    selectedIndex: draft.selectedIndex,
+    interaction: draft.interaction,
+    previewPending: draft.previewPending,
+    previewStatus: preview.status,
+    previewMessage: preview.message,
+    previewWarnings: draft.preview?.warnings.map(warningMessage) ?? [],
+    canSave:
+      staleRejection === null &&
+      (ui.routePreviewError === null ||
+        ui.routePreviewError.code === "invalidRouteDraftInteraction") &&
+      ui.routePreviewHostError === null &&
+      canSaveRouteDraft(draft),
+    canReload: staleRejection !== null || localStaleError !== null,
+  };
+}
+
+function routeFailures(
+  state: GameState,
+  legs: RouteLegPath[],
+): RouteFailureRow[] {
+  return legs.flatMap((leg, legIndex) =>
+    leg.status === "connected"
+      ? []
+      : [
+          {
+            legIndex,
+            fromWaypointId: leg.fromWaypointId,
+            toWaypointId: leg.toWaypointId,
+            fromLabel: waypointLabel(state, leg.fromWaypointId),
+            toLabel: waypointLabel(state, leg.toWaypointId),
+            reason: leg.status,
+            missingNodeKind:
+              leg.status === "missingNode"
+                ? missingNodeKindForLeg(state, leg)
+                : undefined,
+          },
+        ],
+  );
+}
+
+function missingNodeKindForLeg(
+  state: GameState,
+  leg: RouteLegPath,
+): "stop" | "station" {
+  const fromStation = state.transit.stations.find(
+    (node) => node.id === leg.fromWaypointId,
+  );
+  const toStation = state.transit.stations.find(
+    (node) => node.id === leg.toWaypointId,
+  );
+  if (fromStation?.status === "missing" || toStation?.status === "missing") {
+    return "station";
+  }
+  return "stop";
+}
+
+function selectRouteRow(
+  state: GameState,
+  route: Route | MetroLine,
+  mode: "bus" | "metro",
+  selected: boolean,
+): ShellRouteListItem {
+  return {
+    id: route.id,
+    name: route.name,
+    color: route.color,
+    mode,
+    stopCount:
+      "stopIds" in route ? route.stopIds.length : route.stationIds.length,
+    active: route.active,
+    selected,
+    status: routeServiceStatus(route),
+    failures: routeFailures(state, route.legs),
+  };
+}
+
+export function buildRoadMutationPreview(
+  state: GameState,
+  ui: UiState,
+): RoadMutationPreviewView | null {
+  const preview = ui.roadMutationPreview;
+  if (preview === null || preview.generation !== ui.roadPreviewGeneration) {
+    return null;
+  }
+  return {
+    generation: preview.generation,
+    changedTiles: preview.changedTiles,
+    skippedTiles: preview.skippedTiles,
+    authoredTiles: preview.authoredTiles,
+    generatedStructures: preview.generatedStructures,
+    cost: preview.cost,
+    costLabel: formatBudget(preview.cost),
+    routeImpacts: preview.routeImpacts.map((impact) => ({
+      ...impact,
+      routeName: routeNameAndColor(state, impact.routeId).name,
+    })),
+    rejection: preview.rejection,
+  };
+}
+
+export function selectShellState(
+  state: GameState,
+  ui: UiState,
+  rejection: GameplayRejection | null = null,
+): ShellState {
   const inspector = buildInspector(state, ui);
-  const draftActive =
-    ui.draftStopIds.length > 0 || ui.draftStationIds.length > 0;
+  const draftActive = ui.routeDraft !== null;
   // Single derivation of the active-tool label — bound to both the HUD chip
   // and the Brief panel so the two can never drift apart.
   const activeToolLabel = formatActiveTool(ui);
@@ -275,7 +482,8 @@ export function selectShellState(state: GameState, ui: UiState): ShellState {
     },
     hud,
     inspector,
-    routeDraft: buildRouteDraft(state, ui),
+    routeDraft: selectRouteEditorView(state, ui, rejection),
     routes: buildRouteList(state, ui),
+    roadMutationPreview: buildRoadMutationPreview(state, ui),
   };
 }

@@ -1,4 +1,6 @@
-use caelum_core::model::TransitMode;
+use caelum_core::model::{
+    GameSnapshot, ServicePattern, TransitMode, TransitNodeStatus, TransitPath,
+};
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -26,10 +28,30 @@ fn bus_route_state() -> GameEngine {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine
+}
+
+fn left_turn_trip_fixture() -> GameSnapshot {
+    let mut state = bus_route_state().snapshot();
+    let leg = &mut state.transit.routes[0].legs[0];
+    let TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    } = leg.current_path.as_mut().unwrap()
+    else {
+        panic!("bus fixture has a road path");
+    };
+    let left_turn_delay = 1.0;
+    steps.last_mut().unwrap().travel_seconds += left_turn_delay;
+    *total_travel_seconds += left_turn_delay;
+    leg.estimated_seconds = Some(*total_travel_seconds);
+    leg.last_valid_path = leg.current_path.clone();
+    state
 }
 
 #[test]
@@ -42,6 +64,9 @@ fn creates_walking_route_for_nearby_destinations() {
     assert_eq!(plan.estimated_seconds, 40.0);
     assert_eq!(plan.legs.len(), 1);
     assert_eq!(plan.legs[0].mode, TransitMode::Walk);
+    assert_eq!(plan.legs[0].service_direction, None);
+    assert_eq!(plan.legs[0].board_itinerary_index, None);
+    assert_eq!(plan.legs[0].alight_itinerary_index, None);
 }
 
 #[test]
@@ -66,8 +91,41 @@ fn creates_bus_route_plan_from_connected_stops() {
         vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk]
     );
     assert_eq!(plan.legs[1].line_id.as_deref(), Some("route-001"));
+    assert_eq!(
+        plan.legs[1].service_direction,
+        Some(caelum_core::model::ServiceDirection::Loop)
+    );
+    assert_eq!(plan.legs[1].board_itinerary_index, Some(0));
+    assert_eq!(plan.legs[1].alight_itinerary_index, Some(0));
     assert_eq!(plan.legs[1].from, (2, 5).into());
     assert_eq!(plan.legs[1].to, (12, 5).into());
+}
+
+#[test]
+fn missing_node_is_not_enumerated_as_a_router_anchor() {
+    let mut snapshot = bus_route_state().snapshot();
+    snapshot.transit.stops[0].status = TransitNodeStatus::Missing;
+    snapshot.transit.routes[0].path_broken = false;
+
+    let plan = router::find_route_plan(&snapshot, &(1, 5).into(), &(13, 5).into())
+        .expect("walking fallback remains available");
+
+    assert_eq!(plan.legs.len(), 1);
+    assert_eq!(plan.legs[0].mode, TransitMode::Walk);
+}
+
+#[test]
+fn transit_plan_estimate_equals_the_authoritative_leg_duration() {
+    let snapshot = left_turn_trip_fixture();
+    let authoritative_leg_duration = snapshot.transit.routes[0].legs[0]
+        .estimated_seconds
+        .unwrap();
+    let plan = router::find_route_plan(&snapshot, &(2, 5).into(), &(12, 5).into())
+        .expect("bus route should be planned");
+
+    assert_eq!(plan.legs[1].mode, TransitMode::Bus);
+    let transit_seconds = plan.estimated_seconds - 90.0;
+    assert!((transit_seconds - authoritative_leg_duration).abs() < 1e-9);
 }
 
 #[test]
@@ -80,8 +138,10 @@ fn creates_metro_route_plan_from_connected_stations() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
 
     let plan = router::find_route_plan(&engine.snapshot(), &(1, 4).into(), &(13, 4).into())

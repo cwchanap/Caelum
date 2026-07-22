@@ -1,12 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderOverlays } from "../../src/render/overlayRenderer";
+import {
+  renderOverlays,
+  renderRoadPreviewFeedbackBadge,
+  renderRouteDraftHandles,
+} from "../../src/render/overlayRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
-import type { ActiveTrip, Stop } from "../../src/domain/types";
-import { axisLockedLine, reverseLanePoints } from "../../src/ui/roadDrag";
+import type {
+  ActiveTrip,
+  Point,
+  RoadStructure,
+  RouteLegPath,
+  Stop,
+  TransitPath,
+} from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
-import { tileSize } from "../../src/render/canvas";
-import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
+import { tileSize, type BoardTransform } from "../../src/render/canvas";
+import { withAreas, withTracks } from "../helpers/mapFixtures";
+import type { RouteEditorView } from "../../src/runtime/types";
+
+/** Identity transform (scale=1, no offset) for badge-position tests. */
+const identityTransform: BoardTransform = {
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  width: 28 * tileSize,
+  height: 18 * tileSize,
+};
 
 function fakeCtx() {
   return {
@@ -21,9 +41,97 @@ function fakeCtx() {
   } as unknown as CanvasRenderingContext2D;
 }
 
+function editDraftView(): RouteEditorView {
+  return {
+    source: "edit",
+    title: "Editing Route 1",
+    mode: "bus",
+    pattern: "loop",
+    waypoints: [
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: false,
+      },
+      {
+        id: "stop-002",
+        index: 1,
+        label: "Missing Bus Stop",
+        status: "missing",
+        selected: true,
+      },
+      {
+        id: "stop-003",
+        index: 2,
+        label: "Stop C",
+        status: "present",
+        selected: false,
+      },
+    ],
+    selectedIndex: 1,
+    interaction: "replace",
+    previewPending: false,
+    previewStatus: "broken",
+    previewMessage: "Missing Bus Stop to Stop C cannot connect",
+    previewWarnings: [],
+    canSave: true,
+    canReload: false,
+  };
+}
+
+function draftHandleContext() {
+  let status: "present" | "missing" = "present";
+  const labels: Array<{ text: string; status: "present" | "missing" }> = [];
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    arc: vi.fn(),
+    stroke: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    fill: vi.fn(),
+    setLineDash: vi.fn((dash: number[]) => {
+      status = dash.length > 0 ? "missing" : "present";
+    }),
+    fillText: vi.fn((text: string) => labels.push({ text, status })),
+    fillStyle: "",
+    strokeStyle: "",
+    lineWidth: 0,
+    font: "",
+    textAlign: "center",
+    textBaseline: "middle",
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, labels };
+}
+
+describe("route draft handles", () => {
+  it("renders numbered present and missing handles", () => {
+    const { ctx, labels } = draftHandleContext();
+    renderRouteDraftHandles(
+      ctx,
+      editDraftView(),
+      new Map([
+        ["stop-001", { x: 2, y: 3 }],
+        ["stop-002", { x: 6, y: 4 }],
+        ["stop-003", { x: 8, y: 5 }],
+      ]),
+    );
+
+    expect(labels).toEqual([
+      { text: "1", status: "present" },
+      { text: "2", status: "missing" },
+      { text: "3", status: "present" },
+    ]);
+  });
+});
+
 const stop: Stop = {
   id: "stop-001",
   kind: "busStop",
+  status: "present",
   position: { x: 3, y: 3 },
   platforms: [
     { id: "stop-001-p0", label: "A", capacity: 1, routeIds: ["route-001"] },
@@ -49,6 +157,9 @@ function waiter(): ActiveTrip {
           from: { x: 3, y: 3 },
           to: { x: 9, y: 9 },
           lineId: "route-001",
+          serviceDirection: "loop",
+          boardItineraryIndex: 0,
+          alightItineraryIndex: 0,
         },
       ],
     },
@@ -190,6 +301,130 @@ describe("Rust trip overlays", () => {
   });
 });
 
+function markerPath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: from,
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: { kind: "line", from, to },
+        travelSeconds: 1,
+      },
+    ],
+    totalTravelSeconds: 1,
+  };
+}
+
+function failedMarkerLeg(
+  fromWaypointId: string,
+  toWaypointId: string,
+  status: RouteLegPath["status"],
+  lastValidPath: TransitPath,
+): RouteLegPath {
+  return {
+    fromWaypointId,
+    toWaypointId,
+    direction: "loop",
+    kind: "service",
+    status,
+    currentPath: null,
+    lastValidPath,
+    estimatedSeconds: null,
+  };
+}
+
+describe("broken route markers", () => {
+  it("uses distinct missing-node and disconnected-leg markers", () => {
+    const state = createTestGameState();
+    const routeState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: [
+          {
+            id: "a",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 1, y: 1 },
+            platforms: [],
+          },
+          {
+            id: "b",
+            kind: "busStop" as const,
+            status: "missing" as const,
+            position: { x: 2, y: 1 },
+            platforms: [],
+          },
+          {
+            id: "c",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 6, y: 1 },
+            platforms: [],
+          },
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Route 1",
+            color: "#e04f39",
+            stopIds: ["a", "b", "c"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [
+              failedMarkerLeg(
+                "a",
+                "b",
+                "missingNode",
+                markerPath({ x: 1, y: 1 }, { x: 2, y: 1 }),
+              ),
+              failedMarkerLeg(
+                "b",
+                "c",
+                "networkDisconnected",
+                markerPath({ x: 2, y: 1 }, { x: 6, y: 1 }),
+              ),
+            ],
+            pathBroken: true,
+          },
+        ],
+      },
+    };
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      arc: vi.fn(),
+      strokeRect: vi.fn(),
+      fillRect: vi.fn(),
+      strokeStyle: "",
+      fillStyle: "",
+      lineWidth: 0,
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+
+    renderOverlays(context, routeState, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(context.strokeRect).toHaveBeenCalledTimes(1);
+    expect(context.arc).toHaveBeenCalledTimes(1);
+  });
+});
+
 function dragCtx() {
   return {
     save: vi.fn(),
@@ -201,8 +436,13 @@ function dragCtx() {
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn((text: string) => ({ width: text.length * 6 })),
     fillStyle: "",
     strokeStyle: "",
+    font: "",
+    textAlign: "start",
+    textBaseline: "alphabetic",
     lineWidth: 0,
     lineCap: "",
     lineJoin: "",
@@ -223,6 +463,8 @@ function recordingFillCtx() {
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
+    fillText: vi.fn(),
+    measureText: vi.fn((text: string) => ({ width: text.length * 6 })),
     set fillStyle(v: string) {
       fillStyles.push(v);
     },
@@ -230,6 +472,9 @@ function recordingFillCtx() {
       return fillStyles.at(-1) ?? "";
     },
     strokeStyle: "",
+    font: "",
+    textAlign: "start",
+    textBaseline: "alphabetic",
     lineWidth: 0,
     lineCap: "",
     lineJoin: "",
@@ -238,392 +483,480 @@ function recordingFillCtx() {
   return { ctx, fillStyles };
 }
 
-// Records canvas path tokens to derive each arrow shaft's direction vector.
-// A shaft is a moveTo->lineTo pair whose displacement is large (>= tile/4); the
-// chevron barbs are smaller and filtered out. This makes the test fail if the
-// arrow is ever drawn pointing the wrong way, not merely on a stroke count.
-function pathRecorderCtx() {
-  const tokens: Array<{ t: "M" | "L"; x: number; y: number }> = [];
-  const ctx = {
-    save: vi.fn(),
-    restore: vi.fn(),
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    beginPath: vi.fn(),
-    moveTo: vi.fn((x: number, y: number) => tokens.push({ t: "M", x, y })),
-    lineTo: vi.fn((x: number, y: number) => tokens.push({ t: "L", x, y })),
-    stroke: vi.fn(),
-    fill: vi.fn(),
-    fillStyle: "",
-    strokeStyle: "",
-    lineWidth: 0,
-    lineCap: "",
-    lineJoin: "",
-    globalAlpha: 1,
-  } as unknown as CanvasRenderingContext2D;
-  return { ctx, tokens };
+function footprint3x3(origin: Point): Point[] {
+  return Array.from({ length: 9 }, (_, index) => ({
+    x: origin.x + (index % 3),
+    y: origin.y + Math.floor(index / 3),
+  }));
 }
 
-function shaftDeltas(
-  tokens: Array<{ t: "M" | "L"; x: number; y: number }>,
-): Array<{ dx: number; dy: number }> {
-  const out: Array<{ dx: number; dy: number }> = [];
-  for (let i = 1; i < tokens.length; i += 1) {
-    if (tokens[i].t === "L" && tokens[i - 1].t === "M") {
-      const dx = tokens[i].x - tokens[i - 1].x;
-      const dy = tokens[i].y - tokens[i - 1].y;
-      // tileSize/2 == 16 for a full shaft; chevron barbs are ~7.5.
-      if (Math.max(Math.abs(dx), Math.abs(dy)) >= 10) {
-        out.push({ dx, dy });
-      }
-    }
-  }
-  return out;
+function standardRoundaboutFixture(): Extract<
+  RoadStructure,
+  { kind: "roundabout" }
+> {
+  const origin = { x: 5, y: 5 };
+  return {
+    kind: "roundabout",
+    id: "roundabout-001",
+    origin,
+    size: "standard3x3",
+    footprint: footprint3x3(origin),
+    ports: [
+      { id: "north", point: { x: 6, y: 5 }, edge: "north" },
+      { id: "east", point: { x: 7, y: 6 }, edge: "east" },
+      { id: "south", point: { x: 6, y: 7 }, edge: "south" },
+      { id: "west", point: { x: 5, y: 6 }, edge: "west" },
+    ],
+  };
 }
 
-// Like shaftDeltas but also records the tile each shaft is centered on, so a
-// test can assert which lane carries which direction — not just that both
-// directions appear somewhere on the canvas.
-function shaftsByTile(
-  tokens: Array<{ t: "M" | "L"; x: number; y: number }>,
-): Array<{ tile: { x: number; y: number }; dx: number; dy: number }> {
-  const out: Array<{ tile: { x: number; y: number }; dx: number; dy: number }> =
-    [];
-  for (let i = 1; i < tokens.length; i += 1) {
-    if (tokens[i].t === "L" && tokens[i - 1].t === "M") {
-      const dx = tokens[i].x - tokens[i - 1].x;
-      const dy = tokens[i].y - tokens[i - 1].y;
-      if (Math.max(Math.abs(dx), Math.abs(dy)) >= 10) {
-        const midX = (tokens[i].x + tokens[i - 1].x) / 2;
-        const midY = (tokens[i].y + tokens[i - 1].y) / 2;
-        out.push({
-          tile: {
-            x: Math.round((midX - tileSize / 2) / tileSize),
-            y: Math.round((midY - tileSize / 2) / tileSize),
+describe("authoritative road mutation preview", () => {
+  const drag = {
+    tool: "road" as const,
+    start: { x: 1, y: 2 },
+    current: { x: 3, y: 2 },
+  };
+
+  it("renders the matching Rust response for a road-tool hover", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      hoverTile: { x: 6, y: 4 },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 2,
+        changedTiles: [{ x: 6, y: 4 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      6 * tileSize,
+      4 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("renders changed and skipped tiles from the matching Rust response", () => {
+    const ctx = dragCtx();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag,
+      roadPreviewGeneration: 4,
+      roadMutationPreview: {
+        generation: 4,
+        changedTiles: [
+          { x: 1, y: 2 },
+          { x: 2, y: 2 },
+        ],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 200,
+        skippedTiles: [{ x: 3, y: 2 }],
+        routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
+        warnings: [],
+        rejection: null,
+      },
+    };
+
+    renderOverlays(ctx, createTestGameState(), ui);
+
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      1 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      3 * tileSize,
+      2 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("ignores a road preview whose generation does not match", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 5,
+      roadMutationPreview: {
+        generation: 4,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+    expect(ctx.fillRect).not.toHaveBeenCalled();
+    expect(ctx.fillText).not.toHaveBeenCalled();
+    expect(ctx.lineTo).not.toHaveBeenCalled();
+  });
+
+  it("draws authored road connection topology without inferring adjacency", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [
+          {
+            point: { x: 1, y: 2 },
+            oneWay: null,
+            roadConnections: ["north", "east"],
+            roadStructureId: null,
           },
-          dx,
-          dy,
-        });
-      }
+        ],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(ctx.moveTo).toHaveBeenCalledWith(48, 80);
+    expect(ctx.lineTo).toHaveBeenCalledWith(48, 64);
+    expect(ctx.lineTo).toHaveBeenCalledWith(64, 80);
+    expect(ctx.lineTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("presents the exact authoritative road preview cost", () => {
+    const ctx = dragCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 375,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
+
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$375",
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it("presents stable route-impact feedback from the Rust response", () => {
+    const ctx = dragCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 500,
+        skippedTiles: [],
+        routeImpacts: [
+          { routeId: "route-z", kind: "broken" as const },
+          { routeId: "route-a", kind: "rerouted" as const },
+        ],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
+
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$500 · route-a rerouted · route-z broken",
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it("draws direction arrows from authored preview tiles", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 2 }],
+        authoredTiles: [
+          {
+            point: { x: 1, y: 2 },
+            oneWay: "west",
+            roadConnections: ["west"],
+            roadStructureId: null,
+          },
+        ],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+    expect(ctx.stroke).toHaveBeenCalled();
+    expect(ctx.strokeStyle).toBe(colors.oneWayArrow);
+  });
+
+  it("treats an omitted two-way wire field as non-directional", () => {
+    const ctx = dragCtx();
+    expect(() =>
+      renderOverlays(ctx, createTestGameState(), {
+        ...createUiState(),
+        activeTool: "road",
+        drag,
+        roadPreviewGeneration: 1,
+        roadMutationPreview: {
+          generation: 1,
+          changedTiles: [{ x: 1, y: 2 }],
+          authoredTiles: [
+            {
+              point: { x: 1, y: 2 },
+              // Rust omits Option::None fields on the wire for a two-way tile.
+              roadConnections: ["east"],
+              roadStructureId: null,
+            },
+          ],
+          generatedStructures: [],
+          cost: 100,
+          skippedTiles: [],
+          routeImpacts: [],
+          warnings: [],
+          rejection: null,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("renders generated structure footprints from Rust", () => {
+    const ctx = dragCtx();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "road",
+      drag,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "automaticJunction",
+            id: "junction-001",
+            footprint: [{ x: 4, y: 4 }],
+            ports: [],
+          },
+        ],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+    expect(ctx.fillRect).toHaveBeenCalledWith(
+      4 * tileSize,
+      4 * tileSize,
+      tileSize,
+      tileSize,
+    );
+  });
+
+  it("draws the authoritative roundabout footprint and captured ports", () => {
+    const ctx = dragCtx();
+    const structure = standardRoundaboutFixture();
+    renderOverlays(ctx, createTestGameState(), {
+      ...createUiState(),
+      activeTool: "roundabout",
+      hoverTile: structure.origin,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [structure],
+        cost: 2_000,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
     }
-  }
-  return out;
-}
-
-// Captures the strokeStyle value in effect at each stroke() call. Only
-// drawDirectionArrow calls stroke() (the per-tile loop uses strokeRect), so
-// this records exactly the colors used for arrow shafts + chevron barbs.
-function arrowStrokeColorCtx() {
-  let currentStrokeStyle = "";
-  const strokeStylesAtStroke: string[] = [];
-  const ctx = {
-    save: vi.fn(),
-    restore: vi.fn(),
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    beginPath: vi.fn(),
-    moveTo: vi.fn(),
-    lineTo: vi.fn(),
-    stroke: vi.fn(() => {
-      strokeStylesAtStroke.push(currentStrokeStyle);
-    }),
-    fill: vi.fn(),
-    fillStyle: "",
-    set strokeStyle(v: string) {
-      currentStrokeStyle = v;
-    },
-    get strokeStyle() {
-      return currentStrokeStyle;
-    },
-    lineWidth: 0,
-    lineCap: "",
-    lineJoin: "",
-    globalAlpha: 1,
-  } as unknown as CanvasRenderingContext2D;
-  return { ctx, strokeStylesAtStroke };
-}
-
-describe("renderOverlays drag preview", () => {
-  const drag = (
-    tool: "road" | "track" | "remove",
-    start: { x: number; y: number },
-    current: { x: number; y: number },
-  ) => ({ tool, start, current });
-  const areaDrag = (
-    area: "residential" | "commercial",
-    start: { x: number; y: number },
-    current: { x: number; y: number },
-  ) => ({ tool: "area" as const, area, start, current });
-
-  it("fills each tile of a road drag line with the build (green) tint", () => {
-    const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "twoWay" as const,
-      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    const line = axisLockedLine(ui.drag.start, ui.drag.current);
-    expect(
-      (ctx.fillRect as unknown as { mock: { calls: unknown[] } }).mock.calls
-        .length,
-    ).toBeGreaterThanOrEqual(line.length);
-    expect(ctx.fillStyle).toBe(colors.previewValid);
-  });
-
-  it("uses the delete (red) tint for a remove drag line", () => {
-    const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "remove" as const,
-      drag: drag("remove", { x: 1, y: 0 }, { x: 3, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(ctx.fillStyle).toBe(colors.previewInvalid);
-  });
-
-  it("previews an area drag as a full rectangle", () => {
-    const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "area" as const,
-      selectedArea: "residential" as const,
-      drag: areaDrag("residential", { x: 1, y: 1 }, { x: 2, y: 2 }),
-    };
-
-    renderOverlays(ctx, state, ui);
-
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      1 * tileSize,
-      1 * tileSize,
-      tileSize,
-      tileSize,
+    expect(ctx.strokeRect).toHaveBeenCalledWith(
+      5 * tileSize,
+      5 * tileSize,
+      3 * tileSize,
+      3 * tileSize,
     );
     expect(ctx.fillRect).toHaveBeenCalledWith(
-      2 * tileSize,
-      1 * tileSize,
-      tileSize,
-      tileSize,
+      6.25 * tileSize,
+      6.25 * tileSize,
+      0.5 * tileSize,
+      0.5 * tileSize,
     );
+    expect(ctx.moveTo).toHaveBeenCalledWith(6.5 * tileSize, 5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(6.5 * tileSize, 5.25 * tileSize);
+    expect(ctx.moveTo).toHaveBeenCalledWith(8 * tileSize, 6.5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(7.75 * tileSize, 6.5 * tileSize);
+    expect(ctx.strokeStyle).toBe(colors.previewValidStroke);
+  });
+
+  it("uses invalid preview styling when Rust rejects the roundabout", () => {
+    const ctx = dragCtx();
+    const structure = standardRoundaboutFixture();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      hoverTile: structure.origin,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [structure],
+        cost: 2_000,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: {
+          code: "unsafeRoundaboutPortMapping" as const,
+          context: { affectedRouteIds: [] },
+        },
+      },
+    };
+    renderOverlays(ctx, state, ui);
+    renderRoadPreviewFeedbackBadge(ctx, state, ui, identityTransform);
+
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
+    }
     expect(ctx.fillRect).toHaveBeenCalledWith(
-      1 * tileSize,
-      2 * tileSize,
-      tileSize,
-      tileSize,
+      6.25 * tileSize,
+      6.25 * tileSize,
+      0.5 * tileSize,
+      0.5 * tileSize,
     );
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      2 * tileSize,
-      2 * tileSize,
-      tileSize,
-      tileSize,
+    expect(ctx.moveTo).toHaveBeenCalledWith(6.5 * tileSize, 5 * tileSize);
+    expect(ctx.lineTo).toHaveBeenCalledWith(6.5 * tileSize, 5.25 * tileSize);
+    expect(ctx.fillText).toHaveBeenCalledWith(
+      "$2,000",
+      expect.any(Number),
+      expect.any(Number),
     );
+    expect(ctx.strokeStyle).toBe(colors.previewInvalidStroke);
   });
 
-  it("tints area preview tiles by paintability", () => {
-    const { ctx, fillStyles } = recordingFillCtx();
-    const state = withRoads(createTestGameState(), [{ x: 2, y: 2 }]);
-    const ui = {
-      ...createUiState(),
-      activeTool: "area" as const,
-      selectedArea: "commercial" as const,
-      drag: areaDrag("commercial", { x: 1, y: 1 }, { x: 2, y: 2 }),
-    };
-
-    renderOverlays(ctx, state, ui);
-
-    expect(fillStyles).toContain(colors.previewValid);
-    expect(fillStyles).toContain(colors.previewInvalid);
-  });
-
-  it("previews both lanes for the dual-bidirectional preset", () => {
+  it("remove hover highlights the complete owned footprint", () => {
     const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
+    const structure = standardRoundaboutFixture();
+    renderOverlays(ctx, createTestGameState(), {
       ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "dualBidirectional" as const,
-      drag: drag("road", { x: 1, y: 1 }, { x: 4, y: 1 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(
-      (ctx.fillRect as unknown as { mock: { calls: unknown[] } }).mock.calls
-        .length,
-    ).toBeGreaterThanOrEqual(8);
+      activeTool: "remove",
+      hoverTile: { x: 6, y: 6 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: structure.footprint,
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    for (const point of structure.footprint) {
+      expect(ctx.fillRect).toHaveBeenCalledWith(
+        point.x * tileSize,
+        point.y * tileSize,
+        tileSize,
+        tileSize,
+      );
+    }
   });
+});
 
-  it("tints per-tile: valid where placeable, invalid where blocked", () => {
-    const { ctx, fillStyles } = recordingFillCtx();
-    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "twoWay" as const,
-      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(fillStyles).toContain(colors.previewValid);
-    expect(fillStyles).toContain(colors.previewInvalid);
-  });
-
-  it("draws one-way arrows pointing along the drag axis (east)", () => {
-    const { ctx, tokens } = pathRecorderCtx();
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "oneWay" as const,
-      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    const line = axisLockedLine(ui.drag.start, ui.drag.current);
-    const shafts = shaftDeltas(tokens);
-    // One shaft per tile, every shaft pointing east (positive x, ~0 y).
-    expect(shafts).toHaveLength(line.length);
-    expect(shafts.every((s) => s.dx > 0 && Math.abs(s.dy) < 1)).toBe(true);
-    expect(ctx.lineCap).toBe("round");
-    expect(ctx.lineJoin).toBe("round");
-  });
-
-  it("draws opposing arrows on both lanes of a dual-bidirectional drag", () => {
-    const { ctx, tokens } = pathRecorderCtx();
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "dualBidirectional" as const,
-      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    const line = axisLockedLine(ui.drag.start, ui.drag.current);
-    const shafts = shaftDeltas(tokens);
-    // Forward lane points east, reverse lane points west — half each.
-    expect(shafts).toHaveLength(2 * line.length);
-    const eastbound = shafts.filter((s) => s.dx > 0);
-    const westbound = shafts.filter((s) => s.dx < 0);
-    expect(eastbound).toHaveLength(line.length);
-    expect(westbound).toHaveLength(line.length);
-  });
-
-  it("uses canonical (east/south) arrows for dual-bidirectional regardless of drag direction", () => {
-    // The Rust `lay_road_line` commits the primary lane with the canonical
-    // axis direction (east for horizontal, south for vertical) and the reverse
-    // lane with its opposite — independent of drag order. The preview arrows
-    // must match the commit, so a westward or northward drag must still show
-    // eastbound/southbound primary arrows on the drag-line tiles and the
-    // opposing arrows on the reverse-lane tiles. Dragging the wrong way
-    // previously flipped both carriageways' arrow directions.
-    const state = createTestGameState();
-
-    const westUi = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "dualBidirectional" as const,
-      drag: drag("road", { x: 4, y: 0 }, { x: 1, y: 0 }),
-    };
-    const westCtx = pathRecorderCtx();
-    renderOverlays(westCtx.ctx, state, westUi);
-    const westLine = axisLockedLine(westUi.drag.start, westUi.drag.current);
-    const westReverse = reverseLanePoints(westLine);
-    const westShafts = shaftsByTile(westCtx.tokens);
-    expect(westShafts).toHaveLength(2 * westLine.length);
-    // Primary lane tiles (y=0) carry eastbound arrows (canonical east).
-    const westPrimary = westShafts.filter((s) => s.tile.y === 0);
-    expect(westPrimary).toHaveLength(westLine.length);
-    expect(westPrimary.every((s) => s.dx > 0 && Math.abs(s.dy) < 1)).toBe(true);
-    // Reverse lane tiles (y=-1) carry westbound arrows (opposite of canonical).
-    const westReverseShafts = westShafts.filter((s) => s.tile.y === -1);
-    expect(westReverseShafts).toHaveLength(westReverse.length);
-    expect(westReverseShafts.every((s) => s.dx < 0 && Math.abs(s.dy) < 1)).toBe(
-      true,
-    );
-
-    const northUi = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "dualBidirectional" as const,
-      drag: drag("road", { x: 0, y: 4 }, { x: 0, y: 1 }),
-    };
-    const northCtx = pathRecorderCtx();
-    renderOverlays(northCtx.ctx, state, northUi);
-    const northLine = axisLockedLine(northUi.drag.start, northUi.drag.current);
-    const northReverse = reverseLanePoints(northLine);
-    const northShafts = shaftsByTile(northCtx.tokens);
-    expect(northShafts).toHaveLength(2 * northLine.length);
-    // Primary lane (x=0) carries southbound arrows (canonical south).
-    const northPrimary = northShafts.filter((s) => s.tile.x === 0);
-    expect(northPrimary).toHaveLength(northLine.length);
-    expect(northPrimary.every((s) => s.dy > 0 && Math.abs(s.dx) < 1)).toBe(
-      true,
-    );
-    // Reverse lane (x=1) carries northbound arrows (opposite of canonical).
-    const northReverseShafts = northShafts.filter((s) => s.tile.x === 1);
-    expect(northReverseShafts).toHaveLength(northReverse.length);
-    expect(
-      northReverseShafts.every((s) => s.dy < 0 && Math.abs(s.dx) < 1),
-    ).toBe(true);
-  });
-
-  it("draws no direction arrows for a two-way road drag", () => {
+describe("local footprint previews", () => {
+  it("keeps area drag footprint rendering local", () => {
     const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
+    renderOverlays(ctx, createTestGameState(), {
       ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "twoWay" as const,
-      drag: drag("road", { x: 1, y: 0 }, { x: 4, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+      activeTool: "area",
+      selectedArea: "residential",
+      drag: {
+        tool: "area",
+        area: "residential",
+        start: { x: 1, y: 1 },
+        current: { x: 2, y: 2 },
+      },
+    });
+    expect(ctx.fillRect).toHaveBeenCalledTimes(4);
   });
 
-  it("draws no direction arrows for a remove drag", () => {
+  it("keeps track gesture footprint rendering local", () => {
     const ctx = dragCtx();
-    const state = createTestGameState();
-    const ui = {
+    renderOverlays(ctx, createTestGameState(), {
       ...createUiState(),
-      activeTool: "remove" as const,
-      drag: drag("remove", { x: 1, y: 0 }, { x: 3, y: 0 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(ctx.stroke as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
-  });
-
-  it("renders one-way arrows in the stable arrow color even when the line's last tile is invalid", () => {
-    const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
-    // The last forward tile is invalid, so without an explicit strokeStyle the
-    // arrows would inherit the red previewInvalidStroke from the per-tile loop.
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "oneWay" as const,
-      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(strokeStylesAtStroke.length).toBeGreaterThan(0);
-    expect(strokeStylesAtStroke.every((c) => c === colors.oneWayArrow)).toBe(
-      true,
-    );
-  });
-
-  it("renders dual-bidirectional arrows in the stable arrow color even when the line's last tile is invalid", () => {
-    const { ctx, strokeStylesAtStroke } = arrowStrokeColorCtx();
-    const state = withBuildingAt(createTestGameState(), [{ x: 3, y: 3 }]);
-    const ui = {
-      ...createUiState(),
-      activeTool: "road" as const,
-      roadPreset: "dualBidirectional" as const,
-      drag: drag("road", { x: 1, y: 3 }, { x: 3, y: 3 }),
-    };
-    renderOverlays(ctx, state, ui);
-    expect(strokeStylesAtStroke.length).toBeGreaterThan(0);
-    expect(strokeStylesAtStroke.every((c) => c === colors.oneWayArrow)).toBe(
-      true,
-    );
+      activeTool: "track",
+      drag: {
+        tool: "track",
+        start: { x: 1, y: 1 },
+        current: { x: 3, y: 1 },
+      },
+    });
+    expect(ctx.fillRect).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -637,12 +970,14 @@ describe("coverage overlay", () => {
           {
             id: "stop-001",
             kind: "busStop" as const,
+            status: "present" as const,
             position: { x: 5, y: 5 },
             platforms: [],
           },
           {
             id: "stop-002",
             kind: "busTerminal" as const,
+            status: "present" as const,
             position: { x: 10, y: 10 },
             platforms: [],
           },
@@ -650,6 +985,7 @@ describe("coverage overlay", () => {
         stations: [
           {
             id: "station-001",
+            status: "present" as const,
             position: { x: 15, y: 15 },
             platforms: [],
           },
@@ -682,6 +1018,22 @@ describe("coverage overlay", () => {
       tileSize * 9,
       tileSize * 9,
     );
+  });
+
+  it("does not render coverage for missing nodes", () => {
+    const ctx = fakeCtx();
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        ...createTestGameState().transit,
+        stops: [{ ...stop, status: "missing" as const }],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "coverage" as const };
+
+    renderOverlays(ctx, state, ui);
+
+    expect(ctx.fillRect).not.toHaveBeenCalled();
   });
 });
 
@@ -863,6 +1215,7 @@ describe("crowding overlay ratios", () => {
     const crowdedStop: Stop = {
       id: "stop-001",
       kind: "busStop",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
@@ -905,6 +1258,7 @@ describe("crowding overlay ratios", () => {
     const quietStop: Stop = {
       id: "stop-001",
       kind: "busStop",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         { id: "stop-001-p0", label: "A", capacity: 4, routeIds: ["route-001"] },
@@ -933,6 +1287,7 @@ describe("crowding overlay ratios", () => {
     const multiStop: Stop = {
       id: "stop-001",
       kind: "busTerminal",
+      status: "present",
       position: { x: 3, y: 3 },
       platforms: [
         {
@@ -954,7 +1309,15 @@ describe("crowding overlay ratios", () => {
       routePlan: {
         estimatedSeconds: 100,
         legs: [
-          { mode: "bus", from: { x: 3, y: 3 }, to: { x: 9, y: 9 }, lineId },
+          {
+            mode: "bus",
+            from: { x: 3, y: 3 },
+            to: { x: 9, y: 9 },
+            lineId,
+            serviceDirection: "loop",
+            boardItineraryIndex: 0,
+            alightItineraryIndex: 0,
+          },
         ],
       },
     });
@@ -1016,10 +1379,8 @@ describe("renderOverlays building preview", () => {
   });
 });
 
-describe("renderOverlays drag preview off-map", () => {
-  it("marks tiles buildable false when the drag line extends off-map", () => {
-    // A drag whose line runs past the map edge exercises the out-of-bounds
-    // branch of getTile (returns null), so the off-map tiles are not buildable.
+describe("renderOverlays road preview off-map", () => {
+  it("uses Rust skipped tiles for an off-map stroke", () => {
     const { ctx, fillStyles } = recordingFillCtx();
     const state = createTestGameState();
     const ui = {
@@ -1031,9 +1392,23 @@ describe("renderOverlays drag preview off-map", () => {
         start: { x: 0, y: 0 },
         current: { x: -2, y: 0 },
       },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 0, y: 0 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [
+          { x: -1, y: 0 },
+          { x: -2, y: 0 },
+        ],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
     };
     renderOverlays(ctx, state, ui);
-    // The off-map tiles (x < 0) are not buildable -> previewInvalid tint.
     expect(fillStyles).toContain(colors.previewInvalid);
   });
 });

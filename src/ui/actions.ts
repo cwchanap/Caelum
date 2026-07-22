@@ -1,11 +1,11 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
+import { isPresentTransitNode } from "../runtime/snapshotView";
 import {
-  appendDraftStation,
-  appendDraftStop,
+  applyRouteNodeClick,
   cancelDraftRoute,
-  removeDraftNode,
   resolveStationAtTile,
   resolveStopAtTile,
+  type RouteDraft,
 } from "./routeDraft";
 import type { UiState } from "./uiState";
 
@@ -13,17 +13,31 @@ export type ResolvedNode =
   | { kind: "stop"; node: Stop }
   | { kind: "station"; node: Station };
 
+export function draftHandleIndexAtPoint(
+  draft: RouteDraft,
+  state: GameState,
+  point: Point,
+): number | null {
+  const index = draft.waypointIds.findIndex((id) => {
+    const node =
+      state.transit.stops.find((candidate) => candidate.id === id) ??
+      state.transit.stations.find((candidate) => candidate.id === id);
+    return node?.position.x === point.x && node?.position.y === point.y;
+  });
+  return index >= 0 ? index : null;
+}
+
 export function resolveNodesAtTile(
   state: GameState,
   point: Point,
 ): ResolvedNode[] {
   const nodes: ResolvedNode[] = [];
   const stop = resolveStopAtTile(state, point);
-  if (stop !== undefined) {
+  if (stop !== undefined && isPresentTransitNode(stop)) {
     nodes.push({ kind: "stop", node: stop });
   }
   const station = resolveStationAtTile(state, point);
-  if (station !== undefined) {
+  if (station !== undefined && isPresentTransitNode(station)) {
     nodes.push({ kind: "station", node: station });
   }
   return nodes;
@@ -64,19 +78,27 @@ export function applyUiTileClick(
   ui: UiState,
   point: Point,
 ): { state: GameState; ui: UiState } {
-  if (ui.activeTool === "busRoute") {
-    const stop = resolveStopAtTile(state, point);
+  if (
+    (ui.activeTool === "busRoute" || ui.activeTool === "metroLine") &&
+    ui.routeDraft !== null
+  ) {
+    const preferredKind =
+      ui.routeDraft.mode === "bus" ? ("stop" as const) : ("station" as const);
+    const resolved = resolveNodeAtTile(state, point, preferredKind);
+    if (resolved === null) return { state, ui };
+    const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
     return {
       state,
-      ui: stop === undefined ? ui : appendDraftStop(state, ui, stop),
-    };
-  }
-
-  if (ui.activeTool === "metroLine") {
-    const station = resolveStationAtTile(state, point);
-    return {
-      state,
-      ui: station === undefined ? ui : appendDraftStation(state, ui, station),
+      ui:
+        result.draft === ui.routeDraft &&
+        result.rejection === ui.routePreviewError
+          ? ui
+          : {
+              ...ui,
+              routeDraft: result.draft,
+              routePreviewError: result.rejection,
+              routePreviewHostError: null,
+            },
     };
   }
 
@@ -118,9 +140,4 @@ export function applyUiTileClick(
   return { state, ui };
 }
 
-export {
-  cancelDraftRoute,
-  removeDraftNode,
-  resolveStationAtTile,
-  resolveStopAtTile,
-};
+export { cancelDraftRoute, resolveStationAtTile, resolveStopAtTile };

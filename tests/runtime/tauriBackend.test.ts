@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DispatchResult,
   GameIntent,
+  RoadMutationPreviewRequest,
+  RoutePreviewRequest,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
@@ -50,6 +52,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -73,6 +81,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: undefined,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     } as unknown as DispatchResult;
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -83,12 +97,21 @@ describe("createTauriBackend", () => {
     expect(result.applied).toBe(true);
   });
 
-  it("dispatch() preserves a Some rejection string unchanged", async () => {
+  it("dispatch() preserves a structured Some rejection unchanged", async () => {
     const snapshot = createRustSnapshot();
     const raw: DispatchResult = {
       snapshot,
       applied: false,
-      rejection: "invalid speed: 3",
+      rejection: {
+        code: "invalidSpeed",
+        context: { affectedRouteIds: [] },
+      },
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -102,7 +125,10 @@ describe("createTauriBackend", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("game_dispatch", { intent });
     expect(result.applied).toBe(false);
-    expect(result.rejection).toBe("invalid speed: 3");
+    expect(result.rejection).toEqual({
+      code: "invalidSpeed",
+      context: { affectedRouteIds: [] },
+    });
   });
 
   it("tick() invokes game_tick with deltaSeconds and normalizes the result", async () => {
@@ -111,6 +137,12 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
     };
     invokeMock.mockResolvedValueOnce(raw);
 
@@ -132,5 +164,78 @@ describe("createTauriBackend", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("game_reset", undefined);
     expect(result).toEqual(snapshot as RustGameSnapshot);
+  });
+
+  it("invokes the immutable route and road preview commands", async () => {
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 51,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "removeAtTile", point: { x: 5, y: 5 } },
+      generation: 52,
+    };
+    invokeMock
+      .mockResolvedValueOnce({
+        generation: 51,
+        legs: [],
+        totalTravelSeconds: 0,
+        initialVehicleCost: 8_000,
+        affordable: true,
+        turnSummary: {
+          straight: 0,
+          rightTurn: 0,
+          leftTurn: 0,
+          uTurn: 0,
+          roundaboutEntry: 0,
+        },
+        missingWaypointIds: [],
+        warnings: [],
+        rejection: null,
+      })
+      .mockResolvedValueOnce({
+        generation: 52,
+        cost: 100,
+        rejection: {
+          code: "insufficientBudget",
+          context: {
+            requiredBudget: 100,
+            availableBudget: 99,
+            affectedRouteIds: [],
+          },
+        },
+      });
+
+    const backend = await createTauriBackend();
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: 51,
+      rejection: null,
+    });
+    await expect(backend.previewRoadMutation(roadRequest)).resolves.toEqual({
+      generation: 52,
+      cost: 100,
+      rejection: {
+        code: "insufficientBudget",
+        context: {
+          requiredBudget: 100,
+          availableBudget: 99,
+          affectedRouteIds: [],
+        },
+      },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "game_preview_route", {
+      request: routeRequest,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      2,
+      "game_preview_road_mutation",
+      {
+        request: roadRequest,
+      },
+    );
   });
 });

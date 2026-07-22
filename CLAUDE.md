@@ -58,7 +58,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 - `scenario/growingSuburb.ts` — authoritative Growing Suburb map dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/scenario.rs`, exported so e2e helpers and tests reference the source of truth. The authoritative map layout, scenario, objectives, and clock all live in `crates/caelum-core`; the Growing Suburb sandbox ships with no timed growth waves and no starting citizens (see `docs/architecture.md`).
 - `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`), `snapshotView.ts` (read-only views over a snapshot).
 - `runtime/backend/` — the host boundary. `createBackend()` (`index.ts`) picks `wasmBackend.ts` or `tauriBackend.ts` via `isTauriRuntime()` (presence of `__TAURI_INTERNALS__`); both implement the `GameBackend` interface (`types.ts`) and forward ticks/intents to the Rust `GameEngine`. Wire types (`RustGameSnapshot`, `GameIntent`, `DispatchResult`) live here.
-- `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts`/`tilePath.ts` (read-only draft helpers), `uiState.ts` (`UiState` + factory).
+- `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts` (ordered-ID draft reducers), and `uiState.ts` (`UiState` + factory). Production TypeScript has no route pathfinder.
 - `domain/catalog/` — read-only TypeScript catalogs shared by UI and render code.
 - `render/` — imperative canvas drawing. `canvas.ts` owns board sizing, tile↔pixel mapping (`tileSize = 32`), and the render pass; it composes per-concern renderers (map/buildings/transit/citizens/overlays). The runtime creates the real `<canvas>` and attaches it to `GameCanvas.svelte`'s host element.
 - `components/` — `Topbar.svelte` (stats), `GameCanvas.svelte`, and the bottom HUD: `hud/BottomHud.svelte` (slim always-docked bar) + `hud/HudDrawer.svelte` opening one of `hud/panels/*` (Build · Routes · Manage · Data · Brief, plus contextual Inspect). `App.svelte` composes them and surfaces shell errors. (The old monolithic `ControlTower.svelte` was split into these.)
@@ -67,10 +67,27 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 
 **Tauri host (`src-tauri/`)** exposes gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`.
 
+### Authored roads and cached topology
+
+Road occupancy is not connectivity. Rust serializes reciprocal tile-edge connections plus stable automatic-junction/roundabout structures. `GameEngine` compiles those authored facts into a non-serialized heading-state `RoadTopology` and commits a candidate snapshot/topology together.
+
+Bus routes use deterministic weighted movement steps (straight, right, left, U-turn, roundabout entry/circulation/exit); metro routes continue to use deterministic track paths. The same Rust-provided step durations drive previews, trip estimates, and vehicle movement.
+
+### Route lifecycle and editing
+
+Routes store Loop/Shuttle directional service legs with current and last-valid tagged paths. Missing referenced nodes remain non-physical tombstones; exact same-kind/same-anchor rebuilding restores their identity. Route creation and revision-checked updates are atomic Rust intents. TypeScript owns only the unsaved ordered-ID draft and generation-safe rendering of Rust previews.
+
+### Road structures
+
+Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement captures compatible boundary ports, may replace only fully contained bare roads/automatic junctions, preserves latent area, and removes as one structure.
+
 ## Conventions
 
 - **Svelte 5 runes mode** is enabled globally (`svelte.config.js`). Use `$state`, `$props`, `$derived`, `$effect` — not legacy `export let` / stores.
 - **Immutable state, reference-equality dispatch.** Sim and action functions return new `GameState` objects; the runtime's `commit` publishes only when `nextState !== state` (or ui changed). Never mutate `GameState` in place, or the runtime will skip the re-render.
 - **Determinism is a contract.** The Growing Suburb scenario — initial state, growth thresholds, generated citizens, IDs, and objective evaluation — must stay stable across runs. Don't introduce nondeterminism (`Math.random`, wall-clock time) into gameplay code.
+- **Schema and rejection contract.** `SNAPSHOT_SCHEMA_VERSION = 2`; hosts reject other versions instead of heuristically loading legacy snapshots. Gameplay failures use `GameplayRejection { code, context }`, not message parsing.
+- **Preview generations are independent.** Route previews and road-mutation previews use separate generation counters, and late responses may update only the matching current draft or gesture.
+- **Mutation boundaries are explicit.** Linear strokes may partially apply where their intent permits skipped tiles; direction, route, and roundabout mutations are atomic. Structure-owned tiles block every other infrastructure and zoning operation.
 - **`tests/` mirrors `src/`** by domain. Put runtime/host tests under `tests/runtime` (node env) and DOM/Svelte/render tests under `tests/ui` or `tests/render` (jsdom). End-to-end smoke flows go in `tests/e2e` (Playwright).
 - Lint is strict (Rust `clippy -D warnings`). Unused vars must be prefixed `_` to pass eslint.

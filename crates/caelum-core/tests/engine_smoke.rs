@@ -1,5 +1,5 @@
-use caelum_core::model::MetricsState;
-use caelum_core::{GameEngine, GameIntent};
+use caelum_core::model::{MetricsState, ServicePattern, TransitMode};
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
     let decoded: GameIntent =
@@ -61,12 +61,16 @@ fn transit_intents_use_camel_case_json_fields() {
         }),
     );
     assert_intent_json(
-        GameIntent::AddMetroLine {
-            station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        GameIntent::CreateRoute {
+            mode: TransitMode::Metro,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
         },
         serde_json::json!({
-            "type": "addMetroLine",
-            "stationIds": ["station-001", "station-002"]
+            "type": "createRoute",
+            "mode": "metro",
+            "pattern": "loop",
+            "waypointIds": ["station-001", "station-002"]
         }),
     );
     assert_intent_json(
@@ -162,6 +166,29 @@ fn new_engine_exposes_initial_snapshot() {
 }
 
 #[test]
+fn no_op_tick_returns_unapplied_snapshot() {
+    // A fresh engine is paused with speed 1; a zero-delta tick must return the
+    // previous snapshot unchanged with `applied == false` (engine.rs contract).
+    let mut engine = GameEngine::new();
+    let before = engine.snapshot();
+
+    let result = engine.tick(0.0);
+
+    assert!(!result.applied);
+    assert!(result.rejection.is_none());
+    assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn serialized_snapshot_does_not_include_the_engine_topology_cache() {
+    let engine = GameEngine::new();
+    let value = serde_json::to_value(engine.snapshot()).expect("snapshot should serialize");
+
+    assert!(value.get("roadTopology").is_none());
+    assert!(value.get("road_topology").is_none());
+}
+
+#[test]
 fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
     let mut engine = GameEngine::new();
     let before = engine.snapshot();
@@ -173,10 +200,9 @@ fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
 
     assert!(!result.applied);
     assert_eq!(result.snapshot, before);
-    assert_eq!(
-        result.rejection.as_deref(),
-        Some("line not found: missing-route")
-    );
+    let rejection = result.rejection.expect("missing route should reject");
+    assert_eq!(rejection.code, RejectionCode::RouteNotFound);
+    assert_eq!(rejection.context.route_id.as_deref(), Some("missing-route"));
 }
 
 #[test]
@@ -220,5 +246,96 @@ fn set_speed_rejects_invalid_speed_without_changing_snapshot() {
     assert!(!result.applied);
     assert_eq!(result.snapshot, before);
     assert_eq!(result.snapshot.speed, 2);
-    assert_eq!(result.rejection.as_deref(), Some("invalid speed: 3"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidSpeed)
+    );
+}
+
+fn replay_intent_sequence() -> Vec<GameIntent> {
+    // A non-trial sequence exercising road topology compilation, transit node
+    // creation, route building, vehicle assignment, and speed/pause mutations —
+    // the paths most likely to leak HashMap-iteration order into serialized state.
+    vec![
+        GameIntent::LayRoadLine {
+            points: (2..=8)
+                .map(|x| caelum_core::model::Point { x, y: 5 })
+                .collect(),
+            preset: RoadPreset::TwoWay,
+        },
+        GameIntent::AddBusStop {
+            point: caelum_core::model::Point { x: 2, y: 5 },
+        },
+        GameIntent::AddBusStop {
+            point: caelum_core::model::Point { x: 8, y: 5 },
+        },
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        },
+        GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        },
+        GameIntent::SetSpeed { speed: 1 },
+        GameIntent::SetPaused { paused: false },
+    ]
+}
+
+fn assert_snapshots_byte_identical(
+    left: caelum_core::model::GameSnapshot,
+    right: caelum_core::model::GameSnapshot,
+) {
+    assert_eq!(left, right);
+    let left_bytes = serde_json::to_vec(&left).expect("left snapshot should serialize");
+    let right_bytes = serde_json::to_vec(&right).expect("right snapshot should serialize");
+    assert_eq!(
+        left_bytes, right_bytes,
+        "replay snapshots must be byte-identical after serialization"
+    );
+}
+
+#[test]
+fn identical_replay_produces_identical_snapshots() {
+    // Two independent engines fed the same intent sequence (and then the same
+    // tick deltas) must converge to byte-identical snapshots. This guards
+    // against future HashMap-iteration order leaking into serialized state.
+    let intents = replay_intent_sequence();
+
+    let mut engine_a = GameEngine::new();
+    let mut engine_b = GameEngine::new();
+    assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
+
+    for intent in intents {
+        let result_a = engine_a.dispatch(intent.clone());
+        let result_b = engine_b.dispatch(intent);
+        assert_eq!(result_a.applied, result_b.applied);
+        assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
+    }
+
+    // Tick both engines with identical deltas and confirm they stay in lockstep.
+    for delta in [0.25, 0.5, 1.0, 0.125] {
+        let tick_a = engine_a.tick(delta);
+        let tick_b = engine_b.tick(delta);
+        assert_eq!(tick_a.applied, tick_b.applied);
+        assert_snapshots_byte_identical(engine_a.snapshot(), engine_b.snapshot());
+    }
+}
+
+// SetBudget is a debug/e2e helper. Debug builds apply it; release builds no-op so
+// production hosts cannot bypass construction costs. Tests always use
+// `set_budget_for_test` for deterministic budget control.
+#[test]
+fn set_budget_intent_is_debug_only() {
+    let mut engine = GameEngine::new();
+    let before = engine.snapshot().budget;
+    let result = engine.dispatch(GameIntent::SetBudget { budget: before + 1 });
+    if cfg!(debug_assertions) {
+        assert!(result.applied);
+        assert_eq!(result.snapshot.budget, before + 1);
+    } else {
+        assert!(!result.applied);
+        assert_eq!(result.snapshot.budget, before);
+    }
 }
