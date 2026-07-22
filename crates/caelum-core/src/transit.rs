@@ -552,15 +552,58 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 
 pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
     let (_, itinerary) = assigned_line_data(state, vehicle)?;
-    let leg = itinerary.get(vehicle.itinerary_index % itinerary.len())?;
-    let path = leg.current_path.as_ref()?;
-    let current_step = path.step(vehicle.path_step_index)?;
-    let remaining_current = (1.0 - vehicle.step_progress).max(0.0) * current_step.travel_seconds();
-    let remaining_later: f64 = (vehicle.path_step_index + 1..path.step_count())
-        .filter_map(|index| path.step(index))
-        .map(|step| step.travel_seconds())
-        .sum();
-    Some(remaining_current + remaining_later)
+    if itinerary.is_empty() {
+        return None;
+    }
+    let itinerary_len = itinerary.len();
+
+    // Walk forward from the vehicle's current position, accumulating remaining
+    // travel time across legs. Zero-step terminal reversal legs (and zero-
+    // duration steps within a leg) contribute 0 seconds but are skipped over so
+    // the function returns the cumulative time to the first real service-leg
+    // completion rather than `None`. Without this, `next_boundary_after` would
+    // insert no substep boundary when a vehicle sits on a zero-step reversal,
+    // letting a coarse tick run past the next vehicle arrival and breaking
+    // granularity independence (the `just_disembarked_trip_ids` zero-delta
+    // mechanism would then give alighted passengers zero walk time for the
+    // oversized substep).
+    let mut total = 0.0_f64;
+    let mut itinerary_index = vehicle.itinerary_index % itinerary_len;
+    let mut path_step_index = vehicle.path_step_index;
+    let mut step_progress = vehicle.step_progress;
+    for _ in 0..itinerary_len {
+        let leg = &itinerary[itinerary_index];
+        let Some(path) = leg.current_path.as_ref() else {
+            // Missing path: skip this leg (treat as zero-duration).
+            itinerary_index = (itinerary_index + 1) % itinerary_len;
+            path_step_index = 0;
+            step_progress = 0.0;
+            continue;
+        };
+        if path.step_count() == 0 {
+            // Zero-step terminal reversal: contributes 0 seconds, advance to
+            // the next leg.
+            itinerary_index = (itinerary_index + 1) % itinerary_len;
+            path_step_index = 0;
+            step_progress = 0.0;
+            continue;
+        }
+        // Found a real (non-empty) leg. Sum remaining time in the current step
+        // plus all later steps in this leg.
+        let remaining_current = if let Some(current_step) = path.step(path_step_index) {
+            (1.0 - step_progress).max(0.0) * current_step.travel_seconds()
+        } else {
+            0.0
+        };
+        let remaining_later: f64 = (path_step_index + 1..path.step_count())
+            .filter_map(|index| path.step(index))
+            .map(|step| step.travel_seconds())
+            .sum();
+        total += remaining_current + remaining_later;
+        return Some(total);
+    }
+    // Every leg is zero-step or missing a path: no real stop arrival ahead.
+    None
 }
 
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {

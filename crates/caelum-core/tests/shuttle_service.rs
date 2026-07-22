@@ -715,3 +715,118 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
         "reversal must not jump between separate access lanes: {legs:?}"
     );
 }
+
+/// Regression: `seconds_until_next_vehicle_stop` must walk forward across
+/// zero-step terminal reversal legs and return the cumulative time to the
+/// first real service-leg completion. When it returned `None` for a vehicle
+/// sitting on a zero-step reversal, `next_boundary_after` inserted no substep
+/// boundary, so a coarse tick ran past the next vehicle arrival. The
+/// `just_disembarked_trip_ids` zero-delta mechanism then gave the alighted
+/// passenger zero walk time even though part of the oversized substep elapsed
+/// after the actual arrival — producing different walking progress than
+/// equivalent stepped ticks and breaking granularity independence.
+#[test]
+fn coarse_tick_through_zero_step_reversal_matches_stepped_ticks() {
+    let mut state = metro_shuttle_state();
+    state.paused = false;
+    state.speed = 1;
+
+    // Vehicle sits on the zero-step terminal reversal at stop-003 (10, 4),
+    // itinerary index 2. The following leg (index 3) is the return service
+    // from stop-003 to stop-002 (6, 4).
+    state.transit.vehicles[0].itinerary_index = 2;
+    state.transit.vehicles[0].path_step_index = 0;
+    state.transit.vehicles[0].step_progress = 0.0;
+
+    let service_leg_seconds = state.transit.metro_lines[0].legs[3]
+        .current_path
+        .as_ref()
+        .unwrap()
+        .total_travel_seconds();
+
+    // Passenger is aboard, riding to stop-002 (6, 4), then walking 2 tiles
+    // south to (6, 2). The walk leg is 40 seconds (20 s/tile).
+    let ride_plan = metro_transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3);
+    let plan = RoutePlan {
+        legs: vec![
+            ride_plan.legs[0].clone(),
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (6, 4).into(),
+                to: (6, 2).into(),
+                line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
+            },
+        ],
+        estimated_seconds: service_leg_seconds + 40.0,
+    };
+
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: (10, 4).into(),
+        destination: (6, 2).into(),
+        position: (10, 4).into(),
+        status: TripStatus::Riding,
+        deadline: 3_600.0,
+        route_plan: Some(plan),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+
+    // Total delta: service leg + 10 seconds of walking (0.5 tiles at 20 s/tile).
+    let walk_seconds = 10.0;
+    let total_delta = service_leg_seconds + walk_seconds;
+
+    // Coarse: one big tick through the full trip simulation.
+    let coarse = caelum_core::trips::tick_trips(&state, total_delta);
+
+    // Stepped: many small ticks summing to the same total.
+    let step = 0.5;
+    let mut stepped = state.clone();
+    let mut remaining = total_delta;
+    while remaining > 0.0 {
+        let delta = remaining.min(step);
+        stepped = caelum_core::trips::tick_trips(&stepped, delta);
+        remaining -= delta;
+    }
+
+    let coarse_trip = coarse
+        .active_trips
+        .iter()
+        .find(|t| t.id == "trip-001")
+        .expect("trip-001 present after coarse tick");
+    let stepped_trip = stepped
+        .active_trips
+        .iter()
+        .find(|t| t.id == "trip-001")
+        .expect("trip-001 present after stepped ticks");
+
+    assert_eq!(
+        coarse_trip.status, stepped_trip.status,
+        "trip status diverged: coarse {:?} stepped {:?}",
+        coarse_trip.status, stepped_trip.status
+    );
+    assert_eq!(
+        coarse_trip.current_leg_index, stepped_trip.current_leg_index,
+        "current_leg_index diverged: coarse {} stepped {}",
+        coarse_trip.current_leg_index, stepped_trip.current_leg_index
+    );
+    assert!(
+        (coarse_trip.position.x - stepped_trip.position.x).abs() < 0.001,
+        "walk x diverged: coarse {} stepped {}",
+        coarse_trip.position.x,
+        stepped_trip.position.x
+    );
+    assert!(
+        (coarse_trip.position.y - stepped_trip.position.y).abs() < 0.001,
+        "walk y diverged: coarse {} stepped {} (service_leg_seconds={})",
+        coarse_trip.position.y,
+        stepped_trip.position.y,
+        service_leg_seconds
+    );
+}
