@@ -540,7 +540,7 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
         .filter(|structure| structure.is_automatic_junction())
         .map(|structure| structure.id().to_string())
         .collect();
-    let former_automatic_footprint: Vec<Point> = map
+    let former_automatic_footprint: HashSet<Point> = map
         .road_structures
         .iter()
         .filter(|structure| structure.is_automatic_junction())
@@ -659,6 +659,42 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
                 continue;
             }
             if !has_horizontal_ports || !has_vertical_ports {
+                // The prune dissolves two kinds of single-axis artifacts:
+                //   1. Dissolved automatic-junction remnants — a former
+                //      junction whose external approaches on one axis were
+                //      removed, leaving internal edges of that axis orphaned.
+                //   2. Incidental connections between separately authored
+                //      parallel roads (e.g. L-shaped corner tiles linking two
+                //      horizontal segments) — these are trees (no cycle).
+                // A cyclic component that was NEVER an automatic junction is an
+                // authored loop feature (e.g. a 2x2 road ring with a single-axis
+                // spur used by a Loop route). Pruning it would sever the ring
+                // and disconnect the network, so preserve it. Detect a cycle by
+                // counting internal reciprocal edges: a connected component
+                // with N nodes has a cycle iff undirected internal edges >= N
+                // (each reciprocal pair contributes 2 directed edges, so the
+                // directed count must reach 2*N).
+                let was_former_junction = footprint
+                    .iter()
+                    .any(|point| former_automatic_footprint.contains(point));
+                let mut internal_directed_edges = 0usize;
+                for point in &footprint {
+                    let Some(tile) = map.tile(*point) else {
+                        continue;
+                    };
+                    for heading in &tile.road_connections {
+                        let neighbor = offset(*point, *heading);
+                        if footprint_set.contains(&neighbor)
+                            && reciprocal_connection(map, *point, *heading)
+                        {
+                            internal_directed_edges += 1;
+                        }
+                    }
+                }
+                let has_cycle = internal_directed_edges >= footprint.len() * 2;
+                if has_cycle && !was_former_junction {
+                    continue;
+                }
                 for point in &footprint {
                     let Some(tile) = map.tile(*point) else {
                         continue;
@@ -740,7 +776,7 @@ fn disconnect(map: &mut GameMap, point: Point, heading: Heading) {
     }
 }
 
-fn restore_unowned_lane_directions(map: &mut GameMap, former_footprint: &[Point]) {
+fn restore_unowned_lane_directions(map: &mut GameMap, former_footprint: &HashSet<Point>) {
     for point in former_footprint.iter().copied() {
         let Some(tile) = map.tile(point) else {
             continue;
