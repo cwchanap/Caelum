@@ -485,10 +485,13 @@ platform assignments, and edit history. Once every leg reconnects, it resumes
 automatically unless the player had paused it.
 
 Parking chooses the nearest retained live waypoint by squared world-space
-distance, then waypoint order, then stable node ID. If no live waypoint remains,
-the vehicle keeps an explicit out-of-service parked position at its current or
-last valid world position. Riders disembark there and replan. When any waypoint
-is later restored, the vehicle rebases through the normal nearest-waypoint rule.
+distance, then preferred service direction (matching the vehicle's previous leg
+direction to avoid unnecessary reversals, particularly for Shuttle interior
+stops that produce two visits at the same position), then waypoint order
+(itinerary index), then stable node ID. If no live waypoint remains, the vehicle
+keeps an explicit out-of-service parked position at its current or last valid
+world position. Riders disembark there and replan. When any waypoint is later
+restored, the vehicle rebases through the normal nearest-waypoint rule.
 
 ## Transactional route editor
 
@@ -547,15 +550,26 @@ pattern, and waypoint IDs. Rust:
 - Removes assignments from removed nodes
 - Assigns added nodes to their least-loaded compatible platforms
 - Rebuilds directional legs
-- Increments the route revision
+- Increments the route revision only when structure changed
 
 The revision is structural. It increments when waypoint order or service pattern
-changes, a route leg path/status changes after topology mutation, a referenced
-node becomes missing or present, or a platform assignment changes. Rename,
-recolor, active toggle, and vehicle assignment do not increment it because
-UpdateRoute does not overwrite those fields. Deletion still rejects as
+changes, a route leg path/status changes (including after topology mutation), a
+referenced node becomes missing or present, or a platform assignment changes.
+An identical Save that rewrites the same structural fields leaves the revision
+unchanged. Rename, recolor, active toggle, and vehicle assignment do not
+increment it because UpdateRoute does not overwrite those fields. Deletion still rejects as
 route-not-found. This makes an open edit stale whenever its routing or platform
 base changes without rejecting harmless presentation changes.
+
+Revision exhaustion is handled asymmetrically by design. Explicit edits
+(`UpdateRoute` via `route_editor`, and `transit::increment_route_revision`)
+use `checked_add` and surface `RouteRevisionExhausted` so the player learns the
+route is stuck. Network-driven structural bumps (`route_lifecycle::next_revision`,
+fired after a topology mutation changes a leg path/status) use `saturating_add`
+and saturate at `u32::MAX` instead of rejecting — a single exhausted route must
+not brick an unrelated road/stop/track mutation for the whole network. The
+asymmetry is documented in the doc comments on both `next_revision` and the
+`route_editor` revision bump.
 
 UpdateRoute writes only structural route fields and reads the latest name,
 color, active flag, and vehicle set from the commit-time snapshot. Metadata

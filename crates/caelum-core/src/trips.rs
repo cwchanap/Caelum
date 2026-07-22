@@ -15,6 +15,10 @@ pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 
+fn plan_route(state: &GameSnapshot, origin: &Point, destination: &Point) -> Option<RoutePlan> {
+    router::find_route_plan(state, origin, destination)
+}
+
 /// Boundaries per sim per day: outbound spawn + outbound resolution + return
 /// spawn + return resolution, plus headroom for the walk-leg / patience /
 /// deadline boundaries a single commute can generate. Used both in
@@ -127,20 +131,49 @@ fn tick_trips_substepped(
     if !early_termination {
         // The substep cap is an upper bound on legitimate boundary events (see
         // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
-        // source is denser than the budget — a correctness regression that would
-        // otherwise silently drop the tail of the tick. Surface it in debug/test
-        // builds rather than returning a truncated snapshot.
+        // source is denser than the budget — a correctness regression. Surface it
+        // in debug/test builds via debug_assert, but still process the remaining
+        // time through normal boundary progression so release builds never return
+        // a partially advanced tick.
+        let dropped = final_time - next.time;
         debug_assert!(
-            final_time - next.time <= EPSILON,
+            dropped <= EPSILON,
             "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
             next.time,
             final_time,
-            final_time - next.time
+            dropped
         );
 
-        crate::growth::apply_due_growth_waves(&mut next);
-        reset_daily_commute_flags(&mut next);
-        spawn_due_commute_trips(&mut next);
+        while final_time - next.time > EPSILON {
+            crate::growth::apply_due_growth_waves(&mut next);
+            reset_daily_commute_flags(&mut next);
+            spawn_due_commute_trips(&mut next);
+
+            let substep_end = next_boundary_after(&next)
+                .map(|boundary| boundary.min(final_time))
+                .unwrap_or(final_time);
+            let mut substep_delta = (substep_end - next.time).max(0.0);
+            if substep_delta <= EPSILON {
+                // No forward boundary: still consume residual time so the tick
+                // contract (advance by delta) holds in release builds.
+                substep_delta = final_time - next.time;
+                if substep_delta <= EPSILON {
+                    break;
+                }
+            }
+
+            next = advance_tick_substep(&next, substep_delta);
+            if on_substep(&mut next) {
+                early_termination = true;
+                break;
+            }
+        }
+
+        if !early_termination {
+            crate::growth::apply_due_growth_waves(&mut next);
+            reset_daily_commute_flags(&mut next);
+            spawn_due_commute_trips(&mut next);
+        }
     }
 
     next
@@ -342,7 +375,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
             // `has_valid_workplace_destination` above guarantees a workplace, but
             // prefer a defensive `continue` over `.expect()` so a future regression
             // in that guard surfaces as a skipped sim rather than a panic.
-            let Some(workplace) = sim.workplace.clone() else {
+            let Some(workplace) = sim.workplace else {
                 continue;
             };
 
@@ -420,9 +453,9 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                     state,
                     &sim.id,
                     TripPurpose::CommuteOutbound,
-                    sim.home.clone(),
+                    sim.home,
                     workplace,
-                    sim.position.clone().into(),
+                    sim.position.into(),
                     scheduled_time,
                 );
                 state.active_trips.push(trip);
@@ -444,8 +477,8 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                 state,
                 &sim.id,
                 TripPurpose::CommuteReturn,
-                sim.position.clone(),
-                sim.home.clone(),
+                sim.position,
+                sim.home,
                 sim.position.into(),
                 scheduled_time,
             );
@@ -571,7 +604,7 @@ fn track_active_trip_boundary(
 
     let route_plan = if trip.route_plan.is_none() || trip.status == TripStatus::Riding {
         let snapped_origin = snap_position_to_point(&trip.position);
-        router::find_route_plan(state, &snapped_origin, &trip.destination)
+        plan_route(state, &snapped_origin, &trip.destination)
     } else {
         trip.route_plan.clone()
     };
@@ -753,9 +786,7 @@ fn tick_trip(
 
     if route_plan.is_none() {
         let snapped_origin = snap_position_to_point(&next_trip.position);
-        let Some(planned_route) =
-            router::find_route_plan(state, &snapped_origin, &next_trip.destination)
-        else {
+        let Some(planned_route) = plan_route(state, &snapped_origin, &next_trip.destination) else {
             return TripTickResult {
                 trip: mark_unserved(next_trip),
                 completed_trips: 0,
@@ -776,7 +807,26 @@ fn tick_trip(
         route_plan = Some(planned_route);
     }
 
-    let route_plan = route_plan.expect("route plan is set after planning");
+    // Invariant: the block above guarantees `route_plan` is `Some` here — it
+    // either was already set, or planning just succeeded, or planning failed
+    // and we early-returned. Guard defensively so a future regression that
+    // leaves `route_plan` empty marks the trip unserved instead of panicking
+    // under the Tauri Mutex mid-tick (which would brick the game for the
+    // remainder of the session).
+    let Some(route_plan) = route_plan else {
+        return TripTickResult {
+            trip: mark_unserved(next_trip),
+            completed_trips: 0,
+            late_trips: 0,
+            unserved_trips: 1,
+            wait_seconds: 0.0,
+            outcome: Some(trip_outcome(
+                TripOutcomeKind::Unserved,
+                0.0,
+                tick_start_time,
+            )),
+        };
+    };
     if is_walking_only(&route_plan)
         && state.time > next_trip.deadline
         && state.time + route_plan.estimated_seconds > next_trip.deadline
@@ -1026,13 +1076,13 @@ fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
 
     match trip.purpose {
         TripPurpose::CommuteOutbound => {
-            sim.position = trip.destination.clone();
+            sim.position = trip.destination;
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.outbound_arrived_today = true;
             }
         }
         TripPurpose::CommuteReturn => {
-            sim.position = sim.home.clone();
+            sim.position = sim.home;
             if trip_service_day(trip).is_some_and(|day| day == state.day) {
                 sim.returned_home_today = true;
             }
@@ -1164,7 +1214,7 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
             if workplace == &sim.home || !has_valid_workplace_destination(state, sim) {
                 return None;
             }
-            Some((sim.id.clone(), (sim.home.clone(), workplace.clone())))
+            Some((sim.id.clone(), (sim.home, *workplace)))
         })
         .collect();
 
@@ -1190,7 +1240,7 @@ pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
         if trip.destination != *home {
             continue;
         }
-        to_retarget.push((index, workplace.clone()));
+        to_retarget.push((index, *workplace));
     }
 
     for (index, workplace) in to_retarget {

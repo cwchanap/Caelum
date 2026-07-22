@@ -233,6 +233,140 @@ describe("renderCursorBadge", () => {
     expect(blockedCalls.join("")).toContain("⊘");
   });
 
+  it("labels the roundabout tool with its stamp size", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roundaboutSize: "compact2x2" as const,
+      hoverTile: { x: 5, y: 5 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("Roundabout");
+    expect(text).toContain("2×2");
+    expect(text).not.toContain("⊘");
+    expect(text).not.toContain("…");
+  });
+
+  it("labels the 3×3 roundabout stamp", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roundaboutSize: "standard3x3" as const,
+      hoverTile: { x: 5, y: 5 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("3×3");
+    expect(text).not.toContain("2×2");
+  });
+
+  it("marks the roundabout cursor blocked when the current preview is rejected", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roundaboutSize: "compact2x2" as const,
+      hoverTile: { x: 5, y: 5 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: {
+          code: "blockedFootprint" as const,
+          context: { footprint: [{ x: 5, y: 5 }], affectedRouteIds: [] },
+        },
+      },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    const text = calls.join("");
+    expect(text).toContain("Roundabout");
+    expect(text).toContain("⊘");
+  });
+
+  it("marks missing or stale roundabout previews as pending", () => {
+    const { ctx, calls } = badgeCtx();
+    const state = createTestGameState();
+    const baseUi = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roundaboutSize: "compact2x2" as const,
+      hoverTile: { x: 5, y: 5 },
+      roadPreviewGeneration: 2,
+    };
+
+    renderCursorBadge(
+      ctx,
+      state,
+      { ...baseUi, roadMutationPreview: null },
+      getBoardTransform(ctx.canvas, state.map),
+    );
+    expect(calls.join("")).toContain("…");
+    expect(calls.join("")).not.toContain("⊘");
+
+    calls.length = 0;
+    renderCursorBadge(
+      ctx,
+      state,
+      {
+        ...baseUi,
+        roadMutationPreview: {
+          generation: 1,
+          changedTiles: [],
+          authoredTiles: [],
+          generatedStructures: [],
+          cost: 0,
+          skippedTiles: [],
+          routeImpacts: [],
+          warnings: [],
+          rejection: {
+            code: "blockedFootprint" as const,
+            context: { footprint: [{ x: 5, y: 5 }], affectedRouteIds: [] },
+          },
+        },
+      },
+      getBoardTransform(ctx.canvas, state.map),
+    );
+    const staleText = calls.join("");
+    expect(staleText).toContain("…");
+    expect(staleText).not.toContain("⊘");
+  });
+
   it("labels a selected building with its label and rotation", () => {
     const { ctx, calls } = badgeCtx();
     let state = createTestGameState();
@@ -359,6 +493,32 @@ describe("renderCursorBadge", () => {
     renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
     expect(calls.join("")).toContain("Road");
     expect(calls.join("")).not.toContain("⊘");
+  });
+
+  it("marks the road cursor blocked over a structure-owned road tile", () => {
+    // Junction/roundabout roads reject cycleRoadDirection; the existing-road
+    // fallback must not promise a click that Rust will reject.
+    const { ctx, calls } = badgeCtx();
+    let state = withRoads(createTestGameState(), [{ x: 5, y: 5 }]);
+    state = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 5 && tile.y === 5
+            ? { ...tile, roadStructureId: "junction-test" }
+            : tile,
+        ),
+      },
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 5 },
+    };
+    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
+    expect(calls.join("")).toContain("Road");
+    expect(calls.join("")).toContain("⊘");
   });
 
   it("marks the road cursor blocked over an out-of-bounds tile", () => {

@@ -2,13 +2,27 @@ import type {
   AreaKind,
   BuildingType,
   GameState,
+  GameplayRejection,
   Overlay,
   Point,
   RoadPreset,
+  RoadStructure,
+  RoundaboutSize,
+  ServicePattern,
   Tool,
+  TransitMode,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, UiState } from "../ui/uiState";
+import type { RouteDraft } from "../ui/routeDraft";
+import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
+
+export type {
+  RouteDraft,
+  RouteDraftError,
+  RouteDraftInteractionError,
+} from "../ui/routeDraft";
+export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {
   budget: string;
@@ -74,19 +88,62 @@ export interface ShellInspectorState {
   platforms: ShellPlatform[];
 }
 
-export interface ShellRouteDraftStop {
+export interface RouteEditorWaypointView {
+  id: string;
   index: number;
   label: string;
-  coord: string;
+  status: "present" | "missing";
+  selected: boolean;
 }
 
-export interface ShellRouteDraftState {
-  mode: "bus" | "metro";
-  stops: ShellRouteDraftStop[];
-  distinctCount: number;
-  vehicleCost: number;
-  canFinish: boolean;
-  finishHint: string;
+export interface RouteEditorView {
+  source: "create" | "edit";
+  title: string;
+  mode: TransitMode;
+  pattern: ServicePattern;
+  waypoints: RouteEditorWaypointView[];
+  selectedIndex: number | null;
+  interaction: RouteDraft["interaction"];
+  previewPending: boolean;
+  previewStatus: "empty" | "connected" | "broken" | "rejected";
+  previewMessage: string | null;
+  previewWarnings: string[];
+  canSave: boolean;
+  canReload: boolean;
+}
+
+export interface RouteServiceStatus {
+  primary: "running" | "paused" | "broken";
+  pausedAfterRepair: boolean;
+}
+
+export interface RouteFailureRow {
+  legIndex: number;
+  fromWaypointId: string;
+  toWaypointId: string;
+  fromLabel: string;
+  toLabel: string;
+  reason: "missingNode" | "networkDisconnected";
+  /** Present only when reason is "missingNode": the kind of the missing
+   * waypoint(s) — "station" if either endpoint is a missing station, otherwise
+   * "stop". */
+  missingNodeKind?: "stop" | "station";
+}
+
+export interface RoadMutationPreviewView {
+  generation: number;
+  changedTiles: Point[];
+  skippedTiles: Point[];
+  authoredTiles: AuthoredRoadTilePreview[];
+  generatedStructures: RoadStructure[];
+  cost: number;
+  costLabel: string;
+  routeImpacts: Array<{
+    routeId: string;
+    routeName: string;
+    kind: "rerouted" | "broken";
+  }>;
+  rejection: GameplayRejection | null;
 }
 
 export interface ShellRouteListItem {
@@ -97,6 +154,8 @@ export interface ShellRouteListItem {
   stopCount: number;
   active: boolean;
   selected: boolean;
+  status: RouteServiceStatus;
+  failures: RouteFailureRow[];
 }
 
 export type ShellRouteListState = ShellRouteListItem[];
@@ -106,8 +165,9 @@ export interface ShellState {
   brief: ShellBriefState;
   hud: ShellHudState;
   inspector: ShellInspectorState | null;
-  routeDraft: ShellRouteDraftState | null;
+  routeDraft: RouteEditorView | null;
   routes: ShellRouteListState;
+  roadMutationPreview: RoadMutationPreviewView | null;
 }
 
 export interface RuntimeSnapshot {
@@ -119,7 +179,7 @@ export interface RuntimeSnapshot {
   // vehicle assignment). Distinct from `backendError` (fatal host failure):
   // a rejection does not stop the runtime and is dismissible by the player.
   // Auto-clears on the next successful dispatch.
-  rejection: string | null;
+  rejection: GameplayRejection | null;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
@@ -141,6 +201,7 @@ export interface RuntimeController {
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
   setBuildCategory: (category: BuildCategoryId | null) => RuntimeSnapshot;
   armRoad: (preset: RoadPreset) => RuntimeSnapshot;
+  armRoundabout: (size: RoundaboutSize) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
   setDragCurrent: (point: Point | null) => RuntimeSnapshot;
   commitDrag: () => RuntimeCommandResult;
@@ -156,15 +217,28 @@ export interface RuntimeController {
     routeId: string,
     platformId: string,
   ) => RuntimeCommandResult;
-  removeDraftStop: (index: number) => RuntimeSnapshot;
-  finishRoute: () => RuntimeCommandResult;
-  cancelRoute: () => RuntimeSnapshot;
+  startRouteEdit: (routeId: string) => RuntimeSnapshot;
+  selectRouteWaypoint: (
+    index: number | null,
+    interaction: RouteDraft["interaction"],
+  ) => RuntimeSnapshot;
+  removeRouteWaypoint: () => RuntimeSnapshot;
+  moveRouteWaypoint: (delta: -1 | 1) => RuntimeSnapshot;
+  reverseRouteDraft: () => RuntimeSnapshot;
+  setRoutePattern: (pattern: ServicePattern) => RuntimeSnapshot;
+  saveRouteDraft: () => Promise<RuntimeSnapshot>;
+  cancelRouteDraft: () => RuntimeSnapshot;
+  reloadRouteDraft: () => RuntimeSnapshot;
+  handleEscape: () => RuntimeSnapshot;
   renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
   recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
+  focusRouteFailure: (routeId: string, legIndex: number) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
+  previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
+  debugSetBudget: (budget: number) => RuntimeCommandResult;
   mountCanvas: (host: HTMLElement) => () => void;
 }

@@ -1,5 +1,8 @@
-use caelum_core::model::{ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus};
-use caelum_core::{transit, GameEngine, GameIntent};
+use caelum_core::model::{
+    ActiveTrip, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
+    TripPurpose, TripStatus,
+};
+use caelum_core::{router, transit, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -20,20 +23,16 @@ fn bus_route_vehicle_carries_commute_trip() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    let route = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied);
     assert!(!route.snapshot.transit.routes[0].path_broken);
+    assert_eq!(route.snapshot.transit.vehicles.len(), 1);
 
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
-    });
-    assert!(vehicle.applied);
-    assert_eq!(vehicle.snapshot.transit.vehicles.len(), 1);
-
-    let mut snapshot = vehicle.snapshot;
+    let mut snapshot = route.snapshot;
     snapshot.active_trips.push(ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -49,6 +48,9 @@ fn bus_route_vehicle_carries_commute_trip() {
                 from: (2, 5).into(),
                 to: (12, 5).into(),
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: 60.0,
         }),
@@ -67,7 +69,10 @@ fn bus_route_vehicle_carries_commute_trip() {
         .expect("trip should remain after boarding");
     assert_eq!(boarded_trip.status, TripStatus::Riding);
 
-    let arrived = transit::tick_vehicles(&boarded, 20.0);
+    let ride_seconds =
+        transit::seconds_until_next_vehicle_stop(&boarded, &boarded.transit.vehicles[0])
+            .expect("vehicle has a next stop");
+    let arrived = transit::tick_vehicles(&boarded, ride_seconds);
     assert!(!arrived.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
@@ -91,8 +96,10 @@ fn removing_road_marks_route_broken() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -101,4 +108,30 @@ fn removing_road_marks_route_broken() {
 
     assert!(removed.applied);
     assert!(removed.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn routing_ignores_a_route_with_any_disconnected_leg() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 5).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 5).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    let mut state = route.snapshot;
+    state.transit.routes[0].path_broken = false;
+    state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
+    state.transit.routes[0].legs[0].current_path = None;
+
+    let plan = router::find_route_plan(&state, &(2, 5).into(), &(12, 5).into())
+        .expect("walking fallback remains available");
+
+    assert!(plan.legs.iter().all(|leg| leg.mode == TransitMode::Walk));
 }

@@ -3,11 +3,12 @@ import type { GameState, Point } from "../../src/domain/types";
 import {
   applyUiTileClick,
   cancelDraftRoute,
-  removeDraftNode,
+  draftHandleIndexAtPoint,
   resolveNodeAtTile,
   resolveNodesAtTile,
 } from "../../src/ui/actions";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createDraft, selectWaypoint } from "../../src/ui/routeDraft";
 import {
   addTestBusStop,
   addTestMetroStation,
@@ -29,6 +30,7 @@ function withColocatedStopAndStation(
         {
           id: "stop-001",
           kind: "busStop",
+          status: "present",
           position: { ...point },
           platforms: [
             { id: "stop-001-p0", label: "A", capacity: 50, routeIds: [] },
@@ -39,6 +41,7 @@ function withColocatedStopAndStation(
         ...state.transit.stations,
         {
           id: "station-001",
+          status: "present",
           position: { ...point },
           platforms: [
             { id: "station-001-p0", label: "A", capacity: 300, routeIds: [] },
@@ -93,6 +96,23 @@ describe("resolveNodeAtTile", () => {
 
   it("returns null on an empty tile", () => {
     expect(resolveNodeAtTile(createTestGameState(), { x: 0, y: 0 })).toBeNull();
+  });
+
+  it("does not resolve a missing node for routing or inspection", () => {
+    let state = addTestBusStop(createTestGameState(), { x: 7, y: 2 });
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) => ({
+          ...stop,
+          status: "missing" as const,
+        })),
+      },
+    };
+
+    expect(resolveNodeAtTile(state, { x: 7, y: 2 })).toBeNull();
+    expect(resolveNodesAtTile(state, { x: 7, y: 2 })).toEqual([]);
   });
 
   it("honors the preferred node kind on a co-located tile", () => {
@@ -179,7 +199,11 @@ describe("applyUiTileClick route drafts", () => {
     state = addTestBusStop(state, { x: 15, y: 8 });
     return {
       state,
-      ui: { ...createUiState(), activeTool: "busRoute" as const },
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute" as const,
+        routeDraft: createDraft("bus", 1),
+      },
     };
   }
 
@@ -191,22 +215,34 @@ describe("applyUiTileClick route drafts", () => {
 
     expect(result.state).toBe(state);
     expect(result.state.transit.routes).toEqual([]);
-    expect(result.ui.draftStopIds).toEqual(["stop-001", "stop-002"]);
-    expect(result.ui.draftStopPaths).toHaveLength(1);
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-002"]);
+    expect(result.ui.routeDraft?.previewPending).toBe(true);
   });
 
-  it("ignores a repeated final stop", () => {
+  it("optimistically appends a repeated final stop for Rust to validate", () => {
     const { state, ui } = busDraftState();
 
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
-    const afterFirst = result.ui;
     result = applyUiTileClick(state, result.ui, { x: 7, y: 8 });
 
-    expect(result.ui).toBe(afterFirst);
-    expect(result.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-001"]);
   });
 
-  it("does not append a stop without a path from the previous stop", () => {
+  it("uses the selected interaction when applying a compatible node click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const selectedUi = {
+      ...result.ui,
+      routeDraft: selectWaypoint(result.ui.routeDraft!, 0, "replace"),
+    };
+
+    result = applyUiTileClick(state, selectedUi, { x: 15, y: 8 });
+
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-002", "stop-002"]);
+  });
+
+  it("appends before Rust reports that the next leg is disconnected", () => {
     let state = createTestGameState();
     state = withRoads(state, [
       { x: 1, y: 4 },
@@ -214,14 +250,16 @@ describe("applyUiTileClick route drafts", () => {
     ]);
     state = addTestBusStop(state, { x: 1, y: 4 });
     state = addTestBusStop(state, { x: 9, y: 4 });
-    const ui = { ...createUiState(), activeTool: "busRoute" as const };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: createDraft("bus", 1),
+    };
 
     let result = applyUiTileClick(state, ui, { x: 1, y: 4 });
-    const before = result.ui;
-    result = applyUiTileClick(state, before, { x: 9, y: 4 });
+    result = applyUiTileClick(state, result.ui, { x: 9, y: 4 });
 
-    expect(result.ui).toBe(before);
-    expect(result.ui.draftStopIds).toEqual(["stop-001"]);
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-002"]);
   });
 
   it("accumulates metro line stations without mutating state", () => {
@@ -229,43 +267,62 @@ describe("applyUiTileClick route drafts", () => {
     state = withTracks(state, pointsOnRow(8, 7, 15));
     state = addTestMetroStation(state, { x: 7, y: 8 });
     state = addTestMetroStation(state, { x: 15, y: 8 });
-    const ui = { ...createUiState(), activeTool: "metroLine" as const };
+    const ui = {
+      ...createUiState(),
+      activeTool: "metroLine" as const,
+      routeDraft: createDraft("metro", 1),
+    };
 
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
     result = applyUiTileClick(result.state, result.ui, { x: 15, y: 8 });
 
     expect(result.state).toBe(state);
     expect(result.state.transit.metroLines).toEqual([]);
-    expect(result.ui.draftStationIds).toEqual(["station-001", "station-002"]);
-    expect(result.ui.draftStationPaths).toHaveLength(1);
-  });
-
-  it("removes draft nodes by index and keeps paths in sync", () => {
-    const { state, ui } = busDraftState();
-    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
-    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
-
-    const next = removeDraftNode(state, result.ui, 0);
-
-    expect(next.draftStopIds).toEqual(["stop-002"]);
-    expect(next.draftStopPaths).toEqual([]);
+    expect(result.ui.routeDraft?.waypointIds).toEqual([
+      "station-001",
+      "station-002",
+    ]);
   });
 
   it("cancels both drafts", () => {
     const ui = {
       ...createUiState(),
-      draftStopIds: ["stop-001"],
-      draftStationIds: ["station-001"],
-      draftStopPaths: [[{ x: 1, y: 1 }]],
-      draftStationPaths: [[{ x: 2, y: 2 }]],
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-001"],
+      },
     };
 
     const next = cancelDraftRoute(ui);
 
-    expect(next.draftStopIds).toEqual([]);
-    expect(next.draftStationIds).toEqual([]);
-    expect(next.draftStopPaths).toEqual([]);
-    expect(next.draftStationPaths).toEqual([]);
+    expect(next.routeDraft).toBeNull();
+  });
+});
+
+describe("draftHandleIndexAtPoint", () => {
+  it("resolves a retained missing waypoint by its exact anchor", () => {
+    let state = addTestBusStop(createTestGameState(), { x: 6, y: 4 });
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((node) => ({
+          ...node,
+          status: "missing" as const,
+        })),
+      },
+    };
+    const draft = {
+      ...createDraft("bus", 1),
+      source: {
+        kind: "edit" as const,
+        routeId: "route-001",
+        expectedRevision: 1,
+      },
+      waypointIds: ["stop-other", "stop-001"],
+    };
+
+    expect(draftHandleIndexAtPoint(draft, state, { x: 6, y: 4 })).toBe(1);
   });
 });
 

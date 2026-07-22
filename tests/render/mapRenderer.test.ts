@@ -204,7 +204,52 @@ describe("renderMap one-way arrows", () => {
     const context = ctx();
     renderMap(context, state);
 
-    expect(context.moveTo).not.toHaveBeenCalled();
-    expect(context.lineTo).not.toHaveBeenCalled();
+    expect(context.moveTo).not.toHaveBeenCalledWith(264, 272);
+    expect(context.lineTo).not.toHaveBeenCalledWith(280, 272);
+  });
+});
+
+describe("renderMap authored road geometry", () => {
+  it("draws ordinary road corners from authored connections", () => {
+    const initial = createTestGameState();
+    const state: GameState = {
+      ...initial,
+      map: {
+        ...initial.map,
+        tiles: initial.map.tiles.map((tile) =>
+          tile.x === 6 && tile.y === 6
+            ? {
+                ...tile,
+                kind: "road" as const,
+                roadConnections: ["north", "east"],
+              }
+            : tile,
+        ),
+      },
+    };
+    const context = {
+      ...ctx(),
+      quadraticCurveTo: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+
+    renderMap(context, state);
+
+    // Corner tiles draw only the quadratic curve — no stubs. The curve
+    // starts at the first connection edge, curves through the tile center,
+    // and ends at the second connection edge.
+    const tileCenter = { x: 6.5 * 32, y: 6.5 * 32 };
+    const northEdge = { x: 6.5 * 32, y: 6 * 32 };
+    const eastEdge = { x: 7 * 32, y: 6.5 * 32 };
+    expect(context.moveTo).toHaveBeenCalledWith(northEdge.x, northEdge.y);
+    expect(context.quadraticCurveTo).toHaveBeenCalledWith(
+      tileCenter.x,
+      tileCenter.y,
+      eastEdge.x,
+      eastEdge.y,
+    );
+    expect(context.quadraticCurveTo).toHaveBeenCalledTimes(1);
+    // No stub lineTo calls for corner tiles.
+    expect(context.lineTo).not.toHaveBeenCalledWith(northEdge.x, northEdge.y);
+    expect(context.lineTo).not.toHaveBeenCalledWith(eastEdge.x, eastEdge.y);
   });
 });

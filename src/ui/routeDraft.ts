@@ -1,22 +1,86 @@
-import type { GameState, Point, Station, Stop } from "../domain/types";
-import { findTilePath } from "./tilePath";
+import {
+  samePoint,
+  type GameState,
+  type GameplayRejection,
+  type Point,
+  type ServicePattern,
+  type Station,
+  type Stop,
+  type TransitMode,
+} from "../domain/types";
+import type { RoutePreviewResponse } from "../runtime/backend/types";
 import type { UiState } from "./uiState";
 
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
+export interface RouteDraft {
+  instanceId: number;
+  source:
+    | { kind: "create" }
+    | { kind: "edit"; routeId: string; expectedRevision: number };
+  mode: TransitMode;
+  pattern: ServicePattern;
+  waypointIds: string[];
+  selectedIndex: number | null;
+  interaction: "append" | "insertAfter" | "replace";
+  generation: number;
+  previewPending: boolean;
+  preview: RoutePreviewResponse | null;
+}
+
+export interface RouteDraftClickResult {
+  draft: RouteDraft;
+  rejection: GameplayRejection | null;
+}
+
+export type RouteDraftInteractionOperation =
+  | "selectWaypoint"
+  | "removeWaypoint"
+  | "moveWaypoint";
+
+export interface RouteDraftInteractionError {
+  code: "invalidRouteDraftInteraction";
+  context: {
+    operation: RouteDraftInteractionOperation;
+    waypointIndex: number | null;
+    delta?: -1 | 1;
+  };
+}
+
+export type RouteDraftError = GameplayRejection | RouteDraftInteractionError;
+
+type SaveableRouteDraft = RouteDraft & {
+  mode: Exclude<TransitMode, "walk">;
+  preview: RoutePreviewResponse;
+};
+
+export function canSaveRouteDraft(
+  draft: RouteDraft,
+): draft is SaveableRouteDraft {
+  const preview = draft.preview;
+  return (
+    draft.mode !== "walk" &&
+    preview !== null &&
+    preview.generation === draft.generation &&
+    preview.rejection === null &&
+    preview.legs.length > 0 &&
+    // Edits permit already-broken legs (the saved route may have tombstoned
+    // nodes / disconnected legs that the player is mid-edit on); creates must
+    // be fully connected. Rust revalidates atomically on commit, so this gate
+    // is permissive for edits intentionally.
+    (draft.source.kind === "edit" ||
+      preview.legs.every((leg) => leg.status === "connected")) &&
+    preview.affordable
+  );
 }
 
 export function resolveStopAtTile(
   state: GameState,
   point: Point,
 ): Stop | undefined {
-  const exactStop = state.transit.stops.find((candidate) =>
-    samePoint(candidate.position, point),
+  const exactStop = state.transit.stops.find(
+    (candidate) =>
+      candidate.status === "present" && samePoint(candidate.position, point),
   );
-
-  if (exactStop !== undefined) {
-    return exactStop;
-  }
+  if (exactStop !== undefined) return exactStop;
 
   const building = state.buildings.find(
     (candidate) =>
@@ -24,22 +88,23 @@ export function resolveStopAtTile(
       candidate.transitNodeId !== undefined &&
       candidate.occupiedTiles.some((tile) => samePoint(tile, point)),
   );
-
   return building?.transitNodeId === undefined
     ? undefined
-    : state.transit.stops.find((stop) => stop.id === building.transitNodeId);
+    : state.transit.stops.find(
+        (stop) =>
+          stop.id === building.transitNodeId && stop.status === "present",
+      );
 }
 
 export function resolveStationAtTile(
   state: GameState,
   point: Point,
 ): Station | undefined {
-  const exactStation = state.transit.stations.find((candidate) =>
-    samePoint(candidate.position, point),
+  const exactStation = state.transit.stations.find(
+    (candidate) =>
+      candidate.status === "present" && samePoint(candidate.position, point),
   );
-  if (exactStation !== undefined) {
-    return exactStation;
-  }
+  if (exactStation !== undefined) return exactStation;
 
   const building = state.buildings.find(
     (candidate) =>
@@ -47,179 +112,200 @@ export function resolveStationAtTile(
       candidate.transitNodeId !== undefined &&
       candidate.occupiedTiles.some((tile) => samePoint(tile, point)),
   );
-
   return building?.transitNodeId === undefined
     ? undefined
     : state.transit.stations.find(
-        (station) => station.id === building.transitNodeId,
+        (station) =>
+          station.id === building.transitNodeId && station.status === "present",
       );
 }
 
-function appendDraftNode(
-  state: GameState,
-  ui: UiState,
-  node: Stop | Station,
-  mode: "bus" | "metro",
-): UiState {
-  const isMetro = mode === "metro";
-  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
-  if (ids.at(-1) === node.id) {
-    return ui;
-  }
-
-  const previousId = ids.at(-1);
-  if (previousId === undefined) {
-    return isMetro
-      ? { ...ui, draftStationIds: [node.id] }
-      : { ...ui, draftStopIds: [node.id] };
-  }
-
-  const nodes: Array<Stop | Station> = isMetro
-    ? state.transit.stations
-    : state.transit.stops;
-  const previous = nodes.find((n) => n.id === previousId);
-  const path =
-    previous === undefined
-      ? null
-      : findTilePath(state.map, previous.position, node.position, mode);
-  if (path === null) {
-    return ui;
-  }
-
-  return isMetro
-    ? {
-        ...ui,
-        draftStationIds: [...ids, node.id],
-        draftStationPaths: [...ui.draftStationPaths, path],
-      }
-    : {
-        ...ui,
-        draftStopIds: [...ids, node.id],
-        draftStopPaths: [...ui.draftStopPaths, path],
-      };
-}
-
-export function appendDraftStop(
-  state: GameState,
-  ui: UiState,
-  stop: Stop,
-): UiState {
-  return appendDraftNode(state, ui, stop, "bus");
-}
-
-export function appendDraftStation(
-  state: GameState,
-  ui: UiState,
-  station: Station,
-): UiState {
-  return appendDraftNode(state, ui, station, "metro");
-}
-
-export function removeDraftNode(
-  state: GameState,
-  ui: UiState,
-  index: number,
-): UiState {
-  const isMetro = ui.activeTool === "metroLine";
-  const isBus = ui.activeTool === "busRoute";
-  if (!isMetro && !isBus) {
-    return ui;
-  }
-
-  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
-  const paths = isMetro ? ui.draftStationPaths : ui.draftStopPaths;
-  if (index < 0 || index >= ids.length) {
-    return ui;
-  }
-
-  let nextPaths: Point[][];
-  if (index === 0) {
-    nextPaths = paths.slice(1);
-  } else if (index === ids.length - 1) {
-    nextPaths = paths.slice(0, -1);
-  } else {
-    const nodes: Array<Stop | Station> = isMetro
-      ? state.transit.stations
-      : state.transit.stops;
-    const before = nodes.find((node) => node.id === ids[index - 1]);
-    const after = nodes.find((node) => node.id === ids[index + 1]);
-    const merged =
-      before === undefined || after === undefined
-        ? null
-        : findTilePath(
-            state.map,
-            before.position,
-            after.position,
-            isMetro ? "metro" : "bus",
-          );
-    if (merged === null) {
-      return ui;
-    }
-    nextPaths = [
-      ...paths.slice(0, index - 1),
-      merged,
-      ...paths.slice(index + 1),
-    ];
-  }
-
-  const nextIds = ids.filter((_, i) => i !== index);
-  return isMetro
-    ? { ...ui, draftStationIds: nextIds, draftStationPaths: nextPaths }
-    : { ...ui, draftStopIds: nextIds, draftStopPaths: nextPaths };
-}
-
-export function cancelDraftRoute(ui: UiState): UiState {
-  if (ui.draftStopIds.length === 0 && ui.draftStationIds.length === 0) {
-    return ui;
-  }
+export function createDraft(mode: TransitMode, instanceId: number): RouteDraft {
   return {
-    ...ui,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    instanceId,
+    source: { kind: "create" },
+    mode,
+    pattern: "loop",
+    waypointIds: [],
+    selectedIndex: null,
+    interaction: "append",
+    generation: 0,
+    previewPending: false,
+    preview: null,
   };
 }
 
-/**
- * Check that the closing loop segment (last node -> first node) has a valid
- * tile path. Forward draft validation already proves every consecutive pair
- * connects, but under directed (one-way) graphs that does not guarantee the
- * loop closes. Returns true when the closing path exists (or there are fewer
- * than 2 nodes). Mirrors the guard the legacy TS `finishDraftRoute` applied
- * before committing a draft, so the player is not left with a `pathBroken`
- * route, no vehicle, and a cleared draft they cannot recover.
- */
-export function closingLoopIsPathable(state: GameState, ui: UiState): boolean {
-  const isMetro = ui.activeTool === "metroLine";
-  const isBus = ui.activeTool === "busRoute";
-  if (!isBus && !isMetro) {
-    return true;
+export function editDraft(
+  input: {
+    routeId: string;
+    expectedRevision: number;
+    mode: TransitMode;
+    pattern: ServicePattern;
+    waypointIds: string[];
+  },
+  instanceId: number,
+): RouteDraft {
+  return {
+    instanceId,
+    source: {
+      kind: "edit",
+      routeId: input.routeId,
+      expectedRevision: input.expectedRevision,
+    },
+    mode: input.mode,
+    pattern: input.pattern,
+    waypointIds: [...input.waypointIds],
+    selectedIndex: null,
+    interaction: "append",
+    generation: 0,
+    previewPending: true,
+    preview: null,
+  };
+}
+
+function changed(
+  draft: RouteDraft,
+  waypointIds: string[],
+  patch: Partial<
+    Pick<RouteDraft, "pattern" | "selectedIndex" | "interaction">
+  > = {},
+): RouteDraft {
+  return {
+    ...draft,
+    ...patch,
+    waypointIds,
+    generation: draft.generation + 1,
+    previewPending: true,
+    preview: null,
+  };
+}
+
+export function appendWaypoint(
+  draft: RouteDraft,
+  waypointId: string,
+): RouteDraft {
+  return changed(draft, [...draft.waypointIds, waypointId]);
+}
+
+export function selectWaypoint(
+  draft: RouteDraft,
+  index: number | null,
+  interaction: RouteDraft["interaction"],
+): RouteDraft {
+  if (index !== null && (index < 0 || index >= draft.waypointIds.length)) {
+    return draft;
   }
-  const ids = isMetro ? ui.draftStationIds : ui.draftStopIds;
-  if (ids.length < 2) {
-    return true;
+  return { ...draft, selectedIndex: index, interaction };
+}
+
+export function applyNodeClick(draft: RouteDraft, nodeId: string): RouteDraft {
+  const index = draft.selectedIndex;
+  if (index === null || draft.interaction === "append") {
+    return changed(draft, [...draft.waypointIds, nodeId]);
   }
-  const nodes: Array<Stop | Station> = isMetro
-    ? state.transit.stations
-    : state.transit.stops;
-  const first = nodes.find((node) => node.id === ids[0]);
-  const last = nodes.find((node) => node.id === ids.at(-1));
-  if (first === undefined || last === undefined) {
-    // A missing first/last draft node (e.g. the stop was demolished while the
-    // draft was open) means the closing loop cannot be verified, so reject it
-    // here rather than deferring to finishRoute(). Returning true would let the
-    // UI's `canFinish` gate read "Ready" for a draft whose endpoints no longer
-    // exist, surfacing a misleading hint and only catching the problem at the
-    // finish dispatch.
-    return false;
+  if (index < 0 || index >= draft.waypointIds.length) {
+    return draft;
   }
-  return (
-    findTilePath(
-      state.map,
-      last.position,
-      first.position,
-      isMetro ? "metro" : "bus",
-    ) !== null
+  if (draft.interaction === "insertAfter") {
+    const waypointIds = [...draft.waypointIds];
+    waypointIds.splice(index + 1, 0, nodeId);
+    return changed(draft, waypointIds, { selectedIndex: index + 1 });
+  }
+  const waypointIds = [...draft.waypointIds];
+  waypointIds[index] = nodeId;
+  return changed(draft, waypointIds, { selectedIndex: index });
+}
+
+export function removeWaypoint(draft: RouteDraft): RouteDraft {
+  const index = draft.selectedIndex;
+  if (index === null || index < 0 || index >= draft.waypointIds.length) {
+    return draft;
+  }
+  const waypointIds = draft.waypointIds.filter(
+    (_, candidate) => candidate !== index,
   );
+  return changed(draft, waypointIds, {
+    selectedIndex:
+      waypointIds.length === 0 ? null : Math.min(index, waypointIds.length - 1),
+  });
+}
+
+export function moveWaypoint(draft: RouteDraft, delta: -1 | 1): RouteDraft {
+  const index = draft.selectedIndex;
+  const target = index === null ? -1 : index + delta;
+  if (
+    index === null ||
+    index < 0 ||
+    target < 0 ||
+    target >= draft.waypointIds.length
+  ) {
+    return draft;
+  }
+  const waypointIds = [...draft.waypointIds];
+  [waypointIds[index], waypointIds[target]] = [
+    waypointIds[target],
+    waypointIds[index],
+  ];
+  return changed(draft, waypointIds, { selectedIndex: target });
+}
+
+export function reverseRoute(draft: RouteDraft): RouteDraft {
+  if (draft.waypointIds.length < 2) return draft;
+  const waypointIds =
+    draft.pattern === "loop"
+      ? [draft.waypointIds[0], ...draft.waypointIds.slice(1).reverse()]
+      : [...draft.waypointIds].reverse();
+  return changed(draft, waypointIds, { selectedIndex: null });
+}
+
+export function setPattern(
+  draft: RouteDraft,
+  pattern: ServicePattern,
+): RouteDraft {
+  return pattern === draft.pattern
+    ? draft
+    : changed(draft, draft.waypointIds, { pattern });
+}
+
+function nodeMatchesMode(node: Stop | Station, mode: TransitMode): boolean {
+  if (mode === "walk") return false;
+  return mode === "bus" ? "kind" in node : !("kind" in node);
+}
+
+export function applyRouteNodeClick(
+  draft: RouteDraft,
+  node: Stop | Station,
+): RouteDraftClickResult {
+  if (node.status !== "present") {
+    return {
+      draft,
+      rejection: {
+        code: "missingRouteNode",
+        context: { nodeId: node.id, affectedRouteIds: [] },
+      },
+    };
+  }
+  if (!nodeMatchesMode(node, draft.mode)) {
+    return {
+      draft,
+      rejection: {
+        code: "incompatibleRouteNode",
+        context: { nodeId: node.id, affectedRouteIds: [] },
+      },
+    };
+  }
+  return {
+    draft: applyNodeClick(draft, node.id),
+    rejection: null,
+  };
+}
+
+export function cancelDraftRoute(ui: UiState): UiState {
+  if (ui.routeDraft === null && ui.routePreviewError === null) return ui;
+  return {
+    ...ui,
+    routeDraft: null,
+    routePreviewError: null,
+    routePreviewHostError: null,
+  };
 }

@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
+import type {
+  RoadMutationPreviewRequest,
+  RoutePreviewRequest,
+} from "../../src/runtime/backend/types";
 
 const dims = vi.hoisted(() => ({ width: 0, height: 0 }));
 
@@ -21,13 +25,77 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       if (intent.type === "setPaused" && typeof intent.paused === "boolean") {
         this.#paused = intent.paused;
       }
-      return { applied: true, rejection: null, snapshot: this.snapshot() };
+      return {
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+        snapshot: this.snapshot(),
+      };
     }
     tick() {
-      return { applied: true, rejection: null, snapshot: this.snapshot() };
+      return {
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+        snapshot: this.snapshot(),
+      };
     }
     reset() {
       return this.snapshot();
+    }
+    preview_route(request: RoutePreviewRequest) {
+      return {
+        generation: request.generation,
+        legs: [
+          {
+            fromWaypointId: request.waypointIds[0],
+            toWaypointId: request.waypointIds[1],
+            direction: request.pattern === "loop" ? "loop" : "outbound",
+            kind: "service",
+            status: "networkDisconnected",
+            currentPath: undefined,
+            lastValidPath: undefined,
+            estimatedSeconds: undefined,
+          },
+        ],
+        totalTravelSeconds: 0,
+        initialVehicleCost: 0,
+        affordable: true,
+        turnSummary: {
+          straight: 0,
+          rightTurn: 0,
+          leftTurn: 0,
+          uTurn: 0,
+          roundaboutEntry: 0,
+        },
+        missingWaypointIds: [],
+        warnings: [],
+        rejection: null,
+      };
+    }
+    preview_road_mutation(request: RoadMutationPreviewRequest) {
+      return {
+        generation: request.generation,
+        cost: 100,
+        rejection: {
+          code: "insufficientBudget",
+          context: {
+            requiredBudget: 100,
+            availableBudget: 99,
+            affectedRouteIds: [],
+          },
+        },
+      };
     }
   }
   return { default: init, init, WasmGameEngine };
@@ -158,4 +226,65 @@ describe("createWasmBackend", () => {
     // The mock's reset() returns the current engine snapshot.
     expect(resetSnapshot.day).toBe(0);
   });
+
+  it("forwards route and road preview requests to the WASM engine", async () => {
+    const backend = await createWasmBackend();
+    const routeRequest: RoutePreviewRequest = {
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 41,
+    };
+    const roadRequest: RoadMutationPreviewRequest = {
+      mutation: { type: "layRoad", point: { x: 4, y: 4 } },
+      generation: 42,
+    };
+
+    await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
+      generation: 41,
+      rejection: null,
+    });
+    await expect(backend.previewRoadMutation(roadRequest)).resolves.toEqual({
+      generation: 42,
+      cost: 100,
+      rejection: {
+        code: "insufficientBudget",
+        context: {
+          requiredBudget: 100,
+          availableBudget: 99,
+          affectedRouteIds: [],
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["bus", ["stop-001", "stop-002"]],
+    ["metro", ["station-001", "station-002"]],
+  ] as const)(
+    "normalizes broken %s preview leg options at the WASM boundary",
+    async (mode, waypointIds) => {
+      const backend = await createWasmBackend();
+
+      const response = await backend.previewRoute({
+        mode,
+        pattern: "shuttle",
+        waypointIds: [...waypointIds],
+        routeId: null,
+        expectedRevision: null,
+        generation: mode === "bus" ? 61 : 62,
+      });
+
+      expect(response.legs).toHaveLength(1);
+      expect(response.legs[0]).toMatchObject({
+        fromWaypointId: waypointIds[0],
+        toWaypointId: waypointIds[1],
+        currentPath: null,
+        lastValidPath: null,
+        estimatedSeconds: null,
+      });
+    },
+  );
 });

@@ -5,9 +5,12 @@ import type {
   Overlay,
   Point,
   RoadPreset,
+  RoundaboutSize,
   Tool,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
+import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
+import type { RouteDraft, RouteDraftError } from "./routeDraft";
 
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
@@ -49,6 +52,8 @@ export interface UiState {
   activeTool: Tool;
   /** Road build style for the road tool's drag gesture. */
   roadPreset: RoadPreset;
+  /** Fixed authoritative stamp requested by the click-only roundabout tool. */
+  roundaboutSize: RoundaboutSize;
   /** In-progress drag gesture, or null when idle. */
   drag: DragGesture | null;
   activeOverlay: Overlay | null;
@@ -61,13 +66,16 @@ export interface UiState {
   buildingRotation: BuildingRotation;
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
-  draftStopIds: string[];
-  draftStationIds: string[];
-  /** Tile path per consecutive draft pair; paths[i] connects ids[i] -> ids[i+1].
-   *  Invariant: paths.length === max(0, ids.length - 1). */
-  draftStopPaths: Point[][];
-  draftStationPaths: Point[][];
+  routeDraft: RouteDraft | null;
+  routePreviewError: RouteDraftError | null;
+  /** Recoverable host failure for the current route preview request. */
+  routePreviewHostError: string | null;
+  roadPreviewGeneration: number;
+  roadMutationPreview: RoadMutationPreviewResponse | null;
+  /** Recoverable host failure for the current road preview request. */
+  roadMutationPreviewError: string | null;
   selectedRouteId: string | null;
+  routeFailureFocus: { routeId: string; legIndex: number } | null;
   activeHudCategory: HudCategory | null;
 }
 
@@ -75,6 +83,7 @@ export function createUiState(): UiState {
   return {
     activeTool: "inspect",
     roadPreset: "twoWay",
+    roundaboutSize: "compact2x2",
     drag: null,
     activeOverlay: null,
     selectedId: null,
@@ -84,11 +93,14 @@ export function createUiState(): UiState {
     buildCategory: null,
     buildingRotation: 0,
     hoverTile: null,
-    draftStopIds: [],
-    draftStationIds: [],
-    draftStopPaths: [],
-    draftStationPaths: [],
+    routeDraft: null,
+    routePreviewError: null,
+    routePreviewHostError: null,
+    roadPreviewGeneration: 0,
+    roadMutationPreview: null,
+    roadMutationPreviewError: null,
     selectedRouteId: null,
+    routeFailureFocus: null,
     activeHudCategory: "brief",
   };
 }

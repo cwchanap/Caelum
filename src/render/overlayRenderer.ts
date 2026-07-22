@@ -1,102 +1,39 @@
-import type {
-  ActiveTrip,
-  GameMap,
-  GameState,
-  Point,
-  Tile,
+import {
+  ROAD_DIRECTION_OFFSET,
+  type ActiveTrip,
+  type GameState,
+  type Point,
+  type RoadStructure,
+  type RouteLegPath,
+  type TransitPath,
+  type TripPosition,
 } from "../domain/types";
+import type { AuthoredRoadTilePreview } from "../runtime/backend/types";
+import {
+  buildRoadMutationPreview,
+  selectRouteEditorView,
+} from "../runtime/runtimeSelectors";
+import type {
+  RoadMutationPreviewView,
+  RouteEditorView,
+} from "../runtime/types";
 import {
   BUILDING_CATALOG,
   getBuildingFootprint,
 } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
-// NOTE: The geometry helpers below (axisLockedLine, lineDirection,
-// oppositeDirection, reverseLanePoints) mirror the authoritative Rust road
-// geometry in `crates/caelum-core/src/transit.rs` (`lay_road_line`,
-// `line_direction`, `opposite_direction`, `reverse_lane_points`). They are
-// read-only preview helpers here — the Rust core is the sole authority for
-// actual tile placement. If the Rust geometry changes, update these to match
-// or the drag preview will drift from what the backend actually places.
-import {
-  axisLockedLine,
-  canonicalLineDirection,
-  lineDirection,
-  oppositeDirection,
-  planDragPreview,
-  reverseLanePoints,
-} from "../ui/roadDrag";
+import { axisLockedLine } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
-import { tileSize } from "./canvas";
+import { tileSize, type BoardTransform } from "./canvas";
 import { colors } from "./colors";
 import { drawDirectionArrow } from "./mapRenderer";
+import { pointAndTangentAt } from "./pathRenderer";
+import { canPlaceBuilding, isAreaPaintable } from "./placementValidation";
 
 const previewStrokeInset = 2;
 
-function samePoint(left: Point, right: Point): boolean {
-  return left.x === right.x && left.y === right.y;
-}
-
-function getTile(map: GameMap, point: Point): Tile | null {
-  if (
-    point.x < 0 ||
-    point.x >= map.width ||
-    point.y < 0 ||
-    point.y >= map.height
-  ) {
-    return null;
-  }
-
-  return map.tiles.find((tile) => samePoint(tile, point)) ?? null;
-}
-
-function isBuildingOccupied(state: GameState, point: Point): boolean {
-  return state.buildings.some((building) =>
-    building.occupiedTiles.some((occupiedTile) =>
-      samePoint(occupiedTile, point),
-    ),
-  );
-}
-
-function isTransitNodeAt(state: GameState, point: Point): boolean {
-  return (
-    state.transit.stops.some((stop) => samePoint(stop.position, point)) ||
-    state.transit.stations.some((station) => samePoint(station.position, point))
-  );
-}
-
-function canPlaceBuilding(
-  state: GameState,
-  type: keyof typeof BUILDING_CATALOG,
-  origin: Point,
-  rotation: 0 | 90 | 180 | 270,
-): boolean {
-  const definition = BUILDING_CATALOG[type];
-  const footprint = getBuildingFootprint(type, origin, rotation);
-
-  return footprint.every((point) => {
-    const tile = getTile(state.map, point);
-    const kindOk =
-      type === "metroStation"
-        ? tile?.kind === "empty" || tile?.kind === "road"
-        : tile?.kind === "empty";
-    const trackOk =
-      type === "metroStation"
-        ? tile?.hasTrack === true
-        : tile?.hasTrack !== true;
-    const areaOk =
-      definition.allowedArea === undefined ||
-      tile?.area === definition.allowedArea;
-
-    return (
-      kindOk &&
-      trackOk &&
-      areaOk &&
-      !isBuildingOccupied(state, point) &&
-      !isTransitNodeAt(state, point)
-    );
-  });
-}
+type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
 
 function rectanglePoints(start: Point, end: Point): Point[] {
   const minX = Math.min(start.x, end.x);
@@ -112,16 +49,6 @@ function rectanglePoints(start: Point, end: Point): Point[] {
   }
 
   return points;
-}
-
-function isAreaPaintable(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    tile?.kind === "empty" &&
-    tile.hasTrack !== true &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
 }
 
 function planAreaPaintPreview(
@@ -209,10 +136,256 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
+function drawAuthoredRoadConnections(
+  ctx: CanvasRenderingContext2D,
+  tile: AuthoredRoadTilePreview,
+): void {
+  const centerX = tile.point.x * tileSize + tileSize / 2;
+  const centerY = tile.point.y * tileSize + tileSize / 2;
+  for (const heading of tile.roadConnections) {
+    const offset = ROAD_DIRECTION_OFFSET[heading];
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(
+      centerX + (offset.x * tileSize) / 2,
+      centerY + (offset.y * tileSize) / 2,
+    );
+    ctx.stroke();
+  }
+}
+
+function compareRouteImpacts(
+  left: RoadMutationPreviewView["routeImpacts"][number],
+  right: RoadMutationPreviewView["routeImpacts"][number],
+): number {
+  if (left.routeName !== right.routeName) {
+    return left.routeName < right.routeName ? -1 : 1;
+  }
+  if (left.kind === right.kind) return 0;
+  return left.kind < right.kind ? -1 : 1;
+}
+
+function roadPreviewFeedback(preview: RoadMutationPreviewView): string {
+  const impacts = [...preview.routeImpacts]
+    .sort(compareRouteImpacts)
+    .map((impact) => `${impact.routeName} ${impact.kind}`)
+    .join(" · ");
+  const cost = preview.costLabel;
+  return impacts.length === 0 ? cost : `${cost} · ${impacts}`;
+}
+
+function roadPreviewAnchor(preview: RoadMutationPreviewView): Point {
+  return (
+    preview.authoredTiles[0]?.point ??
+    preview.changedTiles[0] ??
+    preview.generatedStructures[0]?.footprint[0] ?? { x: 0, y: 0 }
+  );
+}
+
+function renderRoadPreviewFeedback(
+  ctx: CanvasRenderingContext2D,
+  preview: RoadMutationPreviewView,
+  transform: BoardTransform,
+): void {
+  const text = roadPreviewFeedback(preview);
+  const anchor = roadPreviewAnchor(preview);
+  // Position math bakes in the board transform (offset + scale) so this
+  // can be drawn in the untransformed context (after ctx.restore()), just
+  // like renderCursorBadge. DPR scaling keeps the on-screen size constant.
+  const dpr = globalThis.devicePixelRatio ?? 1;
+  const centerX =
+    transform.offsetX + (anchor.x + 0.5) * tileSize * transform.scale;
+  const height = 18 * dpr;
+  const padding = 4 * dpr;
+
+  ctx.save();
+  ctx.font = `${11 * dpr}px ui-monospace, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const width = ctx.measureText(text).width + padding * 2;
+  const boxX = centerX - width / 2;
+  const anchorY = transform.offsetY + anchor.y * tileSize * transform.scale;
+  const boxY = Math.max(2, anchorY - height - 4 * dpr);
+  ctx.fillStyle = colors.badgeBackground;
+  ctx.fillRect(boxX, boxY, width, height);
+  ctx.fillStyle = colors.badgeText;
+  ctx.fillText(text, centerX, boxY + height / 2);
+  ctx.restore();
+}
+
+function renderRoundaboutPreviewStructure(
+  ctx: CanvasRenderingContext2D,
+  structure: RoundaboutStructure,
+  valid: boolean,
+  alreadyFilled: ReadonlySet<string>,
+): void {
+  const fillColor = valid ? colors.previewValid : colors.previewInvalid;
+  const strokeColor = valid
+    ? colors.previewValidStroke
+    : colors.previewInvalidStroke;
+
+  ctx.fillStyle = fillColor;
+  for (const point of structure.footprint) {
+    if (!alreadyFilled.has(`${point.x},${point.y}`)) {
+      fillTile(ctx, point);
+    }
+  }
+
+  if (structure.footprint.length > 0) {
+    const xs = structure.footprint.map((point) => point.x);
+    const ys = structure.footprint.map((point) => point.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(
+      minX * tileSize,
+      minY * tileSize,
+      (maxX - minX + 1) * tileSize,
+      (maxY - minY + 1) * tileSize,
+    );
+  }
+
+  if (structure.size === "standard3x3") {
+    // The authoritative 3x3 footprint owns its center even though that tile is
+    // not carriageway. Mark the protected island distinctly so the preview
+    // does not suggest it remains buildable.
+    ctx.fillStyle = colors.badgeBackground;
+    ctx.fillRect(
+      (structure.origin.x + 1.25) * tileSize,
+      (structure.origin.y + 1.25) * tileSize,
+      tileSize / 2,
+      tileSize / 2,
+    );
+  }
+
+  if (structure.ports.length === 0) {
+    return;
+  }
+  ctx.beginPath();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (const port of structure.ports) {
+    const left = port.point.x * tileSize;
+    const top = port.point.y * tileSize;
+    const centerX = left + tileSize / 2;
+    const centerY = top + tileSize / 2;
+    const tick = tileSize / 4;
+    if (port.edge === "north") {
+      ctx.moveTo(centerX, top);
+      ctx.lineTo(centerX, top + tick);
+    } else if (port.edge === "east") {
+      ctx.moveTo(left + tileSize, centerY);
+      ctx.lineTo(left + tileSize - tick, centerY);
+    } else if (port.edge === "south") {
+      ctx.moveTo(centerX, top + tileSize);
+      ctx.lineTo(centerX, top + tileSize - tick);
+    } else {
+      ctx.moveTo(left, centerY);
+      ctx.lineTo(left + tick, centerY);
+    }
+  }
+  ctx.stroke();
+}
+
+function renderRoadMutationPreview(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+  removal: boolean,
+  precomputed: RoadMutationPreviewView | null | undefined,
+): void {
+  const preview = precomputed ?? buildRoadMutationPreview(state, ui);
+  if (preview === null) {
+    return;
+  }
+  const changed = new Set(
+    preview.changedTiles.map((point) => `${point.x},${point.y}`),
+  );
+  const skipped = new Set(
+    preview.skippedTiles.map((point) => `${point.x},${point.y}`),
+  );
+  const roundabouts = preview.generatedStructures.filter(
+    (structure): structure is RoundaboutStructure =>
+      structure.kind === "roundabout",
+  );
+  const roundaboutFootprint = new Set(
+    roundabouts.flatMap((structure) =>
+      structure.footprint.map((point) => `${point.x},${point.y}`),
+    ),
+  );
+  const previewAccepted = preview.rejection === null;
+  for (const point of [...preview.changedTiles, ...preview.skippedTiles]) {
+    const key = `${point.x},${point.y}`;
+    const valid =
+      previewAccepted && changed.has(key) && !skipped.has(key) && !removal;
+    ctx.fillStyle = valid ? colors.previewValid : colors.previewInvalid;
+    ctx.strokeStyle = valid
+      ? colors.previewValidStroke
+      : colors.previewInvalidStroke;
+    fillTile(ctx, point);
+    if (!roundaboutFootprint.has(key)) {
+      strokeTile(ctx, point);
+    }
+  }
+  for (const structure of preview.generatedStructures) {
+    if (structure.kind === "roundabout") {
+      renderRoundaboutPreviewStructure(
+        ctx,
+        structure,
+        previewAccepted && !removal,
+        changed,
+      );
+      continue;
+    }
+    ctx.fillStyle = previewAccepted
+      ? colors.previewValid
+      : colors.previewInvalid;
+    ctx.strokeStyle = previewAccepted
+      ? colors.previewValidStroke
+      : colors.previewInvalidStroke;
+    for (const point of structure.footprint) {
+      fillTile(ctx, point);
+      strokeTile(ctx, point);
+    }
+  }
+  if (preview.authoredTiles.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = colors.previewValidStroke;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    for (const tile of preview.authoredTiles) {
+      drawAuthoredRoadConnections(ctx, tile);
+    }
+    ctx.restore();
+  }
+  const directed = preview.authoredTiles.filter((tile) => tile.oneWay != null);
+  if (directed.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = colors.oneWayArrow;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const tile of directed) {
+      if (tile.oneWay != null) {
+        drawDirectionArrow(ctx, tile.point, tile.oneWay);
+      }
+    }
+    ctx.restore();
+  }
+  // Road preview feedback text is drawn in the untransformed context by
+  // `renderRoadPreviewFeedbackBadge` (called from `renderGame` after
+  // ctx.restore()) so its on-screen size stays consistent with the cursor
+  // badge regardless of board scale.
+}
+
 function renderDragPreview(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
+  roadPreview: RoadMutationPreviewView | null | undefined,
 ): void {
   // The gesture is atomic — a non-null `drag` already implies a drag tool and a
   // concrete current tile, so this single check replaces the old three-field
@@ -239,84 +412,212 @@ function renderDragPreview(
     return;
   }
 
-  const isDelete = gesture.tool === "remove";
   const line = axisLockedLine(gesture.start, gesture.current);
-
-  // Per-tile validity mirrors the commit path: a tile tints green only where a
-  // road/track would actually land, and red where it collides, runs off-map, or
-  // is unaffordable. The remove tool has no per-tile predicate — tint red.
-  if (isDelete) {
-    ctx.fillStyle = colors.previewInvalid;
-    ctx.strokeStyle = colors.previewInvalidStroke;
+  if (gesture.tool === "track") {
+    ctx.fillStyle = colors.previewValid;
+    ctx.strokeStyle = colors.previewValidStroke;
     for (const point of line) {
       fillTile(ctx, point);
       strokeTile(ctx, point);
     }
-  } else {
-    for (const { point, buildable } of planDragPreview(state, ui, line)) {
-      ctx.fillStyle = buildable ? colors.previewValid : colors.previewInvalid;
-      ctx.strokeStyle = buildable
-        ? colors.previewValidStroke
-        : colors.previewInvalidStroke;
-      fillTile(ctx, point);
-      strokeTile(ctx, point);
-    }
+    return;
   }
 
-  // Dual preset direction arrows: the oneWay preset shows the drag-axis
-  // direction (Rust `lay_road_line` commits OneWay with the drag direction);
-  // dualBidirectional uses the canonical axis direction (east/south) and its
-  // opposite, matching the Rust commit which canonicalizes the primary lane
-  // so the reverse carriageway lands on a drag-order-invariant side. Using the
-  // drag direction here would flip both carriageways' arrows on west/north
-  // drags while the committed tiles keep canonical directions.
-  // twoWay / track / remove carry no per-tile direction, so they draw none.
-  if (gesture.tool === "road") {
-    const forward = lineDirection(line);
-    if (forward !== null) {
-      ctx.save();
-      // Set an explicit arrow color: without this the arrows inherit the
-      // strokeStyle left by the last tile of the per-tile preview loop above,
-      // so every arrow would render red/green based on the line's final tile
-      // instead of a stable glyph color. Mirrors renderMap's committed arrows.
-      ctx.strokeStyle = colors.oneWayArrow;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      if (ui.roadPreset === "oneWay") {
-        for (const point of line) {
-          drawDirectionArrow(ctx, point, forward);
-        }
-      } else if (ui.roadPreset === "dualBidirectional") {
-        const canonical = canonicalLineDirection(line);
-        if (canonical !== null) {
-          const reverse = reverseLanePoints(line);
-          const reverseDir = oppositeDirection(canonical);
-          for (const point of line) {
-            drawDirectionArrow(ctx, point, canonical);
-          }
-          for (const point of reverse) {
-            drawDirectionArrow(ctx, point, reverseDir);
-          }
-        }
-      }
-      ctx.restore();
-    }
+  renderRoadMutationPreview(
+    ctx,
+    state,
+    ui,
+    gesture.tool === "remove",
+    roadPreview,
+  );
+}
+
+function transitNode(state: GameState, nodeId: string) {
+  return (
+    state.transit.stops.find((node) => node.id === nodeId) ??
+    state.transit.stations.find((node) => node.id === nodeId)
+  );
+}
+
+function drawNumberedHandle(
+  ctx: CanvasRenderingContext2D,
+  position: TripPosition,
+  number: number,
+  options: { selected: boolean; missing: boolean },
+): void {
+  const x = position.x * tileSize + tileSize / 2;
+  const y = position.y * tileSize + tileSize / 2;
+  const radius = options.selected ? 12 : 10;
+  ctx.save();
+  ctx.setLineDash(options.missing ? [4, 3] : []);
+  ctx.lineWidth = options.selected ? 4 : 2;
+  ctx.strokeStyle = options.missing ? colors.unserved : colors.badgeText;
+  ctx.fillStyle = colors.badgeBackground;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  if (options.missing) {
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y - 6);
+    ctx.lineTo(x + 6, y + 6);
+    ctx.moveTo(x + 6, y - 6);
+    ctx.lineTo(x - 6, y + 6);
+    ctx.stroke();
   }
+  ctx.font = "bold 11px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = colors.badgeText;
+  ctx.fillText(String(number), x, y);
+  ctx.restore();
+}
+
+export function renderRouteDraftHandles(
+  ctx: CanvasRenderingContext2D,
+  editor: RouteEditorView,
+  nodePositions: ReadonlyMap<string, TripPosition>,
+): void {
+  for (const waypoint of editor.waypoints) {
+    const position = nodePositions.get(waypoint.id);
+    if (!position) continue;
+    drawNumberedHandle(ctx, position, waypoint.index + 1, {
+      selected: waypoint.selected,
+      missing: waypoint.status === "missing",
+    });
+  }
+}
+
+export function renderRouteDraftHandleOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  const routeEditor = selectRouteEditorView(state, ui, null);
+  if (routeEditor === null) return;
+  renderRouteDraftHandles(
+    ctx,
+    routeEditor,
+    new Map(
+      [...state.transit.stops, ...state.transit.stations].map((node) => [
+        node.id,
+        node.position,
+      ]),
+    ),
+  );
+}
+
+function pathMidpoint(path: TransitPath): TripPosition | null {
+  if (path.steps.length === 0) {
+    return null;
+  }
+  const target = path.totalTravelSeconds / 2;
+  let elapsed = 0;
+  for (const step of path.steps) {
+    const next = elapsed + step.travelSeconds;
+    if (target <= next || step === path.steps.at(-1)) {
+      const progress =
+        step.travelSeconds <= 0 ? 0.5 : (target - elapsed) / step.travelSeconds;
+      return pointAndTangentAt(
+        step.geometry,
+        Math.max(0, Math.min(1, progress)),
+      ).point;
+    }
+    elapsed = next;
+  }
+  return null;
+}
+
+function failedLegMarkerPoint(
+  state: GameState,
+  leg: RouteLegPath,
+): TripPosition | null {
+  const from = transitNode(state, leg.fromWaypointId);
+  const to = transitNode(state, leg.toWaypointId);
+  if (leg.status === "missingNode") {
+    return (
+      (from?.status === "missing" ? from.position : undefined) ??
+      (to?.status === "missing" ? to.position : undefined) ??
+      from?.position ??
+      to?.position ??
+      null
+    );
+  }
+  if (leg.lastValidPath !== null) {
+    return pathMidpoint(leg.lastValidPath);
+  }
+  return from !== undefined && to !== undefined
+    ? {
+        x: (from.position.x + to.position.x) / 2,
+        y: (from.position.y + to.position.y) / 2,
+      }
+    : (from?.position ?? to?.position ?? null);
+}
+
+function renderBrokenRouteMarkers(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  if (ui.selectedRouteId === null) {
+    return;
+  }
+  const selected =
+    state.transit.routes.find((route) => route.id === ui.selectedRouteId) ??
+    state.transit.metroLines.find((line) => line.id === ui.selectedRouteId);
+  if (selected === undefined) {
+    return;
+  }
+  selected.legs.forEach((leg, legIndex) => {
+    if (leg.status === "connected") {
+      return;
+    }
+    const marker = failedLegMarkerPoint(state, leg);
+    if (marker === null) {
+      return;
+    }
+    const x = marker.x * tileSize + tileSize / 2;
+    const y = marker.y * tileSize + tileSize / 2;
+    const focused =
+      ui.routeFailureFocus?.routeId === selected.id &&
+      ui.routeFailureFocus.legIndex === legIndex;
+    ctx.save();
+    ctx.lineWidth = focused ? 4 : 3;
+    if (leg.status === "missingNode") {
+      ctx.strokeStyle = colors.unserved;
+      ctx.strokeRect(x - 8, y - 8, 16, 16);
+      ctx.beginPath();
+      ctx.moveTo(x - 5, y - 5);
+      ctx.lineTo(x + 5, y + 5);
+      ctx.moveTo(x + 5, y - 5);
+      ctx.lineTo(x - 5, y + 5);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = colors.late;
+      ctx.beginPath();
+      ctx.arc(x, y, focused ? 8 : 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
 }
 
 export function renderOverlays(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
+  roadPreview: RoadMutationPreviewView | null | undefined = undefined,
 ): void {
   if (ui.activeOverlay === "coverage") {
     ctx.fillStyle = colors.coverage;
 
     for (const stop of state.transit.stops) {
+      if (stop.status !== "present") continue;
       fillCoverageArea(ctx, stop.position, stopCoverageRadius(stop));
     }
 
     for (const station of state.transit.stations) {
+      if (station.status !== "present") continue;
       fillCoverageArea(ctx, station.position, 4);
     }
   }
@@ -343,7 +644,9 @@ export function renderOverlays(
 
   if (ui.activeOverlay === "crowding") {
     const occupancy = selectPlatformOccupancy(state);
-    const nodes = [...state.transit.stops, ...state.transit.stations];
+    const nodes = [...state.transit.stops, ...state.transit.stations].filter(
+      (node) => node.status === "present",
+    );
 
     for (const node of nodes) {
       let maxRatio = 0;
@@ -397,9 +700,28 @@ export function renderOverlays(
     }
   }
 
+  renderBrokenRouteMarkers(ctx, state, ui);
+
   if (ui.drag !== null) {
-    renderDragPreview(ctx, state, ui);
+    renderDragPreview(ctx, state, ui, roadPreview);
     return;
+  }
+
+  if (
+    ui.activeTool === "road" ||
+    ui.activeTool === "roundabout" ||
+    ui.activeTool === "remove"
+  ) {
+    renderRoadMutationPreview(
+      ctx,
+      state,
+      ui,
+      ui.activeTool === "remove",
+      roadPreview,
+    );
+    if (ui.roadMutationPreview !== null) {
+      return;
+    }
   }
 
   if (ui.hoverTile !== null && ui.selectedBuilding !== null) {
@@ -417,4 +739,23 @@ export function renderOverlays(
       tileSize - 4,
     );
   }
+}
+
+/**
+ * Draws the road-mutation preview feedback badge (cost / route impacts) in
+ * the untransformed context (after `ctx.restore()`), so its on-screen size
+ * stays consistent with the cursor badge regardless of board scale.
+ */
+export function renderRoadPreviewFeedbackBadge(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+  transform: BoardTransform,
+  precomputed: RoadMutationPreviewView | null | undefined = undefined,
+): void {
+  const preview = precomputed ?? buildRoadMutationPreview(state, ui);
+  if (preview === null) {
+    return;
+  }
+  renderRoadPreviewFeedback(ctx, preview, transform);
 }

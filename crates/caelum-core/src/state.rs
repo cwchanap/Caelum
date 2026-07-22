@@ -1,9 +1,10 @@
 use crate::clock::{clock_minutes, day_index};
-use crate::model::{GameSnapshot, Metrics, MetricsState, TransitNetwork};
+use crate::model::{GameSnapshot, Metrics, MetricsState, TransitNetwork, SNAPSHOT_SCHEMA_VERSION};
 use crate::scenario::{create_growing_suburb_map, growing_suburb_scenario};
 
 pub fn create_initial_snapshot() -> GameSnapshot {
     GameSnapshot {
+        schema_version: SNAPSHOT_SCHEMA_VERSION,
         time: 0.0,
         day: day_index(0.0),
         clock_minutes: clock_minutes(0.0),

@@ -1,11 +1,73 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import HudDrawer from "../../src/components/hud/HudDrawer.svelte";
+import RouteEditor from "../../src/components/hud/panels/RouteEditor.svelte";
 import type {
+  RouteEditorView,
   ShellBriefState,
   ShellInspectorState,
   ShellRouteListState,
 } from "../../src/runtime/types";
+
+function createDraftView(
+  overrides: Partial<RouteEditorView> = {},
+): RouteEditorView {
+  return {
+    source: "create",
+    title: "New Bus Route",
+    mode: "bus",
+    pattern: "loop",
+    waypoints: [
+      {
+        id: "stop-001",
+        index: 0,
+        label: "Stop A",
+        status: "present",
+        selected: true,
+      },
+      {
+        id: "stop-002",
+        index: 1,
+        label: "Stop B",
+        status: "present",
+        selected: false,
+      },
+    ],
+    selectedIndex: 0,
+    interaction: "replace",
+    previewPending: false,
+    previewStatus: "connected",
+    previewMessage: "Connected",
+    previewWarnings: [],
+    canSave: true,
+    canReload: false,
+    ...overrides,
+  };
+}
+
+function editDraftView(
+  overrides: Partial<RouteEditorView> = {},
+): RouteEditorView {
+  return createDraftView({
+    source: "edit",
+    title: "Editing Route 1",
+    ...overrides,
+  });
+}
+
+function editorProps(editor: RouteEditorView) {
+  return {
+    editor,
+    onSelectWaypoint: vi.fn(),
+    onRemove: vi.fn(),
+    onMove: vi.fn(),
+    onReverse: vi.fn(),
+    onPattern: vi.fn(),
+    onSave: vi.fn(),
+    onCancel: vi.fn(),
+    onReload: vi.fn(),
+  };
+}
 
 const brief: ShellBriefState = {
   title: "Scenario",
@@ -50,6 +112,7 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     selectedBuilding: null,
     buildingRotation: 0 as const,
     roadPreset: "twoWay" as const,
+    roundaboutSize: "compact2x2" as const,
     buildCategory: null,
     inspector: null,
     routeDraft: null,
@@ -62,14 +125,21 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     onSelectBuildItem: vi.fn(),
     onSetOverlay: vi.fn(),
     onAssignRouteToPlatform: vi.fn(),
-    onRemoveDraftStop: vi.fn(),
-    onFinishRoute: vi.fn(),
-    onCancelRoute: vi.fn(),
+    onSelectRouteWaypoint: vi.fn(),
+    onRemoveRouteWaypoint: vi.fn(),
+    onMoveRouteWaypoint: vi.fn(),
+    onReverseRouteDraft: vi.fn(),
+    onSetRoutePattern: vi.fn(),
+    onSaveRouteDraft: vi.fn(),
+    onCancelRouteDraft: vi.fn(),
+    onReloadRouteDraft: vi.fn(),
+    onStartRouteEdit: vi.fn(),
     onRenameRoute: vi.fn(),
     onRecolorRoute: vi.fn(),
     onToggleRouteActive: vi.fn(),
     onDeleteRoute: vi.fn(),
     onSelectRoute: vi.fn(),
+    onFocusRouteFailure: vi.fn(),
     ...overrides,
   };
 }
@@ -130,6 +200,8 @@ describe("HudDrawer panel routing", () => {
             stopCount: 3,
             active: true,
             selected: false,
+            status: { primary: "running", pausedAfterRepair: false },
+            failures: [],
           },
         ],
       }),
@@ -183,5 +255,106 @@ describe("HudDrawer panel routing", () => {
     const drawer = screen.getByTestId("hud-drawer");
     expect(drawer).toHaveAttribute("aria-hidden", "false");
     expect((drawer as HTMLElement).inert).toBe(false);
+  });
+});
+
+describe("RouteEditor", () => {
+  it("renders the same editor controls for creation and committed edits", async () => {
+    const editorControls = [
+      "Loop",
+      "Shuttle",
+      "Append",
+      "Replace",
+      "Insert after",
+      "Move up",
+      "Move down",
+      "Reverse",
+      "Remove",
+      "Save route",
+      "Cancel",
+    ];
+
+    const { rerender } = render(RouteEditor, {
+      props: editorProps(createDraftView()),
+    });
+    for (const name of editorControls) {
+      expect(
+        screen.getByRole(
+          name === "Loop" || name === "Shuttle" ? "radio" : "button",
+          { name },
+        ),
+      ).toBeVisible();
+    }
+
+    await rerender(editorProps(editDraftView()));
+    expect(screen.getByText("Editing Route 1")).toBeVisible();
+    expect(
+      screen.getByText("Saved service stays live until Save."),
+    ).toBeVisible();
+    for (const name of editorControls) {
+      expect(
+        screen.getByRole(
+          name === "Loop" || name === "Shuttle" ? "radio" : "button",
+          { name },
+        ),
+      ).toBeVisible();
+    }
+  });
+
+  it("offers Reload after a stale revision and keeps Cancel available", () => {
+    render(RouteEditor, {
+      props: editorProps(
+        editDraftView({
+          canReload: true,
+          canSave: false,
+          previewStatus: "rejected",
+          previewMessage:
+            "This route changed while you were editing it. Reload the saved route.",
+        }),
+      ),
+    });
+    expect(
+      screen.getByRole("button", { name: "Reload saved route" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save route" })).toBeDisabled();
+    expect(screen.getByTestId("route-preview-status")).toHaveTextContent(
+      "This route changed while you were editing it. Reload the saved route.",
+    );
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  });
+
+  it("renders retained missing waypoints in the Manage editor", () => {
+    render(HudDrawer, {
+      props: drawerProps({
+        category: "manage",
+        routeDraft: editDraftView({
+          waypoints: [
+            {
+              id: "stop-001",
+              index: 0,
+              label: "Stop A",
+              status: "present",
+              selected: false,
+            },
+            {
+              id: "stop-002",
+              index: 1,
+              label: "Missing Bus Stop",
+              status: "missing",
+              selected: true,
+            },
+          ],
+          selectedIndex: 1,
+          previewStatus: "broken",
+          previewMessage:
+            "Stop A → Missing Bus Stop includes a missing waypoint.",
+        }),
+      }),
+    });
+
+    expect(screen.getByTestId("route-waypoint-1")).toHaveTextContent(
+      "Missing Bus Stop",
+    );
+    expect(screen.getByTestId("route-waypoint-1")).toHaveClass("missing");
   });
 });

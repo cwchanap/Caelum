@@ -1,8 +1,260 @@
 use caelum_core::model::{
-    ActiveTrip, PlacedBuilding, Point, Route, RouteLeg, RoutePlan, Sim, TransitMode, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding,
+    Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNodeStatus, TransitPath,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::{state::create_initial_snapshot, transit, GameEngine, GameIntent, RoadPreset};
+use caelum_core::network::resolve_route_legs;
+use caelum_core::road_topology::RoadTopology;
+use caelum_core::service_itinerary::{build_service_itinerary, ServiceLegSpec};
+use caelum_core::{
+    route_lifecycle, state::create_initial_snapshot, transit, GameEngine, GameIntent,
+    RejectionCode, RoadPreset, RoutingContext,
+};
+
+fn ids(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+#[test]
+fn shuttle_builds_outbound_reversal_return_reversal_in_order() {
+    let specs = build_service_itinerary(ServicePattern::Shuttle, &ids(&["A", "B", "C"]));
+
+    assert_eq!(
+        specs.iter().map(ServiceLegSpec::key).collect::<Vec<_>>(),
+        vec![
+            ("A", "B", ServiceDirection::Outbound, RouteLegKind::Service,),
+            ("B", "C", ServiceDirection::Outbound, RouteLegKind::Service,),
+            (
+                "C",
+                "C",
+                ServiceDirection::Return,
+                RouteLegKind::TerminalReversal,
+            ),
+            ("C", "B", ServiceDirection::Return, RouteLegKind::Service,),
+            ("B", "A", ServiceDirection::Return, RouteLegKind::Service,),
+            (
+                "A",
+                "A",
+                ServiceDirection::Outbound,
+                RouteLegKind::TerminalReversal,
+            ),
+        ]
+    );
+}
+
+fn resolve_fixture(
+    pattern: ServicePattern,
+    mode: TransitMode,
+) -> Vec<caelum_core::model::RouteLegPath> {
+    let mut engine = GameEngine::new();
+    match mode {
+        TransitMode::Bus => {
+            road_line(&mut engine, 5, 2, 10);
+            for x in [2, 6, 10] {
+                engine.dispatch(GameIntent::AddBusStop {
+                    point: (x, 5).into(),
+                });
+            }
+        }
+        TransitMode::Metro => {
+            track_line(&mut engine, 5, 2, 10);
+            for x in [2, 6, 10] {
+                engine.dispatch(GameIntent::AddMetroStation {
+                    point: (x, 5).into(),
+                });
+            }
+        }
+        TransitMode::Walk => unreachable!("fixture only resolves vehicle modes"),
+    }
+    let snapshot = engine.snapshot();
+    let topology = RoadTopology::compile(&snapshot.map).unwrap();
+    let waypoint_ids = if mode == TransitMode::Bus {
+        ids(&["stop-001", "stop-002", "stop-003"])
+    } else {
+        ids(&["station-001", "station-002", "station-003"])
+    };
+    resolve_route_legs(
+        &snapshot,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        mode,
+        &waypoint_ids,
+        pattern,
+    )
+}
+
+#[test]
+fn mode_specific_terminal_reversals_are_explicit() {
+    let metro = resolve_fixture(ServicePattern::Shuttle, TransitMode::Metro);
+    let metro_reversals: Vec<_> = metro
+        .iter()
+        .filter(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .collect();
+    assert_eq!(metro_reversals.len(), 2);
+    assert!(metro_reversals.iter().all(|leg| {
+        leg.status == RouteLegStatus::Connected
+            && matches!(
+                leg.current_path.as_ref(),
+                Some(TransitPath::Track {
+                    total_travel_seconds: 0.0,
+                    ..
+                })
+            )
+    }));
+
+    let bus = resolve_fixture(ServicePattern::Shuttle, TransitMode::Bus);
+    let bus_reversal = bus
+        .iter()
+        .find(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .unwrap();
+    assert!(bus_reversal
+        .current_path
+        .as_ref()
+        .unwrap()
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == caelum_core::model::MovementKind::UTurn));
+}
+
+#[test]
+fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for x in [2, 6, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    });
+    let mut state = engine.snapshot();
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let waypoint_ids = state.transit.routes[0].stop_ids.clone();
+    state.transit.routes[0].pattern = ServicePattern::Shuttle;
+    state.transit.routes[0].legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &waypoint_ids,
+        ServicePattern::Shuttle,
+    );
+    state.transit.vehicles[0].itinerary_index = 3;
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: (10, 5).into(),
+        destination: (6, 5).into(),
+        position: (9, 5).into(),
+        status: TripStatus::Riding,
+        deadline: 100.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Bus,
+                from: (10, 5).into(),
+                to: (6, 5).into(),
+                line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Return),
+                board_itinerary_index: Some(3),
+                alight_itinerary_index: Some(3),
+            }],
+            estimated_seconds: 10.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+
+    let candidate = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
+    let candidate_topology = RoadTopology::compile(&candidate.map).unwrap();
+    let next = route_lifecycle::recompute_all_routes(
+        &state,
+        candidate,
+        RoutingContext {
+            road_topology: &candidate_topology,
+        },
+    )
+    .expect("fixture route revisions are available");
+
+    assert!(next.transit.routes[0].path_broken);
+    assert_eq!(
+        next.transit.vehicles[0].parked_position,
+        Some((10, 5).into())
+    );
+    assert_eq!(next.transit.vehicles[0].itinerary_index, 3);
+    assert_eq!(next.active_trips[0].position, (10, 5).into());
+    assert_eq!(next.active_trips[0].status, TripStatus::Idle);
+}
+
+#[test]
+fn shuttle_break_then_restore_preserves_return_itinerary_index() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for x in [2, 6, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+    });
+    let mut state = engine.snapshot();
+    let topology = RoadTopology::compile(&state.map).unwrap();
+    let waypoint_ids = state.transit.routes[0].stop_ids.clone();
+    state.transit.routes[0].pattern = ServicePattern::Shuttle;
+    state.transit.routes[0].legs = resolve_route_legs(
+        &state,
+        RoutingContext {
+            road_topology: &topology,
+        },
+        TransitMode::Bus,
+        &waypoint_ids,
+        ServicePattern::Shuttle,
+    );
+    state.transit.vehicles[0].itinerary_index = 3;
+
+    // Break: remove road at (8,5) to disconnect stop-002 from stop-003.
+    let broken = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
+    let broken_topology = RoadTopology::compile(&broken.map).unwrap();
+    let broken = route_lifecycle::recompute_all_routes(
+        &state,
+        broken,
+        RoutingContext {
+            road_topology: &broken_topology,
+        },
+    )
+    .expect("fixture route revisions are available");
+    assert!(broken.transit.routes[0].path_broken);
+    assert_eq!(
+        broken.transit.vehicles[0].parked_position,
+        Some((10, 5).into())
+    );
+    assert_eq!(broken.transit.vehicles[0].itinerary_index, 3);
+
+    // Restore: re-add road at (8,5) to reconnect the route.
+    let restored = transit::lay_road(&broken, &(8, 5).into()).unwrap();
+    let restored_topology = RoadTopology::compile(&restored.map).unwrap();
+    let restored = route_lifecycle::recompute_all_routes(
+        &broken,
+        restored,
+        RoutingContext {
+            road_topology: &restored_topology,
+        },
+    )
+    .expect("fixture route revisions are available");
+    assert!(!restored.transit.routes[0].path_broken);
+    assert_eq!(restored.transit.vehicles[0].parked_position, None);
+    assert_eq!(restored.transit.vehicles[0].itinerary_index, 3);
+}
 
 fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
     Route {
@@ -12,7 +264,9 @@ fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
         stop_ids: stop_ids.iter().map(|s| s.to_string()).collect(),
         vehicle_ids: Vec::new(),
         active: true,
-        segments: Vec::new(),
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: Vec::new(),
         path_broken: false,
     }
 }
@@ -33,6 +287,56 @@ fn track_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     }
 }
 
+#[test]
+fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for y in 1..=9 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (6, y).into(),
+        });
+    }
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: (5, 4).into(),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(placed.applied, "{placed:?}");
+    assert_eq!(
+        placed.snapshot.transit.routes[0].legs[0].status,
+        RouteLegStatus::Connected
+    );
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (6, 5).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+    let broken = &removed.snapshot.transit.routes[0];
+    assert_eq!(broken.legs[0].status, RouteLegStatus::NetworkDisconnected);
+    assert!(broken.legs[0].last_valid_path.is_some());
+
+    for x in 5..=7 {
+        let repaired = engine.dispatch(GameIntent::LayRoad {
+            point: (x, 5).into(),
+        });
+        assert!(repaired.applied, "{repaired:?}");
+    }
+    assert_eq!(
+        engine.snapshot().transit.routes[0].legs[0].status,
+        RouteLegStatus::Connected
+    );
+}
+
 fn destination_building(
     id: &str,
     building_type: &str,
@@ -41,7 +345,7 @@ fn destination_building(
     PlacedBuilding {
         id: id.to_string(),
         building_type: building_type.to_string(),
-        origin: occupied_tiles[0].clone(),
+        origin: occupied_tiles[0],
         rotation: 0,
         occupied_tiles,
         transit_node_id: None,
@@ -51,7 +355,7 @@ fn destination_building(
 fn worker_sim(id: &str, position: Point, workplace: Point) -> Sim {
     Sim {
         id: id.to_string(),
-        home: position.clone(),
+        home: position,
         position,
         worker_profile: WorkerProfile::Worker,
         shift_template: None,
@@ -73,14 +377,139 @@ fn two_stop_bus_engine() -> GameEngine {
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
-    });
-    engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     engine
+}
+
+struct RouteTimingFixture {
+    state: GameSnapshot,
+    route_id: String,
+    vehicle_id: String,
+}
+
+fn route<'a>(state: &'a GameSnapshot, route_id: &str) -> &'a Route {
+    state
+        .transit
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+        .expect("fixture route exists")
+}
+
+fn vehicle<'a>(state: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
+    state
+        .transit
+        .vehicles
+        .iter()
+        .find(|vehicle| vehicle.id == vehicle_id)
+        .expect("fixture vehicle exists")
+}
+
+fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    transit::tick_vehicles(state, delta_seconds)
+}
+
+fn movement_route_fixture(movement: MovementKind, movement_seconds: f64) -> RouteTimingFixture {
+    let mut state = two_stop_bus_engine().snapshot();
+    let steps = [(MovementKind::Straight, 1.25), (movement, movement_seconds)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (movement, travel_seconds))| RoadPathStep {
+            position: Point {
+                x: 2 + index as i32,
+                y: 5,
+            },
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement,
+            geometry: PathGeometry::Line {
+                from: (2 + index as i32, 5).into(),
+                to: (3 + index as i32, 5).into(),
+            },
+            travel_seconds,
+        })
+        .collect();
+    let total_travel_seconds = 1.25 + movement_seconds;
+    let path = TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    };
+    let leg = &mut state.transit.routes[0].legs[0];
+    leg.current_path = Some(path.clone());
+    leg.last_valid_path = Some(path);
+    leg.estimated_seconds = Some(total_travel_seconds);
+    let route_id = state.transit.routes[0].id.clone();
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    state.transit.vehicles[0].itinerary_index = 0;
+    state.transit.vehicles[0].path_step_index = 0;
+    state.transit.vehicles[0].step_progress = 0.0;
+    RouteTimingFixture {
+        state,
+        route_id,
+        vehicle_id,
+    }
+}
+
+fn straight_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::Straight, 1.25)
+}
+
+fn right_turn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::RightTurn, 1.75)
+}
+
+fn left_turn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::LeftTurn, 2.25)
+}
+
+fn uturn_route_fixture() -> RouteTimingFixture {
+    movement_route_fixture(MovementKind::UTurn, 2.0)
+}
+
+fn advance_until_itinerary_changes(
+    state: GameSnapshot,
+    vehicle_id: &str,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    assert_eq!(vehicle(&state, vehicle_id).itinerary_index, 0);
+    tick_vehicles(&state, delta_seconds)
+}
+
+fn three_step_vehicle_fixture(durations: [f64; 3]) -> (GameSnapshot, String) {
+    let mut state = two_stop_bus_engine().snapshot();
+    let steps = durations
+        .iter()
+        .enumerate()
+        .map(|(index, travel_seconds)| RoadPathStep {
+            position: Point {
+                x: 2 + index as i32,
+                y: 5,
+            },
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: (2 + index as i32, 5).into(),
+                to: (3 + index as i32, 5).into(),
+            },
+            travel_seconds: *travel_seconds,
+        })
+        .collect();
+    let total_travel_seconds = durations.iter().sum();
+    let path = TransitPath::Road {
+        steps,
+        total_travel_seconds,
+    };
+    let leg = &mut state.transit.routes[0].legs[0];
+    leg.current_path = Some(path.clone());
+    leg.last_valid_path = Some(path);
+    leg.estimated_seconds = Some(total_travel_seconds);
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    (state, vehicle_id)
 }
 
 #[test]
@@ -98,7 +527,7 @@ fn adds_bus_stop_on_road_and_charges_budget() {
     assert_eq!(result.snapshot.transit.stops.len(), 1);
     let stop = &result.snapshot.transit.stops[0];
     assert_eq!(stop.id, "stop-001");
-    assert_eq!(stop.kind, "busStop");
+    assert_eq!(stop.kind, BusStopKind::BusStop);
     assert_eq!(stop.platforms[0].capacity, 50);
     assert_eq!(result.snapshot.budget, 117_900);
 }
@@ -116,12 +545,12 @@ fn creates_active_bus_route_and_assigns_vehicle() {
     assert_eq!(route.vehicle_ids, vec!["vehicle-001"]);
     assert!(route.active);
     assert!(!route.path_broken);
-    assert_eq!(route.segments.len(), 2);
+    assert_eq!(route.legs.len(), 2);
     assert_eq!(snapshot.transit.vehicles[0].capacity, 18);
 }
 
 #[test]
-fn duplicate_stop_route_stays_inactive_and_unassigned() {
+fn duplicate_stop_route_is_rejected_atomically() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad {
         point: (3, 4).into(),
@@ -130,19 +559,25 @@ fn duplicate_stop_route_stays_inactive_and_unassigned() {
         point: (3, 4).into(),
     });
 
-    let result = engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-001".to_string()],
+    let result = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-001".to_string()],
     });
 
-    assert!(result.applied);
-    assert!(!result.snapshot.transit.routes[0].active);
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.expect("duplicate rejection").code,
+        RejectionCode::DuplicateRouteNodes
+    );
+    assert!(result.snapshot.transit.routes.is_empty());
     assert!(!result.snapshot.transit.stops[0].platforms[0]
         .route_ids
         .contains(&"route-001".to_string()));
 }
 
 #[test]
-fn metro_line_serializes_station_ids_and_rejects_vehicle_when_broken() {
+fn disconnected_metro_creation_is_rejected_atomically() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayTrack {
         point: (2, 4).into(),
@@ -157,25 +592,18 @@ fn metro_line_serializes_station_ids_and_rejects_vehicle_when_broken() {
         point: (12, 4).into(),
     });
 
-    let line = engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    let line = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
-    assert!(line.applied);
-    let serialized = serde_json::to_value(&line.snapshot.transit.metro_lines[0])
-        .expect("metro line should serialize");
+    assert!(!line.applied);
     assert_eq!(
-        serialized.get("stationIds"),
-        Some(&serde_json::json!(["station-001", "station-002"]))
+        line.rejection.expect("disconnected rejection").code,
+        RejectionCode::DisconnectedLeg
     );
-    assert!(serialized.get("stopIds").is_none());
-    assert!(line.snapshot.transit.metro_lines[0].path_broken);
-
-    let rejected = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "metro".to_string(),
-        line_id: "metro-001".to_string(),
-    });
-    assert!(!rejected.applied);
-    assert!(rejected.snapshot.transit.vehicles.is_empty());
+    assert!(line.snapshot.transit.metro_lines.is_empty());
+    assert!(line.snapshot.transit.vehicles.is_empty());
 }
 
 #[test]
@@ -230,17 +658,23 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (12, 3).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
 
     let snapshot = engine.snapshot();
     let terminal = &snapshot.transit.stops[0];
     assert_eq!(terminal.platforms[0].route_ids, vec!["route-001"]);
     assert_eq!(terminal.platforms[1].route_ids, vec!["route-002"]);
+    let route_1_revision = snapshot.transit.routes[0].revision;
+    let route_2_revision = snapshot.transit.routes[1].revision;
 
     let moved = engine.dispatch(GameIntent::AssignRouteToPlatform {
         node_id: "stop-001".to_string(),
@@ -250,6 +684,202 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     let terminal = &moved.snapshot.transit.stops[0];
     assert!(terminal.platforms[0].route_ids.is_empty());
     assert_eq!(terminal.platforms[2].route_ids, vec!["route-001"]);
+    assert_eq!(
+        moved.snapshot.transit.routes[0].revision,
+        route_1_revision + 1
+    );
+    assert_eq!(moved.snapshot.transit.routes[1].revision, route_2_revision);
+}
+
+#[test]
+fn bus_stop_building_rebuild_restores_stable_node_and_route() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 10);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (10, 3).into(),
+    });
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 4).into(),
+    });
+    assert_eq!(
+        removed.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Missing
+    );
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    assert_eq!(restored.snapshot.transit.stops.len(), 2);
+    assert_eq!(restored.snapshot.transit.stops[0].id, "stop-001");
+    assert_eq!(
+        restored.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Present
+    );
+    assert_eq!(
+        restored.snapshot.transit.stops[0].platforms,
+        original_platforms
+    );
+    assert_eq!(
+        restored.snapshot.buildings[0].transit_node_id.as_deref(),
+        Some("stop-001")
+    );
+    assert!(!restored.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 12);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 3).into(),
+    });
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (4, 5).into(),
+    });
+
+    let terminal = removed
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("referenced terminal tombstone remains");
+    assert_eq!(terminal.position, (2, 4).into());
+    assert_eq!(terminal.status, TransitNodeStatus::Missing);
+    assert!(removed.snapshot.buildings.is_empty());
+
+    let obstruction = engine.dispatch(GameIntent::LayTrack {
+        point: (2, 4).into(),
+    });
+    assert!(obstruction.applied);
+    let rejected = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedFootprint)
+    );
+    assert_eq!(
+        rejected.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Missing
+    );
+}
+
+#[test]
+fn bus_terminal_rebuild_restores_stable_node_and_route() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 12);
+    engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 3).into(),
+    });
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
+    engine.dispatch(GameIntent::RemoveAtTile {
+        point: (4, 5).into(),
+    });
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    let terminal = restored
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("original terminal identity is restored");
+    assert_eq!(terminal.kind, BusStopKind::BusTerminal);
+    assert_eq!(terminal.status, TransitNodeStatus::Present);
+    assert_eq!(terminal.platforms, original_platforms);
+    assert!(!restored.snapshot.transit.routes[0].path_broken);
+}
+
+#[test]
+fn metro_station_building_rebuild_restores_stable_node_and_line() {
+    let mut engine = GameEngine::new();
+    track_line(&mut engine, 4, 2, 10);
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::PlaceBuilding {
+            building_type: "metroStation".to_string(),
+            origin: (x, 4).into(),
+            rotation: 0,
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["station-001", "station-002"]),
+    });
+    let original_platforms = engine.snapshot().transit.stations[0].platforms.clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 4).into(),
+    });
+    assert_eq!(
+        removed.snapshot.transit.stations[0].status,
+        TransitNodeStatus::Missing
+    );
+    engine.set_budget_for_test(25_000);
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "metroStation".to_string(),
+        origin: (2, 4).into(),
+        rotation: 0,
+    });
+
+    assert!(restored.applied, "restore should apply: {restored:?}");
+    assert_eq!(restored.snapshot.transit.stations[0].id, "station-001");
+    assert_eq!(
+        restored.snapshot.transit.stations[0].status,
+        TransitNodeStatus::Present
+    );
+    assert_eq!(
+        restored.snapshot.transit.stations[0].platforms,
+        original_platforms
+    );
+    assert!(!restored.snapshot.transit.metro_lines[0].path_broken);
 }
 
 #[test]
@@ -262,8 +892,10 @@ fn cycling_road_direction_breaks_and_restores_route() {
     engine.dispatch(GameIntent::AddBusStop {
         point: (10, 5).into(),
     });
-    engine.dispatch(GameIntent::AddBusRoute {
-        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(!engine.snapshot().transit.routes[0].path_broken);
 
@@ -279,7 +911,7 @@ fn cycling_road_direction_breaks_and_restores_route() {
             .find(|tile| tile.x == 4 && tile.y == 5)
             .unwrap()
             .one_way
-            .as_deref(),
+            .map(|h| h.as_str()),
         Some("north")
     );
     assert!(broken.snapshot.transit.routes[0].path_broken);
@@ -319,7 +951,7 @@ fn lay_road_line_one_way_sets_axis_direction_and_charges_new_tiles() {
         .tiles
         .iter()
         .filter(|tile| tile.y == 1 && (1..=3).contains(&tile.x))
-        .map(|tile| tile.one_way.as_deref())
+        .map(|tile| tile.one_way.map(|h| h.as_str()))
         .collect();
     assert_eq!(directions, vec![Some("east"), Some("east"), Some("east")]);
 }
@@ -346,12 +978,12 @@ fn lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_exi
             .find(|tile| tile.x == x && tile.y == y)
             .expect("tile exists")
     };
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(1, 0).one_way.as_deref(), None);
-    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), None);
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
 }
 
 #[test]
@@ -381,29 +1013,29 @@ fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
             .tiles
             .iter()
             .find(|tile| tile.x == x && tile.y == y)
-            .and_then(|tile| tile.one_way.clone())
+            .and_then(|tile| tile.one_way)
     };
 
     // Forward carriageway (y=5) and reverse carriageway (y=4, north/left of
     // east) carry the same directions in both drag orders.
     for x in 1..=3 {
         assert_eq!(
-            one_way_at(&east.snapshot, x, 5).as_deref(),
+            one_way_at(&east.snapshot, x, 5).map(|h| h.as_str()),
             Some("east"),
             "eastward forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 5).as_deref(),
+            one_way_at(&west.snapshot, x, 5).map(|h| h.as_str()),
             Some("east"),
             "westward drag must still place east forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&east.snapshot, x, 4).as_deref(),
+            one_way_at(&east.snapshot, x, 4).map(|h| h.as_str()),
             Some("west"),
             "eastward reverse lane at ({x},4)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 4).as_deref(),
+            one_way_at(&west.snapshot, x, 4).map(|h| h.as_str()),
             Some("west"),
             "westward drag must place the reverse lane on the SAME side (north) at ({x},4)"
         );
@@ -490,15 +1122,96 @@ fn bulldozes_track_before_road_on_crossing_tile() {
 }
 
 #[test]
-fn vehicles_advance_by_speed_over_segment_steps() {
+fn vehicles_advance_by_duration_over_path_steps() {
     let mut engine = two_stop_bus_engine();
     engine.dispatch(GameIntent::SetPaused { paused: false });
 
     let ticked = engine.tick(1.0);
 
     assert!(ticked.applied);
-    let progress = ticked.snapshot.transit.vehicles[0].progress;
-    assert!((progress - 0.1).abs() < 0.000_001);
+    let progress = ticked.snapshot.transit.vehicles[0].step_progress;
+    assert!((progress - 0.8).abs() < 0.000_001);
+}
+
+#[test]
+fn actual_bus_time_includes_the_same_turn_delay_as_its_path() {
+    for fixture in [
+        straight_route_fixture(),
+        right_turn_route_fixture(),
+        left_turn_route_fixture(),
+        uturn_route_fixture(),
+    ] {
+        let leg = route(&fixture.state, &fixture.route_id).legs[0].clone();
+        let expected = leg.current_path.as_ref().unwrap().total_travel_seconds();
+        let almost =
+            advance_until_itinerary_changes(fixture.state, &fixture.vehicle_id, expected - 0.001);
+        assert_eq!(vehicle(&almost, &fixture.vehicle_id).itinerary_index, 0);
+        let arrived = tick_vehicles(&almost, 0.001);
+        assert_eq!(vehicle(&arrived, &fixture.vehicle_id).itinerary_index, 1);
+    }
+}
+
+#[test]
+fn vehicle_time_through_roundabout_matches_authoritative_path_duration() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 10);
+    for y in 1..=9 {
+        engine.dispatch(GameIntent::LayRoad {
+            point: (6, y).into(),
+        });
+    }
+    for x in [2, 10] {
+        engine.dispatch(GameIntent::AddBusStop {
+            point: (x, 5).into(),
+        });
+    }
+    engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: (5, 4).into(),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(placed.applied, "{placed:?}");
+
+    let state = placed.snapshot;
+    let route = &state.transit.routes[0];
+    let expected = route.legs[0]
+        .current_path
+        .as_ref()
+        .expect("roundabout route path")
+        .total_travel_seconds();
+    assert!(route.legs[0]
+        .current_path
+        .as_ref()
+        .unwrap()
+        .road_steps()
+        .iter()
+        .any(|step| step.movement == MovementKind::RoundaboutEntry));
+    let vehicle_id = state.transit.vehicles[0].id.clone();
+    let start_leg_index = vehicle(&state, &vehicle_id).itinerary_index;
+    let almost = tick_vehicles(&state, expected - 0.001);
+    assert_eq!(
+        vehicle(&almost, &vehicle_id).itinerary_index,
+        start_leg_index
+    );
+    let arrived = tick_vehicles(&almost, 0.001);
+    assert_eq!(
+        vehicle(&arrived, &vehicle_id).itinerary_index,
+        start_leg_index + 1
+    );
+}
+
+#[test]
+fn one_tick_consumes_multiple_short_steps_without_losing_remainder() {
+    let (state, vehicle_id) = three_step_vehicle_fixture([0.25, 0.50, 1.00]);
+    let next = tick_vehicles(&state, 1.10);
+    let vehicle = vehicle(&next, &vehicle_id);
+
+    assert_eq!(vehicle.path_step_index, 2);
+    assert!((vehicle.step_progress - 0.35).abs() < 1e-9);
 }
 
 #[test]
@@ -538,8 +1251,8 @@ fn removing_destination_reassigns_workplaces_away_from_removed_tiles() {
         destination_building("building-002", "factory", remaining_tiles.clone()),
     ];
     state.sims = vec![
-        worker_sim("sim-001", (1, 1).into(), removed_tiles[0].clone()),
-        worker_sim("sim-002", (1, 2).into(), remaining_tiles[0].clone()),
+        worker_sim("sim-001", (1, 1).into(), removed_tiles[0]),
+        worker_sim("sim-002", (1, 2).into(), remaining_tiles[0]),
     ];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -557,7 +1270,7 @@ fn removing_destination_reassigns_workplaces_away_from_removed_tiles() {
         .sims
         .iter()
         .find(|sim| sim.id == "sim-001")
-        .and_then(|sim| sim.workplace.clone())
+        .and_then(|sim| sim.workplace)
         .expect("worker should be reassigned");
     assert!(remaining_tiles.contains(&reassigned));
 }
@@ -586,14 +1299,14 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
     state.sims = vec![worker_sim(
         "sim-001",
         Point { x: 2, y: 5 },
-        removed_tiles[0].clone(),
+        removed_tiles[0],
     )];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0].clone(),
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Riding,
         deadline: 3_600.0,
@@ -601,8 +1314,11 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
                 from: Point { x: 2, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: 120.0,
         }),
@@ -615,8 +1331,10 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string(), "trip-other".to_string()],
-        segment_index: 0,
-        progress: 0.25,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.25,
+        parked_position: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -680,7 +1398,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
     state.sims = vec![worker_sim(
         "sim-001",
         Point { x: 2, y: 5 },
-        removed_tiles[0].clone(),
+        removed_tiles[0],
     )];
     // Mid-commute: deadline long elapsed (well past the 300s grace), patience
     // almost gone. Without the timer refresh this trip is doomed on the next
@@ -691,7 +1409,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0].clone(),
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Riding,
         deadline: 1_000.0,
@@ -699,8 +1417,11 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
                 from: Point { x: 2, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: Some("route-001".to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
             }],
             estimated_seconds: 120.0,
         }),
@@ -745,7 +1466,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
     // Worker is mid-return: origin is the (about to be removed) workplace, but the
     // trip's destination is home. Clearing the workplace must not retarget this
     // return trip toward a replacement workplace.
-    let mut sim = worker_sim("sim-001", home.clone(), removed_tiles[0].clone());
+    let mut sim = worker_sim("sim-001", home, removed_tiles[0]);
     sim.outbound_resolved_today = true;
     sim.outbound_arrived_today = true;
     state.sims = vec![sim];
@@ -753,8 +1474,8 @@ fn removing_destination_keeps_return_trip_targeting_home() {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteReturn,
-        origin: removed_tiles[0].clone(),
-        destination: home.clone(),
+        origin: removed_tiles[0],
+        destination: home,
         position: Point { x: 4, y: 5 }.into(),
         status: TripStatus::Walking,
         deadline: 3_600.0,
@@ -762,8 +1483,11 @@ fn removing_destination_keeps_return_trip_targeting_home() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Walk,
                 from: Point { x: 4, y: 5 },
-                to: home.clone(),
+                to: home,
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             }],
             estimated_seconds: 60.0,
         }),
@@ -781,7 +1505,6 @@ fn removing_destination_keeps_return_trip_targeting_home() {
     // Workplace was cleared and reassigned to a still-standing destination...
     let reassigned = sim
         .workplace
-        .clone()
         .expect("worker reassigned to a replacement workplace");
     assert!(remaining_tiles.contains(&reassigned));
 
@@ -815,17 +1538,13 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         "supermarket",
         removed_tiles.clone(),
     )];
-    state.sims = vec![worker_sim(
-        "sim-001",
-        home.clone(),
-        removed_tiles[0].clone(),
-    )];
+    state.sims = vec![worker_sim("sim-001", home, removed_tiles[0])];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: home.clone(),
-        destination: removed_tiles[0].clone(),
+        origin: home,
+        destination: removed_tiles[0],
         position: Point { x: 3, y: 5 }.into(),
         status: TripStatus::Walking,
         deadline: 3_600.0,
@@ -833,8 +1552,11 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
             legs: vec![RouteLeg {
                 mode: TransitMode::Walk,
                 from: Point { x: 3, y: 5 },
-                to: removed_tiles[0].clone(),
+                to: removed_tiles[0],
                 line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
             }],
             estimated_seconds: 60.0,
         }),
@@ -847,8 +1569,10 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         line_id: "route-001".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-day-0-trip-001".to_string()],
-        segment_index: 0,
-        progress: 0.25,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.25,
+        parked_position: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -888,21 +1612,18 @@ fn connected_metro_line_creates_vehicle() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::AddMetroLine {
-        station_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
 
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "metro".to_string(),
-        line_id: "metro-001".to_string(),
-    });
-
-    assert!(vehicle.applied);
+    assert!(created.applied);
     assert_eq!(
-        vehicle.snapshot.transit.metro_lines[0].vehicle_ids,
+        created.snapshot.transit.metro_lines[0].vehicle_ids,
         vec!["vehicle-001"]
     );
-    assert_eq!(vehicle.snapshot.transit.vehicles[0].capacity, 90);
+    assert_eq!(created.snapshot.transit.vehicles[0].capacity, 90);
 }
 
 #[test]
@@ -924,8 +1645,10 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
             line_id: "route-A".to_string(),
             capacity: 18,
             passenger_ids: Vec::new(),
-            segment_index: 0,
-            progress: 0.0,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
         },
         Vehicle {
             id: "veh-B".to_string(),
@@ -933,8 +1656,10 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
             line_id: "route-B".to_string(),
             capacity: 18,
             passenger_ids: vec!["trip-001".to_string()],
-            segment_index: 0,
-            progress: 0.4,
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.4,
+            parked_position: None,
         },
     ];
     state.active_trips = vec![ActiveTrip {
@@ -953,12 +1678,18 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
                     from: Point { x: 2, y: 5 },
                     to: Point { x: 12, y: 5 },
                     line_id: Some("route-A".to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
                 },
                 RouteLeg {
                     mode: TransitMode::Bus,
                     from: Point { x: 12, y: 5 },
                     to: Point { x: 20, y: 5 },
                     line_id: Some("route-B".to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
                 },
             ],
             estimated_seconds: 240.0,
@@ -1007,8 +1738,10 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
         line_id: "route-A".to_string(),
         capacity: 18,
         passenger_ids: vec!["trip-001".to_string()],
-        segment_index: 0,
-        progress: 0.4,
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.4,
+        parked_position: None,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -1026,12 +1759,18 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
                     from: Point { x: 2, y: 5 },
                     to: Point { x: 12, y: 5 },
                     line_id: Some("route-A".to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
                 },
                 RouteLeg {
                     mode: TransitMode::Bus,
                     from: Point { x: 12, y: 5 },
                     to: Point { x: 20, y: 5 },
                     line_id: Some("route-B".to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
                 },
             ],
             estimated_seconds: 240.0,
@@ -1115,14 +1854,14 @@ fn lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied() {
             .expect("tile exists")
     };
     // Forward lane (y=1) is one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // The pre-existing road at (2,0) keeps its two-way (None) direction — the
     // reverse lane did not overwrite it. (1,0) and (3,0) get the reverse lane.
-    assert_eq!(tile(2, 0).one_way.as_deref(), None);
-    assert_eq!(tile(1, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), None);
+    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
 }
 
 #[test]
@@ -1150,29 +1889,29 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
             .tiles
             .iter()
             .find(|tile| tile.x == x && tile.y == y)
-            .and_then(|tile| tile.one_way.clone())
+            .and_then(|tile| tile.one_way)
     };
 
     for y in 1..=3 {
         // Forward lane (x=5) is south in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 5, y).as_deref(),
+            one_way_at(&south.snapshot, 5, y).map(|h| h.as_str()),
             Some("south"),
             "southward forward lane at (5,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 5, y).as_deref(),
+            one_way_at(&north.snapshot, 5, y).map(|h| h.as_str()),
             Some("south"),
             "northward drag must still place south forward lane at (5,{y})"
         );
         // Reverse lane (x=6, east/right of south) is north in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 6, y).as_deref(),
+            one_way_at(&south.snapshot, 6, y).map(|h| h.as_str()),
             Some("north"),
             "southward reverse lane at (6,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 6, y).as_deref(),
+            one_way_at(&north.snapshot, 6, y).map(|h| h.as_str()),
             Some("north"),
             "northward drag must place the reverse lane on the SAME side at (6,{y})"
         );
@@ -1205,8 +1944,8 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .tiles
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
-                .and_then(|tile| tile.one_way.clone())
-                .as_deref(),
+                .and_then(|tile| tile.one_way)
+                .map(|h| h.as_str()),
             Some("south")
         );
     }
@@ -1227,8 +1966,8 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
                 .tiles
                 .iter()
                 .find(|tile| tile.x == 5 && tile.y == y)
-                .and_then(|tile| tile.one_way.clone())
-                .as_deref(),
+                .and_then(|tile| tile.one_way)
+                .map(|h| h.as_str()),
             Some("north")
         );
     }
@@ -1243,6 +1982,56 @@ fn lay_road_line_empty_points_is_rejected() {
     });
     assert!(!result.applied);
     assert!(result.rejection.is_some());
+}
+
+// Regression: direction computation subtracts consecutive stroke points before
+// per-tile map validation. Coordinates that overflow i32 subtraction must
+// reject as InvalidRoadStroke rather than panic (debug) or wrap (release).
+#[test]
+fn lay_road_line_rejects_direction_overflow_coordinates() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(i32::MIN, 0).into(), (i32::MAX, 0).into()],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
+}
+
+// Later pairs must be validated too — the first-pair-only guard lets a payload
+// whose second consecutive subtraction overflows through unchecked arithmetic.
+#[test]
+fn lay_road_line_rejects_overflow_on_later_stroke_pairs() {
+    let mut engine = GameEngine::new();
+    // First pair (0,0)->(1,0) is fine; second pair (1,0)->(i32::MIN,0) overflows.
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(0, 0).into(), (1, 0).into(), (i32::MIN, 0).into()],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
+}
+
+// DualBidirectional reverse-lane offsets can overflow even when consecutive
+// pair subtraction is fine — e.g. South reverse offset (+1,0) on x=i32::MAX.
+#[test]
+fn lay_road_line_rejects_reverse_lane_offset_overflow() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(0, 0).into(), (0, 1).into(), (i32::MAX, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidRoadStroke)
+    );
 }
 
 #[test]
@@ -1265,7 +2054,10 @@ fn lay_track_line_empty_points_is_rejected() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::LayTrackLine { points: vec![] });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("empty track line"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidTrackStroke)
+    );
 }
 
 #[test]
@@ -1277,7 +2069,10 @@ fn lay_track_line_all_invalid_tiles_is_unchanged() {
         points: vec![(100, 100).into()],
     });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("track line unchanged"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::InvalidTrackStroke)
+    );
     assert_eq!(result.snapshot.budget, 120_000);
 }
 
@@ -1286,7 +2081,10 @@ fn remove_at_tiles_empty_points_is_rejected() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::RemoveAtTiles { points: vec![] });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("empty remove line"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::BlockedTile)
+    );
 }
 
 #[test]
@@ -1298,7 +2096,10 @@ fn remove_at_tiles_all_unchanged_is_rejected() {
         points: vec![(100, 100).into()],
     });
     assert!(!result.applied);
-    assert_eq!(result.rejection.as_deref(), Some("remove line unchanged"));
+    assert_eq!(
+        result.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::BlockedTile)
+    );
 }
 
 #[test]
@@ -1338,9 +2139,9 @@ fn lay_road_line_one_way_over_two_way_road_updates_direction() {
             .expect("tile exists")
     };
     // The pre-existing two-way road is flipped to one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // The initial LayRoad charged one tile; the line charges the two newly
     // placed tiles (the flipped (1,1) tile is an update, not a new placement).
     assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
@@ -1364,9 +2165,120 @@ fn lay_road_line_over_building_occupied_tiles_is_unchanged() {
         RoadPreset::OneWay,
     );
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "road line unchanged");
+    assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRoadStroke);
     // No budget was consumed (the input state is untouched on the Err path).
     assert_eq!(state.budget, 120_000);
+}
+
+#[test]
+fn road_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 2, y: 2 };
+    let skipped = Point { x: 14, y: 8 };
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![changed, skipped],
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 100);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn track_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 2, y: 2 };
+    let skipped = Point { x: 1_000, y: 1_000 };
+
+    let result = engine.dispatch(GameIntent::LayTrackLine {
+        points: vec![changed, skipped],
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 500);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn area_stroke_dispatch_context_reports_changed_and_skipped_tiles() {
+    let mut engine = GameEngine::new();
+    let changed = Point { x: 13, y: 10 };
+    let skipped = vec![
+        Point { x: 13, y: 9 },
+        Point { x: 14, y: 9 },
+        Point { x: 14, y: 10 },
+    ];
+
+    let result = engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "residential".to_string(),
+        start: Point { x: 13, y: 9 },
+        end: Point { x: 14, y: 10 },
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.changed_tiles, vec![changed]);
+    assert_eq!(result.context.skipped_tiles, skipped);
+    assert_eq!(result.context.cost, 0);
+    assert!(result.context.affected_route_ids.is_empty());
+}
+
+#[test]
+fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
+    let mut engine = GameEngine::new();
+    for x in 2..=4 {
+        assert!(
+            engine
+                .dispatch(GameIntent::LayRoad {
+                    point: Point { x, y: 3 },
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::AddBusStop {
+                point: Point { x: 2, y: 3 },
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::AddBusStop {
+                point: Point { x: 4, y: 3 },
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::CreateRoute {
+                mode: TransitMode::Bus,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            })
+            .applied
+    );
+
+    let changed = Point { x: 3, y: 3 };
+    let skipped = Point { x: 10, y: 10 };
+    let result = engine.dispatch(GameIntent::RemoveAtTiles {
+        points: vec![changed, skipped],
+    });
+
+    assert!(result.applied);
+    assert_eq!(
+        result.context.changed_tiles,
+        vec![changed, Point { x: 2, y: 3 }, Point { x: 4, y: 3 }]
+    );
+    assert_eq!(result.context.skipped_tiles, vec![skipped]);
+    assert_eq!(result.context.cost, 0);
+    assert_eq!(result.context.affected_route_ids, vec!["route-001"]);
+    assert!(result.snapshot.transit.routes[0].path_broken);
 }
 
 #[test]
@@ -1398,14 +2310,14 @@ fn lay_road_line_dual_bidirectional_skips_building_occupied_reverse_tile() {
             .expect("tile exists")
     };
     // Forward lane (y=1) is one-way east.
-    assert_eq!(tile(1, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(2, 1).one_way.as_deref(), Some("east"));
-    assert_eq!(tile(3, 1).one_way.as_deref(), Some("east"));
+    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
+    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
     // Reverse lane (y=0): (1,0) is skipped (building-occupied), (2,0)/(3,0)
     // get the westbound reverse carriageway.
     assert_ne!(tile(1, 0).kind.as_str(), "road");
-    assert_eq!(tile(2, 0).one_way.as_deref(), Some("west"));
-    assert_eq!(tile(3, 0).one_way.as_deref(), Some("west"));
+    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
     // Three forward tiles + two reverse tiles charged.
     assert_eq!(result.budget, 120_000 - 5 * 100);
 }
@@ -1464,4 +2376,62 @@ fn lay_road_line_dual_bidirectional_duplicate_points_yield_no_reverse_lane() {
         .find(|tile| tile.x == 1 && tile.y == 0);
     assert!(reverse_offset.is_none_or(|tile| tile.kind != "road"));
     assert_eq!(result.snapshot.budget, 120_000 - 100);
+}
+
+/// `AddMetroStation` must reject placement on a structure-owned tile (e.g.,
+/// an automatic junction). The `is_valid_metro_station_placement` check
+/// requires `road_structure_id.is_none()`, but this rejection path was
+/// previously untested. The fixture lays track on an empty tile before roads
+/// form a cross-junction over it — `refresh_automatic_junctions` does not
+/// clear `has_track`, so the tile ends up with both track and a
+/// `road_structure_id`, which is the only state where the structure-owned
+/// guard can fire. Using `LayRoadLine` (not individual `LayRoad`) is required
+/// because `connect_neighbor_endpoints` skips neighbors with ≥2 existing
+/// connections — only `connect_authored_sequence` in a road line can add
+/// the third and fourth connections to the crossing tile.
+#[test]
+fn add_metro_station_rejects_structure_owned_tile() {
+    let mut engine = GameEngine::new();
+    let center = Point { x: 5, y: 5 };
+
+    // Lay track on an empty tile first (track is valid on empty tiles).
+    engine.dispatch(GameIntent::LayTrack { point: center });
+
+    // Lay a horizontal road line through the center, then a vertical road
+    // line. The horizontal line makes (5,5) a road with E/W connections;
+    // the vertical line's `connect_authored_sequence` adds N/S connections
+    // (individual LayRoad would be blocked by the ≥2-connection guard).
+    // The cross triggers `refresh_automatic_junctions` which stamps
+    // `road_structure_id` on the center tile without clearing `has_track`.
+    road_line(&mut engine, 5, 4, 6);
+    engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![
+            Point { x: 5, y: 4 },
+            Point { x: 5, y: 5 },
+            Point { x: 5, y: 6 },
+        ],
+        preset: RoadPreset::TwoWay,
+    });
+
+    // Verify the fixture: center tile has track AND is structure-owned.
+    let snapshot = engine.snapshot();
+    let tile = snapshot.map.tile(center).expect("center tile exists");
+    assert!(tile.has_track, "fixture: center tile must have track");
+    assert!(
+        tile.road_structure_id.is_some(),
+        "fixture: center tile must be structure-owned (junction), got {:?}",
+        tile.road_structure_id
+    );
+
+    // AddMetroStation must be rejected — the tile is structure-owned.
+    let result = engine.dispatch(GameIntent::AddMetroStation { point: center });
+    assert!(
+        !result.applied,
+        "metro station on structure-owned tile should be rejected"
+    );
+    assert_eq!(
+        result.rejection.unwrap().code,
+        RejectionCode::BlockedTile,
+        "structure-owned rejection should use BlockedTile"
+    );
 }

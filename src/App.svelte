@@ -4,12 +4,15 @@
   import HudDrawer from "./components/hud/HudDrawer.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
-  import type { AreaKind, Overlay, Tool } from "./domain/types";
+  import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
+  import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
+    RouteDraft,
     RuntimeCommandResult,
     RuntimeController,
     RuntimeSnapshot,
   } from "./runtime/types";
+  import { rejectionMessage } from "./runtime/rejectionMessages";
   import type { HudCategory } from "./ui/uiState";
   import type {
     BuildCategoryId,
@@ -101,8 +104,12 @@
     }
     if (action.kind === "road") {
       setSnapshot(runtime.armRoad(action.roadPreset));
+    } else if (action.kind === "roundabout") {
+      setSnapshot(runtime.armRoundabout(action.size));
     } else if (action.kind === "track") {
       setSnapshot(runtime.setTool("track"));
+    } else if (action.kind === "tool") {
+      setSnapshot(runtime.setTool(action.tool));
     } else {
       setSnapshot(runtime.setBuilding(action.building));
     }
@@ -126,21 +133,60 @@
     }
   }
 
-  function handleRemoveDraftStop(index: number): void {
+  function handleSelectRouteWaypoint(
+    index: number | null,
+    interaction: RouteDraft["interaction"],
+  ): void {
     if (runtime !== null) {
-      setSnapshot(runtime.removeDraftStop(index));
+      setSnapshot(runtime.selectRouteWaypoint(index, interaction));
     }
   }
 
-  function handleFinishRoute(): void {
+  function handleRemoveRouteWaypoint(): void {
     if (runtime !== null) {
-      void applyRuntimeResult(() => runtime.finishRoute());
+      setSnapshot(runtime.removeRouteWaypoint());
     }
   }
 
-  function handleCancelRoute(): void {
+  function handleMoveRouteWaypoint(delta: -1 | 1): void {
     if (runtime !== null) {
-      setSnapshot(runtime.cancelRoute());
+      setSnapshot(runtime.moveRouteWaypoint(delta));
+    }
+  }
+
+  function handleReverseRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.reverseRouteDraft());
+    }
+  }
+
+  function handleSetRoutePattern(pattern: ServicePattern): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.setRoutePattern(pattern));
+    }
+  }
+
+  function handleSaveRouteDraft(): void {
+    if (runtime !== null) {
+      void applyRuntimeResult(() => runtime.saveRouteDraft());
+    }
+  }
+
+  function handleCancelRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.cancelRouteDraft());
+    }
+  }
+
+  function handleReloadRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.reloadRouteDraft());
+    }
+  }
+
+  function handleStartRouteEdit(routeId: string): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.startRouteEdit(routeId));
     }
   }
 
@@ -174,6 +220,12 @@
     }
   }
 
+  function handleFocusRouteFailure(routeId: string, legIndex: number): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.focusRouteFailure(routeId, legIndex));
+    }
+  }
+
   function handleShellError(message: string): void {
     shellError = message;
   }
@@ -187,6 +239,20 @@
     );
   }
 
+  function handleCancelOrEscape(): void {
+    if (shellError || runtime === null) {
+      return;
+    }
+    if (snapshot !== null && snapshot.ui.drag !== null) {
+      setSnapshot(runtime.cancelDrag());
+      return;
+    }
+    if (snapshot !== null && !snapshot.shell.hud.canCancel) {
+      return;
+    }
+    setSnapshot(runtime.handleEscape());
+  }
+
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (shellError || runtime === null) {
       return;
@@ -197,19 +263,12 @@
       // line but keep the active tool and drawer so the player can resume
       // building. A subsequent Escape (no drag in flight) falls through to the
       // full reset below.
-      if (snapshot !== null && snapshot.ui.drag !== null) {
-        setSnapshot(runtime.cancelDrag());
-        return;
-      }
       // Escape mirrors the Cancel button (its label is "Cancel · Esc"). Respect
       // the same canCancel gate so Escape can't fire a reset when Cancel is
       // disabled (bare inspect with no in-flight draft, building, or overlay) —
       // otherwise it would silently jump the drawer to "Brief" while the button
       // looks dead.
-      if (snapshot !== null && !snapshot.shell.hud.canCancel) {
-        return;
-      }
-      setSnapshot(runtime.resetUi());
+      handleCancelOrEscape();
       return;
     }
 
@@ -322,13 +381,13 @@
         onSetSpeed={handleSetSpeed}
       />
 
-      {#if snapshot.rejection !== null}
+      {#if snapshot.rejection !== null && !(snapshot.rejection.code === "routeChangedWhileEditing" && snapshot.shell.routeDraft?.canReload === true)}
         <div
           class="rejection-banner"
           data-testid="rejection-banner"
           role="status"
         >
-          <span>{snapshot.rejection}</span>
+          <span>{rejectionMessage(snapshot.rejection)}</span>
           <button
             type="button"
             class="rejection-dismiss"
@@ -339,6 +398,11 @@
           </button>
         </div>
       {/if}
+
+      <RoadMutationNotice
+        preview={snapshot.shell.roadMutationPreview}
+        error={snapshot.ui.roadMutationPreviewError}
+      />
 
       <GameCanvas {runtime} onShellError={handleShellError} />
 
@@ -351,6 +415,7 @@
         selectedBuilding={snapshot.ui.selectedBuilding}
         buildingRotation={snapshot.ui.buildingRotation}
         roadPreset={snapshot.ui.roadPreset}
+        roundaboutSize={snapshot.ui.roundaboutSize}
         buildCategory={snapshot.ui.buildCategory}
         inspector={snapshot.shell.inspector}
         routeDraft={snapshot.shell.routeDraft}
@@ -363,20 +428,27 @@
         onSelectBuildItem={handleSelectBuildItem}
         onSetOverlay={handleSetOverlay}
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
-        onRemoveDraftStop={handleRemoveDraftStop}
-        onFinishRoute={handleFinishRoute}
-        onCancelRoute={handleCancelRoute}
+        onSelectRouteWaypoint={handleSelectRouteWaypoint}
+        onRemoveRouteWaypoint={handleRemoveRouteWaypoint}
+        onMoveRouteWaypoint={handleMoveRouteWaypoint}
+        onReverseRouteDraft={handleReverseRouteDraft}
+        onSetRoutePattern={handleSetRoutePattern}
+        onSaveRouteDraft={handleSaveRouteDraft}
+        onCancelRouteDraft={handleCancelRouteDraft}
+        onReloadRouteDraft={handleReloadRouteDraft}
+        onStartRouteEdit={handleStartRouteEdit}
         onRenameRoute={handleRenameRoute}
         onRecolorRoute={handleRecolorRoute}
         onToggleRouteActive={handleToggleRouteActive}
         onDeleteRoute={handleDeleteRoute}
         onSelectRoute={handleSelectRoute}
+        onFocusRouteFailure={handleFocusRouteFailure}
       />
 
       <BottomHud
         hud={snapshot.shell.hud}
         onSetHudCategory={handleSetHudCategory}
-        onCancel={() => setSnapshot(runtime.resetUi())}
+        onCancel={handleCancelOrEscape}
         onSetTool={handleSetTool}
       />
     {/if}
