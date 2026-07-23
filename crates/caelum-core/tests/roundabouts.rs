@@ -993,7 +993,7 @@ fn approach_line_ending_at_roundabout_attaches_and_is_routable() {
     let topology = caelum_core::road_topology::RoadTopology::compile(&snapshot.map)
         .expect("topology must compile after approach attach");
     let path = topology
-        .find_path(&snapshot.map, &point(5, 2), &point(5, 5))
+        .find_path_between_access_tiles(&snapshot.map, point(5, 2), point(5, 5), None, None)
         .expect("approach must reach the attached port tile");
     assert!(path.total_travel_seconds() > 0.0);
 }
