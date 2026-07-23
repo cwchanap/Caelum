@@ -47,7 +47,7 @@ fn editable_bus_engine(stop_xs: &[i32], budget: i32) -> GameEngine {
         dispatch(
             &mut engine,
             GameIntent::AddBusStop {
-                point: point(*x, 5),
+                point: point(*x, 4),
             },
         );
     }
@@ -510,16 +510,16 @@ fn riding_trip(route_id: &str, passenger_id: &str) -> ActiveTrip {
         id: passenger_id.into(),
         sim_id: "sim-001".into(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: point(2, 5),
-        destination: point(10, 5),
+        origin: point(2, 4),
+        destination: point(10, 4),
         position: point(4, 5).into(),
         status: TripStatus::Riding,
         deadline: 100.0,
         route_plan: Some(RoutePlan {
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
-                from: point(2, 5),
-                to: point(10, 5),
+                from: point(2, 4),
+                to: point(10, 4),
                 line_id: Some(route_id.into()),
                 service_direction: Some(ServiceDirection::Loop),
                 board_itinerary_index: Some(0),
@@ -538,7 +538,7 @@ fn trip_with_future_route_leg(route_id: &str) -> ActiveTrip {
         sim_id: "sim-002".into(),
         purpose: TripPurpose::CommuteOutbound,
         origin: point(0, 5),
-        destination: point(10, 5),
+        destination: point(10, 4),
         position: point(1, 5).into(),
         status: TripStatus::Walking,
         deadline: 100.0,
@@ -547,7 +547,7 @@ fn trip_with_future_route_leg(route_id: &str) -> ActiveTrip {
                 RouteLeg {
                     mode: TransitMode::Walk,
                     from: point(0, 5),
-                    to: point(2, 5),
+                    to: point(2, 4),
                     line_id: None,
                     service_direction: None,
                     board_itinerary_index: None,
@@ -555,8 +555,8 @@ fn trip_with_future_route_leg(route_id: &str) -> ActiveTrip {
                 },
                 RouteLeg {
                     mode: TransitMode::Bus,
-                    from: point(2, 5),
-                    to: point(10, 5),
+                    from: point(2, 4),
+                    to: point(10, 4),
                     line_id: Some(route_id.into()),
                     service_direction: Some(ServiceDirection::Loop),
                     board_itinerary_index: Some(0),
@@ -635,7 +635,7 @@ fn edit_may_retain_preexisting_missing_waypoint_while_changing_another() {
         ids(&["stop-001", "stop-002", "stop-003"]),
     );
     let mut state = engine.snapshot();
-    state = transit::remove_at_tile(&state, &point(6, 5)).expect("tombstone middle stop");
+    state = transit::remove_at_tile(&state, &point(6, 4)).expect("tombstone middle stop");
     assert!(state
         .transit
         .stops
@@ -676,7 +676,7 @@ fn live_update_rebases_vehicles_replans_riders_and_collects_last_tombstone() {
     state.transit.vehicles[0].step_progress = 0.5;
     state.transit.vehicles[0].passenger_ids = ids(&["trip-001"]);
     state.active_trips = vec![riding_trip("route-001", "trip-001")];
-    state = transit::remove_at_tile(&state, &point(6, 5)).expect("tombstone stop");
+    state = transit::remove_at_tile(&state, &point(6, 4)).expect("tombstone stop");
     assert!(state
         .transit
         .stops
@@ -692,7 +692,7 @@ fn live_update_rebases_vehicles_replans_riders_and_collects_last_tombstone() {
     );
 
     let edited_vehicle = vehicle(&result, "vehicle-001");
-    assert_eq!(edited_vehicle.parked_position, Some(point(2, 5).into()));
+    assert_eq!(edited_vehicle.parked_position, Some(point(2, 4).into()));
     assert!(edited_vehicle.passenger_ids.is_empty());
     assert_eq!(result.active_trips[0].status, TripStatus::Idle);
     assert!(result.active_trips[0].route_plan.is_none());

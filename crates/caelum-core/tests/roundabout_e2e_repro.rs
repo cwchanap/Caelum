@@ -133,8 +133,8 @@ fn assert_roundabout_e2e_preview_is_connected(
         "vertical crossing must remain connected after roundabout placement"
     );
 
-    let first_stop = point(origin.x - 3, bottom_y);
-    let second_stop = point(origin.x - 2, origin.y);
+    let first_stop = point(origin.x - 3, bottom_y + 1);
+    let second_stop = point(origin.x - 2, origin.y - 1);
     let first_id = add_bus_stop(&mut engine, first_stop);
     let second_id = add_bus_stop(&mut engine, second_stop);
 

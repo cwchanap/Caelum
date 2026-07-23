@@ -222,10 +222,10 @@ fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -243,10 +243,10 @@ fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
     let mut waiting = trip(
         "trip-001",
         TripStatus::Waiting,
-        (2, 5).into(),
-        (12, 5).into(),
+        (2, 4).into(),
+        (12, 4).into(),
     );
-    waiting.route_plan = Some(bus_plan((2, 5).into(), (12, 5).into(), "route-001"));
+    waiting.route_plan = Some(bus_plan((2, 4).into(), (12, 4).into(), "route-001"));
     state.active_trips = vec![waiting];
 
     let next = transit::tick_vehicles(&state, 0.0);
@@ -482,10 +482,10 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -503,12 +503,12 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (12, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (12, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Riding,
         deadline: 100.0,
-        route_plan: Some(bus_plan((2, 5).into(), (12, 5).into(), "route-001")),
+        route_plan: Some(bus_plan((2, 4).into(), (12, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
@@ -551,10 +551,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -572,15 +572,15 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (13, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (13, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Riding,
         deadline: 100.0,
         route_plan: Some(bus_then_walk_plan(
-            (2, 5).into(),
-            (12, 5).into(),
-            (13, 5).into(),
+            (2, 4).into(),
+            (12, 4).into(),
+            (13, 4).into(),
             "route-001",
         )),
         current_leg_index: 0,
@@ -597,7 +597,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
 
     assert_eq!(walking.status, TripStatus::Walking);
     assert_eq!(walking.current_leg_index, 1);
-    assert_eq!(walking.position, (12, 5).into());
+    assert_eq!(walking.position, (12, 4).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
 
@@ -631,10 +631,10 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -652,15 +652,15 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (13, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (13, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Waiting,
         deadline: 100.0,
         route_plan: Some(bus_then_walk_plan(
-            (2, 5).into(),
-            (12, 5).into(),
-            (13, 5).into(),
+            (2, 4).into(),
+            (12, 4).into(),
+            (13, 4).into(),
             "route-001",
         )),
         current_leg_index: 0,
@@ -679,7 +679,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
 
     assert_eq!(walking.status, TripStatus::Walking);
     assert_eq!(walking.current_leg_index, 1);
-    assert_eq!(walking.position, (12, 5).into());
+    assert_eq!(walking.position, (12, 4).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
 
@@ -710,10 +710,10 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 5);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (5, 5).into(),
+        point: (5, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -732,12 +732,12 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (5, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (5, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Riding,
         deadline: 100.0,
-        route_plan: Some(bus_plan((2, 5).into(), (5, 5).into(), "route-001")),
+        route_plan: Some(bus_plan((2, 4).into(), (5, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];
@@ -759,10 +759,10 @@ fn cursor_resets_progress_at_path_step_boundary() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 7);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (7, 5).into(),
+        point: (7, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -781,12 +781,12 @@ fn cursor_resets_progress_at_path_step_boundary() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (7, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (7, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Riding,
         deadline: 100.0,
-        route_plan: Some(bus_plan((2, 5).into(), (7, 5).into(), "route-001")),
+        route_plan: Some(bus_plan((2, 4).into(), (7, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
     }];

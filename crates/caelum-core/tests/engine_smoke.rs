@@ -264,10 +264,10 @@ fn replay_intent_sequence() -> Vec<GameIntent> {
             preset: RoadPreset::TwoWay,
         },
         GameIntent::AddBusStop {
-            point: caelum_core::model::Point { x: 2, y: 5 },
+            point: caelum_core::model::Point { x: 2, y: 4 },
         },
         GameIntent::AddBusStop {
-            point: caelum_core::model::Point { x: 8, y: 5 },
+            point: caelum_core::model::Point { x: 8, y: 4 },
         },
         GameIntent::CreateRoute {
             mode: TransitMode::Bus,

@@ -23,10 +23,10 @@ fn bus_route_state() -> GameEngine {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -82,7 +82,7 @@ fn returns_none_for_out_of_bounds_points() {
 fn creates_bus_route_plan_from_connected_stops() {
     let engine = bus_route_state();
 
-    let plan = router::find_route_plan(&engine.snapshot(), &(1, 5).into(), &(13, 5).into())
+    let plan = router::find_route_plan(&engine.snapshot(), &(1, 4).into(), &(13, 4).into())
         .expect("bus route should be planned");
 
     assert_eq!(plan.estimated_seconds, 142.5);
@@ -97,8 +97,8 @@ fn creates_bus_route_plan_from_connected_stops() {
     );
     assert_eq!(plan.legs[1].board_itinerary_index, Some(0));
     assert_eq!(plan.legs[1].alight_itinerary_index, Some(0));
-    assert_eq!(plan.legs[1].from, (2, 5).into());
-    assert_eq!(plan.legs[1].to, (12, 5).into());
+    assert_eq!(plan.legs[1].from, (2, 4).into());
+    assert_eq!(plan.legs[1].to, (12, 4).into());
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn missing_node_is_not_enumerated_as_a_router_anchor() {
     snapshot.transit.stops[0].status = TransitNodeStatus::Missing;
     snapshot.transit.routes[0].path_broken = false;
 
-    let plan = router::find_route_plan(&snapshot, &(1, 5).into(), &(13, 5).into())
+    let plan = router::find_route_plan(&snapshot, &(1, 4).into(), &(13, 4).into())
         .expect("walking fallback remains available");
 
     assert_eq!(plan.legs.len(), 1);
@@ -120,7 +120,7 @@ fn transit_plan_estimate_equals_the_authoritative_leg_duration() {
     let authoritative_leg_duration = snapshot.transit.routes[0].legs[0]
         .estimated_seconds
         .unwrap();
-    let plan = router::find_route_plan(&snapshot, &(2, 5).into(), &(12, 5).into())
+    let plan = router::find_route_plan(&snapshot, &(2, 4).into(), &(12, 4).into())
         .expect("bus route should be planned");
 
     assert_eq!(plan.legs[1].mode, TransitMode::Bus);
@@ -163,7 +163,7 @@ fn ignores_inactive_and_path_broken_routes() {
         active: false,
     });
     let inactive_plan =
-        router::find_route_plan(&inactive.snapshot(), &(1, 5).into(), &(13, 5).into()).unwrap();
+        router::find_route_plan(&inactive.snapshot(), &(1, 4).into(), &(13, 4).into()).unwrap();
     assert_eq!(inactive_plan.legs.len(), 1);
     assert_eq!(inactive_plan.legs[0].mode, TransitMode::Walk);
 
@@ -173,7 +173,7 @@ fn ignores_inactive_and_path_broken_routes() {
     });
     assert!(broken.snapshot().transit.routes[0].path_broken);
     let broken_plan =
-        router::find_route_plan(&broken.snapshot(), &(1, 5).into(), &(13, 5).into()).unwrap();
+        router::find_route_plan(&broken.snapshot(), &(1, 4).into(), &(13, 4).into()).unwrap();
     assert_eq!(broken_plan.legs.len(), 1);
     assert_eq!(broken_plan.legs[0].mode, TransitMode::Walk);
 }

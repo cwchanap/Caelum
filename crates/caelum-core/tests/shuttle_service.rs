@@ -24,7 +24,7 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
     road_line(&mut engine, 5, 2, 10);
     for x in [2, 6, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     engine.dispatch(GameIntent::CreateRoute {
@@ -180,7 +180,7 @@ fn outbound_and_return_are_independently_routed_on_paired_one_way_roads() {
         points: (2..=25).map(|x| (x, 5).into()).collect(),
         preset: RoadPreset::DualBidirectional,
     });
-    for point in [(2, 5), (25, 5)] {
+    for point in [(2, 6), (25, 3)] {
         engine.dispatch(GameIntent::AddBusStop {
             point: point.into(),
         });
@@ -273,9 +273,9 @@ fn interior_stop_has_distinct_outbound_and_return_visits() {
 fn rider_boards_only_the_vehicle_visit_matching_the_plan() {
     let mut state = shuttle_state();
     state.active_trips = vec![trip(
-        transit_plan((6, 5), (2, 5), ServiceDirection::Return, 4, 4),
+        transit_plan((6, 4), (2, 4), ServiceDirection::Return, 4, 4),
         TripStatus::Waiting,
-        (6, 5),
+        (6, 4),
     )];
     state.transit.vehicles[0].itinerary_index = 1;
 
@@ -365,9 +365,9 @@ fn return_terminal_waiter_boards_after_zero_second_reversal() {
 fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
     let mut state = shuttle_state();
     state.active_trips = vec![trip(
-        transit_plan((10, 5), (6, 5), ServiceDirection::Return, 3, 3),
+        transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3),
         TripStatus::Riding,
-        (10, 5),
+        (10, 4),
     )];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
     state.transit.vehicles[0].itinerary_index = 0;
@@ -396,7 +396,7 @@ fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
         correct_completion.active_trips[0].status,
         TripStatus::Walking
     );
-    assert_eq!(correct_completion.active_trips[0].position, (6, 5).into());
+    assert_eq!(correct_completion.active_trips[0].position, (6, 4).into());
 }
 
 #[test]
@@ -489,12 +489,12 @@ fn terminal_and_loop_rules_are_mode_correct() {
 
     let mut one_way = GameEngine::new();
     one_way.dispatch(GameIntent::LayRoadLine {
-        points: (2..=10).map(|x| (x, 5).into()).collect(),
+        points: (2..=11).map(|x| (x, 5).into()).collect(),
         preset: RoadPreset::OneWay,
     });
     for x in [2, 10] {
         one_way.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     let one_way_state = one_way.snapshot();
@@ -553,18 +553,15 @@ fn terminal_and_loop_rules_are_mode_correct() {
 #[test]
 fn shuttle_with_off_road_terminal_resolves_reversal_on_adjacent_road_access() {
     let mut engine = GameEngine::new();
-    // Corridor on y=5; after placement, move stop anchors off-road to y=4 so
-    // the terminal tile itself is not a RoadState (bus-terminal / roadside).
+    // Corridor on y=5 with empty roadside stop anchors at y=4, so the terminal
+    // tile itself is not a RoadState (bus-terminal / roadside).
     road_line(&mut engine, 5, 2, 10);
     for x in [2, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
-    let mut state = engine.snapshot();
-    for stop in &mut state.transit.stops {
-        stop.position.y = 4;
-    }
+    let state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
     let legs = resolve_route_legs(
         &state,
@@ -595,7 +592,7 @@ fn shuttle_with_off_road_terminal_resolves_reversal_on_adjacent_road_access() {
 fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
     let mut state = shuttle_state();
     for (stop, x) in state.transit.stops.iter_mut().zip([2, 12, 22]) {
-        stop.position = (x, 5).into();
+        stop.position = (x, 4).into();
     }
     for (index, seconds) in [5.0, 7.0, 3.0, 11.0, 13.0, 2.0].into_iter().enumerate() {
         let path = TransitPath::Road {
@@ -620,7 +617,7 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
         .sum();
     assert_eq!(cross_terminal_seconds, 7.0 + 3.0 + 11.0 + 13.0);
 
-    let plan = router::plan_route(&state, &(12, 5).into(), &(2, 5).into()).unwrap();
+    let plan = router::plan_route(&state, &(12, 4).into(), &(2, 4).into()).unwrap();
     let transit_leg = plan
         .legs
         .iter()
@@ -640,13 +637,13 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
 fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
     let mut engine = GameEngine::new();
     // North corridor on y=3 (will be one-way eastbound) and south corridor on
-    // y=5 (will be one-way westbound). Stops are placed on the y=3 road, then
-    // moved off-road to y=4 so each terminal is adjacent to both corridors.
+    // y=5 (will be one-way westbound). Stops are placed on empty y=4 anchors
+    // between the two corridors.
     road_line(&mut engine, 3, 1, 3);
     road_line(&mut engine, 5, 1, 3);
     for x in [1, 3] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 3).into(),
+            point: (x, 4).into(),
         });
     }
     // Isolated bidirectional pair at (4,4)-(5,4), adjacent to the terminal at
@@ -661,10 +658,6 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
     });
 
     let mut state = engine.snapshot();
-    // Move stops off-road to y=4, between the two corridors.
-    for stop in &mut state.transit.stops {
-        stop.position.y = 4;
-    }
     // Make y=3 one-way eastbound and y=5 one-way westbound so the forward leg
     // (stop-001 → stop-002) arrives via (3,3) heading East and the return leg
     // departs via (3,5) heading West — different access tiles for the same

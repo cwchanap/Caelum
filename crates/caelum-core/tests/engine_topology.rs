@@ -130,7 +130,7 @@ fn exhausted_route_revision_clamps_on_network_mutation_without_rejecting_unrelat
     });
     assert!(road.applied, "{road:?}");
     for x in [2, 10] {
-        let stop = engine.dispatch(GameIntent::AddBusStop { point: point(x, 5) });
+        let stop = engine.dispatch(GameIntent::AddBusStop { point: point(x, 4) });
         assert!(stop.applied, "{stop:?}");
     }
     let route = engine.dispatch(GameIntent::CreateRoute {

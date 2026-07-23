@@ -531,7 +531,13 @@ fn tracks_transit_nodes_and_buildings_reject_the_whole_placement() {
     dispatch(&mut track, GameIntent::LayTrack { point: point(5, 5) });
 
     let mut node = GameEngine::new();
-    dispatch(&mut node, GameIntent::LayRoad { point: point(5, 5) });
+    dispatch(
+        &mut node,
+        GameIntent::LayRoadLine {
+            points: points(&[(5, 6), (6, 6)]),
+            preset: RoadPreset::TwoWay,
+        },
+    );
     dispatch(&mut node, GameIntent::AddBusStop { point: point(5, 5) });
 
     let mut building = GameEngine::new();
