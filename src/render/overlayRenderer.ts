@@ -29,7 +29,11 @@ import { tileSize, type BoardTransform } from "./canvas";
 import { colors } from "./colors";
 import { drawDirectionArrow } from "./mapRenderer";
 import { pointAndTangentAt } from "./pathRenderer";
-import { canPlaceBuilding, isAreaPaintable } from "./placementValidation";
+import {
+  canPlaceBuilding,
+  canPlaceBusStop,
+  isAreaPaintable,
+} from "./placementValidation";
 
 const previewStrokeInset = 2;
 
@@ -125,6 +129,23 @@ function renderBuildingPreview(
     fillTile(ctx, point);
     strokeTile(ctx, point);
   }
+}
+
+function renderBusStopPreview(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  ui: UiState,
+): void {
+  if (ui.hoverTile === null) return;
+
+  const validPlacement = canPlaceBusStop(state, ui.hoverTile);
+  ctx.fillStyle = validPlacement ? colors.previewValid : colors.previewInvalid;
+  ctx.strokeStyle = validPlacement
+    ? colors.previewValidStroke
+    : colors.previewInvalidStroke;
+  ctx.lineWidth = 2;
+  fillTile(ctx, ui.hoverTile);
+  strokeTile(ctx, ui.hoverTile);
 }
 
 function isInMap(state: GameState, point: Point): boolean {
@@ -726,6 +747,11 @@ export function renderOverlays(
 
   if (ui.hoverTile !== null && ui.selectedBuilding !== null) {
     renderBuildingPreview(ctx, state, ui);
+    return;
+  }
+
+  if (ui.hoverTile !== null && ui.activeTool === "busStop") {
+    renderBusStopPreview(ctx, state, ui);
     return;
   }
 

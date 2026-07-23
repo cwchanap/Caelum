@@ -45,6 +45,29 @@ export function isTransitNodeAt(state: GameState, point: Point): boolean {
   );
 }
 
+export function canPlaceBusStop(state: GameState, anchor: Point): boolean {
+  const offsets: Point[] = [
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+  ];
+  const tile = getTile(state.map, anchor);
+  return (
+    tile?.kind === "empty" &&
+    tile.roadStructureId === undefined &&
+    !isBuildingOccupied(state, anchor) &&
+    !isTransitNodeAt(state, anchor) &&
+    offsets.some((offset) => {
+      const road = getTile(state.map, {
+        x: anchor.x + offset.x,
+        y: anchor.y + offset.y,
+      });
+      return road?.kind === "road" && road.roadStructureId === undefined;
+    })
+  );
+}
+
 /**
  * Best-effort client-side building hover validation (cheap footprint check).
  *

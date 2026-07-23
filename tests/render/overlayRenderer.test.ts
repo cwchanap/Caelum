@@ -4,6 +4,7 @@ import {
   renderRoadPreviewFeedbackBadge,
   renderRouteDraftHandles,
 } from "../../src/render/overlayRenderer";
+import { renderTransit } from "../../src/render/transitRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type {
@@ -16,7 +17,7 @@ import type {
 } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
 import { tileSize, type BoardTransform } from "../../src/render/canvas";
-import { withAreas, withTracks } from "../helpers/mapFixtures";
+import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 import type { RouteEditorView } from "../../src/runtime/types";
 
 /** Identity transform (scale=1, no offset) for badge-position tests. */
@@ -125,6 +126,53 @@ describe("route draft handles", () => {
       { text: "2", status: "missing" },
       { text: "3", status: "present" },
     ]);
+  });
+});
+
+describe("roadside stop access", () => {
+  it("uses roadside validation for the bus-stop hover tint", () => {
+    const state = withRoads(createTestGameState(), [{ x: 4, y: 5 }]);
+    const { ctx, fillStyles } = recordingFillCtx();
+
+    renderOverlays(ctx, state, {
+      ...createUiState(),
+      activeTool: "busStop",
+      hoverTile: { x: 4, y: 4 },
+    });
+
+    expect(fillStyles).toContain(colors.previewValid);
+  });
+
+  it("draws access from passenger anchor to road point", () => {
+    const state = createTestGameState();
+    const accessState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: [
+          {
+            id: "stop-access",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 4, y: 4 },
+            roadAccess: { roadPoint: { x: 4, y: 5 } },
+            platforms: [],
+          },
+        ],
+      },
+    };
+    const ctx = dragCtx();
+
+    renderTransit(ctx, accessState, createUiState());
+
+    expect(ctx.moveTo).toHaveBeenCalledWith(
+      4 * tileSize + tileSize / 2,
+      4 * tileSize + tileSize / 2,
+    );
+    expect(ctx.lineTo).toHaveBeenCalledWith(
+      4 * tileSize + tileSize / 2,
+      5 * tileSize + tileSize / 2,
+    );
   });
 });
 
