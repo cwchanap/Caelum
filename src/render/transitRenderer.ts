@@ -70,6 +70,54 @@ function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
+function drawStopAccessIndicator(
+  ctx: CanvasRenderingContext2D,
+  stop: GameState["transit"]["stops"][number],
+): void {
+  const access = stop.roadAccess;
+  if (stop.status !== "present" || access === undefined) return;
+
+  const from = center(stop.position);
+  const to = center(access.roadPoint);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return;
+
+  const unitX = dx / length;
+  const unitY = dy / length;
+  const arrowLength = Math.min(7, length / 3);
+  const arrowWidth = Math.min(4, arrowLength / 2);
+  const baseX = to.x - unitX * arrowLength;
+  const baseY = to.y - unitY * arrowLength;
+
+  ctx.save();
+  ctx.strokeStyle = colors.badgeText;
+  ctx.fillStyle = colors.badgeText;
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(baseX - unitY * arrowWidth, baseY + unitX * arrowWidth);
+  ctx.lineTo(baseX + unitY * arrowWidth, baseY - unitX * arrowWidth);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStopAccessIndicators(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+): void {
+  for (const stop of state.transit.stops) {
+    drawStopAccessIndicator(ctx, stop);
+  }
+}
+
 /** Draw a short connector between an off-road node (bus stop / terminal
  *  anchor on a building tile) and its road access tile. Rust's `RoadPath`
  *  starts/ends at the adjacent road tile, not the stop, so without this the
@@ -655,6 +703,7 @@ function renderTransitContents(
       drawLineDirectionArrows(ctx, line, corridors);
     }
   }
+  drawStopAccessIndicators(ctx, state);
 
   for (const stop of state.transit.stops) {
     if (stop.status !== "present") continue;

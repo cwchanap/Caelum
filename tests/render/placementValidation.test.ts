@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  canPlaceBusStop,
   canPlaceBuilding,
   isAreaPaintable,
   isValidRoadPlacement,
   isValidTrackPlacement,
 } from "../../src/render/placementValidation";
 import { createTestGameState } from "../helpers/gameState";
-import { withAreas } from "../helpers/mapFixtures";
+import { withAreas, withRoads } from "../helpers/mapFixtures";
 import type { GameState, Point } from "../../src/domain/types";
 
 /** Mark a tile as structure-owned (e.g. a roundabout center island:
@@ -74,5 +75,14 @@ describe("placement validation blocks structure-owned tiles", () => {
     expect(isValidRoadPlacement(state, center)).toBe(true);
     expect(isValidTrackPlacement(state, center)).toBe(true);
     expect(isAreaPaintable(state, center)).toBe(true);
+  });
+});
+
+describe("bus stop placement", () => {
+  it("accepts a bus stop anchor beside a road, not on it", () => {
+    const state = withRoads(createTestGameState(), [{ x: 4, y: 5 }]);
+
+    expect(canPlaceBusStop(state, { x: 4, y: 4 })).toBe(true);
+    expect(canPlaceBusStop(state, { x: 4, y: 5 })).toBe(false);
   });
 });

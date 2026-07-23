@@ -11,7 +11,7 @@ import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import {
   cancelDraftRoute,
   applyUiTileClick,
-  draftHandleIndexAtPoint,
+  draftHandleIndexAtPoint as draftHandleIndexAtExactPoint,
 } from "../ui/actions";
 import {
   canSaveRouteDraft,
@@ -20,6 +20,8 @@ import {
   moveWaypoint,
   removeWaypoint,
   reverseRoute,
+  resolveStationAtTile,
+  resolveStopAtTile,
   selectWaypoint,
   setPattern,
   type RouteDraft,
@@ -835,6 +837,23 @@ export async function createGameRuntime({
     return null;
   };
 
+  const routeHandleIndexAtPoint = (
+    draft: RouteDraft,
+    point: Point,
+  ): number | null => {
+    const node =
+      draft.mode === "bus"
+        ? resolveStopAtTile(state, point)
+        : resolveStationAtTile(state, point);
+    if (node !== undefined) {
+      const index = draft.waypointIds.indexOf(node.id);
+      return index >= 0 ? index : null;
+    }
+    // Missing route nodes have no physical footprint. Preserve their exact
+    // tombstone handle so editing a broken route remains possible.
+    return draftHandleIndexAtExactPoint(draft, state, point);
+  };
+
   const api: RuntimeController = {
     getSnapshot,
     subscribe(listener) {
@@ -1073,11 +1092,7 @@ export async function createGameRuntime({
     },
     handleTileClick(point) {
       if (ui.routeDraft?.source.kind === "edit") {
-        const handleIndex = draftHandleIndexAtPoint(
-          ui.routeDraft,
-          state,
-          point,
-        );
+        const handleIndex = routeHandleIndexAtPoint(ui.routeDraft, point);
         if (handleIndex !== null) {
           const routeDraft = selectWaypoint(
             ui.routeDraft,

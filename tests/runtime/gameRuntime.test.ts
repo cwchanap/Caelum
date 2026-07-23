@@ -2239,6 +2239,54 @@ describe("route creation and management", () => {
     expect(previewRoute).toHaveBeenCalledTimes(1);
   });
 
+  it("selects a route handle from any occupied terminal footprint tile", async () => {
+    const initial = routeSnapshotWithRoute();
+    const terminalSnapshot: RustGameSnapshot = {
+      ...initial,
+      buildings: [
+        {
+          id: "building-terminal",
+          type: "busTerminal",
+          origin: { x: 14, y: 7 },
+          rotation: 0,
+          occupiedTiles: [
+            { x: 14, y: 7 },
+            { x: 15, y: 7 },
+            { x: 16, y: 7 },
+            { x: 14, y: 8 },
+            { x: 15, y: 8 },
+            { x: 16, y: 8 },
+          ],
+          transitNodeId: "stop-001",
+        },
+      ],
+      transit: {
+        ...initial.transit,
+        stops: initial.transit.stops.map((stop) =>
+          stop.id === "stop-001"
+            ? { ...stop, kind: "busTerminal" as const }
+            : stop,
+        ),
+      },
+    };
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: connectedRouteBackend(terminalSnapshot),
+    });
+
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const before = runtime.getSnapshot().ui.routeDraft;
+
+    runtime.handleTileClick({ x: 15, y: 8 });
+
+    expect(runtime.getSnapshot().ui.routeDraft).toMatchObject({
+      waypointIds: before?.waypointIds,
+      generation: before?.generation,
+      selectedIndex: 0,
+    });
+  });
+
   it("applies editor transforms immediately and re-requests Rust previews", async () => {
     const base = backendSpy(routeSnapshotWithRoute());
     const previewRoute = vi.fn(async (request) =>
