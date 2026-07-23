@@ -43,6 +43,16 @@ pub enum RouteLegStatus {
     MissingNode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LegFailureReason {
+    NoRoadAccess,
+    NetworkDisconnected,
+    NoLegalEntryHeading,
+    NoLegalExitHeading,
+    NoLegalTurnaround,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TransitNodeStatus {
@@ -563,6 +573,8 @@ pub struct RouteLegPath {
     pub current_path: Option<TransitPath>,
     pub last_valid_path: Option<TransitPath>,
     pub estimated_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<LegFailureReason>,
 }
 
 impl RouteLegPath {
@@ -595,6 +607,16 @@ pub struct Stop {
     pub status: TransitNodeStatus,
     pub position: Point,
     pub platforms: Vec<Platform>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub road_access: Option<StopRoadAccess>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopRoadAccess {
+    pub road_point: Point,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_heading: Option<Heading>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

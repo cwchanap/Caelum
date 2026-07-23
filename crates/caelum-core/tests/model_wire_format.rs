@@ -7,6 +7,7 @@
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
 
+use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, Heading, Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point,
@@ -151,6 +152,7 @@ fn route_leg_path_serializes_status_and_kind_in_camel_case() {
         current_path: None,
         last_valid_path: None,
         estimated_seconds: None,
+        failure_reason: None,
     };
     let value = serde_json::to_value(&leg).unwrap();
     assert_eq!(value["status"], json!("missingNode"));
@@ -158,6 +160,38 @@ fn route_leg_path_serializes_status_and_kind_in_camel_case() {
     assert_eq!(value["currentPath"], serde_json::Value::Null);
     assert_eq!(value["lastValidPath"], serde_json::Value::Null);
     assert_eq!(value["estimatedSeconds"], serde_json::Value::Null);
+}
+
+#[test]
+fn stop_road_access_is_optional_for_v2_snapshots() {
+    let stop: Stop = serde_json::from_value(json!({
+        "id": "stop-001",
+        "kind": "busStop",
+        "status": "present",
+        "position": { "x": 4, "y": 5 },
+        "platforms": []
+    }))
+    .unwrap();
+    assert_eq!(stop.road_access, None);
+}
+
+#[test]
+fn route_leg_failure_reason_round_trips() {
+    let leg = RouteLegPath {
+        from_waypoint_id: "stop-001".into(),
+        to_waypoint_id: "stop-002".into(),
+        direction: ServiceDirection::Outbound,
+        kind: RouteLegKind::Service,
+        status: RouteLegStatus::NetworkDisconnected,
+        current_path: None,
+        last_valid_path: None,
+        estimated_seconds: None,
+        failure_reason: Some(LegFailureReason::NoRoadAccess),
+    };
+    assert_eq!(
+        serde_json::from_value::<RouteLegPath>(serde_json::to_value(&leg).unwrap()).unwrap(),
+        leg
+    );
 }
 
 #[test]
@@ -1229,6 +1263,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
             RejectionCode::BlockedTile => "blockedTile",
             RejectionCode::OutOfBounds => "outOfBounds",
             RejectionCode::RoadRequired => "roadRequired",
+            RejectionCode::NoRoadAccess => "noRoadAccess",
             RejectionCode::TrackRequired => "trackRequired",
             RejectionCode::InvalidRoadStroke => "invalidRoadStroke",
             RejectionCode::InvalidTrackStroke => "invalidTrackStroke",
@@ -1258,6 +1293,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
         RejectionCode::BlockedTile,
         RejectionCode::OutOfBounds,
         RejectionCode::RoadRequired,
+        RejectionCode::NoRoadAccess,
         RejectionCode::TrackRequired,
         RejectionCode::InvalidRoadStroke,
         RejectionCode::InvalidTrackStroke,

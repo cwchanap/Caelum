@@ -75,6 +75,7 @@ fn resolve_leg(
         estimated_seconds: path.as_ref().map(TransitPath::total_travel_seconds),
         current_path: path.clone(),
         last_valid_path: path,
+        failure_reason: None,
     }
 }
 
