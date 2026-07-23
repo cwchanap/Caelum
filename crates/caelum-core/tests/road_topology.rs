@@ -984,6 +984,23 @@ fn terminal_reversal_on_bidirectional_road_returns_in_place_uturn() {
 }
 
 #[test]
+fn terminal_reversal_at_one_sided_terminal_returns_in_place_uturn() {
+    let mut map = blank_map(8, 6);
+    let terminal = point(2, 3);
+    corridor(&mut map, &[point(1, 3), terminal], None);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    let path = topology
+        .find_terminal_reversal(terminal, Heading::East, Heading::West)
+        .expect("a one-sided terminal should support a direct U-turn");
+    let steps = path.road_steps();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].movement, MovementKind::UTurn);
+    assert_eq!(steps[0].position, terminal);
+    assert_eq!(steps[0].leaving_heading, Heading::West);
+}
+
+#[test]
 fn terminal_reversal_through_roundabout_finds_multi_step_path() {
     let mut map = blank_map(9, 9);
     let template = roundabout_template(RoundaboutSize::Compact2x2, point(3, 3));

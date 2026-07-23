@@ -110,14 +110,6 @@ impl RoadTopology {
         if self.transitions.get(&start).map_or(true, Vec::is_empty) {
             return Err(LegFailureReason::NoLegalExitHeading);
         }
-        if !self
-            .transitions
-            .values()
-            .flatten()
-            .any(|transition| transition.to == goal)
-        {
-            return Err(LegFailureReason::NoLegalEntryHeading);
-        }
 
         // Direct U-turn at the terminal: ordinary lane U-turns end on the
         // neighbor tile (`transition.to.position`), so reuse the transition's
@@ -140,6 +132,15 @@ impl RoadTopology {
                     total_travel_seconds: travel_seconds,
                 });
             }
+        }
+
+        if !self
+            .transitions
+            .values()
+            .flatten()
+            .any(|transition| transition.to == goal)
+        {
+            return Err(LegFailureReason::NoLegalEntryHeading);
         }
 
         // Multi-step reversal: Dijkstra over the finite (tile × heading)
