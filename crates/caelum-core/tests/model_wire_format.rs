@@ -32,8 +32,13 @@ fn point(x: i32, y: i32) -> Point {
 #[test]
 fn transit_node_status_defaults_to_present_when_missing() {
     let mut engine = GameEngine::new();
-    engine.dispatch(GameIntent::LayRoad { point: point(2, 5) });
-    let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    let road = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(2, 5), point(3, 5)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(road.applied, "{road:?}");
+    let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 4) });
+    assert!(stop_result.applied, "{stop_result:?}");
     let mut stop_value = serde_json::to_value(&stop_result.snapshot.transit.stops[0]).unwrap();
     assert_eq!(stop_value["kind"], json!("busStop"));
     assert_eq!(stop_value["status"], json!("present"));
@@ -56,9 +61,9 @@ fn bus_route_fixture() -> Route {
     for x in 2..=10 {
         engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
     }
-    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 4) });
     engine.dispatch(GameIntent::AddBusStop {
-        point: point(10, 5),
+        point: point(10, 4),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -1205,9 +1210,9 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
     for x in 2..=10 {
         engine.dispatch(GameIntent::LayRoad { point: point(x, 5) });
     }
-    engine.dispatch(GameIntent::AddBusStop { point: point(2, 5) });
+    engine.dispatch(GameIntent::AddBusStop { point: point(2, 4) });
     engine.dispatch(GameIntent::AddBusStop {
-        point: point(10, 5),
+        point: point(10, 4),
     });
     let route_response = engine.preview_route(route_request);
     let route_value = serde_json::to_value(route_response).unwrap();

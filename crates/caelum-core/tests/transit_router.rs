@@ -18,17 +18,17 @@ fn bus_route_vehicle_carries_commute_trip() {
     road_line(&mut engine, 5, 2, 12);
 
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     let route = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    assert!(route.applied);
+    assert!(route.applied, "{route:?}");
     assert!(!route.snapshot.transit.routes[0].path_broken);
     assert_eq!(route.snapshot.transit.vehicles.len(), 1);
 
@@ -37,16 +37,16 @@ fn bus_route_vehicle_carries_commute_trip() {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
-        origin: (2, 5).into(),
-        destination: (12, 5).into(),
-        position: (2, 5).into(),
+        origin: (2, 4).into(),
+        destination: (12, 4).into(),
+        position: (2, 4).into(),
         status: TripStatus::Waiting,
         deadline: 3_600.0,
         route_plan: Some(RoutePlan {
             legs: vec![RouteLeg {
                 mode: TransitMode::Bus,
-                from: (2, 5).into(),
-                to: (12, 5).into(),
+                from: (2, 4).into(),
+                to: (12, 4).into(),
                 line_id: Some("route-001".to_string()),
                 service_direction: Some(ServiceDirection::Loop),
                 board_itinerary_index: Some(0),
@@ -82,7 +82,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         .find(|trip| trip.id == "trip-001")
         .expect("trip should remain after disembark");
     assert_eq!(arrived_trip.status, TripStatus::Walking);
-    assert_eq!(arrived_trip.position, (12, 5).into());
+    assert_eq!(arrived_trip.position, (12, 4).into());
     assert_eq!(arrived_trip.current_leg_index, 1);
 }
 
@@ -91,16 +91,17 @@ fn removing_road_marks_route_broken() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::CreateRoute {
+    let route = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
+    assert!(route.applied, "{route:?}");
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
         point: (7, 5).into(),
@@ -115,22 +116,23 @@ fn routing_ignores_a_route_with_any_disconnected_leg() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 12);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 5).into(),
+        point: (12, 4).into(),
     });
     let route = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
+    assert!(route.applied, "{route:?}");
     let mut state = route.snapshot;
     state.transit.routes[0].path_broken = false;
     state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
     state.transit.routes[0].legs[0].current_path = None;
 
-    let plan = router::find_route_plan(&state, &(2, 5).into(), &(12, 5).into())
+    let plan = router::find_route_plan(&state, &(2, 4).into(), &(12, 4).into())
         .expect("walking fallback remains available");
 
     assert!(plan.legs.iter().all(|leg| leg.mode == TransitMode::Walk));
