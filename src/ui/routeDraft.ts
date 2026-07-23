@@ -26,8 +26,13 @@ export interface RouteDraft {
   preview: RoutePreviewResponse | null;
 }
 
-export interface RouteDraftClickResult {
+export interface RouteDraftMutation {
   draft: RouteDraft;
+  notice?: { kind: "alreadyOnRoute"; waypointId: string };
+  previewRequested: boolean;
+}
+
+export interface RouteDraftClickResult extends RouteDraftMutation {
   rejection: GameplayRejection | null;
 }
 
@@ -180,6 +185,23 @@ function changed(
   };
 }
 
+function noChange(draft: RouteDraft): RouteDraftMutation {
+  return { draft, previewRequested: false };
+}
+
+function changedMutation(
+  draft: RouteDraft,
+  waypointIds: string[],
+  patch: Partial<
+    Pick<RouteDraft, "pattern" | "selectedIndex" | "interaction">
+  > = {},
+): RouteDraftMutation {
+  return {
+    draft: changed(draft, waypointIds, patch),
+    previewRequested: true,
+  };
+}
+
 export function appendWaypoint(
   draft: RouteDraft,
   waypointId: string,
@@ -195,25 +217,64 @@ export function selectWaypoint(
   if (index !== null && (index < 0 || index >= draft.waypointIds.length)) {
     return draft;
   }
+  if (draft.selectedIndex === index && draft.interaction === interaction) {
+    return draft;
+  }
   return { ...draft, selectedIndex: index, interaction };
 }
 
-export function applyNodeClick(draft: RouteDraft, nodeId: string): RouteDraft {
-  const index = draft.selectedIndex;
-  if (index === null || draft.interaction === "append") {
-    return changed(draft, [...draft.waypointIds, nodeId]);
+export function applyNodeClick(
+  draft: RouteDraft,
+  nodeId: string,
+): RouteDraftMutation {
+  const { interaction, selectedIndex, waypointIds } = draft;
+  if (interaction === "append" && waypointIds.at(-1) === nodeId) {
+    return noChange(draft);
   }
-  if (index < 0 || index >= draft.waypointIds.length) {
-    return draft;
+  const existing = waypointIds.indexOf(nodeId);
+  if (interaction === "append" && existing >= 0) {
+    return {
+      draft: selectWaypoint(draft, existing, interaction),
+      previewRequested: false,
+    };
   }
-  if (draft.interaction === "insertAfter") {
-    const waypointIds = [...draft.waypointIds];
-    waypointIds.splice(index + 1, 0, nodeId);
-    return changed(draft, waypointIds, { selectedIndex: index + 1 });
+  if (interaction === "insertAfter" && existing >= 0) {
+    return {
+      draft,
+      notice: { kind: "alreadyOnRoute", waypointId: nodeId },
+      previewRequested: false,
+    };
   }
-  const waypointIds = [...draft.waypointIds];
-  waypointIds[index] = nodeId;
-  return changed(draft, waypointIds, { selectedIndex: index });
+  if (
+    interaction === "replace" &&
+    selectedIndex !== null &&
+    waypointIds[selectedIndex] === nodeId
+  ) {
+    return noChange(draft);
+  }
+  if (interaction === "replace" && existing >= 0) {
+    return {
+      draft: selectWaypoint(draft, existing, interaction),
+      previewRequested: false,
+    };
+  }
+
+  if (selectedIndex === null) {
+    return changedMutation(draft, [...waypointIds, nodeId]);
+  }
+  if (selectedIndex < 0 || selectedIndex >= waypointIds.length) {
+    return noChange(draft);
+  }
+  if (interaction === "insertAfter") {
+    const nextWaypointIds = [...waypointIds];
+    nextWaypointIds.splice(selectedIndex + 1, 0, nodeId);
+    return changedMutation(draft, nextWaypointIds, {
+      selectedIndex: selectedIndex + 1,
+    });
+  }
+  const nextWaypointIds = [...waypointIds];
+  nextWaypointIds[selectedIndex] = nodeId;
+  return changedMutation(draft, nextWaypointIds, { selectedIndex });
 }
 
 export function removeWaypoint(draft: RouteDraft): RouteDraft {
@@ -278,7 +339,7 @@ export function applyRouteNodeClick(
 ): RouteDraftClickResult {
   if (node.status !== "present") {
     return {
-      draft,
+      ...noChange(draft),
       rejection: {
         code: "missingRouteNode",
         context: { nodeId: node.id, affectedRouteIds: [] },
@@ -287,7 +348,7 @@ export function applyRouteNodeClick(
   }
   if (!nodeMatchesMode(node, draft.mode)) {
     return {
-      draft,
+      ...noChange(draft),
       rejection: {
         code: "incompatibleRouteNode",
         context: { nodeId: node.id, affectedRouteIds: [] },
@@ -295,7 +356,7 @@ export function applyRouteNodeClick(
     };
   }
   return {
-    draft: applyNodeClick(draft, node.id),
+    ...applyNodeClick(draft, node.id),
     rejection: null,
   };
 }
