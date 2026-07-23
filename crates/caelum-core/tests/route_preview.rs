@@ -1,5 +1,6 @@
 use caelum_core::model::{
-    Heading, Point, RoadStructure, RoundaboutSize, Route, ServicePattern, TransitMode,
+    Heading, Point, RoadStructure, RoundaboutSize, Route, RouteLegKind, RouteLegStatus,
+    ServicePattern, TransitMode,
 };
 use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
@@ -68,6 +69,45 @@ fn newest_route(snapshot: &caelum_core::GameSnapshot) -> &Route {
     snapshot.transit.routes.last().expect("fixture route")
 }
 
+fn shared_access_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=6).map(|x| point(x, 5)).collect());
+    for point in [point(3, 4), point(3, 6)] {
+        dispatch(&mut engine, GameIntent::AddBusStop { point });
+    }
+    let mut snapshot = engine.snapshot();
+    for stop in &mut snapshot.transit.stops {
+        stop.road_access
+            .as_mut()
+            .expect("shared-access fixture stop")
+            .preferred_heading = None;
+    }
+    GameEngine::from_snapshot(snapshot).expect("shared-access fixture snapshot")
+}
+
+fn assert_exact_leg_shape(
+    preview: &caelum_core::model::RouteLegPath,
+    committed: &caelum_core::model::RouteLegPath,
+) {
+    assert_eq!(preview.key(), committed.key());
+    assert_eq!(preview.status, committed.status);
+    assert_eq!(preview.failure_reason, committed.failure_reason);
+    assert_eq!(preview.estimated_seconds, committed.estimated_seconds);
+    assert_eq!(preview.current_path, committed.current_path);
+    assert_eq!(preview.last_valid_path, committed.last_valid_path);
+    match (&preview.current_path, &committed.current_path) {
+        (Some(preview_path), Some(committed_path)) => {
+            assert_eq!(
+                preview_path.total_travel_seconds(),
+                committed_path.total_travel_seconds()
+            );
+            assert_eq!(preview_path.road_steps(), committed_path.road_steps());
+        }
+        (None, None) => {}
+        _ => panic!("preview and commit disagree on path presence"),
+    }
+}
+
 #[test]
 fn preview_and_committed_route_use_identical_leg_paths() {
     let mut engine = editable_network_engine();
@@ -82,6 +122,60 @@ fn preview_and_committed_route_use_identical_leg_paths() {
         waypoint_ids: request.waypoint_ids,
     });
     assert_eq!(newest_route(&committed.snapshot).legs, preview.legs);
+}
+
+#[test]
+fn shared_access_shuttle_preview_and_commit_match_zero_step_terminal_legs() {
+    let mut engine = shared_access_engine();
+    let request = RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+        route_id: None,
+        expected_revision: None,
+        generation: 10,
+    };
+
+    let preview = engine.preview_route(request.clone());
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert_eq!(preview.legs.len(), 4);
+    for leg in &preview.legs {
+        assert_eq!(leg.status, RouteLegStatus::Connected);
+        assert_eq!(leg.failure_reason, None);
+        assert!(leg.current_path.is_some());
+        assert_eq!(leg.estimated_seconds, Some(0.0));
+        assert_eq!(
+            leg.current_path
+                .as_ref()
+                .expect("zero-step path")
+                .step_count(),
+            0
+        );
+    }
+    assert!(preview
+        .legs
+        .iter()
+        .any(|leg| leg.kind == RouteLegKind::TerminalReversal));
+
+    let committed = engine.dispatch(GameIntent::CreateRoute {
+        mode: request.mode,
+        pattern: request.pattern,
+        waypoint_ids: request.waypoint_ids,
+    });
+    assert!(committed.applied, "{committed:?}");
+    let committed_legs = &newest_route(&committed.snapshot).legs;
+    assert_eq!(preview.total_travel_seconds, 0.0);
+    assert_eq!(
+        preview.total_travel_seconds,
+        committed_legs
+            .iter()
+            .filter_map(|leg| leg.estimated_seconds)
+            .sum()
+    );
+    assert_eq!(preview.legs.len(), committed_legs.len());
+    for (preview_leg, committed_leg) in preview.legs.iter().zip(committed_legs) {
+        assert_exact_leg_shape(preview_leg, committed_leg);
+    }
 }
 
 #[test]

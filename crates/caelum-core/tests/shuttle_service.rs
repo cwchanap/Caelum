@@ -666,7 +666,6 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
         state.map.tile_mut((x, 3).into()).unwrap().one_way = Some(Heading::East);
         state.map.tile_mut((x, 5).into()).unwrap().one_way = Some(Heading::West);
     }
-
     let topology = RoadTopology::compile(&state.map).unwrap();
     let legs = resolve_route_legs(
         &state,
@@ -678,17 +677,21 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
         ServicePattern::Shuttle,
     );
 
-    // Both service legs must be connected (the corridors themselves work).
+    // Exact stop access is a single persisted road point, not a direction-
+    // dependent choice among all adjacent roads. After the one-way mutation,
+    // the saved access is revalidated and the route remains disconnected
+    // rather than silently switching lanes through the stop anchor.
     let service_legs: Vec<_> = legs
         .iter()
         .filter(|leg| leg.kind == RouteLegKind::Service)
         .collect();
     assert_eq!(service_legs.len(), 2);
     assert!(
-        service_legs
-            .iter()
-            .all(|leg| leg.status == RouteLegStatus::Connected),
-        "service legs must be connected: {legs:?}"
+        service_legs.iter().all(|leg| {
+            leg.status == RouteLegStatus::NetworkDisconnected
+                && leg.failure_reason == Some(caelum_core::LegFailureReason::NetworkDisconnected)
+        }),
+        "service legs must preserve the exact access points: {legs:?}"
     );
 
     // The terminal reversal at stop-002 (3,4) arrives at (3,3) heading East
