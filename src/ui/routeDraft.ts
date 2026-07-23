@@ -259,7 +259,7 @@ export function applyNodeClick(
     };
   }
 
-  if (selectedIndex === null) {
+  if (selectedIndex === null || interaction === "append") {
     return changedMutation(draft, [...waypointIds, nodeId]);
   }
   if (selectedIndex < 0 || selectedIndex >= waypointIds.length) {
