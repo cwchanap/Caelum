@@ -166,6 +166,20 @@ describe("createTauriBackend", () => {
     expect(result).toEqual(snapshot as RustGameSnapshot);
   });
 
+  it("loadSnapshot() invokes game_load_snapshot with the serialized snapshot", async () => {
+    const snapshot = createRustSnapshot({ day: 3, paused: false });
+    invokeMock.mockResolvedValueOnce(snapshot);
+
+    const backend = await createTauriBackend();
+    expect(backend.loadSnapshot).toBeDefined();
+    const result = await backend.loadSnapshot!(snapshot);
+
+    expect(invokeMock).toHaveBeenCalledWith("game_load_snapshot", {
+      snapshot,
+    });
+    expect(result).toEqual(snapshot);
+  });
+
   it("invokes the immutable route and road preview commands", async () => {
     const routeRequest: RoutePreviewRequest = {
       mode: "bus",

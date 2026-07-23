@@ -57,6 +57,7 @@ function busDraft(waypointIds: string[], ready = false) {
             currentPath: null,
             lastValidPath: null,
             estimatedSeconds: 1,
+            failureReason: null,
           })),
           totalTravelSeconds: waypointIds.length,
           initialVehicleCost: 8_000,

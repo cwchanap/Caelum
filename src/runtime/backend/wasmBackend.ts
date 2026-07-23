@@ -48,10 +48,14 @@ async function initWithRuntimeWasmSource(): Promise<unknown> {
 export async function createWasmBackend(): Promise<GameBackend> {
   await initWasm();
 
-  const engine = new WasmGameEngine();
+  let engine = new WasmGameEngine();
 
   return {
     async snapshot() {
+      return engine.snapshot() as RustGameSnapshot;
+    },
+    async loadSnapshot(snapshot: RustGameSnapshot) {
+      engine = WasmGameEngine.from_snapshot(snapshot);
       return engine.snapshot() as RustGameSnapshot;
     },
     async dispatch(intent: GameIntent) {

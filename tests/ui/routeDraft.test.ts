@@ -154,6 +154,7 @@ describe("route edit reducers", () => {
           currentPath: null,
           lastValidPath: null,
           estimatedSeconds: 1,
+          failureReason: null,
         },
       ],
     };

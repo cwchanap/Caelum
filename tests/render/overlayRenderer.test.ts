@@ -336,6 +336,7 @@ function failedMarkerLeg(
     currentPath: null,
     lastValidPath,
     estimatedSeconds: null,
+    failureReason: null,
   };
 }
 

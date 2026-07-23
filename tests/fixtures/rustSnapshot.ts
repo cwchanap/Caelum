@@ -84,6 +84,22 @@ export function createRustSnapshot(
   };
 }
 
+export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
+  const snapshot = createRustSnapshot();
+  snapshot.transit.stops.push({
+    id: "stop-001",
+    kind: "busStop",
+    status: "present",
+    position: { x: 4, y: 4 },
+    roadAccess: {
+      roadPoint: { x: 4, y: 5 },
+      preferredHeading: "east",
+    },
+    platforms: [],
+  });
+  return snapshot;
+}
+
 export function previewBackendStubs(): Pick<
   GameBackend,
   "previewRoute" | "previewRoadMutation"

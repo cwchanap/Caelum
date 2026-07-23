@@ -12,6 +12,7 @@ export function normalizeRouteLegPath(leg: RouteLegPath): RouteLegPath {
     currentPath: leg.currentPath ?? null,
     lastValidPath: leg.lastValidPath ?? null,
     estimatedSeconds: leg.estimatedSeconds ?? null,
+    failureReason: leg.failureReason ?? null,
   };
 }
 

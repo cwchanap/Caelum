@@ -59,14 +59,14 @@ describe("real WASM artifact smoke", () => {
 
     const stopA = await backend.dispatch({
       type: "addBusStop",
-      point: { x: 10, y: 8 },
+      point: { x: 10, y: 7 },
     });
     expect(stopA.applied).toBe(true);
     expect(stopA.snapshot.transit.stops).toHaveLength(1);
 
     const stopB = await backend.dispatch({
       type: "addBusStop",
-      point: { x: 5, y: 8 },
+      point: { x: 5, y: 7 },
     });
     expect(stopB.applied).toBe(true);
     expect(stopB.snapshot.transit.stops).toHaveLength(2);
