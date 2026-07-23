@@ -13,6 +13,7 @@ import {
   selectWaypoint,
   setPattern,
 } from "../../src/ui/routeDraft";
+import { createUiState } from "../../src/ui/uiState";
 
 function connectedPreview(generation: number): RoutePreviewResponse {
   return {
@@ -35,6 +36,13 @@ function connectedPreview(generation: number): RoutePreviewResponse {
 }
 
 describe("route draft reducers", () => {
+  it("initializes runtime-owned route history state", () => {
+    expect(createUiState()).toMatchObject({
+      routeDraftHistory: { past: [], future: [] },
+      routeDraftNotice: null,
+    });
+  });
+
   function draftWith(...waypointIds: string[]) {
     return { ...createDraft("bus", 1), waypointIds };
   }

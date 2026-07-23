@@ -300,6 +300,8 @@ function createRuntimeHarness(
     moveRouteWaypoint: vi.fn((_delta) => publish()),
     reverseRouteDraft: vi.fn(() => publish()),
     setRoutePattern: vi.fn((_pattern) => publish()),
+    undoRouteDraft: vi.fn(() => publish()),
+    redoRouteDraft: vi.fn(() => publish()),
     saveRouteDraft: vi.fn(async () => publish()),
     cancelRouteDraft: vi.fn(() => publish()),
     reloadRouteDraft: vi.fn(() => publish()),

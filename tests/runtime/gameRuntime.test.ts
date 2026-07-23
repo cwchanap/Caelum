@@ -1478,6 +1478,7 @@ describe("Game Runtime", () => {
     // Editing the draft clears the host error and re-requests a preview.
     runtime.handleTileClick({ x: 1, y: 1 });
     expect(runtime.getSnapshot().ui.routePreviewHostError).toBeNull();
+    runtime.setRoutePattern("shuttle");
     previews.resolveRoute(3, routePreview(3, ["stop-0001", "stop-0002"]));
     await flushPromises();
 
@@ -2174,6 +2175,201 @@ describe("route creation and management", () => {
       },
     };
   }
+
+  function countedPreviewBackend(initial: RustGameSnapshot = routeSnapshot()): {
+    backend: BackendSpy;
+    previewRoute: ReturnType<typeof vi.fn>;
+  } {
+    const base = backendSpy(initial);
+    const previewRoute = vi.fn(base.previewRoute.bind(base));
+    return { backend: { ...base, previewRoute }, previewRoute };
+  }
+
+  describe("route draft history", () => {
+    it("records one checkpoint for each meaningful draft mutation", async () => {
+      const { backend, previewRoute } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(1);
+      runtime.handleTileClick({ x: 14, y: 8 });
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(2);
+      runtime.handleTileClick({ x: 14, y: 9 });
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(3);
+
+      runtime.selectRouteWaypoint(2, "replace");
+      runtime.removeRouteWaypoint();
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(4);
+
+      runtime.selectRouteWaypoint(1, "replace");
+      runtime.moveRouteWaypoint(-1);
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(5);
+
+      runtime.reverseRouteDraft();
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(6);
+
+      runtime.setRoutePattern("shuttle");
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(7);
+      expect(previewRoute).toHaveBeenCalledTimes(7);
+    });
+
+    it("does not record selection-only changes or duplicate no-ops", async () => {
+      const { backend, previewRoute } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+      const beforeSelection = runtime.getSnapshot();
+      const beforeHistory = beforeSelection.ui.routeDraftHistory;
+      const previewCalls = previewRoute.mock.calls.length;
+
+      runtime.selectRouteWaypoint(0, "replace");
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toBe(beforeHistory);
+      expect(previewRoute).toHaveBeenCalledTimes(previewCalls);
+
+      runtime.selectRouteWaypoint(null, "append");
+      const beforeDuplicate = runtime.getSnapshot();
+      const duplicate = await runtime.handleTileClick({ x: 14, y: 8 });
+      expect(duplicate.ui).toBe(beforeDuplicate.ui);
+      expect(runtime.getSnapshot().ui.routeDraft).toBe(
+        beforeDuplicate.ui.routeDraft,
+      );
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toBe(beforeHistory);
+      expect(previewRoute).toHaveBeenCalledTimes(previewCalls);
+    });
+
+    it("undoes and redoes a draft while preserving its instance and refreshing preview", async () => {
+      const { backend, previewRoute } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+      const instanceId = runtime.getSnapshot().ui.routeDraft!.instanceId;
+      expect(previewRoute).toHaveBeenCalledTimes(2);
+
+      const undone = runtime.undoRouteDraft();
+      expect(undone.ui.routeDraft).toMatchObject({
+        instanceId,
+        waypointIds: ["stop-001"],
+        generation: 3,
+        previewPending: true,
+        preview: null,
+      });
+      expect(undone.ui.routeDraftHistory.past).toHaveLength(1);
+      expect(undone.ui.routeDraftHistory.future).toHaveLength(1);
+      expect(previewRoute).toHaveBeenCalledTimes(3);
+
+      const redone = runtime.redoRouteDraft();
+      expect(redone.ui.routeDraft).toMatchObject({
+        instanceId,
+        waypointIds: ["stop-001", "stop-002"],
+        generation: 4,
+        previewPending: true,
+        preview: null,
+      });
+      expect(redone.ui.routeDraftHistory.past).toHaveLength(2);
+      expect(redone.ui.routeDraftHistory.future).toHaveLength(0);
+      expect(previewRoute).toHaveBeenCalledTimes(4);
+
+      const noOpRedo = runtime.redoRouteDraft();
+      expect(noOpRedo.ui).toBe(redone.ui);
+      expect(previewRoute).toHaveBeenCalledTimes(4);
+    });
+
+    it("caps past checkpoints at one hundred entries", async () => {
+      const { backend } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      for (let index = 0; index < 101; index += 1) {
+        runtime.setRoutePattern(index % 2 === 0 ? "shuttle" : "loop");
+      }
+
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(100);
+      expect(runtime.getSnapshot().ui.routeDraftHistory.future).toHaveLength(0);
+    });
+
+    it("clears history when a draft is cancelled", async () => {
+      const { backend } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      runtime.cancelRouteDraft();
+
+      expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
+        past: [],
+        future: [],
+      });
+      expect(runtime.getSnapshot().ui.routeDraftNotice).toBeNull();
+    });
+
+    it("clears history after a successful save", async () => {
+      const { backend } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+      await flushPromises();
+      await runtime.saveRouteDraft();
+
+      expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
+        past: [],
+        future: [],
+      });
+    });
+
+    it("clears history when editing starts over or the route mode switches", async () => {
+      const { backend } = countedPreviewBackend(routeSnapshotWithRoute());
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.startRouteEdit("route-001");
+      runtime.selectRouteWaypoint(1, "replace");
+      runtime.handleTileClick({ x: 14, y: 9 });
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(1);
+
+      runtime.startRouteEdit("route-001");
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
+        past: [],
+        future: [],
+      });
+
+      runtime.handleTileClick({ x: 14, y: 9 });
+      runtime.setTool("metroLine");
+      expect(runtime.getSnapshot().ui.routeDraft?.mode).toBe("metro");
+      expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
+        past: [],
+        future: [],
+      });
+    });
+  });
 
   it("editing leaves committed service unchanged until Save succeeds", async () => {
     const backend = connectedRouteBackend();
