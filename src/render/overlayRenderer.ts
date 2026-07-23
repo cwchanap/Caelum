@@ -12,7 +12,7 @@ import type { AuthoredRoadTilePreview } from "../runtime/backend/types";
 import {
   buildRoadMutationPreview,
   selectRouteEditorView,
-  selectShellState,
+  selectRouteFailures,
 } from "../runtime/runtimeSelectors";
 import type {
   RoadMutationPreviewView,
@@ -590,9 +590,12 @@ function renderBrokenRouteMarkers(
   if (selected === undefined) {
     return;
   }
-  const failureRows =
-    selectShellState(state, ui).routes.find((route) => route.id === selected.id)
-      ?.failures ?? [];
+  const failureRows = selectRouteFailures(
+    state,
+    selected.pattern,
+    "stopIds" in selected ? selected.stopIds : selected.stationIds,
+    selected.legs,
+  );
   selected.legs.forEach((leg, legIndex) => {
     if (leg.status === "connected") {
       return;
