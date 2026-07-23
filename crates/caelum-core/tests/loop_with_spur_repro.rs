@@ -31,8 +31,8 @@ fn loop_with_single_axis_spur_stays_connected() {
         .expect("topology must compile");
     assert!(
         topology
-            .find_path(&snapshot.map, &point(5, 5), &point(5, 6))
-            .is_some(),
+            .find_path_between_access_tiles(&snapshot.map, point(5, 5), point(5, 6), None, None)
+            .is_ok(),
         "loop with single-axis spur must stay connected"
     );
     // The vertical internal edges of the 2x2 ring must survive.

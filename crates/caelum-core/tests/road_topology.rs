@@ -319,14 +319,18 @@ impl EqualCostFixture {
     }
 }
 
-fn equal_cost_fixture(rebuild_tiles: bool) -> EqualCostFixture {
+fn equal_cost_fixture(
+    rebuild_tiles: bool,
+    from_preferred: Option<Heading>,
+    to_preferred: Option<Heading>,
+) -> EqualCostFixture {
     let mut map = blank_map(6, 5);
     for corridor_points in [
         vec![
             point(1, 2),
             point(1, 1),
             point(2, 1),
-            point(3, 1),
+            point(2, 2),
             point(3, 2),
         ],
         vec![
@@ -337,6 +341,8 @@ fn equal_cost_fixture(rebuild_tiles: bool) -> EqualCostFixture {
             point(3, 2),
         ],
     ] {
+        // Both routes take four transitions and cost 7,000 ms, but have
+        // different first and last headings.
         corridor(&mut map, &corridor_points, None);
     }
     if rebuild_tiles {
@@ -344,17 +350,42 @@ fn equal_cost_fixture(rebuild_tiles: bool) -> EqualCostFixture {
     }
     let topology = RoadTopology::compile(&map).unwrap();
     let path = topology
-        .find_path_between_access_tiles(&map, point(1, 2), point(3, 2), None, None)
+        .find_path_between_access_tiles(
+            &map,
+            point(1, 2),
+            point(3, 2),
+            from_preferred,
+            to_preferred,
+        )
         .unwrap();
     EqualCostFixture { path }
 }
 
 #[test]
 fn equal_cost_paths_use_canonical_direction_and_stable_structure_ties() {
-    let first = equal_cost_fixture(false).path_key();
-    let rebuilt = equal_cost_fixture(true).path_key();
+    let first = equal_cost_fixture(false, None, None).path_key();
+    let rebuilt = equal_cost_fixture(true, None, None).path_key();
     assert_eq!(first, rebuilt);
     assert_eq!(first.first().unwrap().2, Heading::North);
+}
+
+#[test]
+fn equal_cost_paths_honor_preferred_start_and_goal_headings() {
+    let from_preferred = equal_cost_fixture(false, Some(Heading::South), None).path_key();
+    assert_eq!(
+        from_preferred.first().unwrap().2,
+        Heading::South,
+        "an equal-cost tie should honor the preferred start heading"
+    );
+    assert_eq!(from_preferred.last().unwrap().2, Heading::North);
+
+    let to_preferred = equal_cost_fixture(false, None, Some(Heading::North)).path_key();
+    assert_eq!(to_preferred.first().unwrap().2, Heading::South);
+    assert_eq!(
+        to_preferred.last().unwrap().2,
+        Heading::North,
+        "an equal-cost tie should honor the preferred goal heading"
+    );
 }
 
 struct PairedLaneFixture {
