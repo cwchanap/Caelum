@@ -35,6 +35,10 @@ function connectedPreview(generation: number): RoutePreviewResponse {
 }
 
 describe("route draft reducers", () => {
+  function draftWith(...waypointIds: string[]) {
+    return { ...createDraft("bus", 1), waypointIds };
+  }
+
   it("creates the final creation-draft shape", () => {
     expect(createDraft("bus", 7)).toEqual({
       instanceId: 7,
@@ -58,6 +62,35 @@ describe("route draft reducers", () => {
     expect(appended.generation).toBe(1);
     expect(appended.previewPending).toBe(true);
     expect(appended.preview).toBeNull();
+  });
+
+  it("does not mutate or preview when appending the last stop again", () => {
+    const draft = draftWith("stop-001");
+    const result = applyNodeClick(draft, "stop-001");
+
+    expect(result.draft).toBe(draft);
+    expect(result.previewRequested).toBe(false);
+  });
+
+  it("selects an existing waypoint instead of appending it", () => {
+    const draft = draftWith("a", "b");
+    const result = applyNodeClick(draft, "a");
+
+    expect(result.draft.waypointIds).toEqual(["a", "b"]);
+    expect(result.draft.selectedIndex).toBe(0);
+    expect(result.previewRequested).toBe(false);
+  });
+
+  it("notices an insert duplicate without mutation", () => {
+    const insertAfterDraft = selectWaypoint(
+      draftWith("a", "b"),
+      0,
+      "insertAfter",
+    );
+    const result = applyNodeClick(insertAfterDraft, "a");
+
+    expect(result.draft).toBe(insertAfterDraft);
+    expect(result.notice).toEqual({ kind: "alreadyOnRoute", waypointId: "a" });
   });
 
   it("clears an old preview for every meaningful order change", () => {
@@ -97,7 +130,7 @@ describe("route edit reducers", () => {
 
   it("inserts after the selected handle", () => {
     const selected = selectWaypoint(loop, 1, "insertAfter");
-    expect(applyNodeClick(selected, "X").waypointIds).toEqual([
+    expect(applyNodeClick(selected, "X").draft.waypointIds).toEqual([
       "A",
       "B",
       "X",
@@ -107,7 +140,11 @@ describe("route edit reducers", () => {
 
   it("replaces exactly the selected handle", () => {
     const selected = selectWaypoint(loop, 1, "replace");
-    expect(applyNodeClick(selected, "X").waypointIds).toEqual(["A", "X", "C"]);
+    expect(applyNodeClick(selected, "X").draft.waypointIds).toEqual([
+      "A",
+      "X",
+      "C",
+    ]);
   });
 
   it("removes and selects the nearest retained index", () => {
