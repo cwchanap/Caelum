@@ -697,11 +697,11 @@ fn classify_movement(incoming: Heading, outgoing: Heading) -> MovementKind {
     }
 }
 
-fn lane_accepts(one_way: Option<Heading>, heading: Heading) -> bool {
+pub(crate) fn lane_accepts(one_way: Option<Heading>, heading: Heading) -> bool {
     one_way.map_or(true, |allowed| allowed == heading)
 }
 
-fn is_road(map: &GameMap, point: Point) -> bool {
+pub(crate) fn is_road(map: &GameMap, point: Point) -> bool {
     map.tile(point).is_some_and(|tile| tile.kind == "road")
 }
 
