@@ -866,7 +866,7 @@ fn canonicalize_authored_roads(map: &mut GameMap) {
     }
 }
 
-fn reciprocal_connection(map: &GameMap, point: Point, heading: Heading) -> bool {
+pub(crate) fn reciprocal_connection(map: &GameMap, point: Point, heading: Heading) -> bool {
     map.tile(offset(point, heading)).is_some_and(|neighbor| {
         neighbor.kind == "road" && neighbor.road_connections.contains(&opposite(heading))
     })

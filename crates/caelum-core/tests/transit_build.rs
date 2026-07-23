@@ -53,7 +53,7 @@ fn resolve_fixture(
             road_line(&mut engine, 5, 2, 10);
             for x in [2, 6, 10] {
                 engine.dispatch(GameIntent::AddBusStop {
-                    point: (x, 5).into(),
+                    point: (x, 4).into(),
                 });
             }
         }
@@ -124,7 +124,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
     road_line(&mut engine, 5, 2, 10);
     for x in [2, 6, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     engine.dispatch(GameIntent::CreateRoute {
@@ -186,10 +186,10 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
     assert!(next.transit.routes[0].path_broken);
     assert_eq!(
         next.transit.vehicles[0].parked_position,
-        Some((10, 5).into())
+        Some((10, 4).into())
     );
     assert_eq!(next.transit.vehicles[0].itinerary_index, 3);
-    assert_eq!(next.active_trips[0].position, (10, 5).into());
+    assert_eq!(next.active_trips[0].position, (10, 4).into());
     assert_eq!(next.active_trips[0].status, TripStatus::Idle);
 }
 
@@ -199,7 +199,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
     road_line(&mut engine, 5, 2, 10);
     for x in [2, 6, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     engine.dispatch(GameIntent::CreateRoute {
@@ -236,7 +236,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
     assert!(broken.transit.routes[0].path_broken);
     assert_eq!(
         broken.transit.vehicles[0].parked_position,
-        Some((10, 5).into())
+        Some((10, 4).into())
     );
     assert_eq!(broken.transit.vehicles[0].itinerary_index, 3);
 
@@ -287,6 +287,130 @@ fn track_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     }
 }
 
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+fn fixture_engine_with_two_way_road(points: &[Point]) -> GameEngine {
+    let mut engine = GameEngine::new();
+    for point in points {
+        engine.dispatch(GameIntent::LayRoad { point: *point });
+    }
+    engine
+}
+
+fn fixture_engine_with_isolated_road(point: Point) -> GameEngine {
+    fixture_engine_with_two_way_road(&[point])
+}
+
+#[test]
+fn add_bus_stop_uses_empty_anchor_and_adjacent_road_access() {
+    let mut engine = fixture_engine_with_two_way_road(&[point(4, 5), point(5, 5)]);
+
+    let result = engine.dispatch(GameIntent::AddBusStop { point: point(4, 4) });
+
+    assert!(result.applied, "{result:?}");
+    let stop = &result.snapshot.transit.stops[0];
+    assert_eq!(stop.position, point(4, 4));
+    assert_eq!(stop.road_access.unwrap().road_point, point(4, 5));
+    assert_eq!(
+        result.snapshot.map.tile(stop.position).unwrap().kind,
+        "empty"
+    );
+}
+
+#[test]
+fn add_bus_stop_rejects_an_on_road_click() {
+    let mut engine = fixture_engine_with_two_way_road(&[point(4, 5), point(5, 5)]);
+
+    let result = engine.dispatch(GameIntent::AddBusStop { point: point(4, 5) });
+
+    assert_eq!(result.rejection.unwrap().code, RejectionCode::BlockedTile);
+}
+
+#[test]
+fn add_bus_stop_rejects_an_isolated_adjacent_road() {
+    let mut engine = fixture_engine_with_isolated_road(point(4, 5));
+
+    let result = engine.dispatch(GameIntent::AddBusStop { point: point(4, 4) });
+
+    assert_eq!(result.rejection.unwrap().code, RejectionCode::NoRoadAccess);
+}
+
+#[test]
+fn bus_terminal_derives_access_from_a_far_edge_of_its_footprint() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 6, 3, 4);
+
+    let result = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: point(2, 4),
+        rotation: 0,
+    });
+
+    assert!(result.applied, "{result:?}");
+    let terminal = &result.snapshot.transit.stops[0];
+    assert_eq!(terminal.position, point(2, 4));
+    assert_eq!(terminal.road_access.unwrap().road_point, point(3, 6));
+}
+
+#[test]
+fn bus_terminal_restore_with_new_rotation_derives_fresh_access() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 2, 10);
+    road_line(&mut engine, 7, 2, 3);
+
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: point(2, 4),
+        rotation: 0,
+    });
+    assert!(placed.applied, "{placed:?}");
+    assert_eq!(
+        placed.snapshot.transit.stops[0]
+            .road_access
+            .unwrap()
+            .road_point,
+        point(2, 3)
+    );
+    let other_stop = engine.dispatch(GameIntent::AddBusStop {
+        point: point(10, 2),
+    });
+    assert!(other_stop.applied, "{other_stop:?}");
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    assert!(route.applied, "{route:?}");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
+    assert_eq!(
+        removed.snapshot.transit.stops[0].status,
+        TransitNodeStatus::Missing
+    );
+    for x in 2..=10 {
+        engine.dispatch(GameIntent::RemoveAtTile { point: point(x, 3) });
+    }
+
+    let restored = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: point(2, 4),
+        rotation: 90,
+    });
+
+    assert!(restored.applied, "{restored:?}");
+    let terminal = restored
+        .snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == "stop-001")
+        .expect("original terminal identity is restored");
+    assert_eq!(terminal.status, TransitNodeStatus::Present);
+    assert_eq!(terminal.road_access.unwrap().road_point, point(2, 7));
+}
+
 #[test]
 fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
     let mut engine = GameEngine::new();
@@ -298,7 +422,7 @@ fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
     }
     for x in [2, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     engine.dispatch(GameIntent::CreateRoute {
@@ -372,10 +496,10 @@ fn two_stop_bus_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 10);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (10, 5).into(),
+        point: (10, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -513,14 +637,17 @@ fn three_step_vehicle_fixture(durations: [f64; 3]) -> (GameSnapshot, String) {
 }
 
 #[test]
-fn adds_bus_stop_on_road_and_charges_budget() {
+fn adds_bus_stop_on_empty_roadside_anchor_and_charges_budget() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad {
         point: (4, 4).into(),
     });
+    engine.dispatch(GameIntent::LayRoad {
+        point: (5, 4).into(),
+    });
 
     let result = engine.dispatch(GameIntent::AddBusStop {
-        point: (4, 4).into(),
+        point: (4, 3).into(),
     });
 
     assert!(result.applied);
@@ -528,8 +655,9 @@ fn adds_bus_stop_on_road_and_charges_budget() {
     let stop = &result.snapshot.transit.stops[0];
     assert_eq!(stop.id, "stop-001");
     assert_eq!(stop.kind, BusStopKind::BusStop);
+    assert_eq!(stop.position, point(4, 3));
     assert_eq!(stop.platforms[0].capacity, 50);
-    assert_eq!(result.snapshot.budget, 117_900);
+    assert_eq!(result.snapshot.budget, 117_800);
 }
 
 #[test]
@@ -555,8 +683,11 @@ fn duplicate_stop_route_is_rejected_atomically() {
     engine.dispatch(GameIntent::LayRoad {
         point: (3, 4).into(),
     });
+    engine.dispatch(GameIntent::LayRoad {
+        point: (4, 4).into(),
+    });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (3, 4).into(),
+        point: (3, 3).into(),
     });
 
     let result = engine.dispatch(GameIntent::CreateRoute {
@@ -656,7 +787,7 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
         rotation: 0,
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 3).into(),
+        point: (12, 2).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -701,7 +832,7 @@ fn bus_stop_building_rebuild_restores_stable_node_and_route() {
         rotation: 0,
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (10, 3).into(),
+        point: (10, 2).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -752,7 +883,7 @@ fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
         rotation: 0,
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 3).into(),
+        point: (12, 2).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -804,7 +935,7 @@ fn bus_terminal_rebuild_restores_stable_node_and_route() {
         rotation: 0,
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (12, 3).into(),
+        point: (12, 2).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -887,10 +1018,10 @@ fn cycling_road_direction_breaks_and_restores_route() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 10);
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (10, 5).into(),
+        point: (10, 4).into(),
     });
     engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
@@ -1162,7 +1293,7 @@ fn vehicle_time_through_roundabout_matches_authoritative_path_duration() {
     }
     for x in [2, 10] {
         engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 5).into(),
+            point: (x, 4).into(),
         });
     }
     engine.dispatch(GameIntent::CreateRoute {
@@ -2243,14 +2374,14 @@ fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
     assert!(
         engine
             .dispatch(GameIntent::AddBusStop {
-                point: Point { x: 2, y: 3 },
+                point: Point { x: 2, y: 2 },
             })
             .applied
     );
     assert!(
         engine
             .dispatch(GameIntent::AddBusStop {
-                point: Point { x: 4, y: 3 },
+                point: Point { x: 4, y: 2 },
             })
             .applied
     );

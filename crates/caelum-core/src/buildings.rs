@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::platforms::{bus_platforms, metro_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+use crate::stop_access::{derive_stop_access_for_footprint, is_valid_access, stop_footprint};
 use crate::transit_nodes::{
     is_present_node, matching_present_node_id, restore_or_create_node, LogicalNodeKind,
 };
@@ -191,6 +192,16 @@ pub fn can_place_building(
         }
     }
 
+    if building_type == "busTerminal"
+        && derive_stop_access_for_footprint(&state.map, &occupied_tiles).is_none()
+    {
+        return Err(placement_rejection(
+            RejectionCode::NoRoadAccess,
+            *origin,
+            &occupied_tiles,
+        ));
+    }
+
     Ok(occupied_tiles)
 }
 
@@ -227,6 +238,7 @@ pub fn place_building_core(
     );
 
     let mut transit_node_id = None;
+    let mut road_access = None;
 
     if matches!(definition.effect, "busStop" | "busTerminal") {
         let kind = if definition.effect == "busTerminal" {
@@ -243,6 +255,15 @@ pub fn place_building_core(
             "stop",
             next.transit.stops.iter().map(|stop| stop.id.clone()),
         );
+        road_access = if kind == BusStopKind::BusTerminal {
+            Some(
+                derive_stop_access_for_footprint(&next.map, &occupied_tiles).ok_or_else(|| {
+                    placement_rejection(RejectionCode::NoRoadAccess, *origin, &occupied_tiles)
+                })?,
+            )
+        } else {
+            None
+        };
         next = restore_or_create_node(&next, logical_kind, *origin, |state| {
             let mut allocated = state.clone();
             allocated.transit.stops.push(Stop {
@@ -251,10 +272,22 @@ pub fn place_building_core(
                 status: TransitNodeStatus::Present,
                 position: *origin,
                 platforms: bus_platforms(&stop_id, kind),
-                road_access: None,
+                road_access,
             });
             Ok(allocated)
         })?;
+        if let Some(access) = road_access {
+            if let Some(stop_id) = matching_present_node_id(&next, logical_kind, *origin) {
+                if let Some(stop) = next
+                    .transit
+                    .stops
+                    .iter_mut()
+                    .find(|stop| stop.id == stop_id)
+                {
+                    stop.road_access = Some(access);
+                }
+            }
+        }
         transit_node_id = matching_present_node_id(&next, logical_kind, *origin);
     }
 
@@ -279,6 +312,7 @@ pub fn place_building_core(
         transit_node_id = matching_present_node_id(&next, LogicalNodeKind::MetroStation, *origin);
     }
 
+    let transit_node_id_for_validation = transit_node_id.clone();
     next.buildings.push(PlacedBuilding {
         id: building_id,
         building_type: building_type.to_string(),
@@ -287,6 +321,24 @@ pub fn place_building_core(
         occupied_tiles: occupied_tiles.clone(),
         transit_node_id,
     });
+
+    if let (Some(access), Some(transit_node_id)) = (road_access, transit_node_id_for_validation) {
+        if let Some(stop) = next
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == transit_node_id)
+        {
+            let footprint = stop_footprint(&next, stop);
+            if !is_valid_access(&next.map, &footprint, access) {
+                return Err(placement_rejection(
+                    RejectionCode::NoRoadAccess,
+                    *origin,
+                    &occupied_tiles,
+                ));
+            }
+        }
+    }
 
     if definition.effect == "housing" {
         for index in 0..usize::from(definition.citizen_count) {

@@ -13,9 +13,10 @@ use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, pla
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::{apply_road_mutation, RoadMutation};
 use crate::route_lifecycle::is_route_operational;
+use crate::stop_access::derive_stop_access;
 use crate::transit_nodes::{
     canonical_node_anchor, garbage_collect_missing_nodes, is_present_node,
-    remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
+    matching_present_node_id, remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
 };
 use crate::trips::WAIT_PATIENCE_SECONDS;
 
@@ -213,35 +214,28 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
 }
 
 pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
-    // `AddBusStop` is the lightweight road-tile bus stop path. Bus terminals
-    // are multi-platform buildings with their own cost (12,000) and 3x2
-    // footprint validation, placed via `PlaceBuilding` -> `place_building`.
     if state.budget < BUS_STOP_COST {
         return Err(GameplayRejection::budget(BUS_STOP_COST, state.budget));
     }
     if !is_valid_bus_stop_placement(state, point) {
         let rejection = match get_tile(&state.map, point) {
             None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
-            Some(tile) if tile.kind != "road" => {
-                GameplayRejection::at(RejectionCode::RoadRequired, *point)
+            Some(tile)
+                if tile.kind != "empty"
+                    || tile.has_track
+                    || tile.road_structure_id.is_some()
+                    || is_building_occupied(state, point)
+                    || is_transit_node_at(state, point) =>
+            {
+                GameplayRejection::at(RejectionCode::BlockedTile, *point)
             }
-            Some(_) => state
-                .transit
-                .stops
-                .iter()
-                .find(|stop| is_present_node(stop.status) && stop.position == *point)
-                .map_or_else(
-                    || GameplayRejection::at(RejectionCode::BlockedTile, *point),
-                    |stop| {
-                        let mut rejection =
-                            node_rejection(RejectionCode::NodeAlreadyExists, &stop.id, None);
-                        rejection.context.point = Some(*point);
-                        rejection
-                    },
-                ),
+            Some(_) => GameplayRejection::at(RejectionCode::NoRoadAccess, *point),
         };
         return Err(rejection);
     }
+
+    let access = derive_stop_access(&state.map, *point)
+        .ok_or_else(|| GameplayRejection::at(RejectionCode::NoRoadAccess, *point))?;
 
     let stop_id = next_entity_id(
         "stop",
@@ -255,10 +249,20 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
             status: TransitNodeStatus::Present,
             position: *point,
             platforms: bus_platforms(&stop_id, BusStopKind::BusStop),
-            road_access: None,
+            road_access: Some(access),
         });
         Ok(allocated)
     })?;
+    if let Some(stop_id) = matching_present_node_id(&next, LogicalNodeKind::BusStop, *point) {
+        if let Some(stop) = next
+            .transit
+            .stops
+            .iter_mut()
+            .find(|stop| stop.id == stop_id)
+        {
+            stop.road_access = Some(access);
+        }
+    }
     next.budget -= BUS_STOP_COST;
 
     Ok(next)
@@ -1483,15 +1487,12 @@ fn unique_passenger_ids(passenger_ids: &[String]) -> Vec<String> {
 
 fn is_valid_bus_stop_placement(state: &GameSnapshot, point: &Point) -> bool {
     get_tile(&state.map, point).is_some_and(|tile| {
-        tile.kind == "road"
+        tile.kind == "empty"
             && !tile.has_track
             && tile.road_structure_id.is_none()
             && !is_building_occupied(state, point)
-            && !state
-                .transit
-                .stops
-                .iter()
-                .any(|stop| is_present_node(stop.status) && stop.position == *point)
+            && !is_transit_node_at(state, point)
+            && derive_stop_access(&state.map, *point).is_some()
     })
 }
 
