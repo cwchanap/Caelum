@@ -1,5 +1,7 @@
 use crate::heading::{canonical_headings, offset};
-use crate::model::{BusStopKind, GameMap, GameSnapshot, Point, Stop, StopRoadAccess};
+use crate::model::{
+    BusStopKind, GameMap, GameSnapshot, Point, Stop, StopRoadAccess, TransitMode, TripPosition,
+};
 use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
 use crate::transit_nodes::is_present_node;
@@ -155,8 +157,46 @@ pub(crate) fn normalize_snapshot_stops(
         };
     }
 
+    rebase_parked_bus_positions(&mut snapshot);
     rebase_active_trips(&mut snapshot, &moves);
     Ok(snapshot)
+}
+
+fn rebase_parked_bus_positions(snapshot: &mut GameSnapshot) {
+    let repairs: Vec<(usize, Point)> = snapshot
+        .transit
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter_map(|(vehicle_index, vehicle)| {
+            if vehicle.mode != TransitMode::Bus {
+                return None;
+            }
+            let parked_position = vehicle.parked_position.as_ref()?;
+            let route = snapshot
+                .transit
+                .routes
+                .iter()
+                .find(|route| route.id == vehicle.line_id && route.active)?;
+            let road_point = route.stop_ids.iter().find_map(|stop_id| {
+                let stop = snapshot
+                    .transit
+                    .stops
+                    .iter()
+                    .find(|stop| stop.id == *stop_id && is_present_node(stop.status))?;
+                let access = stop_access(snapshot, &stop.id)?;
+                let passenger_position: TripPosition = stop.position.into();
+                let road_position: TripPosition = access.road_point.into();
+                (parked_position == &passenger_position || parked_position == &road_position)
+                    .then_some(access.road_point)
+            })?;
+            Some((vehicle_index, road_point))
+        })
+        .collect();
+
+    for (vehicle_index, road_point) in repairs {
+        snapshot.transit.vehicles[vehicle_index].parked_position = Some(road_point.into());
+    }
 }
 
 fn access_for_road_point(map: &GameMap, road_point: Point) -> Option<StopRoadAccess> {

@@ -76,6 +76,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That building cannot be placed on this footprint.";
     case "blockedFootprint":
       return "The full footprint must contain only empty or replaceable road tiles.";
+    case "unsupportedSnapshotSchema":
+      return `Snapshot schema ${context.actualSchemaVersion ?? "unknown"} is unsupported; expected ${context.expectedSchemaVersion ?? "unknown"}.`;
     default:
       return assertNever(code);
   }

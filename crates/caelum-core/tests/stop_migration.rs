@@ -2,7 +2,7 @@ use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, MetricsState, PlacedBuilding, Platform, Point, Route,
     RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection,
     ServicePattern, Sim, Stop, TransitMode, TransitNodeStatus, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    WorkerProfile, SNAPSHOT_SCHEMA_VERSION,
 };
 use caelum_core::{platforms, GameEngine, GameIntent, RoadPreset};
 
@@ -15,6 +15,20 @@ fn bus_platform(stop_id: &str) -> Platform {
         .into_iter()
         .next()
         .expect("bus stop has a platform")
+}
+
+fn parked_bus(id: &str, line_id: &str, position: Point) -> Vehicle {
+    Vehicle {
+        id: id.to_string(),
+        mode: TransitMode::Bus,
+        line_id: line_id.to_string(),
+        capacity: 18,
+        passenger_ids: Vec::new(),
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.0,
+        parked_position: Some(position.into()),
+    }
 }
 
 fn route_leg_path(from_waypoint_id: &str, to_waypoint_id: &str) -> RouteLegPath {
@@ -114,7 +128,9 @@ fn legacy_snapshot() -> GameSnapshot {
         itinerary_index: 0,
         path_step_index: 0,
         step_progress: 0.0,
-        parked_position: Some(point(4, 5).into()),
+        // Legacy snapshots could persist the passenger anchor instead of the
+        // road coordinate used by buses.
+        parked_position: Some(point(4, 4).into()),
     }];
     snapshot.sims = vec![Sim {
         id: "sim-001".to_string(),
@@ -147,7 +163,7 @@ fn legacy_snapshot() -> GameSnapshot {
 }
 
 #[test]
-fn from_snapshot_migrates_legacy_stop_and_rebases_dependent_passenger_state() {
+fn from_snapshot_migrates_legacy_stop_and_rebases_dependent_passenger_and_bus_state() {
     let engine = GameEngine::from_snapshot(legacy_snapshot()).unwrap();
     let snapshot = engine.snapshot();
     let stop = &snapshot.transit.stops[0];
@@ -180,6 +196,73 @@ fn from_snapshot_migrates_legacy_stop_and_rebases_dependent_passenger_state() {
     assert_eq!(waiting_trip.destination, point(4, 5));
     assert_eq!(snapshot.sims[0].home, point(4, 5));
     assert_eq!(snapshot.sims[0].workplace, Some(point(4, 5)));
+}
+
+#[test]
+fn from_snapshot_rejects_unsupported_schema_before_normalization() {
+    let mut snapshot = legacy_snapshot();
+    snapshot.schema_version = SNAPSHOT_SCHEMA_VERSION - 1;
+
+    let rejection = match GameEngine::from_snapshot(snapshot) {
+        Ok(_) => panic!("unsupported snapshot schema must be rejected"),
+        Err(rejection) => rejection,
+    };
+    let wire = serde_json::to_value(rejection).expect("rejection serializes");
+
+    assert_eq!(wire["code"], serde_json::json!("unsupportedSnapshotSchema"));
+    assert_eq!(
+        wire["context"]["expectedSchemaVersion"],
+        serde_json::json!(SNAPSHOT_SCHEMA_VERSION)
+    );
+    assert_eq!(
+        wire["context"]["actualSchemaVersion"],
+        serde_json::json!(SNAPSHOT_SCHEMA_VERSION - 1)
+    );
+}
+
+#[test]
+fn from_snapshot_preserves_out_of_service_and_unrelated_bus_parking() {
+    let mut snapshot = legacy_snapshot();
+    snapshot.transit.routes.push(Route {
+        id: "route-002".to_string(),
+        name: "Out of service route".to_string(),
+        color: "#000000".to_string(),
+        stop_ids: vec!["stop-001".to_string()],
+        vehicle_ids: vec!["vehicle-002".to_string()],
+        active: false,
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: Vec::new(),
+        path_broken: true,
+    });
+    snapshot.transit.vehicles.extend([
+        parked_bus("vehicle-002", "route-002", point(17, 12)),
+        parked_bus("vehicle-003", "route-999", point(18, 12)),
+    ]);
+
+    let engine = GameEngine::from_snapshot(snapshot).unwrap();
+    let snapshot = engine.snapshot();
+
+    assert_eq!(
+        snapshot
+            .transit
+            .vehicles
+            .iter()
+            .find(|vehicle| vehicle.id == "vehicle-002")
+            .expect("out-of-service bus")
+            .parked_position,
+        Some(point(17, 12).into())
+    );
+    assert_eq!(
+        snapshot
+            .transit
+            .vehicles
+            .iter()
+            .find(|vehicle| vehicle.id == "vehicle-003")
+            .expect("unrelated bus")
+            .parked_position,
+        Some(point(18, 12).into())
+    );
 }
 
 #[test]
