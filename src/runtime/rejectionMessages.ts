@@ -1,5 +1,7 @@
 import type { GameplayRejection } from "../domain/types";
+import type { RouteLegKind } from "../domain/types";
 import type { GameplayWarning } from "./backend/types";
+import type { RouteFailureRow } from "./types";
 
 const numberFormat = new Intl.NumberFormat("en-US");
 const money = (value: number): string => numberFormat.format(value);
@@ -83,6 +85,28 @@ export function rejectionMessage(rejection: GameplayRejection): string {
     default:
       return assertNever(code);
   }
+}
+
+export function routeFailureGuidance(
+  reason: RouteFailureRow["reason"],
+  context: { isLoopClosing: boolean; legKind: RouteLegKind },
+): string {
+  if (reason === "noLegalTurnaround") {
+    return "No legal U-turn here; add a junction or roundabout.";
+  }
+  if (reason === "networkDisconnected" && context.isLoopClosing) {
+    return "Loop can't close here; switch to Shuttle or repair the road.";
+  }
+  if (reason === "noRoadAccess") {
+    return "Stop has no usable adjacent road.";
+  }
+  if (reason === "noLegalEntryHeading" || reason === "noLegalExitHeading") {
+    return "Road direction doesn't allow serving this stop here.";
+  }
+  if (reason === "missingNode") {
+    return "Restore the missing node at its former location.";
+  }
+  return "Repair the road connection between these stops.";
 }
 
 export function warningMessage(warning: GameplayWarning): string {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type { ActiveTrip } from "../../src/domain/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
+import { normalizeRoutePreviewResponse } from "../../src/runtime/backend/shared";
+import { routeFailureGuidance } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { createUiState } from "../../src/ui/uiState";
 import {
@@ -455,6 +457,111 @@ describe("route selectors", () => {
     });
     expect(editor?.previewMessage).toContain("Stop A");
     expect(editor?.previewMessage).toContain("Missing Bus Stop");
+    expect(editor?.failures).toMatchObject([
+      {
+        legIndex: 0,
+        reason: "missingNode",
+        legKind: "service",
+        isLoopClosing: false,
+        guidance: "Restore the missing node at its former location.",
+      },
+    ]);
+  });
+
+  it("projects normalized loop-closing failures into draft and persisted views", () => {
+    let state = twoStops();
+    const preview = routePreview(["stop-001", "stop-002"]);
+    preview.legs[1] = {
+      ...preview.legs[1],
+      status: "networkDisconnected",
+      failureReason: undefined as unknown as null,
+      currentPath: null,
+    };
+    const normalizedPreview = normalizeRoutePreviewResponse(preview);
+    const draft = selectShellState(state, {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"]),
+        preview: normalizedPreview,
+      },
+    }).routeDraft;
+
+    expect(draft?.failures).toMatchObject([
+      {
+        legIndex: 1,
+        fromWaypointId: "stop-002",
+        toWaypointId: "stop-001",
+        fromLabel: "Stop B",
+        toLabel: "Stop A",
+        reason: "networkDisconnected",
+        legKind: "service",
+        isLoopClosing: true,
+        guidance: routeFailureGuidance("networkDisconnected", {
+          isLoopClosing: true,
+          legKind: "service",
+        }),
+      },
+    ]);
+
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          pathBroken: true,
+          legs: route.legs.map((leg, index) =>
+            index === 1
+              ? {
+                  ...leg,
+                  status: "networkDisconnected" as const,
+                  currentPath: null,
+                  failureReason: null,
+                }
+              : leg,
+          ),
+        })),
+      },
+    };
+
+    const persisted = selectShellState(state, createUiState()).routes[0];
+    expect(persisted.failures[0]).toMatchObject({
+      legIndex: 1,
+      reason: "networkDisconnected",
+      legKind: "service",
+      isLoopClosing: true,
+      guidance: draft?.failures[0].guidance,
+    });
+  });
+
+  it("keeps terminal reversal failures out of loop-closing guidance", () => {
+    const state = twoStops();
+    const preview = routePreview(["stop-001", "stop-002"]);
+    preview.legs[1] = {
+      ...preview.legs[1],
+      kind: "terminalReversal",
+      status: "networkDisconnected",
+      failureReason: "noLegalTurnaround",
+      currentPath: null,
+    };
+    const editor = selectShellState(state, {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"]),
+        pattern: "shuttle",
+        preview,
+      },
+    }).routeDraft;
+
+    expect(editor?.failures[0]).toMatchObject({
+      reason: "noLegalTurnaround",
+      legKind: "terminalReversal",
+      isLoopClosing: false,
+      guidance: "No legal U-turn here; add a junction or roundabout.",
+    });
   });
 
   it("lists routes and metro lines with selection state", () => {
