@@ -1,8 +1,9 @@
 use caelum_core::model::{
-    ActiveTrip, GameMap, Heading, LegFailureReason, Point, RoadPort, RoadStructure, RouteLeg,
+    ActiveTrip, Heading, LegFailureReason, MovementKind, Point, RouteLeg, RouteLegKind,
     RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TripPurpose,
     TripStatus,
 };
+use caelum_core::preview::RoutePreviewRequest;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -205,96 +206,192 @@ fn shuttle_route_resolves_outbound_and_return_service_legs_on_two_way_road() {
     );
 }
 
-fn connect_fixture_roads(map: &mut GameMap, first: Point, second: Point) {
-    let heading = match (second.x - first.x, second.y - first.y) {
-        (0, -1) => Heading::North,
-        (1, 0) => Heading::East,
-        (0, 1) => Heading::South,
-        (-1, 0) => Heading::West,
-        delta => panic!("fixture points are not adjacent: {delta:?}"),
-    };
-    let opposite = match heading {
-        Heading::North => Heading::South,
-        Heading::East => Heading::West,
-        Heading::South => Heading::North,
-        Heading::West => Heading::East,
-    };
-    map.tile_mut(first)
-        .expect("fixture first road")
-        .road_connections
-        .push(heading);
-    map.tile_mut(second)
-        .expect("fixture second road")
-        .road_connections
-        .push(opposite);
+fn point(x: i32, y: i32) -> Point {
+    Point { x, y }
+}
+
+fn dispatch(engine: &mut GameEngine, intent: GameIntent) {
+    let result = engine.dispatch(intent);
+    assert!(result.applied, "fixture dispatch should apply: {result:?}");
+}
+
+fn add_bus_stop(engine: &mut GameEngine, position: Point) -> String {
+    dispatch(engine, GameIntent::AddBusStop { point: position });
+    engine
+        .snapshot()
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.position == position)
+        .map(|stop| stop.id.clone())
+        .expect("fixture stop")
 }
 
 #[test]
-fn terminal_turnaround_recovers_after_a_junction_connects_the_headings() {
-    let terminal = Point { x: 3, y: 3 };
-    let east = Point { x: 4, y: 3 };
-    let west = Point { x: 2, y: 3 };
-    let north = Point { x: 3, y: 2 };
-    let mut snapshot = GameEngine::new().snapshot();
-    for (point, one_way) in [
-        (terminal, None),
-        (east, Some(Heading::West)),
-        (west, Some(Heading::East)),
-        (north, Some(Heading::North)),
-    ] {
-        let tile = snapshot.map.tile_mut(point).expect("fixture tile");
-        tile.kind = "road".to_string();
-        tile.one_way = one_way;
-        tile.road_connections.clear();
-        tile.road_structure_id = None;
-    }
-    connect_fixture_roads(&mut snapshot.map, terminal, east);
-    connect_fixture_roads(&mut snapshot.map, terminal, west);
-    connect_fixture_roads(&mut snapshot.map, terminal, north);
-
-    let broken = GameEngine::from_snapshot(snapshot.clone()).expect("fixture snapshot");
-    assert_eq!(
-        broken.road_topology_for_test().find_terminal_reversal(
-            terminal,
-            Heading::East,
-            Heading::West
-        ),
-        Err(LegFailureReason::NoLegalTurnaround)
+fn terminal_turnaround_recovers_after_a_roundabout_is_placed() {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vec![
+                point(3, 3),
+                point(4, 3),
+                point(4, 4),
+                point(3, 4),
+                point(3, 3),
+            ],
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (1..=3).map(|x| point(x, 3)).collect(),
+            preset: RoadPreset::OneWay,
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (4..=6).rev().map(|x| point(x, 3)).collect(),
+            preset: RoadPreset::OneWay,
+        },
     );
 
-    let junction_id = "fixture-junction".to_string();
-    let mut recovered_snapshot = snapshot;
-    recovered_snapshot
-        .map
-        .tile_mut(east)
-        .expect("fixture junction")
-        .road_structure_id = Some(junction_id.clone());
-    recovered_snapshot
-        .map
-        .tile_mut(east)
-        .expect("fixture junction")
-        .one_way = None;
-    recovered_snapshot
-        .map
-        .road_structures
-        .push(RoadStructure::AutomaticJunction {
-            id: junction_id.clone(),
-            footprint: vec![east],
-            ports: [Heading::West]
-                .into_iter()
-                .enumerate()
-                .map(|(index, edge)| RoadPort {
-                    id: format!("{junction_id}-port-{index}"),
-                    point: east,
-                    edge,
-                    direction: None,
-                })
-                .collect(),
-        });
-    let recovered = GameEngine::from_snapshot(recovered_snapshot).expect("recovered snapshot");
-    let path = recovered
-        .road_topology_for_test()
-        .find_terminal_reversal(terminal, Heading::East, Heading::West)
-        .expect("junction should connect the terminal headings");
-    assert!(path.step_count() > 1);
+    let first = add_bus_stop(&mut engine, point(3, 2));
+    let second = add_bus_stop(&mut engine, point(4, 5));
+    let waypoint_ids = vec![first.clone(), second.clone()];
+    let request = RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids: waypoint_ids.clone(),
+        route_id: None,
+        expected_revision: None,
+        generation: 1,
+    };
+
+    let broken = engine.preview_route(request.clone());
+    let turnaround = broken
+        .legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::TerminalReversal
+                && leg.from_waypoint_id.as_str() == first
+                && leg.to_waypoint_id.as_str() == first
+        })
+        .expect("preview should include the first terminal reversal");
+    assert_eq!(turnaround.status, RouteLegStatus::NetworkDisconnected);
+    assert_eq!(
+        turnaround.failure_reason,
+        Some(LegFailureReason::NoLegalTurnaround)
+    );
+    assert!(broken.rejection.is_some());
+
+    let rejected = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids: waypoint_ids.clone(),
+    });
+    assert!(
+        !rejected.applied,
+        "broken route must not save: {rejected:?}"
+    );
+
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(3, 3),
+            size: caelum_core::model::RoundaboutSize::Compact2x2,
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vec![point(4, 2), point(5, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vec![point(3, 5), point(2, 5)],
+            preset: RoadPreset::TwoWay,
+        },
+    );
+
+    let recovered = engine.preview_route(RoutePreviewRequest {
+        generation: 2,
+        ..request
+    });
+    assert!(
+        recovered.rejection.is_none(),
+        "roundabout should recover the route: {recovered:?}"
+    );
+    assert!(recovered
+        .legs
+        .iter()
+        .all(|leg| leg.status == RouteLegStatus::Connected));
+
+    let outbound = recovered
+        .legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::Service
+                && leg.from_waypoint_id.as_str() == first
+                && leg.to_waypoint_id.as_str() == second
+        })
+        .expect("recovered preview should include outbound service");
+    let steps = outbound
+        .current_path
+        .as_ref()
+        .expect("recovered outbound path")
+        .road_steps();
+    assert_eq!(
+        steps
+            .iter()
+            .map(|step| (
+                step.position,
+                step.entering_heading,
+                step.leaving_heading,
+                step.movement,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                point(4, 2),
+                Heading::South,
+                Heading::South,
+                MovementKind::Straight,
+            ),
+            (
+                point(4, 3),
+                Heading::South,
+                Heading::West,
+                MovementKind::RoundaboutEntry,
+            ),
+            (
+                point(3, 3),
+                Heading::West,
+                Heading::South,
+                MovementKind::RoundaboutCirculation,
+            ),
+            (
+                point(3, 4),
+                Heading::South,
+                Heading::South,
+                MovementKind::RoundaboutExit,
+            ),
+        ]
+    );
+
+    let saved = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids,
+    });
+    assert!(saved.applied, "recovered route should save: {saved:?}");
+    assert!(saved.snapshot.transit.routes[0]
+        .legs
+        .iter()
+        .all(|leg| leg.status == RouteLegStatus::Connected && leg.current_path.is_some()));
 }
