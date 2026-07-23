@@ -1,7 +1,9 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, Point, Route, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
-    TransitMode, TransitNodeStatus, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, GameSnapshot, LegFailureReason, Point, Route, RouteLeg, RouteLegPath,
+    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus,
+    TripPosition, TripPurpose, TripStatus, Vehicle,
 };
+use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::transit::{self, BUS_COST, METRO_COST};
 use caelum_core::{
@@ -104,6 +106,23 @@ fn route_mut<'a>(snapshot: &'a mut GameSnapshot, route_id: &str) -> &'a mut Rout
         .expect("fixture route")
 }
 
+fn resolved_bus_legs(
+    snapshot: &GameSnapshot,
+    topology: &RoadTopology,
+    waypoint_ids: &[&str],
+) -> Vec<RouteLegPath> {
+    let waypoint_ids = ids(waypoint_ids);
+    resolve_route_legs(
+        snapshot,
+        RoutingContext {
+            road_topology: topology,
+        },
+        TransitMode::Bus,
+        &waypoint_ids,
+        ServicePattern::Loop,
+    )
+}
+
 fn vehicle<'a>(snapshot: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
     snapshot
         .transit
@@ -131,6 +150,48 @@ fn route_platform_id(snapshot: &GameSnapshot, node_id: &str, route_id: &str) -> 
         .iter()
         .find(|platform| platform.route_ids.iter().any(|id| id == route_id))
         .map(|platform| platform.id.clone())
+}
+
+#[test]
+fn route_resolution_preserves_typed_failure_reasons_and_coarse_status() {
+    let engine = editable_bus_engine(&[2, 10], BUS_COST);
+    let topology = engine.road_topology_for_test();
+
+    let mut no_access = engine.snapshot();
+    no_access.transit.stops[0].position = point(2, 2);
+    no_access.transit.stops[0].road_access = None;
+    let no_access_legs = resolved_bus_legs(&no_access, topology, &["stop-001", "stop-002"]);
+    let no_access_leg = no_access_legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NoRoadAccess))
+        .expect("missing road access should be diagnosed");
+    assert_eq!(no_access_leg.status, RouteLegStatus::NetworkDisconnected);
+
+    let mut disconnected_engine = editable_bus_engine(&[2, 10], BUS_COST);
+    road_line(&mut disconnected_engine, 11, 2, 10);
+    dispatch(
+        &mut disconnected_engine,
+        GameIntent::AddBusStop {
+            point: point(2, 10),
+        },
+    );
+    let disconnected_legs = resolved_bus_legs(
+        &disconnected_engine.snapshot(),
+        disconnected_engine.road_topology_for_test(),
+        &["stop-001", "stop-003"],
+    );
+    let disconnected_leg = disconnected_legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NetworkDisconnected))
+        .expect("disconnected access tiles should be diagnosed");
+    assert_eq!(disconnected_leg.status, RouteLegStatus::NetworkDisconnected);
+
+    let missing_legs = resolved_bus_legs(&engine.snapshot(), topology, &["stop-001", "missing"]);
+    let missing_leg = missing_legs
+        .iter()
+        .find(|leg| leg.status == RouteLegStatus::MissingNode)
+        .expect("missing waypoint should remain a missing node");
+    assert_eq!(missing_leg.failure_reason, None);
 }
 
 #[test]
@@ -745,7 +806,7 @@ fn update_reports_route_not_found_and_rebases_to_new_live_stop_without_retained_
         RejectionCode::RouteNotFound
     );
 
-    let mut engine = editable_bus_engine(&[2, 6, 10, 13], BUS_COST);
+    let mut engine = editable_bus_engine(&[2, 6, 10, 12], BUS_COST);
     create_route(
         &mut engine,
         TransitMode::Bus,

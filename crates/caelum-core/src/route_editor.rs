@@ -79,11 +79,11 @@ pub fn update_route(
         Some(route_id),
         Some(current.waypoint_ids.as_slice()),
     )?;
-    let mut legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
+    let legs = resolve_route_legs(state, context, current.mode, &waypoint_ids, pattern);
     let retained_missing_ids =
         retained_missing_waypoint_ids(state, current.mode, &current.waypoint_ids, &waypoint_ids);
     validate_edit_legs(&current.legs, &legs, route_id, &retained_missing_ids)?;
-    carry_forward_leg_history(&current.legs, &mut legs);
+    let legs = route_lifecycle::merge_resolved_legs(Some(&current.legs), legs);
 
     let mut candidate = state.clone();
     apply_route_platform_delta(
@@ -121,8 +121,8 @@ pub fn update_route(
     );
     // Invariant: `validate_edit_legs` above rejects any leg that is newly
     // broken (was `Connected` in `current.legs` but is now non-`Connected`
-    // with no matching carried key). Only previously-broken legs (carried
-    // forward by `carry_forward_leg_history`) survive into `legs`. This
+    // with no matching pre-existing broken key). Only previously-broken legs
+    // are allowed by `validate_edit_legs` to survive into `legs`. This
     // guarantees `rebase_edited_route_vehicles_and_riders` never observes a
     // leg that was connected before the edit but disconnected after it —
     // riders/vehicles on such a leg would be silently stranded.
@@ -265,21 +265,6 @@ fn retained_missing_waypoint_ids<'a>(
                 .then_some(waypoint_id.as_str())
         })
         .collect()
-}
-
-fn carry_forward_leg_history(old_legs: &[RouteLegPath], new_legs: &mut [RouteLegPath]) {
-    for leg in new_legs {
-        if leg.status == RouteLegStatus::Connected {
-            leg.last_valid_path = leg.current_path.clone();
-            continue;
-        }
-        if let Some(old) = old_legs
-            .iter()
-            .find(|old| old.status != RouteLegStatus::Connected && old.key() == leg.key())
-        {
-            leg.last_valid_path = old.last_valid_path.clone();
-        }
-    }
 }
 
 fn require_all_connected(legs: &[RouteLegPath], route_id: Option<&str>) -> GameplayResult<()> {
