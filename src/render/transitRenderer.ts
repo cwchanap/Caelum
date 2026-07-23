@@ -92,8 +92,8 @@ function drawStopAccessIndicator(
   const baseY = to.y - unitY * arrowLength;
 
   ctx.save();
-  ctx.strokeStyle = colors.badgeText;
-  ctx.fillStyle = colors.badgeText;
+  ctx.strokeStyle = colors.hover;
+  ctx.fillStyle = colors.hover;
   ctx.lineWidth = 2;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -544,13 +544,19 @@ function terminalWaypointPosition(
   vehicle: Vehicle,
   leg: RouteLegPath,
 ): TripPosition | null {
-  const nodes =
-    vehicle.mode === "bus" ? state.transit.stops : state.transit.stations;
-  const node = nodes.find(
+  if (vehicle.mode === "bus") {
+    const stop = state.transit.stops.find(
+      (candidate) =>
+        candidate.id === leg.fromWaypointId && candidate.status === "present",
+    );
+    return stop?.roadAccess?.roadPoint ?? null;
+  }
+
+  const station = state.transit.stations.find(
     (candidate) =>
       candidate.id === leg.fromWaypointId && candidate.status === "present",
   );
-  return node?.position ?? null;
+  return station?.position ?? null;
 }
 
 function vehicleSample(
