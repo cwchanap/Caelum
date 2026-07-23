@@ -261,7 +261,7 @@ The existing `find_path(map, &Point, &Point)` had exactly one production caller 
 
 ### Service legs
 
-`resolve_service_path` / `resolve_leg` resolve each waypoint via `stop_access(...)` and call `find_path_between_access_tiles(from.road_point, to.road_point, from.preferred_heading, to.preferred_heading)`. `waypoint_position` is retained only for presence/missing-node detection (`RouteLegStatus::MissingNode`). The `Result` error is copied into `RouteLegPath.failure_reason`; `current_path`/`last_valid_path` remain `None` for a newly failed leg and the coarse status becomes `NetworkDisconnected`.
+`resolve_service_path` / `resolve_leg` resolve each waypoint via `stop_access(...)` and call `find_path_between_access_tiles(&snapshot.map, from.road_point, to.road_point, from.preferred_heading, to.preferred_heading)`. `waypoint_position` is retained only for presence/missing-node detection (`RouteLegStatus::MissingNode`). The `Result` error is copied into `RouteLegPath.failure_reason`; `current_path`/`last_valid_path` remain `None` for a newly failed leg and the coarse status becomes `NetworkDisconnected`.
 
 ### Terminal reversal
 
