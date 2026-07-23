@@ -12,7 +12,11 @@ import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
-import { rejectionMessage, warningMessage } from "./rejectionMessages";
+import {
+  rejectionMessage,
+  routeFailureGuidance,
+  warningMessage,
+} from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
 import type {
   ShellHudState,
@@ -329,6 +333,12 @@ export function selectRouteEditorView(
     previewStatus: preview.status,
     previewMessage: preview.message,
     previewWarnings: draft.preview?.warnings.map(warningMessage) ?? [],
+    failures: routeFailures(
+      state,
+      draft.pattern,
+      draft.waypointIds,
+      draft.preview?.legs ?? [],
+    ),
     canSave:
       staleRejection === null &&
       (ui.routePreviewError === null ||
@@ -344,26 +354,40 @@ export function selectRouteEditorView(
 
 function routeFailures(
   state: GameState,
+  pattern: Route["pattern"],
+  waypointIds: string[],
   legs: RouteLegPath[],
 ): RouteFailureRow[] {
-  return legs.flatMap((leg, legIndex) =>
-    leg.status === "connected"
-      ? []
-      : [
-          {
-            legIndex,
-            fromWaypointId: leg.fromWaypointId,
-            toWaypointId: leg.toWaypointId,
-            fromLabel: waypointLabel(state, leg.fromWaypointId),
-            toLabel: waypointLabel(state, leg.toWaypointId),
-            reason: leg.status,
-            missingNodeKind:
-              leg.status === "missingNode"
-                ? missingNodeKindForLeg(state, leg)
-                : undefined,
-          },
-        ],
-  );
+  return legs.flatMap((leg, legIndex) => {
+    if (leg.status === "connected") return [];
+
+    const reason: RouteFailureRow["reason"] =
+      leg.status === "missingNode"
+        ? "missingNode"
+        : (leg.failureReason ?? "networkDisconnected");
+    const isLoopClosing =
+      pattern === "loop" && leg.toWaypointId === waypointIds[0];
+    return [
+      {
+        legIndex,
+        fromWaypointId: leg.fromWaypointId,
+        toWaypointId: leg.toWaypointId,
+        fromLabel: waypointLabel(state, leg.fromWaypointId),
+        toLabel: waypointLabel(state, leg.toWaypointId),
+        reason,
+        legKind: leg.kind,
+        isLoopClosing,
+        guidance: routeFailureGuidance(reason, {
+          isLoopClosing,
+          legKind: leg.kind,
+        }),
+        missingNodeKind:
+          reason === "missingNode"
+            ? missingNodeKindForLeg(state, leg)
+            : undefined,
+      },
+    ];
+  });
 }
 
 function missingNodeKindForLeg(
@@ -398,7 +422,12 @@ function selectRouteRow(
     active: route.active,
     selected,
     status: routeServiceStatus(route),
-    failures: routeFailures(state, route.legs),
+    failures: routeFailures(
+      state,
+      route.pattern,
+      "stopIds" in route ? route.stopIds : route.stationIds,
+      route.legs,
+    ),
   };
 }
 

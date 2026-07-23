@@ -58,14 +58,6 @@
   function statusLabel(primary: "running" | "paused" | "broken"): string {
     return primary[0].toUpperCase() + primary.slice(1);
   }
-
-  function failureReason(
-    reason: "missingNode" | "networkDisconnected",
-    missingNodeKind: "stop" | "station" | undefined,
-  ): string {
-    if (reason === "networkDisconnected") return "road disconnected";
-    return missingNodeKind === "station" ? "missing station" : "missing stop";
-  }
 </script>
 
 <div class="hud-panel" data-testid="panel-manage">
@@ -140,10 +132,7 @@
                 {#each route.failures as failure (failure.legIndex)}
                   <li class="route-failure">
                     <span class="route-failure-detail">
-                      {failure.fromLabel} → {failure.toLabel}: {failureReason(
-                        failure.reason,
-                        failure.missingNodeKind,
-                      )}
+                      {failure.fromLabel} → {failure.toLabel}
                     </span>
                     <button
                       type="button"
@@ -159,9 +148,7 @@
                       class="route-repair-guidance"
                       id={`route-repair-${route.id}-${failure.legIndex}`}
                     >
-                      {failure.reason === "missingNode"
-                        ? "Restore the missing node at its former location."
-                        : "Repair the former road alignment."}
+                      {failure.guidance}
                     </span>
                   </li>
                 {/each}

@@ -176,6 +176,9 @@ describe("ManagePanel route controls", () => {
                 fromLabel: "Stop B",
                 toLabel: "Stop C",
                 reason: "missingNode",
+                legKind: "service",
+                isLoopClosing: false,
+                guidance: "Restore the missing node at its former location.",
               },
             ],
           },
@@ -188,7 +191,7 @@ describe("ManagePanel route controls", () => {
       "Broken",
     );
     expect(screen.getByText("Paused after repair")).toBeVisible();
-    expect(screen.getByText("Stop B → Stop C: missing stop")).toBeVisible();
+    expect(screen.getByText("Stop B → Stop C")).toBeVisible();
     const focus = screen.getByRole("button", {
       name: "Focus Stop B to Stop C",
     });
@@ -201,6 +204,37 @@ describe("ManagePanel route controls", () => {
     ).toHaveTextContent("Restore the missing node at its former location.");
     await fireEvent.click(focus);
     expect(cb.onFocusRouteFailure).toHaveBeenCalledWith("route-001", 1);
+  });
+
+  it("renders typed route guidance supplied by the selector", () => {
+    render(ManagePanel, {
+      props: {
+        routes: routes([
+          {
+            status: { primary: "broken", pausedAfterRepair: false },
+            failures: [
+              {
+                legIndex: 0,
+                fromWaypointId: "stop-001",
+                toWaypointId: "stop-002",
+                fromLabel: "Stop A",
+                toLabel: "Stop B",
+                reason: "noLegalTurnaround",
+                legKind: "terminalReversal",
+                isLoopClosing: false,
+                guidance: "No legal U-turn here; add a junction or roundabout.",
+              },
+            ],
+          },
+        ]),
+        ...callbacks(),
+      },
+    });
+
+    expect(
+      screen.getByText("No legal U-turn here; add a junction or roundabout."),
+    ).toBeVisible();
+    expect(screen.queryByText("Repair the former road alignment.")).toBeNull();
   });
 
   it("launches Edit from a broken route", async () => {
@@ -218,6 +252,9 @@ describe("ManagePanel route controls", () => {
                 fromLabel: "Stop A",
                 toLabel: "Missing Bus Stop",
                 reason: "missingNode",
+                legKind: "service",
+                isLoopClosing: false,
+                guidance: "Restore the missing node at its former location.",
               },
             ],
           },

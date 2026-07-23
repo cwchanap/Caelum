@@ -82,6 +82,7 @@ function editDraftView(): RouteEditorView {
     canUndo: false,
     canRedo: false,
     notice: null,
+    failures: [],
   };
 }
 
@@ -377,17 +378,19 @@ function failedMarkerLeg(
   toWaypointId: string,
   status: RouteLegPath["status"],
   lastValidPath: TransitPath,
+  kind: RouteLegPath["kind"] = "service",
+  failureReason: RouteLegPath["failureReason"] = null,
 ): RouteLegPath {
   return {
     fromWaypointId,
     toWaypointId,
     direction: "loop",
-    kind: "service",
+    kind,
     status,
     currentPath: null,
     lastValidPath,
     estimatedSeconds: null,
-    failureReason: null,
+    failureReason,
   };
 }
 
@@ -461,10 +464,14 @@ describe("broken route markers", () => {
       arc: vi.fn(),
       strokeRect: vi.fn(),
       fillRect: vi.fn(),
+      fillText: vi.fn(),
       strokeStyle: "",
       fillStyle: "",
       lineWidth: 0,
       globalAlpha: 1,
+      font: "",
+      textAlign: "left",
+      textBaseline: "bottom",
     } as unknown as CanvasRenderingContext2D;
 
     renderOverlays(context, routeState, {
@@ -474,6 +481,116 @@ describe("broken route markers", () => {
 
     expect(context.strokeRect).toHaveBeenCalledTimes(1);
     expect(context.arc).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders shared guidance for loop-closing and terminal-reversal failures", () => {
+    const state = createTestGameState();
+    const stops = [
+      {
+        id: "a",
+        kind: "busStop" as const,
+        status: "present" as const,
+        position: { x: 1, y: 1 },
+        platforms: [],
+      },
+      {
+        id: "b",
+        kind: "busStop" as const,
+        status: "present" as const,
+        position: { x: 6, y: 1 },
+        platforms: [],
+      },
+    ];
+    const loopRoute = {
+      id: "route-loop",
+      name: "Loop Route",
+      color: "#e04f39",
+      stopIds: ["a", "b"],
+      vehicleIds: [],
+      active: true,
+      pattern: "loop" as const,
+      revision: 1,
+      legs: [
+        failedMarkerLeg(
+          "b",
+          "a",
+          "networkDisconnected",
+          markerPath({ x: 6, y: 1 }, { x: 1, y: 1 }),
+          "service",
+          "networkDisconnected",
+        ),
+      ],
+      pathBroken: true,
+    };
+    const shuttleRoute = {
+      id: "route-shuttle",
+      name: "Shuttle Route",
+      color: "#2867b2",
+      stopIds: ["a", "b"],
+      vehicleIds: [],
+      active: true,
+      pattern: "shuttle" as const,
+      revision: 1,
+      legs: [
+        failedMarkerLeg(
+          "a",
+          "b",
+          "networkDisconnected",
+          markerPath({ x: 1, y: 1 }, { x: 6, y: 1 }),
+          "terminalReversal",
+          "noLegalTurnaround",
+        ),
+      ],
+      pathBroken: true,
+    };
+    const routeState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops,
+        routes: [loopRoute, shuttleRoute],
+      },
+    };
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      arc: vi.fn(),
+      strokeRect: vi.fn(),
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      strokeStyle: "",
+      fillStyle: "",
+      lineWidth: 0,
+      globalAlpha: 1,
+      font: "",
+      textAlign: "left",
+      textBaseline: "bottom",
+    } as unknown as CanvasRenderingContext2D;
+
+    renderOverlays(context, routeState, {
+      ...createUiState(),
+      selectedRouteId: "route-loop",
+    });
+    renderOverlays(context, routeState, {
+      ...createUiState(),
+      selectedRouteId: "route-shuttle",
+    });
+
+    expect(context.fillText).toHaveBeenCalledWith(
+      "Loop can't close here; switch to Shuttle or repair the road.",
+      expect.any(Number),
+      expect.any(Number),
+    );
+    expect(context.fillText).toHaveBeenCalledWith(
+      "No legal U-turn here; add a junction or roundabout.",
+      expect.any(Number),
+      expect.any(Number),
+    );
   });
 });
 

@@ -154,6 +154,22 @@
     {editor.previewMessage ?? editor.previewStatus}
   </p>
 
+  {#if editor.failures.length > 0}
+    <ul
+      class="route-failures route-preview-failures"
+      data-testid="route-preview-failures"
+    >
+      {#each editor.failures as failure (failure.legIndex)}
+        <li class="route-failure">
+          <span class="route-failure-detail">
+            {failure.fromLabel} → {failure.toLabel}
+          </span>
+          <span class="route-repair-guidance">{failure.guidance}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
   {#if editor.notice?.kind === "alreadyOnRoute"}
     <p
       class="route-preview route-draft-notice"

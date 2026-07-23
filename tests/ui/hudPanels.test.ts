@@ -44,6 +44,7 @@ function createDraftView(
     canUndo: false,
     canRedo: false,
     notice: null,
+    failures: [],
     ...overrides,
   };
 }
@@ -297,6 +298,34 @@ describe("RouteEditor", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Redo" }));
     expect(onRedo).toHaveBeenCalledTimes(1);
     expect(onUndo).not.toHaveBeenCalled();
+  });
+
+  it("renders typed route guidance supplied by the selector", () => {
+    const guidance =
+      "Loop can't close here; switch to Shuttle or repair the road.";
+    render(RouteEditor, {
+      props: {
+        ...editorProps(
+          createDraftView({
+            failures: [
+              {
+                legIndex: 1,
+                fromWaypointId: "stop-002",
+                toWaypointId: "stop-001",
+                fromLabel: "Stop B",
+                toLabel: "Stop A",
+                reason: "networkDisconnected",
+                legKind: "service",
+                isLoopClosing: true,
+                guidance,
+              },
+            ],
+          }),
+        ),
+      },
+    });
+
+    expect(screen.getByText(guidance)).toBeVisible();
   });
 
   it("renders the same editor controls for creation and committed edits", async () => {

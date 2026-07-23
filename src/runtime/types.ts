@@ -3,11 +3,13 @@ import type {
   BuildingType,
   GameState,
   GameplayRejection,
+  LegFailureReason,
   Overlay,
   Point,
   RoadPreset,
   RoadStructure,
   RoundaboutSize,
+  RouteLegKind,
   ServicePattern,
   Tool,
   TransitMode,
@@ -113,6 +115,7 @@ export interface RouteEditorView {
   previewStatus: "empty" | "connected" | "broken" | "rejected";
   previewMessage: string | null;
   previewWarnings: string[];
+  failures: RouteFailureRow[];
   canSave: boolean;
   canReload: boolean;
   canUndo: boolean;
@@ -131,7 +134,10 @@ export interface RouteFailureRow {
   toWaypointId: string;
   fromLabel: string;
   toLabel: string;
-  reason: "missingNode" | "networkDisconnected";
+  reason: "missingNode" | LegFailureReason;
+  legKind: RouteLegKind;
+  isLoopClosing: boolean;
+  guidance: string;
   /** Present only when reason is "missingNode": the kind of the missing
    * waypoint(s) — "station" if either endpoint is a missing station, otherwise
    * "stop". */

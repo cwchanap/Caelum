@@ -12,6 +12,7 @@ import type { AuthoredRoadTilePreview } from "../runtime/backend/types";
 import {
   buildRoadMutationPreview,
   selectRouteEditorView,
+  selectShellState,
 } from "../runtime/runtimeSelectors";
 import type {
   RoadMutationPreviewView,
@@ -589,6 +590,9 @@ function renderBrokenRouteMarkers(
   if (selected === undefined) {
     return;
   }
+  const failureRows =
+    selectShellState(state, ui).routes.find((route) => route.id === selected.id)
+      ?.failures ?? [];
   selected.legs.forEach((leg, legIndex) => {
     if (leg.status === "connected") {
       return;
@@ -618,6 +622,14 @@ function renderBrokenRouteMarkers(
       ctx.beginPath();
       ctx.arc(x, y, focused ? 8 : 6, 0, Math.PI * 2);
       ctx.fill();
+    }
+    const failure = failureRows.find((row) => row.legIndex === legIndex);
+    if (failure !== undefined) {
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = colors.badgeText;
+      ctx.fillText(failure.guidance, x + 12, y - 8);
     }
     ctx.restore();
   });
