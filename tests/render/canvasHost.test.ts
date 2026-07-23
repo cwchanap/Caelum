@@ -7,6 +7,7 @@ import type {
   CanvasHostContext,
 } from "../../src/runtime/createCanvasHost";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
 
 // jsdom ships no PointerEvent, no Pointer Capture API, and canvas.getContext
@@ -139,6 +140,7 @@ interface Fixture {
     onTick: ReturnType<typeof vi.fn>;
     onTileClick: ReturnType<typeof vi.fn>;
     onHoverTile: ReturnType<typeof vi.fn>;
+    onRouteDraftContextMenu: ReturnType<typeof vi.fn>;
     onDragStart: ReturnType<typeof vi.fn>;
     onDragCurrent: ReturnType<typeof vi.fn>;
     onDragCommit: ReturnType<typeof vi.fn>;
@@ -165,6 +167,7 @@ function createFixture(options?: {
     onTick: vi.fn(),
     onTileClick: vi.fn(),
     onHoverTile: vi.fn(),
+    onRouteDraftContextMenu: vi.fn(() => false),
     onDragStart: vi.fn(() => options?.onDragStartResult ?? true),
     onDragCurrent: vi.fn(),
     onDragCommit: vi.fn(),
@@ -312,6 +315,67 @@ describe("createCanvasHost", () => {
     expect(callbacks.onTileClick).not.toHaveBeenCalled();
   });
 
+  it("suppresses the browser context menu when route draft undo handles it", () => {
+    const fixture = createFixture({
+      ui: {
+        activeTool: "busRoute",
+        routeDraft: {
+          ...createDraft("bus", 1),
+          waypointIds: ["stop-001"],
+          selectedIndex: null,
+          interaction: "append",
+          generation: 1,
+          previewPending: false,
+          preview: null,
+        },
+      },
+    });
+    const { canvas, callbacks } = fixture;
+    const undo = vi.fn();
+    callbacks.onRouteDraftContextMenu.mockImplementation(() => {
+      if (fixture.getUi().routeDraft === null) {
+        return false;
+      }
+      undo();
+      return true;
+    });
+
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    canvas.dispatchEvent(event);
+
+    expect(callbacks.onRouteDraftContextMenu).toHaveBeenCalledTimes(1);
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("preserves the browser context menu when route draft undo declines", () => {
+    const fixture = createFixture({
+      ui: { activeTool: "inspect", routeDraft: null },
+    });
+    const { canvas, callbacks } = fixture;
+    const undo = vi.fn();
+    callbacks.onRouteDraftContextMenu.mockImplementation(() => {
+      if (fixture.getUi().routeDraft === null) {
+        return false;
+      }
+      undo();
+      return true;
+    });
+
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    canvas.dispatchEvent(event);
+
+    expect(callbacks.onRouteDraftContextMenu).toHaveBeenCalledTimes(1);
+    expect(undo).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("pointermove during drag calls onDragCurrent", () => {
     const { canvas, callbacks } = createFixture({
       ui: {
@@ -406,16 +470,21 @@ describe("createCanvasHost", () => {
     callbacks.onTileClick.mockClear();
     callbacks.onHoverTile.mockClear();
     callbacks.onDragCancel.mockClear();
+    callbacks.onRouteDraftContextMenu.mockClear();
 
     canvas.dispatchEvent(
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
     );
     dispatchPointer(canvas, "pointermove", center({ x: 4, y: 5 }));
     dispatchPointer(canvas, "pointerleave", center({ x: 0, y: 0 }));
+    canvas.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    );
 
     expect(callbacks.onTileClick).not.toHaveBeenCalled();
     expect(callbacks.onHoverTile).not.toHaveBeenCalled();
     expect(callbacks.onDragCancel).not.toHaveBeenCalled();
+    expect(callbacks.onRouteDraftContextMenu).not.toHaveBeenCalled();
   });
 
   it("remounting onto a different host tears down the prior mount", () => {

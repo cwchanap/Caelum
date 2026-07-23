@@ -20,6 +20,8 @@
       interaction: RouteDraft["interaction"],
     ) => void;
     onRemove: () => void;
+    onUndo: () => void;
+    onRedo: () => void;
     onMove: (delta: -1 | 1) => void;
     onReverse: () => void;
     onPattern: (pattern: ServicePattern) => void;
@@ -35,6 +37,8 @@
     onSetTool,
     onSelectWaypoint,
     onRemove,
+    onUndo,
+    onRedo,
     onMove,
     onReverse,
     onPattern,
@@ -72,6 +76,8 @@
         editor={routeDraft}
         {onSelectWaypoint}
         {onRemove}
+        {onUndo}
+        {onRedo}
         {onMove}
         {onReverse}
         {onPattern}

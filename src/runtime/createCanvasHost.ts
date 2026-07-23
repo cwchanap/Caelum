@@ -22,6 +22,8 @@ export interface CanvasHostContext {
   onTick: (deltaSeconds: number) => void;
   onTileClick: (point: Point) => void;
   onHoverTile: (point: Point | null) => void;
+  /** Handle a route-draft context menu. Return true to consume the browser menu. */
+  onRouteDraftContextMenu: () => boolean;
   /** Begin a drag gesture at `point`. Returns `true` when a drag is now active
    *  (so the host can capture the pointer for a clean release at the edge). */
   onDragStart: (point: Point) => boolean;
@@ -200,6 +202,12 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       }
     };
 
+    const handleContextMenu = (event: MouseEvent): void => {
+      if (ctx.onRouteDraftContextMenu()) {
+        event.preventDefault();
+      }
+    };
+
     const handlePointerMove = (event: PointerEvent): void => {
       if (canvas === null) {
         return;
@@ -355,6 +363,7 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
     }
 
     canvas.addEventListener("click", handleClick);
+    canvas.addEventListener("contextmenu", handleContextMenu);
     canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointerup", handlePointerUp);
@@ -389,6 +398,7 @@ export function createCanvasHost(ctx: CanvasHostContext): CanvasHost {
       observedCssHeight = 0;
 
       canvas.removeEventListener("click", handleClick);
+      canvas.removeEventListener("contextmenu", handleContextMenu);
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerdown", handlePointerDown);
       canvas.removeEventListener("pointerup", handlePointerUp);

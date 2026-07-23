@@ -60,6 +60,8 @@ function editorProps(editor: RouteEditorView) {
     editor,
     onSelectWaypoint: vi.fn(),
     onRemove: vi.fn(),
+    onUndo: vi.fn(),
+    onRedo: vi.fn(),
     onMove: vi.fn(),
     onReverse: vi.fn(),
     onPattern: vi.fn(),
@@ -127,6 +129,8 @@ function drawerProps(overrides: Record<string, unknown> = {}) {
     onAssignRouteToPlatform: vi.fn(),
     onSelectRouteWaypoint: vi.fn(),
     onRemoveRouteWaypoint: vi.fn(),
+    onUndoRouteDraft: vi.fn(),
+    onRedoRouteDraft: vi.fn(),
     onMoveRouteWaypoint: vi.fn(),
     onReverseRouteDraft: vi.fn(),
     onSetRoutePattern: vi.fn(),
@@ -259,6 +263,39 @@ describe("HudDrawer panel routing", () => {
 });
 
 describe("RouteEditor", () => {
+  it("offers history controls, disabled states, and duplicate notices", async () => {
+    const onUndo = vi.fn();
+    const onRedo = vi.fn();
+    const editor = {
+      ...createDraftView(),
+      canUndo: false,
+      canRedo: true,
+      notice: { kind: "alreadyOnRoute" as const, waypointId: "stop-001" },
+    };
+
+    render(RouteEditor, {
+      props: {
+        ...editorProps(editor),
+        onUndo,
+        onRedo,
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeEnabled();
+    expect(screen.getByTestId("route-draft-notice")).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
+    expect(screen.getByTestId("route-draft-notice")).toHaveTextContent(
+      "Already on this route",
+    );
+
+    await fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(onRedo).toHaveBeenCalledTimes(1);
+    expect(onUndo).not.toHaveBeenCalled();
+  });
+
   it("renders the same editor controls for creation and committed edits", async () => {
     const editorControls = [
       "Loop",

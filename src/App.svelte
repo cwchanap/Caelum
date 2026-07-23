@@ -8,6 +8,7 @@
   import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
+    RouteEditorView,
     RuntimeCommandResult,
     RuntimeController,
     RuntimeSnapshot,
@@ -148,6 +149,18 @@
     }
   }
 
+  function handleUndoRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.undoRouteDraft());
+    }
+  }
+
+  function handleRedoRouteDraft(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.redoRouteDraft());
+    }
+  }
+
   function handleMoveRouteWaypoint(delta: -1 | 1): void {
     if (runtime !== null) {
       setSnapshot(runtime.moveRouteWaypoint(delta));
@@ -239,6 +252,26 @@
     );
   }
 
+  type RouteEditorViewWithHistory = RouteEditorView & {
+    canUndo: boolean;
+    canRedo: boolean;
+    notice: RuntimeSnapshot["ui"]["routeDraftNotice"];
+  };
+
+  function routeEditorView(
+    current: RuntimeSnapshot,
+  ): RouteEditorViewWithHistory | null {
+    const editor = current.shell.routeDraft;
+    return editor === null
+      ? null
+      : {
+          ...editor,
+          canUndo: current.ui.routeDraftHistory.past.length > 0,
+          canRedo: current.ui.routeDraftHistory.future.length > 0,
+          notice: current.ui.routeDraftNotice,
+        };
+  }
+
   function handleCancelOrEscape(): void {
     if (shellError || runtime === null) {
       return;
@@ -272,16 +305,49 @@
       return;
     }
 
+    const targetIsInput = isTextInput(event.target);
+    const key = event.key.toLowerCase();
+    const routeDraftActive =
+      snapshot !== null && snapshot.ui.routeDraft !== null;
+
     if (
-      event.metaKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      isTextInput(event.target)
+      !targetIsInput &&
+      routeDraftActive &&
+      (event.metaKey || event.ctrlKey) &&
+      key === "z"
     ) {
+      event.preventDefault();
+      setSnapshot(
+        event.shiftKey ? runtime.redoRouteDraft() : runtime.undoRouteDraft(),
+      );
       return;
     }
 
-    const key = event.key.toLowerCase();
+    if (
+      !targetIsInput &&
+      routeDraftActive &&
+      (event.metaKey || event.ctrlKey) &&
+      key === "y"
+    ) {
+      event.preventDefault();
+      setSnapshot(runtime.redoRouteDraft());
+      return;
+    }
+
+    if (
+      !targetIsInput &&
+      routeDraftActive &&
+      (event.key === "Delete" || event.key === "Backspace")
+    ) {
+      event.preventDefault();
+      setSnapshot(runtime.removeRouteWaypoint());
+      return;
+    }
+
+    if (event.metaKey || event.ctrlKey || event.altKey || targetIsInput) {
+      return;
+    }
+
     if (key === "b") {
       const next = snapshot?.ui.activeHudCategory === "build" ? null : "build";
       setSnapshot(runtime.setHudCategory(next));
@@ -418,7 +484,7 @@
         roundaboutSize={snapshot.ui.roundaboutSize}
         buildCategory={snapshot.ui.buildCategory}
         inspector={snapshot.shell.inspector}
-        routeDraft={snapshot.shell.routeDraft}
+        routeDraft={routeEditorView(snapshot)}
         routes={snapshot.shell.routes}
         onCloseDrawer={() => handleSetHudCategory(null)}
         onSetTool={handleSetTool}
@@ -430,6 +496,8 @@
         onAssignRouteToPlatform={handleAssignRouteToPlatform}
         onSelectRouteWaypoint={handleSelectRouteWaypoint}
         onRemoveRouteWaypoint={handleRemoveRouteWaypoint}
+        onUndoRouteDraft={handleUndoRouteDraft}
+        onRedoRouteDraft={handleRedoRouteDraft}
         onMoveRouteWaypoint={handleMoveRouteWaypoint}
         onReverseRouteDraft={handleReverseRouteDraft}
         onSetRoutePattern={handleSetRoutePattern}
