@@ -28,7 +28,12 @@ import {
   type RouteDraftInteractionError,
 } from "../ui/routeDraft";
 import { axisLockedLine } from "../ui/roadDrag";
-import { createUiState, type UiState } from "../ui/uiState";
+import {
+  createUiState,
+  type RouteDraftCheckpoint,
+  type RouteDraftHistory,
+  type UiState,
+} from "../ui/uiState";
 import type { GameBackend, GameIntent, RoadMutation } from "./backend";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
@@ -41,6 +46,44 @@ import type {
 } from "./types";
 
 const rotations = [0, 90, 180, 270] as const;
+const ROUTE_DRAFT_HISTORY_LIMIT = 100;
+
+function emptyRouteDraftHistory(): RouteDraftHistory {
+  return { past: [], future: [] };
+}
+
+function checkpointRouteDraft(draft: RouteDraft): RouteDraftCheckpoint {
+  return {
+    waypointIds: [...draft.waypointIds],
+    pattern: draft.pattern,
+    selectedIndex: draft.selectedIndex,
+    interaction: draft.interaction,
+    mode: draft.mode,
+    source:
+      draft.source.kind === "create" ? { kind: "create" } : { ...draft.source },
+  };
+}
+
+function restoreRouteDraftCheckpoint(
+  draft: RouteDraft,
+  checkpoint: RouteDraftCheckpoint,
+): RouteDraft {
+  return {
+    ...draft,
+    waypointIds: [...checkpoint.waypointIds],
+    pattern: checkpoint.pattern,
+    selectedIndex: checkpoint.selectedIndex,
+    interaction: checkpoint.interaction,
+    mode: checkpoint.mode,
+    source:
+      checkpoint.source.kind === "create"
+        ? { kind: "create" }
+        : { ...checkpoint.source },
+    generation: draft.generation + 1,
+    previewPending: true,
+    preview: null,
+  };
+}
 
 interface CreateGameRuntimeOptions {
   backend: GameBackend;
@@ -63,6 +106,8 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
       activeTool === "busRoute" || activeTool === "metroLine"
         ? current.routeDraft
         : null,
+    routeDraftHistory: emptyRouteDraftHistory(),
+    routeDraftNotice: null,
     routePreviewError:
       activeTool === "busRoute" || activeTool === "metroLine"
         ? current.routePreviewError
@@ -92,6 +137,8 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     buildCategory: null,
     buildingRotation: 0 as const,
     routeDraft: null,
+    routeDraftHistory: emptyRouteDraftHistory(),
+    routeDraftNotice: null,
     routePreviewError: null,
     routePreviewHostError: null,
     roadMutationPreview: null,
@@ -118,6 +165,8 @@ function nextBuildingUiState(
     buildCategory: null,
     buildingRotation: 0 as const,
     routeDraft: null,
+    routeDraftHistory: emptyRouteDraftHistory(),
+    routeDraftNotice: null,
     routePreviewError: null,
     routePreviewHostError: null,
     roadMutationPreview: null,
@@ -430,6 +479,17 @@ export async function createGameRuntime({
       ui.routeDraft,
       routeDraft,
     );
+    const shouldRecordHistory =
+      ui.routeDraft !== null && previewRelevantChanged;
+    const routeDraftHistory = shouldRecordHistory
+      ? {
+          past: [
+            ...ui.routeDraftHistory.past,
+            checkpointRouteDraft(ui.routeDraft!),
+          ].slice(-ROUTE_DRAFT_HISTORY_LIMIT),
+          future: [],
+        }
+      : ui.routeDraftHistory;
     // Generation-stable updates preserve host/preview rejections; only clear
     // local interaction errors that a successful selection resolves.
     const routePreviewError = previewRelevantChanged
@@ -443,6 +503,8 @@ export async function createGameRuntime({
     const result = commit(state, {
       ...ui,
       routeDraft,
+      routeDraftHistory,
+      routeDraftNotice: null,
       routePreviewError,
       routePreviewHostError,
     });
@@ -511,6 +573,8 @@ export async function createGameRuntime({
       selectedArea: null,
       buildCategory: null,
       routeDraft,
+      routeDraftHistory: emptyRouteDraftHistory(),
+      routeDraftNotice: null,
       routePreviewError: null,
       routePreviewHostError: null,
       selectedRouteId: routeId,
@@ -589,6 +653,8 @@ export async function createGameRuntime({
           return commit(normalizeRustSnapshot(result.snapshot), {
             ...ui,
             routeDraft: null,
+            routeDraftHistory: emptyRouteDraftHistory(),
+            routeDraftNotice: null,
             routePreviewError: null,
             routePreviewHostError: null,
           });
@@ -650,7 +716,68 @@ export async function createGameRuntime({
 
   const cancelRouteDraft = (): RuntimeSnapshot => {
     previewCoordinator.invalidateRoute();
-    return commit(state, cancelDraftRoute(ui));
+    const cancelledUi = cancelDraftRoute(ui);
+    if (
+      cancelledUi === ui &&
+      ui.routeDraftHistory.past.length === 0 &&
+      ui.routeDraftHistory.future.length === 0 &&
+      ui.routeDraftNotice === null
+    ) {
+      return commit(state, ui);
+    }
+    return commit(state, {
+      ...cancelledUi,
+      routeDraftHistory: emptyRouteDraftHistory(),
+      routeDraftNotice: null,
+    });
+  };
+
+  const undoRouteDraft = (): RuntimeSnapshot => {
+    const draft = ui.routeDraft;
+    const checkpoint = ui.routeDraftHistory.past.at(-1);
+    if (draft === null || checkpoint === undefined) {
+      return commit(state, ui);
+    }
+    const restored = restoreRouteDraftCheckpoint(draft, checkpoint);
+    const nextUi: UiState = {
+      ...ui,
+      routeDraft: restored,
+      routeDraftHistory: {
+        past: ui.routeDraftHistory.past.slice(0, -1),
+        future: [...ui.routeDraftHistory.future, checkpointRouteDraft(draft)],
+      },
+      routeDraftNotice: null,
+      routePreviewError: null,
+      routePreviewHostError: null,
+    };
+    const snapshot = commit(state, nextUi);
+    requestRoutePreview(restored);
+    return snapshot;
+  };
+
+  const redoRouteDraft = (): RuntimeSnapshot => {
+    const draft = ui.routeDraft;
+    const checkpoint = ui.routeDraftHistory.future.at(-1);
+    if (draft === null || checkpoint === undefined) {
+      return commit(state, ui);
+    }
+    const restored = restoreRouteDraftCheckpoint(draft, checkpoint);
+    const nextUi: UiState = {
+      ...ui,
+      routeDraft: restored,
+      routeDraftHistory: {
+        past: [...ui.routeDraftHistory.past, checkpointRouteDraft(draft)].slice(
+          -ROUTE_DRAFT_HISTORY_LIMIT,
+        ),
+        future: ui.routeDraftHistory.future.slice(0, -1),
+      },
+      routeDraftNotice: null,
+      routePreviewError: null,
+      routePreviewHostError: null,
+    };
+    const snapshot = commit(state, nextUi);
+    requestRoutePreview(restored);
+    return snapshot;
   };
 
   const reloadRouteDraft = (): RuntimeSnapshot => {
@@ -1111,17 +1238,13 @@ export async function createGameRuntime({
       ) {
         const previousDraft = ui.routeDraft;
         const result = applyUiTileClick(state, ui, point);
-        const snapshot = commit(state, result.ui);
-        // Defer to the same generation-based decision `commitRouteDraft` uses,
-        // but also skip when `applyUiTileClick` set a local rejection (e.g.
-        // duplicate waypoint) — the backend must not preview an invalid draft.
         if (
           hasPreviewRelevantChange(previousDraft, result.ui.routeDraft) &&
           result.ui.routePreviewError === null
         ) {
-          requestRoutePreview(result.ui.routeDraft!);
+          return commitRouteDraft(result.ui.routeDraft!);
         }
-        return snapshot;
+        return commit(state, result.ui);
       }
 
       if (ui.activeTool === "road") {
@@ -1219,6 +1342,8 @@ export async function createGameRuntime({
         ? commit(state, ui)
         : commitRouteDraft(setPattern(ui.routeDraft, pattern));
     },
+    undoRouteDraft,
+    redoRouteDraft,
     saveRouteDraft,
     cancelRouteDraft,
     reloadRouteDraft,

@@ -219,16 +219,18 @@ describe("applyUiTileClick route drafts", () => {
     expect(result.ui.routeDraft?.previewPending).toBe(true);
   });
 
-  it("optimistically appends a repeated final stop for Rust to validate", () => {
+  it("preserves the draft when clicking the repeated final stop", () => {
     const { state, ui } = busDraftState();
 
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
-    result = applyUiTileClick(state, result.ui, { x: 7, y: 8 });
+    const first = result.ui;
+    result = applyUiTileClick(state, first, { x: 7, y: 8 });
 
-    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-001"]);
+    expect(result.ui).toBe(first);
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001"]);
   });
 
-  it("uses the selected interaction when applying a compatible node click", () => {
+  it("selects an existing waypoint for a duplicate compatible node click", () => {
     const { state, ui } = busDraftState();
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
     result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
@@ -239,7 +241,8 @@ describe("applyUiTileClick route drafts", () => {
 
     result = applyUiTileClick(state, selectedUi, { x: 15, y: 8 });
 
-    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-002", "stop-002"]);
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-002"]);
+    expect(result.ui.routeDraft?.selectedIndex).toBe(1);
   });
 
   it("appends before Rust reports that the next leg is disconnected", () => {

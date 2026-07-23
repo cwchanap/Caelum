@@ -12,6 +12,26 @@ import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
 import type { RouteDraft, RouteDraftError } from "./routeDraft";
 
+export type RouteDraftCheckpoint = Pick<
+  RouteDraft,
+  | "waypointIds"
+  | "pattern"
+  | "selectedIndex"
+  | "interaction"
+  | "mode"
+  | "source"
+>;
+
+export interface RouteDraftHistory {
+  past: RouteDraftCheckpoint[];
+  future: RouteDraftCheckpoint[];
+}
+
+export type RouteDraftNotice = {
+  kind: "alreadyOnRoute";
+  waypointId: string;
+};
+
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
   | "build"
@@ -67,6 +87,8 @@ export interface UiState {
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
   routeDraft: RouteDraft | null;
+  routeDraftHistory: RouteDraftHistory;
+  routeDraftNotice: RouteDraftNotice | null;
   routePreviewError: RouteDraftError | null;
   /** Recoverable host failure for the current route preview request. */
   routePreviewHostError: string | null;
@@ -94,6 +116,8 @@ export function createUiState(): UiState {
     buildingRotation: 0,
     hoverTile: null,
     routeDraft: null,
+    routeDraftHistory: { past: [], future: [] },
+    routeDraftNotice: null,
     routePreviewError: null,
     routePreviewHostError: null,
     roadPreviewGeneration: 0,

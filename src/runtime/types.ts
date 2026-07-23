@@ -22,6 +22,11 @@ export type {
   RouteDraftError,
   RouteDraftInteractionError,
 } from "../ui/routeDraft";
+export type {
+  RouteDraftCheckpoint,
+  RouteDraftHistory,
+  RouteDraftNotice,
+} from "../ui/uiState";
 export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {
@@ -226,6 +231,8 @@ export interface RuntimeController {
   moveRouteWaypoint: (delta: -1 | 1) => RuntimeSnapshot;
   reverseRouteDraft: () => RuntimeSnapshot;
   setRoutePattern: (pattern: ServicePattern) => RuntimeSnapshot;
+  undoRouteDraft: () => RuntimeSnapshot;
+  redoRouteDraft: () => RuntimeSnapshot;
   saveRouteDraft: () => Promise<RuntimeSnapshot>;
   cancelRouteDraft: () => RuntimeSnapshot;
   reloadRouteDraft: () => RuntimeSnapshot;
