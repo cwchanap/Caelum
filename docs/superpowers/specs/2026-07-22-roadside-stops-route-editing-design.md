@@ -2,7 +2,7 @@
 
 **Issue:** [HPA-309](https://linear.app/cwchanap/issue/HPA-309) — Fix bus route editing, roadside stops, and dual-lane turning.
 **Date:** 2026-07-22
-**Status:** Revised 2026-07-22 after design review (see "Review revisions" below)
+**Status:** Revised 2026-07-23 after three design-review rounds (see "Review revisions" below)
 
 ## Context
 
@@ -10,34 +10,44 @@ The heading-aware route editor and road topology introduced by PR #13 (commit `1
 
 Rust remains the authority for stop placement, road access, topology, route preview, and committed route validation. TypeScript owns draft history, shortcuts, interaction state, and presentation.
 
-### Correction to the issue's premise
+### The player-facing bus stop is on-road (issue premise confirmed)
 
-The issue states *"bus stops are currently placed and stored directly on road cells."* This is **inaccurate**. `buildings::can_place_building` (`crates/caelum-core/src/buildings.rs:132`) already requires `tile.kind == "empty"` for `busStop`, and `Stop.position` is set to the roadside `origin` (`buildings.rs:252`). Stops are *already* on roadside cells.
+The issue states *"bus stops are currently placed and stored directly on road cells."* **This is correct.** The lightweight `busStop` tool — the only normal bus stop the player can place — goes through a path separate from `place_building`:
 
-The real gap is the **missing explicit road access**: routing scans adjacent roads unconstrainedly (`network::terminal_reversal_access_points`, bare `waypoint_position`), which causes wrong-lane binding and the dual-road turn failures. Migration is therefore *"derive and persist a road access for stops already roadside,"* not *"move stops off roads."*
+- Build menu (`src/domain/catalog/buildMenu.ts`): transit category is `[transitNodeItem("busStop"), buildingItem("busTerminal")]`. The `busStop` *building* catalog entry is never surfaced; the menu uses the `busStop` **tool**.
+- Runtime (`src/runtime/createGameRuntime.ts`): `activeTool === "busStop"` produces a `{ type: "addBusStop", point }` intent.
+- `transit::add_bus_stop` → `is_valid_bus_stop_placement` **requires `tile.kind == "road"`** and stores `position: *point` (the road tile). (Only `busTerminal`, a 3×2 building via `place_building`, is roadside.)
+
+So the issue's product decision — *"a normal bus stop occupies a non-road roadside cell"* — requires **moving the `busStop` tool off-road** (decision 2). This is a real positional migration of existing on-road stops, not merely "derive an access field."
 
 ### Root cause of the dual-road turn failure
 
-`road_topology::compile_automatic_junction_transitions` already emits port-to-port left/right turns between dual carriageways — the junction graph **does** support legal turns. The bug is endpoint resolution, not the graph. Verified: `RoadTopology::find_path` takes bare `Point`s (`road_topology.rs`); `start_states` fans an off-road anchor out to **all** adjacent road tiles × all headings; the goal accepts any heading at manhattan distance 1. That unconstrained fan-out across parallel dual cariageways is the wrong-lane binding. The fix is to pin each endpoint to the stop's authoritative access **tile**, eliminating the fan-out — without constraining the heading (see Review revision A).
+`road_topology::compile_automatic_junction_transitions` already emits port-to-port left/right turns between dual carriageways — the junction graph **does** support legal turns. The bug is endpoint resolution, not the graph. Verified: `RoadTopology::find_path` takes bare `Point`s; `start_states` fans an off-road anchor out to **all** adjacent road tiles × all headings; the goal accepts any heading at manhattan distance 1. That unconstrained fan-out across parallel dual cariageways is the wrong-lane binding. The fix is to pin each endpoint to the stop's authoritative access **tile**, eliminating the fan-out — without constraining the heading (revision A).
 
-### Review revisions (2026-07-22)
+### Review revisions
 
-A design review caught two blocking defects and several gaps in the first draft. The revisions below are incorporated into the sections that follow:
+**Round 1 (2026-07-22):**
+- **A. Pin the tile, not the heading.** `road_point` is the authoritative pin; the heading is preference/display only (a hard heading pin breaks shuttle returns).
+- **B. `find_path` must be replaced for bus stops** — a new tile-constrained finder; the graph builder is unchanged.
 
-- **A. Pin the tile, not the heading.** The draft pinned both endpoints of every leg to one lifelong `RoadState { road_point, serving_heading }`. That breaks shuttle returns on ordinary two-way roads: a mid-block stop pinned to `East` cannot be reached westbound on the return leg (`shuttle_specs` emits real return legs needing the opposite heading). `road_point` is the authoritative pin; the heading is preference/display only.
-- **B. `find_path` must be replaced for bus stops.** "Dijkstra unchanged" was wrong — `find_path(map, &Point, &Point)` fans out across all adjacent roads. A new tile-constrained finder is required (`road_topology.rs` is now a touched file).
-- **C. Stale `road_access` after road edits.** A stored access can point at a demolished road, a swallowed structure tile, or a flipped one-way forever. The access is normalized into the snapshot (revision E supersedes the earlier "resolve-time no-mutate" wording).
-- **D. History checkpoints, not full drafts; real reducers; status matrix; multi-tile terminal access; structural preview≡commit equality.** See §4/§5.
-- **E (2nd review). Persist access so the UI indicator is authoritative.** Resolve-time-only derivation can't feed the TS indicator (migrated stops would show no arrow; stale stops would show a tile Rust no longer routes through). Access is now **normalized into the snapshot** at engine construction and at placement/restore, so the wire field is always authoritative. Resolve validates defensively but is no longer the sole supplier.
-- **F (2nd review). Validate access against the stop footprint, not just bare-road.** `is_valid_access` requires `road_point` to be orthogonally adjacent to the stop's *current* footprint; tombstone restore installs the access derived for the new placement (a terminal rebuilt with a different rotation must not keep a now-dangling road_point). "Legal road access" at placement requires a *usable* road tile (≥1 servable heading with a reciprocal neighbor), not merely a bare road tile.
-- **G (2nd review). Turnaround guidance attaches to the right leg kind.** `NoLegalTurnaround` only occurs on Shuttle terminal-reversal legs (Loop itineraries have none), so its guidance is "add turnaround infrastructure," not "switch to Shuttle." The "switch to Shuttle" suggestion attaches to a failed Loop *closing service leg*.
-- **H (2nd review). Mutation result carries notice/history; keyboard lives in App.svelte.** `applyNodeClick` returns `{ draft, rejection }` only today — extend the reducer contract to carry notice/history; `canUndo`/`canRedo`/notice join the view model; keyboard undo is wired in `App.svelte`'s existing `handleWindowKeydown` (which already has the `isTextInput` focus guard), not the canvas host.
+**Round 2 (2026-07-22):**
+- **C/E. Persist access (normalize into the snapshot)** so the TS indicator is authoritative, not resolve-time-only.
+- **D/F. Footprint-aware validation; usable-road requirement; checkpoint history; status matrix; structural preview≡commit equality.**
+- **G. Turnaround guidance attaches to the producing leg kind.**
+- **H. Mutation-result contract; keyboard undo in `App.svelte`.**
 
-## Decisions (confirmed in brainstorming; revised after two reviews)
+**Round 3 (2026-07-23) — premise correction + downstream fixes:**
+- **I. Move the `busStop` tool off-road.** `add_bus_stop` is rewritten to require an empty roadside tile with an adjacent usable road; `Stop.position` becomes the roadside anchor, `road_access.road_point` the adjacent road. Existing on-road stops migrate to a roadside anchor (decision 2). This supersedes the first draft's false "stops are already roadside" correction.
+- **J. Normalize on the dispatch commit path too**, not only at engine construction — road edits happen via `dispatch`/`tick`, so demolishing a road beside a stop must re-normalize its access immediately (gated on map change, same as the topology recompile).
+- **K. Zero-step service legs need a terminal-reversal fallback** — `road_exit_heading`/`road_entry_heading` return `None` on an empty path and the deleted `terminal_reversal_access_points` fallback no longer rescues it; derive the reversal headings from `preferred_heading` (or the nearest non-empty bounding leg) instead.
+- **L. `stop_footprint` must be defined** — `Stop` carries only `position`; the footprint lives on `PlacedBuilding.occupied_tiles`. Define a helper (roadside `busStop` → `[position]`; `busTerminal` → associated building's `occupied_tiles`) and pass the footprint into `restore_or_create_node` (called before the building is pushed). Tombstoned stops (no building) are skipped by normalization.
+- **M. Housekeeping.** `find_path` becomes **test-only** (its sole production caller is `resolve_service_path`); `find_reversal_between` becomes dead — remove it. `lane_accepts`/`is_road`/`reciprocal_connection` need `pub(crate)`; `orthogonal_neighbors` = `canonical_headings()` + `offset()`. Loop closing-leg rule for RouteEditor = last loop spec (`toWaypointId === waypointIds[0]` when `pattern === "loop"`). Drop the millisecond-quantization hedge (paths share `build_road_path`; integer millis → exact deterministic equality).
+
+## Decisions (confirmed in brainstorming; revised after three reviews)
 
 1. **Scope:** all five delivery slices in one spec.
-2. **Access selection UX:** auto-pick deterministically (fixed tile order, then N,E,S,W heading order) at placement, render a visible indicator. No two-step gesture. **The pin is the tile (`road_point`); the heading is preference/display only** (revision A).
-3. **Migration & staleness:** add `roadAccess` as a `#[serde(default)] Option<StopRoadAccess>` on `Stop`. **No schema bump** (stay on v2). Access is **normalized into the snapshot** — derived+stored at placement, at tombstone restore, and on `GameEngine` construction for any stop whose access is missing or invalid against the live map (revisions E/F). Resolve re-derives only as a defensive fallback. The wire field is the authoritative source for both routing and the TS indicator.
+2. **Placement model — move the `busStop` tool off-road (revision I).** The player-facing `busStop` tool is relocated from road tiles to roadside cells: `add_bus_stop` is rewritten to require an empty, unoccupied roadside tile with at least one adjacent usable road. `Stop.position` becomes the roadside anchor (an empty cell); `road_access.road_point` is the adjacent road; `preferred_heading` is auto-picked (N,E,S,W order) and shown via an indicator. No two-step gesture. `busTerminal` (already roadside via `place_building`) keeps the footprint-based derivation.
+3. **Migration & staleness — positional migration, no schema bump (revisions C/E/I).** `roadAccess` is a `#[serde(default)] Option<StopRoadAccess>` on `Stop`; stay on v2. Existing **on-road** stops migrate on `GameEngine` construction: each stop whose `position` is a road tile moves to a roadside anchor (an adjacent empty, unoccupied, non-node cell, picked in N,E,S,W order) and its original road tile becomes `road_access.road_point`; if no roadside cell is available, it falls back to staying on-road with `road_point == position` (degenerate but functional). Access is re-normalized into the snapshot on the **dispatch commit path** whenever the map changes (revision J), and at placement/restore — so the TS indicator is always authoritative mid-session, not just on load. Resolve re-derives only as a defensive fallback.
 
 ## Architecture — two forks
 
@@ -94,80 +104,85 @@ export interface Stop {
 }
 ```
 
-**No schema bump.** Per decision 3, `roadAccess` is optional and lazily (re)derived at resolve time. `Station` (metro) is unchanged — metro already uses track paths and has no road access concept. `RouteLegPath` also gains `failureReason?` (§5).
+**No schema bump.** Per decision 3, `roadAccess` is optional and normalized into the snapshot (placement, restore, engine construction, dispatch commit). `Station` (metro) is unchanged — metro already uses track paths and has no road access concept. `RouteLegPath` also gains `failureReason?` (§5).
 
 ## Section 2 — Placement & deterministic access selection
+
+There are two placement paths and both now produce a roadside anchor + an explicit access:
+
+- **`busStop` tool → `transit::add_bus_stop`** (revision I): the player-facing lightweight stop, **relocated off-road**.
+- **`busTerminal` → `buildings::place_building`**: the 3×2 building (already roadside), footprint-based.
 
 ### New module `crates/caelum-core/src/stop_access.rs`
 
 ```rust
-/// Deterministically derive the authoritative road access for a stop.
-/// `road_point` is the pin; `preferred_heading` is a display/ranking hint.
-/// Returns None when no adjacent legal road access exists.
+/// Derive access for a roadside anchor (an empty/off-road tile): scan its
+/// orthogonal neighbors for the first usable bare road tile.
 pub fn derive_stop_access(map: &GameMap, anchor: Point) -> Option<StopRoadAccess>
+/// Derive access for a multi-tile footprint (busTerminal): union of orthogonal
+/// neighbors of every footprint tile, in footprint-then-N,E,S,W order.
 pub fn derive_stop_access_for_footprint(map: &GameMap, footprint: &[Point]) -> Option<StopRoadAccess>
+/// Resolve the footprint a stop's access must stay adjacent to.
+/// busStop -> [position]; busTerminal -> associated building's occupied_tiles.
+pub fn stop_footprint(snapshot: &GameSnapshot, stop: &Stop) -> Vec<Point>
 ```
 
-**Candidate tiles** — the set of orthogonal neighbors that are *usable* bare road tiles, scanned in a deterministic order:
+**Candidate road tiles** — usable bare road tiles (`kind == "road" && road_structure_id.is_none()` **and** at least one heading `h` with `lane_accepts(one_way, h)` **and** `reciprocal_connection(map, tile, h)`; automatic-junction/roundabout footprint tiles are excluded). For `busStop`, scan the anchor's neighbors N,E,S,W; for `busTerminal`, the union over all footprint tiles. The **first** candidate becomes `road_point`.
 
-- `busStop` (1×1): neighbors of the single anchor cell, in N, E, S, W order.
-- `busTerminal` (3×2, revision D): the union of orthogonal neighbors of **every** footprint tile. Deterministic order: iterate footprint tiles in their emitted order, and within each tile scan N, E, S, W; dedup. This handles a terminal whose only adjacent road runs along the far edge (the `origin` cell alone would miss it). `Stop.position` stays as `origin` (the passenger anchor); only `road_point` may come from a non-origin footprint neighbor.
+`preferred_heading` (best-effort display/ranking hint, never a constraint): first `h` (N,E,S,W) where `lane_accepts(one_way,h) && road_connections.contains(h)`; else first `h` where `lane_accepts(one_way,h)`; else `None`.
 
-The **first** candidate tile (in that order) becomes `road_point`. Then `preferred_heading`:
+### `add_bus_stop` rewrite (revision I)
 
-1. first heading `h` (N, E, S, W) where `lane_accepts(one_way, h)` **and** `road_connections.contains(h)` — the bus can pass straight through (the usual mid-block direction); else
-2. first `h` where `lane_accepts(one_way, h)` — terminus / must-turn; else
-3. `None`.
+`is_valid_bus_stop_placement` is inverted: it now requires the clicked tile to be a **roadside anchor** — an **empty** tile (not road), unoccupied by a building, not already a transit node, `road_structure_id.is_none()`, with **at least one adjacent usable road** (`derive_stop_access(map, point).is_some()`). `add_bus_stop` stores `position: *point` (the roadside anchor) and `road_access: derive_stop_access(map, *point)`. Rejections: `OutOfBounds`; `RoadRequired` is replaced — on-road clicks now fail with `NoRoadAccess` (no adjacent usable road) or `BlockedTile` (occupied/non-empty). `BUS_STOP_COST` is unchanged.
 
-**`preferred_heading` is best-effort.** It ranks otherwise-equal goal states and drives the indicator arrow; it never reduces the servable heading set. A heading with no graph transitions is harmless — the finder simply falls back to the other reachable headings on `road_point`.
+### `place_building` (`busTerminal`)
 
-**Usable-road requirement (revision F).** A candidate qualifies only if it is a *usable* road tile, not merely bare road:
+`can_place_building` for `busTerminal` additionally requires `derive_stop_access_for_footprint(map, &occupied_tiles).is_some()`, else `NoRoadAccess`. `place_building_core` stores the derived `road_access` on the new `Stop`. (The unused `busStop` building-catalog entry stays dead — the tool path is `add_bus_stop`.)
 
-- bare road: `kind == "road" && road_structure_id.is_none()` (automatic-junction/roundabout footprint tiles are excluded — those are served through their ports via normal graph edges); **and**
-- at least one heading `h` where `lane_accepts(one_way, h)` **and** `reciprocal_connection(map, road_point, h)` — the neighbor in direction `h` is a road that connects back, so a compiled `RoadState` transition will exist there. This is a cheap local adjacency check (`road::reciprocal_connection`), no full topology compile.
+**Tombstone restore (`restore_or_create_node`)** is passed the footprint (revision F/L — it is called before the building is pushed, and is shared with metro) and re-derives/installs access for the current footprint; a terminal rebuilt with a different rotation gets a fresh access. `busStop` restore uses `[anchor]`. Tombstoned stops have no building → `stop_footprint` falls back to `[position]`; normalization skips `Missing` stops entirely (they aren't routed).
 
-This prevents an isolated road from passing placement and then immediately producing `NoLegalEntryHeading`. (If only a non-reciprocal heading exists the tile is a true dead-end with no legal entry/exit and is rejected as `NoRoadAccess`.)
+### Migration of existing on-road stops (revision I)
 
-### Placement integration (`buildings.rs`)
+On `GameEngine` construction (and re-run on the dispatch commit path when the map changes — revision J), normalize every `Present` stop:
 
-- `can_place_building` adds a new validation branch for `busStop`/`busTerminal`: after the existing footprint checks, derive the access (`derive_stop_access` for 1×1, `derive_stop_access_for_footprint` for terminals); reject with `RejectionCode::NoRoadAccess` (new code) when it returns `None` or the candidate is not *usable*. This enforces *"at least one adjacent legal, usable road access exists."*
-- `place_building_core` stores the derived `road_access` on the new `Stop`.
-- **Tombstone restore (`restore_or_create_node`) re-derives and installs access for the new placement** (revision F): a terminal rebuilt at the same origin but a different rotation has a different footprint, and a previously-valid `road_point` may no longer be adjacent. Restore must not preserve a stale field; it installs the access derived for the *current* footprint. (Same anchor + footprint re-derives identically, so identity is preserved for unchanged restores.)
-- Removal (`remove_or_tombstone_node`) is unchanged — `road_access` is part of the `Stop`, carried by tombstones and dropped on garbage-collection.
+1. If `position` is a **road tile** (legacy on-road stop): pick a roadside anchor — the first orthogonal neighbor (N,E,S,W) that is an empty, unoccupied, non-node tile — and set `position` to it; set `road_access.road_point` to the **original** road tile (preserving the served lane). If no roadside neighbor is free, leave `position` on the road with `road_access.road_point == position` (degenerate fallback, still servable).
+2. If `position` is already roadside but `road_access` is missing or fails `is_valid_access` (road demolished / one-way flipped / tile swallowed): re-derive via `derive_stop_access`/`derive_stop_access_for_footprint`.
 
-### TypeScript mirror (`src/render/placementValidation.ts`)
+This is a real positional change to existing snapshots (stop `position`s move off the road), so e2e/fixture assertions on stop coordinates and `MovementKind[]` paths must be updated (§6). It stays on schema v2 — no reject-old-saves.
 
-`canPlaceBuilding` for `busStop`/`busTerminal` additionally requires at least one orthogonal neighbor (of the **full footprint** for terminals) to be a bare road tile, so hover validation matches Rust (optimistic-only parity, same as today; the reciprocal-connection usability check is Rust-side authoritative).
+### TypeScript mirror (`src/render/placementValidation.ts` + `createGameRuntime.ts`)
+
+The `busStop` tool's hover validation flips to require an **empty** tile with an adjacent bare road (was: a road tile). `createGameRuntime.ts` keeps emitting `addBusStop`; the Rust side now interprets it as a roadside placement. `busTerminal` hover matches the footprint version.
 
 ### Rendering indicator
 
-The transit/building renderer draws a small arrow from the stop's `position` toward `roadAccess.roadPoint` along `preferredHeading`, making the bound lane visible (decision 2). The arrow renders above the road layer but below route-preview handles so it stays readable (z-order: map < buildings < access indicator < transit handles/preview). Exact art handled in implementation; a short stub arrow is the minimum.
+The transit renderer draws a small arrow from the stop's `position` (roadside) toward `roadAccess.roadPoint` along `preferredHeading`. Z-order: map < buildings < access indicator < transit handles/preview.
 
 ## Section 3 — Access-constrained routing (`network.rs` + `road_topology.rs`)
 
-### Access resolution & normalization (revisions C/E/F)
+### Access resolution & normalization (revisions C/E/F/I/J)
 
-Access is **normalized into the snapshot** so the wire field is authoritative for both routing and the TS indicator:
+Access is **normalized into the snapshot** so the wire field is authoritative for both routing and the TS indicator — at load *and* mid-session:
 
 - **At placement / tombstone restore:** `road_access` is derived for the current footprint and stored on the `Stop` (§2).
-- **At `GameEngine` construction:** any stop whose `road_access` is `None` **or** fails `is_valid_access` is re-derived (against its current footprint) and written back into the snapshot. This runs once on load, so old v2 snapshots and stops affected by road edits converge to a valid, persisted access on the first snapshot the host publishes.
-- **At resolve (defensive):** `stop_access` trusts the stored access when still valid and re-derives otherwise. Because construction already normalized, this fallback should be a no-op in practice — it exists to guarantee correctness if a snapshot reaches routing without normalization.
+- **At `GameEngine` construction:** run the migration + re-derivation pass — legacy on-road stops move to a roadside anchor (revision I), and any stop whose `road_access` is `None` or fails `is_valid_access` is re-derived and written back.
+- **On the dispatch commit path (revision J):** road edits happen via `dispatch`/`tick`, not construction, so a stop whose neighbor road was demolished/flipped/swallowed would otherwise keep a stale persisted field (and a wrong indicator) until next load. The engine's commit (where the topology is already recompiled, gated on `before.map != after.map`) also runs stop-access normalization on the candidate snapshot. This keeps the wire field correct mid-session.
+- **At resolve (defensive):** `stop_access` trusts stored access when valid and re-derives otherwise. With the commit-path normalize this is a no-op in practice.
 
 ```rust
 /// Resolve a stop waypoint to its authoritative access tile + preferred heading.
 fn stop_access(snapshot: &GameSnapshot, stop_id: &str) -> Option<StopRoadAccess> {
     let stop = snapshot.transit.stops.iter().find(|s| s.id == stop_id)?;
-    let footprint = stop_footprint(snapshot, stop);           // [origin] for busStop, full for terminal
+    let footprint = stop_footprint(snapshot, stop);   // [position] for busStop, building tiles for terminal
     match stop.road_access {
         Some(access) if is_valid_access(&snapshot.map, &footprint, &access) => Some(access),
         _ => derive_stop_access_for_footprint(&snapshot.map, &footprint),
     }
 }
 
-/// road_point is still a bare, usable road tile AND is orthogonally adjacent to
-/// the stop's CURRENT footprint. preferred_heading is not re-validated (a hint).
-/// Footprint-adjacency catches a terminal rebuilt with a different rotation whose
-/// old road_point is no longer touching the footprint.
+/// road_point is a bare, usable road tile AND orthogonally adjacent to the
+/// stop's CURRENT footprint (catches a rebuilt/different-rotation terminal, or
+/// a migrated stop whose anchor moved). preferred_heading is not re-validated.
 fn is_valid_access(map: &GameMap, footprint: &[Point], access: &StopRoadAccess) -> bool {
     let still_bare_usable = map.tile(access.road_point).is_some_and(|t| {
         t.kind == "road" && t.road_structure_id.is_none()
@@ -177,7 +192,7 @@ fn is_valid_access(map: &GameMap, footprint: &[Point], access: &StopRoadAccess) 
     });
     let adjacent_to_footprint = footprint
         .iter()
-        .any(|p| orthogonal_neighbors(*p).contains(&access.road_point));
+        .any(|p| canonical_headings().any(|h| offset(*p, h) == access.road_point));
     still_bare_usable && adjacent_to_footprint
 }
 ```
@@ -207,7 +222,7 @@ Implementation is `deterministic_dijkstra` with two changes: `start_states` is r
 
 **Shared-access-tile / positive-movement rule (revision E, 2nd-review P1).** When two stops share the same `road_point` (`from_tile == to_tile`) — e.g. roadside cells on opposite sides of one road tile — the bus is already at the goal `RoadState`, so the leg is a **deliberate zero-step service leg** (connected, 0 s). This is distinct from the `movement_count > 0` guard, which exists to reject an *untraversed* goal on a seeded start tile. The finder returns the zero-step path only when `from_tile == to_tile` (a legitimate same-tile serve); for `from_tile != to_tile` the `movement_count > 0` guard is preserved exactly as today, so a goal is never accepted without a real traversal.
 
-The existing `find_path(map, &Point, &Point)` is **kept** for any non-stop caller and for metro (metro uses `find_track_path`, unaffected). Bus service legs stop calling it.
+The existing `find_path(map, &Point, &Point)` had exactly one production caller (`resolve_service_path`); after this change it is **test-only** (the ~26 remaining call sites are integration tests). Mark it `#[cfg(test)]` or document it as a test surface — do not rely on it for production routing. `find_reversal_between` becomes dead (no caller, no test) — **remove it**.
 
 ### Service legs
 
@@ -221,13 +236,13 @@ The existing `find_path(map, &Point, &Point)` is **kept** for any non-stop calle
 RoadTopology::find_terminal_reversal(access_tile, exit_heading, entry_heading)
 ```
 
-`exit_heading` / `entry_heading` are derived from the bounding service legs' last/first road-step headings (as today). Because the heading is **not** pinned, a shuttle's return leg naturally arrives on the opposite heading and the terminal reversal performs the real heading change (no zero-step no-op unless the headings genuinely match). `find_reversal_between` is retained in `RoadTopology` but unused by stop-based terminals under the single-access model.
+where `exit_heading`/`entry_heading` come from `road_exit_heading`/`road_entry_heading` (`.last()`/`.first()` of the bounding legs' road steps). **Zero-step bounding-leg fallback (revision K):** those helpers return `None` when a bounding service leg is a deliberate zero-step (two stops sharing one `road_point`), and the old `terminal_reversal_access_points` degenerate branch that rescued this is deleted. When either heading is `None`, fall back to the terminal stop's `preferred_heading` for both exit and entry → an in-place same-heading reversal, which `find_terminal_reversal` resolves as a zero-step no-op (valid). Otherwise the heading is **not** pinned, so a shuttle's return leg naturally arrives on the opposite heading and the terminal reversal performs the real heading change.
 
-**Remove** `terminal_reversal_access_points` and `shared_service_access_tile` (the "scan all adjacent roads" fallback) — the source of the wrong-lane binding. Existing tests that relied on multi-access corners are rewritten as explicit dual-stop / dual-lane fixtures (§6).
+**Remove** `terminal_reversal_access_points`, `shared_service_access_tile`, and (unused) `find_reversal_between` — the "scan all adjacent roads" fallback was the source of the wrong-lane binding. Existing tests that relied on multi-access corners are rewritten as explicit dual-stop / dual-lane fixtures (§6).
 
 ### Preview ≡ commit invariant
 
-Both `preview::preview_route` and `route_lifecycle` route creation/revision **must** call the same `network::resolve_route_legs` (already true). The regression test asserts the preview path and committed path are **structurally equal** (revision D): same leg keys (`from`/`to`/`direction`/`kind`) and per-leg equal road-step `position`/`entering_heading`/`leaving_heading`/`movement`, with `travel_seconds` compared quantized to the millisecond. Raw serde bytes / `f64` equality would flake and are not used.
+Both `preview::preview_route` and `route_lifecycle` route creation/revision **must** call the same `network::resolve_route_legs` (already true). The regression test asserts the preview path and committed path are **structurally equal** (revision D/M): same leg keys (`from`/`to`/`direction`/`kind`) and per-leg equal road-step `position`/`entering_heading`/`leaving_heading`/`movement`, with `total_travel_seconds` compared by **exact** equality (both paths are built by the same `build_road_path` from identical integer `travel_millis`, so the `f64` is deterministic — no quantization needed).
 
 ## Section 4 — Draft undo + duplicate suppression (TypeScript)
 
@@ -364,6 +379,8 @@ The Entry/Exit naming is scoped to where headings are genuinely constrained: the
 
 `rejectionMessages.ts` gains a `noRoadAccess` placement message. The editor never silently flips Loop↔Shuttle; it only *suggests* Shuttle for a failed Loop closing leg.
 
+**Loop closing-leg identification (revision M):** RouteEditor treats a leg as the "closing leg" iff `pattern === "loop"` and `leg.toWaypointId === waypointIds[0]` (equivalently, the last spec from `loop_specs`). Only that leg offers the Shuttle suggestion.
+
 ### Unified hit testing (TS)
 
 One footprint-aware resolver — the existing `resolveStopAtTile` (`routeDraft.ts`) — is used for **add, inspect, and select**. Route-handle selection currently uses only the exact node anchor; it is switched to the shared footprint-aware path so multi-tile `busTerminal` footprints resolve consistently across all three interactions.
@@ -373,8 +390,9 @@ One footprint-aware resolver — the existing `resolveStopAtTile` (`routeDraft.t
 ### Rust
 
 - **`tests/dual_road_routing.rs` (new):** via normal `GameIntent` calls — (1) draw intersecting dual-bidirectional roads; (2) assert the automatic-junction footprint and ports; (3) place stops on differently-oriented approaches; (4) preview and save a route; (5) assert the path's road steps **contain the specific junction turn tiles** (assert concrete `position`/`movement` values, not just "a left turn exists") and never enter a lane wrong-way; (6) **Shuttle terminal reversal:** a paired road with no legal turnaround fails the **terminal-reversal leg** with `NoLegalTurnaround`, then succeeds after adding a junction/roundabout; (6b) **Loop closing leg:** a Loop whose `last→first` wrap is impossible fails that **service** leg with `NetworkDisconnected` (the leg "suggest Shuttle" attaches to); (7) **shuttle return-leg regression:** a shuttle A→B→C on an ordinary two-way road resolves both outbound and return legs (the heading-unpinned fix).
-- **`tests/transit_build.rs` (extend):** placement requires *usable* road access (reciprocal connection); rejects an isolated road and a no-adjacent-road cell (`NoRoadAccess`); stores the correct `road_access` (`road_point` deterministic, `preferred_heading` populated); `busTerminal` placed with road only along the far edge derives access from the non-origin footprint neighbor; a tombstoned terminal rebuilt with a different rotation installs the freshly-derived access (no dangling road_point); engine construction normalizes a stop with missing/invalid access into the snapshot.
-- **`tests/route_editing.rs` (extend):** preview path ≡ committed path via **structural equality** (leg keys + road-step `position`/`entering_heading`/`leaving_heading`/`movement` + millis quantized to 1 ms), not bytes. Also: a stop whose stored `road_access` is stale (road demolished / one-way flipped / tile swallowed by a structure) is re-normalized on engine construction and the route resolves or fails with the correct typed reason. Shared-access-tile (two stops, one `road_point`) yields a zero-step connected leg.
+- **`tests/transit_build.rs` (extend):** `add_bus_stop` now requires an **empty roadside** tile with an adjacent usable road; rejects an on-road click and a no-adjacent-road empty cell (`NoRoadAccess`); rejects an isolated road; stores `position` = roadside anchor and `road_access.road_point` = adjacent road (`preferred_heading` populated). `busTerminal` with road only along the far edge derives access from the non-origin footprint neighbor. A tombstoned terminal rebuilt with a different rotation installs the freshly-derived access.
+- **`tests/stop_migration.rs` (new, revision I):** an engine built from a legacy snapshot with on-road stops migrates each to a roadside anchor (deterministic N,E,S,W pick), `road_access.road_point` = original road tile, and routes still resolve on the same lane; a stop with no free roadside neighbor falls back to on-road with `road_point == position`.
+- **`tests/route_editing.rs` (extend):** preview path ≡ committed path via **structural equality** (leg keys + road-step `position`/`entering_heading`/`leaving_heading`/`movement` + exact `total_travel_seconds`), not bytes. Stale `road_access` (road demolished / one-way flipped / tile swallowed) is re-normalized **on the dispatch commit path** (not only on construction) and the route resolves or fails with the correct typed reason. Shared-access-tile (two stops, one `road_point`) yields a zero-step connected leg; a Shuttle whose end leg is that zero-step still resolves its terminal reversal (preferred-heading fallback).
 - **`tests/model_wire_format.rs` (extend):** `Stop` with and without `roadAccess` round-trips; missing field deserializes to `None`; `RouteLegPath` with and without `failureReason` round-trips.
 
 ### TypeScript
@@ -382,16 +400,17 @@ One footprint-aware resolver — the existing `resolveStopAtTile` (`routeDraft.t
 - **`tests/ui/routeDraft.test.ts` (extend):** reducers return `RouteDraftMutation`; duplicate clicks are no-ops on the real reducers (`applyRouteNodeClick`/`applyNodeClick`) — assert `===` draft, `generation` unchanged, `previewRequested === false`, no history push; append-of-existing selects the existing waypoint; insert-of-existing surfaces the `alreadyOnRoute` notice without mutating; undo/redo restore checkpoints and bump generation; **`selectWaypoint` does not push history**; history is cleared on cancel/save/startEdit/mode switch.
 - **`tests/ui/appShell.test.ts` (extend, revision H):** `handleWindowKeydown` dispatches Cmd/Ctrl+Z → undo and Cmd/Ctrl+Shift+Z/Y → redo **only when no text input is focused** (assert it does not fire when an `<input>`/`<textarea>` has focus); Delete/Backspace removes the selected waypoint under the same focus rule.
 - **A canvas `contextmenu` test:** right-click while a route draft is active calls `undoRouteDraft()` and suppresses the browser menu; outside route-draft mode it does not.
-- **`tests/render/placementValidation.test.ts` (extend):** `canPlaceBuilding` for busStop/busTerminal requires a bare-road neighbor (full footprint for terminals).
-- **`tests/runtime/gameRuntime.test.ts` (extend):** end-to-end preview≡commit identity through the runtime/backend boundary (structural equality); the published snapshot's stops carry normalized `roadAccess` (indicator has data).
+- **`tests/render/placementValidation.test.ts` (extend):** the `busStop` tool requires an **empty** tile with an adjacent bare road (was: a road tile); `busTerminal` requires a bare-road neighbor of the full footprint.
+- **`tests/runtime/gameRuntime.test.ts` (extend):** end-to-end preview≡commit identity through the runtime/backend boundary (structural equality); the published snapshot's stops carry normalized `roadAccess` (indicator has data); a roadside `busStop` placement flows through `addBusStop`.
 - **`tests/render/overlayRenderer.test.ts` (extend):** failed-leg overlay renders the typed reason + correct guidance (Shuttle-reversal → infrastructure; Loop closing leg → suggest Shuttle); access indicator renders toward `roadPoint`.
-- Test fixtures under `tests/fixtures/` and `tests/helpers/gameState.ts` updated for the new `roadAccess`/`failureReason` fields.
+- **`tests/e2e/routes.spec.ts` (update, revision I):** the existing fixture places a stop on a road tile (`{9,4}` on `y=4`); rewrite to place the stop on the roadside cell beside the road, and relax/update any `MovementKind[]` assertions affected by the relocated anchor.
+- Test fixtures under `tests/fixtures/` and `tests/helpers/gameState.ts` updated for the new `roadAccess`/`failureReason` fields and roadside stop positions.
 
 ## Acceptance criteria mapping
 
 | Criterion | Section |
 |---|---|
-| Stop rendered on a roadside cell, never on the road | §1, §2 (already roadside; now has access) |
+| Stop rendered on a roadside cell, never on the road | §2 rev I (`add_bus_stop` relocated off-road + migration) |
 | Every stop has an explicit authoritative serving road access | §1, §2, §3 (`road_point` is the pin) |
 | Route can legally turn through an auto-generated dual-road intersection | §3 (tile pin kills the fan-out) |
 | Route never crosses paired lanes mid-block or enters a one-way lane wrong-way | §3 (tile-constrained finder + `is_valid_access`) |
@@ -401,21 +420,23 @@ One footprint-aware resolver — the existing `resolveStopAtTile` (`routeDraft.t
 | Right-click and Cmd/Ctrl+Z undo one meaningful operation and refresh preview | §4 |
 | Repeatedly clicking the same stop adds no duplicate, no history, no generation, no preview | §4 |
 | Route-node hit testing consistent across add/inspect/edit | §5 |
-| Existing snapshots migrate deterministically; stale access re-derives after road edits | §1, §3 (normalize on construction + placement/restore) |
+| Existing on-road snapshots migrate to roadside deterministically; stale access re-normalizes after road edits (mid-session) | §2 rev I, §3 rev J (construction + dispatch commit) |
 | Rust workspace tests and frontend tests pass | §6 |
 
 ## Primary files
 
 ### Rust
 - `crates/caelum-core/src/model.rs` — `StopRoadAccess { road_point, preferred_heading }`, `LegFailureReason`, `Stop.road_access`, `RouteLegPath.failure_reason`.
-- `crates/caelum-core/src/stop_access.rs` — **new** `derive_stop_access` / `derive_stop_access_for_footprint` / `is_valid_access` (footprint-aware, reciprocal-connection usability).
-- `crates/caelum-core/src/buildings.rs` — placement validation (incl. terminal footprint + usability) + storing access.
-- `crates/caelum-core/src/engine.rs` — normalize stop access into the snapshot on `GameEngine` construction (revision E).
-- `crates/caelum-core/src/road_topology.rs` — **new** `find_path_between_access_tiles` (finder only; compile/builder unchanged; preserves `movement_count > 0`, deliberate zero-step for shared tile).
-- `crates/caelum-core/src/network.rs` — access-aware endpoint resolution via the new finder; `stop_access` defensive validate-on-resolve; remove `terminal_reversal_access_points` + `shared_service_access_tile`; populate `failure_reason`.
-- `crates/caelum-core/src/transit_nodes.rs` — tombstone restore **re-derives and installs** access for the current footprint.
+- `crates/caelum-core/src/stop_access.rs` — **new** `derive_stop_access` / `derive_stop_access_for_footprint` / `stop_footprint` / `is_valid_access` (footprint-aware, reciprocal-connection usability).
+- `crates/caelum-core/src/transit.rs` — **rewrite `add_bus_stop`/`is_valid_bus_stop_placement`** off-road (revision I); store `position`=anchor + `road_access`.
+- `crates/caelum-core/src/buildings.rs` — `busTerminal` placement validation (footprint + usability) + storing access.
+- `crates/caelum-core/src/engine.rs` — stop-access **migration + normalization** on construction (revision I) **and on the dispatch commit path** gated on map change (revision J), alongside the topology recompile.
+- `crates/caelum-core/src/road_topology.rs` — **new** `find_path_between_access_tiles`; **remove** `find_reversal_between`; `find_path` becomes test-only (revision M).
+- `crates/caelum-core/src/network.rs` — access-aware endpoint resolution via the new finder; `stop_access` defensive fallback; remove `terminal_reversal_access_points` + `shared_service_access_tile`; zero-step terminal-reversal `preferred_heading` fallback (revision K); populate `failure_reason`.
+- `crates/caelum-core/src/transit_nodes.rs` — tombstone restore takes the footprint and **re-derives/installs** access (revision F/L).
+- `crates/caelum-core/src/road.rs`, `crates/caelum-core/src/road_topology.rs` — `pub(crate)` for `lane_accepts`, `is_road`, `reciprocal_connection` (revision M).
 - `crates/caelum-core/src/rejection.rs` — `NoRoadAccess` code.
-- `crates/caelum-core/tests/dual_road_routing.rs` — **new**.
+- `crates/caelum-core/tests/dual_road_routing.rs`, `crates/caelum-core/tests/stop_migration.rs` — **new**.
 - `crates/caelum-core/tests/transit_build.rs`, `route_editing.rs`, `model_wire_format.rs` — extend.
 
 ### TypeScript / Svelte
@@ -427,14 +448,14 @@ One footprint-aware resolver — the existing `resolveStopAtTile` (`routeDraft.t
 - `src/runtime/createCanvasHost.ts` — `contextmenu` listener → undo in route-draft mode (revision H). `src/ui/actions.ts` remains click/drag dispatch.
 - `src/runtime/backend/types.ts` (+ wire mappers if not pure structural serde) — `failureReason` / `roadAccess` round-trip.
 - `src/runtime/rejectionMessages.ts` — `noRoadAccess` message.
-- `src/render/placementValidation.ts` — road-access hover mirror (full footprint for terminals).
+- `src/render/placementValidation.ts` — `busStop` tool hover now requires an **empty** tile + adjacent bare road; `busTerminal` full-footprint neighbor check.
 - `src/render/overlayRenderer.ts` + transit renderer — access indicator (defined z-order), failed-leg overlay + guidance.
 - `src/components/hud/panels/RouteEditor.svelte` — Undo/Redo actions (disabled binding), notice, Loop-closing-leg Shuttle suggestion, Shuttle-reversal infrastructure suggestion.
-- `tests/ui/routeDraft.test.ts`, `tests/ui/appShell.test.ts`, `tests/runtime/gameRuntime.test.ts`, `tests/render/overlayRenderer.test.ts`, `tests/render/placementValidation.test.ts`, `tests/fixtures/*`, `tests/helpers/gameState.ts` — extend.
+- `tests/ui/routeDraft.test.ts`, `tests/ui/appShell.test.ts`, `tests/runtime/gameRuntime.test.ts`, `tests/render/overlayRenderer.test.ts`, `tests/render/placementValidation.test.ts`, `tests/e2e/routes.spec.ts`, `tests/fixtures/*`, `tests/helpers/gameState.ts` — extend/update.
 
 ## Out of scope
 
 - No change to metro routing (track paths).
 - No new graph edges / topology **builder** changes — the existing port-to-port junction transitions already support legal turns. (A new *finder* is added, but the compiled graph is untouched.)
 - No two-step lane-picking gesture (deferred; a "cycle serving lane" action can be added later if auto-pick proves insufficient).
-- Access is normalized into the snapshot (placement, restore, engine construction) so the wire field is authoritative — but there is no separate offline migration tool or schema-version bump; old v2 snapshots converge on first load via the construction normalize pass.
+- No schema-version bump — old v2 snapshots with on-road stops migrate in-place to roadside anchors via the construction + dispatch normalize passes (decision 3). There is no separate offline migration tool.
