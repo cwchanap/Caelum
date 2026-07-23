@@ -223,6 +223,13 @@ export async function createGameRuntime({
     onTileClick: (point) => {
       api.handleTileClick(point);
     },
+    onRouteDraftContextMenu: () => {
+      if (ui.routeDraft === null) {
+        return false;
+      }
+      api.undoRouteDraft();
+      return true;
+    },
     onHoverTile: (point) => {
       api.setHoverTile(point);
     },

@@ -4,11 +4,20 @@
     RouteEditorView,
     ServicePattern,
   } from "../../../runtime/types";
+  import type { RouteDraftNotice } from "../../../ui/uiState";
+
+  type RouteEditorViewWithHistory = RouteEditorView & {
+    canUndo?: boolean;
+    canRedo?: boolean;
+    notice?: RouteDraftNotice | null;
+  };
 
   let {
     editor,
     onSelectWaypoint,
     onRemove,
+    onUndo,
+    onRedo,
     onMove,
     onReverse,
     onPattern,
@@ -16,12 +25,14 @@
     onCancel,
     onReload,
   }: {
-    editor: RouteEditorView;
+    editor: RouteEditorViewWithHistory;
     onSelectWaypoint: (
       index: number | null,
       interaction: RouteDraft["interaction"],
     ) => void;
     onRemove: () => void;
+    onUndo: () => void;
+    onRedo: () => void;
     onMove: (delta: -1 | 1) => void;
     onReverse: () => void;
     onPattern: (pattern: ServicePattern) => void;
@@ -134,6 +145,12 @@
     <button type="button" disabled={!hasSelection} onclick={onRemove}
       >Remove</button
     >
+    <button type="button" disabled={!editor.canUndo} onclick={onUndo}
+      >Undo</button
+    >
+    <button type="button" disabled={!editor.canRedo} onclick={onRedo}
+      >Redo</button
+    >
   </div>
 
   <p
@@ -143,6 +160,16 @@
   >
     {editor.previewMessage ?? editor.previewStatus}
   </p>
+
+  {#if editor.notice?.kind === "alreadyOnRoute"}
+    <p
+      class="route-preview route-draft-notice"
+      data-testid="route-draft-notice"
+      aria-live="polite"
+    >
+      Already on this route.
+    </p>
+  {/if}
 
   {#if editor.previewWarnings.length > 0}
     <ul class="route-preview-warnings" data-testid="route-preview-warnings">

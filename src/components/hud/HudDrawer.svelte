@@ -61,6 +61,8 @@
       interaction: RouteDraft["interaction"],
     ) => void;
     onRemoveRouteWaypoint: () => void;
+    onUndoRouteDraft: () => void;
+    onRedoRouteDraft: () => void;
     onMoveRouteWaypoint: (delta: -1 | 1) => void;
     onReverseRouteDraft: () => void;
     onSetRoutePattern: (pattern: ServicePattern) => void;
@@ -137,6 +139,8 @@
         onSetTool={p.onSetTool}
         onSelectWaypoint={p.onSelectRouteWaypoint}
         onRemove={p.onRemoveRouteWaypoint}
+        onUndo={p.onUndoRouteDraft}
+        onRedo={p.onRedoRouteDraft}
         onMove={p.onMoveRouteWaypoint}
         onReverse={p.onReverseRouteDraft}
         onPattern={p.onSetRoutePattern}
@@ -150,6 +154,8 @@
           editor={p.routeDraft}
           onSelectWaypoint={p.onSelectRouteWaypoint}
           onRemove={p.onRemoveRouteWaypoint}
+          onUndo={p.onUndoRouteDraft}
+          onRedo={p.onRedoRouteDraft}
           onMove={p.onMoveRouteWaypoint}
           onReverse={p.onReverseRouteDraft}
           onPattern={p.onSetRoutePattern}

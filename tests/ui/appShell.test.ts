@@ -993,6 +993,108 @@ describe("App shell bootstrap", () => {
 });
 
 describe("App hotkeys", () => {
+  function routeDraftRuntime() {
+    return createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        routeDraft: busDraft(["stop-001"]),
+        activeHudCategory: "routes",
+      },
+    });
+  }
+
+  it.each([
+    { modifier: "metaKey", label: "Cmd" },
+    { modifier: "ctrlKey", label: "Ctrl" },
+  ])("uses $label+Z to undo an active route draft", async ({ modifier }) => {
+    const { runtime } = routeDraftRuntime();
+    render(App, { props: { runtime } });
+
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      [modifier]: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+
+    expect(runtime.undoRouteDraft).toHaveBeenCalledTimes(1);
+    expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it.each([
+    { key: "z", shiftKey: true, label: "Shift+Z" },
+    { key: "y", shiftKey: false, label: "Y" },
+  ])(
+    "uses Cmd/Ctrl+$label to redo an active route draft",
+    async ({ key, shiftKey }) => {
+      const { runtime } = routeDraftRuntime();
+      render(App, { props: { runtime } });
+
+      const event = new KeyboardEvent("keydown", {
+        key,
+        metaKey: true,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(event);
+
+      expect(runtime.redoRouteDraft).toHaveBeenCalledTimes(1);
+      expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    },
+  );
+
+  it.each(["Delete", "Backspace"])(
+    "uses %s to remove the selected route waypoint",
+    async (key) => {
+      const { runtime } = routeDraftRuntime();
+      render(App, { props: { runtime } });
+
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(event);
+
+      expect(runtime.removeRouteWaypoint).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+    },
+  );
+
+  it("leaves native undo and deletion behavior alone in a focused input", async () => {
+    const { runtime } = routeDraftRuntime();
+    render(App, { props: { runtime } });
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    for (const init of [
+      { key: "z", metaKey: true },
+      { key: "y", ctrlKey: true },
+      { key: "Delete" },
+      { key: "Backspace" },
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        ...init,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+
+    expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.removeRouteWaypoint).not.toHaveBeenCalled();
+    input.remove();
+  });
+
   it("selects the road tool on 'r' when no building is selected", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
