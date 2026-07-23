@@ -7,7 +7,9 @@ import {
   type Point,
   type RoadDirection,
   type Route,
+  type RouteLegPath,
   type Stop,
+  type TransitPath,
 } from "../../src/domain/types";
 import type {
   DispatchResult,
@@ -147,6 +149,61 @@ function routePreview(
             code: "disconnectedLeg",
             context: { affectedRouteIds: [] },
           },
+  };
+}
+
+function fixtureRoadPath(from: Point, to: Point): TransitPath {
+  const heading: "south" | "north" = to.y > from.y ? "south" : "north";
+  const step = {
+    position: from,
+    enteringHeading: heading,
+    leavingHeading: heading,
+    movement: "straight" as const,
+    geometry: { kind: "line" as const, from, to },
+    travelSeconds: 1.25,
+  };
+  return {
+    kind: "road",
+    steps: [step],
+    totalTravelSeconds: step.travelSeconds,
+  };
+}
+
+function structuralRouteLegs(waypointIds: string[]): RouteLegPath[] {
+  const positions = new Map([
+    ["stop-001", { x: 14, y: 7 }],
+    ["stop-002", { x: 14, y: 8 }],
+  ]);
+  return waypointIds.length < 2
+    ? []
+    : waypointIds.map((fromWaypointId, index) => {
+        const toWaypointId = waypointIds[(index + 1) % waypointIds.length];
+        const from = positions.get(fromWaypointId);
+        const to = positions.get(toWaypointId);
+        if (from === undefined || to === undefined) {
+          throw new Error("structural route fixture has an unknown stop");
+        }
+        const path = fixtureRoadPath(from, to);
+        return {
+          ...previewLeg(fromWaypointId, toWaypointId),
+          currentPath: path,
+          lastValidPath: path,
+          estimatedSeconds: path.totalTravelSeconds,
+        };
+      });
+}
+
+function structuralLeg(leg: RouteLegPath) {
+  return {
+    fromWaypointId: leg.fromWaypointId,
+    toWaypointId: leg.toWaypointId,
+    direction: leg.direction,
+    kind: leg.kind,
+    status: leg.status,
+    failureReason: leg.failureReason,
+    estimatedSeconds: leg.estimatedSeconds,
+    currentPath: leg.currentPath,
+    lastValidPath: leg.lastValidPath,
   };
 }
 
@@ -2246,6 +2303,39 @@ describe("route creation and management", () => {
       expect(previewRoute).toHaveBeenCalledTimes(previewCalls);
     });
 
+    it("does not preview repeated clicks on the same stop", async () => {
+      const { backend, previewRoute } = countedPreviewBackend();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      runtime.setTool("busRoute");
+      runtime.handleTileClick({ x: 14, y: 7 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+      runtime.selectRouteWaypoint(null, "append");
+
+      const before = runtime.getSnapshot();
+      const beforeDraft = before.ui.routeDraft!;
+      const beforeWaypointIds = [...beforeDraft.waypointIds];
+      const beforeGeneration = beforeDraft.generation;
+      const beforeHistory = before.ui.routeDraftHistory;
+      const beforePreviewCalls = previewRoute.mock.calls.length;
+
+      runtime.handleTileClick({ x: 14, y: 8 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+      runtime.handleTileClick({ x: 14, y: 8 });
+
+      const after = runtime.getSnapshot();
+      expect(after.ui.routeDraft?.waypointIds).toEqual(beforeWaypointIds);
+      expect(after.ui.routeDraft?.generation).toBe(beforeGeneration);
+      expect(after.ui.routeDraftHistory).toBe(beforeHistory);
+      expect(after.ui.routeDraftHistory.past).toHaveLength(
+        beforeHistory.past.length,
+      );
+      expect(previewRoute).toHaveBeenCalledTimes(beforePreviewCalls);
+    });
+
     it("undoes and redoes a draft while preserving its instance and refreshing preview", async () => {
       const { backend, previewRoute } = countedPreviewBackend();
       const runtime = await createGameRuntime({
@@ -2913,6 +3003,61 @@ describe("route creation and management", () => {
     );
     expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "assignVehicle" }),
+    );
+  });
+
+  it("preserves preview leg structure in the committed route snapshot", async () => {
+    const base = backendSpy(routeSnapshot());
+    let previewLegs: RouteLegPath[] = [];
+    const backend: BackendSpy = {
+      ...base,
+      async previewRoute(request) {
+        previewLegs = structuralRouteLegs(request.waypointIds);
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          legs: previewLegs,
+          totalTravelSeconds: previewLegs.reduce(
+            (total, leg) => total + (leg.estimatedSeconds ?? 0),
+            0,
+          ),
+        };
+      },
+      async dispatch(intent) {
+        const result = await base.dispatch(intent);
+        if (intent.type !== "createRoute") {
+          return result;
+        }
+        const committed = result.snapshot.transit.routes.at(-1);
+        if (committed === undefined) {
+          return result;
+        }
+        const snapshot: RustGameSnapshot = {
+          ...result.snapshot,
+          transit: {
+            ...result.snapshot.transit,
+            routes: result.snapshot.transit.routes.map((route) =>
+              route.id === committed.id
+                ? { ...route, legs: previewLegs }
+                : route,
+            ),
+          },
+        };
+        base.setSnapshot(snapshot);
+        return { ...result, snapshot };
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    const preview = runtime.getSnapshot().ui.routeDraft?.preview;
+    expect(preview?.legs.map(structuralLeg)).toHaveLength(2);
+
+    await runtime.saveRouteDraft();
+
+    const committed = runtime.getSnapshot().state.transit.routes.at(-1);
+    expect(committed).toBeDefined();
+    expect(committed?.legs.map(structuralLeg)).toEqual(
+      preview?.legs.map(structuralLeg),
     );
   });
 
