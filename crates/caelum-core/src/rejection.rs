@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::Point;
+use crate::model::{Point, SNAPSHOT_SCHEMA_VERSION};
 
 pub type GameplayResult<T> = Result<T, GameplayRejection>;
 
@@ -33,6 +33,7 @@ pub enum RejectionCode {
     InvalidBuildingPlacement,
     BlockedFootprint,
     UnsafeRoundaboutPortMapping,
+    UnsupportedSnapshotSchema,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +61,10 @@ pub struct RejectionContext {
     pub required_budget: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_budget: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_schema_version: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_schema_version: Option<u16>,
     #[serde(default)]
     pub affected_route_ids: Vec<String>,
 }
@@ -106,6 +111,17 @@ impl GameplayRejection {
             context: RejectionContext {
                 route_id: Some(route_id.to_string()),
                 actual_revision: Some(actual_revision),
+                ..RejectionContext::default()
+            },
+        }
+    }
+
+    pub fn unsupported_snapshot_schema(actual_schema_version: u16) -> Self {
+        Self {
+            code: RejectionCode::UnsupportedSnapshotSchema,
+            context: RejectionContext {
+                expected_schema_version: Some(SNAPSHOT_SCHEMA_VERSION),
+                actual_schema_version: Some(actual_schema_version),
                 ..RejectionContext::default()
             },
         }

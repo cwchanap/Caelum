@@ -1,7 +1,7 @@
 use crate::areas;
 use crate::buildings;
 use crate::intent::{DispatchContext, DispatchResult, GameIntent};
-use crate::model::{GameSnapshot, Point};
+use crate::model::{GameSnapshot, Point, SNAPSHOT_SCHEMA_VERSION};
 use crate::preview::{
     self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
     RoutePreviewResponse,
@@ -252,6 +252,11 @@ impl GameEngine {
     /// Construct an engine from a serialized schema-v2 snapshot, normalizing
     /// roadside stop state before rebuilding the non-serialized topology cache.
     pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
+        if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
+            return Err(GameplayRejection::unsupported_snapshot_schema(
+                snapshot.schema_version,
+            ));
+        }
         let snapshot = stop_access::normalize_snapshot_stops(snapshot)?;
         let road_topology = RoadTopology::compile(&snapshot.map)?;
         Ok(Self {

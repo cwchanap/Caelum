@@ -124,7 +124,8 @@ export type RejectionCode =
   | "invalidPlatform"
   | "invalidBuildingPlacement"
   | "blockedFootprint"
-  | "unsafeRoundaboutPortMapping";
+  | "unsafeRoundaboutPortMapping"
+  | "unsupportedSnapshotSchema";
 
 export interface RejectionContext {
   routeId?: string;
@@ -138,6 +139,8 @@ export interface RejectionContext {
   actualRevision?: number;
   requiredBudget?: number;
   availableBudget?: number;
+  expectedSchemaVersion?: number;
+  actualSchemaVersion?: number;
   /** Present on every Rust rejection; optional so omitted serde payloads normalize cleanly. */
   affectedRouteIds?: string[];
 }

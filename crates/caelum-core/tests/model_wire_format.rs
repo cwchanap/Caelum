@@ -1289,6 +1289,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
             RejectionCode::InvalidBuildingPlacement => "invalidBuildingPlacement",
             RejectionCode::BlockedFootprint => "blockedFootprint",
             RejectionCode::UnsafeRoundaboutPortMapping => "unsafeRoundaboutPortMapping",
+            RejectionCode::UnsupportedSnapshotSchema => "unsupportedSnapshotSchema",
         }
     }
 
@@ -1319,6 +1320,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
         RejectionCode::InvalidBuildingPlacement,
         RejectionCode::BlockedFootprint,
         RejectionCode::UnsafeRoundaboutPortMapping,
+        RejectionCode::UnsupportedSnapshotSchema,
     ];
 
     let mut seen = std::collections::HashSet::new();
