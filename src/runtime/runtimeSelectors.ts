@@ -333,7 +333,7 @@ export function selectRouteEditorView(
     previewStatus: preview.status,
     previewMessage: preview.message,
     previewWarnings: draft.preview?.warnings.map(warningMessage) ?? [],
-    failures: routeFailures(
+    failures: selectRouteFailures(
       state,
       draft.pattern,
       draft.waypointIds,
@@ -352,7 +352,7 @@ export function selectRouteEditorView(
   };
 }
 
-function routeFailures(
+export function selectRouteFailures(
   state: GameState,
   pattern: Route["pattern"],
   waypointIds: string[],
@@ -422,7 +422,7 @@ function selectRouteRow(
     active: route.active,
     selected,
     status: routeServiceStatus(route),
-    failures: routeFailures(
+    failures: selectRouteFailures(
       state,
       route.pattern,
       "stopIds" in route ? route.stopIds : route.stationIds,

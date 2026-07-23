@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
-import type { ActiveTrip } from "../../src/domain/types";
-import { selectShellState } from "../../src/runtime/runtimeSelectors";
+import type {
+  ActiveTrip,
+  LegFailureReason,
+  RouteLegPath,
+} from "../../src/domain/types";
+import {
+  selectRouteFailures,
+  selectShellState,
+} from "../../src/runtime/runtimeSelectors";
 import { normalizeRoutePreviewResponse } from "../../src/runtime/backend/shared";
 import { routeFailureGuidance } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
@@ -227,6 +234,186 @@ describe("route selectors", () => {
     state = addTestBusStop(state, { x: 15, y: 8 });
     return state;
   }
+
+  function twoStations() {
+    let state = createTestGameState();
+    state = withTracks(state, pointsOnRow(2, 7, 15));
+    state = addTestMetroStation(state, { x: 7, y: 2 });
+    state = addTestMetroStation(state, { x: 15, y: 2 });
+    return state;
+  }
+
+  function failedLeg(
+    fromWaypointId: string,
+    toWaypointId: string,
+    status: RouteLegPath["status"],
+    failureReason: RouteLegPath["failureReason"],
+    kind: RouteLegPath["kind"] = "service",
+  ): RouteLegPath {
+    return {
+      fromWaypointId,
+      toWaypointId,
+      direction: "loop",
+      kind,
+      status,
+      currentPath: null,
+      lastValidPath: null,
+      estimatedSeconds: null,
+      failureReason,
+    };
+  }
+
+  it.each([
+    {
+      reason: "noRoadAccess" as const,
+      pattern: "shuttle" as const,
+      legKind: "service" as const,
+      isLoopClosing: false,
+      guidance: "Stop has no usable adjacent road.",
+    },
+    {
+      reason: "networkDisconnected" as const,
+      pattern: "loop" as const,
+      legKind: "service" as const,
+      isLoopClosing: true,
+      guidance: "Loop can't close here; switch to Shuttle or repair the road.",
+    },
+    {
+      reason: "noLegalEntryHeading" as const,
+      pattern: "shuttle" as const,
+      legKind: "service" as const,
+      isLoopClosing: false,
+      guidance: "Road direction doesn't allow serving this stop here.",
+    },
+    {
+      reason: "noLegalExitHeading" as const,
+      pattern: "shuttle" as const,
+      legKind: "service" as const,
+      isLoopClosing: false,
+      guidance: "Road direction doesn't allow serving this stop here.",
+    },
+    {
+      reason: "noLegalTurnaround" as const,
+      pattern: "shuttle" as const,
+      legKind: "terminalReversal" as const,
+      isLoopClosing: false,
+      guidance: "No legal U-turn here; add a junction or roundabout.",
+    },
+  ] satisfies Array<{
+    reason: LegFailureReason;
+    pattern: "loop" | "shuttle";
+    legKind: RouteLegPath["kind"];
+    isLoopClosing: boolean;
+    guidance: string;
+  }>)(
+    "projects $reason with endpoint labels, leg context, and guidance",
+    (failure) => {
+      const rows = selectRouteFailures(
+        twoStops(),
+        failure.pattern,
+        ["stop-001", "stop-002"],
+        [
+          failedLeg(
+            "stop-002",
+            "stop-001",
+            "networkDisconnected",
+            failure.reason,
+            failure.legKind,
+          ),
+        ],
+      );
+
+      expect(rows).toEqual([
+        {
+          legIndex: 0,
+          fromWaypointId: "stop-002",
+          toWaypointId: "stop-001",
+          fromLabel: "Stop B",
+          toLabel: "Stop A",
+          reason: failure.reason,
+          legKind: failure.legKind,
+          isLoopClosing: failure.isLoopClosing,
+          guidance: failure.guidance,
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      kind: "stop" as const,
+      state: () => {
+        const state = twoStops();
+        return {
+          ...state,
+          transit: {
+            ...state.transit,
+            stops: state.transit.stops.map((stop) =>
+              stop.id === "stop-002"
+                ? { ...stop, status: "missing" as const }
+                : stop,
+            ),
+          },
+        };
+      },
+      waypointIds: ["stop-001", "stop-002"],
+      fromWaypointId: "stop-001",
+      toWaypointId: "stop-002",
+      fromLabel: "Stop A",
+      toLabel: "Missing Bus Stop",
+    },
+    {
+      kind: "station" as const,
+      state: () => {
+        const state = twoStations();
+        return {
+          ...state,
+          transit: {
+            ...state.transit,
+            stations: state.transit.stations.map((station) =>
+              station.id === "station-002"
+                ? { ...station, status: "missing" as const }
+                : station,
+            ),
+          },
+        };
+      },
+      waypointIds: ["station-001", "station-002"],
+      fromWaypointId: "station-001",
+      toWaypointId: "station-002",
+      fromLabel: "Station A",
+      toLabel: "Missing Metro Station",
+    },
+  ])("projects missing $kind labels and missingNodeKind", (failure) => {
+    const rows = selectRouteFailures(
+      failure.state(),
+      "loop",
+      failure.waypointIds,
+      [
+        failedLeg(
+          failure.fromWaypointId,
+          failure.toWaypointId,
+          "missingNode",
+          null,
+        ),
+      ],
+    );
+
+    expect(rows).toEqual([
+      {
+        legIndex: 0,
+        fromWaypointId: failure.fromWaypointId,
+        toWaypointId: failure.toWaypointId,
+        fromLabel: failure.fromLabel,
+        toLabel: failure.toLabel,
+        reason: "missingNode",
+        legKind: "service",
+        isLoopClosing: false,
+        guidance: "Restore the missing node at its former location.",
+        missingNodeKind: failure.kind,
+      },
+    ]);
+  });
 
   it("returns null draft when not drafting", () => {
     const shell = selectShellState(createTestGameState(), createUiState());
