@@ -245,6 +245,23 @@ describe("applyUiTileClick route drafts", () => {
     expect(result.ui.routeDraft?.selectedIndex).toBe(1);
   });
 
+  it("propagates a duplicate insertion notice through the UI state", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    const insertAfter = {
+      ...result.ui,
+      routeDraft: selectWaypoint(result.ui.routeDraft!, 0, "insertAfter"),
+    };
+
+    result = applyUiTileClick(state, insertAfter, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001"]);
+    expect(result.ui.routeDraftNotice).toEqual({
+      kind: "alreadyOnRoute",
+      waypointId: "stop-001",
+    });
+  });
+
   it("appends before Rust reports that the next leg is disconnected", () => {
     let state = createTestGameState();
     state = withRoads(state, [

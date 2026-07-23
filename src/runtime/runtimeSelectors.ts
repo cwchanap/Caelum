@@ -336,6 +336,9 @@ export function selectRouteEditorView(
       ui.routePreviewHostError === null &&
       canSaveRouteDraft(draft),
     canReload: staleRejection !== null || localStaleError !== null,
+    canUndo: ui.routeDraftHistory.past.length > 0,
+    canRedo: ui.routeDraftHistory.future.length > 0,
+    notice: ui.routeDraftNotice,
   };
 }
 

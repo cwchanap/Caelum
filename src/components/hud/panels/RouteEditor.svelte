@@ -4,13 +4,6 @@
     RouteEditorView,
     ServicePattern,
   } from "../../../runtime/types";
-  import type { RouteDraftNotice } from "../../../ui/uiState";
-
-  type RouteEditorViewWithHistory = RouteEditorView & {
-    canUndo?: boolean;
-    canRedo?: boolean;
-    notice?: RouteDraftNotice | null;
-  };
 
   let {
     editor,
@@ -25,7 +18,7 @@
     onCancel,
     onReload,
   }: {
-    editor: RouteEditorViewWithHistory;
+    editor: RouteEditorView;
     onSelectWaypoint: (
       index: number | null,
       interaction: RouteDraft["interaction"],

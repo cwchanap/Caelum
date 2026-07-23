@@ -79,6 +79,9 @@ function editDraftView(): RouteEditorView {
     previewWarnings: [],
     canSave: true,
     canReload: false,
+    canUndo: false,
+    canRedo: false,
+    notice: null,
   };
 }
 

@@ -8,7 +8,6 @@
   import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
-    RouteEditorView,
     RuntimeCommandResult,
     RuntimeController,
     RuntimeSnapshot,
@@ -252,26 +251,6 @@
     );
   }
 
-  type RouteEditorViewWithHistory = RouteEditorView & {
-    canUndo: boolean;
-    canRedo: boolean;
-    notice: RuntimeSnapshot["ui"]["routeDraftNotice"];
-  };
-
-  function routeEditorView(
-    current: RuntimeSnapshot,
-  ): RouteEditorViewWithHistory | null {
-    const editor = current.shell.routeDraft;
-    return editor === null
-      ? null
-      : {
-          ...editor,
-          canUndo: current.ui.routeDraftHistory.past.length > 0,
-          canRedo: current.ui.routeDraftHistory.future.length > 0,
-          notice: current.ui.routeDraftNotice,
-        };
-  }
-
   function handleCancelOrEscape(): void {
     if (shellError || runtime === null) {
       return;
@@ -309,6 +288,10 @@
     const key = event.key.toLowerCase();
     const routeDraftActive =
       snapshot !== null && snapshot.ui.routeDraft !== null;
+    const routeDraftHasSelectedWaypoint =
+      snapshot !== null &&
+      snapshot.ui.routeDraft !== null &&
+      snapshot.ui.routeDraft.selectedIndex !== null;
 
     if (
       !targetIsInput &&
@@ -336,7 +319,7 @@
 
     if (
       !targetIsInput &&
-      routeDraftActive &&
+      routeDraftHasSelectedWaypoint &&
       (event.key === "Delete" || event.key === "Backspace")
     ) {
       event.preventDefault();
@@ -484,7 +467,7 @@
         roundaboutSize={snapshot.ui.roundaboutSize}
         buildCategory={snapshot.ui.buildCategory}
         inspector={snapshot.shell.inspector}
-        routeDraft={routeEditorView(snapshot)}
+        routeDraft={snapshot.shell.routeDraft}
         routes={snapshot.shell.routes}
         onCloseDrawer={() => handleSetHudCategory(null)}
         onSetTool={handleSetTool}
