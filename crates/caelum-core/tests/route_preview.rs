@@ -35,7 +35,7 @@ fn editable_network_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     road_line(&mut engine, (2..=10).map(|x| point(x, 5)).collect());
     for x in [2, 10] {
-        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 5) });
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 4) });
     }
     engine
 }
@@ -194,7 +194,7 @@ fn already_broken_route_still_reports_a_changed_connected_leg_with_commit_parity
     let mut engine = GameEngine::new();
     road_line(&mut engine, (2..=20).map(|x| point(x, 5)).collect());
     for x in [2, 10, 20] {
-        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 5) });
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 4) });
     }
     dispatch(
         &mut engine,
@@ -269,7 +269,7 @@ fn unrelated_road_preview_does_not_reroute_already_broken_route() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, (2..=20).map(|x| point(x, 5)).collect());
     for x in [2, 10, 20] {
-        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 5) });
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 4) });
     }
     dispatch(
         &mut engine,
@@ -356,8 +356,14 @@ fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
 #[test]
 fn route_preview_returns_typed_validation_with_generation() {
     let mut engine = editable_network_engine();
-    dispatch(&mut engine, GameIntent::LayRoad { point: point(2, 2) });
-    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 2) });
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 1) });
     dispatch(&mut engine, GameIntent::LayTrack { point: point(3, 3) });
     dispatch(
         &mut engine,
@@ -425,8 +431,13 @@ fn route_preview_reports_cost_affordability_and_revision_context() {
 fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
     let mut engine = editable_network_engine();
     // A second, disconnected road island with its own stop.
-    road_line(&mut engine, (2..=10).map(|x| point(x, 9)).collect());
-    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 9) });
+    road_line(&mut engine, (2..=10).map(|x| point(x, 11)).collect());
+    dispatch(
+        &mut engine,
+        GameIntent::AddBusStop {
+            point: point(2, 10),
+        },
+    );
     engine.set_budget_for_test(BUS_COST - 1);
 
     let response = engine.preview_route(RoutePreviewRequest {
@@ -469,7 +480,7 @@ fn edit_preview_is_free_and_rejects_stale_revision_with_full_context() {
 #[test]
 fn retained_tombstone_is_missing_in_preview_but_edit_save_is_allowed() {
     let mut engine = existing_route_engine();
-    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 5) });
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 4) });
     let before = engine.snapshot();
     let route = newest_route(&before).clone();
     assert_eq!(
@@ -512,7 +523,7 @@ fn edit_preview_and_commit_reject_newly_introduced_missing_nodes() {
     let mut engine = existing_route_engine();
     // Third present stop on the existing corridor so a second route can try to
     // introduce route-001's tombstone as a brand-new waypoint.
-    dispatch(&mut engine, GameIntent::AddBusStop { point: point(6, 5) });
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(6, 4) });
     dispatch(
         &mut engine,
         GameIntent::CreateRoute {
@@ -521,7 +532,7 @@ fn edit_preview_and_commit_reject_newly_introduced_missing_nodes() {
             waypoint_ids: ids(&["stop-002", "stop-003"]),
         },
     );
-    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 5) });
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(2, 4) });
     let snapshot = engine.snapshot();
     let route = snapshot
         .transit
@@ -580,7 +591,7 @@ fn alternate_path_engine() -> GameEngine {
     road_line(&mut engine, (2..=3).map(|y| point(6, y)).collect());
     road_line(&mut engine, (5..=6).map(|y| point(6, y)).collect());
     for x in [2, 10] {
-        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 4) });
+        dispatch(&mut engine, GameIntent::AddBusStop { point: point(x, 3) });
     }
     dispatch(
         &mut engine,

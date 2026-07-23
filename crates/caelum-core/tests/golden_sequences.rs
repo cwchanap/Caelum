@@ -315,10 +315,10 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
         });
     }
     engine.dispatch(GameIntent::AddBusStop {
-        point: (2, 5).into(),
+        point: (2, 4).into(),
     });
     engine.dispatch(GameIntent::AddBusStop {
-        point: (10, 5).into(),
+        point: (10, 4).into(),
     });
     let created = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Bus,
