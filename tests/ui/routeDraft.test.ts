@@ -81,6 +81,15 @@ describe("route draft reducers", () => {
     expect(result.previewRequested).toBe(false);
   });
 
+  it("appends after selecting an existing waypoint in append mode", () => {
+    const draft = draftWith("a", "b");
+    const selected = applyNodeClick(draft, "a");
+    const result = applyNodeClick(selected.draft, "c");
+
+    expect(result.draft.waypointIds).toEqual(["a", "b", "c"]);
+    expect(result.previewRequested).toBe(true);
+  });
+
   it("notices an insert duplicate without mutation", () => {
     const insertAfterDraft = selectWaypoint(
       draftWith("a", "b"),
