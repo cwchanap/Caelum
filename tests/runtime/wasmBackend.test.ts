@@ -5,20 +5,41 @@ import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import type {
   RoadMutationPreviewRequest,
   RoutePreviewRequest,
+  RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 
 const dims = vi.hoisted(() => ({ width: 0, height: 0 }));
+const fromSnapshot = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
   const init = vi.fn().mockResolvedValue(undefined);
   class WasmGameEngine {
+    #snapshot: Record<string, unknown>;
     #paused = true;
-    snapshot() {
-      return {
+
+    constructor(
+      snapshot: Record<string, unknown> = {
         day: 0,
         clockMinutes: 0,
-        paused: this.#paused,
+        paused: true,
         map: { width: dims.width, height: dims.height },
+      },
+    ) {
+      this.#snapshot = snapshot;
+      if (typeof snapshot.paused === "boolean") {
+        this.#paused = snapshot.paused;
+      }
+    }
+
+    static from_snapshot(snapshot: unknown) {
+      fromSnapshot(snapshot);
+      return new WasmGameEngine(snapshot as Record<string, unknown>);
+    }
+
+    snapshot() {
+      return {
+        ...this.#snapshot,
+        paused: this.#paused,
       };
     }
     dispatch(intent: { type: string; paused?: boolean }) {
@@ -225,6 +246,36 @@ describe("createWasmBackend", () => {
     expect(resetSnapshot).toBeDefined();
     // The mock's reset() returns the current engine snapshot.
     expect(resetSnapshot.day).toBe(0);
+  });
+
+  it("loads a serialized snapshot and replaces the WASM engine", async () => {
+    const backend = await createWasmBackend();
+    const replacement = {
+      ...(await backend.snapshot()),
+      day: 3,
+      clockMinutes: 480,
+      paused: false,
+    } as RustGameSnapshot;
+
+    expect(backend.loadSnapshot).toBeDefined();
+    const loaded = await backend.loadSnapshot!(replacement);
+
+    expect(fromSnapshot).toHaveBeenCalledWith(replacement);
+    expect(loaded).toMatchObject({
+      day: 3,
+      clockMinutes: 480,
+      paused: false,
+    });
+
+    const dispatched = await backend.dispatch({
+      type: "setPaused",
+      paused: true,
+    });
+    expect(dispatched.snapshot).toMatchObject({
+      day: 3,
+      clockMinutes: 480,
+      paused: true,
+    });
   });
 
   it("forwards route and road preview requests to the WASM engine", async () => {

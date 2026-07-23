@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
+import type { RustGameSnapshot } from "../../src/runtime/backend/types";
 
 /**
  * Loads the real built WASM artifact (not the vi.mock in wasmBackend.test.ts).
@@ -31,6 +32,65 @@ describe("real WASM artifact smoke", () => {
     });
     expect(rejected.applied).toBe(false);
     expect(rejected.rejection?.code).toBe("invalidSpeed");
+  });
+
+  it("replaces and loads a schema-v2 snapshot through the real artifact", async () => {
+    const backend = await createWasmBackend();
+    const initial = await backend.snapshot();
+    const replacement: RustGameSnapshot = {
+      ...initial,
+      time: 123.5,
+      day: 4,
+      clockMinutes: 615,
+      speed: 4,
+      paused: false,
+      budget: 110_000,
+      tripSequenceDay: 4,
+      nextTripSequence: 19,
+    };
+
+    expect(backend.loadSnapshot).toBeDefined();
+    const loaded = await backend.loadSnapshot!(replacement);
+
+    expect(loaded).toMatchObject({
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      time: 123.5,
+      day: 4,
+      clockMinutes: 615,
+      speed: 4,
+      paused: false,
+      budget: 110_000,
+      tripSequenceDay: 4,
+      nextTripSequence: 19,
+      map: {
+        width: initial.map.width,
+        height: initial.map.height,
+        tiles: expect.any(Array),
+        roadStructures: expect.any(Array),
+      },
+      buildings: expect.any(Array),
+      transit: {
+        stops: expect.any(Array),
+        stations: expect.any(Array),
+        routes: expect.any(Array),
+        metroLines: expect.any(Array),
+        vehicles: expect.any(Array),
+      },
+      sims: expect.any(Array),
+      activeTrips: expect.any(Array),
+      metrics: expect.objectContaining({
+        state: "running",
+      }),
+      scenario: expect.objectContaining({
+        name: "Growing Suburb",
+        objectives: expect.any(Object),
+        growthWaves: expect.any(Array),
+      }),
+    });
+    // serde-wasm-bindgen omits Rust Option::None, while the Tauri JSON wire
+    // shape uses null for the same field.
+    expect(loaded.metrics.lossReason ?? null).toBeNull();
+    expect(loaded.map.tiles).toHaveLength(loaded.map.width * loaded.map.height);
   });
 
   it("round-trips a placeRoundabout dispatch through wasm-bindgen", async () => {
