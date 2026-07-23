@@ -186,10 +186,10 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
     assert!(next.transit.routes[0].path_broken);
     assert_eq!(
         next.transit.vehicles[0].parked_position,
-        Some((10, 4).into())
+        Some((10, 5).into())
     );
     assert_eq!(next.transit.vehicles[0].itinerary_index, 3);
-    assert_eq!(next.active_trips[0].position, (10, 4).into());
+    assert_eq!(next.active_trips[0].position, (10, 5).into());
     assert_eq!(next.active_trips[0].status, TripStatus::Idle);
 }
 
@@ -236,7 +236,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
     assert!(broken.transit.routes[0].path_broken);
     assert_eq!(
         broken.transit.vehicles[0].parked_position,
-        Some((10, 4).into())
+        Some((10, 5).into())
     );
     assert_eq!(broken.transit.vehicles[0].itinerary_index, 3);
 

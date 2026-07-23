@@ -692,7 +692,7 @@ fn live_update_rebases_vehicles_replans_riders_and_collects_last_tombstone() {
     );
 
     let edited_vehicle = vehicle(&result, "vehicle-001");
-    assert_eq!(edited_vehicle.parked_position, Some(point(2, 4).into()));
+    assert_eq!(edited_vehicle.parked_position, Some(point(2, 5).into()));
     assert!(edited_vehicle.passenger_ids.is_empty());
     assert_eq!(result.active_trips[0].status, TripStatus::Idle);
     assert!(result.active_trips[0].route_plan.is_none());
@@ -780,8 +780,9 @@ fn update_reports_route_not_found_and_rebases_to_new_live_stop_without_retained_
         .parked_position
         .as_ref()
         .expect("vehicle is parked at a new live stop");
-    assert_eq!(parked.x, f64::from(stop_003.position.x));
-    assert_eq!(parked.y, f64::from(stop_003.position.y));
+    let road_access = stop_003.road_access.expect("stop has road access");
+    assert_eq!(parked.x, f64::from(road_access.road_point.x));
+    assert_eq!(parked.y, f64::from(road_access.road_point.y));
     assert_ne!(parked, &before_world);
 }
 

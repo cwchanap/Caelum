@@ -36,6 +36,19 @@ fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
 }
 
 #[tauri::command]
+fn game_load_snapshot(
+    state: State<'_, EngineState>,
+    snapshot: GameSnapshot,
+) -> Result<GameSnapshot, String> {
+    let loaded = GameEngine::from_snapshot(snapshot).map_err(|rejection| {
+        serde_json::to_string(&rejection).unwrap_or_else(|error| error.to_string())
+    })?;
+    let mut engine = state.lock().map_err(|error| error.to_string())?;
+    *engine = loaded;
+    Ok(engine.snapshot())
+}
+
+#[tauri::command]
 fn game_preview_route(
     state: State<'_, EngineState>,
     request: RoutePreviewRequest,
@@ -62,6 +75,7 @@ pub fn run() {
             game_dispatch,
             game_tick,
             game_reset,
+            game_load_snapshot,
             game_preview_route,
             game_preview_road_mutation
         ])
