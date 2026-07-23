@@ -74,6 +74,7 @@ fn on_platform_trip_ids_include_first_capacity_waiters_by_patience_then_id() {
             capacity: 2,
             route_ids: vec!["route-001".to_string()],
         }],
+        road_access: None,
     });
     snapshot.active_trips = vec![
         waiting_trip("c1", (5, 5).into(), "route-001", 100.0),
@@ -138,6 +139,7 @@ fn missing_node_has_no_waiting_queue_or_platform_capacity() {
             capacity: 2,
             route_ids: vec!["route-001".to_string()],
         }],
+        road_access: None,
     });
     snapshot.active_trips = vec![waiting_trip(
         "missing-waiter",

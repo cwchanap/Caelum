@@ -251,6 +251,7 @@ pub fn place_building_core(
                 status: TransitNodeStatus::Present,
                 position: *origin,
                 platforms: bus_platforms(&stop_id, kind),
+                road_access: None,
             });
             Ok(allocated)
         })?;

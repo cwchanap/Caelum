@@ -255,6 +255,7 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
             status: TransitNodeStatus::Present,
             position: *point,
             platforms: bus_platforms(&stop_id, BusStopKind::BusStop),
+            road_access: None,
         });
         Ok(allocated)
     })?;
