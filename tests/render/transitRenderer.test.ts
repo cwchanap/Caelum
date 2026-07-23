@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
 import type { RouteLegPath, TransitPath } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
+import { tileSize } from "../../src/render/canvas";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import {
@@ -530,6 +531,95 @@ describe("renderTransit highlight", () => {
     ).toBe(true);
   });
 
+  it("uses the road access point for a zero-step bus terminal vehicle", () => {
+    let state = busState();
+    const emptyPath: TransitPath = {
+      kind: "road",
+      steps: [],
+      totalTravelSeconds: 0,
+    };
+    const terminalLeg: RouteLegPath = {
+      fromWaypointId: "stop-002",
+      toWaypointId: "stop-002",
+      direction: "return",
+      kind: "terminalReversal",
+      status: "connected",
+      currentPath: emptyPath,
+      lastValidPath: emptyPath,
+      estimatedSeconds: 0,
+      failureReason: null,
+    };
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) =>
+          stop.id === "stop-002"
+            ? {
+                ...stop,
+                kind: "busTerminal" as const,
+                position: { x: 15, y: 8 },
+                roadAccess: { roadPoint: { x: 14, y: 8 } },
+              }
+            : stop,
+        ),
+        routes: state.transit.routes.map((route) =>
+          route.id === "route-001"
+            ? { ...route, legs: [terminalLeg, ...route.legs] }
+            : route,
+        ),
+        vehicles: state.transit.vehicles.map((vehicle) => ({
+          ...vehicle,
+          itineraryIndex: 0,
+          pathStepIndex: 0,
+          stepProgress: 0,
+          parkedPosition: null,
+        })),
+      },
+    };
+
+    const context = ctx();
+    renderTransit(context, state, createUiState());
+
+    // The passenger anchor is (15,8), but the zero-step bus must render at
+    // the physical road access point (14,8): centre = (464,272).
+    expect(context.fillRect).toHaveBeenCalledWith(457, 258, 14, 8);
+  });
+
+  it("uses a dark map-safe style for the passenger-to-road access indicator", () => {
+    const { ctx: context, strokes, fills } = recordingContext();
+    const state = {
+      ...createTestGameState(),
+      transit: {
+        ...createTestGameState().transit,
+        stops: [
+          {
+            id: "stop-access",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 4, y: 4 },
+            roadAccess: { roadPoint: { x: 4, y: 5 } },
+            platforms: [],
+          },
+        ],
+      },
+    };
+
+    renderTransit(context, state, createUiState());
+
+    const accessStroke = strokes.find(
+      (stroke) =>
+        stroke.path[0]?.x === 4 * tileSize + tileSize / 2 &&
+        stroke.path[0]?.y === 4 * tileSize + tileSize / 2 &&
+        stroke.path[1]?.x === 4 * tileSize + tileSize / 2 &&
+        stroke.path[1]?.y === 5 * tileSize + tileSize / 2,
+    );
+    expect(accessStroke?.strokeStyle).toBe(colors.hover);
+    expect(fills.find((fill) => fill.pathKind === "polygon")?.fillStyle).toBe(
+      colors.hover,
+    );
+  });
+
   it("parks the vehicle at the segment-start stop when the route is broken", () => {
     let state = busState();
 
@@ -590,55 +680,6 @@ describe("renderTransit highlight", () => {
 
     // Parked at station-001 (7,8), centre = (7*32+16, 8*32+16) = (240, 272).
     expect(context.fillRect).toHaveBeenCalledWith(233, 258, 14, 8);
-  });
-
-  it("renders a vehicle on a zero-step terminal reversal at the terminal waypoint", () => {
-    // Connected empty paths (same-heading / metro terminal reversals) have no
-    // steps, so path.steps[pathStepIndex] is undefined while parkedPosition is
-    // still null. Resolve the empty leg to its terminal waypoint instead of
-    // treating the vehicle as absent.
-    let state = busState();
-    const emptyPath: TransitPath = {
-      kind: "road",
-      steps: [],
-      totalTravelSeconds: 0,
-    };
-    const terminalLeg: RouteLegPath = {
-      fromWaypointId: "stop-002",
-      toWaypointId: "stop-002",
-      direction: "return",
-      kind: "terminalReversal",
-      status: "connected",
-      currentPath: emptyPath,
-      lastValidPath: emptyPath,
-      estimatedSeconds: 0,
-      failureReason: null,
-    };
-    state = {
-      ...state,
-      transit: {
-        ...state.transit,
-        routes: state.transit.routes.map((route) =>
-          route.id === "route-001"
-            ? { ...route, legs: [terminalLeg, ...route.legs] }
-            : route,
-        ),
-        vehicles: state.transit.vehicles.map((vehicle) => ({
-          ...vehicle,
-          itineraryIndex: 0,
-          pathStepIndex: 0,
-          stepProgress: 0,
-          parkedPosition: null,
-        })),
-      },
-    };
-
-    const context = ctx();
-    renderTransit(context, state, createUiState());
-
-    // stop-002 is at (15,8); centre = (15*32+16, 8*32+16) = (496, 272).
-    // No path tangent → axis-aligned fillRect at point - (7, 14).
-    expect(context.fillRect).toHaveBeenCalledWith(489, 258, 14, 8);
   });
 
   it("draws current geometry solid and only the failed last-valid leg dotted", () => {
