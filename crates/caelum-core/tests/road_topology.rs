@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    GameMap, Heading, MovementKind, PathGeometry, Point, RoadStructure, RoundaboutSize, Tile,
-    TransitPath,
+    GameMap, Heading, LegFailureReason, MovementKind, PathGeometry, Point, RoadStructure,
+    RoundaboutSize, Tile, TransitPath,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
 use caelum_core::roundabouts::{roundabout_structure_id, roundabout_template};
@@ -218,7 +218,7 @@ fn turns_between_dual_bidirectional_corridors_choose_the_compatible_outbound_lan
     let fixture = dual_cross_fixture();
     let path = fixture
         .topology
-        .find_path(&fixture.map, &point(6, 8), &point(15, 3))
+        .find_path_between_access_tiles(&fixture.map, point(6, 8), point(15, 3), None, None)
         .expect("west approach must turn north");
 
     assert!(path
@@ -282,7 +282,7 @@ fn weighted_search_can_prefer_more_steps_with_a_cheaper_turn_sequence() {
     let fixture = turn_penalty_fixture();
     let path = fixture
         .topology
-        .find_path(&fixture.map, &fixture.from, &fixture.to)
+        .find_path_between_access_tiles(&fixture.map, fixture.from, fixture.to, None, None)
         .unwrap();
 
     assert_eq!(
@@ -344,7 +344,7 @@ fn equal_cost_fixture(rebuild_tiles: bool) -> EqualCostFixture {
     }
     let topology = RoadTopology::compile(&map).unwrap();
     let path = topology
-        .find_path(&map, &point(1, 2), &point(3, 2))
+        .find_path_between_access_tiles(&map, point(1, 2), point(3, 2), None, None)
         .unwrap();
     EqualCostFixture { path }
 }
@@ -396,16 +396,126 @@ fn rejects_mid_block_lane_change_and_wrong_way_entry() {
     let fixture = paired_lane_fixture();
     assert!(fixture
         .topology
-        .find_path(
+        .find_path_between_access_tiles(
             &fixture.map,
-            &fixture.midblock_left,
-            &fixture.midblock_right
+            fixture.midblock_left,
+            fixture.midblock_right,
+            None,
+            None,
         )
-        .is_none());
+        .is_err());
     assert!(fixture
         .topology
-        .find_path(&fixture.map, &fixture.legal_start, &fixture.wrong_way_end)
-        .is_none());
+        .find_path_between_access_tiles(
+            &fixture.map,
+            fixture.legal_start,
+            fixture.wrong_way_end,
+            None,
+            None,
+        )
+        .is_err());
+}
+
+#[test]
+fn access_tile_finder_reports_disconnected_and_missing_entry_failures() {
+    let mut map = blank_map(7, 5);
+    let from = point(1, 2);
+    let to = point(5, 2);
+    let isolated = point(1, 1);
+    corridor(&mut map, &[from, point(2, 2)], None);
+    corridor(&mut map, &[point(4, 2), to], None);
+    road(&mut map, isolated, None);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    assert_eq!(
+        topology.find_path_between_access_tiles(&map, from, to, None, None),
+        Err(LegFailureReason::NetworkDisconnected)
+    );
+    assert_eq!(
+        topology.find_path_between_access_tiles(&map, isolated, to, None, None),
+        Err(LegFailureReason::NoLegalEntryHeading)
+    );
+}
+
+#[test]
+fn access_tile_finder_allows_a_zero_step_same_tile_service() {
+    let mut map = blank_map(5, 5);
+    let access = point(2, 2);
+    corridor(&mut map, &[point(1, 2), access, point(3, 2)], None);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    let path = topology
+        .find_path_between_access_tiles(&map, access, access, None, None)
+        .unwrap();
+    assert_eq!(path.step_count(), 0);
+    assert_eq!(path.total_travel_seconds(), 0.0);
+}
+
+#[test]
+fn access_tile_finder_never_expands_to_an_adjacent_parallel_lane() {
+    let fixture = paired_lane_fixture();
+
+    assert_eq!(
+        fixture.topology.find_path_between_access_tiles(
+            &fixture.map,
+            fixture.midblock_left,
+            fixture.midblock_right,
+            None,
+            None,
+        ),
+        Err(LegFailureReason::NetworkDisconnected)
+    );
+}
+
+#[test]
+fn access_tile_finder_ranks_preferences_without_excluding_alternatives() {
+    let mut map = blank_map(6, 5);
+    for corridor_points in [
+        vec![
+            point(1, 2),
+            point(1, 1),
+            point(2, 1),
+            point(3, 1),
+            point(3, 2),
+        ],
+        vec![
+            point(1, 2),
+            point(1, 3),
+            point(2, 3),
+            point(3, 3),
+            point(3, 2),
+        ],
+    ] {
+        corridor(&mut map, &corridor_points, None);
+    }
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    // The preferred lower lane is more expensive because it requires left
+    // turns; a preference must not override the weighted path rank.
+    let preferred = topology
+        .find_path_between_access_tiles(
+            &map,
+            point(1, 2),
+            point(3, 2),
+            Some(Heading::South),
+            Some(Heading::North),
+        )
+        .unwrap();
+    assert_eq!(
+        preferred.road_steps().first().unwrap().leaving_heading,
+        Heading::North
+    );
+    assert_eq!(
+        preferred.road_steps().last().unwrap().leaving_heading,
+        Heading::South
+    );
+
+    let invalid_preference_still_uses_a_legal_start = topology
+        .find_path_between_access_tiles(&map, point(1, 2), point(3, 2), Some(Heading::West), None)
+        .unwrap();
+    assert!(!invalid_preference_still_uses_a_legal_start
+        .road_steps()
+        .is_empty());
 }
 
 struct MovementFixture {
@@ -515,7 +625,7 @@ fn l_t_cross_and_uturn_paths_report_their_actual_movement_steps() {
     ] {
         let path = fixture
             .topology
-            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .find_path_between_access_tiles(&fixture.map, fixture.from, fixture.to, None, None)
             .unwrap();
         assert!(path
             .road_steps()
@@ -543,7 +653,7 @@ fn right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent() {
     ] {
         let path = fixture
             .topology
-            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .find_path_between_access_tiles(&fixture.map, fixture.from, fixture.to, None, None)
             .unwrap();
         let step = path
             .road_steps()
@@ -565,7 +675,7 @@ fn consecutive_geometry_is_continuous_through_right_and_left_turns() {
     for fixture in [l_junction_fixture(), t_junction_fixture()] {
         let path = fixture
             .topology
-            .find_path(&fixture.map, &fixture.from, &fixture.to)
+            .find_path_between_access_tiles(&fixture.map, fixture.from, fixture.to, None, None)
             .unwrap();
         for pair in path.road_steps().windows(2) {
             let previous_end = match &pair[0].geometry {
@@ -708,7 +818,7 @@ fn structure_transition_keys_are_stable_when_authored_order_changes() {
     let mut first = dual_cross_fixture();
     let first_path = first
         .topology
-        .find_path(&first.map, &point(6, 8), &point(15, 3))
+        .find_path_between_access_tiles(&first.map, point(6, 8), point(15, 3), None, None)
         .unwrap();
     first.map.road_structures.reverse();
     for structure in &mut first.map.road_structures {
@@ -718,7 +828,7 @@ fn structure_transition_keys_are_stable_when_authored_order_changes() {
     }
     let rebuilt = RoadTopology::compile(&first.map).unwrap();
     let rebuilt_path = rebuilt
-        .find_path(&first.map, &point(6, 8), &point(15, 3))
+        .find_path_between_access_tiles(&first.map, point(6, 8), point(15, 3), None, None)
         .unwrap();
     assert_eq!(first_path, rebuilt_path);
 }
@@ -767,7 +877,7 @@ fn fixed_roundabout_transitions_connect_compatible_external_lanes() {
 
     let topology = RoadTopology::compile(&map).unwrap();
     let path = topology
-        .find_path(&map, &point(1, 4), &point(6, 4))
+        .find_path_between_access_tiles(&map, point(1, 4), point(6, 4), None, None)
         .expect("roundabout should connect compatible lanes");
     assert!(path
         .road_steps()
@@ -883,7 +993,7 @@ fn terminal_reversal_through_roundabout_finds_multi_step_path() {
 }
 
 #[test]
-fn terminal_reversal_returns_none_when_no_path_exists() {
+fn terminal_reversal_returns_no_legal_entry_heading_when_no_path_exists() {
     let mut map = blank_map(8, 6);
     corridor(
         &mut map,
@@ -893,9 +1003,61 @@ fn terminal_reversal_returns_none_when_no_path_exists() {
     let topology = RoadTopology::compile(&map).unwrap();
 
     // One-way eastbound road: can't reverse from East to West.
-    assert!(topology
-        .find_terminal_reversal(point(2, 3), Heading::East, Heading::West)
-        .is_none());
+    assert_eq!(
+        topology.find_terminal_reversal(point(2, 3), Heading::East, Heading::West),
+        Err(LegFailureReason::NoLegalEntryHeading)
+    );
+}
+
+#[test]
+fn terminal_reversal_reports_no_legal_exit_heading_without_outgoing_transitions() {
+    let mut map = blank_map(8, 6);
+    let terminal = point(2, 3);
+    road(&mut map, terminal, None);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    assert_eq!(
+        topology.find_terminal_reversal(terminal, Heading::East, Heading::West),
+        Err(LegFailureReason::NoLegalExitHeading)
+    );
+}
+
+#[test]
+fn terminal_reversal_reports_no_legal_entry_heading_when_required_heading_is_unreachable() {
+    let mut map = blank_map(8, 6);
+    corridor(
+        &mut map,
+        &[point(1, 3), point(2, 3), point(3, 3)],
+        Some(Heading::East),
+    );
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    assert_eq!(
+        topology.find_terminal_reversal(point(2, 3), Heading::East, Heading::West),
+        Err(LegFailureReason::NoLegalEntryHeading)
+    );
+}
+
+#[test]
+fn terminal_reversal_reports_no_legal_turnaround_when_both_headings_exist_but_do_not_connect() {
+    let mut map = blank_map(8, 8);
+    let terminal = point(3, 3);
+    let east = point(4, 3);
+    let west = point(2, 3);
+    let north = point(3, 2);
+    road(&mut map, terminal, None);
+    road(&mut map, east, Some(Heading::West));
+    road(&mut map, west, Some(Heading::East));
+    road(&mut map, north, Some(Heading::North));
+    connect(&mut map, terminal, east);
+    connect(&mut map, terminal, west);
+    connect(&mut map, terminal, north);
+    let topology = RoadTopology::compile(&map).unwrap();
+
+    assert_eq!(
+        topology.find_terminal_reversal(terminal, Heading::East, Heading::West),
+        Err(LegFailureReason::NoLegalTurnaround)
+    );
 }
 
 #[test]
@@ -1137,7 +1299,7 @@ fn multi_tile_automatic_junction_geometry_is_continuous() {
 
     let topology = RoadTopology::compile(&map).unwrap();
     let path = topology
-        .find_path(&map, &point(1, 2), &point(5, 2))
+        .find_path_between_access_tiles(&map, point(1, 2), point(5, 2), None, None)
         .expect("west-to-east path through 2×2 junction should exist");
 
     let steps = path.road_steps();

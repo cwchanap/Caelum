@@ -52,7 +52,7 @@ fn finds_straight_shortest_bus_path() {
     let map = &engine.snapshot().map;
     let path = RoadTopology::compile(map)
         .unwrap()
-        .find_path(map, &(2, 5).into(), &(6, 5).into())
+        .find_path_between_access_tiles(map, (2, 5).into(), (6, 5).into(), None, None)
         .expect("road line should be pathable");
 
     let points = path_points(&path, (2, 5).into(), (6, 5).into());
@@ -79,18 +79,18 @@ fn deterministic_equal_shortest_paths_use_north_east_south_west_order() {
 }
 
 #[test]
-fn rejects_adjacent_off_network_endpoints_then_finds_network_path() {
+fn finds_path_between_pinned_access_tiles() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 8, 9);
 
     let map = &engine.snapshot().map;
     let path = RoadTopology::compile(map)
         .unwrap()
-        .find_path(map, &(8, 4).into(), &(9, 4).into())
-        .expect("adjacent off-road stops should connect through road");
+        .find_path_between_access_tiles(map, (8, 5).into(), (9, 5).into(), None, None)
+        .expect("pinned access tiles should connect through road");
 
-    let points = path_points(&path, (8, 4).into(), (9, 4).into());
-    assert_eq!(points, vec![(8, 4), (8, 5), (9, 5), (9, 4)]);
+    let points = path_points(&path, (8, 5).into(), (9, 5).into());
+    assert_eq!(points, vec![(8, 5), (9, 5)]);
 }
 
 #[test]
@@ -116,10 +116,10 @@ fn one_way_roads_constrain_buses_but_not_metro() {
 
     let topology = RoadTopology::compile(&snapshot.map).unwrap();
     assert!(topology
-        .find_path(&snapshot.map, &(7, 5).into(), &(9, 5).into())
-        .is_some());
+        .find_path_between_access_tiles(&snapshot.map, (7, 5).into(), (9, 5).into(), None, None,)
+        .is_ok());
     assert!(topology
-        .find_path(&snapshot.map, &(9, 5).into(), &(7, 5).into())
-        .is_none());
+        .find_path_between_access_tiles(&snapshot.map, (9, 5).into(), (7, 5).into(), None, None,)
+        .is_err());
     assert!(network::find_track_path(&snapshot.map, &(9, 5).into(), &(7, 5).into()).is_some());
 }
