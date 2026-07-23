@@ -211,6 +211,12 @@ fn place_bus_stop_building_creates_linked_stop() {
 fn place_bus_terminal_building_creates_terminal_stop_platforms() {
     let mut engine = GameEngine::new();
 
+    let road = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(2, 5).into(), (3, 5).into()],
+        preset: caelum_core::RoadPreset::TwoWay,
+    });
+    assert!(road.applied, "{road:?}");
+
     let placed = engine.dispatch(GameIntent::PlaceBuilding {
         building_type: "busTerminal".to_string(),
         origin: (2, 3).into(),
@@ -225,6 +231,7 @@ fn place_bus_terminal_building_creates_terminal_stop_platforms() {
     assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
     assert_eq!(stop.kind, BusStopKind::BusTerminal);
     assert_eq!(stop.position, building.origin);
+    assert_eq!(stop.road_access.unwrap().road_point, (2, 5).into());
     assert_eq!(stop.platforms.len(), 3);
     assert_eq!(stop.platforms[2].id, "stop-001-p2");
 }
@@ -350,7 +357,7 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
     assert!(road.applied, "{road:?}");
     for x in [5, 6] {
         let stop = engine.dispatch(GameIntent::AddBusStop {
-            point: (x, 4).into(),
+            point: (x, 3).into(),
         });
         assert!(stop.applied, "{stop:?}");
     }
@@ -364,7 +371,7 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
     // Demolish the stop (tombstone + road remains), then clear the road so the
     // anchor is empty while the Missing node still occupies the position.
     let stop_removed = engine.dispatch(GameIntent::RemoveAtTile {
-        point: (5, 4).into(),
+        point: (5, 3).into(),
     });
     assert!(stop_removed.applied, "{stop_removed:?}");
     let road_removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -382,20 +389,20 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
         tombstone.status,
         caelum_core::model::TransitNodeStatus::Missing
     );
-    assert_eq!(tombstone.position, (5, 4).into());
+    assert_eq!(tombstone.position, (5, 3).into());
     let cleared = road_removed
         .snapshot
         .map
         .tiles
         .iter()
-        .find(|tile| tile.x == 5 && tile.y == 4)
+        .find(|tile| tile.x == 5 && tile.y == 3)
         .expect("map tile");
     assert_eq!(cleared.kind, "empty");
 
     let painted = engine.dispatch(GameIntent::PaintAreaRectangle {
         area: "residential".to_string(),
-        start: (5, 4).into(),
-        end: (5, 4).into(),
+        start: (5, 3).into(),
+        end: (5, 3).into(),
     });
     assert!(
         painted.applied,
@@ -406,7 +413,7 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
         .map
         .tiles
         .iter()
-        .find(|tile| tile.x == 5 && tile.y == 4)
+        .find(|tile| tile.x == 5 && tile.y == 3)
         .expect("map tile");
     assert_eq!(tile.area.as_deref(), Some("residential"));
 }
