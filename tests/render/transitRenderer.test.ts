@@ -265,6 +265,7 @@ function routeLeg(
     currentPath: status === "connected" ? path : null,
     lastValidPath: path,
     estimatedSeconds: path?.totalTravelSeconds ?? null,
+    failureReason: null,
   };
 }
 
@@ -611,6 +612,7 @@ describe("renderTransit highlight", () => {
       currentPath: emptyPath,
       lastValidPath: emptyPath,
       estimatedSeconds: 0,
+      failureReason: null,
     };
     state = {
       ...state,

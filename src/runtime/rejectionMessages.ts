@@ -44,6 +44,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That location is outside the map.";
     case "roadRequired":
       return "Build a road here first.";
+    case "noRoadAccess":
+      return "That stop has no road access.";
     case "trackRequired":
       return "Build track here first.";
     case "invalidRoadStroke":

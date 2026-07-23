@@ -233,6 +233,7 @@ export interface RoadMutationPreviewResponse {
 
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
+  loadSnapshot?(snapshot: RustGameSnapshot): Promise<RustGameSnapshot>;
   dispatch(intent: GameIntent): Promise<DispatchResult>;
   tick(deltaSeconds: number): Promise<DispatchResult>;
   reset(): Promise<RustGameSnapshot>;

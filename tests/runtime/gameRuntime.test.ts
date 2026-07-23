@@ -107,6 +107,7 @@ function previewLeg(
     currentPath: null,
     lastValidPath: null,
     estimatedSeconds: status === "connected" ? 1 : null,
+    failureReason: null,
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   SNAPSHOT_SCHEMA_VERSION,
   type GameplayRejection,
+  type RouteLegPath,
 } from "../../src/domain/types";
 import type {
   DispatchResult,
@@ -11,11 +12,14 @@ import type {
   RoadMutationPreviewResponse,
   RoutePreviewRequest,
   RoutePreviewResponse,
+  RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { rejectionMessage } from "../../src/runtime/rejectionMessages";
+import { normalizeRouteLegPath } from "../../src/runtime/backend/shared";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import {
   createRustSnapshot,
+  createRustSnapshotWithRoadAccess,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 
@@ -271,6 +275,7 @@ describe("Rust backend contract", () => {
       currentPath: undefined as unknown as null,
       lastValidPath: undefined as unknown as null,
       estimatedSeconds: undefined as unknown as null,
+      failureReason: undefined as unknown as null,
     };
     snapshot.transit.routes.push({
       id: "route-001",
@@ -316,6 +321,41 @@ describe("Rust backend contract", () => {
       lastValidPath: null,
       estimatedSeconds: null,
     });
+  });
+
+  it("normalizes omitted optional route fields", () => {
+    const legacyLeg = {
+      fromWaypointId: "stop-001",
+      toWaypointId: "stop-002",
+      direction: "loop" as const,
+      kind: "service" as const,
+      status: "networkDisconnected" as const,
+    } as unknown as RouteLegPath;
+
+    const leg = normalizeRouteLegPath(legacyLeg);
+
+    expect(leg.currentPath).toBeNull();
+    expect(leg.lastValidPath).toBeNull();
+    expect(leg.estimatedSeconds).toBeNull();
+    expect(leg.failureReason).toBeNull();
+  });
+
+  it("preserves stop road access from the Rust snapshot", () => {
+    const state = normalizeRustSnapshot(createRustSnapshotWithRoadAccess());
+
+    expect(state.transit.stops[0].roadAccess).toEqual({
+      roadPoint: { x: 4, y: 5 },
+      preferredHeading: "east",
+    });
+  });
+
+  it("maps the Rust no-road-access rejection code", () => {
+    const rejection: GameplayRejection = {
+      code: "noRoadAccess",
+      context: { affectedRouteIds: [] },
+    };
+
+    expect(rejectionMessage(rejection)).toBe("That stop has no road access.");
   });
 
   it("normalizes omitted vehicle parkedPosition to explicit null", () => {
@@ -442,6 +482,9 @@ describe("Rust backend contract", () => {
       (
         request: RoadMutationPreviewRequest,
       ) => Promise<RoadMutationPreviewResponse>
+    >();
+    expectTypeOf<NonNullable<GameBackend["loadSnapshot"]>>().toEqualTypeOf<
+      (snapshot: RustGameSnapshot) => Promise<RustGameSnapshot>
     >();
     await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
       generation: routeRequest.generation,

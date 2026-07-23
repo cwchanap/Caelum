@@ -190,6 +190,7 @@ describe("route selectors", () => {
         currentPath: null,
         lastValidPath: null,
         estimatedSeconds: 1,
+        failureReason: null,
       })),
       totalTravelSeconds: waypointIds.length,
       initialVehicleCost: COSTS.bus,

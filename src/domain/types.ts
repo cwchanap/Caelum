@@ -17,6 +17,12 @@ export type RouteLegStatus =
   | "connected"
   | "networkDisconnected"
   | "missingNode";
+export type LegFailureReason =
+  | "noRoadAccess"
+  | "networkDisconnected"
+  | "noLegalEntryHeading"
+  | "noLegalExitHeading"
+  | "noLegalTurnaround";
 export type BuildingType =
   | "busStop"
   | "busTerminal"
@@ -105,6 +111,7 @@ export type RejectionCode =
   | "blockedTile"
   | "outOfBounds"
   | "roadRequired"
+  | "noRoadAccess"
   | "trackRequired"
   | "invalidRoadStroke"
   | "invalidTrackStroke"
@@ -205,7 +212,13 @@ export interface Stop {
   kind: StopKind;
   status: TransitNodeStatus;
   position: Point;
+  roadAccess?: StopRoadAccess;
   platforms: Platform[];
+}
+
+export interface StopRoadAccess {
+  roadPoint: Point;
+  preferredHeading?: Heading;
 }
 
 export interface Station {
@@ -273,6 +286,7 @@ export interface RouteLegPath {
   currentPath: TransitPath | null;
   lastValidPath: TransitPath | null;
   estimatedSeconds: number | null;
+  failureReason: LegFailureReason | null;
 }
 
 export interface Route {

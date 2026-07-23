@@ -236,6 +236,7 @@ function legFromLegacyFixture(
     currentPath: path,
     lastValidPath: path,
     estimatedSeconds: path?.totalTravelSeconds ?? null,
+    failureReason: null,
   };
 }
 

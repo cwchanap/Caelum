@@ -21,6 +21,9 @@ export async function createTauriBackend(): Promise<GameBackend> {
     async snapshot() {
       return invoke<RustGameSnapshot>("game_snapshot");
     },
+    async loadSnapshot(snapshot: RustGameSnapshot) {
+      return invoke<RustGameSnapshot>("game_load_snapshot", { snapshot });
+    },
     async dispatch(intent: GameIntent) {
       const result = await invoke<DispatchResult>("game_dispatch", { intent });
       return normalizeDispatchResult(result);
