@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    Heading, Point, RoadStructure, RoundaboutSize, Route, RouteLegKind, RouteLegStatus,
-    ServicePattern, TransitMode,
+    Heading, LegFailureReason, Point, RoadStructure, RoundaboutSize, Route, RouteLegKind,
+    RouteLegStatus, ServicePattern, TransitMode,
 };
 use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
@@ -83,6 +83,28 @@ fn shared_access_engine() -> GameEngine {
             .preferred_heading = None;
     }
     GameEngine::from_snapshot(snapshot).expect("shared-access fixture snapshot")
+}
+
+fn shared_access_existing_route_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, (2..=14).map(|x| point(x, 5)).collect());
+    for point in [point(3, 4), point(3, 6), point(10, 4)] {
+        dispatch(&mut engine, GameIntent::AddBusStop { point });
+    }
+    let mut snapshot = engine.snapshot().clone();
+    for stop_id in ["stop-001", "stop-002"] {
+        snapshot
+            .transit
+            .stops
+            .iter_mut()
+            .find(|stop| stop.id == stop_id)
+            .expect("shared-access fixture stop")
+            .road_access
+            .as_mut()
+            .expect("shared-access fixture access")
+            .preferred_heading = None;
+    }
+    GameEngine::from_snapshot(snapshot).expect("shared-access route fixture snapshot")
 }
 
 fn assert_exact_leg_shape(
@@ -172,6 +194,57 @@ fn shared_access_shuttle_preview_and_commit_match_zero_step_terminal_legs() {
             .filter_map(|leg| leg.estimated_seconds)
             .sum()
     );
+    assert_eq!(preview.legs.len(), committed_legs.len());
+    for (preview_leg, committed_leg) in preview.legs.iter().zip(committed_legs) {
+        assert_exact_leg_shape(preview_leg, committed_leg);
+    }
+}
+
+#[test]
+fn existing_route_update_preview_and_commit_match_failures_and_zero_step_legs() {
+    let mut engine = shared_access_existing_route_engine();
+    dispatch(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Shuttle,
+            waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
+        },
+    );
+    dispatch(&mut engine, GameIntent::RemoveAtTile { point: point(6, 5) });
+    let route = newest_route(&engine.snapshot()).clone();
+    assert!(route.path_broken);
+
+    let request = RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: route.pattern,
+        waypoint_ids: route.stop_ids.clone(),
+        route_id: Some(route.id.clone()),
+        expected_revision: Some(route.revision),
+        generation: 91,
+    };
+    let preview = engine.preview_route(request.clone());
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    let failed_leg = preview
+        .legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NetworkDisconnected))
+        .expect("broken corridor should retain its typed failure reason");
+    assert_eq!(failed_leg.status, RouteLegStatus::NetworkDisconnected);
+    assert!(preview.legs.iter().any(|leg| {
+        leg.current_path
+            .as_ref()
+            .is_some_and(|path| path.step_count() == 0)
+    }));
+
+    let committed = engine.dispatch(GameIntent::UpdateRoute {
+        route_id: request.route_id.expect("existing route"),
+        expected_revision: request.expected_revision.expect("route revision"),
+        pattern: request.pattern,
+        waypoint_ids: request.waypoint_ids,
+    });
+    assert!(committed.rejection.is_none(), "{committed:?}");
+    let committed_legs = &newest_route(&committed.snapshot).legs;
     assert_eq!(preview.legs.len(), committed_legs.len());
     for (preview_leg, committed_leg) in preview.legs.iter().zip(committed_legs) {
         assert_exact_leg_shape(preview_leg, committed_leg);

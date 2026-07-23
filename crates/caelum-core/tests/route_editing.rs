@@ -1,7 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, LegFailureReason, Point, Route, RouteLeg, RouteLegPath,
-    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus,
-    TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, GameMap, GameSnapshot, Heading, LegFailureReason, Point, RoadPort, RoadStructure,
+    Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection,
+    ServicePattern, StopRoadAccess, TransitMode, TransitNodeStatus, TripPosition, TripPurpose,
+    TripStatus, Vehicle,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -111,6 +112,15 @@ fn resolved_bus_legs(
     topology: &RoadTopology,
     waypoint_ids: &[&str],
 ) -> Vec<RouteLegPath> {
+    resolved_bus_legs_with_pattern(snapshot, topology, waypoint_ids, ServicePattern::Loop)
+}
+
+fn resolved_bus_legs_with_pattern(
+    snapshot: &GameSnapshot,
+    topology: &RoadTopology,
+    waypoint_ids: &[&str],
+    pattern: ServicePattern,
+) -> Vec<RouteLegPath> {
     let waypoint_ids = ids(waypoint_ids);
     resolve_route_legs(
         snapshot,
@@ -119,8 +129,159 @@ fn resolved_bus_legs(
         },
         TransitMode::Bus,
         &waypoint_ids,
-        ServicePattern::Loop,
+        pattern,
     )
+}
+
+fn set_stop_access(
+    snapshot: &mut GameSnapshot,
+    stop_id: &str,
+    position: Point,
+    road_point: Point,
+    preferred_heading: Option<Heading>,
+) {
+    let stop = snapshot
+        .transit
+        .stops
+        .iter_mut()
+        .find(|stop| stop.id == stop_id)
+        .expect("fixture stop");
+    stop.position = position;
+    stop.road_access = Some(StopRoadAccess {
+        road_point,
+        preferred_heading,
+    });
+}
+
+fn heading_between_points(from: Point, to: Point) -> Heading {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Heading::North,
+        (1, 0) => Heading::East,
+        (0, 1) => Heading::South,
+        (-1, 0) => Heading::West,
+        delta => panic!("fixture points are not adjacent: {delta:?}"),
+    }
+}
+
+fn opposite_heading(heading: Heading) -> Heading {
+    match heading {
+        Heading::North => Heading::South,
+        Heading::East => Heading::West,
+        Heading::South => Heading::North,
+        Heading::West => Heading::East,
+    }
+}
+
+fn ensure_road(map: &mut GameMap, point: Point, one_way: Option<Heading>) {
+    let tile = map.tile_mut(point).expect("fixture tile");
+    tile.kind = "road".into();
+    tile.one_way = one_way;
+    tile.road_structure_id = None;
+}
+
+fn connect_fixture_roads(map: &mut GameMap, first: Point, second: Point) {
+    let heading = heading_between_points(first, second);
+    let reverse = opposite_heading(heading);
+    let first_one_way = map.tile(first).and_then(|tile| tile.one_way);
+    let second_one_way = map.tile(second).and_then(|tile| tile.one_way);
+    ensure_road(map, first, first_one_way);
+    ensure_road(map, second, second_one_way);
+    let first_tile = map.tile_mut(first).expect("fixture first road");
+    if !first_tile.road_connections.contains(&heading) {
+        first_tile.road_connections.push(heading);
+    }
+    let second_tile = map.tile_mut(second).expect("fixture second road");
+    if !second_tile.road_connections.contains(&reverse) {
+        second_tile.road_connections.push(reverse);
+    }
+}
+
+fn terminal_snapshot() -> GameSnapshot {
+    let engine = editable_bus_engine(&[2, 3], BUS_COST);
+    let mut snapshot = engine.snapshot().clone();
+    let access = point(3, 4);
+    let terminal = point(3, 5);
+    set_stop_access(&mut snapshot, "stop-001", point(3, 3), access, None);
+    set_stop_access(
+        &mut snapshot,
+        "stop-002",
+        point(3, 6),
+        terminal,
+        Some(Heading::West),
+    );
+    ensure_road(&mut snapshot.map, access, None);
+    connect_fixture_roads(&mut snapshot.map, access, terminal);
+    snapshot
+}
+
+fn turnaround_snapshot() -> GameSnapshot {
+    let engine = editable_bus_engine(&[2, 3], BUS_COST);
+    let mut snapshot = engine.snapshot().clone();
+    let access = point(3, 3);
+    let terminal = point(3, 5);
+    let west = point(2, 5);
+    let left = point(1, 5);
+    let upper_left = point(1, 4);
+    let upper_middle = point(1, 3);
+    let upper_right = point(2, 3);
+    let north = point(3, 4);
+    set_stop_access(&mut snapshot, "stop-001", point(3, 2), access, None);
+    set_stop_access(
+        &mut snapshot,
+        "stop-002",
+        point(3, 6),
+        terminal,
+        Some(Heading::West),
+    );
+    for point in [left, upper_left, upper_middle, upper_right, north] {
+        ensure_road(&mut snapshot.map, point, None);
+    }
+    connect_fixture_roads(&mut snapshot.map, west, left);
+    connect_fixture_roads(&mut snapshot.map, left, upper_left);
+    connect_fixture_roads(&mut snapshot.map, upper_left, upper_middle);
+    connect_fixture_roads(&mut snapshot.map, upper_middle, upper_right);
+    connect_fixture_roads(&mut snapshot.map, upper_right, access);
+    connect_fixture_roads(&mut snapshot.map, access, north);
+    connect_fixture_roads(&mut snapshot.map, north, terminal);
+    snapshot
+}
+
+fn terminal_structure_topology(
+    snapshot: &GameSnapshot,
+    terminal: Point,
+    edges: &[Heading],
+) -> RoadTopology {
+    let mut map = snapshot.map.clone();
+    let structure_id = "fixture-terminal".to_string();
+    map.tile_mut(terminal)
+        .expect("fixture terminal")
+        .road_structure_id = Some(structure_id.clone());
+    map.road_structures.push(RoadStructure::AutomaticJunction {
+        id: structure_id.clone(),
+        footprint: vec![terminal],
+        ports: edges
+            .iter()
+            .enumerate()
+            .map(|(index, edge)| RoadPort {
+                id: format!("{structure_id}-port-{index}"),
+                point: terminal,
+                edge: *edge,
+                direction: None,
+            })
+            .collect(),
+    });
+    RoadTopology::compile(&map).expect("fixture topology")
+}
+
+fn turnaround_topology(snapshot: &GameSnapshot) -> RoadTopology {
+    let west = point(2, 5);
+    let east = point(4, 5);
+    let north = point(3, 4);
+    let mut map = snapshot.map.clone();
+    map.tile_mut(west).expect("fixture west road").one_way = Some(Heading::West);
+    map.tile_mut(east).expect("fixture east road").one_way = Some(Heading::West);
+    map.tile_mut(north).expect("fixture north road").one_way = Some(Heading::South);
+    RoadTopology::compile(&map).expect("fixture topology")
 }
 
 fn vehicle<'a>(snapshot: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
@@ -192,6 +353,100 @@ fn route_resolution_preserves_typed_failure_reasons_and_coarse_status() {
         .find(|leg| leg.status == RouteLegStatus::MissingNode)
         .expect("missing waypoint should remain a missing node");
     assert_eq!(missing_leg.failure_reason, None);
+
+    let tombstoned =
+        transit::remove_at_tile(&engine.snapshot(), &point(2, 4)).expect("fixture tombstone");
+    let tombstoned_legs = resolved_bus_legs(&tombstoned, topology, &["stop-001", "stop-002"]);
+    let tombstoned_leg = tombstoned_legs
+        .iter()
+        .find(|leg| leg.status == RouteLegStatus::MissingNode)
+        .expect("tombstoned waypoint should remain a missing node");
+    assert_eq!(tombstoned_leg.failure_reason, None);
+
+    let mut loop_engine = editable_bus_engine(&[2, 10], BUS_COST);
+    road_line(&mut loop_engine, 11, 2, 10);
+    dispatch(
+        &mut loop_engine,
+        GameIntent::AddBusStop {
+            point: point(2, 10),
+        },
+    );
+    let loop_legs = resolved_bus_legs_with_pattern(
+        &loop_engine.snapshot(),
+        loop_engine.road_topology_for_test(),
+        &["stop-001", "stop-002", "stop-003"],
+        ServicePattern::Loop,
+    );
+    let closing_leg = loop_legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::Service
+                && leg.from_waypoint_id == "stop-003"
+                && leg.to_waypoint_id == "stop-001"
+        })
+        .expect("Loop closing service leg");
+    assert_eq!(closing_leg.status, RouteLegStatus::NetworkDisconnected);
+    assert_eq!(
+        closing_leg.failure_reason,
+        Some(LegFailureReason::NetworkDisconnected)
+    );
+}
+
+#[test]
+fn route_resolution_preserves_terminal_typed_failure_reasons_and_coarse_status() {
+    let snapshot = terminal_snapshot();
+
+    let no_entry_topology = RoadTopology::empty();
+    let no_entry_legs = resolved_bus_legs_with_pattern(
+        &snapshot,
+        &no_entry_topology,
+        &["stop-001", "stop-002"],
+        ServicePattern::Shuttle,
+    );
+    let no_entry = no_entry_legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NoLegalEntryHeading))
+        .expect("service resolution should preserve no-entry diagnosis");
+    assert_eq!(no_entry.kind, RouteLegKind::Service);
+    assert_eq!(no_entry.status, RouteLegStatus::NetworkDisconnected);
+
+    let mut structure_snapshot = terminal_snapshot();
+    let terminal = point(3, 5);
+    let access = point(3, 4);
+    let east = point(4, 5);
+    let detour = point(4, 4);
+    ensure_road(&mut structure_snapshot.map, detour, None);
+    connect_fixture_roads(&mut structure_snapshot.map, east, detour);
+    connect_fixture_roads(&mut structure_snapshot.map, detour, access);
+    let no_exit_topology =
+        terminal_structure_topology(&structure_snapshot, terminal, &[Heading::East]);
+    let no_exit_legs = resolved_bus_legs_with_pattern(
+        &structure_snapshot,
+        &no_exit_topology,
+        &["stop-001", "stop-002"],
+        ServicePattern::Shuttle,
+    );
+    let no_exit = no_exit_legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NoLegalExitHeading))
+        .expect("terminal reversal should preserve no-exit diagnosis");
+    assert_eq!(no_exit.kind, RouteLegKind::TerminalReversal);
+    assert_eq!(no_exit.status, RouteLegStatus::NetworkDisconnected);
+
+    let no_turnaround_snapshot = turnaround_snapshot();
+    let no_turnaround_topology = turnaround_topology(&no_turnaround_snapshot);
+    let no_turnaround_legs = resolved_bus_legs_with_pattern(
+        &no_turnaround_snapshot,
+        &no_turnaround_topology,
+        &["stop-001", "stop-002"],
+        ServicePattern::Shuttle,
+    );
+    let no_turnaround = no_turnaround_legs
+        .iter()
+        .find(|leg| leg.failure_reason == Some(LegFailureReason::NoLegalTurnaround))
+        .expect("terminal reversal should preserve no-turnaround diagnosis");
+    assert_eq!(no_turnaround.kind, RouteLegKind::TerminalReversal);
+    assert_eq!(no_turnaround.status, RouteLegStatus::NetworkDisconnected);
 }
 
 #[test]

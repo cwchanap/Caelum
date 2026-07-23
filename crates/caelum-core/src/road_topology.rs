@@ -150,40 +150,6 @@ impl RoadTopology {
             .ok_or(LegFailureReason::NoLegalTurnaround)
     }
 
-    /// Route a terminal reversal between two distinct road access tiles — the
-    /// actual arrival tile (from the previous service leg) and the actual
-    /// departure tile (from the next service leg). Unlike
-    /// `find_terminal_reversal`, this never returns a zero-step path when the
-    /// tiles differ: the bus must physically travel from `from` to `to`.
-    /// Used when an off-road terminal has separate arrival and departure
-    /// access lanes.
-    pub fn find_reversal_between(
-        &self,
-        from: Point,
-        from_heading: Heading,
-        to: Point,
-        to_heading: Heading,
-    ) -> Option<TransitPath> {
-        let start = RoadState {
-            position: from,
-            incoming_heading: from_heading,
-        };
-        let goal = RoadState {
-            position: to,
-            incoming_heading: to_heading,
-        };
-        // Degenerate: same tile and same heading — no movement needed. This
-        // only arises when from == to; callers dispatch same-tile reversals
-        // through `find_terminal_reversal` instead, but guard anyway.
-        if start == goal {
-            return Some(TransitPath::Road {
-                steps: Vec::new(),
-                total_travel_seconds: 0.0,
-            });
-        }
-        self.find_reversal_path(start, goal)
-    }
-
     #[doc(hidden)]
     pub fn transition_for(&self, from: RoadState, outgoing: Heading) -> Option<&RoadTransition> {
         self.transitions
