@@ -258,6 +258,37 @@ describe("route selectors", () => {
     );
   });
 
+  it("derives route history controls and notices into the editor view", () => {
+    const state = createTestGameState();
+    const checkpoint = {
+      waypointIds: ["stop-001"],
+      pattern: "loop" as const,
+      selectedIndex: null,
+      interaction: "append" as const,
+      mode: "bus" as const,
+      source: { kind: "create" as const },
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: createDraft("bus", 1),
+      routeDraftHistory: {
+        past: [checkpoint],
+        future: [checkpoint],
+      },
+      routeDraftNotice: {
+        kind: "alreadyOnRoute" as const,
+        waypointId: "stop-001",
+      },
+    };
+
+    expect(selectShellState(state, ui).routeDraft).toMatchObject({
+      canUndo: true,
+      canRedo: true,
+      notice: { kind: "alreadyOnRoute", waypointId: "stop-001" },
+    });
+  });
+
   it("enables Save at two affordable stops", () => {
     const state = twoStops();
     const ui = {

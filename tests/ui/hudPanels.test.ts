@@ -41,6 +41,9 @@ function createDraftView(
     previewWarnings: [],
     canSave: true,
     canReload: false,
+    canUndo: false,
+    canRedo: false,
+    notice: null,
     ...overrides,
   };
 }

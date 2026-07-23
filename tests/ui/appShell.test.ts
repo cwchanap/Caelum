@@ -23,6 +23,7 @@ import {
   addTestBusStop,
   addTestBusRoute,
 } from "../helpers/gameState";
+import { applyUiTileClick } from "../../src/ui/actions";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import type {
   RuntimeController,
@@ -266,7 +267,12 @@ function createRuntimeHarness(
       return publish();
     }),
     resetUi,
-    handleTileClick: vi.fn((_point: Point) => publish()),
+    handleTileClick: vi.fn((point: Point) => {
+      const result = applyUiTileClick(state, ui, point);
+      state = result.state;
+      ui = result.ui;
+      return publish();
+    }),
     assignRouteToPlatform: vi.fn(
       (_nodeId: string, _routeId: string, _platformId: string) => publish(),
     ),
@@ -993,12 +999,12 @@ describe("App shell bootstrap", () => {
 });
 
 describe("App hotkeys", () => {
-  function routeDraftRuntime() {
+  function routeDraftRuntime(selectedIndex: number | null = null) {
     return createRuntimeHarness({
       ui: {
         ...createUiState(),
         activeTool: "busRoute",
-        routeDraft: busDraft(["stop-001"]),
+        routeDraft: { ...busDraft(["stop-001"]), selectedIndex },
         activeHudCategory: "routes",
       },
     });
@@ -1025,17 +1031,18 @@ describe("App hotkeys", () => {
   });
 
   it.each([
-    { key: "z", shiftKey: true, label: "Shift+Z" },
-    { key: "y", shiftKey: false, label: "Y" },
+    { key: "z", shiftKey: true, modifier: "metaKey", label: "Cmd+Shift+Z" },
+    { key: "y", shiftKey: false, modifier: "metaKey", label: "Cmd+Y" },
+    { key: "y", shiftKey: false, modifier: "ctrlKey", label: "Ctrl+Y" },
   ])(
-    "uses Cmd/Ctrl+$label to redo an active route draft",
-    async ({ key, shiftKey }) => {
+    "uses $label to redo an active route draft",
+    async ({ key, shiftKey, modifier }) => {
       const { runtime } = routeDraftRuntime();
       render(App, { props: { runtime } });
 
       const event = new KeyboardEvent("keydown", {
         key,
-        metaKey: true,
+        [modifier]: true,
         shiftKey,
         bubbles: true,
         cancelable: true,
@@ -1051,7 +1058,7 @@ describe("App hotkeys", () => {
   it.each(["Delete", "Backspace"])(
     "uses %s to remove the selected route waypoint",
     async (key) => {
-      const { runtime } = routeDraftRuntime();
+      const { runtime } = routeDraftRuntime(0);
       render(App, { props: { runtime } });
 
       const event = new KeyboardEvent("keydown", {
@@ -1063,6 +1070,24 @@ describe("App hotkeys", () => {
 
       expect(runtime.removeRouteWaypoint).toHaveBeenCalledTimes(1);
       expect(event.defaultPrevented).toBe(true);
+    },
+  );
+
+  it.each(["Delete", "Backspace"])(
+    "does not consume %s when no route waypoint is selected",
+    async (key) => {
+      const { runtime } = routeDraftRuntime();
+      render(App, { props: { runtime } });
+
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(event);
+
+      expect(runtime.removeRouteWaypoint).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     },
   );
 
@@ -1353,6 +1378,36 @@ describe("App manage-panel route handlers", () => {
     const cancelBtn = screen.getByRole("button", { name: "Cancel" });
     await fireEvent.click(cancelBtn);
     expect(runtime.cancelRouteDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the duplicate insertion notice after a route interaction", async () => {
+    let state = createTestGameState();
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    const { runtime } = createRuntimeHarness({
+      state,
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        routeDraft: busDraft(["stop-001", "stop-002"], true),
+        activeHudCategory: "routes",
+      },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("route-waypoint-0"));
+    await fireEvent.click(screen.getByRole("button", { name: "Insert after" }));
+    runtime.handleTileClick({ x: 7, y: 8 });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("route-draft-notice")).toHaveAttribute(
+        "aria-live",
+        "polite",
+      ),
+    );
+    expect(screen.getByTestId("route-draft-notice")).toHaveTextContent(
+      "Already on this route.",
+    );
   });
 
   it("wires saveRouteDraft through the Save route button during a draft", async () => {

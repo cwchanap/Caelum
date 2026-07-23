@@ -13,7 +13,7 @@ import type {
   TransitMode,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
-import type { HudCategory, UiState } from "../ui/uiState";
+import type { HudCategory, RouteDraftNotice, UiState } from "../ui/uiState";
 import type { RouteDraft } from "../ui/routeDraft";
 import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
 
@@ -115,6 +115,9 @@ export interface RouteEditorView {
   previewWarnings: string[];
   canSave: boolean;
   canReload: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  notice: RouteDraftNotice | null;
 }
 
 export interface RouteServiceStatus {

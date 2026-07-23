@@ -87,15 +87,18 @@ export function applyUiTileClick(
     const resolved = resolveNodeAtTile(state, point, preferredKind);
     if (resolved === null) return { state, ui };
     const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
+    const routeDraftNotice = result.notice ?? null;
     return {
       state,
       ui:
         result.draft === ui.routeDraft &&
-        result.rejection === ui.routePreviewError
+        result.rejection === ui.routePreviewError &&
+        routeDraftNotice === ui.routeDraftNotice
           ? ui
           : {
               ...ui,
               routeDraft: result.draft,
+              routeDraftNotice,
               routePreviewError: result.rejection,
               routePreviewHostError: null,
             },
