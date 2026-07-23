@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, GameSnapshot, Heading, PathGeometry, Point, Route, RouteLegStatus,
-    RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus, TransitPath,
-    TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, PathGeometry, Point, Route, RouteLegKind,
+    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus,
+    TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -848,4 +848,60 @@ fn shuttle_parking_prefers_visit_matching_previous_leg_direction() {
         ServiceDirection::Return,
         "parking should prefer the return-direction visit matching the vehicle's previous leg"
     );
+}
+
+#[test]
+fn missing_shuttle_terminal_stays_missing_without_a_turnaround_diagnosis() {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 10));
+    for x in [2, 6, 10] {
+        let added = engine.dispatch(GameIntent::AddBusStop { point: point(x, 4) });
+        assert!(added.applied, "fixture stop should apply: {added:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Shuttle,
+        waypoint_ids: vec![
+            "stop-001".to_string(),
+            "stop-002".to_string(),
+            "stop-003".to_string(),
+        ],
+    });
+    assert!(created.applied, "fixture shuttle should apply: {created:?}");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: point(10, 4),
+    });
+    assert!(
+        removed.applied,
+        "terminal removal should apply: {removed:?}"
+    );
+    assert_eq!(
+        removed
+            .snapshot
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == "stop-003")
+            .expect("terminal tombstone")
+            .status,
+        TransitNodeStatus::Missing
+    );
+    let route = route(&removed.snapshot, "route-001");
+    let missing_terminal = route
+        .legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::TerminalReversal
+                && leg.from_waypoint_id == "stop-003"
+                && leg.to_waypoint_id == "stop-003"
+        })
+        .expect("the missing Shuttle terminal reversal remains in the itinerary");
+    assert_eq!(missing_terminal.status, RouteLegStatus::MissingNode);
+    assert_eq!(missing_terminal.failure_reason, None);
+    assert!(route
+        .legs
+        .iter()
+        .filter(|leg| { leg.from_waypoint_id == "stop-003" || leg.to_waypoint_id == "stop-003" })
+        .all(|leg| { leg.status == RouteLegStatus::MissingNode && leg.failure_reason.is_none() }));
 }
