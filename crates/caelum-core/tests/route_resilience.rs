@@ -358,9 +358,9 @@ fn first_broken_transition_parks_at_nearest_live_waypoint_and_replans_riders() {
 
     assert!(route.path_broken);
     assert_eq!(route.active, old_active);
-    assert_eq!(vehicle.parked_position, Some(point(10, 4).into()));
+    assert_eq!(vehicle.parked_position, Some(point(10, 5).into()));
     assert!(vehicle.passenger_ids.is_empty());
-    assert_eq!(rider.position, point(10, 4).into());
+    assert_eq!(rider.position, point(10, 5).into());
     assert_eq!(rider.status, TripStatus::Idle);
     assert!(rider.route_plan.is_none());
     assert_eq!(rider.current_leg_index, 0);
@@ -414,7 +414,6 @@ fn break_service_parks_vehicle_at_zero_step_terminal_reversal() {
     // Sampling path.step(0) returns None; fall back to the terminal waypoint so
     // break_service can still park the vehicle at the terminal location.
     let mut fixture = moving_vehicle_with_rider_fixture();
-    let terminal = point(10, 4);
     let empty_path = TransitPath::Road {
         steps: Vec::new(),
         total_travel_seconds: 0.0,
@@ -431,7 +430,7 @@ fn break_service_parks_vehicle_at_zero_step_terminal_reversal() {
     let next = recompute_after_removal(&fixture.state, point(6, 5));
     let parked = vehicle(&next, &fixture.vehicle_id);
     assert!(route(&next, &fixture.route_id).path_broken);
-    assert_eq!(parked.parked_position, Some(terminal.into()));
+    assert_eq!(parked.parked_position, Some(point(10, 5).into()));
 }
 
 #[test]
@@ -481,7 +480,7 @@ fn restoring_one_live_waypoint_reparks_a_still_broken_vehicle_there() {
     assert!(route(&one_node, &fixture.route_id).path_broken);
     assert_eq!(
         vehicle(&one_node, &fixture.vehicle_id).parked_position,
-        Some(point(10, 4).into())
+        Some(point(10, 5).into())
     );
 }
 
@@ -838,10 +837,10 @@ fn shuttle_parking_prefers_visit_matching_previous_leg_direction() {
     let vehicle = vehicle(&next, "vehicle-001");
 
     assert!(route(&next, "route-001").path_broken);
-    // The vehicle should park at the interior stop's position (6,4) —
+    // The vehicle should park at the interior stop's road access (6,5) —
     // the nearest live waypoint — and its itinerary index should correspond
     // to the return-direction visit, not the outbound one.
-    assert_eq!(vehicle.parked_position, Some(point(6, 4).into()));
+    assert_eq!(vehicle.parked_position, Some(point(6, 5).into()));
     let parked_itinerary = vehicle.itinerary_index;
     let parked_leg = &route(&next, "route-001").legs[parked_itinerary];
     assert_eq!(

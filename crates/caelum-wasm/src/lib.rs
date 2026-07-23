@@ -1,4 +1,6 @@
-use caelum_core::{GameEngine, GameIntent, RoadMutationPreviewRequest, RoutePreviewRequest};
+use caelum_core::{
+    GameEngine, GameIntent, GameSnapshot, RoadMutationPreviewRequest, RoutePreviewRequest,
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -19,6 +21,15 @@ impl WasmGameEngine {
         WasmGameEngine {
             inner: GameEngine::new(),
         }
+    }
+
+    pub fn from_snapshot(snapshot: JsValue) -> Result<WasmGameEngine, JsValue> {
+        let snapshot: GameSnapshot =
+            serde_wasm_bindgen::from_value(snapshot).map_err(to_js_error)?;
+        let inner = GameEngine::from_snapshot(snapshot).map_err(|rejection| {
+            serde_wasm_bindgen::to_value(&rejection).unwrap_or_else(to_js_error)
+        })?;
+        Ok(WasmGameEngine { inner })
     }
 
     pub fn snapshot(&self) -> Result<JsValue, JsValue> {

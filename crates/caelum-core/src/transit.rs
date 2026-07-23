@@ -439,7 +439,9 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     let mut vehicles = Vec::with_capacity(state.transit.vehicles.len());
 
     for vehicle in &state.transit.vehicles {
-        let Some((position_by_id, itinerary)) = assigned_line_data(state, vehicle) else {
+        let Some((vehicle_position_by_id, passenger_position_by_id, itinerary)) =
+            assigned_line_data(state, vehicle)
+        else {
             vehicles.push(vehicle.clone());
             continue;
         };
@@ -450,14 +452,22 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 
         let itinerary_index = vehicle.itinerary_index % itinerary.len();
         let current_leg = &itinerary[itinerary_index];
-        let Some(current_position) = position_by_id.get(&current_leg.from_waypoint_id) else {
+        let Some(_current_vehicle_position) =
+            vehicle_position_by_id.get(&current_leg.from_waypoint_id)
+        else {
+            vehicles.push(vehicle.clone());
+            continue;
+        };
+        let Some(current_passenger_position) =
+            passenger_position_by_id.get(&current_leg.from_waypoint_id)
+        else {
             vehicles.push(vehicle.clone());
             continue;
         };
         let waiter_order = waiter_order_lookup
             .get(&format!(
                 "{}|{}",
-                position_key(current_position.x, current_position.y),
+                position_key(current_passenger_position.x, current_passenger_position.y),
                 vehicle.line_id
             ))
             .cloned()
@@ -469,7 +479,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
             board_vehicle(
                 &mut active_trips,
                 vehicle,
-                current_position,
+                current_passenger_position,
                 &mut occupied_passenger_ids,
                 &on_platform,
                 &waiter_order,
@@ -491,11 +501,13 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
             |candidate, completed_itinerary_index| {
                 let mut event_changed = false;
                 let completed_leg = &itinerary[completed_itinerary_index];
-                if let Some(reached_position) = position_by_id.get(&completed_leg.to_waypoint_id) {
+                if let Some(reached_passenger_position) =
+                    passenger_position_by_id.get(&completed_leg.to_waypoint_id)
+                {
                     let (disembarked, disembark_changed) = disembark_vehicle(
                         &mut active_trips,
                         candidate,
-                        reached_position,
+                        reached_passenger_position,
                         completed_itinerary_index,
                     );
                     *candidate = disembarked;
@@ -507,7 +519,8 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
                 if next_leg.kind != RouteLegKind::Service {
                     return event_changed;
                 }
-                let Some(departure_position) = position_by_id.get(&next_leg.from_waypoint_id)
+                let Some(departure_position) =
+                    passenger_position_by_id.get(&next_leg.from_waypoint_id)
                 else {
                     return event_changed;
                 };
@@ -556,7 +569,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 }
 
 pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
-    let (_, itinerary) = assigned_line_data(state, vehicle)?;
+    let (_, _, itinerary) = assigned_line_data(state, vehicle)?;
     if itinerary.is_empty() {
         return None;
     }
@@ -1127,10 +1140,13 @@ fn plan_references_line_from(
     })
 }
 
-fn assigned_line_data(
-    state: &GameSnapshot,
-    vehicle: &Vehicle,
-) -> Option<(HashMap<String, Point>, Vec<RouteLegPath>)> {
+type AssignedLineData = (
+    HashMap<String, Point>,
+    HashMap<String, Point>,
+    Vec<RouteLegPath>,
+);
+
+fn assigned_line_data(state: &GameSnapshot, vehicle: &Vehicle) -> Option<AssignedLineData> {
     if vehicle.mode == TransitMode::Bus {
         let route = state
             .transit
@@ -1140,13 +1156,22 @@ fn assigned_line_data(
         if !is_route_operational(route.active, &route.legs) {
             return None;
         }
-        let stop_by_id: HashMap<String, Point> = state
+        let passenger_stop_by_id: HashMap<String, Point> = state
             .transit
             .stops
             .iter()
             .map(|stop| (stop.id.clone(), stop.position))
             .collect();
-        return Some((stop_by_id, route.legs.clone()));
+        let vehicle_stop_by_id: HashMap<String, Point> = state
+            .transit
+            .stops
+            .iter()
+            .filter_map(|stop| {
+                crate::stop_access::stop_access(state, &stop.id)
+                    .map(|access| (stop.id.clone(), access.road_point))
+            })
+            .collect();
+        return Some((vehicle_stop_by_id, passenger_stop_by_id, route.legs.clone()));
     }
 
     let line = state
@@ -1163,7 +1188,7 @@ fn assigned_line_data(
         .iter()
         .map(|station| (station.id.clone(), station.position))
         .collect();
-    Some((station_by_id, line.legs.clone()))
+    Some((station_by_id.clone(), station_by_id, line.legs.clone()))
 }
 
 /// Advance one vehicle along its itinerary by `remaining_seconds` of simulated
@@ -1361,7 +1386,7 @@ fn board_vehicle(
 fn disembark_vehicle(
     active_trips: &mut [ActiveTrip],
     vehicle: &Vehicle,
-    reached_position: &Point,
+    reached_passenger_position: &Point,
     completed_itinerary_index: usize,
 ) -> (Vehicle, bool) {
     let passenger_ids = unique_passenger_ids(&vehicle.passenger_ids);
@@ -1379,7 +1404,7 @@ fn disembark_vehicle(
                         leg.mode == vehicle.mode
                             && leg.line_id.as_deref() == Some(vehicle.line_id.as_str())
                             && leg.alight_itinerary_index == Some(completed_itinerary_index)
-                            && leg.to == *reached_position
+                            && leg.to == *reached_passenger_position
                     })
         })
         .map(|trip| trip.id.clone())
@@ -1387,7 +1412,7 @@ fn disembark_vehicle(
 
     for trip in active_trips {
         if disembarking_ids.contains(&trip.id) {
-            trip.position = (*reached_position).into();
+            trip.position = (*reached_passenger_position).into();
             trip.status = TripStatus::Walking;
             trip.current_leg_index += 1;
         }
@@ -1404,7 +1429,7 @@ fn disembark_vehicle(
 fn trip_can_board(
     trip: &ActiveTrip,
     vehicle: &Vehicle,
-    current_position: &Point,
+    current_passenger_position: &Point,
     occupied_passenger_ids: &HashSet<String>,
     on_platform: &HashSet<String>,
 ) -> bool {
@@ -1422,7 +1447,7 @@ fn trip_can_board(
             leg.mode == vehicle.mode
                 && leg.line_id.as_deref() == Some(vehicle.line_id.as_str())
                 && leg.board_itinerary_index == Some(vehicle.itinerary_index)
-                && trip_position_matches_point(&trip.position, current_position)
+                && trip_position_matches_point(&trip.position, current_passenger_position)
         })
 }
 

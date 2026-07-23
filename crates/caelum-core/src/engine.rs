@@ -12,6 +12,7 @@ use crate::road_topology::RoadTopology;
 use crate::route_editor;
 use crate::route_lifecycle;
 use crate::state::create_initial_snapshot;
+use crate::stop_access;
 use crate::transit;
 use crate::trips;
 
@@ -220,15 +221,6 @@ impl NetworkCandidate {
 /// Facade for the simulation core. Both the WASM and Tauri hosts drive this
 /// same engine: `tick` advances game time, `dispatch` applies a player intent.
 ///
-/// # Schema-version invariant
-///
-/// Every `GameSnapshot` produced by this engine carries
-/// [`crate::model::SNAPSHOT_SCHEMA_VERSION`]. The engine itself never ingests an external
-/// snapshot today (there is no save-load or multiplayer API), so it does not
-/// assert the version on input. When a future API accepts snapshots from an
-/// external source, it MUST reject `schema_version != SNAPSHOT_SCHEMA_VERSION`
-/// rather than heuristically loading a legacy format — the TS host boundary
-/// already enforces this in `normalizeRustSnapshot`.
 #[derive(Clone)]
 pub struct GameEngine {
     snapshot: GameSnapshot,
@@ -255,6 +247,17 @@ impl GameEngine {
             snapshot,
             road_topology,
         }
+    }
+
+    /// Construct an engine from a serialized schema-v2 snapshot, normalizing
+    /// roadside stop state before rebuilding the non-serialized topology cache.
+    pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
+        let snapshot = stop_access::normalize_snapshot_stops(snapshot)?;
+        let road_topology = RoadTopology::compile(&snapshot.map)?;
+        Ok(Self {
+            snapshot,
+            road_topology,
+        })
     }
 
     pub fn snapshot(&self) -> GameSnapshot {
@@ -562,12 +565,20 @@ impl GameEngine {
             Ok(candidate) => candidate,
             Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
         };
+        let map_changed = self.snapshot.map != network_candidate.snapshot.map;
+        if map_changed {
+            network_candidate.snapshot =
+                match stop_access::normalize_snapshot_stops(network_candidate.snapshot) {
+                    Ok(snapshot) => snapshot,
+                    Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+                };
+        }
         // If the map's road topology inputs are unchanged (e.g. AddBusStop,
         // AddMetroStation, PlaceBuilding — none of which modify map tiles),
         // skip the O(N²) topology compile and reuse the cached topology.
         // Route recompute still runs because transit node changes (stop/station
         // removal, status changes) can break route legs without altering the map.
-        let topology = if self.snapshot.map == network_candidate.snapshot.map {
+        let topology = if !map_changed {
             self.road_topology.clone()
         } else {
             match RoadTopology::compile(&network_candidate.snapshot.map) {
