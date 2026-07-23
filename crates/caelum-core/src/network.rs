@@ -118,7 +118,8 @@ fn resolve_terminal_reversal(
     match (arrival, departure) {
         (Some(access), Some(departure_tile)) if access == departure_tile => context
             .road_topology
-            .find_terminal_reversal(access, exit_heading, entry_heading),
+            .find_terminal_reversal(access, exit_heading, entry_heading)
+            .ok(),
         (Some(arrival_tile), Some(departure_tile)) => context.road_topology.find_reversal_between(
             arrival_tile,
             exit_heading,
@@ -132,7 +133,7 @@ fn resolve_terminal_reversal(
             for access in
                 terminal_reversal_access_points(snapshot, terminal, &previous_path, &next_path)
             {
-                if let Some(path) = context.road_topology.find_terminal_reversal(
+                if let Ok(path) = context.road_topology.find_terminal_reversal(
                     access,
                     exit_heading,
                     entry_heading,

@@ -5,8 +5,8 @@ use crate::heading::{
     canonical_headings, heading_key, heading_rank, offset, offset_components, opposite,
 };
 use crate::model::{
-    GameMap, Heading, MovementKind, PathGeometry, Point, RoadPathStep, RoadStructure, TransitPath,
-    TripPosition,
+    GameMap, Heading, LegFailureReason, MovementKind, PathGeometry, Point, RoadPathStep,
+    RoadStructure, TransitPath, TripPosition,
 };
 use crate::rejection::GameplayResult;
 use crate::roundabouts::compile_roundabout_transitions;
@@ -58,8 +58,29 @@ impl RoadTopology {
         })
     }
 
+    #[doc(hidden)]
     pub fn find_path(&self, map: &GameMap, from: &Point, to: &Point) -> Option<TransitPath> {
         deterministic_dijkstra(self, map, from, to)
+    }
+
+    /// Route between two specific road access tiles without expanding either
+    /// endpoint to adjacent roads.
+    pub fn find_path_between_access_tiles(
+        &self,
+        map: &GameMap,
+        from_tile: Point,
+        to_tile: Point,
+        from_preferred: Option<Heading>,
+        to_preferred: Option<Heading>,
+    ) -> Result<TransitPath, LegFailureReason> {
+        deterministic_access_tile_dijkstra(
+            self,
+            map,
+            from_tile,
+            to_tile,
+            from_preferred,
+            to_preferred,
+        )
     }
 
     pub fn find_terminal_reversal(
@@ -67,7 +88,7 @@ impl RoadTopology {
         terminal: Point,
         previous_exit_heading: Heading,
         next_required_entry_heading: Heading,
-    ) -> Option<TransitPath> {
+    ) -> Result<TransitPath, LegFailureReason> {
         let start = RoadState {
             position: terminal,
             incoming_heading: previous_exit_heading,
@@ -80,10 +101,22 @@ impl RoadTopology {
         // Same heading in and out: no reversal needed (e.g., one-way roads
         // where the return path naturally continues in the same direction).
         if start == goal {
-            return Some(TransitPath::Road {
+            return Ok(TransitPath::Road {
                 steps: Vec::new(),
                 total_travel_seconds: 0.0,
             });
+        }
+
+        if self.transitions.get(&start).map_or(true, Vec::is_empty) {
+            return Err(LegFailureReason::NoLegalExitHeading);
+        }
+        if !self
+            .transitions
+            .values()
+            .flatten()
+            .any(|transition| transition.to == goal)
+        {
+            return Err(LegFailureReason::NoLegalEntryHeading);
         }
 
         // Direct U-turn at the terminal: ordinary lane U-turns end on the
@@ -95,7 +128,7 @@ impl RoadTopology {
         if let Some(transition) = self.transition_for(start, next_required_entry_heading) {
             if transition.movement == MovementKind::UTurn {
                 let travel_seconds = f64::from(transition.travel_millis) / 1_000.0;
-                return Some(TransitPath::Road {
+                return Ok(TransitPath::Road {
                     steps: vec![RoadPathStep {
                         position: terminal,
                         entering_heading: previous_exit_heading,
@@ -113,6 +146,7 @@ impl RoadTopology {
         // state space (e.g. entry → circulation → exit through a roundabout
         // when no direct U-turn exists).
         self.find_reversal_path(start, goal)
+            .ok_or(LegFailureReason::NoLegalTurnaround)
     }
 
     /// Route a terminal reversal between two distinct road access tiles — the
@@ -443,6 +477,8 @@ fn merge_and_canonicalize(
 struct PathRank {
     total_millis: u64,
     movement_count: u32,
+    start_preference: u8,
+    goal_preference: u8,
     direction_key: Vec<u8>,
     stable_keys: Vec<String>,
 }
@@ -452,9 +488,17 @@ impl PathRank {
         Self {
             total_millis: 0,
             movement_count: 0,
+            start_preference: 0,
+            goal_preference: 0,
             direction_key: Vec::new(),
             stable_keys: Vec::new(),
         }
+    }
+
+    fn with_start_preference(mut self, state: RoadState, preferred: Option<Heading>) -> Self {
+        self.start_preference =
+            preferred.is_some_and(|heading| state.incoming_heading != heading) as u8;
+        self
     }
 
     fn with_transition(&self, transition: &RoadTransition) -> Self {
@@ -464,6 +508,19 @@ impl PathRank {
         next.direction_key
             .push(heading_rank(transition.to.incoming_heading));
         next.stable_keys.push(transition.stable_key.clone());
+        next
+    }
+
+    fn with_transition_to(
+        &self,
+        transition: &RoadTransition,
+        to_tile: Point,
+        to_preferred: Option<Heading>,
+    ) -> Self {
+        let mut next = self.with_transition(transition);
+        next.goal_preference = to_preferred.is_some_and(|heading| {
+            transition.to.position == to_tile && transition.to.incoming_heading != heading
+        }) as u8;
         next
     }
 }
@@ -539,6 +596,71 @@ fn deterministic_dijkstra(
         }
     }
     None
+}
+
+fn deterministic_access_tile_dijkstra(
+    topology: &RoadTopology,
+    map: &GameMap,
+    from_tile: Point,
+    to_tile: Point,
+    from_preferred: Option<Heading>,
+    to_preferred: Option<Heading>,
+) -> Result<TransitPath, LegFailureReason> {
+    if map.tile(from_tile).is_none() {
+        return Err(LegFailureReason::NoLegalEntryHeading);
+    }
+    if map.tile(to_tile).is_none() {
+        return Err(LegFailureReason::NetworkDisconnected);
+    }
+    if from_tile == to_tile {
+        return Ok(TransitPath::Road {
+            steps: Vec::new(),
+            total_travel_seconds: 0.0,
+        });
+    }
+
+    let starts = road_start_states(topology, from_tile);
+    if starts.is_empty() {
+        return Err(LegFailureReason::NoLegalEntryHeading);
+    }
+    let mut best = BTreeMap::new();
+    let mut parents: BTreeMap<RoadState, (RoadState, RoadTransition)> = BTreeMap::new();
+    let mut heap = BinaryHeap::new();
+
+    for state in starts {
+        let rank = PathRank::zero().with_start_preference(state, from_preferred);
+        let should_insert = best
+            .get(&state)
+            .map_or(true, |existing: &PathRank| rank < *existing);
+        if should_insert {
+            best.insert(state, rank.clone());
+            heap.push(Reverse((rank, state)));
+        }
+    }
+
+    while let Some(Reverse((rank, state))) = heap.pop() {
+        if best.get(&state) != Some(&rank) {
+            continue;
+        }
+        if rank.movement_count > 0 && state.position == to_tile {
+            return Ok(build_road_path(state, rank.total_millis, &parents));
+        }
+
+        for transition in topology.transitions.get(&state).into_iter().flatten() {
+            let next_rank = rank.with_transition_to(transition, to_tile, to_preferred);
+            let should_update = best
+                .get(&transition.to)
+                .map_or(true, |existing| next_rank < *existing);
+            if !should_update {
+                continue;
+            }
+            best.insert(transition.to, next_rank.clone());
+            parents.insert(transition.to, (state, transition.clone()));
+            heap.push(Reverse((next_rank, transition.to)));
+        }
+    }
+
+    Err(LegFailureReason::NetworkDisconnected)
 }
 
 fn start_states(topology: &RoadTopology, map: &GameMap, from: Point) -> Vec<RoadState> {
