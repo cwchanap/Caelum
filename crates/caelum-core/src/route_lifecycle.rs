@@ -283,6 +283,9 @@ fn transition_route_service(
         }
         _ => {}
     }
+    if mode == TransitMode::Bus {
+        rebase_parked_bus_access_to_live_stop(previous, candidate, route_id);
+    }
 }
 
 fn route_is_broken(snapshot: &GameSnapshot, mode: TransitMode, route_id: &str) -> bool {
@@ -430,6 +433,76 @@ fn rebase_broken_parking_to_new_live_waypoint(
         return;
     }
     rebase_parked_vehicles(previous, candidate, mode, route_id, false, &waypoint_ids);
+}
+
+fn rebase_parked_bus_access_to_live_stop(
+    previous: &GameSnapshot,
+    candidate: &mut GameSnapshot,
+    route_id: &str,
+) {
+    let Some((active, waypoint_ids, legs)) = route_data(candidate, TransitMode::Bus, route_id)
+    else {
+        return;
+    };
+    if !active {
+        return;
+    }
+    let waypoint_ids = waypoint_ids.to_vec();
+    let legs = legs.to_vec();
+    let changed_accesses: Vec<TripPosition> = waypoint_ids
+        .iter()
+        .filter_map(|waypoint_id| {
+            let previous_access = present_node_world(previous, TransitMode::Bus, waypoint_id)?;
+            let candidate_access = present_node_world(candidate, TransitMode::Bus, waypoint_id);
+            (Some(previous_access.clone()) != candidate_access).then_some(previous_access)
+        })
+        .collect();
+    if changed_accesses.is_empty() {
+        return;
+    }
+
+    let vehicle_indexes: Vec<usize> = candidate
+        .transit
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vehicle)| {
+            (vehicle.mode == TransitMode::Bus && vehicle.line_id == route_id).then_some(index)
+        })
+        .collect();
+
+    for vehicle_index in vehicle_indexes {
+        let vehicle = &candidate.transit.vehicles[vehicle_index];
+        let Some(parked_position) = vehicle.parked_position.clone() else {
+            continue;
+        };
+        if !changed_accesses
+            .iter()
+            .any(|access| access == &parked_position)
+        {
+            continue;
+        }
+        let preferred_direction = (!legs.is_empty())
+            .then(|| legs.get(vehicle.itinerary_index % legs.len()))
+            .flatten()
+            .map(|leg| leg.direction);
+        let Some((itinerary_index, _, parked_world)) = parking_target(
+            candidate,
+            TransitMode::Bus,
+            &legs,
+            &waypoint_ids,
+            &parked_position,
+            preferred_direction,
+        ) else {
+            continue;
+        };
+
+        let vehicle = &mut candidate.transit.vehicles[vehicle_index];
+        vehicle.itinerary_index = itinerary_index;
+        vehicle.path_step_index = 0;
+        vehicle.step_progress = 0.0;
+        vehicle.parked_position = Some(parked_world);
+    }
 }
 
 fn rebase_parked_vehicles(

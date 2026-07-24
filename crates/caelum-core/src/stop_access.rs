@@ -1,10 +1,19 @@
-use crate::heading::{canonical_headings, offset};
+use crate::heading::{canonical_headings, offset_components};
 use crate::model::{
-    BusStopKind, GameMap, GameSnapshot, Point, Stop, StopRoadAccess, TransitMode, TripPosition,
+    BusStopKind, GameMap, GameSnapshot, Heading, Point, Stop, StopRoadAccess, TransitMode,
+    TripPosition,
 };
 use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
 use crate::transit_nodes::is_present_node;
+
+fn checked_offset(point: Point, heading: Heading) -> Option<Point> {
+    let (dx, dy) = offset_components(heading);
+    Some(Point {
+        x: point.x.checked_add(dx)?,
+        y: point.y.checked_add(dy)?,
+    })
+}
 
 fn usable_road(map: &GameMap, point: Point) -> bool {
     map.tile(point).is_some_and(|tile| {
@@ -29,7 +38,7 @@ pub(crate) fn derive_stop_access_for_footprint(
         .flat_map(|point| {
             canonical_headings()
                 .into_iter()
-                .map(|heading| offset(*point, heading))
+                .filter_map(|heading| checked_offset(*point, heading))
         })
         .find(|point| usable_road(map, *point))?;
     let tile = map.tile(road_point)?;
@@ -64,7 +73,7 @@ pub(crate) fn is_valid_access(map: &GameMap, footprint: &[Point], access: StopRo
     let adjacent_to_footprint = footprint.iter().any(|point| {
         canonical_headings()
             .into_iter()
-            .any(|heading| offset(*point, heading) == access.road_point)
+            .any(|heading| checked_offset(*point, heading) == Some(access.road_point))
     });
     let legacy_on_road_fallback = footprint.len() == 1
         && footprint[0] == access.road_point
@@ -126,7 +135,7 @@ pub(crate) fn normalize_snapshot_stops(
             let road_point = stop.position;
             let new_position = canonical_headings()
                 .into_iter()
-                .map(|heading| offset(stop.position, heading))
+                .filter_map(|heading| checked_offset(stop.position, heading))
                 .find(|candidate| is_free_anchor(&snapshot, *candidate));
             let access = access_for_road_point(&snapshot.map, road_point).or_else(|| {
                 new_position.and_then(|position| {
