@@ -117,12 +117,16 @@ fn resolve_terminal_reversal(
     let previous = &specs[(index + specs.len() - 1) % specs.len()];
     let next = &specs[(index + 1) % specs.len()];
 
-    let previous_path = resolve_spec_service_path(snapshot, context, mode, previous)?;
-    let next_path = resolve_spec_service_path(snapshot, context, mode, next)?;
-    let exit_heading = road_exit_heading(&previous_path)
+    let previous_path = resolve_spec_service_path(snapshot, context, mode, previous).ok();
+    let next_path = resolve_spec_service_path(snapshot, context, mode, next).ok();
+    let exit_heading = previous_path
+        .as_ref()
+        .and_then(road_exit_heading)
         .or_else(|| terminal_heading(context, terminal_access))
         .ok_or(LegFailureReason::NoLegalExitHeading)?;
-    let entry_heading = road_entry_heading(&next_path)
+    let entry_heading = next_path
+        .as_ref()
+        .and_then(road_entry_heading)
         .or_else(|| terminal_heading(context, terminal_access))
         .ok_or(LegFailureReason::NoLegalEntryHeading)?;
     context.road_topology.find_terminal_reversal(

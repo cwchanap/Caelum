@@ -450,6 +450,51 @@ fn route_resolution_preserves_terminal_typed_failure_reasons_and_coarse_status()
 }
 
 #[test]
+fn terminal_reversal_does_not_leak_bounding_leg_failure_reason() {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 6);
+    road_line(&mut engine, 12, 2, 6);
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 4) });
+    dispatch(
+        &mut engine,
+        GameIntent::AddBusStop {
+            point: point(2, 11),
+        },
+    );
+
+    let legs = resolved_bus_legs_with_pattern(
+        &engine.snapshot(),
+        engine.road_topology_for_test(),
+        &["stop-001", "stop-002"],
+        ServicePattern::Shuttle,
+    );
+    let service = legs
+        .iter()
+        .find(|leg| leg.kind == RouteLegKind::Service)
+        .expect("service leg");
+    assert_eq!(
+        service.status,
+        RouteLegStatus::NetworkDisconnected,
+        "service leg should be disconnected across separate roads: {service:?}",
+    );
+
+    let reversal = legs
+        .iter()
+        .find(|leg| leg.kind == RouteLegKind::TerminalReversal)
+        .expect("terminal reversal leg");
+    assert_ne!(
+        reversal.failure_reason,
+        Some(LegFailureReason::NetworkDisconnected),
+        "reversal leg must not leak the bounding service leg's NetworkDisconnected: {reversal:?}",
+    );
+    assert_ne!(
+        reversal.failure_reason,
+        Some(LegFailureReason::NoRoadAccess),
+        "reversal leg must not leak NoRoadAccess from the bounding service leg: {reversal:?}",
+    );
+}
+
+#[test]
 fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
     let mut engine = editable_bus_engine(&[2, 10], BUS_COST);
     let before = engine.snapshot();
