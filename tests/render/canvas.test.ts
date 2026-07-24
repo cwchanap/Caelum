@@ -7,7 +7,7 @@ import { getBuildingFootprint } from "../../src/domain/catalog/buildings";
 import { stopCoverageRadius } from "../../src/domain/catalog/transit";
 import { createUiState } from "../../src/ui/uiState";
 import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
-import { withAreas } from "../helpers/mapFixtures";
+import { withAreas, withRoads } from "../helpers/mapFixtures";
 
 const tileSize = 32;
 
@@ -284,7 +284,7 @@ describe("canvas helpers", () => {
 
   it("renders selected building preview over the full footprint", () => {
     const { ctx, calls } = createContextRecorder();
-    const state = createTestGameState();
+    const state = withRoads(createTestGameState(), [{ x: 0, y: 3 }]);
     const ui = {
       ...createUiState(),
       hoverTile: { x: 0, y: 0 },

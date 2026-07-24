@@ -221,6 +221,34 @@ fn from_snapshot_rejects_unsupported_schema_before_normalization() {
 }
 
 #[test]
+fn from_snapshot_handles_extreme_stop_and_footprint_coordinates_without_overflow() {
+    let mut snapshot = legacy_snapshot();
+    snapshot.transit.routes.clear();
+    snapshot.transit.vehicles.clear();
+    snapshot.transit.stops[0].position = point(i32::MAX, i32::MAX);
+    snapshot.transit.stops[0].road_access = None;
+    snapshot.transit.stops[1].road_access = None;
+    snapshot.buildings.push(PlacedBuilding {
+        id: "malformed-footprint".to_string(),
+        building_type: "fixture".to_string(),
+        origin: point(i32::MAX, i32::MAX),
+        rotation: 0,
+        occupied_tiles: vec![point(i32::MAX, i32::MAX)],
+        transit_node_id: Some("stop-002".to_string()),
+    });
+
+    let engine = GameEngine::from_snapshot(snapshot).expect("malformed coordinates are ignored");
+    let loaded = engine.snapshot();
+
+    assert_eq!(loaded.schema_version, SNAPSHOT_SCHEMA_VERSION);
+    assert!(loaded
+        .transit
+        .stops
+        .iter()
+        .all(|stop| stop.road_access.is_none()));
+}
+
+#[test]
 fn from_snapshot_preserves_out_of_service_and_unrelated_bus_parking() {
     let mut snapshot = legacy_snapshot();
     snapshot.transit.routes.push(Route {

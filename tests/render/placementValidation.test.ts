@@ -101,3 +101,21 @@ describe("bus stop placement", () => {
     expect(canPlaceBusStop(withTrack, { x: 4, y: 4 })).toBe(false);
   });
 });
+
+describe("bus terminal placement", () => {
+  it("rejects a terminal footprint with no adjacent road", () => {
+    const state = createTestGameState();
+
+    expect(canPlaceBuilding(state, "busTerminal", { x: 4, y: 4 }, 0)).toBe(
+      false,
+    );
+  });
+
+  it("accepts a road beside a non-origin footprint tile", () => {
+    const state = withRoads(createTestGameState(), [{ x: 5, y: 3 }]);
+
+    expect(canPlaceBuilding(state, "busTerminal", { x: 4, y: 4 }, 0)).toBe(
+      true,
+    );
+  });
+});

@@ -532,6 +532,59 @@ fn mutations_while_already_broken_do_not_repeat_break_side_effects() {
     assert!(untouched_trip.route_plan.is_some());
 }
 
+#[test]
+fn already_broken_route_rebases_parked_bus_when_live_stop_access_is_demolished() {
+    let mut engine = GameEngine::new();
+    lay_two_way_line(&mut engine, horizontal(5, 2, 10));
+    add_bus_route(&mut engine, &[(2, 4), (10, 4)]);
+    let alternate = engine.dispatch(GameIntent::LayRoadLine {
+        points: vertical(2, 2, 3),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(
+        alternate.applied,
+        "alternate stop access should apply: {alternate:?}"
+    );
+
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
+
+    let broken = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
+    assert!(
+        broken.applied,
+        "route-breaking removal should apply: {broken:?}"
+    );
+    assert!(route(&broken.snapshot, "route-001").path_broken);
+    assert_eq!(
+        vehicle(&broken.snapshot, "vehicle-001").parked_position,
+        Some(point(2, 5).into())
+    );
+
+    let access_loss = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 5) });
+    assert!(
+        access_loss.applied,
+        "old stop access removal should apply: {access_loss:?}"
+    );
+    assert!(route(&access_loss.snapshot, "route-001").path_broken);
+    assert_eq!(
+        access_loss.snapshot.transit.stops[0]
+            .road_access
+            .expect("the north access remains live")
+            .road_point,
+        point(2, 3)
+    );
+    assert_eq!(
+        vehicle(&access_loss.snapshot, "vehicle-001").parked_position,
+        Some(point(2, 3).into())
+    );
+}
+
 fn shared_stop_route_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     lay_two_way_line(&mut engine, horizontal(5, 2, 10));

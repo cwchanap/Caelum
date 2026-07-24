@@ -69,6 +69,24 @@ export function canPlaceBusStop(state: GameState, anchor: Point): boolean {
   );
 }
 
+function hasAdjacentRoad(state: GameState, footprint: Point[]): boolean {
+  const offsets: Point[] = [
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+  ];
+  return footprint.some((point) =>
+    offsets.some((offset) => {
+      const road = getTile(state.map, {
+        x: point.x + offset.x,
+        y: point.y + offset.y,
+      });
+      return road?.kind === "road" && road.roadStructureId === undefined;
+    }),
+  );
+}
+
 /**
  * Best-effort client-side building hover validation (cheap footprint check).
  *
@@ -86,7 +104,7 @@ export function canPlaceBuilding(
   const definition = BUILDING_CATALOG[type];
   const footprint = getBuildingFootprint(type, origin, rotation);
 
-  return footprint.every((point) => {
+  const footprintIsClear = footprint.every((point) => {
     const tile = getTile(state.map, point);
     const kindOk =
       type === "metroStation"
@@ -109,6 +127,11 @@ export function canPlaceBuilding(
       !isTransitNodeAt(state, point)
     );
   });
+
+  return (
+    footprintIsClear &&
+    (type !== "busTerminal" || hasAdjacentRoad(state, footprint))
+  );
 }
 
 export function isValidRoadPlacement(state: GameState, point: Point): boolean {
