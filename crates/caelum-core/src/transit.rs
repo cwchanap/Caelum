@@ -253,15 +253,11 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
         });
         Ok(allocated)
     })?;
-    if let Some(stop_id) = matching_present_node_id(&next, LogicalNodeKind::BusStop, *point) {
-        if let Some(stop) = next
-            .transit
-            .stops
-            .iter_mut()
-            .find(|stop| stop.id == stop_id)
-        {
-            stop.road_access = Some(access);
-        }
+    let stop_id = matching_present_node_id(&next, LogicalNodeKind::BusStop, *point);
+    if let Some(stop) =
+        stop_id.and_then(|id| next.transit.stops.iter_mut().find(|stop| stop.id == id))
+    {
+        stop.road_access = Some(access);
     }
     next.budget -= BUS_STOP_COST;
 
@@ -452,18 +448,15 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 
         let itinerary_index = vehicle.itinerary_index % itinerary.len();
         let current_leg = &itinerary[itinerary_index];
-        let Some(_current_vehicle_position) =
+        let Some(current_vehicle_position) =
             vehicle_position_by_id.get(&current_leg.from_waypoint_id)
         else {
             vehicles.push(vehicle.clone());
             continue;
         };
-        let Some(current_passenger_position) =
-            passenger_position_by_id.get(&current_leg.from_waypoint_id)
-        else {
-            vehicles.push(vehicle.clone());
-            continue;
-        };
+        let current_passenger_position = passenger_position_by_id
+            .get(&current_leg.from_waypoint_id)
+            .unwrap_or(current_vehicle_position);
         let waiter_order = waiter_order_lookup
             .get(&format!(
                 "{}|{}",
@@ -1614,4 +1607,95 @@ fn position_key(x: i32, y: i32) -> String {
 
 fn point_key(point: &Point) -> String {
     position_key(point.x, point.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        BusStopKind, Heading, MovementKind, PathGeometry, RoadPathStep, Route, RouteLegKind,
+        RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, Stop, StopRoadAccess,
+        TransitMode, TransitNodeStatus, TripPosition, Vehicle,
+    };
+    use crate::state::create_initial_snapshot;
+
+    #[test]
+    fn tick_vehicles_skips_vehicle_whose_from_waypoint_lacks_road_access() {
+        let mut snapshot = create_initial_snapshot();
+        let stop_a = Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point { x: 4, y: 5 },
+            platforms: Vec::new(),
+            road_access: None,
+        };
+        let stop_b = Stop {
+            id: "stop-002".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point { x: 8, y: 5 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 8, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        snapshot.transit.stops = vec![stop_a, stop_b];
+
+        let leg = RouteLegPath {
+            from_waypoint_id: "stop-001".to_string(),
+            to_waypoint_id: "stop-002".to_string(),
+            direction: ServiceDirection::Loop,
+            kind: RouteLegKind::Service,
+            status: RouteLegStatus::Connected,
+            current_path: Some(TransitPath::Road {
+                steps: vec![RoadPathStep {
+                    position: Point { x: 4, y: 5 },
+                    entering_heading: Heading::East,
+                    leaving_heading: Heading::East,
+                    movement: MovementKind::Straight,
+                    geometry: PathGeometry::Line {
+                        from: TripPosition { x: 4.0, y: 5.0 },
+                        to: TripPosition { x: 8.0, y: 5.0 },
+                    },
+                    travel_seconds: 4.0,
+                }],
+                total_travel_seconds: 4.0,
+            }),
+            last_valid_path: None,
+            estimated_seconds: Some(4.0),
+            failure_reason: None,
+        };
+        let route = Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![leg],
+            path_broken: false,
+        };
+        snapshot.transit.routes = vec![route];
+
+        let vehicle = Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
+        };
+        snapshot.transit.vehicles = vec![vehicle.clone()];
+
+        let result = tick_vehicles(&snapshot, 1.0);
+        assert_eq!(result.transit.vehicles.len(), 1);
+        assert_eq!(result.transit.vehicles[0], vehicle);
+    }
 }

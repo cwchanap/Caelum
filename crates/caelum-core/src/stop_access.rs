@@ -105,9 +105,7 @@ struct StopMove {
     road_point: Point,
 }
 
-pub(crate) fn normalize_snapshot_stops(
-    mut snapshot: GameSnapshot,
-) -> crate::rejection::GameplayResult<GameSnapshot> {
+pub(crate) fn normalize_snapshot_stops(mut snapshot: GameSnapshot) -> GameSnapshot {
     let mut stop_indexes: Vec<usize> = snapshot
         .transit
         .stops
@@ -168,7 +166,7 @@ pub(crate) fn normalize_snapshot_stops(
 
     rebase_parked_bus_positions(&mut snapshot);
     rebase_active_trips(&mut snapshot, &moves);
-    Ok(snapshot)
+    snapshot
 }
 
 fn rebase_parked_bus_positions(snapshot: &mut GameSnapshot) {
@@ -299,13 +297,15 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
 mod tests {
     use super::*;
     use crate::intent::RoadPreset;
+    use crate::model::{
+        ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus, Vehicle,
+    };
     use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
 
-    #[test]
-    fn accepts_the_supported_on_road_fallback_access() {
+    fn road_at_y5() -> GameSnapshot {
         let snapshot = create_initial_snapshot();
-        let candidate = apply_road_mutation(
+        apply_road_mutation(
             &snapshot,
             &RoadMutation::LayRoadLine {
                 points: (2..=10).map(|x| Point { x, y: 5 }).collect(),
@@ -313,7 +313,12 @@ mod tests {
             },
         )
         .expect("fixture road should apply")
-        .snapshot;
+        .snapshot
+    }
+
+    #[test]
+    fn accepts_the_supported_on_road_fallback_access() {
+        let candidate = road_at_y5();
 
         assert!(is_valid_access(
             &candidate.map,
@@ -323,5 +328,203 @@ mod tests {
                 preferred_heading: None,
             },
         ));
+    }
+
+    #[test]
+    fn derive_access_falls_back_to_a_lane_accepted_heading_without_a_connection() {
+        let mut candidate = road_at_y5();
+        let tile = candidate
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("road tile exists");
+        tile.one_way = Some(Heading::East);
+        tile.road_connections.clear();
+
+        let access = derive_stop_access_for_footprint(&candidate.map, &[Point { x: 4, y: 4 }])
+            .expect("roadside access is derived");
+        assert_eq!(access.road_point, Point { x: 4, y: 5 });
+        assert_eq!(access.preferred_heading, Some(Heading::East));
+    }
+
+    #[test]
+    fn access_for_road_point_returns_none_for_a_structure_owned_road() {
+        let mut candidate = road_at_y5();
+        let tile = candidate
+            .map
+            .tile_mut(Point { x: 6, y: 5 })
+            .expect("road tile exists");
+        tile.road_structure_id = Some("fixture-roundabout".to_string());
+
+        assert!(access_for_road_point(&candidate.map, Point { x: 6, y: 5 }).is_none());
+    }
+
+    #[test]
+    fn access_for_road_point_falls_back_to_a_lane_accepted_heading_without_a_connection() {
+        let mut candidate = road_at_y5();
+        let tile = candidate
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("road tile exists");
+        tile.one_way = Some(Heading::East);
+        tile.road_connections.clear();
+
+        let access = access_for_road_point(&candidate.map, Point { x: 4, y: 5 })
+            .expect("usable road returns access");
+        assert_eq!(access.road_point, Point { x: 4, y: 5 });
+        assert_eq!(access.preferred_heading, Some(Heading::East));
+    }
+
+    #[test]
+    fn normalize_legacy_stop_on_unusable_road_derives_access_from_free_neighbor() {
+        let mut snapshot = create_initial_snapshot();
+        let usable_road = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: (2..=10).map(|x| Point { x, y: 3 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+        snapshot = usable_road;
+
+        let isolated = snapshot
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("tile exists");
+        isolated.kind = "road".to_string();
+        isolated.road_connections.clear();
+
+        snapshot.transit.stops.push(Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 4, y: 5 },
+            platforms: Vec::new(),
+            road_access: None,
+        });
+
+        let normalized = normalize_snapshot_stops(snapshot);
+        let stop = &normalized.transit.stops[0];
+
+        assert_eq!(stop.position, Point { x: 4, y: 4 });
+        assert_eq!(
+            stop.road_access
+                .expect("access derived from free neighbor")
+                .road_point,
+            Point { x: 4, y: 3 },
+        );
+    }
+
+    #[test]
+    fn rebase_parked_bus_positions_leaves_a_parked_metro_vehicle_untouched() {
+        let mut snapshot = create_initial_snapshot();
+        let parked_metro = Vehicle {
+            id: "metro-001".to_string(),
+            mode: TransitMode::Metro,
+            line_id: "metro-line-001".to_string(),
+            capacity: 90,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: Some(Point { x: 4, y: 4 }.into()),
+        };
+        snapshot.transit.vehicles.push(parked_metro.clone());
+
+        rebase_parked_bus_positions(&mut snapshot);
+
+        assert_eq!(
+            snapshot.transit.vehicles[0].parked_position,
+            Some(Point { x: 4, y: 4 }.into())
+        );
+    }
+
+    #[test]
+    fn rebase_active_trips_repoints_walk_legs_around_moved_legacy_stops() {
+        let mut snapshot = create_initial_snapshot();
+        let old_a = Point { x: 4, y: 5 };
+        let new_a = Point { x: 4, y: 4 };
+        let old_b = Point { x: 8, y: 5 };
+        let new_b = Point { x: 8, y: 4 };
+
+        let riding_trip = ActiveTrip {
+            id: "trip-001".to_string(),
+            sim_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: old_a,
+            destination: Point { x: 8, y: 8 },
+            position: old_a.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![
+                    RouteLeg {
+                        mode: TransitMode::Bus,
+                        from: old_a,
+                        to: old_b,
+                        line_id: Some("route-001".to_string()),
+                        service_direction: None,
+                        board_itinerary_index: None,
+                        alight_itinerary_index: None,
+                    },
+                    RouteLeg {
+                        mode: TransitMode::Walk,
+                        from: old_b,
+                        to: Point { x: 8, y: 8 },
+                        line_id: None,
+                        service_direction: None,
+                        board_itinerary_index: None,
+                        alight_itinerary_index: None,
+                    },
+                ],
+                estimated_seconds: 100.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        let planless_trip = ActiveTrip {
+            id: "trip-002".to_string(),
+            sim_id: "sim-002".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: old_a,
+            destination: old_a,
+            position: old_a.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        snapshot.active_trips = vec![riding_trip, planless_trip];
+
+        let moves = vec![
+            StopMove {
+                stop_id: "stop-001".to_string(),
+                old_position: old_a,
+                new_position: new_a,
+                road_point: old_a,
+            },
+            StopMove {
+                stop_id: "stop-002".to_string(),
+                old_position: old_b,
+                new_position: new_b,
+                road_point: old_b,
+            },
+        ];
+        rebase_active_trips(&mut snapshot, &moves);
+
+        let riding = &snapshot.active_trips[0];
+        assert_eq!(riding.position, new_a.into());
+        let plan = riding
+            .route_plan
+            .as_ref()
+            .expect("riding trip keeps its plan");
+        assert_eq!(plan.legs[0].from, new_a);
+        assert_eq!(plan.legs[0].to, new_b);
+        assert_eq!(plan.legs[1].from, new_b);
+
+        assert_eq!(snapshot.active_trips[1].position, new_a.into());
+        assert!(snapshot.active_trips[1].route_plan.is_none());
     }
 }

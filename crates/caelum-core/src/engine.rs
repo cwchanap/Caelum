@@ -257,7 +257,7 @@ impl GameEngine {
                 snapshot.schema_version,
             ));
         }
-        let normalized = stop_access::normalize_snapshot_stops(snapshot)?;
+        let normalized = stop_access::normalize_snapshot_stops(snapshot);
         let road_topology = RoadTopology::compile(&normalized.map)?;
         // Saved route legs are derived state. Re-resolve them after stop access
         // normalization so they cannot continue to reference removed roads.
@@ -268,7 +268,7 @@ impl GameEngine {
             RoutingContext {
                 road_topology: &road_topology,
             },
-        )?;
+        );
         Ok(Self {
             snapshot,
             road_topology,
@@ -583,10 +583,7 @@ impl GameEngine {
         let map_changed = self.snapshot.map != network_candidate.snapshot.map;
         if map_changed {
             network_candidate.snapshot =
-                match stop_access::normalize_snapshot_stops(network_candidate.snapshot) {
-                    Ok(snapshot) => snapshot,
-                    Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
-                };
+                stop_access::normalize_snapshot_stops(network_candidate.snapshot);
         }
         // If the map's road topology inputs are unchanged (e.g. AddBusStop,
         // AddMetroStation, PlaceBuilding — none of which modify map tiles),
@@ -601,16 +598,13 @@ impl GameEngine {
                 Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
             }
         };
-        let candidate = match route_lifecycle::recompute_all_routes(
+        let candidate = route_lifecycle::recompute_all_routes(
             &self.snapshot,
             network_candidate.snapshot,
             RoutingContext {
                 road_topology: &topology,
             },
-        ) {
-            Ok(candidate) => candidate,
-            Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
-        };
+        );
         network_candidate.context.affected_route_ids =
             route_lifecycle::structurally_changed_route_ids(&self.snapshot, &candidate);
         self.commit_snapshot_and_topology(candidate, topology, network_candidate.context)

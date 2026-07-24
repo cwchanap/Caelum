@@ -317,3 +317,67 @@ fn track_path_from_points(points: Vec<Point>, tiles_per_second: f64) -> TransitP
         steps,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{RouteLegKind, ServiceDirection};
+    use crate::road_topology::RoadTopology;
+    use crate::service_itinerary::ServiceLegSpec;
+    use crate::state::create_initial_snapshot;
+
+    fn routing_context() -> (GameSnapshot, RoadTopology) {
+        let snapshot = create_initial_snapshot();
+        let topology = RoadTopology::compile(&snapshot.map).expect("topology compiles");
+        (snapshot, topology)
+    }
+
+    #[test]
+    fn terminal_reversal_with_no_service_specs_reports_network_disconnected() {
+        let (snapshot, topology) = routing_context();
+        let context = RoutingContext {
+            road_topology: &topology,
+        };
+        let result =
+            resolve_terminal_reversal(&snapshot, context, TransitMode::Bus, &[], 0, "stop-001");
+        assert_eq!(result.unwrap_err(), LegFailureReason::NetworkDisconnected);
+    }
+
+    #[test]
+    fn spec_service_path_rejects_a_non_service_leg() {
+        let (snapshot, topology) = routing_context();
+        let context = RoutingContext {
+            road_topology: &topology,
+        };
+        let spec = ServiceLegSpec {
+            from_waypoint_id: "stop-001".to_string(),
+            to_waypoint_id: "stop-002".to_string(),
+            direction: ServiceDirection::Loop,
+            kind: RouteLegKind::TerminalReversal,
+        };
+        let result = resolve_spec_service_path(&snapshot, context, TransitMode::Bus, &spec);
+        assert_eq!(result.unwrap_err(), LegFailureReason::NetworkDisconnected);
+    }
+
+    #[test]
+    fn service_path_for_walk_mode_reports_network_disconnected() {
+        let (snapshot, topology) = routing_context();
+        let context = RoutingContext {
+            road_topology: &topology,
+        };
+        let result = resolve_service_path(
+            &snapshot,
+            context,
+            TransitMode::Walk,
+            "stop-001",
+            "stop-002",
+        );
+        assert_eq!(result.unwrap_err(), LegFailureReason::NetworkDisconnected);
+    }
+
+    #[test]
+    fn waypoint_present_is_false_for_walk_mode() {
+        let (snapshot, _topology) = routing_context();
+        assert!(!waypoint_present(&snapshot, TransitMode::Walk, "stop-001"));
+    }
+}
