@@ -249,6 +249,38 @@ fn from_snapshot_handles_extreme_stop_and_footprint_coordinates_without_overflow
         .all(|stop| stop.road_access.is_none()));
 }
 
+/// Mirror of the `i32::MAX` case above, exercising the negative-overflow
+/// side of `checked_offset`: a stop at `i32::MIN` with a building footprint
+/// at the same corner must not panic when the access deriver subtracts a
+/// heading offset, and must leave `road_access` as `None`.
+#[test]
+fn from_snapshot_handles_negative_extreme_stop_and_footprint_coordinates_without_overflow() {
+    let mut snapshot = legacy_snapshot();
+    snapshot.transit.routes.clear();
+    snapshot.transit.vehicles.clear();
+    snapshot.transit.stops[0].position = point(i32::MIN, i32::MIN);
+    snapshot.transit.stops[0].road_access = None;
+    snapshot.transit.stops[1].road_access = None;
+    snapshot.buildings.push(PlacedBuilding {
+        id: "malformed-footprint-min".to_string(),
+        building_type: "fixture".to_string(),
+        origin: point(i32::MIN, i32::MIN),
+        rotation: 0,
+        occupied_tiles: vec![point(i32::MIN, i32::MIN)],
+        transit_node_id: Some("stop-002".to_string()),
+    });
+
+    let engine = GameEngine::from_snapshot(snapshot).expect("malformed coordinates are ignored");
+    let loaded = engine.snapshot();
+
+    assert_eq!(loaded.schema_version, SNAPSHOT_SCHEMA_VERSION);
+    assert!(loaded
+        .transit
+        .stops
+        .iter()
+        .all(|stop| stop.road_access.is_none()));
+}
+
 #[test]
 fn from_snapshot_preserves_out_of_service_and_unrelated_bus_parking() {
     let mut snapshot = legacy_snapshot();

@@ -549,7 +549,10 @@ function terminalWaypointPosition(
       (candidate) =>
         candidate.id === leg.fromWaypointId && candidate.status === "present",
     );
-    return stop?.roadAccess?.roadPoint ?? null;
+    // Fall back to the passenger anchor if road access is missing (e.g. a
+    // snapshot loaded before access normalization completes) so paused /
+    // exact-boundary buses remain visible instead of disappearing.
+    return stop?.roadAccess?.roadPoint ?? stop?.position ?? null;
   }
 
   const station = state.transit.stations.find(

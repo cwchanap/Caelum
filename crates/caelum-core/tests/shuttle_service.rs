@@ -714,21 +714,34 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
     // The terminal reversal at stop-002 (3,4) must not jump between the
     // separate north/south access lanes via the unrelated (4,4)-(5,4) pair.
     // After the fix, the reversal resolves independently at the terminal's
-    // own road_point — either it fails with a reversal-scoped reason, or it
-    // succeeds with a zero-step path (no road steps = no lane jumping).
+    // own road_point and succeeds with a zero-step path (no road steps =
+    // no lane jumping).
     let reversal = legs
         .iter()
         .find(|leg| {
             leg.kind == RouteLegKind::TerminalReversal && leg.from_waypoint_id == "stop-002"
         })
         .expect("terminal reversal at stop-002");
+    // The reversal resolves independently at the terminal's own road_point:
+    // it succeeds with a zero-step path (no road steps = no lane jumping).
+    // Pin the exact outcome rather than a disjunction so a regression to
+    // either a lane-jumping connected path or an unexpected failure reason is
+    // caught.
+    assert_eq!(
+        reversal.status,
+        RouteLegStatus::Connected,
+        "reversal must stay connected at the terminal's own road_point: {legs:?}"
+    );
+    assert_eq!(
+        reversal.failure_reason, None,
+        "connected reversal must carry no failure reason: {legs:?}"
+    );
+    let path = reversal
+        .current_path
+        .as_ref()
+        .expect("connected reversal has a current path");
     assert!(
-        reversal.status != RouteLegStatus::Connected
-            || reversal
-                .current_path
-                .as_ref()
-                .map(|path| path.road_steps().is_empty())
-                .unwrap_or(false),
+        path.road_steps().is_empty(),
         "reversal must not jump between separate access lanes: {legs:?}"
     );
 }
