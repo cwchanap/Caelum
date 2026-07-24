@@ -180,8 +180,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         RoutingContext {
             road_topology: &candidate_topology,
         },
-    )
-    .expect("fixture route revisions are available");
+    );
 
     assert!(next.transit.routes[0].path_broken);
     assert_eq!(
@@ -231,8 +230,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
         RoutingContext {
             road_topology: &broken_topology,
         },
-    )
-    .expect("fixture route revisions are available");
+    );
     assert!(broken.transit.routes[0].path_broken);
     assert_eq!(
         broken.transit.vehicles[0].parked_position,
@@ -249,8 +247,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
         RoutingContext {
             road_topology: &restored_topology,
         },
-    )
-    .expect("fixture route revisions are available");
+    );
     assert!(!restored.transit.routes[0].path_broken);
     assert_eq!(restored.transit.vehicles[0].parked_position, None);
     assert_eq!(restored.transit.vehicles[0].itinerary_index, 3);

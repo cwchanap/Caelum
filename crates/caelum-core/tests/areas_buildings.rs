@@ -237,6 +237,20 @@ fn place_bus_terminal_building_creates_terminal_stop_platforms() {
 }
 
 #[test]
+fn place_bus_terminal_without_adjacent_road_is_rejected_for_no_road_access() {
+    let mut engine = GameEngine::new();
+
+    let result = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 2).into(),
+        rotation: 0,
+    });
+
+    assert!(!result.applied, "{result:?}");
+    assert_eq!(result.rejection.unwrap().code, RejectionCode::NoRoadAccess);
+}
+
+#[test]
 fn remove_transit_building_removes_linked_stop() {
     let mut engine = GameEngine::new();
     let placed = engine.dispatch(GameIntent::PlaceBuilding {

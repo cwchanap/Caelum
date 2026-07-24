@@ -7,7 +7,6 @@ use crate::model::{
     TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
-use crate::rejection::GameplayResult;
 use crate::service_itinerary::{service_visits, ServiceVisit};
 use crate::stop_access::stop_access;
 use crate::transit::invalidate_trips_for_line;
@@ -151,17 +150,17 @@ pub fn recompute_all_routes(
     previous: &GameSnapshot,
     mut candidate: GameSnapshot,
     context: RoutingContext<'_>,
-) -> GameplayResult<GameSnapshot> {
-    recompute_bus_routes(previous, &mut candidate, context)?;
-    recompute_metro_lines(previous, &mut candidate, context)?;
-    Ok(candidate)
+) -> GameSnapshot {
+    recompute_bus_routes(previous, &mut candidate, context);
+    recompute_metro_lines(previous, &mut candidate, context);
+    candidate
 }
 
 fn recompute_bus_routes(
     previous: &GameSnapshot,
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
-) -> GameplayResult<()> {
+) {
     for route_index in 0..candidate.transit.routes.len() {
         let route = candidate.transit.routes[route_index].clone();
         let previous_route = previous
@@ -204,14 +203,13 @@ fn recompute_bus_routes(
         candidate.transit.routes[route_index].path_broken = path_broken;
         transition_route_service(previous, candidate, TransitMode::Bus, &route.id);
     }
-    Ok(())
 }
 
 fn recompute_metro_lines(
     previous: &GameSnapshot,
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
-) -> GameplayResult<()> {
+) {
     for line_index in 0..candidate.transit.metro_lines.len() {
         let line = candidate.transit.metro_lines[line_index].clone();
         let previous_line = previous
@@ -254,7 +252,6 @@ fn recompute_metro_lines(
         candidate.transit.metro_lines[line_index].path_broken = path_broken;
         transition_route_service(previous, candidate, TransitMode::Metro, &line.id);
     }
-    Ok(())
 }
 
 /// Bump a route revision after a network-driven structural change.
@@ -473,8 +470,9 @@ fn rebase_parked_bus_access_to_live_stop(
 
     for vehicle_index in vehicle_indexes {
         let vehicle = &candidate.transit.vehicles[vehicle_index];
-        let Some(parked_position) = vehicle.parked_position.clone() else {
-            continue;
+        let parked_position = match vehicle.parked_position.clone() {
+            Some(pos) => pos,
+            None => continue,
         };
         if !changed_accesses
             .iter()
@@ -1057,7 +1055,12 @@ pub fn structurally_changed_route_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{MovementKind, Point, RoadPathStep};
+    use crate::model::{
+        BusStopKind, MovementKind, PathGeometry, Point, RoadPathStep, Route, RouteLegKind,
+        RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, Stop, StopRoadAccess,
+        TransitMode, TransitNodeStatus, TripPosition, Vehicle,
+    };
+    use crate::state::create_initial_snapshot;
 
     /// Control: Line geometry step_progress uses only add/mul/div (no
     /// transcendentals), so it must be bit-identical across all hosts.
@@ -1084,5 +1087,112 @@ mod tests {
         // 1.0 / 4.0 = 0.25 — exact in f64.
         assert_eq!(projection.step_progress, 0.25);
         assert_eq!(projection.step_progress.to_bits(), 0x3FD0_0000_0000_0000);
+    }
+
+    #[test]
+    fn rebase_parked_bus_access_returns_early_for_unknown_route() {
+        let snapshot = create_initial_snapshot();
+        let mut candidate = snapshot.clone();
+        rebase_parked_bus_access_to_live_stop(&snapshot, &mut candidate, "nonexistent-route");
+    }
+
+    #[test]
+    fn rebase_parked_bus_access_skips_vehicle_without_parked_position() {
+        let base = create_initial_snapshot();
+        let laid = crate::road::apply_road_mutation(
+            &base,
+            &crate::road::RoadMutation::LayRoadLine {
+                points: (2..=10).map(|x| Point { x, y: 5 }).collect(),
+                preset: crate::intent::RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+        let mut previous = laid;
+        let stop_a = Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point { x: 4, y: 4 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 4, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        let stop_b = Stop {
+            id: "stop-002".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point { x: 8, y: 4 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 8, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        previous.transit.stops = vec![stop_a, stop_b];
+
+        let leg = RouteLegPath {
+            from_waypoint_id: "stop-001".to_string(),
+            to_waypoint_id: "stop-002".to_string(),
+            direction: ServiceDirection::Loop,
+            kind: RouteLegKind::Service,
+            status: RouteLegStatus::Connected,
+            current_path: Some(TransitPath::Road {
+                steps: vec![RoadPathStep {
+                    position: Point { x: 4, y: 5 },
+                    entering_heading: Heading::East,
+                    leaving_heading: Heading::East,
+                    movement: MovementKind::Straight,
+                    geometry: PathGeometry::Line {
+                        from: TripPosition { x: 4.0, y: 5.0 },
+                        to: TripPosition { x: 8.0, y: 5.0 },
+                    },
+                    travel_seconds: 4.0,
+                }],
+                total_travel_seconds: 4.0,
+            }),
+            last_valid_path: None,
+            estimated_seconds: Some(4.0),
+            failure_reason: None,
+        };
+        let route = Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![leg],
+            path_broken: false,
+        };
+        previous.transit.routes = vec![route];
+        previous.transit.vehicles = vec![Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: None,
+        }];
+
+        let mut candidate = previous.clone();
+        let tile = candidate
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("road tile exists");
+        tile.kind = "ground".to_string();
+        tile.road_connections.clear();
+        tile.one_way = None;
+
+        rebase_parked_bus_access_to_live_stop(&previous, &mut candidate, "route-001");
+
+        assert_eq!(candidate.transit.vehicles[0].parked_position, None);
     }
 }
