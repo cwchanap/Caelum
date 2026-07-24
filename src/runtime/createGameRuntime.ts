@@ -1303,12 +1303,18 @@ export async function createGameRuntime({
     selectRouteWaypoint(index, interaction) {
       if (ui.routeDraft === null) return commit(state, ui);
       const routeDraft = selectWaypoint(ui.routeDraft, index, interaction);
-      return routeDraft === ui.routeDraft
+      if (routeDraft !== ui.routeDraft) {
+        return commitRouteDraft(routeDraft);
+      }
+      const invalidIndex =
+        index !== null &&
+        (index < 0 || index >= ui.routeDraft.waypointIds.length);
+      return invalidIndex
         ? rejectRouteDraftInteraction({
             code: "invalidRouteDraftInteraction",
             context: { operation: "selectWaypoint", waypointIndex: index },
           })
-        : commitRouteDraft(routeDraft);
+        : commit(state, ui);
     },
     removeRouteWaypoint() {
       if (ui.routeDraft === null) return commit(state, ui);

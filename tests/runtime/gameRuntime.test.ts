@@ -2587,6 +2587,21 @@ describe("route creation and management", () => {
     expect(valid.ui.routePreviewError).toBeNull();
   });
 
+  it("silently ignores selecting the already-current waypoint interaction", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: connectedRouteBackend(),
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const before = runtime.getSnapshot();
+
+    const unchanged = runtime.selectRouteWaypoint(null, "append");
+
+    expect(unchanged.ui).toBe(before.ui);
+    expect(unchanged.ui.routePreviewError).toBeNull();
+  });
+
   it("keeps a local interaction error when an older preview resolves", async () => {
     const previews = deferredPreviewBackend(routeSnapshotWithRoute());
     const runtime = await createGameRuntime({

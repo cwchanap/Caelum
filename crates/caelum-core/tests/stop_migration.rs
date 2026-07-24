@@ -1,8 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, GameSnapshot, MetricsState, PlacedBuilding, Platform, Point, Route,
-    RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, Sim, Stop, TransitMode, TransitNodeStatus, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile, SNAPSHOT_SCHEMA_VERSION,
+    ActiveTrip, BusStopKind, GameSnapshot, Heading, MetricsState, PathGeometry, PlacedBuilding,
+    Platform, Point, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, Sim, Stop, TransitMode, TransitNodeStatus, TransitPath,
+    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile, SNAPSHOT_SCHEMA_VERSION,
 };
 use caelum_core::{platforms, GameEngine, GameIntent, RoadPreset};
 
@@ -293,6 +293,154 @@ fn legacy_stop_with_no_free_neighbor_uses_on_road_access_fallback() {
 
     assert_eq!(stop.position, access.road_point);
     assert_eq!(access.road_point, point(4, 5));
+}
+
+fn point_at(path: &TransitPath, index: usize, progress: f64) -> TripPosition {
+    let step = &path.road_steps()[index];
+    match &step.geometry {
+        PathGeometry::Line { from, to } => TripPosition {
+            x: from.x + (to.x - from.x) * progress,
+            y: from.y + (to.y - from.y) * progress,
+        },
+        PathGeometry::QuadraticBezier { from, control, to } => {
+            let inverse = 1.0 - progress;
+            TripPosition {
+                x: inverse * inverse * from.x
+                    + 2.0 * inverse * progress * control.x
+                    + progress * progress * to.x,
+                y: inverse * inverse * from.y
+                    + 2.0 * inverse * progress * control.y
+                    + progress * progress * to.y,
+            }
+        }
+    }
+}
+
+fn stale_access_route_snapshot() -> (GameSnapshot, TransitPath, usize, f64, Heading) {
+    let mut engine = GameEngine::new();
+    let old_road = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 2)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(old_road.applied, "fixture road should apply: {old_road:?}");
+
+    for points in [
+        (2..=5).map(|x| point(x, 4)).collect::<Vec<_>>(),
+        (7..=10).map(|x| point(x, 4)).collect::<Vec<_>>(),
+        (5..=7).map(|x| point(x, 5)).collect::<Vec<_>>(),
+    ] {
+        let result = engine.dispatch(GameIntent::LayRoadLine {
+            points,
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(result.applied, "fixture road should apply: {result:?}");
+    }
+
+    for point in [point(4, 3), point(8, 3)] {
+        let stop = engine.dispatch(GameIntent::AddBusStop { point });
+        assert!(stop.applied, "fixture stop should apply: {stop:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(created.applied, "fixture route should apply: {created:?}");
+
+    let mut snapshot = created.snapshot;
+    let old_path = snapshot.transit.routes[0].legs[0]
+        .current_path
+        .clone()
+        .expect("old route path");
+    let path_step_index = old_path.step_count() / 2;
+    let step = &old_path.road_steps()[path_step_index];
+    let old_heading = step.leaving_heading;
+    let step_progress = 0.5;
+    snapshot.transit.routes[0].vehicle_ids = vec!["vehicle-001".to_string()];
+    snapshot.transit.vehicles = vec![Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-001".to_string(),
+        capacity: 18,
+        passenger_ids: Vec::new(),
+        itinerary_index: 0,
+        path_step_index,
+        step_progress,
+        parked_position: None,
+    }];
+
+    for tile in snapshot.map.tiles.iter_mut().filter(|tile| tile.y == 2) {
+        tile.kind = "empty".to_string();
+        tile.has_track = false;
+        tile.one_way = None;
+        tile.road_connections.clear();
+        tile.road_structure_id = None;
+    }
+
+    // Encode the two reciprocal turn edges that the serialized candidate map
+    // retained for the surviving detour.
+    for (point, heading) in [
+        (point(5, 4), Heading::South),
+        (point(5, 5), Heading::North),
+        (point(7, 4), Heading::South),
+        (point(7, 5), Heading::North),
+    ] {
+        snapshot
+            .map
+            .tile_mut(point)
+            .expect("detour tile")
+            .road_connections
+            .push(heading);
+    }
+
+    (
+        snapshot,
+        old_path,
+        path_step_index,
+        step_progress,
+        old_heading,
+    )
+}
+
+#[test]
+fn from_snapshot_recomputes_stale_route_paths_after_access_normalization() {
+    let (snapshot, old_path, old_step_index, old_progress, old_heading) =
+        stale_access_route_snapshot();
+    let old_world = point_at(&old_path, old_step_index, old_progress);
+
+    let engine = GameEngine::from_snapshot(snapshot).unwrap();
+    let loaded = engine.snapshot();
+    assert_eq!(
+        loaded.transit.stops[0]
+            .road_access
+            .expect("normalized stop access")
+            .road_point,
+        point(4, 4)
+    );
+    assert_eq!(
+        loaded.transit.stops[1]
+            .road_access
+            .expect("normalized stop access")
+            .road_point,
+        point(8, 4)
+    );
+
+    let route = &loaded.transit.routes[0];
+    let path = route.legs[0]
+        .current_path
+        .as_ref()
+        .expect("route path is re-resolved on load");
+    assert!(
+        path.road_steps().iter().any(|step| step.position.y == 5),
+        "the loaded path must use the surviving detour rather than stale y=2 roads"
+    );
+    assert!(path.road_steps().iter().all(|step| step.position.y != 2));
+
+    let projection =
+        caelum_core::route_lifecycle::project_position_onto_path(path, old_world, old_heading);
+    let vehicle = &loaded.transit.vehicles[0];
+    assert_eq!(vehicle.path_step_index, projection.path_step_index);
+    assert!((vehicle.step_progress - projection.step_progress).abs() < 1e-9);
 }
 
 #[test]
