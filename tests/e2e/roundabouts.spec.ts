@@ -101,8 +101,10 @@ async function createRoundaboutShuttleRoute(
     structure?.kind === "roundabout" && structure.size === "standard3x3"
       ? 3
       : 2;
-  const first = { x: origin.x - 3, y: origin.y + height - 1 };
-  const second = { x: origin.x - 2, y: origin.y };
+  // Keep passenger anchors off the bottom/top approach roads while leaving
+  // their adjacent road points unchanged for roundabout routing.
+  const first = { x: origin.x - 3, y: origin.y + height };
+  const second = { x: origin.x - 2, y: origin.y - 1 };
   await buildItem(page, "Bus", "Bus Stop");
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
