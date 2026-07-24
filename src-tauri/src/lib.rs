@@ -39,11 +39,14 @@ fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
 fn game_load_snapshot(
     state: State<'_, EngineState>,
     snapshot: GameSnapshot,
-) -> Result<GameSnapshot, String> {
+) -> Result<GameSnapshot, serde_json::Value> {
     let loaded = GameEngine::from_snapshot(snapshot).map_err(|rejection| {
-        serde_json::to_string(&rejection).unwrap_or_else(|error| error.to_string())
+        serde_json::to_value(rejection)
+            .unwrap_or_else(|error| serde_json::Value::String(error.to_string()))
     })?;
-    let mut engine = state.lock().map_err(|error| error.to_string())?;
+    let mut engine = state
+        .lock()
+        .map_err(|error| serde_json::Value::String(error.to_string()))?;
     *engine = loaded;
     Ok(engine.snapshot())
 }
@@ -91,4 +94,57 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
+    use serde_json::json;
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    #[test]
+    fn snapshot_load_rejection_preserves_structured_code_and_context() {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.runtime_authority_mut().__allow_command(
+            "game_load_snapshot".to_string(),
+            tauri::utils::acl::ExecutionContext::Local,
+        );
+        let app = tauri::test::mock_builder()
+            .manage(Mutex::new(GameEngine::new()))
+            .invoke_handler(tauri::generate_handler![game_load_snapshot])
+            .build(context)
+            .expect("test Tauri app should build");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("test webview should build");
+
+        let mut snapshot = GameEngine::new().snapshot();
+        snapshot.schema_version = SNAPSHOT_SCHEMA_VERSION - 1;
+        let response = get_ipc_response(
+            &webview,
+            InvokeRequest {
+                cmd: "game_load_snapshot".into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: InvokeBody::Json(json!({ "snapshot": snapshot })),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        );
+        let error = response.expect_err("unsupported schema should reject");
+
+        assert_eq!(error["code"], json!("unsupportedSnapshotSchema"));
+        assert_eq!(
+            error["context"]["expectedSchemaVersion"],
+            json!(SNAPSHOT_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            error["context"]["actualSchemaVersion"],
+            json!(SNAPSHOT_SCHEMA_VERSION - 1)
+        );
+    }
 }

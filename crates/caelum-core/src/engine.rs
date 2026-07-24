@@ -257,8 +257,18 @@ impl GameEngine {
                 snapshot.schema_version,
             ));
         }
-        let snapshot = stop_access::normalize_snapshot_stops(snapshot)?;
-        let road_topology = RoadTopology::compile(&snapshot.map)?;
+        let normalized = stop_access::normalize_snapshot_stops(snapshot)?;
+        let road_topology = RoadTopology::compile(&normalized.map)?;
+        // Saved route legs are derived state. Re-resolve them after stop access
+        // normalization so they cannot continue to reference removed roads.
+        let previous = normalized.clone();
+        let snapshot = route_lifecycle::recompute_all_routes(
+            &previous,
+            normalized,
+            RoutingContext {
+                road_topology: &road_topology,
+            },
+        )?;
         Ok(Self {
             snapshot,
             road_topology,

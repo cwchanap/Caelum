@@ -85,4 +85,19 @@ describe("bus stop placement", () => {
     expect(canPlaceBusStop(state, { x: 4, y: 4 })).toBe(true);
     expect(canPlaceBusStop(state, { x: 4, y: 5 })).toBe(false);
   });
+
+  it("rejects a bus stop anchor on a track tile even beside a road", () => {
+    const state = withRoads(createTestGameState(), [{ x: 4, y: 5 }]);
+    const withTrack = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === 4 && tile.y === 4 ? { ...tile, hasTrack: true } : tile,
+        ),
+      },
+    };
+
+    expect(canPlaceBusStop(withTrack, { x: 4, y: 4 })).toBe(false);
+  });
 });

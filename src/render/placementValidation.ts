@@ -55,6 +55,7 @@ export function canPlaceBusStop(state: GameState, anchor: Point): boolean {
   const tile = getTile(state.map, anchor);
   return (
     tile?.kind === "empty" &&
+    tile.hasTrack !== true &&
     tile.roadStructureId === undefined &&
     !isBuildingOccupied(state, anchor) &&
     !isTransitNodeAt(state, anchor) &&
