@@ -1,11 +1,12 @@
 use crate::heading::{canonical_headings, offset_components};
 use crate::model::{
-    BusStopKind, GameMap, GameSnapshot, Heading, Point, Stop, StopRoadAccess, TransitMode,
+    BusStopKind, GameMap, GameSnapshot, Heading, Point, Stop, StopRoadAccess, Tile, TransitMode,
     TripPosition,
 };
 use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
 use crate::transit_nodes::is_present_node;
+use std::collections::HashMap;
 
 fn checked_offset(point: Point, heading: Heading) -> Option<Point> {
     let (dx, dy) = offset_components(heading);
@@ -29,6 +30,19 @@ pub(crate) fn derive_stop_access(map: &GameMap, anchor: Point) -> Option<StopRoa
     derive_stop_access_for_footprint(map, &[anchor])
 }
 
+fn preferred_heading_for_tile(tile: &Tile) -> Option<Heading> {
+    canonical_headings()
+        .into_iter()
+        .find(|heading| {
+            lane_accepts(tile.one_way, *heading) && tile.road_connections.contains(heading)
+        })
+        .or_else(|| {
+            canonical_headings()
+                .into_iter()
+                .find(|heading| lane_accepts(tile.one_way, *heading))
+        })
+}
+
 pub(crate) fn derive_stop_access_for_footprint(
     map: &GameMap,
     footprint: &[Point],
@@ -42,19 +56,9 @@ pub(crate) fn derive_stop_access_for_footprint(
         })
         .find(|point| usable_road(map, *point))?;
     let tile = map.tile(road_point)?;
-    let preferred_heading = canonical_headings()
-        .into_iter()
-        .find(|heading| {
-            lane_accepts(tile.one_way, *heading) && tile.road_connections.contains(heading)
-        })
-        .or_else(|| {
-            canonical_headings()
-                .into_iter()
-                .find(|heading| lane_accepts(tile.one_way, *heading))
-        });
     Some(StopRoadAccess {
         road_point,
-        preferred_heading,
+        preferred_heading: preferred_heading_for_tile(tile),
     })
 }
 
@@ -120,6 +124,18 @@ pub(crate) fn normalize_snapshot_stops(mut snapshot: GameSnapshot) -> GameSnapsh
             .then_with(|| left.cmp(right))
     });
 
+    let old_road_points: HashMap<String, Point> = snapshot
+        .transit
+        .stops
+        .iter()
+        .filter(|stop| is_present_node(stop.status))
+        .filter_map(|stop| {
+            stop.road_access
+                .as_ref()
+                .map(|access| (stop.id.clone(), access.road_point))
+        })
+        .collect();
+
     let mut moves = Vec::new();
     for stop_index in stop_indexes {
         let stop = snapshot.transit.stops[stop_index].clone();
@@ -164,12 +180,15 @@ pub(crate) fn normalize_snapshot_stops(mut snapshot: GameSnapshot) -> GameSnapsh
         };
     }
 
-    rebase_parked_bus_positions(&mut snapshot);
+    rebase_parked_bus_positions(&mut snapshot, &old_road_points);
     rebase_active_trips(&mut snapshot, &moves);
     snapshot
 }
 
-fn rebase_parked_bus_positions(snapshot: &mut GameSnapshot) {
+fn rebase_parked_bus_positions(
+    snapshot: &mut GameSnapshot,
+    old_road_points: &HashMap<String, Point>,
+) {
     let repairs: Vec<(usize, Point)> = snapshot
         .transit
         .vehicles
@@ -194,8 +213,15 @@ fn rebase_parked_bus_positions(snapshot: &mut GameSnapshot) {
                 let access = stop_access(snapshot, &stop.id)?;
                 let passenger_position: TripPosition = stop.position.into();
                 let road_position: TripPosition = access.road_point.into();
-                (parked_position == &passenger_position || parked_position == &road_position)
-                    .then_some(access.road_point)
+                let old_road_position = old_road_points
+                    .get(&stop.id)
+                    .map(|point| TripPosition::from(*point));
+                let matches_current =
+                    parked_position == &passenger_position || parked_position == &road_position;
+                let matches_old = old_road_position
+                    .as_ref()
+                    .is_some_and(|old| parked_position == old);
+                (matches_current || matches_old).then_some(access.road_point)
             })?;
             Some((vehicle_index, road_point))
         })
@@ -211,19 +237,9 @@ fn access_for_road_point(map: &GameMap, road_point: Point) -> Option<StopRoadAcc
     if !usable_road(map, road_point) {
         return None;
     }
-    let preferred_heading = canonical_headings()
-        .into_iter()
-        .find(|heading| {
-            lane_accepts(tile.one_way, *heading) && tile.road_connections.contains(heading)
-        })
-        .or_else(|| {
-            canonical_headings()
-                .into_iter()
-                .find(|heading| lane_accepts(tile.one_way, *heading))
-        });
     Some(StopRoadAccess {
         road_point,
-        preferred_heading,
+        preferred_heading: preferred_heading_for_tile(tile),
     })
 }
 
@@ -432,7 +448,7 @@ mod tests {
         };
         snapshot.transit.vehicles.push(parked_metro.clone());
 
-        rebase_parked_bus_positions(&mut snapshot);
+        rebase_parked_bus_positions(&mut snapshot, &HashMap::new());
 
         assert_eq!(
             snapshot.transit.vehicles[0].parked_position,

@@ -10,11 +10,11 @@
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, Heading, Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point,
-    RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
-    RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, Station, Stop,
-    Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, BusStopKind, Heading, Metrics, MetricsState, MovementKind, PathGeometry,
+    PlacedBuilding, Point, RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg,
+    RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim,
+    Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
+    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -178,6 +178,26 @@ fn stop_road_access_is_optional_for_v2_snapshots() {
     }))
     .unwrap();
     assert_eq!(stop.road_access, None);
+}
+
+#[test]
+fn stop_with_populated_road_access_round_trips_camel_case_keys() {
+    let stop = Stop {
+        id: "stop-001".to_string(),
+        kind: BusStopKind::BusStop,
+        status: TransitNodeStatus::Present,
+        position: Point { x: 4, y: 4 },
+        road_access: Some(StopRoadAccess {
+            road_point: Point { x: 4, y: 5 },
+            preferred_heading: Some(Heading::East),
+        }),
+        platforms: Vec::new(),
+    };
+    let value = serde_json::to_value(&stop).unwrap();
+    assert_eq!(value["roadAccess"]["roadPoint"], json!({ "x": 4, "y": 5 }));
+    assert_eq!(value["roadAccess"]["preferredHeading"], json!("east"));
+    let round_tripped: Stop = serde_json::from_value(value).unwrap();
+    assert_eq!(round_tripped.road_access, stop.road_access);
 }
 
 #[test]

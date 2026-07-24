@@ -198,18 +198,11 @@ fn loop_closing_leg_reports_network_disconnected() {
     dispatch(
         &mut engine,
         GameIntent::LayRoadLine {
-            points: (2..=10).map(|x| point(x, 5)).collect(),
-            preset: RoadPreset::TwoWay,
+            points: (2..=12).map(|x| point(x, 5)).collect(),
+            preset: RoadPreset::OneWay,
         },
     );
-    dispatch(
-        &mut engine,
-        GameIntent::LayRoadLine {
-            points: (2..=10).map(|x| point(x, 11)).collect(),
-            preset: RoadPreset::TwoWay,
-        },
-    );
-    for stop_point in [point(2, 4), point(6, 4), point(2, 10)] {
+    for stop_point in [point(2, 4), point(6, 4), point(10, 4)] {
         dispatch(&mut engine, GameIntent::AddBusStop { point: stop_point });
     }
 
@@ -240,4 +233,20 @@ fn loop_closing_leg_reports_network_disconnected() {
         .legs
         .iter()
         .all(|leg| { leg.kind != caelum_core::model::RouteLegKind::TerminalReversal }));
+    let non_closing: Vec<_> = preview
+        .legs
+        .iter()
+        .filter(|leg| !(leg.from_waypoint_id == "stop-003" && leg.to_waypoint_id == "stop-001"))
+        .collect();
+    assert!(
+        !non_closing.is_empty(),
+        "expected at least one non-closing service leg: {preview:?}",
+    );
+    for leg in &non_closing {
+        assert_eq!(
+            leg.status,
+            RouteLegStatus::Connected,
+            "non-closing legs should be connected on the one-way east road: {leg:?}",
+        );
+    }
 }

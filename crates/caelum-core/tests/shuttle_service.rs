@@ -1,6 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, Heading, MovementKind, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, TransitMode, TransitPath, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind, RouteLegStatus,
+    RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath, TripPurpose, TripStatus,
+    Vehicle,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -511,7 +512,23 @@ fn terminal_and_loop_rules_are_mode_correct() {
     assert!(one_way_legs
         .iter()
         .filter(|leg| leg.kind == RouteLegKind::TerminalReversal)
-        .all(|leg| leg.status == RouteLegStatus::NetworkDisconnected));
+        .all(|leg| {
+            leg.failure_reason != Some(LegFailureReason::NetworkDisconnected)
+                && leg.failure_reason != Some(LegFailureReason::NoRoadAccess)
+        }));
+    let return_service = one_way_legs
+        .iter()
+        .find(|leg| {
+            leg.kind == RouteLegKind::Service
+                && leg.from_waypoint_id == "stop-002"
+                && leg.to_waypoint_id == "stop-001"
+        })
+        .expect("return service leg on one-way road");
+    assert_eq!(
+        return_service.status,
+        RouteLegStatus::NetworkDisconnected,
+        "return service leg must fail on a one-way east road: {return_service:?}",
+    );
 
     let mut metro = GameEngine::new();
     for x in 2..=10 {
@@ -694,20 +711,24 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
         "service legs must preserve the exact access points: {legs:?}"
     );
 
-    // The terminal reversal at stop-002 (3,4) arrives at (3,3) heading East
-    // and departs from (3,5) heading West. The (4,4)-(5,4) pair can U-turn
-    // but is disconnected from both corridors. The reversal must NOT be
-    // marked Connected — that would let the bus jump between separate access
-    // lanes via an unrelated tile.
+    // The terminal reversal at stop-002 (3,4) must not jump between the
+    // separate north/south access lanes via the unrelated (4,4)-(5,4) pair.
+    // After the fix, the reversal resolves independently at the terminal's
+    // own road_point — either it fails with a reversal-scoped reason, or it
+    // succeeds with a zero-step path (no road steps = no lane jumping).
     let reversal = legs
         .iter()
         .find(|leg| {
             leg.kind == RouteLegKind::TerminalReversal && leg.from_waypoint_id == "stop-002"
         })
         .expect("terminal reversal at stop-002");
-    assert_eq!(
-        reversal.status,
-        RouteLegStatus::NetworkDisconnected,
+    assert!(
+        reversal.status != RouteLegStatus::Connected
+            || reversal
+                .current_path
+                .as_ref()
+                .map(|path| path.road_steps().is_empty())
+                .unwrap_or(false),
         "reversal must not jump between separate access lanes: {legs:?}"
     );
 }

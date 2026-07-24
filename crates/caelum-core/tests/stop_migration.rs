@@ -1,8 +1,9 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, MetricsState, PathGeometry, PlacedBuilding,
     Platform, Point, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, Sim, Stop, TransitMode, TransitNodeStatus, TransitPath,
-    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile, SNAPSHOT_SCHEMA_VERSION,
+    ServiceDirection, ServicePattern, Sim, Stop, StopRoadAccess, TransitMode, TransitNodeStatus,
+    TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 use caelum_core::{platforms, GameEngine, GameIntent, RoadPreset};
 
@@ -290,6 +291,77 @@ fn from_snapshot_preserves_out_of_service_and_unrelated_bus_parking() {
             .expect("unrelated bus")
             .parked_position,
         Some(point(18, 12).into())
+    );
+}
+
+#[test]
+fn from_snapshot_rebases_parked_bus_when_road_access_is_re_derived() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied, "south road: {result:?}");
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 3)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied, "north road: {result:?}");
+
+    let mut snapshot = engine.snapshot();
+    let stop_platform = bus_platform("stop-001");
+    snapshot.transit.stops = vec![Stop {
+        id: "stop-001".to_string(),
+        kind: BusStopKind::BusStop,
+        status: TransitNodeStatus::Present,
+        position: point(4, 4),
+        platforms: vec![Platform {
+            route_ids: vec!["route-001".to_string()],
+            ..stop_platform
+        }],
+        road_access: Some(StopRoadAccess {
+            road_point: point(4, 5),
+            preferred_heading: None,
+        }),
+    }];
+    snapshot.transit.routes = vec![Route {
+        id: "route-001".to_string(),
+        name: "Test route".to_string(),
+        color: "#ffffff".to_string(),
+        stop_ids: vec!["stop-001".to_string()],
+        vehicle_ids: vec!["vehicle-001".to_string()],
+        active: true,
+        pattern: ServicePattern::Shuttle,
+        revision: 0,
+        legs: Vec::new(),
+        path_broken: false,
+    }];
+    snapshot.transit.vehicles = vec![parked_bus("vehicle-001", "route-001", point(4, 5))];
+
+    let tile = snapshot.map.tile_mut(point(4, 5)).expect("old road tile");
+    tile.kind = "empty".to_string();
+    tile.road_connections.clear();
+    tile.one_way = None;
+
+    let engine = GameEngine::from_snapshot(snapshot).unwrap();
+    let loaded = engine.snapshot();
+    let stop = &loaded.transit.stops[0];
+    let new_road_point = stop.road_access.expect("re-derived access").road_point;
+    assert_eq!(
+        new_road_point,
+        point(4, 3),
+        "access should re-derive to the north road after demolition",
+    );
+    let bus = loaded
+        .transit
+        .vehicles
+        .iter()
+        .find(|v| v.id == "vehicle-001")
+        .expect("bus");
+    assert_eq!(
+        bus.parked_position,
+        Some(point(4, 3).into()),
+        "parked bus should be rebased from demolished road_point (4,5) to re-derived (4,3)",
     );
 }
 

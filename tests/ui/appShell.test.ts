@@ -1032,6 +1032,7 @@ describe("App hotkeys", () => {
 
   it.each([
     { key: "z", shiftKey: true, modifier: "metaKey", label: "Cmd+Shift+Z" },
+    { key: "z", shiftKey: true, modifier: "ctrlKey", label: "Ctrl+Shift+Z" },
     { key: "y", shiftKey: false, modifier: "metaKey", label: "Cmd+Y" },
     { key: "y", shiftKey: false, modifier: "ctrlKey", label: "Ctrl+Y" },
   ])(
@@ -1118,6 +1119,36 @@ describe("App hotkeys", () => {
     expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
     expect(runtime.removeRouteWaypoint).not.toHaveBeenCalled();
     input.remove();
+  });
+
+  it("leaves native undo and deletion behavior alone in a focused textarea", async () => {
+    const { runtime } = routeDraftRuntime();
+    render(App, { props: { runtime } });
+
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    for (const init of [
+      { key: "z", metaKey: true },
+      { key: "z", metaKey: true, shiftKey: true },
+      { key: "y", ctrlKey: true },
+      { key: "Delete" },
+      { key: "Backspace" },
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        ...init,
+        bubbles: true,
+        cancelable: true,
+      });
+      textarea.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+
+    expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.removeRouteWaypoint).not.toHaveBeenCalled();
+    textarea.remove();
   });
 
   it("selects the road tool on 'r' when no building is selected", async () => {
