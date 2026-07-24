@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { MovementKind, RouteLegPath } from "../../src/domain/types";
+import { tileSize } from "../../src/render/canvas";
+import { colors } from "../../src/render/colors";
 import {
   buildItem,
   clickMapTile,
@@ -28,6 +30,40 @@ const SIMPLE_ROUTE_STOPS = [
 const DRAFT_ROUTE_STOPS = SIMPLE_ROUTE_STOPS.slice(0, 2);
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
+
+interface CanvasFillRectRecord {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fillStyle: string;
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    const fillRects: CanvasFillRectRecord[] = [];
+    const originalFillRect = CanvasRenderingContext2D.prototype.fillRect;
+    Object.defineProperty(window, "__caelumCanvasTrace", {
+      configurable: true,
+      value: { fillRects },
+    });
+    CanvasRenderingContext2D.prototype.fillRect = function (
+      x,
+      y,
+      width,
+      height,
+    ) {
+      fillRects.push({
+        x,
+        y,
+        width,
+        height,
+        fillStyle: String(this.fillStyle),
+      });
+      return originalFillRect.call(this, x, y, width, height);
+    };
+  });
+});
 
 function roadMovements(leg: RouteLegPath): MovementKind[] {
   return leg.currentPath?.kind === "road"
@@ -71,6 +107,82 @@ async function expectRoadsideStopAnchors(
         accessKind: "road",
       })),
     );
+
+  const snapshot = await runtimeSnapshot(page);
+  const anchors = positions.map((position) => {
+    const stop = snapshot.state.transit.stops.find(
+      (candidate) =>
+        candidate.status === "present" &&
+        candidate.position.x === position.x &&
+        candidate.position.y === position.y,
+    );
+    if (stop?.roadAccess === undefined) {
+      throw new Error(
+        `Missing road access for stop at ${position.x},${position.y}`,
+      );
+    }
+    return {
+      passenger: stop.position,
+      road: stop.roadAccess.roadPoint,
+    };
+  });
+
+  await page.evaluate(() => {
+    const trace = (
+      window as unknown as {
+        __caelumCanvasTrace?: { fillRects: CanvasFillRectRecord[] };
+      }
+    ).__caelumCanvasTrace;
+    if (trace === undefined) {
+      throw new Error("Canvas render trace is unavailable");
+    }
+    trace.fillRects.length = 0;
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          setHoverTile: (point: { x: number; y: number } | null) => void;
+        };
+      }
+    ).__caelumRuntime;
+    runtime?.setHoverTile({ x: 0, y: 0 });
+    runtime?.setHoverTile(null);
+  });
+
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        ({ anchors, busColor, size }) => {
+          const trace = (
+            window as unknown as {
+              __caelumCanvasTrace?: { fillRects: CanvasFillRectRecord[] };
+            }
+          ).__caelumCanvasTrace;
+          if (trace === undefined) {
+            throw new Error("Canvas render trace is unavailable");
+          }
+          const stopMarkers = trace.fillRects.filter(
+            (rect) =>
+              rect.fillStyle === busColor &&
+              rect.width === 10 &&
+              rect.height === 10,
+          );
+          const markerAt = (point: { x: number; y: number }) =>
+            stopMarkers.some(
+              (rect) =>
+                rect.x === point.x * size + 11 &&
+                rect.y === point.y * size + 11,
+            );
+          return {
+            passengerMarkers: anchors.every(({ passenger }) =>
+              markerAt(passenger),
+            ),
+            roadMarkers: anchors.some(({ road }) => markerAt(road)),
+          };
+        },
+        { anchors, busColor: colors.bus, size: tileSize },
+      ),
+    )
+    .toEqual({ passengerMarkers: true, roadMarkers: false });
 }
 
 async function waitForRoutePreview(
@@ -252,6 +364,16 @@ test("create, manage, and delete a bus route", async ({ page }) => {
 test("undoes and redoes a roadside route draft while preview is pending", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const harness = {
+      deferRoutePreviews: true,
+      releaseRoutePreviews: undefined as (() => void) | undefined,
+    };
+    Object.defineProperty(window, "__caelumE2E", {
+      configurable: true,
+      value: harness,
+    });
+  });
   await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
@@ -273,10 +395,32 @@ test("undoes and redoes a roadside route draft while preview is pending", async 
   await openHudCategory(page, "routes");
   const draft = page.getByTestId("route-draft");
   const previewStatus = page.getByTestId("route-preview-status");
-  const save = page.getByRole("button", { name: "Save route" });
+  const save = page.locator("button.route-save");
   await expect(draft).toBeVisible();
+  await expect
+    .poll(async () => {
+      const current = (await runtimeSnapshot(page)).ui.routeDraft;
+      return {
+        waypointCount: current?.waypointIds.length ?? -1,
+        previewPending: current?.previewPending ?? false,
+      };
+    })
+    .toEqual({ waypointCount: 2, previewPending: true });
+  await expect(save).toBeDisabled();
+  await page.evaluate(() => {
+    const harness = (
+      window as unknown as {
+        __caelumE2E?: { releaseRoutePreviews?: () => void };
+      }
+    ).__caelumE2E;
+    if (harness?.releaseRoutePreviews === undefined) {
+      throw new Error("Deferred route-preview harness is unavailable");
+    }
+    harness.releaseRoutePreviews();
+  });
   const firstPreviewGeneration = await waitForRoutePreview(page, 2);
   await expect(previewStatus).toHaveText(/connected/i);
+  await expect(save).toBeEnabled();
 
   // The canvas context-menu handler is the browser-facing undo affordance.
   await canvas.click({ button: "right", position: { x: 20, y: 20 } });

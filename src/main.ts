@@ -1,7 +1,7 @@
 import "./styles.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
-import { createBackend } from "./runtime/backend";
+import { createBackend, type GameBackend } from "./runtime/backend";
 import { createGameRuntime } from "./runtime/createGameRuntime";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -12,8 +12,54 @@ if (!app) {
 
 const target = app;
 
+interface DevE2eHooks {
+  deferRoutePreviews?: boolean;
+  releaseRoutePreviews?: () => void;
+}
+
+interface DevWindow extends Window {
+  __caelumE2E?: DevE2eHooks;
+}
+
+function installDeferredRoutePreviewHarness(backend: GameBackend): GameBackend {
+  const hooks = (globalThis.window as DevWindow).__caelumE2E;
+  if (hooks?.deferRoutePreviews !== true) return backend;
+
+  const previewRoute = backend.previewRoute.bind(backend);
+  const pending: Array<{
+    request: Parameters<GameBackend["previewRoute"]>[0];
+    resolve: (
+      response: Awaited<ReturnType<GameBackend["previewRoute"]>>,
+    ) => void;
+    reject: (error: unknown) => void;
+  }> = [];
+
+  hooks.releaseRoutePreviews = () => {
+    hooks.deferRoutePreviews = false;
+    const queued = pending.splice(0);
+    for (const entry of queued) {
+      void previewRoute(entry.request).then(entry.resolve, entry.reject);
+    }
+  };
+
+  return {
+    ...backend,
+    previewRoute(request) {
+      if (hooks.deferRoutePreviews !== true) {
+        return previewRoute(request);
+      }
+      return new Promise((resolve, reject) => {
+        pending.push({ request, resolve, reject });
+      });
+    },
+  };
+}
+
 async function mountApp(): Promise<void> {
-  const backend = await createBackend();
+  let backend = await createBackend();
+  if (import.meta.env.DEV) {
+    backend = installDeferredRoutePreviewHarness(backend);
+  }
   const runtime = await createGameRuntime({ backend });
   // Expose the runtime on `window` in dev only, so Playwright e2e can inspect
   // the live Rust-derived snapshot (e.g. assert a vehicle was assigned after
