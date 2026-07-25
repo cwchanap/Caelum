@@ -302,7 +302,7 @@ describe("RouteEditor", () => {
 
   it("renders typed route guidance supplied by the selector", () => {
     const guidance =
-      "Loop can't close here; switch to Shuttle or repair the road.";
+      "Loop can't close here; remove a stop or switch to Shuttle.";
     render(RouteEditor, {
       props: {
         ...editorProps(

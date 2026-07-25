@@ -89,7 +89,10 @@ pub(crate) fn is_valid_access(map: &GameMap, footprint: &[Point], access: StopRo
     usable_road(map, access.road_point) && (adjacent_to_footprint || legacy_on_road_fallback)
 }
 
-pub(crate) fn stop_access(snapshot: &GameSnapshot, stop_id: &str) -> Option<StopRoadAccess> {
+pub(crate) fn resolve_stop_access(
+    snapshot: &GameSnapshot,
+    stop_id: &str,
+) -> Option<StopRoadAccess> {
     let stop = snapshot
         .transit
         .stops
@@ -108,6 +111,49 @@ struct StopMove {
     old_position: Point,
     new_position: Point,
     road_point: Point,
+}
+
+/// Check whether any present stop's road-access situation could have changed
+/// between `previous_map` and the candidate snapshot. Returns `false` when
+/// `normalize_snapshot_stops` would be a no-op, allowing the engine to skip
+/// the O(stops × footprint) normalization + rebase pass on map edits that
+/// don't touch any stop's neighbourhood.
+///
+/// This checks three things per present stop:
+/// 1. The tile at the stop's `road_access.road_point` (if any) — if it changed,
+///    the existing access may be invalid and need re-derivation.
+/// 2. The tile at the stop's `position` — if it changed, the legacy on-road
+///    detection (`tile.kind == "road"`) may flip.
+/// 3. The four tiles adjacent to the stop's position — if any changed, the
+///    legacy migration's free-anchor search or simple bus-stop access
+///    derivation may produce a different result.
+///
+/// Bus terminals (multi-tile footprints) are not affected by the legacy
+/// migration (it only applies to `BusStopKind::BusStop`), and their
+/// `road_access` is set at placement time and only re-derived when the
+/// road_point tile itself changes — covered by check #1.
+pub(crate) fn stops_access_affected(previous_map: &GameMap, candidate: &GameSnapshot) -> bool {
+    for stop in &candidate.transit.stops {
+        if !is_present_node(stop.status) {
+            continue;
+        }
+        if let Some(access) = &stop.road_access {
+            if previous_map.tile(access.road_point) != candidate.map.tile(access.road_point) {
+                return true;
+            }
+        }
+        if previous_map.tile(stop.position) != candidate.map.tile(stop.position) {
+            return true;
+        }
+        for heading in canonical_headings() {
+            if let Some(adjacent) = checked_offset(stop.position, heading) {
+                if previous_map.tile(adjacent) != candidate.map.tile(adjacent) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn normalize_snapshot_stops(mut snapshot: GameSnapshot) -> GameSnapshot {
@@ -302,7 +348,7 @@ fn match_stop_access(
         .stops
         .iter()
         .find(|stop| stop.id == stop_id && is_present_node(stop.status))?;
-    let access = stop_access(snapshot, &stop.id)?;
+    let access = resolve_stop_access(snapshot, &stop.id)?;
     let passenger_position: TripPosition = stop.position.into();
     let road_position: TripPosition = access.road_point.into();
     let old_road_position = old_road_points
@@ -356,7 +402,10 @@ fn rebase_active_trips(
 ) {
     for movement in moves {
         debug_assert!(!movement.stop_id.is_empty());
-        debug_assert_eq!(movement.road_point, movement.old_position);
+        // Correctness-critical: rebase_active_trips matches waiting passengers
+        // by old_position. If road_point != old_position the matching logic
+        // silently targets the wrong coordinate, so check in release too.
+        assert_eq!(movement.road_point, movement.old_position);
         // Collect route IDs that serve the moved stop so the position update
         // can be gated on the trip actually waiting for a bus at this stop.
         // A co-located metro station (or a second bus stop at the same

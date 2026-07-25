@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use caelum_core::model::{
     GameMap, Heading, LegFailureReason, MovementKind, PathGeometry, Point, RoadStructure,
     RoundaboutSize, Tile, TransitPath,

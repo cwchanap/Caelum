@@ -9,7 +9,7 @@ use crate::model::{
 };
 use crate::road_topology::RoadState;
 use crate::service_itinerary::{build_service_itinerary, ServiceLegSpec};
-use crate::stop_access::stop_access;
+use crate::stop_access::resolve_stop_access;
 use crate::transit::METRO_TILES_PER_SECOND;
 use crate::transit_nodes::is_present_node;
 
@@ -126,8 +126,8 @@ fn resolve_terminal_reversal(
     if mode != TransitMode::Bus || spec_count == 0 {
         return Err(LegFailureReason::NetworkDisconnected);
     }
-    let terminal_access =
-        stop_access(snapshot, terminal_waypoint_id).ok_or(LegFailureReason::NoRoadAccess)?;
+    let terminal_access = resolve_stop_access(snapshot, terminal_waypoint_id)
+        .ok_or(LegFailureReason::NoRoadAccess)?;
     let previous_index = (index + spec_count - 1) % spec_count;
     let next_index = (index + 1) % spec_count;
 
@@ -175,9 +175,10 @@ fn resolve_service_path(
 ) -> TransitPathResult {
     match mode {
         TransitMode::Bus => {
-            let from =
-                stop_access(snapshot, from_waypoint_id).ok_or(LegFailureReason::NoRoadAccess)?;
-            let to = stop_access(snapshot, to_waypoint_id).ok_or(LegFailureReason::NoRoadAccess)?;
+            let from = resolve_stop_access(snapshot, from_waypoint_id)
+                .ok_or(LegFailureReason::NoRoadAccess)?;
+            let to = resolve_stop_access(snapshot, to_waypoint_id)
+                .ok_or(LegFailureReason::NoRoadAccess)?;
             context.road_topology.find_path_between_access_tiles(
                 &snapshot.map,
                 from.road_point,

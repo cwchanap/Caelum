@@ -434,9 +434,14 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     let mut changed = false;
     let mut vehicles = Vec::with_capacity(state.transit.vehicles.len());
 
+    // Build route-independent stop/station position maps once for the whole
+    // tick. Previously `assigned_line_data` rebuilt these (including the
+    // O(stops × footprint) `resolve_stop_access` pass) per vehicle.
+    let position_maps = TickPositionMaps::build(state);
+
     for vehicle in &state.transit.vehicles {
         let Some((vehicle_position_by_id, passenger_position_by_id, itinerary)) =
-            assigned_line_data(state, vehicle)
+            assigned_line_data(state, vehicle, &position_maps)
         else {
             vehicles.push(vehicle.clone());
             continue;
@@ -562,7 +567,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 }
 
 pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
-    let (_, _, itinerary) = assigned_line_data(state, vehicle)?;
+    let itinerary = vehicle_itinerary(state, vehicle)?;
     if itinerary.is_empty() {
         return None;
     }
@@ -1133,13 +1138,82 @@ fn plan_references_line_from(
     })
 }
 
-type AssignedLineData = (
-    HashMap<String, Point>,
-    HashMap<String, Point>,
+type AssignedLineData<'a> = (
+    &'a HashMap<String, Point>,
+    &'a HashMap<String, Point>,
     Vec<RouteLegPath>,
 );
 
-fn assigned_line_data(state: &GameSnapshot, vehicle: &Vehicle) -> Option<AssignedLineData> {
+/// Pre-computed route-independent stop/station position maps shared across all
+/// vehicles in one tick. Building these once per tick (instead of per vehicle
+/// inside `assigned_line_data`) avoids an O(vehicles × stops × footprint)
+/// recomputation of `resolve_stop_access` every tick.
+struct TickPositionMaps {
+    bus_vehicle_positions: HashMap<String, Point>,
+    bus_passenger_positions: HashMap<String, Point>,
+    metro_positions: HashMap<String, Point>,
+}
+
+impl TickPositionMaps {
+    fn build(state: &GameSnapshot) -> Self {
+        let has_bus = state
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.mode == TransitMode::Bus);
+        let has_metro = state
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.mode == TransitMode::Metro);
+
+        let bus_vehicle_positions = if has_bus {
+            state
+                .transit
+                .stops
+                .iter()
+                .filter_map(|stop| {
+                    crate::stop_access::resolve_stop_access(state, &stop.id)
+                        .map(|access| (stop.id.clone(), access.road_point))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let bus_passenger_positions = if has_bus {
+            state
+                .transit
+                .stops
+                .iter()
+                .filter(|stop| is_present_node(stop.status))
+                .map(|stop| (stop.id.clone(), stop.position))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let metro_positions = if has_metro {
+            state
+                .transit
+                .stations
+                .iter()
+                .filter(|station| is_present_node(station.status))
+                .map(|station| (station.id.clone(), station.position))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        Self {
+            bus_vehicle_positions,
+            bus_passenger_positions,
+            metro_positions,
+        }
+    }
+}
+
+/// Look up the route/line assigned to `vehicle` and return its service legs if
+/// the line is operational. This is the per-vehicle part of `assigned_line_data`
+/// that cannot be hoisted out of the vehicle loop.
+fn vehicle_itinerary(state: &GameSnapshot, vehicle: &Vehicle) -> Option<Vec<RouteLegPath>> {
     if vehicle.mode == TransitMode::Bus {
         let route = state
             .transit
@@ -1149,41 +1223,35 @@ fn assigned_line_data(state: &GameSnapshot, vehicle: &Vehicle) -> Option<Assigne
         if !is_route_operational(route.active, &route.legs) {
             return None;
         }
-        let passenger_stop_by_id: HashMap<String, Point> = state
+        Some(route.legs.clone())
+    } else {
+        let line = state
             .transit
-            .stops
+            .metro_lines
             .iter()
-            .filter(|stop| is_present_node(stop.status))
-            .map(|stop| (stop.id.clone(), stop.position))
-            .collect();
-        let vehicle_stop_by_id: HashMap<String, Point> = state
-            .transit
-            .stops
-            .iter()
-            .filter_map(|stop| {
-                crate::stop_access::stop_access(state, &stop.id)
-                    .map(|access| (stop.id.clone(), access.road_point))
-            })
-            .collect();
-        return Some((vehicle_stop_by_id, passenger_stop_by_id, route.legs.clone()));
+            .find(|candidate| candidate.id == vehicle.line_id)?;
+        if !is_route_operational(line.active, &line.legs) {
+            return None;
+        }
+        Some(line.legs.clone())
     }
+}
 
-    let line = state
-        .transit
-        .metro_lines
-        .iter()
-        .find(|candidate| candidate.id == vehicle.line_id)?;
-    if !is_route_operational(line.active, &line.legs) {
-        return None;
+fn assigned_line_data<'a>(
+    state: &'a GameSnapshot,
+    vehicle: &Vehicle,
+    maps: &'a TickPositionMaps,
+) -> Option<AssignedLineData<'a>> {
+    let itinerary = vehicle_itinerary(state, vehicle)?;
+    if vehicle.mode == TransitMode::Bus {
+        Some((
+            &maps.bus_vehicle_positions,
+            &maps.bus_passenger_positions,
+            itinerary,
+        ))
+    } else {
+        Some((&maps.metro_positions, &maps.metro_positions, itinerary))
     }
-    let station_by_id: HashMap<String, Point> = state
-        .transit
-        .stations
-        .iter()
-        .filter(|station| is_present_node(station.status))
-        .map(|station| (station.id.clone(), station.position))
-        .collect();
-    Some((station_by_id.clone(), station_by_id, line.legs.clone()))
 }
 
 /// Advance one vehicle along its itinerary by `remaining_seconds` of simulated
@@ -1622,7 +1690,7 @@ mod tests {
     };
     use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
-    use crate::stop_access::stop_access;
+    use crate::stop_access::resolve_stop_access;
 
     #[test]
     fn tick_vehicles_skips_vehicle_whose_from_waypoint_lacks_road_access() {
@@ -1662,8 +1730,8 @@ mod tests {
 
         // Assert the resolved access state before ticking, so the premise is
         // explicit and not silently dependent on the scenario map defaults.
-        assert!(stop_access(&snapshot, "stop-001").is_none());
-        assert!(stop_access(&snapshot, "stop-002").is_some());
+        assert!(resolve_stop_access(&snapshot, "stop-001").is_none());
+        assert!(resolve_stop_access(&snapshot, "stop-002").is_some());
 
         let leg = RouteLegPath {
             from_waypoint_id: "stop-001".to_string(),

@@ -269,14 +269,14 @@ describe("route selectors", () => {
       pattern: "shuttle" as const,
       legKind: "service" as const,
       isLoopClosing: false,
-      guidance: "Stop has no usable adjacent road.",
+      guidance: "Stop has no adjacent road.",
     },
     {
       reason: "networkDisconnected" as const,
       pattern: "loop" as const,
       legKind: "service" as const,
       isLoopClosing: true,
-      guidance: "Loop can't close here; switch to Shuttle or repair the road.",
+      guidance: "Loop can't close here; remove a stop or switch to Shuttle.",
     },
     {
       reason: "noLegalEntryHeading" as const,
