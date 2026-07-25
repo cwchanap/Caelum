@@ -930,6 +930,57 @@ describe("route selectors", () => {
     expect(draft?.previewStatus).toBe("rejected");
     expect(draft?.previewMessage).toBe("backend unreachable");
   });
+
+  it("keeps surfacing a preview-level missingRouteNode rejection after a generation-stable selection clears the click error", () => {
+    // Deferred-preview regression: Rust returns `missingRouteNode` during
+    // validate_waypoints with an empty leg list. The runtime stores that
+    // authoritative rejection in both `draft.preview.rejection` and
+    // `routePreviewError`. A subsequent successful selection-only click is
+    // generation-stable (no new preview request), so `applyUiTileClick` /
+    // `commitRouteDraft` clear `routePreviewError` (the code is classified
+    // transient), but `draft.preview.rejection` stays non-null. The selector
+    // must derive the persistent failure from `draft.preview.rejection` —
+    // not show "Add at least two waypoints" while Save is disabled.
+    const state = twoStops();
+    const previewRejection = {
+      code: "missingRouteNode" as const,
+      context: { nodeId: "stop-999", affectedRouteIds: [] },
+    };
+    const previewWithRejection: RoutePreviewResponse = {
+      generation: 1,
+      legs: [],
+      totalTravelSeconds: 0,
+      initialVehicleCost: COSTS.bus,
+      affordable: true,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: ["stop-999"],
+      warnings: [],
+      rejection: previewRejection,
+    };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"]),
+        preview: previewWithRejection,
+      },
+      // The successful generation-stable selection cleared the click error;
+      // the preview rejection lives on in `draft.preview.rejection`.
+      routePreviewError: null,
+      routePreviewHostError: null,
+    };
+
+    const draft = selectShellState(state, ui).routeDraft;
+    expect(draft?.previewStatus).toBe("rejected");
+    expect(draft?.previewMessage).not.toBe("Add at least two waypoints.");
+    expect(draft?.canSave).toBe(false);
+  });
 });
 
 describe("ShellHudState", () => {
