@@ -38,10 +38,22 @@ pub fn resolve_route_legs(
         return Vec::new();
     }
     let specs = build_service_itinerary(pattern, waypoint_ids);
+    // Pre-compute service leg paths so terminal reversals can reuse them
+    // instead of re-resolving the adjacent service legs.
+    let service_paths: Vec<TransitPathResult> = specs
+        .iter()
+        .map(|spec| {
+            if spec.kind == RouteLegKind::Service {
+                resolve_spec_service_path(snapshot, context, mode, spec)
+            } else {
+                Err(LegFailureReason::NetworkDisconnected)
+            }
+        })
+        .collect();
     specs
         .iter()
         .enumerate()
-        .map(|(index, spec)| resolve_leg(snapshot, context, mode, &specs, index, spec))
+        .map(|(index, spec)| resolve_leg(snapshot, context, mode, &service_paths, index, spec))
         .collect()
 }
 
@@ -49,7 +61,7 @@ fn resolve_leg(
     snapshot: &GameSnapshot,
     context: RoutingContext<'_>,
     mode: TransitMode,
-    specs: &[ServiceLegSpec],
+    service_paths: &[TransitPathResult],
     index: usize,
     spec: &ServiceLegSpec,
 ) -> RouteLegPath {
@@ -57,13 +69,14 @@ fn resolve_leg(
     let to_present = waypoint_present(snapshot, mode, &spec.to_waypoint_id);
     let resolution = if from_present && to_present {
         Some(match spec.kind {
-            RouteLegKind::Service => resolve_spec_service_path(snapshot, context, mode, spec),
+            RouteLegKind::Service => service_paths[index].clone(),
             RouteLegKind::TerminalReversal => resolve_terminal_reversal(
                 snapshot,
                 context,
                 mode,
-                specs,
+                service_paths,
                 index,
+                service_paths.len(),
                 &spec.from_waypoint_id,
             ),
         })
@@ -99,8 +112,9 @@ fn resolve_terminal_reversal(
     snapshot: &GameSnapshot,
     context: RoutingContext<'_>,
     mode: TransitMode,
-    specs: &[ServiceLegSpec],
+    service_paths: &[TransitPathResult],
     index: usize,
+    spec_count: usize,
     terminal_waypoint_id: &str,
 ) -> TransitPathResult {
     if mode == TransitMode::Metro {
@@ -109,23 +123,21 @@ fn resolve_terminal_reversal(
             total_travel_seconds: 0.0,
         });
     }
-    if mode != TransitMode::Bus || specs.is_empty() {
+    if mode != TransitMode::Bus || spec_count == 0 {
         return Err(LegFailureReason::NetworkDisconnected);
     }
     let terminal_access =
         stop_access(snapshot, terminal_waypoint_id).ok_or(LegFailureReason::NoRoadAccess)?;
-    let previous = &specs[(index + specs.len() - 1) % specs.len()];
-    let next = &specs[(index + 1) % specs.len()];
+    let previous_index = (index + spec_count - 1) % spec_count;
+    let next_index = (index + 1) % spec_count;
 
-    let previous_path = resolve_spec_service_path(snapshot, context, mode, previous).ok();
-    let next_path = resolve_spec_service_path(snapshot, context, mode, next).ok();
+    let previous_path = service_paths[previous_index].as_ref().ok();
+    let next_path = service_paths[next_index].as_ref().ok();
     let exit_heading = previous_path
-        .as_ref()
         .and_then(road_exit_heading)
         .or_else(|| terminal_heading(context, terminal_access))
         .ok_or(LegFailureReason::NoLegalExitHeading)?;
     let entry_heading = next_path
-        .as_ref()
         .and_then(road_entry_heading)
         .or_else(|| terminal_heading(context, terminal_access))
         .ok_or(LegFailureReason::NoLegalEntryHeading)?;
@@ -343,7 +355,7 @@ mod tests {
             road_topology: &topology,
         };
         let result =
-            resolve_terminal_reversal(&snapshot, context, TransitMode::Bus, &[], 0, "stop-001");
+            resolve_terminal_reversal(&snapshot, context, TransitMode::Bus, &[], 0, 0, "stop-001");
         assert_eq!(result.unwrap_err(), LegFailureReason::NetworkDisconnected);
     }
 

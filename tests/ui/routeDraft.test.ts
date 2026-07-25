@@ -77,7 +77,6 @@ describe("route draft reducers", () => {
     const result = applyNodeClick(draft, "stop-001");
 
     expect(result.draft).toBe(draft);
-    expect(result.previewRequested).toBe(false);
   });
 
   it("selects an existing waypoint instead of appending it", () => {
@@ -86,7 +85,6 @@ describe("route draft reducers", () => {
 
     expect(result.draft.waypointIds).toEqual(["a", "b"]);
     expect(result.draft.selectedIndex).toBe(0);
-    expect(result.previewRequested).toBe(false);
   });
 
   it("appends after selecting an existing waypoint in append mode", () => {
@@ -95,7 +93,7 @@ describe("route draft reducers", () => {
     const result = applyNodeClick(selected.draft, "c");
 
     expect(result.draft.waypointIds).toEqual(["a", "b", "c"]);
-    expect(result.previewRequested).toBe(true);
+    expect(result.draft.generation).toBe(draft.generation + 1);
   });
 
   it("notices an insert duplicate without mutation", () => {

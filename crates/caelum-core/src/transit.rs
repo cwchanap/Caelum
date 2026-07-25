@@ -1153,6 +1153,7 @@ fn assigned_line_data(state: &GameSnapshot, vehicle: &Vehicle) -> Option<Assigne
             .transit
             .stops
             .iter()
+            .filter(|stop| is_present_node(stop.status))
             .map(|stop| (stop.id.clone(), stop.position))
             .collect();
         let vehicle_stop_by_id: HashMap<String, Point> = state
@@ -1179,6 +1180,7 @@ fn assigned_line_data(state: &GameSnapshot, vehicle: &Vehicle) -> Option<Assigne
         .transit
         .stations
         .iter()
+        .filter(|station| is_present_node(station.status))
         .map(|station| (station.id.clone(), station.position))
         .collect();
     Some((station_by_id.clone(), station_by_id, line.legs.clone()))

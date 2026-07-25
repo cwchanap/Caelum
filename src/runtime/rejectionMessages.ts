@@ -97,6 +97,12 @@ export function routeFailureGuidance(
   if (reason === "networkDisconnected" && context.isLoopClosing) {
     return "Loop can't close here; switch to Shuttle or repair the road.";
   }
+  if (
+    reason === "networkDisconnected" &&
+    context.legKind === "terminalReversal"
+  ) {
+    return "No turnaround path here; add a junction or roundabout nearby.";
+  }
   if (reason === "noRoadAccess") {
     return "Stop has no usable adjacent road.";
   }

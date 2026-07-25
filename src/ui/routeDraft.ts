@@ -9,7 +9,7 @@ import {
   type TransitMode,
 } from "../domain/types";
 import type { RoutePreviewResponse } from "../runtime/backend/types";
-import type { UiState } from "./uiState";
+import type { RouteDraftNotice, UiState } from "./uiState";
 
 export interface RouteDraft {
   instanceId: number;
@@ -28,8 +28,7 @@ export interface RouteDraft {
 
 export interface RouteDraftMutation {
   draft: RouteDraft;
-  notice?: { kind: "alreadyOnRoute"; waypointId: string };
-  previewRequested: boolean;
+  notice?: RouteDraftNotice;
 }
 
 export interface RouteDraftClickResult extends RouteDraftMutation {
@@ -186,7 +185,7 @@ function changed(
 }
 
 function noChange(draft: RouteDraft): RouteDraftMutation {
-  return { draft, previewRequested: false };
+  return { draft };
 }
 
 function changedMutation(
@@ -198,7 +197,6 @@ function changedMutation(
 ): RouteDraftMutation {
   return {
     draft: changed(draft, waypointIds, patch),
-    previewRequested: true,
   };
 }
 
@@ -235,14 +233,12 @@ export function applyNodeClick(
   if (interaction === "append" && existing >= 0) {
     return {
       draft: selectWaypoint(draft, existing, interaction),
-      previewRequested: false,
     };
   }
   if (interaction === "insertAfter" && existing >= 0) {
     return {
       draft,
       notice: { kind: "alreadyOnRoute", waypointId: nodeId },
-      previewRequested: false,
     };
   }
   if (
@@ -255,7 +251,6 @@ export function applyNodeClick(
   if (interaction === "replace" && existing >= 0) {
     return {
       draft: selectWaypoint(draft, existing, interaction),
-      previewRequested: false,
     };
   }
 
