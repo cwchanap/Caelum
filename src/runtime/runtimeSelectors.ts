@@ -245,6 +245,21 @@ function routeDraftPreviewMessage(
   }
   const preview = draft.preview;
   if (preview === null || preview.legs.length === 0) {
+    // A preview-level rejection (e.g. `missingRouteNode` from
+    // validate_waypoints, or `routeChangedWhileEditing`) is persistent and
+    // authoritative — it lives in `draft.preview.rejection` and survives a
+    // generation-stable selection that clears the transient click error in
+    // `routePreviewError`. Derive the persistent failure directly from
+    // `preview.rejection` so Save stays disabled with a real reason rather
+    // than degrading to "Add at least two waypoints." once the click error is
+    // cleared.
+    if (preview !== null && preview.rejection !== null) {
+      const message =
+        preview.rejection.code === "routeChangedWhileEditing"
+          ? "Saved route changed. Reload the latest revision."
+          : "Route preview was rejected.";
+      return { status: "rejected", message };
+    }
     if (
       localError !== null &&
       localError.code !== "invalidRouteDraftInteraction"
@@ -301,14 +316,23 @@ export function selectRouteEditorView(
     rejection.context.routeId === draft.source.routeId
       ? rejection
       : null;
-  // The routeChangedWhileEditing error can surface either as a global
-  // rejection (failed Save) or as a local preview error (detected during
-  // preview re-evaluation). In both cases the user needs a Reload button.
+  // The routeChangedWhileEditing error can surface as a global rejection
+  // (failed Save), as a local preview error (detected during preview
+  // re-evaluation), or directly in `draft.preview.rejection` — the
+  // authoritative source for persistent preview failures, which survives a
+  // generation-stable selection that clears the transient `routePreviewError`
+  // mirror. In every case the user needs a Reload button.
   const localStaleError =
     routeId !== null &&
     ui.routePreviewError?.code === "routeChangedWhileEditing" &&
     ui.routePreviewError.context.routeId === routeId
       ? ui.routePreviewError
+      : null;
+  const previewStaleRejection =
+    routeId !== null &&
+    draft.preview?.rejection?.code === "routeChangedWhileEditing" &&
+    draft.preview.rejection.context.routeId === routeId
+      ? draft.preview.rejection
       : null;
   const preview =
     staleRejection === null
@@ -358,7 +382,10 @@ export function selectRouteEditorView(
         ui.routePreviewError.code === "invalidRouteDraftInteraction") &&
       ui.routePreviewHostError === null &&
       canSaveRouteDraft(draft),
-    canReload: staleRejection !== null || localStaleError !== null,
+    canReload:
+      staleRejection !== null ||
+      localStaleError !== null ||
+      previewStaleRejection !== null,
     canUndo: ui.routeDraftHistory.past.length > 0,
     canRedo: ui.routeDraftHistory.future.length > 0,
     notice: ui.routeDraftNotice,
