@@ -442,9 +442,16 @@ export async function createGameRuntime({
           // state. Preserve them across preview resolution so the user still
           // sees the click feedback after a pending preview finishes; a
           // subsequent successful generation-stable click clears them.
-          routePreviewError: isTransientRouteClickError(ui.routePreviewError)
-            ? ui.routePreviewError
-            : response.rejection,
+          // A preview rejection (e.g. `routeChangedWhileEditing`) is
+          // persistent and authoritative — it must override the transient
+          // error, otherwise a later valid click would clear the transient
+          // error and permanently hide the stale-revision rejection (Save
+          // disabled, Reload unavailable, "Add at least two waypoints").
+          routePreviewError:
+            isTransientRouteClickError(ui.routePreviewError) &&
+            response.rejection === null
+              ? ui.routePreviewError
+              : response.rejection,
           routePreviewHostError: null,
         });
       })

@@ -2709,6 +2709,123 @@ describe("route creation and management", () => {
     );
   });
 
+  it("replaces a transient click error with a persistent routeChangedWhileEditing rejection when the preview resolves stale", async () => {
+    // P2 regression: when a preview resolves with `routeChangedWhileEditing`
+    // while a transient click error (incompatibleRouteNode) is stored, the
+    // persistent rejection must override the transient error. Otherwise a
+    // subsequent valid selection click clears the transient error and
+    // permanently hides the stale-revision rejection — Save disabled, Reload
+    // unavailable, message reads "Add at least two waypoints."
+    const snapshotWithStation = fullRustSnapshot({
+      map: routeMap(),
+      transit: {
+        stops: [
+          createStop("stop-001", { x: 14, y: 7 }),
+          createStop("stop-002", { x: 14, y: 8 }),
+        ],
+        stations: [
+          {
+            id: "station-001",
+            status: "present",
+            position: { x: 10, y: 5 },
+            platforms: [
+              {
+                id: "station-001-p0",
+                label: "A",
+                capacity: 300,
+                routeIds: [],
+              },
+            ],
+          },
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#2563eb",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop",
+            revision: 0,
+            legs: [],
+            pathBroken: false,
+          },
+        ],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(snapshotWithStation);
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+    runtime.startRouteEdit("route-001");
+    // The preview for generation 0 is now pending.
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(true);
+
+    // Click the metro station tile — incompatible with a bus route draft.
+    runtime.handleTileClick({ x: 10, y: 5 });
+    expect(runtime.getSnapshot().ui.routePreviewError).toEqual({
+      code: "incompatibleRouteNode",
+      context: { nodeId: "station-001", affectedRouteIds: [] },
+    });
+
+    // Resolve the pending preview with a stale-revision rejection. Rust
+    // returns this before populating any legs.
+    previews.resolveRoute(0, {
+      generation: 0,
+      legs: [],
+      totalTravelSeconds: 0,
+      initialVehicleCost: 8_000,
+      affordable: true,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: [],
+      warnings: [],
+      rejection: {
+        code: "routeChangedWhileEditing" as const,
+        context: {
+          routeId: "route-001",
+          expectedRevision: 0,
+          actualRevision: 1,
+          affectedRouteIds: ["route-001"],
+        },
+      },
+    });
+    await flushPromises();
+
+    // The persistent rejection must override the transient click error.
+    const staleSnapshot = runtime.getSnapshot();
+    expect(staleSnapshot.ui.routePreviewError?.code).toBe(
+      "routeChangedWhileEditing",
+    );
+    expect(staleSnapshot.shell.routeDraft?.canSave).toBe(false);
+    expect(staleSnapshot.shell.routeDraft?.canReload).toBe(true);
+    expect(staleSnapshot.shell.routeDraft?.previewMessage).toBe(
+      "Saved route changed. Reload the latest revision.",
+    );
+
+    // Click a valid existing waypoint (selection-only, generation-stable).
+    // This must NOT clear the persistent rejection or request a new preview.
+    runtime.handleTileClick({ x: 14, y: 7 });
+    const finalSnapshot = runtime.getSnapshot();
+    expect(finalSnapshot.ui.routePreviewError?.code).toBe(
+      "routeChangedWhileEditing",
+    );
+    expect(finalSnapshot.shell.routeDraft?.canSave).toBe(false);
+    expect(finalSnapshot.shell.routeDraft?.canReload).toBe(true);
+    expect(finalSnapshot.shell.routeDraft?.previewMessage).toBe(
+      "Saved route changed. Reload the latest revision.",
+    );
+  });
+
   it("surfaces typed errors for invalid remove and move operations", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
