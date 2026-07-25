@@ -297,6 +297,69 @@ describe("applyUiTileClick route drafts", () => {
     expect(result.ui.routePreviewError).toBeNull();
   });
 
+  it("clears a stale incompatibleRouteNode error on a successful compatible selection click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    // Simulate a prior incompatible click that stored an
+    // incompatibleRouteNode rejection without changing the draft.
+    const uiWithIncompatibleError: UiState = {
+      ...result.ui,
+      routePreviewError: {
+        code: "incompatibleRouteNode",
+        context: { nodeId: "station-001", affectedRouteIds: [] },
+      },
+    };
+
+    // Clicking stop-001 (an existing waypoint) in append mode selects it
+    // (generation-stable) — the stale incompatible rejection must clear so
+    // Save is not left disabled by a click the user has since corrected.
+    result = applyUiTileClick(state, uiWithIncompatibleError, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.selectedIndex).toBe(0);
+    expect(result.ui.routeDraft?.generation).toBe(
+      uiWithIncompatibleError.routeDraft!.generation,
+    );
+    expect(result.ui.routePreviewError).toBeNull();
+  });
+
+  it("clears a stale missingRouteNode error on a successful compatible selection click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const uiWithMissingError: UiState = {
+      ...result.ui,
+      routePreviewError: {
+        code: "missingRouteNode",
+        context: { nodeId: "stop-999", affectedRouteIds: [] },
+      },
+    };
+
+    result = applyUiTileClick(state, uiWithMissingError, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.selectedIndex).toBe(0);
+    expect(result.ui.routePreviewError).toBeNull();
+  });
+
+  it("preserves a persistent routeChangedWhileEditing error on a generation-stable selection click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const persistentError: GameplayRejection = {
+      code: "routeChangedWhileEditing",
+      context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+    };
+    const uiWithPersistentError: UiState = {
+      ...result.ui,
+      routePreviewError: persistentError,
+    };
+
+    result = applyUiTileClick(state, uiWithPersistentError, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.selectedIndex).toBe(0);
+    expect(result.ui.routePreviewError).toBe(persistentError);
+  });
+
   it("replaces the preview error with a new interaction rejection on an incompatible node click", () => {
     const { state, ui } = busDraftState();
     let result = applyUiTileClick(state, ui, { x: 7, y: 8 });

@@ -3,6 +3,7 @@ import { isPresentTransitNode } from "../runtime/snapshotView";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,
+  isTransientRouteClickError,
   resolveStationAtTile,
   resolveStopAtTile,
   type RouteDraft,
@@ -88,17 +89,20 @@ export function applyUiTileClick(
     if (resolved === null) return { state, ui };
     const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
     const routeDraftNotice = result.notice ?? null;
-    // Generation-stable selection updates preserve preview/host rejections
-    // (matching `commitRouteDraft`): a selection-only click does not request a
-    // new preview, so wiping an existing error would leave the editor without
-    // the original failure or a retry. A new interaction rejection (e.g.
-    // `incompatibleRouteNode`) still replaces the preview error, and a
-    // successful selection clears a stale `invalidRouteDraftInteraction` error.
+    // Generation-stable selection updates preserve persistent preview/host
+    // rejections (matching `commitRouteDraft`): a selection-only click does
+    // not request a new preview, so wiping a persistent error would leave the
+    // editor without the original failure or a retry. A new interaction
+    // rejection (e.g. `incompatibleRouteNode`) still replaces the preview
+    // error, and a successful selection clears a stale transient click error
+    // (`invalidRouteDraftInteraction`, `incompatibleRouteNode`,
+    // `missingRouteNode`); persistent errors like
+    // `routeChangedWhileEditing` survive.
     const generationStable =
       result.draft.generation === ui.routeDraft.generation;
     const routePreviewError = generationStable
       ? (result.rejection ??
-        (ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+        (isTransientRouteClickError(ui.routePreviewError)
           ? null
           : ui.routePreviewError))
       : result.rejection;

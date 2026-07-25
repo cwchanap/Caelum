@@ -871,6 +871,65 @@ describe("route selectors", () => {
       rejection: null,
     });
   });
+
+  it("shows an incompatibleRouteNode click error before a stale host error", () => {
+    // When a prior preview request failed (host error) and the user then
+    // clicks an incompatible node, the click error must surface first so
+    // the user gets feedback about the wrong click. The host error remains
+    // in state (Save stays disabled) and resurfaces once the click error
+    // is cleared.
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: busDraft(["stop-001", "stop-002"], true),
+      routePreviewError: {
+        code: "incompatibleRouteNode" as const,
+        context: { nodeId: "station-001", affectedRouteIds: [] },
+      },
+      routePreviewHostError: "backend unreachable",
+    };
+
+    const draft = selectShellState(state, ui).routeDraft;
+    expect(draft?.previewStatus).toBe("rejected");
+    expect(draft?.previewMessage).toBe(
+      "Choose a stop or station that matches this route.",
+    );
+    expect(draft?.canSave).toBe(false);
+  });
+
+  it("shows a missingRouteNode click error before a stale host error", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: busDraft(["stop-001", "stop-002"], true),
+      routePreviewError: {
+        code: "missingRouteNode" as const,
+        context: { nodeId: "stop-999", affectedRouteIds: [] },
+      },
+      routePreviewHostError: "backend unreachable",
+    };
+
+    const draft = selectShellState(state, ui).routeDraft;
+    expect(draft?.previewStatus).toBe("rejected");
+    expect(draft?.previewMessage).toBe("That route node is missing.");
+  });
+
+  it("surfaces the host error once a transient click error is cleared", () => {
+    const state = twoStops();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: busDraft(["stop-001", "stop-002"], true),
+      routePreviewError: null,
+      routePreviewHostError: "backend unreachable",
+    };
+
+    const draft = selectShellState(state, ui).routeDraft;
+    expect(draft?.previewStatus).toBe("rejected");
+    expect(draft?.previewMessage).toBe("backend unreachable");
+  });
 });
 
 describe("ShellHudState", () => {

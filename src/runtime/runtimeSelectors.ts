@@ -223,6 +223,23 @@ function routeDraftPreviewMessage(
   if (draft.previewPending) {
     return { status: "empty", message: "Checking route…" };
   }
+  // Transient click errors (incompatible/missing node) describe the most
+  // recent click, not persistent preview state. Show them before a stale
+  // host error so the user gets immediate feedback about an incompatible
+  // click even when a prior preview request also failed. The host error
+  // remains in state (Save stays disabled) and surfaces once the click
+  // error is cleared by a subsequent successful selection.
+  if (
+    localError !== null &&
+    (localError.code === "incompatibleRouteNode" ||
+      localError.code === "missingRouteNode")
+  ) {
+    const message =
+      localError.code === "incompatibleRouteNode"
+        ? "Choose a stop or station that matches this route."
+        : "That route node is missing.";
+    return { status: "rejected", message };
+  }
   if (ui.routePreviewHostError !== null) {
     return { status: "rejected", message: ui.routePreviewHostError };
   }
@@ -235,11 +252,7 @@ function routeDraftPreviewMessage(
       const message =
         localError.code === "routeChangedWhileEditing"
           ? "Saved route changed. Reload the latest revision."
-          : localError.code === "incompatibleRouteNode"
-            ? "Choose a stop or station that matches this route."
-            : localError.code === "missingRouteNode"
-              ? "That route node is missing."
-              : "Route preview was rejected.";
+          : "Route preview was rejected.";
       return { status: "rejected", message };
     }
     return {

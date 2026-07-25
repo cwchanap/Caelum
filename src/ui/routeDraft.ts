@@ -51,6 +51,21 @@ export interface RouteDraftInteractionError {
 
 export type RouteDraftError = GameplayRejection | RouteDraftInteractionError;
 
+/** Transient click errors from `applyRouteNodeClick` (and interaction
+ *  failures) describe the most recent click, not persistent preview state.
+ *  A subsequent successful generation-stable click clears them; persistent
+ *  errors like `routeChangedWhileEditing` survive. */
+export function isTransientRouteClickError(
+  error: RouteDraftError | null,
+): boolean {
+  if (error === null) return false;
+  return (
+    error.code === "invalidRouteDraftInteraction" ||
+    error.code === "incompatibleRouteNode" ||
+    error.code === "missingRouteNode"
+  );
+}
+
 type SaveableRouteDraft = RouteDraft & {
   mode: Exclude<TransitMode, "walk">;
   preview: RoutePreviewResponse;
