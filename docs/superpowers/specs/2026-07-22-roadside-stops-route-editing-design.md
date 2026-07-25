@@ -22,7 +22,7 @@ So the issue's product decision — *"a normal bus stop occupies a non-road road
 
 ### Root cause of the dual-road turn failure
 
-`road_topology::compile_automatic_junction_transitions` already emits port-to-port left/right turns between dual carriageways — the junction graph **does** support legal turns. The bug is endpoint resolution, not the graph. Verified: `RoadTopology::find_path` takes bare `Point`s; `start_states` fans an off-road anchor out to **all** adjacent road tiles × all headings; the goal accepts any heading at manhattan distance 1. That unconstrained fan-out across parallel dual cariageways is the wrong-lane binding. The fix is to pin each endpoint to the stop's authoritative access **tile**, eliminating the fan-out — without constraining the heading (revision A).
+`road_topology::compile_automatic_junction_transitions` already emits port-to-port left/right turns between dual carriageways — the junction graph **does** support legal turns. The bug is endpoint resolution, not the graph. Verified: `RoadTopology::find_path` takes bare `Point`s; `start_states` fans an off-road anchor out to **all** adjacent road tiles × all headings; the goal accepts any heading at manhattan distance 1. That unconstrained fan-out across parallel dual carriageways is the wrong-lane binding. The fix is to pin each endpoint to the stop's authoritative access **tile**, eliminating the fan-out — without constraining the heading (revision A).
 
 ### Review revisions
 
@@ -426,16 +426,14 @@ interface RouteFailureRow {
   legIndex: number;
   fromWaypointId: string;
   toWaypointId: string;
-  reason:
-    | "missingNode"
-    | "noRoadAccess"
-    | "networkDisconnected"
-    | "noLegalEntryHeading"
-    | "noLegalExitHeading"
-    | "noLegalTurnaround";
+  reason: "missingNode" | LegFailureReason;
   legKind: RouteLegKind;
   isLoopClosing: boolean;
   guidance: string;
+  /** Present only when reason is "missingNode": the kind of the missing
+   * waypoint(s) — "station" if either endpoint is a missing station, otherwise
+   * "stop". */
+  missingNodeKind?: "stop" | "station";
 }
 ```
 

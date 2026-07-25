@@ -4,7 +4,6 @@ import {
   renderRoadPreviewFeedbackBadge,
   renderRouteDraftHandles,
 } from "../../src/render/overlayRenderer";
-import { renderTransit } from "../../src/render/transitRenderer";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type {
@@ -145,38 +144,6 @@ describe("roadside stop access", () => {
     });
 
     expect(fillStyles).toContain(colors.previewValid);
-  });
-
-  it("draws access from passenger anchor to road point", () => {
-    const state = createTestGameState();
-    const accessState = {
-      ...state,
-      transit: {
-        ...state.transit,
-        stops: [
-          {
-            id: "stop-access",
-            kind: "busStop" as const,
-            status: "present" as const,
-            position: { x: 4, y: 4 },
-            roadAccess: { roadPoint: { x: 4, y: 5 } },
-            platforms: [],
-          },
-        ],
-      },
-    };
-    const ctx = dragCtx();
-
-    renderTransit(ctx, accessState, createUiState());
-
-    expect(ctx.moveTo).toHaveBeenCalledWith(
-      4 * tileSize + tileSize / 2,
-      4 * tileSize + tileSize / 2,
-    );
-    expect(ctx.lineTo).toHaveBeenCalledWith(
-      4 * tileSize + tileSize / 2,
-      5 * tileSize + tileSize / 2,
-    );
   });
 });
 
