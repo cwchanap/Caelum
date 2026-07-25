@@ -220,15 +220,12 @@ function routeDraftPreviewMessage(
           : "That waypoint is no longer available."
       : null;
 
-  if (draft.previewPending) {
-    return { status: "empty", message: "Checking route…" };
-  }
   // Transient click errors (incompatible/missing node) describe the most
-  // recent click, not persistent preview state. Show them before a stale
-  // host error so the user gets immediate feedback about an incompatible
-  // click even when a prior preview request also failed. The host error
-  // remains in state (Save stays disabled) and surfaces once the click
-  // error is cleared by a subsequent successful selection.
+  // recent click, not persistent preview state. Evaluate them before
+  // `previewPending` so the user gets immediate feedback about an
+  // incompatible click even while a prior preview request is still
+  // pending — otherwise "Checking route…" would hide the click error and
+  // the resolving preview would wipe it (see `requestRoutePreview`).
   if (
     localError !== null &&
     (localError.code === "incompatibleRouteNode" ||
@@ -239,6 +236,9 @@ function routeDraftPreviewMessage(
         ? "Choose a stop or station that matches this route."
         : "That route node is missing.";
     return { status: "rejected", message };
+  }
+  if (draft.previewPending) {
+    return { status: "empty", message: "Checking route…" };
   }
   if (ui.routePreviewHostError !== null) {
     return { status: "rejected", message: ui.routePreviewHostError };

@@ -2626,6 +2626,89 @@ describe("route creation and management", () => {
     });
   });
 
+  it("preserves an incompatible-click error across a pending preview resolution", async () => {
+    // Snapshot with a bus route and a metro station at a tile with no stop,
+    // so clicking the station while editing the bus route yields
+    // `incompatibleRouteNode`.
+    const snapshotWithStation = fullRustSnapshot({
+      map: routeMap(),
+      transit: {
+        stops: [
+          createStop("stop-001", { x: 14, y: 7 }),
+          createStop("stop-002", { x: 14, y: 8 }),
+        ],
+        stations: [
+          {
+            id: "station-001",
+            status: "present",
+            position: { x: 10, y: 5 },
+            platforms: [
+              {
+                id: "station-001-p0",
+                label: "A",
+                capacity: 300,
+                routeIds: [],
+              },
+            ],
+          },
+        ],
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#2563eb",
+            stopIds: ["stop-001", "stop-002"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop",
+            revision: 0,
+            legs: [],
+            pathBroken: false,
+          },
+        ],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(snapshotWithStation);
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+    runtime.startRouteEdit("route-001");
+    // The preview for generation 0 is now pending.
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(true);
+
+    // Click the metro station tile — incompatible with a bus route draft.
+    runtime.handleTileClick({ x: 10, y: 5 });
+
+    // The click error must surface immediately, even while the preview is
+    // still pending (not hidden behind "Checking route…").
+    const pendingSnapshot = runtime.getSnapshot();
+    expect(pendingSnapshot.ui.routePreviewError).toEqual({
+      code: "incompatibleRouteNode",
+      context: { nodeId: "station-001", affectedRouteIds: [] },
+    });
+    expect(pendingSnapshot.shell.routeDraft?.previewStatus).toBe("rejected");
+    expect(pendingSnapshot.shell.routeDraft?.previewMessage).toBe(
+      "Choose a stop or station that matches this route.",
+    );
+
+    // Resolve the pending preview — the transient click error must survive.
+    previews.resolveRoute(0, routePreview(0, ["stop-001", "stop-002"]));
+    await flushPromises();
+
+    const resolvedSnapshot = runtime.getSnapshot();
+    expect(resolvedSnapshot.ui.routePreviewError).toEqual({
+      code: "incompatibleRouteNode",
+      context: { nodeId: "station-001", affectedRouteIds: [] },
+    });
+    expect(resolvedSnapshot.shell.routeDraft?.previewStatus).toBe("rejected");
+    expect(resolvedSnapshot.shell.routeDraft?.previewMessage).toBe(
+      "Choose a stop or station that matches this route.",
+    );
+  });
+
   it("surfaces typed errors for invalid remove and move operations", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,

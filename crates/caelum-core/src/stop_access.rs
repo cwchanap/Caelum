@@ -1,7 +1,7 @@
 use crate::heading::{canonical_headings, offset_components};
 use crate::model::{
-    BusStopKind, GameMap, GameSnapshot, Heading, Point, Stop, StopRoadAccess, Tile, TransitMode,
-    TripPosition,
+    BusStopKind, GameMap, GameSnapshot, Heading, Point, RouteLeg, RouteLegPath, Stop,
+    StopRoadAccess, Tile, TransitMode, TripPosition,
 };
 use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
@@ -331,10 +331,27 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
             .filter(|route| route.stop_ids.contains(&movement.stop_id))
             .map(|route| route.id.clone())
             .collect();
+        // Build a lookup from route ID → route legs so board/alight itinerary
+        // indexes can be resolved to specific waypoint IDs. This distinguishes
+        // two co-located stops on the same route: the itinerary index
+        // identifies exactly which stop a leg boards/alights at, so only
+        // endpoints associated with `movement.stop_id` are rewritten.
+        let route_legs_by_id: HashMap<&str, &[RouteLegPath]> = snapshot
+            .transit
+            .routes
+            .iter()
+            .map(|route| (route.id.as_str(), route.legs.as_slice()))
+            .collect();
         for trip in &mut snapshot.active_trips {
             if trip.status == crate::model::TripStatus::Waiting
                 && trip.position == movement.old_position.into()
-                && trip_waits_for_bus_at_stop(trip, movement.old_position, &routes_serving_stop)
+                && trip_boards_at_stop(
+                    trip,
+                    movement.old_position,
+                    &movement.stop_id,
+                    &route_legs_by_id,
+                    &routes_serving_stop,
+                )
             {
                 trip.position = movement.new_position.into();
             }
@@ -349,7 +366,19 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
 
                 let from_moved = route_plan.legs[leg_index].from == movement.old_position;
                 let to_moved = route_plan.legs[leg_index].to == movement.old_position;
-                if from_moved {
+                // Gate each endpoint on the leg being associated with
+                // `movement.stop_id` — not merely sharing the old coordinate.
+                // Without this, a second co-located stop on the same route
+                // would capture every bus leg at that coordinate, even legs
+                // whose itinerary index references the other stop.
+                if from_moved
+                    && leg_boards_at_stop(
+                        &route_plan.legs[leg_index],
+                        &movement.stop_id,
+                        &route_legs_by_id,
+                        &routes_serving_stop,
+                    )
+                {
                     route_plan.legs[leg_index].from = movement.new_position;
                     if leg_index > 0
                         && route_plan.legs[leg_index - 1].mode == crate::model::TransitMode::Walk
@@ -358,7 +387,14 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
                         route_plan.legs[leg_index - 1].to = movement.new_position;
                     }
                 }
-                if to_moved {
+                if to_moved
+                    && leg_alights_at_stop(
+                        &route_plan.legs[leg_index],
+                        &movement.stop_id,
+                        &route_legs_by_id,
+                        &routes_serving_stop,
+                    )
+                {
                     route_plan.legs[leg_index].to = movement.new_position;
                     if leg_index + 1 < route_plan.legs.len()
                         && route_plan.legs[leg_index + 1].mode == crate::model::TransitMode::Walk
@@ -372,13 +408,83 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
     }
 }
 
+/// Resolves the waypoint ID a bus leg boards at, using the route's service
+/// itinerary. Returns `None` when `board_itinerary_index` is absent (legacy
+/// snapshots) or the index is out of bounds.
+fn resolve_board_waypoint<'a>(
+    leg: &RouteLeg,
+    route_legs_by_id: &HashMap<&str, &'a [RouteLegPath]>,
+) -> Option<&'a str> {
+    let line_id = leg.line_id.as_deref()?;
+    let board_idx = leg.board_itinerary_index?;
+    let route_legs = route_legs_by_id.get(line_id)?;
+    let service_leg = route_legs.get(board_idx)?;
+    Some(service_leg.from_waypoint_id.as_str())
+}
+
+/// Resolves the waypoint ID a bus leg alights at, using the route's service
+/// itinerary. Returns `None` when `alight_itinerary_index` is absent (legacy
+/// snapshots) or the index is out of bounds.
+fn resolve_alight_waypoint<'a>(
+    leg: &RouteLeg,
+    route_legs_by_id: &HashMap<&str, &'a [RouteLegPath]>,
+) -> Option<&'a str> {
+    let line_id = leg.line_id.as_deref()?;
+    let alight_idx = leg.alight_itinerary_index?;
+    let route_legs = route_legs_by_id.get(line_id)?;
+    let service_leg = route_legs.get(alight_idx)?;
+    Some(service_leg.to_waypoint_id.as_str())
+}
+
+/// Whether a bus leg's `from` endpoint is associated with `stop_id`. Uses
+/// `board_itinerary_index` to resolve the exact boarding waypoint when
+/// available; falls back to checking the route serves the stop (legacy
+/// behavior for snapshots without itinerary indexes).
+fn leg_boards_at_stop(
+    leg: &RouteLeg,
+    stop_id: &str,
+    route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
+    routes_serving_stop: &[String],
+) -> bool {
+    match resolve_board_waypoint(leg, route_legs_by_id) {
+        Some(waypoint_id) => waypoint_id == stop_id,
+        None => leg
+            .line_id
+            .as_deref()
+            .is_some_and(|id| routes_serving_stop.iter().any(|r| r == id)),
+    }
+}
+
+/// Whether a bus leg's `to` endpoint is associated with `stop_id`. Uses
+/// `alight_itinerary_index` to resolve the exact alighting waypoint when
+/// available; falls back to checking the route serves the stop (legacy
+/// behavior for snapshots without itinerary indexes).
+fn leg_alights_at_stop(
+    leg: &RouteLeg,
+    stop_id: &str,
+    route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
+    routes_serving_stop: &[String],
+) -> bool {
+    match resolve_alight_waypoint(leg, route_legs_by_id) {
+        Some(waypoint_id) => waypoint_id == stop_id,
+        None => leg
+            .line_id
+            .as_deref()
+            .is_some_and(|id| routes_serving_stop.iter().any(|r| r == id)),
+    }
+}
+
 /// Whether a waiting trip's current leg is a bus leg boarding at
-/// `stop_position` on a route that serves the moved stop. This prevents
-/// co-located nodes (e.g. a metro station sharing a bus stop's coordinate)
-/// from capturing passengers waiting for a different service.
-fn trip_waits_for_bus_at_stop(
+/// `stop_position` for the moved stop. Uses `board_itinerary_index` to
+/// resolve the exact boarding waypoint when available; falls back to
+/// checking the route serves the stop. This prevents co-located nodes
+/// (e.g. a metro station or a second bus stop sharing a coordinate) from
+/// capturing passengers waiting for a different service.
+fn trip_boards_at_stop(
     trip: &crate::model::ActiveTrip,
     stop_position: Point,
+    stop_id: &str,
+    route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
     routes_serving_stop: &[String],
 ) -> bool {
     let Some(plan) = trip.route_plan.as_ref() else {
@@ -393,10 +499,7 @@ fn trip_waits_for_bus_at_stop(
     if leg.from != stop_position {
         return false;
     }
-    let Some(line_id) = leg.line_id.as_ref() else {
-        return false;
-    };
-    routes_serving_stop.contains(line_id)
+    leg_boards_at_stop(leg, stop_id, route_legs_by_id, routes_serving_stop)
 }
 
 #[cfg(test)]
@@ -772,6 +875,103 @@ mod tests {
 
         // The bus passenger is moved to the new bus stop anchor.
         assert_eq!(snapshot.active_trips[1].position, new_bus_stop.into());
+    }
+
+    /// P2 regression: two distinct bus stops at the same legacy coordinate,
+    /// both served by the same route, must be distinguished via
+    /// `board_itinerary_index` / `alight_itinerary_index`. A passenger
+    /// waiting for stop-B must not be captured when stop-A is processed,
+    /// and only endpoints associated with the moved stop are rewritten.
+    #[test]
+    fn rebase_active_trips_distinguishes_colocated_bus_stops_on_same_route() {
+        let mut snapshot = create_initial_snapshot();
+        let shared = Point { x: 4, y: 5 };
+        let new_a = Point { x: 4, y: 4 };
+        let new_b = Point { x: 4, y: 6 };
+
+        // A single route serving two co-located stops. The route's legs
+        // map itinerary indexes to specific waypoints:
+        //   legs[0] = stop-A → stop-B  (boards at stop-A, alights at stop-B)
+        //   legs[1] = stop-B → stop-A  (boards at stop-B, alights at stop-A)
+        snapshot.transit.routes = vec![Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-A".to_string(), "stop-B".to_string()],
+            vehicle_ids: Vec::new(),
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![
+                service_leg("stop-A", "stop-B"),
+                service_leg("stop-B", "stop-A"),
+            ],
+            path_broken: false,
+        }];
+
+        // A passenger waiting at the shared coordinate for stop-B
+        // (board_itinerary_index = 1 → legs[1].from_waypoint_id = "stop-B")
+        // and alighting at stop-A
+        // (alight_itinerary_index = 1 → legs[1].to_waypoint_id = "stop-A").
+        let trip = ActiveTrip {
+            id: "trip-001".to_string(),
+            sim_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: shared,
+            destination: shared,
+            position: shared.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: shared,
+                    to: shared,
+                    line_id: Some("route-001".to_string()),
+                    service_direction: None,
+                    board_itinerary_index: Some(1),
+                    alight_itinerary_index: Some(1),
+                }],
+                estimated_seconds: 100.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        snapshot.active_trips = vec![trip];
+
+        // Move stop-A first. The passenger waiting for stop-B must NOT be
+        // moved, and the leg's `from` (boarding at stop-B) must NOT be
+        // rewritten. Only the `to` (alighting at stop-A) is rewritten.
+        let moves = vec![
+            StopMove {
+                stop_id: "stop-A".to_string(),
+                old_position: shared,
+                new_position: new_a,
+                road_point: shared,
+            },
+            StopMove {
+                stop_id: "stop-B".to_string(),
+                old_position: shared,
+                new_position: new_b,
+                road_point: shared,
+            },
+        ];
+        rebase_active_trips(&mut snapshot, &moves);
+
+        let result = &snapshot.active_trips[0];
+        // The passenger was waiting for stop-B, so after both moves it is
+        // rebased to stop-B's new position — not stop-A's.
+        assert_eq!(result.position, new_b.into());
+
+        let plan = result
+            .route_plan
+            .as_ref()
+            .expect("trip keeps its route plan");
+        // `from` (boarding at stop-B) → new_b; `to` (alighting at stop-A)
+        // → new_a. The itinerary indexes correctly routed each endpoint to
+        // its own stop's new position.
+        assert_eq!(plan.legs[0].from, new_b);
+        assert_eq!(plan.legs[0].to, new_a);
     }
 
     /// Item 2 regression: a paused (inactive) route's parked bus must still be

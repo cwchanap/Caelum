@@ -437,10 +437,14 @@ export async function createGameRuntime({
             previewPending: false,
             preview: response,
           },
-          routePreviewError:
-            ui.routePreviewError?.code === "invalidRouteDraftInteraction"
-              ? ui.routePreviewError
-              : response.rejection,
+          // Transient click errors (incompatible/missing node, interaction
+          // hint) describe the most recent click, not persistent preview
+          // state. Preserve them across preview resolution so the user still
+          // sees the click feedback after a pending preview finishes; a
+          // subsequent successful generation-stable click clears them.
+          routePreviewError: isTransientRouteClickError(ui.routePreviewError)
+            ? ui.routePreviewError
+            : response.rejection,
           routePreviewHostError: null,
         });
       })
