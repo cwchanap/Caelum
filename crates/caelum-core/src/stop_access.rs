@@ -7,7 +7,7 @@ use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
 use crate::service_itinerary::service_visits;
 use crate::transit_nodes::is_present_node;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn checked_offset(point: Point, heading: Heading) -> Option<Point> {
     let (dx, dy) = offset_components(heading);
@@ -342,6 +342,31 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
             .iter()
             .map(|route| (route.id.as_str(), route.legs.as_slice()))
             .collect();
+        // Routes with more than one stop at the moved coordinate. When
+        // itinerary indexes are absent (legacy snapshots), the fallback in
+        // `leg_boards_at_stop` / `leg_alights_at_stop` cannot distinguish
+        // which co-located stop a leg boards/alights at — guessing would
+        // let the first migration move capture a passenger waiting for the
+        // other stop. For these ambiguous routes the fallback must refuse to
+        // match, leaving the trip untouched rather than risking a misroute.
+        let ambiguous_routes_at_coordinate: HashSet<&str> = snapshot
+            .transit
+            .routes
+            .iter()
+            .filter(|route| {
+                route
+                    .stop_ids
+                    .iter()
+                    .filter(|stop_id| {
+                        snapshot.transit.stops.iter().any(|stop| {
+                            stop.id == **stop_id && stop.position == movement.old_position
+                        })
+                    })
+                    .count()
+                    > 1
+            })
+            .map(|route| route.id.as_str())
+            .collect();
         for trip in &mut snapshot.active_trips {
             if trip.status == crate::model::TripStatus::Waiting
                 && trip.position == movement.old_position.into()
@@ -351,6 +376,7 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
                     &movement.stop_id,
                     &route_legs_by_id,
                     &routes_serving_stop,
+                    &ambiguous_routes_at_coordinate,
                 )
             {
                 trip.position = movement.new_position.into();
@@ -377,6 +403,7 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
                         &movement.stop_id,
                         &route_legs_by_id,
                         &routes_serving_stop,
+                        &ambiguous_routes_at_coordinate,
                     )
                 {
                     route_plan.legs[leg_index].from = movement.new_position;
@@ -393,6 +420,7 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
                         &movement.stop_id,
                         &route_legs_by_id,
                         &routes_serving_stop,
+                        &ambiguous_routes_at_coordinate,
                     )
                 {
                     route_plan.legs[leg_index].to = movement.new_position;
@@ -439,38 +467,46 @@ fn resolve_alight_waypoint<'a>(
 /// Whether a bus leg's `from` endpoint is associated with `stop_id`. Uses
 /// `board_itinerary_index` to resolve the exact boarding waypoint when
 /// available; falls back to checking the route serves the stop (legacy
-/// behavior for snapshots without itinerary indexes).
+/// behavior for snapshots without itinerary indexes). The fallback is only
+/// safe when the route has exactly one stop at the moved coordinate — for
+/// ambiguous co-located stops on the same route it refuses to match so the
+/// trip is left untouched rather than misrouted.
 fn leg_boards_at_stop(
     leg: &RouteLeg,
     stop_id: &str,
     route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
     routes_serving_stop: &[String],
+    ambiguous_routes_at_coordinate: &HashSet<&str>,
 ) -> bool {
     match resolve_board_waypoint(leg, route_legs_by_id) {
         Some(waypoint_id) => waypoint_id == stop_id,
-        None => leg
-            .line_id
-            .as_deref()
-            .is_some_and(|id| routes_serving_stop.iter().any(|r| r == id)),
+        None => leg.line_id.as_deref().is_some_and(|id| {
+            !ambiguous_routes_at_coordinate.contains(id)
+                && routes_serving_stop.iter().any(|r| r == id)
+        }),
     }
 }
 
 /// Whether a bus leg's `to` endpoint is associated with `stop_id`. Uses
 /// `alight_itinerary_index` to resolve the exact alighting waypoint when
 /// available; falls back to checking the route serves the stop (legacy
-/// behavior for snapshots without itinerary indexes).
+/// behavior for snapshots without itinerary indexes). The fallback is only
+/// safe when the route has exactly one stop at the moved coordinate — for
+/// ambiguous co-located stops on the same route it refuses to match so the
+/// trip is left untouched rather than misrouted.
 fn leg_alights_at_stop(
     leg: &RouteLeg,
     stop_id: &str,
     route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
     routes_serving_stop: &[String],
+    ambiguous_routes_at_coordinate: &HashSet<&str>,
 ) -> bool {
     match resolve_alight_waypoint(leg, route_legs_by_id) {
         Some(waypoint_id) => waypoint_id == stop_id,
-        None => leg
-            .line_id
-            .as_deref()
-            .is_some_and(|id| routes_serving_stop.iter().any(|r| r == id)),
+        None => leg.line_id.as_deref().is_some_and(|id| {
+            !ambiguous_routes_at_coordinate.contains(id)
+                && routes_serving_stop.iter().any(|r| r == id)
+        }),
     }
 }
 
@@ -486,6 +522,7 @@ fn trip_boards_at_stop(
     stop_id: &str,
     route_legs_by_id: &HashMap<&str, &[RouteLegPath]>,
     routes_serving_stop: &[String],
+    ambiguous_routes_at_coordinate: &HashSet<&str>,
 ) -> bool {
     let Some(plan) = trip.route_plan.as_ref() else {
         return false;
@@ -499,7 +536,13 @@ fn trip_boards_at_stop(
     if leg.from != stop_position {
         return false;
     }
-    leg_boards_at_stop(leg, stop_id, route_legs_by_id, routes_serving_stop)
+    leg_boards_at_stop(
+        leg,
+        stop_id,
+        route_legs_by_id,
+        routes_serving_stop,
+        ambiguous_routes_at_coordinate,
+    )
 }
 
 #[cfg(test)]
@@ -972,6 +1015,124 @@ mod tests {
         // its own stop's new position.
         assert_eq!(plan.legs[0].from, new_b);
         assert_eq!(plan.legs[0].to, new_a);
+    }
+
+    /// P2 regression: two co-located bus stops on the same route with
+    /// `board_itinerary_index` / `alight_itinerary_index` both `None` (legacy
+    /// snapshots). The fallback cannot distinguish which stop a leg boards or
+    /// alights at, so it must refuse to match — leaving the trip untouched
+    /// rather than letting the first migration move capture a passenger
+    /// waiting for the other stop.
+    #[test]
+    fn rebase_active_trips_leaves_trip_untouched_for_colocated_same_route_null_itinerary() {
+        let mut snapshot = create_initial_snapshot();
+        let shared = Point { x: 4, y: 5 };
+        let new_a = Point { x: 4, y: 4 };
+        let new_b = Point { x: 4, y: 6 };
+
+        // Two co-located stops at the shared coordinate, both on the same
+        // route. The stops must exist in the snapshot so the ambiguous-route
+        // detection can count them.
+        snapshot.transit.stops = vec![
+            Stop {
+                id: "stop-A".to_string(),
+                kind: BusStopKind::BusStop,
+                status: crate::model::TransitNodeStatus::Present,
+                position: shared,
+                platforms: Vec::new(),
+                road_access: Some(StopRoadAccess {
+                    road_point: shared,
+                    preferred_heading: None,
+                }),
+            },
+            Stop {
+                id: "stop-B".to_string(),
+                kind: BusStopKind::BusStop,
+                status: crate::model::TransitNodeStatus::Present,
+                position: shared,
+                platforms: Vec::new(),
+                road_access: Some(StopRoadAccess {
+                    road_point: shared,
+                    preferred_heading: None,
+                }),
+            },
+        ];
+        snapshot.transit.routes = vec![Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-A".to_string(), "stop-B".to_string()],
+            vehicle_ids: Vec::new(),
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![
+                service_leg("stop-A", "stop-B"),
+                service_leg("stop-B", "stop-A"),
+            ],
+            path_broken: false,
+        }];
+
+        // A passenger waiting at the shared coordinate with null itinerary
+        // indexes — the legacy fallback path.
+        let trip = ActiveTrip {
+            id: "trip-001".to_string(),
+            sim_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: shared,
+            destination: shared,
+            position: shared.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: shared,
+                    to: shared,
+                    line_id: Some("route-001".to_string()),
+                    service_direction: None,
+                    board_itinerary_index: None,
+                    alight_itinerary_index: None,
+                }],
+                estimated_seconds: 100.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        snapshot.active_trips = vec![trip];
+
+        // Move stop-A first, then stop-B. Because the route is ambiguous at
+        // the shared coordinate and the itinerary indexes are absent, the
+        // fallback must refuse to match — the passenger is NOT captured by
+        // either move.
+        let moves = vec![
+            StopMove {
+                stop_id: "stop-A".to_string(),
+                old_position: shared,
+                new_position: new_a,
+                road_point: shared,
+            },
+            StopMove {
+                stop_id: "stop-B".to_string(),
+                old_position: shared,
+                new_position: new_b,
+                road_point: shared,
+            },
+        ];
+        rebase_active_trips(&mut snapshot, &moves);
+
+        let result = &snapshot.active_trips[0];
+        // The passenger stays at the shared coordinate — untouched.
+        assert_eq!(result.position, shared.into());
+
+        let plan = result
+            .route_plan
+            .as_ref()
+            .expect("trip keeps its route plan");
+        // Leg endpoints are NOT rewritten — both remain at the shared
+        // coordinate.
+        assert_eq!(plan.legs[0].from, shared);
+        assert_eq!(plan.legs[0].to, shared);
     }
 
     /// Item 2 regression: a paused (inactive) route's parked bus must still be
