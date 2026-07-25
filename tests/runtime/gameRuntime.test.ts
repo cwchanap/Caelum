@@ -1492,10 +1492,16 @@ describe("Game Runtime", () => {
       speed: 2,
     });
 
-    // Editing the draft clears the host error and re-requests a preview.
+    // A selection-only click (clicking an existing waypoint) preserves the
+    // host error: the draft is generation-stable and no retry is requested,
+    // so clearing the error would leave the editor without the failure or a
+    // retry. A preview-relevant edit clears it and re-requests a preview.
     runtime.handleTileClick({ x: 1, y: 1 });
-    expect(runtime.getSnapshot().ui.routePreviewHostError).toBeNull();
+    expect(runtime.getSnapshot().ui.routePreviewHostError).toBe(
+      "preview host offline",
+    );
     runtime.setRoutePattern("shuttle");
+    expect(runtime.getSnapshot().ui.routePreviewHostError).toBeNull();
     previews.resolveRoute(3, routePreview(3, ["stop-0001", "stop-0002"]));
     await flushPromises();
 

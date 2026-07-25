@@ -437,13 +437,13 @@ fn rebase_parked_bus_access_to_live_stop(
     candidate: &mut GameSnapshot,
     route_id: &str,
 ) {
-    let Some((active, waypoint_ids, legs)) = route_data(candidate, TransitMode::Bus, route_id)
-    else {
+    let Some((_, waypoint_ids, legs)) = route_data(candidate, TransitMode::Bus, route_id) else {
         return;
     };
-    if !active {
-        return;
-    }
+    // Rebase parked buses regardless of the route's active flag: a paused
+    // route's vehicles are still parked at a stop whose road access can change
+    // via a later road mutation. The active flag controls whether they resume
+    // service, not whether their parked position tracks the current access.
     let waypoint_ids = waypoint_ids.to_vec();
     let legs = legs.to_vec();
     let changed_accesses: Vec<TripPosition> = waypoint_ids

@@ -88,19 +88,37 @@ export function applyUiTileClick(
     if (resolved === null) return { state, ui };
     const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
     const routeDraftNotice = result.notice ?? null;
+    // Generation-stable selection updates preserve preview/host rejections
+    // (matching `commitRouteDraft`): a selection-only click does not request a
+    // new preview, so wiping an existing error would leave the editor without
+    // the original failure or a retry. A new interaction rejection (e.g.
+    // `incompatibleRouteNode`) still replaces the preview error, and a
+    // successful selection clears a stale `invalidRouteDraftInteraction` error.
+    const generationStable =
+      result.draft.generation === ui.routeDraft.generation;
+    const routePreviewError = generationStable
+      ? (result.rejection ??
+        (ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+          ? null
+          : ui.routePreviewError))
+      : result.rejection;
+    const routePreviewHostError = generationStable
+      ? ui.routePreviewHostError
+      : null;
     return {
       state,
       ui:
         result.draft === ui.routeDraft &&
-        result.rejection === ui.routePreviewError &&
+        routePreviewError === ui.routePreviewError &&
+        routePreviewHostError === ui.routePreviewHostError &&
         routeDraftNotice === ui.routeDraftNotice
           ? ui
           : {
               ...ui,
               routeDraft: result.draft,
               routeDraftNotice,
-              routePreviewError: result.rejection,
-              routePreviewHostError: null,
+              routePreviewError,
+              routePreviewHostError,
             },
     };
   }
