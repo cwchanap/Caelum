@@ -1614,16 +1614,31 @@ fn point_key(point: &Point) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intent::RoadPreset;
     use crate::model::{
         BusStopKind, Heading, MovementKind, PathGeometry, RoadPathStep, Route, RouteLegKind,
         RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, Stop, StopRoadAccess,
         TransitMode, TransitNodeStatus, TripPosition, Vehicle,
     };
+    use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
+    use crate::stop_access::stop_access;
 
     #[test]
     fn tick_vehicles_skips_vehicle_whose_from_waypoint_lacks_road_access() {
-        let mut snapshot = create_initial_snapshot();
+        // Lay a road adjacent to stop-002 only, so the resolved `stop_access`
+        // is `None` for stop-001 (the from_waypoint) and `Some` for stop-002.
+        // This guarantees the skip is caused by the from_waypoint lacking road
+        // access, independent of `create_initial_snapshot()`'s scenario map.
+        let mut snapshot = apply_road_mutation(
+            &create_initial_snapshot(),
+            &RoadMutation::LayRoadLine {
+                points: (7..=9).map(|x| Point { x, y: 6 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
         let stop_a = Stop {
             id: "stop-001".to_string(),
             kind: BusStopKind::BusStop,
@@ -1639,11 +1654,16 @@ mod tests {
             position: Point { x: 8, y: 5 },
             platforms: Vec::new(),
             road_access: Some(StopRoadAccess {
-                road_point: Point { x: 8, y: 5 },
+                road_point: Point { x: 8, y: 6 },
                 preferred_heading: None,
             }),
         };
         snapshot.transit.stops = vec![stop_a, stop_b];
+
+        // Assert the resolved access state before ticking, so the premise is
+        // explicit and not silently dependent on the scenario map defaults.
+        assert!(stop_access(&snapshot, "stop-001").is_none());
+        assert!(stop_access(&snapshot, "stop-002").is_some());
 
         let leg = RouteLegPath {
             from_waypoint_id: "stop-001".to_string(),
