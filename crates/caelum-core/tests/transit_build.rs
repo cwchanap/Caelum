@@ -409,6 +409,65 @@ fn bus_terminal_restore_with_new_rotation_derives_fresh_access() {
 }
 
 #[test]
+fn bus_terminal_access_re_derived_when_replacement_road_touches_non_origin_footprint_edge() {
+    // Regression for the stops_access_affected shortcut: a bus terminal's
+    // road access is derived from any road tile adjacent to *any* footprint
+    // cell, not only the terminal origin. After the access road is
+    // demolished (road_access -> None), a replacement road laid beside a
+    // non-origin footprint cell must still trigger normalisation so the
+    // authoritative road_access field is persisted to the new tile.
+    let mut engine = GameEngine::new();
+    // Initial access road south of the terminal footprint, adjacent to the
+    // non-origin cells (3,5) and (4,5).
+    road_line(&mut engine, 6, 3, 4);
+
+    let placed = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: point(2, 4),
+        rotation: 0,
+    });
+    assert!(placed.applied, "{placed:?}");
+    let terminal = &placed.snapshot.transit.stops[0];
+    assert_eq!(terminal.position, point(2, 4));
+    let original_road_point = terminal.road_access.unwrap().road_point;
+    assert_eq!(original_road_point, point(3, 6));
+
+    // Demolish the access road. Normalisation must clear road_access.
+    engine.dispatch(GameIntent::RemoveAtTile { point: point(3, 6) });
+    engine.dispatch(GameIntent::RemoveAtTile { point: point(4, 6) });
+    let after_demolish = engine.snapshot();
+    let terminal = after_demolish
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.position == point(2, 4))
+        .expect("terminal still present");
+    assert!(
+        terminal.road_access.is_none(),
+        "road_access should be cleared after demolishing the access road, got {:?}",
+        terminal.road_access
+    );
+
+    // Lay a replacement road east of the footprint, adjacent to (4,4) — a
+    // non-origin cell whose neighbourhood the old origin-only shortcut did
+    // not inspect. The segment (5,4)-(6,4) gives (5,4) a reciprocal
+    // connection so it qualifies as a usable road.
+    road_line(&mut engine, 4, 5, 6);
+
+    let after_repair = engine.snapshot();
+    let terminal = after_repair
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.position == point(2, 4))
+        .expect("terminal still present");
+    let access = terminal
+        .road_access
+        .expect("road_access should be re-derived to the replacement road tile");
+    assert_eq!(access.road_point, point(5, 4));
+}
+
+#[test]
 fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 5, 2, 10);
