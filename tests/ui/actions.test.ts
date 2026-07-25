@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, Point } from "../../src/domain/types";
+import type {
+  GameplayRejection,
+  GameState,
+  Point,
+} from "../../src/domain/types";
 import {
   applyUiTileClick,
   cancelDraftRoute,
@@ -243,6 +247,79 @@ describe("applyUiTileClick route drafts", () => {
 
     expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001", "stop-002"]);
     expect(result.ui.routeDraft?.selectedIndex).toBe(1);
+  });
+
+  it("preserves preview and host errors on a generation-stable selection click", () => {
+    const { state, ui } = busDraftState();
+    // Build a draft with two waypoints, then click a duplicate to trigger a
+    // selection-only (generation-stable) update.
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const previewError: GameplayRejection = {
+      code: "disconnectedLeg",
+      context: { affectedRouteIds: [] },
+    };
+    const uiWithErrors: UiState = {
+      ...result.ui,
+      routePreviewError: previewError,
+      routePreviewHostError: "backend unreachable",
+    };
+
+    // Clicking stop-001 (not the last waypoint) in append mode selects it
+    // without bumping generation (append + existing waypoint → selectWaypoint).
+    result = applyUiTileClick(state, uiWithErrors, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.selectedIndex).toBe(0);
+    expect(result.ui.routeDraft?.generation).toBe(
+      uiWithErrors.routeDraft!.generation,
+    );
+    expect(result.ui.routePreviewError).toBe(previewError);
+    expect(result.ui.routePreviewHostError).toBe("backend unreachable");
+  });
+
+  it("clears a stale invalidRouteDraftInteraction error on a successful selection click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    result = applyUiTileClick(state, result.ui, { x: 15, y: 8 });
+    const uiWithInteractionError: UiState = {
+      ...result.ui,
+      routePreviewError: {
+        code: "invalidRouteDraftInteraction",
+        context: { operation: "selectWaypoint", waypointIndex: 99 },
+      },
+    };
+
+    // Clicking stop-001 (not the last waypoint) selects it (generation-stable)
+    // and resolves the stale interaction error.
+    result = applyUiTileClick(state, uiWithInteractionError, { x: 7, y: 8 });
+
+    expect(result.ui.routeDraft?.selectedIndex).toBe(0);
+    expect(result.ui.routePreviewError).toBeNull();
+  });
+
+  it("replaces the preview error with a new interaction rejection on an incompatible node click", () => {
+    const { state, ui } = busDraftState();
+    let result = applyUiTileClick(state, ui, { x: 7, y: 8 });
+    // Place a metro station on a tile with no bus stop so the resolver falls
+    // back to the station (mode-incompatible for a bus route draft).
+    const stateWithStation = addTestMetroStation(state, { x: 12, y: 8 });
+    const uiWithPreviewError: UiState = {
+      ...result.ui,
+      routePreviewError: {
+        code: "disconnectedLeg",
+        context: { affectedRouteIds: [] },
+      },
+    };
+
+    // In bus mode, preferredKind is "stop"; with no stop at this tile the
+    // resolver falls back to the station, which is mode-incompatible. The
+    // draft is unchanged (generation-stable) but a new rejection is produced.
+    result = applyUiTileClick(stateWithStation, uiWithPreviewError, {
+      x: 12,
+      y: 8,
+    });
+
+    expect(result.ui.routePreviewError?.code).toBe("incompatibleRouteNode");
   });
 
   it("propagates a duplicate insertion notice through the UI state", () => {

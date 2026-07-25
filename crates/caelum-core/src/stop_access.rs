@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::road::reciprocal_connection;
 use crate::road_topology::{is_road, lane_accepts};
+use crate::service_itinerary::service_visits;
 use crate::transit_nodes::is_present_node;
 use std::collections::HashMap;
 
@@ -199,30 +200,38 @@ fn rebase_parked_bus_positions(
                 return None;
             }
             let parked_position = vehicle.parked_position.as_ref()?;
+            // Rebase parked vehicles regardless of the route's active flag: a
+            // paused route's buses are still parked at a stop whose road access
+            // can change via a later road mutation. The active flag controls
+            // whether they resume service, not whether their parked position
+            // tracks the current access tile.
             let route = snapshot
                 .transit
                 .routes
                 .iter()
-                .find(|route| route.id == vehicle.line_id && route.active)?;
-            let road_point = route.stop_ids.iter().find_map(|stop_id| {
-                let stop = snapshot
-                    .transit
-                    .stops
-                    .iter()
-                    .find(|stop| stop.id == *stop_id && is_present_node(stop.status))?;
-                let access = stop_access(snapshot, &stop.id)?;
-                let passenger_position: TripPosition = stop.position.into();
-                let road_position: TripPosition = access.road_point.into();
-                let old_road_position = old_road_points
-                    .get(&stop.id)
-                    .map(|point| TripPosition::from(*point));
-                let matches_current =
-                    parked_position == &passenger_position || parked_position == &road_position;
-                let matches_old = old_road_position
-                    .as_ref()
-                    .is_some_and(|old| parked_position == old);
-                (matches_current || matches_old).then_some(access.road_point)
-            })?;
+                .find(|route| route.id == vehicle.line_id)?;
+            // Identify the vehicle's associated stop via its itinerary first,
+            // falling back to coordinate matching. Two stops can legally share
+            // a road-access tile (e.g. opposite sides of a road); a pure
+            // coordinate scan would let the first matching stop capture a bus
+            // actually parked for the other. The itinerary index reliably
+            // points to the service visit the vehicle was parked at (set by
+            // break_service / restore_service / rebase_parked_vehicles).
+            let visits = service_visits(&route.stop_ids, &route.legs);
+            let itinerary_stop_id = visits
+                .iter()
+                .find(|visit| visit.departing_itinerary_index == vehicle.itinerary_index)
+                .map(|visit| visit.waypoint_id.clone());
+            let road_point = itinerary_stop_id
+                .as_deref()
+                .and_then(|stop_id| {
+                    match_stop_access(snapshot, stop_id, parked_position, old_road_points)
+                })
+                .or_else(|| {
+                    route.stop_ids.iter().find_map(|stop_id| {
+                        match_stop_access(snapshot, stop_id, parked_position, old_road_points)
+                    })
+                })?;
             Some((vehicle_index, road_point))
         })
         .collect();
@@ -230,6 +239,34 @@ fn rebase_parked_bus_positions(
     for (vehicle_index, road_point) in repairs {
         snapshot.transit.vehicles[vehicle_index].parked_position = Some(road_point.into());
     }
+}
+
+/// Check whether a stop's current or previous road access matches the vehicle's
+/// `parked_position`; if so, return the current access road point so the
+/// vehicle can be rebased to it.
+fn match_stop_access(
+    snapshot: &GameSnapshot,
+    stop_id: &str,
+    parked_position: &TripPosition,
+    old_road_points: &HashMap<String, Point>,
+) -> Option<Point> {
+    let stop = snapshot
+        .transit
+        .stops
+        .iter()
+        .find(|stop| stop.id == stop_id && is_present_node(stop.status))?;
+    let access = stop_access(snapshot, &stop.id)?;
+    let passenger_position: TripPosition = stop.position.into();
+    let road_position: TripPosition = access.road_point.into();
+    let old_road_position = old_road_points
+        .get(&stop.id)
+        .map(|point| TripPosition::from(*point));
+    let matches_current =
+        parked_position == &passenger_position || parked_position == &road_position;
+    let matches_old = old_road_position
+        .as_ref()
+        .is_some_and(|old| parked_position == old);
+    (matches_current || matches_old).then_some(access.road_point)
 }
 
 fn access_for_road_point(map: &GameMap, road_point: Point) -> Option<StopRoadAccess> {
@@ -314,10 +351,39 @@ mod tests {
     use super::*;
     use crate::intent::RoadPreset;
     use crate::model::{
-        ActiveTrip, RouteLeg, RoutePlan, TransitMode, TripPurpose, TripStatus, Vehicle,
+        ActiveTrip, MovementKind, PathGeometry, RoadPathStep, Route, RouteLeg, RouteLegKind,
+        RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode,
+        TransitPath, TripPurpose, TripStatus, Vehicle,
     };
     use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
+
+    fn service_leg(from: &str, to: &str) -> RouteLegPath {
+        RouteLegPath {
+            from_waypoint_id: from.to_string(),
+            to_waypoint_id: to.to_string(),
+            direction: ServiceDirection::Loop,
+            kind: RouteLegKind::Service,
+            status: RouteLegStatus::Connected,
+            current_path: Some(TransitPath::Road {
+                steps: vec![RoadPathStep {
+                    position: Point { x: 4, y: 5 },
+                    entering_heading: Heading::East,
+                    leaving_heading: Heading::East,
+                    movement: MovementKind::Straight,
+                    geometry: PathGeometry::Line {
+                        from: TripPosition::from(Point { x: 4, y: 5 }),
+                        to: TripPosition::from(Point { x: 8, y: 5 }),
+                    },
+                    travel_seconds: 4.0,
+                }],
+                total_travel_seconds: 4.0,
+            }),
+            last_valid_path: None,
+            estimated_seconds: Some(4.0),
+            failure_reason: None,
+        }
+    }
 
     fn road_at_y5() -> GameSnapshot {
         let snapshot = create_initial_snapshot();
@@ -542,5 +608,199 @@ mod tests {
 
         assert_eq!(snapshot.active_trips[1].position, new_a.into());
         assert!(snapshot.active_trips[1].route_plan.is_none());
+    }
+
+    /// Item 2 regression: a paused (inactive) route's parked bus must still be
+    /// rebased when a road mutation changes its stop's road access. The active
+    /// flag controls whether the vehicle resumes service, not whether its parked
+    /// position tracks the current access tile.
+    #[test]
+    fn rebase_parked_bus_positions_rebases_inactive_route_vehicle() {
+        let mut snapshot = create_initial_snapshot();
+        snapshot = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: (2..=10).map(|x| Point { x, y: 5 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+        // Lay an alternate road at y=3 so the stop's access can migrate north.
+        snapshot = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: (2..=10).map(|x| Point { x, y: 3 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+
+        let stop_a = Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 4, y: 4 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 4, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        let stop_b = Stop {
+            id: "stop-002".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 8, y: 4 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 8, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        snapshot.transit.stops = vec![stop_a, stop_b];
+
+        let route = Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: false, // paused
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![
+                service_leg("stop-001", "stop-002"),
+                service_leg("stop-002", "stop-001"),
+            ],
+            path_broken: false,
+        };
+        snapshot.transit.routes = vec![route];
+        snapshot.transit.vehicles = vec![Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: Some(Point { x: 4, y: 5 }.into()),
+        }];
+
+        // Remove the road at (4,5) so stop-001's stored access becomes invalid
+        // and `stop_access` re-derives to (4,3).
+        let tile = snapshot
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("road tile exists");
+        tile.kind = "empty".to_string();
+        tile.road_connections.clear();
+        tile.one_way = None;
+
+        let mut old_road_points = HashMap::new();
+        old_road_points.insert("stop-001".to_string(), Point { x: 4, y: 5 });
+        rebase_parked_bus_positions(&mut snapshot, &old_road_points);
+
+        assert_eq!(
+            snapshot.transit.vehicles[0].parked_position,
+            Some(Point { x: 4, y: 3 }.into()),
+        );
+    }
+
+    /// Item 3 regression: when two stops share a road-access tile, the vehicle's
+    /// itinerary index must identify its associated stop so the first coordinate
+    /// match doesn't capture a bus parked for the other stop.
+    #[test]
+    fn rebase_parked_bus_positions_disambiguates_shared_access_via_itinerary() {
+        let mut snapshot = create_initial_snapshot();
+        for y in [3, 5, 7] {
+            snapshot = apply_road_mutation(
+                &snapshot,
+                &RoadMutation::LayRoadLine {
+                    points: (2..=10).map(|x| Point { x, y }).collect(),
+                    preset: RoadPreset::TwoWay,
+                },
+            )
+            .expect("fixture road should apply")
+            .snapshot;
+        }
+
+        // Two stops on opposite sides of the road at y=5, both accessing (4,5).
+        let stop_a = Stop {
+            id: "stop-A".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 4, y: 4 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 4, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        let stop_b = Stop {
+            id: "stop-B".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 4, y: 6 },
+            platforms: Vec::new(),
+            road_access: Some(StopRoadAccess {
+                road_point: Point { x: 4, y: 5 },
+                preferred_heading: None,
+            }),
+        };
+        snapshot.transit.stops = vec![stop_a, stop_b];
+
+        let route = Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-A".to_string(), "stop-B".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![
+                service_leg("stop-A", "stop-B"),
+                service_leg("stop-B", "stop-A"),
+            ],
+            path_broken: false,
+        };
+        snapshot.transit.routes = vec![route];
+        // Vehicle parked at the shared tile (4,5) for stop-B (itinerary_index=1).
+        snapshot.transit.vehicles = vec![Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 1,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: Some(Point { x: 4, y: 5 }.into()),
+        }];
+
+        // Remove the shared road at (4,5) so each stop re-derives to a
+        // different tile: stop-A → (4,3) [north], stop-B → (4,7) [south].
+        let tile = snapshot
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("road tile exists");
+        tile.kind = "empty".to_string();
+        tile.road_connections.clear();
+        tile.one_way = None;
+
+        let mut old_road_points = HashMap::new();
+        old_road_points.insert("stop-A".to_string(), Point { x: 4, y: 5 });
+        old_road_points.insert("stop-B".to_string(), Point { x: 4, y: 5 });
+        rebase_parked_bus_positions(&mut snapshot, &old_road_points);
+
+        // The bus was parked for stop-B, so it must be rebased to stop-B's new
+        // access (4,7), not stop-A's (4,3).
+        assert_eq!(
+            snapshot.transit.vehicles[0].parked_position,
+            Some(Point { x: 4, y: 7 }.into()),
+        );
     }
 }
