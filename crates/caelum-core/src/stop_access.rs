@@ -119,19 +119,22 @@ struct StopMove {
 /// the O(stops × footprint) normalization + rebase pass on map edits that
 /// don't touch any stop's neighbourhood.
 ///
-/// This checks three things per present stop:
+/// This checks two things per present stop:
 /// 1. The tile at the stop's `road_access.road_point` (if any) — if it changed,
 ///    the existing access may be invalid and need re-derivation.
-/// 2. The tile at the stop's `position` — if it changed, the legacy on-road
-///    detection (`tile.kind == "road"`) may flip.
-/// 3. The four tiles adjacent to the stop's position — if any changed, the
-///    legacy migration's free-anchor search or simple bus-stop access
-///    derivation may produce a different result.
+/// 2. The tile at every footprint cell and its four neighbours — if any
+///    changed, the legacy on-road detection (`tile.kind == "road"` at the
+///    stop origin), the legacy migration's free-anchor search, or the
+///    footprint-wide `derive_stop_access_for_footprint` scan may produce a
+///    different result.
 ///
-/// Bus terminals (multi-tile footprints) are not affected by the legacy
-/// migration (it only applies to `BusStopKind::BusStop`), and their
-/// `road_access` is set at placement time and only re-derived when the
-/// road_point tile itself changes — covered by check #1.
+/// The footprint scan is required for bus terminals: their road access is
+/// derived from any road tile adjacent to *any* occupied footprint cell, not
+/// only the terminal origin. When a terminal's `road_access` is already
+/// `None` (e.g. after its access road was demolished), check #1 is vacuous,
+/// and a replacement road laid beside a non-origin footprint cell would be
+/// missed by an origin-only neighbourhood scan — leaving the authoritative
+/// `road_access` field stale until a later full normalisation or reload.
 pub(crate) fn stops_access_affected(previous_map: &GameMap, candidate: &GameSnapshot) -> bool {
     for stop in &candidate.transit.stops {
         if !is_present_node(stop.status) {
@@ -142,13 +145,16 @@ pub(crate) fn stops_access_affected(previous_map: &GameMap, candidate: &GameSnap
                 return true;
             }
         }
-        if previous_map.tile(stop.position) != candidate.map.tile(stop.position) {
-            return true;
-        }
-        for heading in canonical_headings() {
-            if let Some(adjacent) = checked_offset(stop.position, heading) {
-                if previous_map.tile(adjacent) != candidate.map.tile(adjacent) {
-                    return true;
+        let footprint = stop_footprint(candidate, stop);
+        for footprint_tile in &footprint {
+            if previous_map.tile(*footprint_tile) != candidate.map.tile(*footprint_tile) {
+                return true;
+            }
+            for heading in canonical_headings() {
+                if let Some(adjacent) = checked_offset(*footprint_tile, heading) {
+                    if previous_map.tile(adjacent) != candidate.map.tile(adjacent) {
+                        return true;
+                    }
                 }
             }
         }
