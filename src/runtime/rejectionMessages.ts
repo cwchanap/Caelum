@@ -95,7 +95,7 @@ export function routeFailureGuidance(
     return "No legal U-turn here; add a junction or roundabout.";
   }
   if (reason === "networkDisconnected" && context.isLoopClosing) {
-    return "Loop can't close here; switch to Shuttle or repair the road.";
+    return "Loop can't close here; remove a stop or switch to Shuttle.";
   }
   if (
     reason === "networkDisconnected" &&
@@ -104,7 +104,7 @@ export function routeFailureGuidance(
     return "No turnaround path here; add a junction or roundabout nearby.";
   }
   if (reason === "noRoadAccess") {
-    return "Stop has no usable adjacent road.";
+    return "Stop has no adjacent road.";
   }
   if (reason === "noLegalEntryHeading" || reason === "noLegalExitHeading") {
     return "Road direction doesn't allow serving this stop here.";
@@ -112,7 +112,7 @@ export function routeFailureGuidance(
   if (reason === "missingNode") {
     return "Restore the missing node at its former location.";
   }
-  return "Repair the road connection between these stops.";
+  return "Roads not connected between these stops.";
 }
 
 export function warningMessage(warning: GameplayWarning): string {

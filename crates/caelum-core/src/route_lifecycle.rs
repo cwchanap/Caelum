@@ -8,7 +8,7 @@ use crate::model::{
 };
 use crate::network::resolve_route_legs;
 use crate::service_itinerary::{service_visits, ServiceVisit};
-use crate::stop_access::stop_access;
+use crate::stop_access::resolve_stop_access;
 use crate::transit::invalidate_trips_for_line;
 use crate::transit_nodes::is_present_node;
 
@@ -647,7 +647,7 @@ fn present_node_world(
             .iter()
             .find(|stop| stop.id == node_id && is_present_node(stop.status))
             .and_then(|stop| {
-                stop_access(snapshot, &stop.id).map(|access| access.road_point.into())
+                resolve_stop_access(snapshot, &stop.id).map(|access| access.road_point.into())
             });
     }
     snapshot

@@ -54,6 +54,10 @@ export async function createWasmBackend(): Promise<GameBackend> {
     async snapshot() {
       return engine.snapshot() as RustGameSnapshot;
     },
+    // No production caller yet — save/load UI is deferred (see plan
+    // 2026-07-22-route-editing-frontend.md). Exercised by backendContract,
+    // wasmArtifact.smoke, and wasmBackend tests so the migration path through
+    // stop_access::normalize_snapshot_stops stays covered.
     async loadSnapshot(snapshot: RustGameSnapshot) {
       engine = WasmGameEngine.from_snapshot(snapshot);
       return engine.snapshot() as RustGameSnapshot;

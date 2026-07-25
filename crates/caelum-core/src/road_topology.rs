@@ -59,6 +59,8 @@ impl RoadTopology {
     }
 
     #[doc(hidden)]
+    #[deprecated(note = "use find_path_between_access_tiles for route finding; \
+                         find_path is only retained for topology test fixtures")]
     pub fn find_path(&self, map: &GameMap, from: &Point, to: &Point) -> Option<TransitPath> {
         deterministic_dijkstra(self, map, from, to)
     }

@@ -582,8 +582,15 @@ impl GameEngine {
         };
         let map_changed = self.snapshot.map != network_candidate.snapshot.map;
         if map_changed {
-            network_candidate.snapshot =
-                stop_access::normalize_snapshot_stops(network_candidate.snapshot);
+            // Short-circuit: skip the O(stops × footprint) normalization +
+            // rebase pass when no present stop's road-access neighbourhood
+            // changed between the old and new maps (e.g. a road edit far
+            // from any stop). Mirrors the `changed_accesses.is_empty()` gate
+            // in route_lifecycle::rebase_parked_bus_access_to_live_stop.
+            if stop_access::stops_access_affected(&self.snapshot.map, &network_candidate.snapshot) {
+                network_candidate.snapshot =
+                    stop_access::normalize_snapshot_stops(network_candidate.snapshot);
+            }
         }
         // If the map's road topology inputs are unchanged (e.g. AddBusStop,
         // AddMetroStation, PlaceBuilding — none of which modify map tiles),

@@ -21,6 +21,10 @@ export async function createTauriBackend(): Promise<GameBackend> {
     async snapshot() {
       return invoke<RustGameSnapshot>("game_snapshot");
     },
+    // No production caller yet — save/load UI is deferred (see plan
+    // 2026-07-22-route-editing-frontend.md). Exercised by tauriBackend tests
+    // so the migration path through stop_access::normalize_snapshot_stops
+    // stays covered.
     async loadSnapshot(snapshot: RustGameSnapshot) {
       return invoke<RustGameSnapshot>("game_load_snapshot", { snapshot });
     },

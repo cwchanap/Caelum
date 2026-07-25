@@ -549,7 +549,7 @@ describe("broken route markers", () => {
     });
 
     expect(context.fillText).toHaveBeenCalledWith(
-      "Loop can't close here; switch to Shuttle or repair the road.",
+      "Loop can't close here; remove a stop or switch to Shuttle.",
       expect.any(Number),
       expect.any(Number),
     );
