@@ -17,6 +17,7 @@ import {
   canSaveRouteDraft,
   createDraft,
   editDraft,
+  isTransientRouteClickError,
   moveWaypoint,
   removeWaypoint,
   reverseRoute,
@@ -498,10 +499,10 @@ export async function createGameRuntime({
         }
       : ui.routeDraftHistory;
     // Generation-stable updates preserve host/preview rejections; only clear
-    // local interaction errors that a successful selection resolves.
+    // local transient click errors that a successful selection resolves.
     const routePreviewError = previewRelevantChanged
       ? null
-      : ui.routePreviewError?.code === "invalidRouteDraftInteraction"
+      : isTransientRouteClickError(ui.routePreviewError)
         ? null
         : ui.routePreviewError;
     const routePreviewHostError = previewRelevantChanged

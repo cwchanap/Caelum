@@ -131,9 +131,22 @@ pub(crate) fn normalize_snapshot_stops(mut snapshot: GameSnapshot) -> GameSnapsh
         .iter()
         .filter(|stop| is_present_node(stop.status))
         .filter_map(|stop| {
-            stop.road_access
-                .as_ref()
-                .map(|access| (stop.id.clone(), access.road_point))
+            if let Some(access) = stop.road_access.as_ref() {
+                return Some((stop.id.clone(), access.road_point));
+            }
+            // Legacy on-road stops have no `road_access`, but their position
+            // IS the road point. Record it so `rebase_parked_bus_positions`
+            // can identify buses parked at the original on-road coordinate
+            // after the stop migrates to a roadside anchor.
+            if stop.kind == BusStopKind::BusStop
+                && snapshot
+                    .map
+                    .tile(stop.position)
+                    .is_some_and(|tile| tile.kind == "road")
+            {
+                return Some((stop.id.clone(), stop.position));
+            }
+            None
         })
         .collect();
 
@@ -306,9 +319,22 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
     for movement in moves {
         debug_assert!(!movement.stop_id.is_empty());
         debug_assert_eq!(movement.road_point, movement.old_position);
+        // Collect route IDs that serve the moved stop so the position update
+        // can be gated on the trip actually waiting for a bus at this stop.
+        // A co-located metro station (or a second bus stop at the same
+        // coordinate) must not capture a passenger waiting for a different
+        // service — merely sharing a coordinate is insufficient.
+        let routes_serving_stop: Vec<String> = snapshot
+            .transit
+            .routes
+            .iter()
+            .filter(|route| route.stop_ids.contains(&movement.stop_id))
+            .map(|route| route.id.clone())
+            .collect();
         for trip in &mut snapshot.active_trips {
             if trip.status == crate::model::TripStatus::Waiting
                 && trip.position == movement.old_position.into()
+                && trip_waits_for_bus_at_stop(trip, movement.old_position, &routes_serving_stop)
             {
                 trip.position = movement.new_position.into();
             }
@@ -344,6 +370,33 @@ fn rebase_active_trips(snapshot: &mut GameSnapshot, moves: &[StopMove]) {
             }
         }
     }
+}
+
+/// Whether a waiting trip's current leg is a bus leg boarding at
+/// `stop_position` on a route that serves the moved stop. This prevents
+/// co-located nodes (e.g. a metro station sharing a bus stop's coordinate)
+/// from capturing passengers waiting for a different service.
+fn trip_waits_for_bus_at_stop(
+    trip: &crate::model::ActiveTrip,
+    stop_position: Point,
+    routes_serving_stop: &[String],
+) -> bool {
+    let Some(plan) = trip.route_plan.as_ref() else {
+        return false;
+    };
+    let Some(leg) = plan.legs.get(trip.current_leg_index) else {
+        return false;
+    };
+    if leg.mode != TransitMode::Bus {
+        return false;
+    }
+    if leg.from != stop_position {
+        return false;
+    }
+    let Some(line_id) = leg.line_id.as_ref() else {
+        return false;
+    };
+    routes_serving_stop.contains(line_id)
 }
 
 #[cfg(test)]
@@ -530,6 +583,21 @@ mod tests {
         let old_b = Point { x: 8, y: 5 };
         let new_b = Point { x: 8, y: 4 };
 
+        // A route serving both stops must exist so the position update can
+        // verify the trip is waiting for a bus at the moved stop.
+        snapshot.transit.routes = vec![Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+            vehicle_ids: Vec::new(),
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: Vec::new(),
+            path_broken: false,
+        }];
+
         let riding_trip = ActiveTrip {
             id: "trip-001".to_string(),
             sim_id: "sim-001".to_string(),
@@ -606,8 +674,104 @@ mod tests {
         assert_eq!(plan.legs[0].to, new_b);
         assert_eq!(plan.legs[1].from, new_b);
 
-        assert_eq!(snapshot.active_trips[1].position, new_a.into());
+        // The planless trip shares a coordinate with the moved stop but is
+        // not waiting for a bus service, so it must NOT be moved.
+        assert_eq!(snapshot.active_trips[1].position, old_a.into());
         assert!(snapshot.active_trips[1].route_plan.is_none());
+    }
+
+    /// Item 3 regression: a metro passenger waiting at a co-located metro
+    /// station must not be moved when a legacy bus stop at the same
+    /// coordinate migrates to a roadside anchor. The position update is
+    /// gated on the trip's current leg being a bus leg serving the moved
+    /// stop, not merely sharing a coordinate.
+    #[test]
+    fn rebase_active_trips_does_not_move_colocated_metro_passenger() {
+        let mut snapshot = create_initial_snapshot();
+        let shared = Point { x: 4, y: 5 };
+        let new_bus_stop = Point { x: 4, y: 4 };
+
+        // Bus route serving the legacy bus stop at the shared coordinate.
+        snapshot.transit.routes = vec![Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string()],
+            vehicle_ids: Vec::new(),
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: Vec::new(),
+            path_broken: false,
+        }];
+
+        // A metro passenger waiting at the shared coordinate. Their current
+        // leg is a Metro leg, not a Bus leg.
+        let metro_passenger = ActiveTrip {
+            id: "trip-metro".to_string(),
+            sim_id: "sim-metro".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: shared,
+            destination: Point { x: 8, y: 8 },
+            position: shared.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Metro,
+                    from: shared,
+                    to: Point { x: 8, y: 5 },
+                    line_id: Some("metro-line-001".to_string()),
+                    service_direction: None,
+                    board_itinerary_index: None,
+                    alight_itinerary_index: None,
+                }],
+                estimated_seconds: 100.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        // A bus passenger waiting at the same coordinate for the bus route.
+        let bus_passenger = ActiveTrip {
+            id: "trip-bus".to_string(),
+            sim_id: "sim-bus".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: shared,
+            destination: Point { x: 8, y: 8 },
+            position: shared.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: shared,
+                    to: Point { x: 8, y: 5 },
+                    line_id: Some("route-001".to_string()),
+                    service_direction: None,
+                    board_itinerary_index: None,
+                    alight_itinerary_index: None,
+                }],
+                estimated_seconds: 100.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        };
+        snapshot.active_trips = vec![metro_passenger, bus_passenger];
+
+        let moves = vec![StopMove {
+            stop_id: "stop-001".to_string(),
+            old_position: shared,
+            new_position: new_bus_stop,
+            road_point: shared,
+        }];
+        rebase_active_trips(&mut snapshot, &moves);
+
+        // The metro passenger stays at the shared coordinate — their metro
+        // route plan and platform location are unchanged.
+        assert_eq!(snapshot.active_trips[0].position, shared.into());
+
+        // The bus passenger is moved to the new bus stop anchor.
+        assert_eq!(snapshot.active_trips[1].position, new_bus_stop.into());
     }
 
     /// Item 2 regression: a paused (inactive) route's parked bus must still be
@@ -801,6 +965,89 @@ mod tests {
         assert_eq!(
             snapshot.transit.vehicles[0].parked_position,
             Some(Point { x: 4, y: 7 }.into()),
+        );
+    }
+
+    /// Item 2 regression: a legacy on-road stop with no `road_access` whose
+    /// original road tile is unusable must still record its position as the
+    /// previous road point so a bus parked at that coordinate is rebased to
+    /// the stop's newly derived road access.
+    #[test]
+    fn normalize_rebases_parked_bus_from_legacy_on_road_position_without_access() {
+        let mut snapshot = create_initial_snapshot();
+        // Alternate road at y=3 so the stop's access can migrate north.
+        snapshot = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: (2..=10).map(|x| Point { x, y: 3 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+
+        // Legacy on-road stop at (4,5) with no road_access. The tile at
+        // (4,5) is marked as "road" but has no connections (and no
+        // neighbouring road tiles), making it unusable for access.
+        let isolated = snapshot
+            .map
+            .tile_mut(Point { x: 4, y: 5 })
+            .expect("tile exists");
+        isolated.kind = "road".to_string();
+        isolated.road_connections.clear();
+
+        snapshot.transit.stops.push(Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: crate::model::TransitNodeStatus::Present,
+            position: Point { x: 4, y: 5 },
+            platforms: Vec::new(),
+            road_access: None,
+        });
+
+        let route = Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-001".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: vec![],
+            path_broken: false,
+        };
+        snapshot.transit.routes = vec![route];
+        // Bus parked at the legacy on-road stop position (4,5).
+        snapshot.transit.vehicles = vec![Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: Some(Point { x: 4, y: 5 }.into()),
+        }];
+
+        let normalized = normalize_snapshot_stops(snapshot);
+
+        // The stop moved to the roadside anchor (4,4).
+        let stop = &normalized.transit.stops[0];
+        assert_eq!(stop.position, Point { x: 4, y: 4 });
+        assert_eq!(
+            stop.road_access
+                .expect("access derived from alternate road")
+                .road_point,
+            Point { x: 4, y: 3 },
+        );
+
+        // The parked bus was rebased from the obsolete (4,5) to the new
+        // access road point (4,3).
+        assert_eq!(
+            normalized.transit.vehicles[0].parked_position,
+            Some(Point { x: 4, y: 3 }.into()),
         );
     }
 }
