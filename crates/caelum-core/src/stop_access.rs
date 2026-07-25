@@ -254,9 +254,30 @@ fn rebase_parked_bus_positions(
                     match_stop_access(snapshot, stop_id, parked_position, old_road_points)
                 })
                 .or_else(|| {
-                    route.stop_ids.iter().find_map(|stop_id| {
-                        match_stop_access(snapshot, stop_id, parked_position, old_road_points)
-                    })
+                    // Itinerary resolution failed — most commonly because a
+                    // loaded route has empty `legs` (`#[serde(default)]` on
+                    // `Route.legs`), so `service_visits` returned an empty
+                    // vec and `itinerary_stop_id` is `None`. A `find_map`
+                    // would let the first stop whose old or current access
+                    // matches the parked coordinate capture a bus actually
+                    // parked for another co-located stop — the parked-vehicle
+                    // analogue of the null-itinerary passenger ambiguity
+                    // handled in `rebase_active_trips`. Collect every match
+                    // and only rebase when exactly one stop qualifies;
+                    // multiple matches preserve the parked coordinate rather
+                    // than guessing, and no matches leave it unchanged.
+                    let matches: Vec<Point> = route
+                        .stop_ids
+                        .iter()
+                        .filter_map(|stop_id| {
+                            match_stop_access(snapshot, stop_id, parked_position, old_road_points)
+                        })
+                        .collect();
+                    if matches.len() == 1 {
+                        matches.into_iter().next()
+                    } else {
+                        None
+                    }
                 })?;
             Some((vehicle_index, road_point))
         })
@@ -1292,6 +1313,171 @@ mod tests {
             .expect("trip keeps its route plan");
         assert_eq!(plan.legs[0].from, shared, "leg from not rewritten");
         assert_eq!(plan.legs[0].to, shared, "leg to not rewritten");
+    }
+
+    /// P2 end-to-end regression: the parked-vehicle analogue of the
+    /// null-itinerary passenger ambiguity. `Route.legs` has `#[serde(default)]`,
+    /// so a loaded route can have no saved legs when stop normalisation runs.
+    /// `service_visits` then returns an empty vec, `itinerary_stop_id` is
+    /// `None`, and `rebase_parked_bus_positions` falls back to scanning
+    /// `route.stop_ids`. When two co-located legacy stops share the same old
+    /// road coordinate and that road is unusable (so each stop re-derives to a
+    /// DIFFERENT replacement access tile), both stops match the parked
+    /// coordinate via `old_road_points`. A `find_map` fallback would move the
+    /// bus to whichever stop appears first in `route.stop_ids` — guessing. The
+    /// fallback must instead collect every match and only rebase when exactly
+    /// one stop qualifies; multiple matches preserve the parked coordinate.
+    #[test]
+    fn normalize_snapshot_stops_preserves_parked_bus_when_itinerary_empty_and_stops_colocated() {
+        let mut snapshot = create_initial_snapshot();
+        // Roads at y=3 and y=7 (full span) provide divergent access tiles for
+        // the two co-located stops. The y=5 road is laid with a GAP at x=4 so
+        // the neighbours (3,5) and (5,5) have no reciprocal connection toward
+        // (4,5); we then stamp (4,5) as an isolated road tile below. This
+        // makes `usable_road((4,5))` false (no neighbour points back), so
+        // `access_for_road_point` returns None and the stops re-derive access
+        // from their migrated anchors. The road tiles at (3,5) and (5,5) also
+        // block the East/West neighbours, forcing the two co-located legacy
+        // stops to migrate to distinct anchors: stop-A → (4,4) → access
+        // (4,3); stop-B → (4,6) → access (4,7).
+        for y in [3, 7] {
+            snapshot = apply_road_mutation(
+                &snapshot,
+                &RoadMutation::LayRoadLine {
+                    points: (2..=10).map(|x| Point { x, y }).collect(),
+                    preset: RoadPreset::TwoWay,
+                },
+            )
+            .expect("fixture road should apply")
+            .snapshot;
+        }
+        snapshot = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: vec![Point { x: 2, y: 5 }, Point { x: 3, y: 5 }],
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+        snapshot = apply_road_mutation(
+            &snapshot,
+            &RoadMutation::LayRoadLine {
+                points: (5..=10).map(|x| Point { x, y: 5 }).collect(),
+                preset: RoadPreset::TwoWay,
+            },
+        )
+        .expect("fixture road should apply")
+        .snapshot;
+        // Clear buildings so the only obstacles to free roadside anchors are
+        // the road itself and the other co-located stop.
+        snapshot.buildings = Vec::new();
+        let shared = Point { x: 4, y: 5 };
+
+        // Stamp (4,5) as an isolated road tile (no connections, no neighbours
+        // pointing back) so both stops are legacy on-road but the tile is
+        // unusable for access — forcing divergence.
+        let isolated = snapshot.map.tile_mut(shared).expect("tile exists");
+        isolated.kind = "road".to_string();
+        isolated.road_connections.clear();
+        isolated.one_way = None;
+        snapshot.transit.stops = vec![
+            Stop {
+                id: "stop-A".to_string(),
+                kind: BusStopKind::BusStop,
+                status: crate::model::TransitNodeStatus::Present,
+                position: shared,
+                platforms: Vec::new(),
+                road_access: None,
+            },
+            Stop {
+                id: "stop-B".to_string(),
+                kind: BusStopKind::BusStop,
+                status: crate::model::TransitNodeStatus::Present,
+                position: shared,
+                platforms: Vec::new(),
+                road_access: None,
+            },
+        ];
+        // Empty `legs` — the loaded-snapshot shape that defeats itinerary
+        // resolution in `rebase_parked_bus_positions`.
+        snapshot.transit.routes = vec![Route {
+            id: "route-001".to_string(),
+            name: "R1".to_string(),
+            color: "#f00".to_string(),
+            stop_ids: vec!["stop-A".to_string(), "stop-B".to_string()],
+            vehicle_ids: vec!["vehicle-001".to_string()],
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: Vec::new(),
+            path_broken: false,
+        }];
+        // Bus parked at the shared old road coordinate.
+        snapshot.transit.vehicles = vec![Vehicle {
+            id: "vehicle-001".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index: 0,
+            path_step_index: 0,
+            step_progress: 0.0,
+            parked_position: Some(shared.into()),
+        }];
+
+        let normalized = normalize_snapshot_stops(snapshot);
+
+        // Both legacy stops migrated to distinct roadside anchors with
+        // divergent access tiles — confirming both stops match the parked
+        // coordinate via `old_road_points`, so the ambiguity path is
+        // exercised.
+        let stop_a = normalized
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == "stop-A")
+            .expect("stop-A present");
+        let stop_b = normalized
+            .transit
+            .stops
+            .iter()
+            .find(|stop| stop.id == "stop-B")
+            .expect("stop-B present");
+        assert_eq!(
+            stop_a.position,
+            Point { x: 4, y: 4 },
+            "stop-A migrates north"
+        );
+        assert_eq!(
+            stop_b.position,
+            Point { x: 4, y: 6 },
+            "stop-B migrates south"
+        );
+        assert_eq!(
+            stop_a
+                .road_access
+                .expect("stop-A access derived")
+                .road_point,
+            Point { x: 4, y: 3 },
+            "stop-A access diverges to y=3 road",
+        );
+        assert_eq!(
+            stop_b
+                .road_access
+                .expect("stop-B access derived")
+                .road_point,
+            Point { x: 4, y: 7 },
+            "stop-B access diverges to y=7 road",
+        );
+
+        // The parked bus stays at the shared coordinate — not captured by
+        // either stop's migration despite both matching via `old_road_points`.
+        assert_eq!(
+            normalized.transit.vehicles[0].parked_position,
+            Some(shared.into()),
+            "parked bus preserved when itinerary is empty and stops are co-located",
+        );
     }
 
     /// Item 2 regression: a paused (inactive) route's parked bus must still be
