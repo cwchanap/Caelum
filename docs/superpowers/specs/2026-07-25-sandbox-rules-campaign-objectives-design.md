@@ -82,14 +82,16 @@ The Rust model uses these concrete types:
 - `EconomyPreset::{Standard, Creative}`
 - `SandboxTemplateId::GrowingSuburb`
 - `MoveInRateSelection::Paused`
-- `DemandMultiplier`, a transparent validated numeric value
+- `DemandMultiplier`, a validated numeric newtype serialized through `f64`
+  conversions
 - `SandboxSettings`
 - `GameRules`
 
 All new enums use `#[serde(rename_all = "camelCase")]`, matching the
 TypeScript wire strings such as `"growingSuburb"`. `DemandMultiplier` uses
-`#[serde(transparent)]`, so it remains a plain number rather than a nested
-object.
+`#[serde(try_from = "f64", into = "f64")]`, so it remains a plain number
+rather than a nested object while its deserializer goes through the validated
+conversion.
 
 `GameRules` is nested instead of flattening three unrelated fields onto the
 already-large snapshot. It also stays separate from `ScenarioConfig`, whose
@@ -114,9 +116,13 @@ the Rust wire strings exactly.
 
 ### 1.3 Demand multiplier validation
 
-`DemandMultiplier` serializes transparently as a JSON/JS number. Its
-constructor and deserializer accept only finite values greater than zero. The
-default is `1.0`.
+`DemandMultiplier` serializes as a JSON/JS number. Implement `TryFrom<f64>` to
+accept only finite values greater than zero, and implement
+`From<DemandMultiplier> for f64` for serialization. The Serde
+`try_from`/`into` attributes use those same conversions, so direct
+construction and deserialization share one validation rule. The default is
+`1.0`. The newtype derives `Clone` and `Copy`, which also satisfies Serde's
+owned `into` conversion without changing the wire shape.
 
 Zero is not a hidden no-demand mode. Population growth is represented by
 `moveInRate`, while demand strength remains a positive multiplier. TypeScript
@@ -186,7 +192,18 @@ same underlying sandbox settings while adding authored objectives:
 
 ### 1.5 Explicit campaign authoring
 
-`scenario.rs` exposes one construction path for authored Growing Suburb
+`scenario.rs` exposes the standard objective values independently from the
+campaign constructor:
+
+```rust
+pub fn growing_suburb_objectives() -> ObjectiveThresholds
+```
+
+The helper constructs thresholds from the existing public objective constants.
+This keeps the constants available for authored defaults without making the
+objective evaluator consult them directly.
+
+The module also exposes one construction path for authored Growing Suburb
 campaigns:
 
 ```rust
@@ -206,6 +223,11 @@ This helper is the shared authoring and test-fixture path for campaigns with
 objectives, not a new player-facing campaign-selection API. A campaign that
 intentionally omits objectives can construct the same campaign rules with
 `ScenarioConfig { objectives: None, ... }`.
+
+Standard campaign fixtures call
+`growing_suburb_campaign(growing_suburb_objectives(), growth_waves)`. Tests
+that intentionally exercise custom thresholds continue to pass those
+thresholds directly.
 
 Retain `growing_suburb_scenario()` and change its meaning to the default
 sandbox scenario: Growing Suburb name, `objectives: None`, and no growth
@@ -249,6 +271,13 @@ content is ignored, including for outcome-history retention. No
 strings, invalid `DemandMultiplier` values, missing required fields, and
 unsupported schema versions still fail at their documented Rust boundaries.
 
+Metrics terminality remains authoritative independently of mode.
+`tick_trips_substepped` checks `metrics.state` before advancing the clock or
+evaluating mode-specific behavior, so an imported schema-v3 sandbox snapshot
+whose metrics are already `won` or `lost` remains frozen. HPA-337 does not
+reopen or recover terminal snapshots; persistence validation and migration
+remain HPA-340 concerns.
+
 ## 2. Schema and Boundary Handling
 
 Increment `SNAPSHOT_SCHEMA_VERSION` from `2` to `3` in Rust and TypeScript.
@@ -257,15 +286,20 @@ Schema-v3 `rules`, `scenario`, `scenario.objectives`, and
 `null`, but it may not be omitted. Remove the current snapshot-level
 `#[serde(default = "default_scenario")]` and scenario-level
 `#[serde(default)]` for `growth_waves`; do not add serde defaults that guess
-the new rules or scenario content for an older payload.
+the new rules or scenario content for an older payload. Delete the
+now-unreferenced private `default_scenario()` helper after removing its only
+Serde attribute caller.
 
 Because Serde normally treats a missing `Option<T>` field as `None`,
-`scenario.objectives` uses a presence-enforcing field deserializer: explicit
-`null` becomes `None`, an object becomes `Some(ObjectiveThresholds)`, and an
-omitted key is a missing-field error. Existing defaults on unrelated snapshot
-fields, including `trip_sequence_day`, `next_trip_sequence`, transit-node
-status, and metric outcome history, remain unchanged and are outside this
-schema slice.
+`scenario.objectives` uses `#[serde(deserialize_with = "...")]` with a
+presence-enforcing field deserializer that delegates to
+`Option::<ObjectiveThresholds>::deserialize`. Explicit `null` and a present
+JavaScript `undefined` become `None`, while an object becomes
+`Some(ObjectiveThresholds)`. Because the field has no Serde default, an
+omitted key never invokes the field deserializer and remains a missing-field
+error. Existing defaults on unrelated snapshot fields, including
+`trip_sequence_day`, `next_trip_sequence`, transit-node status, and metric
+outcome history, remain unchanged and are outside this schema slice.
 
 Consequences:
 
@@ -315,16 +349,18 @@ requested delta instead of stopping at the former survival threshold.
 - `rolling_window_seconds`
 - `survival_time`
 
-The existing threshold constants remain public so `scenario.rs` can use them
-as the standard Growing Suburb campaign authoring defaults. They are no longer
-consulted directly during objective evaluation. `ROLLING_WINDOW_SECONDS` also
-supplies the 300-second history-retention fallback for snapshots without
-active campaign objectives, but it does not score or terminate those
-snapshots.
+The existing threshold constants remain public so
+`growing_suburb_objectives()` can use them as the standard Growing Suburb
+campaign authoring defaults. They are no longer consulted directly during
+objective evaluation. `ROLLING_WINDOW_SECONDS` also supplies the 300-second
+history-retention fallback for snapshots without a usable active campaign
+window, but it does not score or terminate those snapshots.
 
-HPA-337 does not add range or finiteness validation to the existing
-`ObjectiveThresholds` fields. Custom-threshold tests use valid finite values;
-broader scenario-authoring validation remains outside this slice.
+HPA-337 does not add wire-level range or finiteness rejection to the existing
+`ObjectiveThresholds` fields. Custom-threshold tests use valid finite values,
+and broader scenario-authoring validation remains outside this slice. The
+rolling window receives the point-of-use safety guard in Section 3.3 because
+it directly controls both memory retention and scoring.
 
 ### 3.3 Metrics history remains bounded
 
@@ -341,25 +377,30 @@ pub fn prune_trip_outcomes(
 )
 ```
 
-The trip pipeline chooses that third argument from the serialized
-`rolling_window_seconds` only when the snapshot is in campaign mode and
-objectives are present. Sandbox mode and campaigns without objectives use the
+The trip pipeline derives one effective retention window. It considers the
+serialized `rolling_window_seconds` only when the snapshot is in campaign mode
+and objectives are present, and uses that value only when it is finite and
+strictly greater than zero. Sandbox mode, campaigns without objectives, and
+campaigns with a zero, negative, NaN, or infinite rolling window use the
 existing `ROLLING_WINDOW_SECONDS` fallback of 300 seconds.
-`objective_counts` uses the same supplied campaign threshold window when
-scoring: change it to accept `rolling_window_seconds: f64`, and have
-`evaluate_objectives` pass the serialized threshold value.
+
+`objective_counts` accepts `rolling_window_seconds: f64`, and both
+`prune_trip_outcomes` and `evaluate_objectives` receive the same effective
+value. Evaluation must not re-read the unsanitized serialized field after the
+trip pipeline has selected the window.
 
 Therefore the recent `trip_outcomes` sample uses:
 
 - the campaign objective's `rolling_window_seconds` when campaign objectives
-  exist;
-- the existing 300-second retention window in sandbox or when campaign
-  objectives are absent.
+  exist and the value is finite and greater than zero;
+- the existing 300-second retention window in sandbox, when campaign
+  objectives are absent, or when the configured window is unusable.
 
 This keeps sandbox metrics bounded and inspectable while retaining enough
 campaign history to evaluate its configured window. In particular, a
 600-second campaign window cannot be truncated to 300 seconds before
-evaluation.
+evaluation. Invalid-window tests cover zero, negative, NaN, and infinity and
+prove that pruning and scoring both fall back deterministically to 300 seconds.
 
 ### 3.4 Growth waves are campaign-only
 
@@ -395,18 +436,22 @@ Keep the current global WASM serializer unchanged. Changing it to serialize
 every missing value as `null` would broaden HPA-337 to unrelated `Option`
 fields.
 
-`normalizeRustSnapshot()` passes `rules` and `growthWaves` through unchanged
-and canonicalizes only the transport representation:
+`normalizeRustSnapshot()` passes `rules` through unchanged and maps the known
+scenario fields explicitly while canonicalizing only the transport
+representation:
 
 ```typescript
 scenario: {
-  ...snapshot.scenario,
+  name: snapshot.scenario.name,
   objectives: snapshot.scenario.objectives ?? null,
+  growthWaves: snapshot.scenario.growthWaves,
 }
 ```
 
 This follows the existing `parkedPosition ?? null` boundary pattern.
 Normalization does not invent threshold defaults, rules, or growth events.
+The explicit mapping preserves the boundary's current behavior of discarding
+unknown raw scenario properties.
 The canonical `GameState` shape is therefore identical for WASM and Tauri even
 though their raw `None` encodings differ.
 
@@ -450,8 +495,8 @@ The selector contract is:
 | --- | --- | --- | --- | --- | --- |
 | Standard sandbox | `Standard Sandbox` | `Template · Growing Suburb` | `Open-ended city — no campaign objective.` | `Metrics continue without win/loss.` | `No automatic growth` |
 | Creative sandbox | `Creative Sandbox` | `Template · Growing Suburb` | `Open-ended city — no campaign objective.` | `Metrics continue without win/loss.` | `No automatic growth` |
-| Campaign with objectives | `scenario.name` | `Campaign` | `formatObjective(objectives)` | `Within tolerances. Hold the line.` | Pending wave message or `No automatic growth` |
-| Campaign without objectives | `scenario.name` | `Campaign` | `No campaign objective.` | `Metrics continue without win/loss.` | Pending wave message or `No automatic growth` |
+| Campaign with objectives | `scenario.name` | `Campaign · Growing Suburb` | `formatObjective(objectives)` | `Within tolerances. Hold the line.` | Pending wave message or `No automatic growth` |
+| Campaign without objectives | `scenario.name` | `Campaign · Growing Suburb` | `No campaign objective.` | `Metrics continue without win/loss.` | Pending wave message or `No automatic growth` |
 
 For every row, a non-null `metrics.lossReason` takes priority over the default
 `lossNote`. `status` is `metrics.state.toUpperCase()`, so `RUNNING`, `WON`, and
@@ -459,7 +504,9 @@ For every row, a non-null `metrics.lossReason` takes priority over the default
 
 Campaign title selection takes priority over economy preset: a campaign with
 `EconomyPreset::Creative` still uses `scenario.name`. Sandbox title selection
-uses the economy preset.
+uses the economy preset. Campaign context is
+`Campaign · ${SANDBOX_TEMPLATE_LABELS[templateId]}`; sandbox context is
+`Template · ${SANDBOX_TEMPLATE_LABELS[templateId]}`.
 
 Runtime selectors own a local, exhaustive display-name map:
 
@@ -492,8 +539,10 @@ objectives.
   the key fails through the presence-enforcing field deserializer.
 - Unknown game mode, economy preset, template, and move-in strings fail.
 - The fallible Rust `DemandMultiplier` constructor rejects zero, negative,
-  infinite, and NaN values. Serde rejects the same values as deserialization
-  errors when the host input format can represent them.
+  infinite, and NaN values. The `TryFrom<f64>` conversion and Serde
+  `try_from`/`into` path reject the same values as deserialization errors when
+  the host input format can represent them, while serialization remains a
+  plain number.
 - Omitting `rules`, `scenario`, `scenario.objectives`, or
   `scenario.growthWaves` fails deserialization; the current test that accepts a
   missing growth-wave list is replaced with a required-field rejection test.
@@ -505,6 +554,8 @@ objectives.
   `running` while the tick consumes its full requested delta and metrics
   continue.
 - Loss-producing sandbox metrics do not transition to `lost`.
+- Loading an already terminal schema-v3 sandbox snapshot preserves the current
+  frozen behavior; ticking does not reopen it or advance its clock.
 - Growth waves do not fire in sandbox.
 - Sandbox-attached objectives do not evaluate and do not replace the default
   300-second outcome-retention window.
@@ -513,6 +564,8 @@ objectives.
   average-wait, and survival gates.
 - Custom campaign thresholds prove evaluation reads snapshot values rather
   than module constants.
+- Campaign objective windows of zero, a negative value, NaN, and infinity
+  prove pruning and scoring use the same deterministic 300-second fallback.
 - Campaign rolling-window behavior remains deterministic across coarse and
   fine ticks.
 - Existing objective and growth tests opt into campaign rules explicitly
@@ -520,8 +573,15 @@ objectives.
 
 The existing Rust test migration is explicit:
 
-- `crates/caelum-core/src/growth.rs` uses `growing_suburb_campaign` in its
-  inline seeded-growth fixtures so authored waves continue to execute.
+- In `crates/caelum-core/src/growth.rs`, every test that installs non-empty
+  authored waves opts into campaign mode. This includes the `seeded()` helper
+  and the direct setup in
+  `placement_without_zoning_is_skipped_but_wave_marked_applied`,
+  `multiple_waves_in_one_tick_all_fire_in_declared_order`, and
+  `mid_tick_wave_fires_at_boundary_regardless_of_granularity`. Empty-wave
+  no-op tests may remain sandbox. These tests call `tick_trips` without
+  objective evaluation, so using standard campaign thresholds does not alter
+  their assertions.
 - `crates/caelum-core/tests/objectives_metrics.rs` constructs campaign rules
   for every win/loss threshold test and adds sandbox no-op coverage.
 - `crates/caelum-core/tests/trip_lifecycle.rs` marks terminal objective
@@ -544,6 +604,9 @@ The existing Rust test migration is explicit:
 - Tauri raw snapshots expose `objectives: null`; WASM raw snapshots expose
   `objectives: undefined`; snapshot normalization canonicalizes both to
   `objectives: null` without adding thresholds.
+- A real WASM raw snapshot with a present `objectives: undefined` round-trips
+  through `loadSnapshot`, while deleting the key from the same raw snapshot
+  fails deserialization as a missing required field.
 - Unsupported schema versions remain rejected.
 - WASM and Tauri backend contract tests assert equivalent normalized
   schema-v3 shapes.
@@ -585,17 +648,18 @@ bun run test:e2e
 
 The implementation is expected to remain within these boundaries:
 
-- `crates/caelum-core/src/model.rs` — schema version, new wire types, and
-  required-but-nullable objectives deserialization.
+- `crates/caelum-core/src/model.rs` — schema version, new wire types,
+  required-but-nullable objectives deserialization, and removal of the
+  obsolete `default_scenario()` helper.
 - `crates/caelum-core/src/scenario.rs` — retain
-  `growing_suburb_scenario()` as the default sandbox and add the explicit
-  campaign authoring helper.
+  `growing_suburb_scenario()` as the default sandbox, add
+  `growing_suburb_objectives()`, and add the explicit campaign authoring
+  helper.
 - `crates/caelum-core/src/state.rs` — default rules construction.
-- `crates/caelum-core/src/objectives.rs` — optional, mode-gated evaluation using
-  serialized thresholds, parameterized-window documentation, and the
-  objective-less retention fallback.
+- `crates/caelum-core/src/objectives.rs` — optional, mode-gated evaluation
+  using serialized thresholds and the shared effective rolling window.
 - `crates/caelum-core/src/growth.rs` and `trips.rs` — campaign growth gate and
-  metrics-retention window.
+  the validated-at-use metrics-retention window.
 - `crates/caelum-core/src/engine.rs` — update the stale schema-v2
   `from_snapshot` documentation.
 - `crates/caelum-core/src/growth.rs`,
@@ -610,7 +674,8 @@ The implementation is expected to remain within these boundaries:
   required `rules` field.
 - `src/domain/types.ts`, `src/runtime/backend/types.ts`, and
   `src/runtime/snapshotView.ts` — schema-v3 TypeScript parity and WASM
-  `undefined` to canonical `null` normalization.
+  `undefined` to canonical `null` normalization through explicit scenario
+  field mapping.
 - `src/runtime/runtimeSelectors.ts`, `src/runtime/types.ts`, and
   `src/components/hud/panels/BriefPanel.svelte` — display-ready sandbox and
   campaign copy.
@@ -634,5 +699,5 @@ No new gameplay authority belongs in TypeScript.
 | Sandbox remains running beyond survival | Mode/absence gate before objective evaluation |
 | Custom campaign thresholds still work | Explicit campaign fixtures prove serialized values override authoring constants |
 | WASM/Tauri/TypeScript shapes match | Raw `undefined`/`null` normalize to one schema-v3 domain shape |
-| Invalid enums and multipliers fail in Rust | Closed enums plus transparent validated `DemandMultiplier` |
+| Invalid enums and multipliers fail in Rust | Closed enums plus `try_from`/`into` validated `DemandMultiplier` |
 | Brief identifies mode and template | Supplied `context` plus the selector mapping table |
