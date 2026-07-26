@@ -74,11 +74,13 @@ object is present, its `rollingWindowSeconds` field is required; omitting it is
 malformed. Each `ObjectiveThresholds` field is a validated newtype, so invalid
 values (non-finite, negative, or — for `rollingWindowSeconds` and
 `survivalTimeSeconds` — non-positive) are rejected at the Rust deserialization
-boundary with a structured `GameplayRejection` rather than coerced at
-evaluation time. The deterministic 300-second constant applies to both
-trip-outcome retention and objective scoring when objectives are inactive or
-absent in their allowed mode configuration; a present-but-invalid configured
-rolling window is unreachable because the newtype rejects it at load.
+boundary as a serde error (surfaced by both hosts as a shell/runtime error —
+see the design spec's Error Handling section: serde boundary mismatches are
+distinct from `GameplayRejection`) rather than coerced at evaluation time. The
+deterministic 300-second constant applies to both trip-outcome retention and
+objective scoring when objectives are inactive or absent in their allowed mode
+configuration; a present-but-invalid configured rolling window is unreachable
+because the newtype rejects it at load.
 
 Growing Suburb retains its authored dual-bidirectional arterial cross, with no
 pre-seeded districts, timed sandbox growth waves, buildings, or citizens.

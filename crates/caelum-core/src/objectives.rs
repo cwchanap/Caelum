@@ -68,16 +68,21 @@ pub fn prune_trip_outcomes(
     }
 }
 
-pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
+/// Evaluate campaign objectives, returning `Some(next)` only when a terminal
+/// transition (win/loss) fires, and `None` when the snapshot is unchanged.
+///
+/// The no-fire path is the common case and avoids the `state.clone()` the
+/// legacy [`evaluate_objectives`] wrapper performs. Hot paths (e.g. the
+/// per-substep callback in `tick_trips_with_objectives`) should call this
+/// variant; tests and external callers may use the wrapper for convenience.
+pub fn evaluate_objectives_opt(state: &GameSnapshot) -> Option<GameSnapshot> {
     if state.metrics.state != MetricsState::Running {
-        return state.clone();
+        return None;
     }
     if state.rules.game_mode != GameMode::Campaign {
-        return state.clone();
+        return None;
     }
-    let Some(thresholds) = state.scenario.objectives.as_ref() else {
-        return state.clone();
-    };
+    let thresholds = state.scenario.objectives.as_ref()?;
 
     let rolling_window_seconds = effective_rolling_window_seconds(state);
     let counts = objective_counts(state, rolling_window_seconds);
@@ -87,20 +92,20 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
         && f64::from(counts.unserved_trips) / f64::from(total_trips)
             > thresholds.max_unserved_ratio.value()
     {
-        return lose(state, "Too many unserved citizens");
+        return Some(lose(state, "Too many unserved citizens"));
     }
 
     if counts.completed_trips >= 10
         && f64::from(counts.late_trips) / f64::from(counts.completed_trips)
             > thresholds.max_late_ratio.value()
     {
-        return lose(state, "Too many late arrivals");
+        return Some(lose(state, "Too many late arrivals"));
     }
 
     if state.metrics.waiting_trip_count > 0
         && state.metrics.average_wait_seconds > thresholds.max_average_wait.value()
     {
-        return lose(state, "Average wait time is too high");
+        return Some(lose(state, "Average wait time is too high"));
     }
 
     // Win gate: intentionally reads the LIFETIME `state.metrics.completed_trips`
@@ -115,10 +120,18 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
         let mut next = state.clone();
         next.metrics.state = MetricsState::Won;
         next.metrics.loss_reason = None;
-        return next;
+        return Some(next);
     }
 
-    state.clone()
+    None
+}
+
+/// Legacy wrapper around [`evaluate_objectives_opt`] that returns a
+/// `GameSnapshot` (cloning on the no-fire path). Kept for test ergonomics and
+/// external callers that expect a snapshot back regardless; the per-substep
+/// hot path uses [`evaluate_objectives_opt`] directly to skip the clone.
+pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
+    evaluate_objectives_opt(state).unwrap_or_else(|| state.clone())
 }
 
 fn lose(state: &GameSnapshot, reason: &str) -> GameSnapshot {
