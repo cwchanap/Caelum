@@ -1,15 +1,23 @@
 use std::sync::Mutex;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use caelum_core::{
     DispatchResult, GameEngine, GameIntent, GameSnapshot, GameplayRejection,
     RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
-    RoutePreviewResponse, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
+    RoutePreviewResponse, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
+    SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use tauri::State;
 
 type EngineState = Mutex<GameEngine>;
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum TauriCommandError<E> {
+    Domain(E),
+    Host(String),
+}
 
 #[tauri::command]
 fn game_snapshot(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
@@ -33,9 +41,27 @@ fn game_tick(state: State<'_, EngineState>, delta_seconds: f64) -> Result<Dispat
 }
 
 #[tauri::command]
-fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
-    let mut engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.reset())
+fn game_create_sandbox(
+    state: State<'_, EngineState>,
+    request: SandboxCreationRequest,
+) -> Result<GameSnapshot, TauriCommandError<SandboxCreationError>> {
+    let candidate = GameEngine::from_sandbox_request(request).map_err(TauriCommandError::Domain)?;
+    let snapshot = candidate.snapshot();
+    let mut engine = state
+        .lock()
+        .map_err(|error| TauriCommandError::Host(error.to_string()))?;
+    *engine = candidate;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn game_reset(
+    state: State<'_, EngineState>,
+) -> Result<GameSnapshot, TauriCommandError<SandboxResetError>> {
+    let mut engine = state
+        .lock()
+        .map_err(|error| TauriCommandError::Host(error.to_string()))?;
+    engine.reset().map_err(TauriCommandError::Domain)
 }
 
 #[tauri::command]
@@ -106,6 +132,7 @@ pub fn run() {
             game_snapshot,
             game_dispatch,
             game_tick,
+            game_create_sandbox,
             game_reset,
             game_load_snapshot,
             game_preview_route,
@@ -128,11 +155,269 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
-    use serde_json::json;
-    use tauri::ipc::{CallbackFn, InvokeBody};
-    use tauri::test::{get_ipc_response, INVOKE_KEY};
+    use caelum_core::model::{GameMode, Point, SNAPSHOT_SCHEMA_VERSION};
+    use caelum_core::{canonical_default_request, create_sandbox_snapshot};
+    use serde_json::{json, Value};
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
+    use tauri::test::{get_ipc_response, MockRuntime, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
+    use tauri::{App, Manager, Webview, WebviewWindow};
+
+    fn sandbox_test_app(engine: GameEngine) -> App<MockRuntime> {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        for command in ["game_create_sandbox", "game_reset", "game_snapshot"] {
+            context.runtime_authority_mut().__allow_command(
+                command.to_string(),
+                tauri::utils::acl::ExecutionContext::Local,
+            );
+        }
+        tauri::test::mock_builder()
+            .manage(Mutex::new(engine))
+            .invoke_handler(tauri::generate_handler![
+                game_create_sandbox,
+                game_reset,
+                game_snapshot
+            ])
+            .build(context)
+            .expect("test Tauri app should build")
+    }
+
+    fn test_webview(app: &App<MockRuntime>) -> WebviewWindow<MockRuntime> {
+        tauri::WebviewWindowBuilder::new(app, "main", Default::default())
+            .build()
+            .expect("test webview should build")
+    }
+
+    fn ipc<W: AsRef<Webview<MockRuntime>>>(
+        webview: &W,
+        command: &str,
+        body: InvokeBody,
+    ) -> Result<InvokeResponseBody, Value> {
+        get_ipc_response(
+            webview,
+            InvokeRequest {
+                cmd: command.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body,
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        )
+    }
+
+    fn sandbox_request_body(request: &Value) -> InvokeBody {
+        InvokeBody::Json(json!({ "request": request }))
+    }
+
+    fn decode_snapshot(response: InvokeResponseBody) -> GameSnapshot {
+        response
+            .deserialize()
+            .expect("successful IPC response should decode to GameSnapshot")
+    }
+
+    #[test]
+    fn game_create_sandbox_matches_direct_factory_and_replaces_managed_engine() {
+        let cases = [
+            json!({
+                "templateId": "crossroads",
+                "economyPreset": "standard",
+                "startingCapital": 120_000,
+                "demandMultiplier": 1,
+                "moveInRate": "paused"
+            }),
+            json!({
+                "templateId": "blankGrid",
+                "economyPreset": "creative",
+                "startingCapital": 42_000,
+                "demandMultiplier": 1.5,
+                "moveInRate": "paused"
+            }),
+            json!({
+                "templateId": "crossroads",
+                "economyPreset": "standard",
+                "startingCapital": 7_500,
+                "demandMultiplier": 2.25,
+                "moveInRate": "paused"
+            }),
+        ];
+
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        for request_value in cases {
+            let request =
+                serde_json::from_value(request_value.clone()).expect("request should decode");
+            let expected = create_sandbox_snapshot(request).expect("request should be valid");
+
+            let created = ipc(
+                &webview,
+                "game_create_sandbox",
+                sandbox_request_body(&request_value),
+            )
+            .expect("valid creation should resolve");
+            assert_eq!(decode_snapshot(created), expected);
+
+            let managed = ipc(&webview, "game_snapshot", InvokeBody::default())
+                .expect("snapshot should resolve");
+            assert_eq!(decode_snapshot(managed), expected);
+        }
+
+        let canonical = create_sandbox_snapshot(canonical_default_request()).unwrap();
+        let default_app = sandbox_test_app(GameEngine::new());
+        let default_webview = test_webview(&default_app);
+        let default_snapshot = ipc(&default_webview, "game_snapshot", InvokeBody::default())
+            .expect("default snapshot should resolve");
+        assert_eq!(decode_snapshot(default_snapshot), canonical);
+    }
+
+    #[test]
+    fn game_create_sandbox_domain_errors_are_objects_and_preserve_managed_state() {
+        let before = GameEngine::new().snapshot();
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+        let invalid = json!({
+            "templateId": "unknown",
+            "economyPreset": "standard",
+            "startingCapital": 120_000,
+            "demandMultiplier": 1,
+            "moveInRate": "paused"
+        });
+
+        let error = ipc(
+            &webview,
+            "game_create_sandbox",
+            sandbox_request_body(&invalid),
+        )
+        .expect_err("invalid creation should reject");
+
+        assert!(error.is_object());
+        assert_eq!(error["code"], json!("unknownTemplateId"));
+        assert_eq!(error["context"]["field"], json!("templateId"));
+        assert_eq!(error["context"]["attemptedValue"], json!("unknown"));
+        let after =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot(after), before);
+    }
+
+    #[test]
+    fn game_create_sandbox_null_numeric_values_return_typed_errors_without_mutation() {
+        let before = GameEngine::new().snapshot();
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+        let cases = [
+            (
+                "startingCapital",
+                "invalidStartingCapital",
+                json!({
+                    "templateId": "crossroads",
+                    "economyPreset": "standard",
+                    "startingCapital": null,
+                    "demandMultiplier": 1,
+                    "moveInRate": "paused"
+                }),
+            ),
+            (
+                "demandMultiplier",
+                "invalidDemandMultiplier",
+                json!({
+                    "templateId": "crossroads",
+                    "economyPreset": "standard",
+                    "startingCapital": 120_000,
+                    "demandMultiplier": null,
+                    "moveInRate": "paused"
+                }),
+            ),
+        ];
+
+        for (field, code, request) in cases {
+            let error = ipc(
+                &webview,
+                "game_create_sandbox",
+                sandbox_request_body(&request),
+            )
+            .expect_err("null numeric value should reject");
+
+            assert!(error.is_object());
+            assert_eq!(error["code"], json!(code));
+            assert_eq!(error["context"]["field"], json!(field));
+            assert_eq!(error["context"]["attemptedValue"], json!("null"));
+            let after = ipc(&webview, "game_snapshot", InvokeBody::default())
+                .expect("snapshot should resolve");
+            assert_eq!(decode_snapshot(after), before);
+        }
+    }
+
+    #[test]
+    fn game_create_sandbox_reset_replays_complete_request_through_ipc() {
+        let request_value = json!({
+            "templateId": "blankGrid",
+            "economyPreset": "creative",
+            "startingCapital": 42_000,
+            "demandMultiplier": 1.5,
+            "moveInRate": "paused"
+        });
+        let request = serde_json::from_value(request_value.clone()).expect("request should decode");
+        let expected = create_sandbox_snapshot(request).expect("request should be valid");
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+        ipc(
+            &webview,
+            "game_create_sandbox",
+            sandbox_request_body(&request_value),
+        )
+        .expect("valid creation should resolve");
+
+        {
+            let state = app.state::<EngineState>();
+            let mut engine = state.lock().expect("managed engine should lock");
+            engine.set_budget_for_test(7);
+            let _ = engine.dispatch(GameIntent::LayRoad {
+                point: Point { x: 3, y: 3 },
+            });
+            assert_ne!(engine.snapshot(), expected);
+        }
+
+        let reset = ipc(&webview, "game_reset", InvokeBody::default())
+            .expect("sandbox reset should resolve");
+        assert_eq!(decode_snapshot(reset), expected);
+        let managed =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot(managed), expected);
+    }
+
+    #[test]
+    fn game_create_sandbox_campaign_reset_is_typed_and_preserves_state() {
+        let mut campaign = GameEngine::new().snapshot();
+        campaign.rules.game_mode = GameMode::Campaign;
+        let before = campaign.clone();
+        let engine = GameEngine::from_snapshot(campaign).expect("campaign snapshot should load");
+        let app = sandbox_test_app(engine);
+        let webview = test_webview(&app);
+
+        let error = ipc(&webview, "game_reset", InvokeBody::default())
+            .expect_err("campaign reset should reject");
+
+        assert!(error.is_object());
+        assert_eq!(error["code"], json!("unsupportedGameMode"));
+        assert_eq!(error["context"]["gameMode"], json!("campaign"));
+        let after =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot(after), before);
+    }
+
+    #[test]
+    fn game_create_sandbox_host_command_errors_serialize_as_strings() {
+        let serialized = serde_json::to_value(
+            TauriCommandError::<caelum_core::SandboxCreationError>::Host(
+                "mutex poisoned".to_string(),
+            ),
+        )
+        .unwrap();
+
+        assert!(serialized.is_string());
+    }
 
     #[test]
     fn snapshot_load_rejection_preserves_structured_code_and_context() {
