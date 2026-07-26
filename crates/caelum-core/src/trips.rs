@@ -619,6 +619,9 @@ fn track_aggregate_wait_boundary(
     let Some(max_average_wait) = max_average_wait else {
         return;
     };
+    if !max_average_wait.is_finite() {
+        return;
+    }
     let waiting_trips: Vec<&ActiveTrip> = state
         .active_trips
         .iter()
@@ -636,6 +639,11 @@ fn track_aggregate_wait_boundary(
     let seconds_to_threshold = max_average_wait - average_wait_seconds;
     if seconds_to_threshold > EPSILON {
         track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
+    } else if seconds_to_threshold >= -EPSILON {
+        // Equality needs one sample strictly beyond the `>` threshold. Use a
+        // boundary later than `after`; after that substep the wait is beyond
+        // this equality band, preventing repeated epsilon-boundary loops.
+        track_next_boundary(next, after + EPSILON, after);
     }
 }
 
@@ -707,11 +715,15 @@ fn track_waiting_terminal_boundaries(
     // after `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)`
     // more seconds. A tiny `EPSILON` offset lands the sample strictly above the
     // threshold because the loss gate uses `>` not `>=`.
-    if let Some(max_average_wait) = max_average_wait {
-        let wait_threshold_remaining =
-            trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait) + EPSILON;
-        if wait_threshold_remaining > EPSILON {
-            track_next_boundary(next, state.time + wait_threshold_remaining, after);
+    if let Some(max_average_wait) = max_average_wait.filter(|value| value.is_finite()) {
+        let seconds_to_threshold =
+            trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait);
+        if seconds_to_threshold > EPSILON {
+            track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
+        } else if seconds_to_threshold >= -EPSILON {
+            // As with the aggregate tracker, advance once beyond equality and
+            // then fall out of the epsilon band to avoid a zero-progress loop.
+            track_next_boundary(next, after + EPSILON, after);
         }
     }
 
