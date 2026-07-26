@@ -1856,6 +1856,69 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     );
 }
 
+fn assert_average_wait_loss_matches_coarse_and_fine(state: &caelum_core::GameSnapshot) {
+    let coarse = trips::tick_trips_with_objectives(state, 300.0);
+    let fine = trips::tick_trips_with_objectives(state, 1.0);
+
+    assert_eq!(coarse.metrics.state, MetricsState::Lost);
+    assert_eq!(fine.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        coarse.metrics.loss_reason.as_deref(),
+        Some("Average wait time is too high")
+    );
+    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
+    assert_eq!(coarse.time, fine.time);
+    assert!(
+        (coarse.time - 0.000_002).abs() < 1e-12,
+        "expected strict-threshold sample at t=0.000002, got {}",
+        coarse.time
+    );
+}
+
+#[test]
+fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
+    let mut state = campaign_state();
+    state.paused = false;
+    state.scenario.objectives.as_mut().unwrap().max_average_wait = 149.0;
+
+    let mut trip_a = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    trip_a.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    trip_a.patience_remaining = 61.0; // waited 179s
+
+    let mut trip_b = trip(
+        "trip-002",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    trip_b.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    trip_b.patience_remaining = 121.0; // waited 119s; aggregate average is exactly 149s
+
+    state.active_trips = vec![trip_a, trip_b];
+
+    assert_average_wait_loss_matches_coarse_and_fine(&state);
+}
+
+#[test]
+fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
+    let mut state = campaign_state();
+    state.paused = false;
+    state.scenario.objectives.as_mut().unwrap().max_average_wait = 0.0;
+
+    // Idle is intentional: aggregate tracking sees no waiting trip yet, so the
+    // per-trip terminal tracker must schedule the strict-threshold sample.
+    let mut idle = trip("trip-001", TripStatus::Idle, (7, 8).into(), (22, 8).into());
+    idle.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    state.active_trips = vec![idle];
+
+    assert_average_wait_loss_matches_coarse_and_fine(&state);
+}
+
 /// Regression: a coarse tick that generates bad outcomes early and advances past
 /// the 300s rolling window must still detect the loss. Without per-substep
 /// objective evaluation, `prune_trip_outcomes` drops the stale outcomes by the
