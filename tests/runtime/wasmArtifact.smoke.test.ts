@@ -141,6 +141,30 @@ describe("real WASM artifact smoke", () => {
     }
   });
 
+  it("rejects a schema-v2 save missing required v3 fields with unsupportedSnapshotSchema", async () => {
+    // A legacy schema-v2 save lacks the required v3 `rules` field. The two-phase
+    // probe must reject it with the structured `unsupportedSnapshotSchema` code
+    // (surfaced as a serialized GameplayRejection object) instead of a generic
+    // missing-field serde error string.
+    const backend = await createWasmBackend();
+    const raw = await backend.snapshot();
+    const legacy = {
+      ...raw,
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
+    } as Partial<RustGameSnapshot> & { rules?: unknown };
+    delete (legacy as { rules?: unknown }).rules;
+
+    await expect(
+      backend.loadSnapshot!(legacy as RustGameSnapshot),
+    ).rejects.toMatchObject({
+      code: "unsupportedSnapshotSchema",
+      context: {
+        expectedSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
+        actualSchemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
+      },
+    });
+  });
+
   it("round-trips a placeRoundabout dispatch through wasm-bindgen", async () => {
     const backend = await createWasmBackend();
     const before = await backend.snapshot();

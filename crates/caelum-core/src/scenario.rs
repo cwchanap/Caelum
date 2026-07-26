@@ -2,8 +2,9 @@ use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GrowthAction, GrowthWave,
-    MoveInRateSelection, ObjectiveThresholds, Point, SandboxSettings, SandboxTemplateId,
-    ScenarioConfig, Tile,
+    MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio, MoveInRateSelection,
+    ObjectiveThresholds, Point, RollingWindowSeconds, SandboxSettings, SandboxTemplateId,
+    ScenarioConfig, SurvivalTimeSeconds, Tile,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
@@ -25,11 +26,16 @@ const SEED_UNITS_PER_ROW: i32 = 6;
 
 pub fn growing_suburb_objectives() -> ObjectiveThresholds {
     ObjectiveThresholds {
-        max_late_ratio: MAX_LATE_RATIO,
-        max_unserved_ratio: MAX_UNSERVED_RATIO,
-        max_average_wait: MAX_AVERAGE_WAIT_SECONDS,
-        rolling_window_seconds: ROLLING_WINDOW_SECONDS,
-        survival_time: SURVIVAL_TIME_SECONDS,
+        max_late_ratio: MaxLateRatio::new(MAX_LATE_RATIO)
+            .expect("MAX_LATE_RATIO is a valid MaxLateRatio"),
+        max_unserved_ratio: MaxUnservedRatio::new(MAX_UNSERVED_RATIO)
+            .expect("MAX_UNSERVED_RATIO is a valid MaxUnservedRatio"),
+        max_average_wait: MaxAverageWaitSeconds::new(MAX_AVERAGE_WAIT_SECONDS)
+            .expect("MAX_AVERAGE_WAIT_SECONDS is a valid MaxAverageWaitSeconds"),
+        rolling_window_seconds: RollingWindowSeconds::new(ROLLING_WINDOW_SECONDS)
+            .expect("ROLLING_WINDOW_SECONDS is a valid RollingWindowSeconds"),
+        survival_time: SurvivalTimeSeconds::new(SURVIVAL_TIME_SECONDS)
+            .expect("SURVIVAL_TIME_SECONDS is a valid SurvivalTimeSeconds"),
     }
 }
 
@@ -41,6 +47,18 @@ pub fn growing_suburb_scenario() -> ScenarioConfig {
     }
 }
 
+/// Shared `SandboxSettings` for the Growing Suburb template. Used by both the
+/// sandbox initial snapshot (`state::create_initial_snapshot`) and the campaign
+/// rules (`growing_suburb_campaign`) so the template id, default demand
+/// multiplier, and paused move-in rate stay in sync if the defaults change.
+pub fn growing_suburb_sandbox_settings() -> SandboxSettings {
+    SandboxSettings {
+        template_id: SandboxTemplateId::GrowingSuburb,
+        demand_multiplier: DemandMultiplier::default(),
+        move_in_rate: MoveInRateSelection::Paused,
+    }
+}
+
 pub fn growing_suburb_campaign(
     objectives: ObjectiveThresholds,
     growth_waves: Vec<GrowthWave>,
@@ -49,11 +67,7 @@ pub fn growing_suburb_campaign(
         GameRules {
             game_mode: GameMode::Campaign,
             economy_preset: EconomyPreset::Standard,
-            sandbox: SandboxSettings {
-                template_id: SandboxTemplateId::GrowingSuburb,
-                demand_multiplier: DemandMultiplier::default(),
-                move_in_rate: MoveInRateSelection::Paused,
-            },
+            sandbox: growing_suburb_sandbox_settings(),
         },
         ScenarioConfig {
             name: SCENARIO_NAME.to_string(),

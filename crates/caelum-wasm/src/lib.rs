@@ -1,5 +1,6 @@
 use caelum_core::{
-    GameEngine, GameIntent, GameSnapshot, RoadMutationPreviewRequest, RoutePreviewRequest,
+    GameEngine, GameIntent, GameSnapshot, GameplayRejection, RoadMutationPreviewRequest,
+    RoutePreviewRequest, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use wasm_bindgen::prelude::*;
 
@@ -24,6 +25,20 @@ impl WasmGameEngine {
     }
 
     pub fn from_snapshot(snapshot: JsValue) -> Result<WasmGameEngine, JsValue> {
+        // Two-phase: probe `schemaVersion` before the full `GameSnapshot`
+        // deserialization so a legacy schema-v2 save (which lacks the required
+        // v3 `rules` / `scenario.objectives` / `scenario.growthWaves` fields)
+        // is rejected with the structured `UnsupportedSnapshotSchema` code
+        // instead of a generic missing-field serde error. If the probe cannot
+        // read a schema version, treat it as unknown (0) and still reject.
+        let probe_schema_version =
+            serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(snapshot.clone())
+                .map(|probe| probe.schema_version)
+                .unwrap_or(0);
+        if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
+            let rejection = GameplayRejection::unsupported_snapshot_schema(probe_schema_version);
+            return Err(serde_wasm_bindgen::to_value(&rejection).unwrap_or_else(to_js_error));
+        }
         let snapshot: GameSnapshot =
             serde_wasm_bindgen::from_value(snapshot).map_err(to_js_error)?;
         let inner = GameEngine::from_snapshot(snapshot).map_err(|rejection| {

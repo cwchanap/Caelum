@@ -510,8 +510,8 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     }
 
     if let Some(survival_time) = active_thresholds
-        .map(|thresholds| thresholds.survival_time)
-        .filter(|survival_time| survival_time.is_finite() && *survival_time > after)
+        .map(|thresholds| thresholds.survival_time.value())
+        .filter(|survival_time| *survival_time > after)
     {
         track_next_boundary(&mut next, survival_time, after);
     }
@@ -556,7 +556,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             state,
             trip,
             after,
-            active_thresholds.map(|thresholds| thresholds.max_average_wait),
+            active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
         );
     }
 
@@ -564,7 +564,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         &mut next,
         state,
         after,
-        active_thresholds.map(|thresholds| thresholds.max_average_wait),
+        active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
     );
 
     for vehicle in &state.transit.vehicles {

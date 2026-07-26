@@ -217,17 +217,125 @@ pub struct GameSnapshot {
     pub scenario: ScenarioConfig,
 }
 
+/// Minimal view of a snapshot used to probe `schemaVersion` BEFORE attempting a
+/// full `GameSnapshot` deserialization. Hosts deserialize into this first
+/// (serde ignores the unknown remaining fields), compare against
+/// [`SNAPSHOT_SCHEMA_VERSION`], and reject with
+/// [`GameplayRejection::unsupported_snapshot_schema`] on mismatch — so a legacy
+/// schema-v2 save that lacks the required v3 `rules` / `scenario.objectives` /
+/// `scenario.growthWaves` fields is rejected with the structured
+/// `UnsupportedSnapshotSchema` code instead of a generic missing-field serde
+/// error from the full deserialize.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSchemaProbe {
+    pub schema_version: u16,
+}
+
+/// Generates a validated `f64` newtype for an `ObjectiveThresholds` field,
+/// following the `DemandMultiplier` pattern: `#[serde(try_from = "f64", into = "f64")]`
+/// keeps the wire shape a plain JSON number while `TryFrom<f64>` rejects
+/// non-finite or predicate-invalid values at deserialization. Bad campaign
+/// authoring therefore fails loudly at load instead of being silently coerced
+/// at evaluation time. The `validate` argument is a closure receiving the
+/// candidate `f64` (already known finite) and returning whether it satisfies
+/// the field's predicate.
+macro_rules! validated_threshold_newtype {
+    (
+        $(#[$meta:meta])*
+        $name:ident,
+        $error:literal,
+        validate = $validate:expr,
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(try_from = "f64", into = "f64")]
+        pub struct $name(f64);
+
+        impl $name {
+            pub fn new(value: f64) -> Result<Self, &'static str> {
+                Self::try_from(value)
+            }
+
+            pub fn value(self) -> f64 {
+                self.0
+            }
+        }
+
+        impl TryFrom<f64> for $name {
+            type Error = &'static str;
+
+            fn try_from(value: f64) -> Result<Self, Self::Error> {
+                if value.is_finite() && ($validate)(value) {
+                    Ok(Self(value))
+                } else {
+                    Err($error)
+                }
+            }
+        }
+
+        impl From<$name> for f64 {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
+}
+
+validated_threshold_newtype!(
+    /// Maximum fraction of completed trips that may arrive late before the
+    /// campaign fails. A ratio of `0.0` means zero tolerance; values above `1.0`
+    /// effectively disable the gate (late trips can never exceed completed trips).
+    MaxLateRatio,
+    "max late ratio must be finite and non-negative",
+    validate = |value| value >= 0.0,
+);
+
+validated_threshold_newtype!(
+    /// Maximum fraction of total trips that may go unserved before the campaign
+    /// fails. Same range semantics as [`MaxLateRatio`].
+    MaxUnservedRatio,
+    "max unserved ratio must be finite and non-negative",
+    validate = |value| value >= 0.0,
+);
+
+validated_threshold_newtype!(
+    /// Maximum average wait time (seconds) across waiting trips before the
+    /// campaign fails. `0.0` means zero tolerance.
+    MaxAverageWaitSeconds,
+    "max average wait seconds must be finite and non-negative",
+    validate = |value| value >= 0.0,
+);
+
+validated_threshold_newtype!(
+    /// Rolling evaluation window (seconds) for late/unserved trip scoring. Must
+    /// be strictly positive; a zero or negative window is nonsensical.
+    RollingWindowSeconds,
+    "rolling window seconds must be finite and positive",
+    validate = |value| value > 0.0,
+);
+
+validated_threshold_newtype!(
+    /// Survival time (seconds) the campaign must be held before the win gate
+    /// fires. Must be strictly positive.
+    SurvivalTimeSeconds,
+    "survival time seconds must be finite and positive",
+    validate = |value| value > 0.0,
+);
+
 /// Objective thresholds the engine enforces in `objectives::evaluate_objectives`.
 /// Serialized with TS-parity camelCase names so the shell can render the exact
-/// contract the Rust core evaluates against.
+/// contract the Rust core evaluates against. Each field is a validated newtype
+/// (see [`validated_threshold_newtype`]); invalid values are rejected at
+/// deserialization rather than silently coerced at evaluation time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectiveThresholds {
-    pub max_late_ratio: f64,
-    pub max_unserved_ratio: f64,
-    pub max_average_wait: f64,
-    pub rolling_window_seconds: f64,
-    pub survival_time: f64,
+    pub max_late_ratio: MaxLateRatio,
+    pub max_unserved_ratio: MaxUnservedRatio,
+    pub max_average_wait: MaxAverageWaitSeconds,
+    pub rolling_window_seconds: RollingWindowSeconds,
+    pub survival_time: SurvivalTimeSeconds,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -29,9 +29,10 @@ pub const SURVIVAL_TIME_SECONDS: f64 = 1_200.0;
 /// not scored. A WASM/Tauri consumer expecting the TS snapshot shape must account for the
 /// trimmed `trip_outcomes` vector.
 ///
-/// Campaign snapshots may configure a positive, finite rolling window. All other
-/// snapshots use the stable default so retention remains bounded even when no
-/// objectives are active.
+/// Campaign snapshots may configure a rolling window. All other snapshots use
+/// the stable default so retention remains bounded even when no objectives are
+/// active. The configured value is a validated [`RollingWindowSeconds`](crate::model::RollingWindowSeconds)
+/// newtype, so it is guaranteed finite and positive; no runtime coercion is needed.
 pub fn effective_rolling_window_seconds(state: &GameSnapshot) -> f64 {
     if state.rules.game_mode != GameMode::Campaign {
         return ROLLING_WINDOW_SECONDS;
@@ -40,12 +41,7 @@ pub fn effective_rolling_window_seconds(state: &GameSnapshot) -> f64 {
     let Some(objectives) = state.scenario.objectives.as_ref() else {
         return ROLLING_WINDOW_SECONDS;
     };
-    let configured = objectives.rolling_window_seconds;
-    if configured.is_finite() && configured > 0.0 {
-        configured
-    } else {
-        ROLLING_WINDOW_SECONDS
-    }
+    objectives.rolling_window_seconds.value()
 }
 
 pub fn prune_trip_outcomes(
@@ -88,25 +84,34 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
     let total_trips = counts.completed_trips + counts.unserved_trips;
 
     if total_trips >= 10
-        && f64::from(counts.unserved_trips) / f64::from(total_trips) > thresholds.max_unserved_ratio
+        && f64::from(counts.unserved_trips) / f64::from(total_trips)
+            > thresholds.max_unserved_ratio.value()
     {
         return lose(state, "Too many unserved citizens");
     }
 
     if counts.completed_trips >= 10
         && f64::from(counts.late_trips) / f64::from(counts.completed_trips)
-            > thresholds.max_late_ratio
+            > thresholds.max_late_ratio.value()
     {
         return lose(state, "Too many late arrivals");
     }
 
     if state.metrics.waiting_trip_count > 0
-        && state.metrics.average_wait_seconds > thresholds.max_average_wait
+        && state.metrics.average_wait_seconds > thresholds.max_average_wait.value()
     {
         return lose(state, "Average wait time is too high");
     }
 
-    if state.time >= thresholds.survival_time && state.metrics.completed_trips > 0 {
+    // Win gate: intentionally reads the LIFETIME `state.metrics.completed_trips`
+    // counter, not the rolling-window `counts.completed_trips` in scope above.
+    // A campaign must not lose its survival win just because demand went quiet
+    // in the last rolling window (the window can legitimately contain zero
+    // in-range outcomes — see `prune_trip_outcomes`). The loss gates above
+    // correctly use rolling-window counts so a burst of late/unserved trips
+    // fails the campaign even when lifetime totals look healthy; this
+    // lifetime-vs-window asymmetry is deliberate.
+    if state.time >= thresholds.survival_time.value() && state.metrics.completed_trips > 0 {
         let mut next = state.clone();
         next.metrics.state = MetricsState::Won;
         next.metrics.loss_reason = None;

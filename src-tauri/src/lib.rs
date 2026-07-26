@@ -1,8 +1,9 @@
 use std::sync::Mutex;
 
 use caelum_core::{
-    DispatchResult, GameEngine, GameIntent, GameSnapshot, RoadMutationPreviewRequest,
-    RoadMutationPreviewResponse, RoutePreviewRequest, RoutePreviewResponse,
+    DispatchResult, GameEngine, GameIntent, GameSnapshot, GameplayRejection,
+    RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
+    RoutePreviewResponse, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use tauri::State;
 
@@ -38,8 +39,28 @@ fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
 #[tauri::command]
 fn game_load_snapshot(
     state: State<'_, EngineState>,
-    snapshot: GameSnapshot,
+    snapshot: serde_json::Value,
 ) -> Result<GameSnapshot, serde_json::Value> {
+    // Two-phase: probe `schemaVersion` before the full `GameSnapshot`
+    // deserialization so a legacy schema-v2 save (which lacks the required v3
+    // `rules` / `scenario.objectives` / `scenario.growthWaves` fields) is
+    // rejected with the structured `UnsupportedSnapshotSchema` code instead of
+    // a generic missing-field serde error. If the probe itself cannot read a
+    // schema version (truly malformed payload), treat the version as unknown
+    // (0) and still reject as unsupported.
+    let probe_schema_version = serde_json::from_value::<SnapshotSchemaProbe>(snapshot.clone())
+        .map(|probe| probe.schema_version)
+        .unwrap_or(0);
+    if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
+        return Err(
+            serde_json::to_value(GameplayRejection::unsupported_snapshot_schema(
+                probe_schema_version,
+            ))
+            .unwrap_or_else(|error| serde_json::Value::String(error.to_string())),
+        );
+    }
+    let snapshot: GameSnapshot = serde_json::from_value(snapshot)
+        .map_err(|error| serde_json::Value::String(error.to_string()))?;
     let loaded = GameEngine::from_snapshot(snapshot).map_err(|rejection| {
         serde_json::to_value(rejection)
             .unwrap_or_else(|error| serde_json::Value::String(error.to_string()))
@@ -136,6 +157,59 @@ mod tests {
             },
         );
         let error = response.expect_err("unsupported schema should reject");
+
+        assert_eq!(error["code"], json!("unsupportedSnapshotSchema"));
+        assert_eq!(
+            error["context"]["expectedSchemaVersion"],
+            json!(SNAPSHOT_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            error["context"]["actualSchemaVersion"],
+            json!(SNAPSHOT_SCHEMA_VERSION - 1)
+        );
+    }
+
+    #[test]
+    fn schema_v2_save_missing_required_v3_fields_is_structurally_rejected() {
+        // A legacy schema-v2 save lacks the required v3 `rules` field (and the
+        // tightened `scenario.objectives` / `scenario.growthWaves` keys). The
+        // two-phase probe must reject it with `UnsupportedSnapshotSchema`
+        // before the full deserialize fails with a generic missing-field error.
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.runtime_authority_mut().__allow_command(
+            "game_load_snapshot".to_string(),
+            tauri::utils::acl::ExecutionContext::Local,
+        );
+        let app = tauri::test::mock_builder()
+            .manage(Mutex::new(GameEngine::new()))
+            .invoke_handler(tauri::generate_handler![game_load_snapshot])
+            .build(context)
+            .expect("test Tauri app should build");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("test webview should build");
+
+        // Start from a valid v3 snapshot's JSON, then regress it to a v2 shape:
+        // drop the required `rules` field and set `schemaVersion` to v2.
+        let mut snapshot_value =
+            serde_json::to_value(GameEngine::new().snapshot()).expect("snapshot serializes");
+        let snapshot_obj = snapshot_value.as_object_mut().expect("snapshot is object");
+        snapshot_obj.remove("rules");
+        snapshot_obj["schemaVersion"] = json!(SNAPSHOT_SCHEMA_VERSION - 1);
+
+        let response = get_ipc_response(
+            &webview,
+            InvokeRequest {
+                cmd: "game_load_snapshot".into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: InvokeBody::Json(json!({ "snapshot": snapshot_value })),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        );
+        let error = response.expect_err("v2 save must be rejected as unsupported schema");
 
         assert_eq!(error["code"], json!("unsupportedSnapshotSchema"));
         assert_eq!(
