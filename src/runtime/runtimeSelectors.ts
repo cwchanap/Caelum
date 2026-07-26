@@ -2,9 +2,11 @@ import type {
   GameState,
   GameplayRejection,
   MetroLine,
+  ObjectiveThresholds,
   Overlay,
   Route,
   RouteLegPath,
+  SandboxTemplateId,
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
@@ -39,6 +41,10 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   growth: "Growth",
 };
 
+const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
+  growingSuburb: "Growing Suburb",
+};
+
 const budgetFormat = new Intl.NumberFormat("en-US");
 
 export function formatBudget(budget: number): string {
@@ -51,11 +57,7 @@ function formatSnapshotClock(state: GameState): string {
   return `Day ${state.day + 1} ${pad2(hours)}:${pad2(minutes)}`;
 }
 
-export function formatObjective(state: GameState): string {
-  const objectives = state.scenario.objectives;
-  if (objectives === null) {
-    return "Open-ended city — no campaign objective.";
-  }
+export function formatObjective(objectives: ObjectiveThresholds): string {
   return `Hold late trips below ${Math.round(objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
     objectives.maxUnservedRatio * 100,
   )}%, average wait under ${objectives.maxAverageWait}s.`;
@@ -509,6 +511,16 @@ export function selectShellState(
   // Single derivation of the active-tool label — bound to both the HUD chip
   // and the Brief panel so the two can never drift apart.
   const activeToolLabel = formatActiveTool(ui);
+  const templateLabel = SANDBOX_TEMPLATE_LABELS[state.rules.sandbox.templateId];
+  const isCampaign = state.rules.gameMode === "campaign";
+  const campaignObjectives = isCampaign ? state.scenario.objectives : null;
+  const defaultLossNote =
+    campaignObjectives === null
+      ? "Metrics continue without win/loss."
+      : "Within tolerances. Hold the line.";
+  const pendingCampaignWave = isCampaign
+    ? state.scenario.growthWaves.find((wave) => !wave.applied)
+    : undefined;
 
   const hud: ShellHudState = {
     activeCategory: ui.activeHudCategory,
@@ -546,13 +558,22 @@ export function selectShellState(
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
     },
     brief: {
-      title: state.scenario.name,
+      title: isCampaign
+        ? state.scenario.name
+        : state.rules.economyPreset === "creative"
+          ? "Creative Sandbox"
+          : "Standard Sandbox",
+      context: isCampaign
+        ? `Campaign · ${templateLabel}`
+        : `Template · ${templateLabel}`,
       status: state.metrics.state.toUpperCase(),
-      objective: formatObjective(state),
-      lossNote: state.metrics.lossReason ?? "Within tolerances. Hold the line.",
-      nextGrowth:
-        state.scenario.growthWaves.find((wave) => !wave.applied)?.message ??
-        "Sandbox: paint areas to grow.",
+      objective: isCampaign
+        ? campaignObjectives === null
+          ? "No campaign objective."
+          : formatObjective(campaignObjectives)
+        : "Open-ended city — no campaign objective.",
+      lossNote: state.metrics.lossReason ?? defaultLossNote,
+      nextGrowth: pendingCampaignWave?.message ?? "No automatic growth",
       selectedId: ui.selectedId ?? "—",
       activeTool: activeToolLabel,
     },

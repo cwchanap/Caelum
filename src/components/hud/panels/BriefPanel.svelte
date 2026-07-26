@@ -12,7 +12,7 @@
   <section class="panel-section details">
     <h3 class="section-head"><span class="num">05</span> Brief</h3>
     <h2>{shell.title}</h2>
-    <p class="brief-id">Scenario · 001</p>
+    <p class="brief-id">{shell.context}</p>
 
     <div class="dispatch-row">
       <span class="dispatch-key">Status</span>

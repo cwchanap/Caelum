@@ -6,7 +6,6 @@ import type {
   RouteLegPath,
 } from "../../src/domain/types";
 import {
-  formatObjective,
   selectRouteFailures,
   selectShellState,
 } from "../../src/runtime/runtimeSelectors";
@@ -984,13 +983,150 @@ describe("route selectors", () => {
   });
 });
 
-describe("ShellHudState", () => {
-  it("uses the sandbox objective copy when Rust supplies no thresholds", () => {
-    expect(formatObjective(createTestGameState())).toBe(
-      "Open-ended city — no campaign objective.",
-    );
+describe("selectShellState Brief", () => {
+  const thresholds = {
+    maxLateRatio: 0.25,
+    maxUnservedRatio: 0.2,
+    maxAverageWait: 180,
+    rollingWindowSeconds: 300,
+    survivalTime: 1_200,
+  };
+
+  it.each([
+    {
+      name: "standard sandbox",
+      rules: {
+        gameMode: "sandbox" as const,
+        economyPreset: "standard" as const,
+      },
+      objectives: null,
+      title: "Standard Sandbox",
+      context: "Template · Growing Suburb",
+      objective: "Open-ended city — no campaign objective.",
+      lossNote: "Metrics continue without win/loss.",
+    },
+    {
+      name: "creative sandbox",
+      rules: {
+        gameMode: "sandbox" as const,
+        economyPreset: "creative" as const,
+      },
+      objectives: thresholds,
+      title: "Creative Sandbox",
+      context: "Template · Growing Suburb",
+      objective: "Open-ended city — no campaign objective.",
+      lossNote: "Metrics continue without win/loss.",
+    },
+    {
+      name: "campaign with objectives",
+      rules: {
+        gameMode: "campaign" as const,
+        economyPreset: "standard" as const,
+      },
+      objectives: thresholds,
+      title: "Growing Suburb",
+      context: "Campaign · Growing Suburb",
+      objective:
+        "Hold late trips below 25%, unserved below 20%, average wait under 180s.",
+      lossNote: "Within tolerances. Hold the line.",
+    },
+    {
+      name: "campaign without objectives",
+      rules: {
+        gameMode: "campaign" as const,
+        economyPreset: "creative" as const,
+      },
+      objectives: null,
+      title: "Growing Suburb",
+      context: "Campaign · Growing Suburb",
+      objective: "No campaign objective.",
+      lossNote: "Metrics continue without win/loss.",
+    },
+  ])("renders $name", (entry) => {
+    const state = createTestGameState({
+      rules: {
+        ...createTestGameState().rules,
+        gameMode: entry.rules.gameMode,
+        economyPreset: entry.rules.economyPreset,
+      },
+      scenario: {
+        name: "Growing Suburb",
+        objectives: entry.objectives,
+        growthWaves: [],
+      },
+    });
+
+    expect(selectShellState(state, createUiState()).brief).toMatchObject({
+      title: entry.title,
+      context: entry.context,
+      objective: entry.objective,
+      lossNote: entry.lossNote,
+      nextGrowth: "No automatic growth",
+    });
   });
 
+  it("uses campaign wave copy and preserves a Rust loss reason", () => {
+    const base = createTestGameState();
+    const state = createTestGameState({
+      rules: {
+        ...base.rules,
+        gameMode: "campaign",
+        economyPreset: "creative",
+      },
+      metrics: {
+        ...base.metrics,
+        state: "lost",
+        lossReason: "Existing campaign loss",
+      },
+      scenario: {
+        name: "Authored Campaign",
+        objectives: thresholds,
+        growthWaves: [
+          {
+            id: "wave-1",
+            triggerTime: 60,
+            message: "New residents arrive soon.",
+            applied: false,
+            actions: [],
+          },
+        ],
+      },
+    });
+
+    expect(selectShellState(state, createUiState()).brief).toMatchObject({
+      title: "Authored Campaign",
+      context: "Campaign · Growing Suburb",
+      lossNote: "Existing campaign loss",
+      nextGrowth: "New residents arrive soon.",
+    });
+  });
+
+  it("ignores sandbox-attached objectives and waves", () => {
+    const state = createTestGameState({
+      scenario: {
+        name: "Growing Suburb",
+        objectives: thresholds,
+        growthWaves: [
+          {
+            id: "inert-wave",
+            triggerTime: 0,
+            message: "Must not render",
+            applied: false,
+            actions: [],
+          },
+        ],
+      },
+    });
+
+    expect(selectShellState(state, createUiState()).brief).toMatchObject({
+      title: "Standard Sandbox",
+      objective: "Open-ended city — no campaign objective.",
+      nextGrowth: "No automatic growth",
+    });
+  });
+});
+
+describe("ShellHudState", () => {
   it("exposes bus terminal cost from the shared transit catalog", () => {
     expect(COSTS.busTerminal).toBe(12_000);
   });
