@@ -64,6 +64,67 @@ pub struct SandboxCreationError {
     pub context: SandboxCreationErrorContext,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxResetErrorCode {
+    UnsupportedGameMode,
+    TemplateInvariantViolation,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxResetErrorContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game_mode: Option<GameMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<SandboxTemplateId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxResetError {
+    pub code: SandboxResetErrorCode,
+    pub context: SandboxResetErrorContext,
+}
+
+impl SandboxResetError {
+    fn unsupported_game_mode(game_mode: GameMode) -> Self {
+        Self {
+            code: SandboxResetErrorCode::UnsupportedGameMode,
+            context: SandboxResetErrorContext {
+                game_mode: Some(game_mode),
+                template_id: None,
+            },
+        }
+    }
+
+    fn template_invariant_violation(template_id: SandboxTemplateId) -> Self {
+        Self {
+            code: SandboxResetErrorCode::TemplateInvariantViolation,
+            context: SandboxResetErrorContext {
+                game_mode: None,
+                template_id: Some(template_id),
+            },
+        }
+    }
+}
+
+impl From<SandboxCreationError> for SandboxResetError {
+    fn from(error: SandboxCreationError) -> Self {
+        match error.code {
+            SandboxCreationErrorCode::TemplateInvariantViolation => {
+                let template_id = match error.context.template_id.as_deref() {
+                    Some("blankGrid") => SandboxTemplateId::BlankGrid,
+                    Some("crossroads") => SandboxTemplateId::Crossroads,
+                    _ => unreachable!("factory invariant failures identify a known template"),
+                };
+                Self::template_invariant_violation(template_id)
+            }
+            _ => unreachable!("persisted sandbox rules reconstruct only validated requests"),
+        }
+    }
+}
+
 pub fn canonical_default_request() -> SandboxCreationRequest {
     SandboxCreationRequest {
         template_id: "crossroads".to_string(),
@@ -172,6 +233,35 @@ pub(crate) fn create_sandbox_candidate(
         snapshot: snapshot_shell(validated, name, map),
         road_topology,
     })
+}
+
+pub(crate) fn sandbox_candidate_from_persisted_rules(
+    rules: &GameRules,
+) -> Result<SandboxCandidate, SandboxResetError> {
+    if rules.game_mode != GameMode::Sandbox {
+        return Err(SandboxResetError::unsupported_game_mode(rules.game_mode));
+    }
+
+    let request = SandboxCreationRequest {
+        template_id: match rules.sandbox.template_id {
+            SandboxTemplateId::BlankGrid => "blankGrid",
+            SandboxTemplateId::Crossroads => "crossroads",
+        }
+        .to_string(),
+        economy_preset: match rules.economy_preset {
+            EconomyPreset::Standard => "standard",
+            EconomyPreset::Creative => "creative",
+        }
+        .to_string(),
+        starting_capital: Some(f64::from(rules.sandbox.starting_capital.value())),
+        demand_multiplier: Some(rules.sandbox.demand_multiplier.value()),
+        move_in_rate: match rules.sandbox.move_in_rate {
+            MoveInRateSelection::Paused => "paused",
+        }
+        .to_string(),
+    };
+
+    create_sandbox_candidate(request).map_err(SandboxResetError::from)
 }
 
 fn blank_map() -> GameMap {

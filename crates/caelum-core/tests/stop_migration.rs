@@ -1,11 +1,11 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, MetricsState, PathGeometry, PlacedBuilding,
     Platform, Point, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, Sim, Stop, StopRoadAccess, TransitMode, TransitNodeStatus,
-    TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ServiceDirection, ServicePattern, Sim, SnapshotSchemaProbe, Stop, StopRoadAccess, TransitMode,
+    TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
     SNAPSHOT_SCHEMA_VERSION,
 };
-use caelum_core::{platforms, GameEngine, GameIntent, RoadPreset};
+use caelum_core::{platforms, GameEngine, GameIntent, GameplayRejection, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -219,6 +219,33 @@ fn from_snapshot_rejects_unsupported_schema_before_normalization() {
         wire["context"]["actualSchemaVersion"],
         serde_json::json!(SNAPSHOT_SCHEMA_VERSION - 1)
     );
+}
+
+#[test]
+fn schema_v3_json_missing_starting_capital_is_rejected_before_full_deserialization() {
+    let mut value = serde_json::to_value(legacy_snapshot()).expect("snapshot serializes");
+    value["schemaVersion"] = serde_json::json!(3);
+    value["rules"]["sandbox"]
+        .as_object_mut()
+        .expect("sandbox rules are an object")
+        .remove("startingCapital");
+
+    let probe: SnapshotSchemaProbe =
+        serde_json::from_value(value.clone()).expect("schema probe reads schema-v3 JSON");
+    let rejection = if probe.schema_version != SNAPSHOT_SCHEMA_VERSION {
+        GameplayRejection::unsupported_snapshot_schema(probe.schema_version)
+    } else {
+        panic!("schema-v3 JSON must be rejected before the full deserialize")
+    };
+    let wire = serde_json::to_value(rejection).expect("rejection serializes");
+
+    assert!(serde_json::from_value::<GameSnapshot>(value).is_err());
+    assert_eq!(wire["code"], serde_json::json!("unsupportedSnapshotSchema"));
+    assert_eq!(
+        wire["context"]["expectedSchemaVersion"],
+        serde_json::json!(4)
+    );
+    assert_eq!(wire["context"]["actualSchemaVersion"], serde_json::json!(3));
 }
 
 #[test]

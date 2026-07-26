@@ -256,8 +256,8 @@ pub struct GameSnapshot {
 /// (serde ignores the unknown remaining fields), compare against
 /// [`SNAPSHOT_SCHEMA_VERSION`], and reject with
 /// [`GameplayRejection::unsupported_snapshot_schema`] on mismatch — so a legacy
-/// schema-v2 save that lacks the required v3 `rules` / `scenario.objectives` /
-/// `scenario.growthWaves` fields is rejected with the structured
+/// schema-v3 save that lacks the required v4 `rules.sandbox.startingCapital`
+/// field is rejected with the structured
 /// `UnsupportedSnapshotSchema` code instead of a generic missing-field serde
 /// error from the full deserialize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
