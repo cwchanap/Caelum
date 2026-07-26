@@ -49,12 +49,10 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Static scenario identity + objective thresholds shipped on every Rust
-/// snapshot. The thresholds are the authoritative values the core's
-/// `evaluate_objectives` enforces; the shell must read them from here rather
-/// than hard-coding a local copy (which drifted: `rollingWindowSeconds` was 600
-/// in the TS shim while the core evaluates at 300). Growth waves ship here
-/// too (empty for Growing Suburb); the shell reads them read-only.
+/// Schema-v3 raw snapshots always include scenario identity, growth waves, and
+/// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
+/// or present WASM `undefined`; both host encodings of Rust `None` normalize
+/// to canonical `null`. Non-null thresholds remain authoritative core data.
 export interface RustScenarioConfig {
   name: string;
   objectives: RustObjectiveThresholds | null | undefined;
