@@ -77,6 +77,7 @@ function editorProps(editor: RouteEditorView) {
 
 const brief: ShellBriefState = {
   title: "Scenario",
+  context: "Template · Growing Suburb",
   status: "RUNNING",
   objective: "obj",
   lossNote: "note",
@@ -241,10 +242,11 @@ describe("HudDrawer panel routing", () => {
     );
   });
 
-  it("renders the brief panel scenario text", () => {
+  it("renders the selector-provided brief title and context", () => {
     render(HudDrawer, { props: drawerProps({ category: "brief" }) });
     const panel = screen.getByTestId("panel-brief");
     expect(within(panel).getByText("Scenario")).toBeVisible();
+    expect(within(panel).getByText("Template · Growing Suburb")).toBeVisible();
   });
 
   it("hides the drawer when category is null", () => {

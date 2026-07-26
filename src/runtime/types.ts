@@ -43,6 +43,7 @@ export interface ShellTopbarState {
 
 export interface ShellBriefState {
   title: string;
+  context: string;
   status: string;
   objective: string;
   lossNote: string;
