@@ -171,7 +171,7 @@ fn from_snapshot_migrates_legacy_stop_and_rebases_dependent_passenger_and_bus_st
     let waiting_trip = &snapshot.active_trips[0];
     let parked_bus = &snapshot.transit.vehicles[0];
 
-    assert_eq!(snapshot.schema_version, 2);
+    assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(stop.position, point(4, 4));
     assert_eq!(stop.road_access.unwrap().road_point, point(4, 5));
     assert_eq!(

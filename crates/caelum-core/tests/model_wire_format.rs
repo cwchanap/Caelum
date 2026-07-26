@@ -10,14 +10,16 @@
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, Heading, Metrics, MetricsState, MovementKind, PathGeometry,
-    PlacedBuilding, Point, RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg,
-    RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim,
-    Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
+    ActiveTrip, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading, Metrics,
+    MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, RoadPathStep, RoadPort,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus,
+    RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim, Station, Stop,
+    StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
     TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
+use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
     DispatchResult, GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset,
@@ -248,8 +250,136 @@ fn snapshot_carries_the_authoritative_schema_version() {
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(2)
+        json!(3)
     );
+}
+
+#[test]
+fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
+    let value = serde_json::to_value(create_initial_snapshot()).unwrap();
+
+    assert_eq!(value["schemaVersion"], json!(3));
+    assert_eq!(
+        value["rules"],
+        json!({
+            "gameMode": "sandbox",
+            "economyPreset": "standard",
+            "sandbox": {
+                "templateId": "growingSuburb",
+                "demandMultiplier": 1.0,
+                "moveInRate": "paused"
+            }
+        })
+    );
+    assert_eq!(value["scenario"]["objectives"], json!(null));
+    assert_eq!(value["scenario"]["growthWaves"], json!([]));
+}
+
+#[test]
+fn demand_multiplier_rejects_non_positive_and_non_finite_values() {
+    for value in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(DemandMultiplier::try_from(value).is_err());
+    }
+    assert!(serde_json::from_value::<DemandMultiplier>(json!(0.0)).is_err());
+    assert!(serde_json::from_value::<DemandMultiplier>(json!(-1.0)).is_err());
+
+    let multiplier = DemandMultiplier::try_from(1.5).unwrap();
+    assert_eq!(serde_json::to_value(multiplier).unwrap(), json!(1.5));
+}
+
+#[test]
+fn nullable_objectives_key_is_required() {
+    let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
+    value["scenario"]
+        .as_object_mut()
+        .unwrap()
+        .remove("objectives");
+
+    assert!(serde_json::from_value::<GameSnapshot>(value).is_err());
+}
+
+#[test]
+fn snapshot_rejects_unknown_rule_enum_values() {
+    for path in [
+        &["rules", "gameMode"][..],
+        &["rules", "economyPreset"][..],
+        &["rules", "sandbox", "templateId"][..],
+        &["rules", "sandbox", "moveInRate"][..],
+    ] {
+        let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
+        let mut nested = &mut value;
+        for key in path {
+            nested = nested.get_mut(*key).unwrap();
+        }
+        *nested = json!("unknown");
+
+        assert!(
+            serde_json::from_value::<GameSnapshot>(value).is_err(),
+            "unknown value for {} must reject",
+            path.join(".")
+        );
+    }
+}
+
+#[test]
+fn campaign_rules_and_scenario_round_trip() {
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+
+    assert_eq!(
+        serde_json::to_value(&rules).unwrap(),
+        json!({
+            "gameMode": "campaign",
+            "economyPreset": "standard",
+            "sandbox": {
+                "templateId": "growingSuburb",
+                "demandMultiplier": 1.0,
+                "moveInRate": "paused"
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&scenario).unwrap()["objectives"],
+        json!({
+            "maxLateRatio": 0.25,
+            "maxUnservedRatio": 0.2,
+            "maxAverageWait": 180.0,
+            "rollingWindowSeconds": 300.0,
+            "survivalTime": 1_200.0,
+        })
+    );
+
+    let restored_rules: GameRules =
+        serde_json::from_value(serde_json::to_value(&rules).unwrap()).unwrap();
+    let restored_scenario: ScenarioConfig =
+        serde_json::from_value(serde_json::to_value(&scenario).unwrap()).unwrap();
+
+    assert_eq!(restored_rules, rules);
+    assert_eq!(restored_scenario, scenario);
+}
+
+#[test]
+fn snapshot_requires_schema_v3_rules_and_scenario_fields() {
+    for field in ["rules", "scenario", "objectives", "growthWaves"] {
+        let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
+        if matches!(field, "objectives" | "growthWaves") {
+            value["scenario"].as_object_mut().unwrap().remove(field);
+        } else {
+            value.as_object_mut().unwrap().remove(field);
+        }
+
+        assert!(
+            serde_json::from_value::<GameSnapshot>(value).is_err(),
+            "schema-v3 field {field} must be required"
+        );
+    }
+}
+
+#[test]
+fn explicit_null_objectives_deserializes_to_none() {
+    let value = serde_json::to_value(create_initial_snapshot()).unwrap();
+    let snapshot: GameSnapshot = serde_json::from_value(value).unwrap();
+
+    assert_eq!(snapshot.scenario.objectives, None);
 }
 
 #[test]
@@ -869,19 +999,14 @@ fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
     // the objective copy from them), and they must match the TS domain
     // `Scenario.objectives` shape exactly — including `rollingWindowSeconds`,
     // which a previous TS shim had drifted to 600 while the core evaluates 300.
-    let snapshot = create_initial_snapshot();
-    let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
-    assert_eq!(value["name"], json!("Growing Suburb"));
-    assert_eq!(value["objectives"]["maxLateRatio"], json!(0.25));
-    assert_eq!(value["objectives"]["maxUnservedRatio"], json!(0.2));
-    assert_eq!(value["objectives"]["maxAverageWait"], json!(180.0));
-    assert_eq!(value["objectives"]["rollingWindowSeconds"], json!(300.0));
-    assert_eq!(value["objectives"]["survivalTime"], json!(1_200.0));
-    // No leaked snake_case keys from the Rust field names. These fields live on
-    // the nested `ObjectiveThresholds` struct, so the leak check must inspect
-    // `value["objectives"]` — checking the scenario root would always pass and
-    // miss a regression in the `rename_all = "camelCase"` on that struct.
-    let objectives = &value["objectives"];
+    let value = serde_json::to_value(growing_suburb_objectives()).expect("objectives serialize");
+    assert_eq!(value["maxLateRatio"], json!(0.25));
+    assert_eq!(value["maxUnservedRatio"], json!(0.2));
+    assert_eq!(value["maxAverageWait"], json!(180.0));
+    assert_eq!(value["rollingWindowSeconds"], json!(300.0));
+    assert_eq!(value["survivalTime"], json!(1_200.0));
+    // No leaked snake_case keys from the Rust field names.
+    let objectives = &value;
     assert!(
         objectives.get("rolling_window_seconds").is_none(),
         "objectives must not leak the snake_case `rolling_window_seconds` field"
@@ -1167,9 +1292,7 @@ fn shipped_scenario_growth_waves_serialize_to_empty_list() {
 }
 
 #[test]
-fn scenario_config_growth_waves_defaults_to_empty_when_omitted() {
-    use caelum_core::model::ScenarioConfig;
-
+fn scenario_config_rejects_omitted_growth_waves() {
     let value = json!({
         "name": "Growing Suburb",
         "objectives": {
@@ -1180,9 +1303,7 @@ fn scenario_config_growth_waves_defaults_to_empty_when_omitted() {
             "survivalTime": 600.0
         }
     });
-    let config: ScenarioConfig =
-        serde_json::from_value(value).expect("scenario without growthWaves deserializes");
-    assert!(config.growth_waves.is_empty());
+    assert!(serde_json::from_value::<ScenarioConfig>(value).is_err());
 }
 
 #[test]

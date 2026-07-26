@@ -1,7 +1,9 @@
 use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    GameMap, GrowthAction, GrowthWave, ObjectiveThresholds, Point, ScenarioConfig, Tile,
+    DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GrowthAction, GrowthWave,
+    MoveInRateSelection, ObjectiveThresholds, Point, SandboxSettings, SandboxTemplateId,
+    ScenarioConfig, Tile,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
@@ -21,26 +23,44 @@ const SEED_ANCHOR_X: i32 = 2;
 const SEED_ANCHOR_Y: i32 = 3;
 const SEED_UNITS_PER_ROW: i32 = 6;
 
-/// The scenario identity + objective thresholds the engine enforces, sourced
-/// from the `objectives` constants so the shell cannot drift from the values
-/// `evaluate_objectives` actually applies (the previous TS shim hard-coded
-/// `rollingWindowSeconds = 600` while the core evaluates at `300`).
+pub fn growing_suburb_objectives() -> ObjectiveThresholds {
+    ObjectiveThresholds {
+        max_late_ratio: MAX_LATE_RATIO,
+        max_unserved_ratio: MAX_UNSERVED_RATIO,
+        max_average_wait: MAX_AVERAGE_WAIT_SECONDS,
+        rolling_window_seconds: ROLLING_WINDOW_SECONDS,
+        survival_time: SURVIVAL_TIME_SECONDS,
+    }
+}
+
 pub fn growing_suburb_scenario() -> ScenarioConfig {
     ScenarioConfig {
         name: SCENARIO_NAME.to_string(),
-        objectives: ObjectiveThresholds {
-            max_late_ratio: MAX_LATE_RATIO,
-            max_unserved_ratio: MAX_UNSERVED_RATIO,
-            max_average_wait: MAX_AVERAGE_WAIT_SECONDS,
-            rolling_window_seconds: ROLLING_WINDOW_SECONDS,
-            survival_time: SURVIVAL_TIME_SECONDS,
-        },
-        // Growth waves are implemented and unit-tested (see
-        // `growing_suburb_growth_waves`) but intentionally NOT wired here: firing
-        // a seed wave on the first tick would perturb the deterministic core
-        // suite + golden traces. Wiring the live seed is a deliberate follow-up.
+        objectives: None,
         growth_waves: Vec::new(),
     }
+}
+
+pub fn growing_suburb_campaign(
+    objectives: ObjectiveThresholds,
+    growth_waves: Vec<GrowthWave>,
+) -> (GameRules, ScenarioConfig) {
+    (
+        GameRules {
+            game_mode: GameMode::Campaign,
+            economy_preset: EconomyPreset::Standard,
+            sandbox: SandboxSettings {
+                template_id: SandboxTemplateId::GrowingSuburb,
+                demand_multiplier: DemandMultiplier::default(),
+                move_in_rate: MoveInRateSelection::Paused,
+            },
+        },
+        ScenarioConfig {
+            name: SCENARIO_NAME.to_string(),
+            objectives: Some(objectives),
+            growth_waves,
+        },
+    )
 }
 
 /// Grid-derived seed wave: authors `max(1, grid / GRID_CELLS_PER_HOUSING_UNIT)`

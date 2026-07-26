@@ -249,7 +249,7 @@ impl GameEngine {
         }
     }
 
-    /// Construct an engine from a serialized schema-v2 snapshot, normalizing
+    /// Construct an engine from a serialized schema-v3 snapshot, normalizing
     /// roadside stop state before rebuilding the non-serialized topology cache.
     pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
         if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
