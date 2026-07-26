@@ -28,7 +28,13 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 2`. Loading is strict: there is no heuristic legacy-snapshot migration or fallback path. Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 3`. Every snapshot carries
+required Rust-owned `GameRules` plus a required `ScenarioConfig`; objectives
+are explicitly an object or absent campaign content (`null` in JSON and
+normalized from WASM `undefined`). Loading is strict: schema-v2 or malformed
+schema-v3 snapshots are rejected rather than heuristically migrated.
+
+Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
 Linear road, track, remove, and area strokes may partially apply in authored order where their intent allows skipped tiles. Direction changes, route creation/updates, and roundabout placement/removal are atomic mutations. A tile owned by any road structure blocks every other infrastructure or zoning operation until that structure is removed through its owning mutation.
 
@@ -52,7 +58,21 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
-The Growing Suburb scenario ships as a sandbox with an authored dual-bidirectional arterial cross, but no pre-seeded districts, timed growth waves, buildings, or citizens. Growth is player-driven through area painting and building placement. TypeScript does not synthesize growth waves: `snapshotView.ts` passes through the Rust-owned scenario list (empty for the shipped scenario), and any future timed-growth mechanic belongs in `crates/caelum-core` so browser and Tauri hosts stay symmetric.
+The fresh Growing Suburb game is Standard Sandbox: `growingSuburb`, demand
+multiplier `1.0`, paused move-in, no campaign objectives, and no growth waves.
+Sandbox ticks continue trips and metrics but never newly win, lose, or apply
+authored growth. Explicit campaign snapshots may independently attach
+objective thresholds and ordered growth waves; Rust evaluates and applies
+those features only in campaign mode.
+
+Serialized campaign thresholds are authoritative: hosts display the values
+Rust enforces and do not derive or hard-code a local copy. A missing, non-finite,
+or non-positive campaign rolling window falls back to the deterministic
+300-second constant for both trip-outcome retention and objective scoring.
+
+Growing Suburb retains its authored dual-bidirectional arterial cross, with no
+pre-seeded districts, timed sandbox growth waves, buildings, or citizens.
+Growth is player-driven through area painting and building placement.
 
 ## UI shell
 

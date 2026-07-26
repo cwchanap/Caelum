@@ -1524,7 +1524,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("busStop");
     expect(snapshot.state.paused).toBe(false);
     expect(snapshot.shell.topbar.budget).toBe("$120,000");
-    expect(snapshot.shell.brief.title).toBe("Growing Suburb");
+    expect(snapshot.shell.brief.title).toBe("Standard Sandbox");
   });
 
   it("publishes state changes to subscribers", async () => {
