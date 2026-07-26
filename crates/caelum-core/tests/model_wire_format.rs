@@ -250,7 +250,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(3)
+        json!(4)
     );
 }
 
@@ -258,17 +258,16 @@ fn snapshot_carries_the_authoritative_schema_version() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(3));
+    assert_eq!(value["schemaVersion"], json!(4));
+    assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
+    assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
-        value["rules"],
+        value["rules"]["sandbox"],
         json!({
-            "gameMode": "sandbox",
-            "economyPreset": "standard",
-            "sandbox": {
-                "templateId": "growingSuburb",
-                "demandMultiplier": 1.0,
-                "moveInRate": "paused"
-            }
+            "templateId": "crossroads",
+            "startingCapital": 120000,
+            "demandMultiplier": 1.0,
+            "moveInRate": "paused"
         })
     );
     assert_eq!(value["scenario"]["objectives"], json!(null));
@@ -285,6 +284,24 @@ fn demand_multiplier_rejects_non_positive_and_non_finite_values() {
 
     let multiplier = DemandMultiplier::try_from(1.5).unwrap();
     assert_eq!(serde_json::to_value(multiplier).unwrap(), json!(1.5));
+}
+
+#[test]
+fn snapshot_rejects_invalid_schema_v4_sandbox_fields() {
+    let mut negative_capital = serde_json::to_value(create_initial_snapshot()).unwrap();
+    negative_capital["rules"]["sandbox"]["startingCapital"] = json!(-1);
+    assert!(serde_json::from_value::<GameSnapshot>(negative_capital).is_err());
+
+    let mut legacy_template = serde_json::to_value(create_initial_snapshot()).unwrap();
+    legacy_template["rules"]["sandbox"]["templateId"] = json!("growingSuburb");
+    assert!(serde_json::from_value::<GameSnapshot>(legacy_template).is_err());
+
+    let mut missing_capital = serde_json::to_value(create_initial_snapshot()).unwrap();
+    missing_capital["rules"]["sandbox"]
+        .as_object_mut()
+        .unwrap()
+        .remove("startingCapital");
+    assert!(serde_json::from_value::<GameSnapshot>(missing_capital).is_err());
 }
 
 #[test]
@@ -328,10 +345,11 @@ fn campaign_rules_and_scenario_round_trip() {
     assert_eq!(
         serde_json::to_value(&rules).unwrap(),
         json!({
-            "gameMode": "campaign",
-            "economyPreset": "standard",
-            "sandbox": {
-                "templateId": "growingSuburb",
+                "gameMode": "campaign",
+                "economyPreset": "standard",
+                "sandbox": {
+                "templateId": "crossroads",
+                "startingCapital": 120000,
                 "demandMultiplier": 1.0,
                 "moveInRate": "paused"
             }
@@ -358,7 +376,7 @@ fn campaign_rules_and_scenario_round_trip() {
 }
 
 #[test]
-fn snapshot_requires_schema_v3_rules_and_scenario_fields() {
+fn snapshot_requires_schema_v4_rules_and_scenario_fields() {
     for field in ["rules", "scenario", "objectives", "growthWaves"] {
         let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
         if matches!(field, "objectives" | "growthWaves") {
@@ -369,7 +387,7 @@ fn snapshot_requires_schema_v3_rules_and_scenario_fields() {
 
         assert!(
             serde_json::from_value::<GameSnapshot>(value).is_err(),
-            "schema-v3 field {field} must be required"
+            "schema-v4 field {field} must be required"
         );
     }
 }
