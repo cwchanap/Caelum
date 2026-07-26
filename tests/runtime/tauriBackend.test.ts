@@ -246,8 +246,8 @@ describe("createTauriBackend", () => {
 
   it("rethrows unexpected creation/reset command string rejections", async () => {
     invokeMock
-      .mockRejectedValueOnce("engine mutex poisoned")
-      .mockRejectedValueOnce("engine mutex poisoned");
+      .mockRejectedValueOnce("mutex poisoned")
+      .mockRejectedValueOnce("mutex poisoned");
     const backend = await createTauriBackend();
 
     await expect(
@@ -258,8 +258,8 @@ describe("createTauriBackend", () => {
         demandMultiplier: 1,
         moveInRate: "paused",
       }),
-    ).rejects.toBe("engine mutex poisoned");
-    await expect(backend.reset()).rejects.toBe("engine mutex poisoned");
+    ).rejects.toBe("mutex poisoned");
+    await expect(backend.reset()).rejects.toBe("mutex poisoned");
   });
 
   it("loadSnapshot() invokes game_load_snapshot with the serialized snapshot", async () => {
