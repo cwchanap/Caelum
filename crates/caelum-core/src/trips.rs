@@ -105,11 +105,22 @@ fn tick_trips_substepped(
     let mut steps = 0;
     // The substep budget is computed from the current snapshot, but growth
     // waves applied inside the loop can spawn new sims whose departure
-    // boundaries weren't counted in `events_per_day`. Widen the cap when the
-    // sim count grows so the post-growth event budget is always accounted for
-    // and the tick cannot be truncated in release builds.
+    // boundaries weren't counted in `events_per_day`, and each substep appends
+    // new `TripOutcome`s whose expiry boundaries weren't counted in
+    // `outcome_expiry_bound`. Widen the cap when either count grows so the
+    // post-growth/post-substep event budget is always accounted for and the
+    // tick cannot be truncated in release builds. The outcome widening is
+    // Campaign-only, matching the `outcome_expiry_bound` term in
+    // `max_tick_substeps` (sandbox mode never tracks outcome-expiry
+    // boundaries — see `next_boundary_after`).
     let mut cap = max_tick_substeps(&next, final_time);
     let mut last_sim_count = next.sims.len();
+    let campaign_mode = next.rules.game_mode == GameMode::Campaign;
+    let mut last_outcome_count = if campaign_mode {
+        next.metrics.trip_outcomes.len()
+    } else {
+        0
+    };
     loop {
         if steps >= cap || final_time - next.time <= EPSILON {
             break;
@@ -127,6 +138,13 @@ fn tick_trips_substepped(
                 .saturating_mul(day_count);
             cap = cap.saturating_add(additional);
             last_sim_count = sim_count;
+        }
+        if campaign_mode {
+            let outcome_count = next.metrics.trip_outcomes.len();
+            if outcome_count > last_outcome_count {
+                cap = cap.saturating_add(outcome_count.saturating_sub(last_outcome_count));
+                last_outcome_count = outcome_count;
+            }
         }
 
         reset_daily_commute_flags(&mut next);
