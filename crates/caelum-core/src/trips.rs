@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
 use crate::model::{
-    ActiveTrip, GameSnapshot, Metrics, MetricsState, Point, RoutePlan, Sim, TransitMode,
-    TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, WorkerProfile,
+    ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
+    RoutePlan, Sim, TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
+    TripStatus, WorkerProfile,
 };
 use crate::objectives;
 use crate::router;
@@ -51,8 +52,8 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 /// tick as soon as a loss or win condition is reached.
 ///
 /// A coarse tick (e.g. resuming from a suspended browser tab) can span a waiting
-/// trip past the 180s average-wait loss threshold and then to its 240s patience
-/// expiry, or generate bad outcomes that fall outside the 300s rolling window by
+/// trip past a campaign average-wait loss threshold and then to its 240s patience
+/// expiry, or generate bad outcomes that fall outside the active rolling window by
 /// the time the final substep completes. Evaluating objectives only once on the
 /// final snapshot misses those loss conditions — the expired trip is gone from
 /// `waiting_trip_count`, and the stale outcomes are pruned. Per-substep
@@ -296,7 +297,14 @@ fn advance_active_trips_with_zero_delta_ids(
         }
     }
 
-    next.metrics = update_metrics(&state.metrics, &next.active_trips, metric_delta, state.time);
+    let retention_window_seconds = objectives::effective_rolling_window_seconds(state);
+    next.metrics = update_metrics(
+        &state.metrics,
+        &next.active_trips,
+        metric_delta,
+        state.time,
+        retention_window_seconds,
+    );
     next
 }
 
@@ -490,9 +498,17 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
 fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     let after = state.time + EPSILON;
     let mut next = None;
+    let active_thresholds = active_objective_thresholds(state);
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
     if next_day_boundary > after {
         next = Some(next_day_boundary);
+    }
+
+    if let Some(survival_time) = active_thresholds
+        .map(|thresholds| thresholds.survival_time)
+        .filter(|survival_time| survival_time.is_finite() && *survival_time > after)
+    {
+        track_next_boundary(&mut next, survival_time, after);
     }
 
     for sim in &state.sims {
@@ -530,10 +546,21 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     }
 
     for trip in &state.active_trips {
-        track_active_trip_boundary(&mut next, state, trip, after);
+        track_active_trip_boundary(
+            &mut next,
+            state,
+            trip,
+            after,
+            active_thresholds.map(|thresholds| thresholds.max_average_wait),
+        );
     }
 
-    track_aggregate_wait_boundary(&mut next, state, after);
+    track_aggregate_wait_boundary(
+        &mut next,
+        state,
+        after,
+        active_thresholds.map(|thresholds| thresholds.max_average_wait),
+    );
 
     for vehicle in &state.transit.vehicles {
         if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
@@ -550,8 +577,16 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     next
 }
 
+fn active_objective_thresholds(state: &GameSnapshot) -> Option<&ObjectiveThresholds> {
+    if state.rules.game_mode == GameMode::Campaign {
+        state.scenario.objectives.as_ref()
+    } else {
+        None
+    }
+}
+
 /// Track a boundary at the instant the aggregate `average_wait_seconds` metric
-/// can cross `MAX_AVERAGE_WAIT_SECONDS`, so a coarse substep samples the loss
+/// can cross the active campaign average-wait threshold, so a coarse substep samples the loss
 /// gate there instead of skipping over the crossing.
 ///
 /// The per-trip `wait_threshold_remaining` boundary in
@@ -562,13 +597,21 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
 ///
 /// Between boundary events every waiting trip's wait grows at 1s/s, so the
 /// average also grows at 1s/s and crosses the threshold after
-/// `MAX_AVERAGE_WAIT_SECONDS - current_average` seconds. This is computed from
+/// `max_average_wait - current_average` seconds. This is computed from
 /// the trips' `patience_remaining` (not `state.metrics.average_wait_seconds`,
 /// which is stale until the first `update_metrics` call). Patience expiries and
 /// vehicle boardings are already tracked as boundaries, so the substep ends
 /// there first and this boundary is recomputed from the new state — keeping the
 /// calculation correct as the waiting set changes.
-fn track_aggregate_wait_boundary(next: &mut Option<f64>, state: &GameSnapshot, after: f64) {
+fn track_aggregate_wait_boundary(
+    next: &mut Option<f64>,
+    state: &GameSnapshot,
+    after: f64,
+    max_average_wait: Option<f64>,
+) {
+    let Some(max_average_wait) = max_average_wait else {
+        return;
+    };
     let waiting_trips: Vec<&ActiveTrip> = state
         .active_trips
         .iter()
@@ -583,7 +626,7 @@ fn track_aggregate_wait_boundary(next: &mut Option<f64>, state: &GameSnapshot, a
         .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
         .sum();
     let average_wait_seconds = current_wait_seconds / f64::from(waiting_trips.len() as u32);
-    let seconds_to_threshold = objectives::MAX_AVERAGE_WAIT_SECONDS - average_wait_seconds;
+    let seconds_to_threshold = max_average_wait - average_wait_seconds;
     if seconds_to_threshold > EPSILON {
         track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
     }
@@ -594,6 +637,7 @@ fn track_active_trip_boundary(
     state: &GameSnapshot,
     trip: &ActiveTrip,
     after: f64,
+    max_average_wait: Option<f64>,
 ) {
     if is_terminal_status(trip.status)
         || is_home_fallback_trip(state, trip)
@@ -629,7 +673,7 @@ fn track_active_trip_boundary(
             return;
         };
         if leg.mode != TransitMode::Walk {
-            track_waiting_terminal_boundaries(next, state, trip, after);
+            track_waiting_terminal_boundaries(next, state, trip, after, max_average_wait);
             return;
         }
         match seconds_to_next_walk_boundary(&trip.position, &leg.to) {
@@ -647,19 +691,21 @@ fn track_waiting_terminal_boundaries(
     state: &GameSnapshot,
     trip: &ActiveTrip,
     after: f64,
+    max_average_wait: Option<f64>,
 ) {
     // Break at the average-wait loss threshold so a coarse substep doesn't span
-    // from below `MAX_AVERAGE_WAIT_SECONDS` of wait all the way to patience
+    // from below the active average-wait threshold all the way to patience
     // expiry without sampling the metric. A trip that has waited
     // `WAIT_PATIENCE_SECONDS - patience_remaining` seconds crosses the threshold
-    // after `patience_remaining - (WAIT_PATIENCE_SECONDS - MAX_AVERAGE_WAIT_SECONDS)`
+    // after `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)`
     // more seconds. A tiny `EPSILON` offset lands the sample strictly above the
     // threshold because the loss gate uses `>` not `>=`.
-    let wait_threshold_remaining = trip.patience_remaining
-        - (WAIT_PATIENCE_SECONDS - objectives::MAX_AVERAGE_WAIT_SECONDS)
-        + EPSILON;
-    if wait_threshold_remaining > EPSILON {
-        track_next_boundary(next, state.time + wait_threshold_remaining, after);
+    if let Some(max_average_wait) = max_average_wait {
+        let wait_threshold_remaining =
+            trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait) + EPSILON;
+        if wait_threshold_remaining > EPSILON {
+            track_next_boundary(next, state.time + wait_threshold_remaining, after);
+        }
     }
 
     if trip.patience_remaining > EPSILON {
@@ -1032,6 +1078,7 @@ fn update_metrics(
     trips: &[ActiveTrip],
     metric_delta: TripMetricDelta,
     current_time: f64,
+    retention_window_seconds: f64,
 ) -> Metrics {
     let total_wait_seconds = metrics.total_wait_seconds + metric_delta.wait_seconds;
     let waiting_trip_count = trips
@@ -1050,7 +1097,7 @@ fn update_metrics(
         .cloned()
         .chain(metric_delta.outcomes)
         .collect();
-    objectives::prune_trip_outcomes(&mut trip_outcomes, current_time);
+    objectives::prune_trip_outcomes(&mut trip_outcomes, current_time, retention_window_seconds);
 
     Metrics {
         late_trips: metrics.late_trips + metric_delta.late_trips,

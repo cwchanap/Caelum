@@ -3,8 +3,17 @@ use caelum_core::model::{
     ServiceDirection, ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome,
     TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
+use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
 use caelum_core::{GameEngine, GameIntent};
+
+fn campaign_state() -> caelum_core::GameSnapshot {
+    let mut state = create_initial_snapshot();
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    state.rules = rules;
+    state.scenario = scenario;
+    state
+}
 
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
@@ -1775,7 +1784,7 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
 /// ticks (which sample metrics each tick) would lose.
 #[test]
 fn coarse_tick_detects_wait_loss_before_patience_expiry() {
-    let mut state = create_initial_snapshot();
+    let mut state = campaign_state();
     state.paused = false;
     let mut waiting = trip(
         "trip-001",
@@ -1811,7 +1820,7 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
 /// t=31s and t=61s is never sampled and the simulation incorrectly continues.
 #[test]
 fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
-    let mut state = create_initial_snapshot();
+    let mut state = campaign_state();
     state.paused = false;
     state.time = 0.0;
 
@@ -1853,7 +1862,7 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
 /// final snapshot and `evaluate_objectives` sees an empty in-range window.
 #[test]
 fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
-    let mut state = create_initial_snapshot();
+    let mut state = campaign_state();
     state.paused = false;
     state.time = 0.0;
     // Ten trips that will time out (unserved) at t=10s, each with 10s patience.
@@ -1882,4 +1891,44 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
         next.metrics.loss_reason.as_deref(),
         Some("Too many unserved citizens")
     );
+}
+
+#[test]
+fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
+    fn build() -> caelum_core::GameSnapshot {
+        let mut state = campaign_state();
+        state.paused = false;
+        state
+            .scenario
+            .objectives
+            .as_mut()
+            .unwrap()
+            .rolling_window_seconds = 600.0;
+        state.scenario.objectives.as_mut().unwrap().max_average_wait = 300.0;
+        state.active_trips = (0..10)
+            .map(|index| {
+                let mut waiting = trip(
+                    &format!("trip-{index:03}"),
+                    TripStatus::Waiting,
+                    (7, 8).into(),
+                    (22, 8).into(),
+                );
+                waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+                waiting.patience_remaining = 10.0;
+                waiting
+            })
+            .collect();
+        state
+    }
+
+    let coarse = trips::tick_trips_with_objectives(&build(), 700.0);
+    let mut fine = build();
+    while fine.metrics.state == MetricsState::Running {
+        fine = trips::tick_trips_with_objectives(&fine, 1.0);
+    }
+
+    assert_eq!(coarse.metrics.state, MetricsState::Lost);
+    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
+    assert_eq!(coarse.time, fine.time);
+    assert_eq!(coarse.metrics.unserved_trips, fine.metrics.unserved_trips);
 }
