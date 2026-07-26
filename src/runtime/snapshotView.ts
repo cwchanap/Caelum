@@ -38,7 +38,7 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
     },
     scenario: {
       name: snapshot.scenario.name,
-      objectives: snapshot.scenario.objectives,
+      objectives: snapshot.scenario.objectives ?? null,
       growthWaves: snapshot.scenario.growthWaves,
     },
   };

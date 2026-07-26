@@ -4,12 +4,14 @@ import type {
   BuildingRotation,
   BuildingType,
   GameMap,
+  GameRules,
   GrowthWave,
   GameplayRejection,
   Heading,
   PlacedBuilding,
   Point,
   RoundaboutSize,
+  SNAPSHOT_SCHEMA_VERSION,
   RoadStructure,
   RouteLegPath,
   ServicePattern,
@@ -55,12 +57,13 @@ export interface RustObjectiveThresholds {
 /// too (empty for Growing Suburb); the shell reads them read-only.
 export interface RustScenarioConfig {
   name: string;
-  objectives: RustObjectiveThresholds;
+  objectives: RustObjectiveThresholds | null | undefined;
   growthWaves: GrowthWave[];
 }
 
 export interface RustGameSnapshot {
-  schemaVersion: 2;
+  schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
+  rules: GameRules;
   time: number;
   day: number;
   clockMinutes: number;

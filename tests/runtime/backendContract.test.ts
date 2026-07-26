@@ -255,12 +255,12 @@ describe("Rust backend contract", () => {
     expect(anotherSnapshot.scenario.growthWaves).toEqual([]);
   });
 
-  it("rejects a snapshot with an unsupported schema version", () => {
+  it("rejects a schema-v2 snapshot", () => {
     const stale = createRustSnapshot({
-      schemaVersion: 1 as unknown as typeof SNAPSHOT_SCHEMA_VERSION,
+      schemaVersion: 2 as unknown as typeof SNAPSHOT_SCHEMA_VERSION,
     });
     expect(() => normalizeRustSnapshot(stale)).toThrow(
-      "Unsupported snapshot schema version: 1",
+      "Unsupported snapshot schema version: 2",
     );
   });
 
@@ -378,6 +378,46 @@ describe("Rust backend contract", () => {
     expect(normalized.transit.vehicles[0].parkedPosition).toBeNull();
   });
 
+  it("normalizes both Rust None encodings to null objectives", () => {
+    const tauri = normalizeRustSnapshot(
+      createRustSnapshot({
+        scenario: {
+          name: "Growing Suburb",
+          objectives: null,
+          growthWaves: [],
+        },
+      }),
+    );
+    const wasm = normalizeRustSnapshot(
+      createRustSnapshot({
+        scenario: {
+          name: "Growing Suburb",
+          objectives: undefined,
+          growthWaves: [],
+        },
+      }),
+    );
+
+    expect(tauri.scenario.objectives).toBeNull();
+    expect(wasm.scenario.objectives).toBeNull();
+  });
+
+  it("maps only known scenario fields", () => {
+    const raw = createRustSnapshot() as RustGameSnapshot & {
+      scenario: RustGameSnapshot["scenario"] & { unknownField: string };
+    };
+    raw.scenario.unknownField = "discard me";
+
+    const normalized = normalizeRustSnapshot(raw);
+
+    expect(normalized.scenario).toEqual({
+      name: "Growing Suburb",
+      objectives: null,
+      growthWaves: [],
+    });
+    expect("unknownField" in normalized.scenario).toBe(false);
+  });
+
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
     // Guards against the drift that motivated this contract: a previous TS shim
     // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.
@@ -399,7 +439,7 @@ describe("Rust backend contract", () => {
     expect(normalized.scenario.objectives).toEqual(
       withThresholds.scenario.objectives,
     );
-    expect(normalized.scenario.objectives.rollingWindowSeconds).toBe(300);
+    expect(normalized.scenario.objectives?.rollingWindowSeconds).toBe(300);
 
     // And a custom threshold round-trips through unchanged (proving the value
     // is read from the snapshot, not overwritten by a constant).
@@ -419,8 +459,8 @@ describe("Rust backend contract", () => {
       }),
     );
     expect(custom.scenario.name).toBe("Tight Suburb");
-    expect(custom.scenario.objectives.maxLateRatio).toBe(0.1);
-    expect(custom.scenario.objectives.rollingWindowSeconds).toBe(150);
+    expect(custom.scenario.objectives?.maxLateRatio).toBe(0.1);
+    expect(custom.scenario.objectives?.rollingWindowSeconds).toBe(150);
   });
 
   it("backend methods return promises so browser and Tauri share one runtime contract", async () => {

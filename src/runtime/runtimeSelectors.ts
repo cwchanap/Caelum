@@ -52,9 +52,13 @@ function formatSnapshotClock(state: GameState): string {
 }
 
 export function formatObjective(state: GameState): string {
-  return `Hold late trips below ${Math.round(state.scenario.objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
-    state.scenario.objectives.maxUnservedRatio * 100,
-  )}%, average wait under ${state.scenario.objectives.maxAverageWait}s.`;
+  const objectives = state.scenario.objectives;
+  if (objectives === null) {
+    return "Open-ended city — no campaign objective.";
+  }
+  return `Hold late trips below ${Math.round(objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
+    objectives.maxUnservedRatio * 100,
+  )}%, average wait under ${objectives.maxAverageWait}s.`;
 }
 
 export function formatActiveTool(ui: UiState): string {

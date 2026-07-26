@@ -34,6 +34,15 @@ export function createRustSnapshot(
 ): RustGameSnapshot {
   return {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    rules: {
+      gameMode: "sandbox",
+      economyPreset: "standard",
+      sandbox: {
+        templateId: "growingSuburb",
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+    },
     time: 0,
     day: 0,
     clockMinutes: 0,
@@ -71,13 +80,7 @@ export function createRustSnapshot(
     },
     scenario: {
       name: "Growing Suburb",
-      objectives: {
-        maxLateRatio: 0.25,
-        maxUnservedRatio: 0.2,
-        maxAverageWait: 180,
-        rollingWindowSeconds: 300,
-        survivalTime: 1_200,
-      },
+      objectives: null,
       growthWaves: [],
     },
     ...overrides,
