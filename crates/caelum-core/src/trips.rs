@@ -62,8 +62,11 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 /// invariant.
 pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     tick_trips_substepped(state, delta_seconds, |next| {
-        let evaluated = objectives::evaluate_objectives(next);
-        *next = evaluated;
+        // Use the opt variant so the common no-fire path skips the snapshot
+        // clone the legacy wrapper would perform on every substep.
+        if let Some(evaluated) = objectives::evaluate_objectives_opt(next) {
+            *next = evaluated;
+        }
         next.metrics.state != MetricsState::Running
     })
 }
