@@ -1,5 +1,9 @@
 use crate::clock::{clock_minutes, day_index};
-use crate::model::{GameSnapshot, Metrics, MetricsState, TransitNetwork, SNAPSHOT_SCHEMA_VERSION};
+use crate::model::{
+    DemandMultiplier, EconomyPreset, GameMode, GameRules, GameSnapshot, Metrics, MetricsState,
+    MoveInRateSelection, SandboxSettings, SandboxTemplateId, TransitNetwork,
+    SNAPSHOT_SCHEMA_VERSION,
+};
 use crate::scenario::{create_growing_suburb_map, growing_suburb_scenario};
 
 pub fn create_initial_snapshot() -> GameSnapshot {
@@ -11,6 +15,15 @@ pub fn create_initial_snapshot() -> GameSnapshot {
         speed: 1,
         paused: true,
         budget: 120_000,
+        rules: GameRules {
+            game_mode: GameMode::Sandbox,
+            economy_preset: EconomyPreset::Standard,
+            sandbox: SandboxSettings {
+                template_id: SandboxTemplateId::GrowingSuburb,
+                demand_multiplier: DemandMultiplier::default(),
+                move_in_rate: MoveInRateSelection::Paused,
+            },
+        },
         map: create_growing_suburb_map(),
         buildings: Vec::new(),
         transit: TransitNetwork {

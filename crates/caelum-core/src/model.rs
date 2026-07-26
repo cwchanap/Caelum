@@ -1,6 +1,86 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 2;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GameMode {
+    Sandbox,
+    Campaign,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EconomyPreset {
+    Standard,
+    Creative,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxTemplateId {
+    GrowingSuburb,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MoveInRateSelection {
+    Paused,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
+pub struct DemandMultiplier(f64);
+
+impl DemandMultiplier {
+    pub fn new(value: f64) -> Result<Self, &'static str> {
+        Self::try_from(value)
+    }
+
+    pub fn value(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for DemandMultiplier {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+impl TryFrom<f64> for DemandMultiplier {
+    type Error = &'static str;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        if value.is_finite() && value > 0.0 {
+            Ok(Self(value))
+        } else {
+            Err("demand multiplier must be finite and greater than zero")
+        }
+    }
+}
+
+impl From<DemandMultiplier> for f64 {
+    fn from(value: DemandMultiplier) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxSettings {
+    pub template_id: SandboxTemplateId,
+    pub demand_multiplier: DemandMultiplier,
+    pub move_in_rate: MoveInRateSelection,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameRules {
+    pub game_mode: GameMode,
+    pub economy_preset: EconomyPreset,
+    pub sandbox: SandboxSettings,
+}
 
 /// How a transit leg is travelled. Serialized as the lowercase TS-parity strings
 /// `walk` / `bus` / `metro` (see `tests/model_wire_format.rs`).
@@ -120,6 +200,7 @@ pub struct GameSnapshot {
     pub speed: u8,
     pub paused: bool,
     pub budget: i32,
+    pub rules: GameRules,
     pub map: GameMap,
     pub buildings: Vec<PlacedBuilding>,
     pub transit: TransitNetwork,
@@ -130,12 +211,9 @@ pub struct GameSnapshot {
     #[serde(default)]
     pub next_trip_sequence: u32,
     pub metrics: Metrics,
-    /// Static scenario identity + objective thresholds. The thresholds are the
-    /// authoritative source for the shell's objective copy so the TS host cannot
-    /// drift from the values `objectives::evaluate_objectives` actually enforces.
+    /// Static scenario identity plus optional campaign objectives.
     /// `growth_waves` carries scenario-authored growth; entries' `applied` flag
     /// mutates as the tick pipeline fires them (see `crate::growth`).
-    #[serde(default = "default_scenario")]
     pub scenario: ScenarioConfig,
 }
 
@@ -156,13 +234,9 @@ pub struct ObjectiveThresholds {
 #[serde(rename_all = "camelCase")]
 pub struct ScenarioConfig {
     pub name: String,
-    pub objectives: ObjectiveThresholds,
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub objectives: Option<ObjectiveThresholds>,
     pub growth_waves: Vec<GrowthWave>,
-}
-
-fn default_scenario() -> ScenarioConfig {
-    crate::scenario::growing_suburb_scenario()
 }
 
 /// A batch of scheduled scenario intents applied at `trigger_time` by
