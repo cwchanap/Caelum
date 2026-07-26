@@ -9,7 +9,7 @@ import type { RustGameSnapshot } from "../../src/runtime/backend/types";
  * Requires `bun run ensure-wasm` / pretest hook so src/generated/caelum_wasm exists.
  */
 describe("real WASM artifact smoke", () => {
-  it("loads the built module and returns a schema-valid snapshot", async () => {
+  it("loads the built module and returns a schema-v3 snapshot", async () => {
     const backend = await createWasmBackend();
     const snapshot = await backend.snapshot();
 
@@ -20,6 +20,18 @@ describe("real WASM artifact smoke", () => {
     expect(snapshot.map.tiles.length).toBe(
       snapshot.map.width * snapshot.map.height,
     );
+    expect(snapshot.rules).toEqual({
+      gameMode: "sandbox",
+      economyPreset: "standard",
+      sandbox: {
+        templateId: "growingSuburb",
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+    });
+    expect(snapshot.scenario.growthWaves).toEqual([]);
+    expect(Object.hasOwn(snapshot.scenario, "objectives")).toBe(true);
+    expect(snapshot.scenario.objectives).toBeUndefined();
 
     const tick = await backend.tick(0);
     expect(tick.rejection).toBeNull();
@@ -34,7 +46,7 @@ describe("real WASM artifact smoke", () => {
     expect(rejected.rejection?.code).toBe("invalidSpeed");
   });
 
-  it("replaces and loads a schema-v2 snapshot through the real artifact", async () => {
+  it("replaces and loads a schema-v3 snapshot through the real artifact", async () => {
     const backend = await createWasmBackend();
     const initial = await backend.snapshot();
     const replacement: RustGameSnapshot = {
@@ -83,14 +95,50 @@ describe("real WASM artifact smoke", () => {
       }),
       scenario: expect.objectContaining({
         name: "Growing Suburb",
-        objectives: expect.any(Object),
-        growthWaves: expect.any(Array),
+        growthWaves: [],
       }),
     });
     // serde-wasm-bindgen omits Rust Option::None, while the Tauri JSON wire
     // shape uses null for the same field.
     expect(loaded.metrics.lossReason ?? null).toBeNull();
+    expect(loaded.rules).toEqual(initial.rules);
+    expect(Object.hasOwn(loaded.scenario, "objectives")).toBe(true);
+    expect(loaded.scenario.objectives).toBeUndefined();
     expect(loaded.map.tiles).toHaveLength(loaded.map.width * loaded.map.height);
+  });
+
+  it("round-trips present undefined objectives but rejects an omitted key", async () => {
+    const backend = await createWasmBackend();
+    const raw = await backend.snapshot();
+
+    expect(Object.hasOwn(raw.scenario, "objectives")).toBe(true);
+    expect(raw.scenario.objectives).toBeUndefined();
+    const loaded = await backend.loadSnapshot!(raw);
+    expect(loaded.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
+    expect(Object.hasOwn(loaded.scenario, "objectives")).toBe(true);
+    expect(loaded.scenario.objectives).toBeUndefined();
+
+    const missing = {
+      ...raw,
+      scenario: { ...raw.scenario },
+    };
+    delete (missing.scenario as { objectives?: unknown }).objectives;
+
+    await expect(
+      backend.loadSnapshot!(missing as RustGameSnapshot),
+    ).rejects.toThrow(/objectives|missing field/i);
+  });
+
+  it("rejects invalid demand multipliers at the real WASM Rust boundary", async () => {
+    for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const backend = await createWasmBackend();
+      const raw = await backend.snapshot();
+      raw.rules.sandbox.demandMultiplier = invalid;
+
+      await expect(backend.loadSnapshot!(raw)).rejects.toThrow(
+        /demand multiplier/i,
+      );
+    }
   });
 
   it("round-trips a placeRoundabout dispatch through wasm-bindgen", async () => {

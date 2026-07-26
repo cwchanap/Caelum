@@ -40,6 +40,17 @@ describe("createTauriBackend", () => {
     expect(invokeMock).toHaveBeenCalledWith("game_snapshot", undefined);
     expect(result).toEqual(snapshot);
     expect(result.paused).toBe(false);
+    expect(result.scenario.objectives).toBeNull();
+    expect(result.scenario.growthWaves).toEqual([]);
+    expect(result.rules).toEqual({
+      gameMode: "sandbox",
+      economyPreset: "standard",
+      sandbox: {
+        templateId: "growingSuburb",
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+    });
   });
 
   it("dispatch() invokes game_dispatch with the intent and normalizes a None rejection", async () => {

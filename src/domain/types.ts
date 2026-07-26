@@ -1,5 +1,27 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 2 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 3 as const;
+export type GameMode = "sandbox" | "campaign";
+export type EconomyPreset = "standard" | "creative";
+export type SandboxTemplateId = "growingSuburb";
+export type MoveInRateSelection = "paused";
+
+export interface GameRules {
+  gameMode: GameMode;
+  economyPreset: EconomyPreset;
+  sandbox: {
+    templateId: SandboxTemplateId;
+    demandMultiplier: number;
+    moveInRate: MoveInRateSelection;
+  };
+}
+
+export interface ObjectiveThresholds {
+  maxLateRatio: number;
+  maxUnservedRatio: number;
+  maxAverageWait: number;
+  rollingWindowSeconds: number;
+  survivalTime: number;
+}
 export type AreaKind =
   | "residential"
   | "commercial"
@@ -398,13 +420,7 @@ export interface GrowthWave {
 export interface Scenario {
   name: string;
   growthWaves: GrowthWave[];
-  objectives: {
-    maxLateRatio: number;
-    maxUnservedRatio: number;
-    maxAverageWait: number;
-    rollingWindowSeconds: number;
-    survivalTime: number;
-  };
+  objectives: ObjectiveThresholds | null;
 }
 
 export type TripOutcomeKind = "arrived" | "late" | "unserved";
@@ -438,6 +454,7 @@ export interface TransitNetwork {
 
 export interface GameState {
   schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
+  rules: GameRules;
   time: number;
   day: number;
   clockMinutes: number;

@@ -6,6 +6,7 @@ import type {
   RouteLegPath,
 } from "../../src/domain/types";
 import {
+  formatObjective,
   selectRouteFailures,
   selectShellState,
 } from "../../src/runtime/runtimeSelectors";
@@ -984,6 +985,12 @@ describe("route selectors", () => {
 });
 
 describe("ShellHudState", () => {
+  it("uses the sandbox objective copy when Rust supplies no thresholds", () => {
+    expect(formatObjective(createTestGameState())).toBe(
+      "Open-ended city — no campaign objective.",
+    );
+  });
+
   it("exposes bus terminal cost from the shared transit catalog", () => {
     expect(COSTS.busTerminal).toBe(12_000);
   });
