@@ -199,7 +199,7 @@ fn tick_trips_substepped(
 ///   upper-bounds bus arrivals too. Each vehicle contributes independently, so the
 ///   union of arrival events over the tick is at most
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
-/// - `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
+/// - campaign `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
 ///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`).
 ///
 /// then `+1`. Without `vehicle_bound`, a large delta advanced while a metro runs on
@@ -222,12 +222,17 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let vehicle_bound =
         (duration * transit::METRO_TILES_PER_SECOND * state.transit.vehicles.len() as f64).ceil()
             as usize;
+    let growth_wave_bound = if state.rules.game_mode == GameMode::Campaign {
+        state.scenario.growth_waves.len()
+    } else {
+        0
+    };
 
     day_count
         .saturating_mul(events_per_day)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
-        .saturating_add(state.scenario.growth_waves.len())
+        .saturating_add(growth_wave_bound)
         .saturating_add(1)
 }
 
@@ -568,9 +573,11 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         }
     }
 
-    for wave in &state.scenario.growth_waves {
-        if !wave.applied {
-            track_next_boundary(&mut next, wave.trigger_time, after);
+    if state.rules.game_mode == GameMode::Campaign {
+        for wave in &state.scenario.growth_waves {
+            if !wave.applied {
+                track_next_boundary(&mut next, wave.trigger_time, after);
+            }
         }
     }
 
@@ -1341,4 +1348,42 @@ fn move_toward(from: &TripPosition, to: &Point, max_distance: f64) -> TripPositi
 fn same_position_and_point(position: &TripPosition, point: &Point) -> bool {
     (position.x - f64::from(point.x)).abs() < EPSILON
         && (position.y - f64::from(point.y)).abs() < EPSILON
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenario::growing_suburb_growth_waves;
+    use crate::state::create_initial_snapshot;
+
+    #[test]
+    fn sandbox_mid_tick_growth_wave_does_not_schedule_or_apply_growth() {
+        let mut sandbox_with_wave = create_initial_snapshot();
+        sandbox_with_wave.paused = false;
+        let mut waves = growing_suburb_growth_waves();
+        waves[0].trigger_time = 120.0;
+        sandbox_with_wave.scenario.growth_waves = waves;
+
+        let mut sandbox_without_wave = create_initial_snapshot();
+        sandbox_without_wave.paused = false;
+
+        assert_eq!(
+            next_boundary_after(&sandbox_with_wave),
+            next_boundary_after(&sandbox_without_wave),
+            "sandbox waves do not create tick boundaries"
+        );
+        assert_eq!(
+            max_tick_substeps(&sandbox_with_wave, 300.0),
+            max_tick_substeps(&sandbox_without_wave, 300.0),
+            "sandbox waves do not consume the substep budget"
+        );
+
+        let next = tick_trips(&sandbox_with_wave, 300.0);
+        let baseline = tick_trips(&sandbox_without_wave, 300.0);
+
+        assert_eq!(next.time, baseline.time, "sandbox tick timing is unchanged");
+        assert_eq!(next.buildings, baseline.buildings);
+        assert_eq!(next.sims, baseline.sims);
+        assert!(!next.scenario.growth_waves[0].applied);
+    }
 }
