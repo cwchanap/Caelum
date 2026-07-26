@@ -1,15 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import {
+  isSandboxCreationError,
+  isSandboxResetError,
+} from "../../src/runtime/backend";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import type {
   RoadMutationPreviewRequest,
   RoutePreviewRequest,
   RustGameSnapshot,
+  SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
 
 const dims = vi.hoisted(() => ({ width: 0, height: 0 }));
 const fromSnapshot = vi.hoisted(() => vi.fn());
+const fromSandboxRequest = vi.hoisted(() => vi.fn());
+const sandboxFactory = vi.hoisted(
+  (): {
+    rejection: unknown;
+    snapshot: Record<string, unknown> | null;
+    resetRejection: unknown;
+  } => ({
+    rejection: undefined,
+    snapshot: null,
+    resetRejection: undefined,
+  }),
+);
 
 vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
   const init = vi.fn().mockResolvedValue(undefined);
@@ -34,6 +51,32 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
     static from_snapshot(snapshot: unknown) {
       fromSnapshot(snapshot);
       return new WasmGameEngine(snapshot as Record<string, unknown>);
+    }
+
+    static from_sandbox_request(request: SandboxCreationRequest) {
+      fromSandboxRequest(request);
+      if (sandboxFactory.rejection !== undefined) {
+        throw sandboxFactory.rejection;
+      }
+      return new WasmGameEngine(
+        sandboxFactory.snapshot ?? {
+          day: 0,
+          clockMinutes: 0,
+          paused: true,
+          budget: request.startingCapital,
+          rules: {
+            gameMode: "sandbox",
+            economyPreset: request.economyPreset,
+            sandbox: {
+              templateId: request.templateId,
+              startingCapital: request.startingCapital,
+              demandMultiplier: request.demandMultiplier,
+              moveInRate: request.moveInRate,
+            },
+          },
+          map: { width: dims.width, height: dims.height },
+        },
+      );
     }
 
     snapshot() {
@@ -72,6 +115,9 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       };
     }
     reset() {
+      if (sandboxFactory.resetRejection !== undefined) {
+        throw sandboxFactory.resetRejection;
+      }
       return this.snapshot();
     }
     preview_route(request: RoutePreviewRequest) {
@@ -133,6 +179,9 @@ describe("createWasmBackend", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    sandboxFactory.rejection = undefined;
+    sandboxFactory.snapshot = null;
+    sandboxFactory.resetRejection = undefined;
   });
 
   it("creates a Rust WASM backend and dispatches pause intents", async () => {
@@ -240,12 +289,98 @@ describe("createWasmBackend", () => {
     expect(result.snapshot).toBeDefined();
   });
 
-  it("resets the engine and returns the fresh snapshot", async () => {
+  it("resets the engine and returns the fresh snapshot result", async () => {
     const backend = await createWasmBackend();
-    const resetSnapshot = await backend.reset();
-    expect(resetSnapshot).toBeDefined();
+    const result = await backend.reset();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected reset success");
     // The mock's reset() returns the current engine snapshot.
-    expect(resetSnapshot.day).toBe(0);
+    expect(result.snapshot.day).toBe(0);
+  });
+
+  it("constructs a requested sandbox candidate before replacing the engine", async () => {
+    const backend = await createWasmBackend();
+    const request: SandboxCreationRequest = {
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 42_000,
+      demandMultiplier: 1.5,
+      moveInRate: "paused",
+    };
+
+    const result = await backend.createSandbox(request);
+
+    expect(fromSandboxRequest).toHaveBeenCalledWith(request);
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: {
+        budget: 42_000,
+        rules: {
+          economyPreset: "creative",
+          sandbox: {
+            templateId: "blankGrid",
+            startingCapital: 42_000,
+            demandMultiplier: 1.5,
+          },
+        },
+      },
+    });
+    await expect(backend.snapshot()).resolves.toMatchObject({
+      budget: 42_000,
+    });
+  });
+
+  it("returns typed requested-construction failures without replacing the engine", async () => {
+    const backend = await createWasmBackend();
+    const before = await backend.snapshot();
+    const error = {
+      code: "invalidStartingCapital",
+      context: {
+        field: "startingCapital",
+        attemptedValue: "-1",
+      },
+    };
+    sandboxFactory.rejection = error;
+
+    await expect(
+      backend.createSandbox({
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: -1,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).resolves.toEqual({ ok: false, error });
+    await expect(backend.snapshot()).resolves.toEqual(before);
+  });
+
+  it("rethrows unexpected requested-construction string failures", async () => {
+    const backend = await createWasmBackend();
+    sandboxFactory.rejection = "serialization failed";
+
+    await expect(
+      backend.createSandbox({
+        templateId: "crossroads",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).rejects.toBe("serialization failed");
+  });
+
+  it("returns typed reset failures and rethrows unexpected reset strings", async () => {
+    const backend = await createWasmBackend();
+    const error = {
+      code: "unsupportedGameMode",
+      context: { gameMode: "campaign" },
+    };
+    sandboxFactory.resetRejection = error;
+
+    await expect(backend.reset()).resolves.toEqual({ ok: false, error });
+
+    sandboxFactory.resetRejection = "reset serialization failed";
+    await expect(backend.reset()).rejects.toBe("reset serialization failed");
   });
 
   it("loads a serialized snapshot and replaces the WASM engine", async () => {
@@ -338,4 +473,91 @@ describe("createWasmBackend", () => {
       });
     },
   );
+});
+
+describe("sandbox domain error guards", () => {
+  it.each([
+    "unknownTemplateId",
+    "unknownEconomyPreset",
+    "invalidStartingCapital",
+    "invalidDemandMultiplier",
+    "unknownMoveInRate",
+    "templateInvariantViolation",
+  ])("accepts exact creation code %s with valid recognized context", (code) => {
+    expect(
+      isSandboxCreationError({
+        code,
+        context: {
+          field: "templateId",
+          attemptedValue: "unknown",
+          templateId: "crossroads",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { code: "futureCode", context: {} },
+    { code: "unknownTemplateId", context: [] },
+    { code: "unknownTemplateId", context: null },
+    {
+      code: "invalidStartingCapital",
+      context: { attemptedValue: 42 },
+    },
+  ])("rejects malformed creation domain value %#", (value) => {
+    expect(isSandboxCreationError(value)).toBe(false);
+  });
+
+  it("accepts additional unknown creation context fields", () => {
+    expect(
+      isSandboxCreationError({
+        code: "unknownTemplateId",
+        context: {
+          field: "templateId",
+          attemptedValue: "unknown",
+          futureDiagnostic: { value: 1 },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["unsupportedGameMode", "templateInvariantViolation"])(
+    "accepts exact reset code %s with valid recognized context",
+    (code) => {
+      expect(
+        isSandboxResetError({
+          code,
+          context: {
+            gameMode: "campaign",
+            templateId: "crossroads",
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { code: "futureCode", context: {} },
+    { code: "unsupportedGameMode", context: [] },
+    { code: "unsupportedGameMode", context: null },
+    { code: "unsupportedGameMode", context: { gameMode: "unknown" } },
+    {
+      code: "templateInvariantViolation",
+      context: { templateId: "growingSuburb" },
+    },
+  ])("rejects malformed reset domain value %#", (value) => {
+    expect(isSandboxResetError(value)).toBe(false);
+  });
+
+  it("accepts additional unknown reset context fields", () => {
+    expect(
+      isSandboxResetError({
+        code: "unsupportedGameMode",
+        context: {
+          gameMode: "campaign",
+          futureDiagnostic: { value: 1 },
+        },
+      }),
+    ).toBe(true);
+  });
 });

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import {
   normalizeDispatchResult,
   normalizeRoadMutationPreviewResponse,
@@ -14,6 +15,7 @@ import type {
   RoutePreviewRequest,
   RoutePreviewResponse,
   RustGameSnapshot,
+  SandboxCreationRequest,
 } from "./types";
 
 export async function createTauriBackend(): Promise<GameBackend> {
@@ -28,6 +30,19 @@ export async function createTauriBackend(): Promise<GameBackend> {
     async loadSnapshot(snapshot: RustGameSnapshot) {
       return invoke<RustGameSnapshot>("game_load_snapshot", { snapshot });
     },
+    async createSandbox(request: SandboxCreationRequest) {
+      try {
+        const snapshot = await invoke<RustGameSnapshot>("game_create_sandbox", {
+          request,
+        });
+        return { ok: true, snapshot } as const;
+      } catch (error: unknown) {
+        if (isSandboxCreationError(error)) {
+          return { ok: false, error } as const;
+        }
+        throw error;
+      }
+    },
     async dispatch(intent: GameIntent) {
       const result = await invoke<DispatchResult>("game_dispatch", { intent });
       return normalizeDispatchResult(result);
@@ -39,7 +54,15 @@ export async function createTauriBackend(): Promise<GameBackend> {
       return normalizeDispatchResult(result);
     },
     async reset() {
-      return invoke<RustGameSnapshot>("game_reset");
+      try {
+        const snapshot = await invoke<RustGameSnapshot>("game_reset");
+        return { ok: true, snapshot } as const;
+      } catch (error: unknown) {
+        if (isSandboxResetError(error)) {
+          return { ok: false, error } as const;
+        }
+        throw error;
+      }
     },
     async previewRoute(request: RoutePreviewRequest) {
       const response = await invoke<RoutePreviewResponse>(

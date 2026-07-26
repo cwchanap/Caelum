@@ -42,7 +42,8 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
 };
 
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
-  growingSuburb: "Growing Suburb",
+  blankGrid: "Blank Grid",
+  crossroads: "Crossroads",
 };
 
 const budgetFormat = new Intl.NumberFormat("en-US");

@@ -6,6 +6,7 @@ import type {
   RoadMutationPreviewRequest,
   RoutePreviewRequest,
   RustGameSnapshot,
+  SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
@@ -46,7 +47,8 @@ describe("createTauriBackend", () => {
       gameMode: "sandbox",
       economyPreset: "standard",
       sandbox: {
-        templateId: "growingSuburb",
+        templateId: "crossroads",
+        startingCapital: 120_000,
         demandMultiplier: 1,
         moveInRate: "paused",
       },
@@ -166,7 +168,7 @@ describe("createTauriBackend", () => {
     expect(result.snapshot.day).toBe(1);
   });
 
-  it("reset() invokes game_reset with no args and returns the raw snapshot", async () => {
+  it("reset() invokes game_reset with no args and returns a success result", async () => {
     const snapshot = createRustSnapshot({ day: 0, paused: true });
     invokeMock.mockResolvedValueOnce(snapshot);
 
@@ -174,7 +176,90 @@ describe("createTauriBackend", () => {
     const result = await backend.reset();
 
     expect(invokeMock).toHaveBeenCalledWith("game_reset", undefined);
-    expect(result).toEqual(snapshot as RustGameSnapshot);
+    expect(result).toEqual({
+      ok: true,
+      snapshot: snapshot as RustGameSnapshot,
+    });
+  });
+
+  it("createSandbox() invokes game_create_sandbox and returns a success result", async () => {
+    const request: SandboxCreationRequest = {
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 42_000,
+      demandMultiplier: 1.5,
+      moveInRate: "paused",
+    };
+    const snapshot = createRustSnapshot({
+      budget: 42_000,
+      rules: {
+        gameMode: "sandbox",
+        economyPreset: "creative",
+        sandbox: {
+          templateId: "blankGrid",
+          startingCapital: 42_000,
+          demandMultiplier: 1.5,
+          moveInRate: "paused",
+        },
+      },
+    });
+    invokeMock.mockResolvedValueOnce(snapshot);
+
+    const backend = await createTauriBackend();
+    const result = await backend.createSandbox(request);
+
+    expect(invokeMock).toHaveBeenCalledWith("game_create_sandbox", { request });
+    expect(result).toEqual({ ok: true, snapshot });
+  });
+
+  it("returns typed creation/reset command rejections as domain results", async () => {
+    const creationError = {
+      code: "unknownTemplateId",
+      context: {
+        field: "templateId",
+        attemptedValue: "unknown",
+      },
+    };
+    const resetError = {
+      code: "unsupportedGameMode",
+      context: { gameMode: "campaign" },
+    };
+    invokeMock
+      .mockRejectedValueOnce(creationError)
+      .mockRejectedValueOnce(resetError);
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.createSandbox({
+        templateId: "unknown",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).resolves.toEqual({ ok: false, error: creationError });
+    await expect(backend.reset()).resolves.toEqual({
+      ok: false,
+      error: resetError,
+    });
+  });
+
+  it("rethrows unexpected creation/reset command string rejections", async () => {
+    invokeMock
+      .mockRejectedValueOnce("engine mutex poisoned")
+      .mockRejectedValueOnce("engine mutex poisoned");
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.createSandbox({
+        templateId: "crossroads",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).rejects.toBe("engine mutex poisoned");
+    await expect(backend.reset()).rejects.toBe("engine mutex poisoned");
   });
 
   it("loadSnapshot() invokes game_load_snapshot with the serialized snapshot", async () => {

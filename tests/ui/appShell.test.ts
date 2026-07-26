@@ -392,7 +392,7 @@ describe("App shell bootstrap", () => {
     expect(screen.getByText("$123,456")).toBeVisible();
     expect(screen.getByText("Day 1 02:05")).toBeVisible();
     expect(screen.getByText("Standard Sandbox")).toBeVisible();
-    expect(screen.getByText("Template · Growing Suburb")).toBeVisible();
+    expect(screen.getByText("Template · Crossroads")).toBeVisible();
     expect(
       screen.getByText("Open-ended city — no campaign objective."),
     ).toBeVisible();

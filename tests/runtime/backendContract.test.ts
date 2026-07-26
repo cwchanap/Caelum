@@ -495,7 +495,7 @@ describe("Rust backend contract", () => {
           cost: 0,
         },
       }),
-      reset: async () => snapshot,
+      reset: async () => ({ ok: true, snapshot }),
     };
 
     await expect(backend.dispatch(intent)).resolves.toMatchObject({

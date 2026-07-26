@@ -1001,7 +1001,7 @@ describe("selectShellState Brief", () => {
       },
       objectives: null,
       title: "Standard Sandbox",
-      context: "Template · Growing Suburb",
+      context: "Template · Crossroads",
       objective: "Open-ended city — no campaign objective.",
       lossNote: "Metrics continue without win/loss.",
     },
@@ -1013,7 +1013,7 @@ describe("selectShellState Brief", () => {
       },
       objectives: thresholds,
       title: "Creative Sandbox",
-      context: "Template · Growing Suburb",
+      context: "Template · Crossroads",
       objective: "Open-ended city — no campaign objective.",
       lossNote: "Metrics continue without win/loss.",
     },
@@ -1025,7 +1025,7 @@ describe("selectShellState Brief", () => {
       },
       objectives: thresholds,
       title: "Growing Suburb",
-      context: "Campaign · Growing Suburb",
+      context: "Campaign · Crossroads",
       objective:
         "Hold late trips below 25%, unserved below 20%, average wait under 180s.",
       lossNote: "Within tolerances. Hold the line.",
@@ -1038,7 +1038,7 @@ describe("selectShellState Brief", () => {
       },
       objectives: null,
       title: "Growing Suburb",
-      context: "Campaign · Growing Suburb",
+      context: "Campaign · Crossroads",
       objective: "No campaign objective.",
       lossNote: "Metrics continue without win/loss.",
     },
@@ -1095,7 +1095,7 @@ describe("selectShellState Brief", () => {
 
     expect(selectShellState(state, createUiState()).brief).toMatchObject({
       title: "Authored Campaign",
-      context: "Campaign · Growing Suburb",
+      context: "Campaign · Crossroads",
       lossNote: "Existing campaign loss",
       nextGrowth: "New residents arrive soon.",
     });
