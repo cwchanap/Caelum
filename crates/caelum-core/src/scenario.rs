@@ -1,18 +1,13 @@
-use crate::ids::tile_id;
-use crate::intent::RoadPreset;
 use crate::model::{
-    EconomyPreset, GameMap, GameMode, GameRules, GrowthAction, GrowthWave, MaxAverageWaitSeconds,
+    EconomyPreset, GameMode, GameRules, GrowthAction, GrowthWave, MaxAverageWaitSeconds,
     MaxLateRatio, MaxUnservedRatio, ObjectiveThresholds, Point, RollingWindowSeconds,
-    SandboxSettings, ScenarioConfig, SurvivalTimeSeconds, Tile,
+    SandboxSettings, ScenarioConfig, SurvivalTimeSeconds,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
     SURVIVAL_TIME_SECONDS,
 };
-use crate::sandbox::canonical_default_settings;
-
-pub const MAP_WIDTH: u8 = 28;
-pub const MAP_HEIGHT: u8 = 18;
+use crate::sandbox::{canonical_default_settings, MAP_HEIGHT, MAP_WIDTH};
 
 pub const SCENARIO_NAME: &str = "Growing Suburb";
 
@@ -148,98 +143,6 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
         applied: false,
         actions,
     }]
-}
-
-fn horizontal_westbound_points() -> Vec<Point> {
-    (0..i32::from(MAP_WIDTH))
-        .rev()
-        .map(|x| Point { x, y: 8 })
-        .collect()
-}
-
-fn horizontal_eastbound_points() -> Vec<Point> {
-    (0..i32::from(MAP_WIDTH))
-        .map(|x| Point { x, y: 9 })
-        .collect()
-}
-
-fn vertical_southbound_points() -> Vec<Point> {
-    (0..i32::from(MAP_HEIGHT))
-        .map(|y| Point { x: 14, y })
-        .collect()
-}
-
-fn vertical_northbound_points() -> Vec<Point> {
-    (0..i32::from(MAP_HEIGHT))
-        .rev()
-        .map(|y| Point { x: 15, y })
-        .collect()
-}
-
-pub fn create_growing_suburb_map() -> GameMap {
-    let mut tiles = Vec::new();
-
-    for y in 0..i32::from(MAP_HEIGHT) {
-        for x in 0..i32::from(MAP_WIDTH) {
-            tiles.push(Tile {
-                id: tile_id(x, y),
-                x,
-                y,
-                kind: "empty".to_string(),
-                area: None,
-                has_track: false,
-                one_way: None,
-                road_connections: Vec::new(),
-                road_structure_id: None,
-            });
-        }
-    }
-
-    let mut map = GameMap {
-        width: MAP_WIDTH,
-        height: MAP_HEIGHT,
-        tiles,
-        road_structures: Vec::new(),
-    };
-    // Scenario roads use `author_scenario_road_line`, which connects only the
-    // authored sequence — it does NOT call `connect_neighbor_endpoints`, so the
-    // four one-way arterials here do not form reciprocal edge connections at
-    // the cross intersection. `refresh_all_automatic_junctions` below attempts
-    // to heal that, but its failure is non-fatal (debug_assert only). This is
-    // intentional: the starter cross is a visual scaffold, not a routable
-    // junction — players must re-lay or connect roads to enable turns.
-    crate::road::author_scenario_road_line(
-        &mut map,
-        &horizontal_westbound_points(),
-        RoadPreset::OneWay,
-    );
-    crate::road::author_scenario_road_line(
-        &mut map,
-        &horizontal_eastbound_points(),
-        RoadPreset::OneWay,
-    );
-    crate::road::author_scenario_road_line(
-        &mut map,
-        &vertical_southbound_points(),
-        RoadPreset::OneWay,
-    );
-    crate::road::author_scenario_road_line(
-        &mut map,
-        &vertical_northbound_points(),
-        RoadPreset::OneWay,
-    );
-    // Panic-free: `create_initial_snapshot` / `GameEngine::new` / `reset` run
-    // under the Tauri host's `State<Mutex<GameEngine>>`. An `.expect` here
-    // would poison the mutex and brick the desktop session. Starter roads are
-    // authored to form valid junctions; surface unexpected failure in dev and
-    // leave the map without automatic junctions in release (engine.rs:23).
-    if let Err(rejection) = crate::road::refresh_all_automatic_junctions(&mut map) {
-        debug_assert!(
-            false,
-            "authored starter roads must form valid junctions: {rejection:?}"
-        );
-    }
-    map
 }
 
 #[cfg(test)]

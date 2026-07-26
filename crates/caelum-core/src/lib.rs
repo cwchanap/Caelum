@@ -65,7 +65,7 @@ pub use preview::{
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 pub use route_lifecycle::{project_position_onto_path, PathProjection};
 pub use sandbox::{
-    canonical_default_request, canonical_default_settings, validate_request, SandboxCreationError,
-    SandboxCreationErrorCode, SandboxCreationErrorContext, SandboxCreationRequest,
-    ValidatedSandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
+    canonical_default_request, canonical_default_settings, create_sandbox_snapshot,
+    validate_request, SandboxCreationError, SandboxCreationErrorCode, SandboxCreationErrorContext,
+    SandboxCreationRequest, ValidatedSandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
 };

@@ -1,11 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+use crate::clock::{clock_minutes, day_index};
+use crate::ids::tile_id;
+use crate::intent::RoadPreset;
 use crate::model::{
-    DemandMultiplier, EconomyPreset, MoveInRateSelection, SandboxSettings, SandboxTemplateId,
-    StartingCapital,
+    DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GameSnapshot, Heading, Metrics,
+    MetricsState, MoveInRateSelection, MovementKind, Point, SandboxSettings, SandboxTemplateId,
+    ScenarioConfig, StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
 };
+use crate::road::{author_scenario_road_line, refresh_all_automatic_junctions};
+use crate::road_topology::{RoadState, RoadTopology};
 
 pub const DEFAULT_STARTING_CAPITAL: i32 = 120_000;
+pub const MAP_WIDTH: u8 = 28;
+pub const MAP_HEIGHT: u8 = 18;
+const CROSSROADS_STRUCTURE_ID: &str = "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south";
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +100,282 @@ pub fn validate_request(
         demand_multiplier,
         move_in_rate,
     })
+}
+
+pub fn create_sandbox_snapshot(
+    request: SandboxCreationRequest,
+) -> Result<GameSnapshot, SandboxCreationError> {
+    let SandboxCandidate {
+        snapshot,
+        road_topology: _road_topology,
+    } = create_sandbox_candidate(request)?;
+    Ok(snapshot)
+}
+
+pub(crate) struct SandboxCandidate {
+    pub snapshot: GameSnapshot,
+    pub road_topology: RoadTopology,
+}
+
+pub(crate) fn create_sandbox_candidate(
+    request: SandboxCreationRequest,
+) -> Result<SandboxCandidate, SandboxCreationError> {
+    let validated = validate_request(request)?;
+    let (name, map, road_topology) = match validated.template_id {
+        SandboxTemplateId::BlankGrid => {
+            let map = blank_map();
+            let topology = RoadTopology::compile(&map)
+                .map_err(|_| template_invariant_error(SandboxTemplateId::BlankGrid))?;
+            ("Blank Grid", map, topology)
+        }
+        SandboxTemplateId::Crossroads => {
+            let mut map = blank_map();
+            author_scenario_road_line(
+                &mut map,
+                &(0..i32::from(MAP_WIDTH))
+                    .rev()
+                    .map(|x| Point { x, y: 8 })
+                    .collect::<Vec<_>>(),
+                RoadPreset::OneWay,
+            );
+            author_scenario_road_line(
+                &mut map,
+                &(0..i32::from(MAP_WIDTH))
+                    .map(|x| Point { x, y: 9 })
+                    .collect::<Vec<_>>(),
+                RoadPreset::OneWay,
+            );
+            author_scenario_road_line(
+                &mut map,
+                &(0..i32::from(MAP_HEIGHT))
+                    .map(|y| Point { x: 14, y })
+                    .collect::<Vec<_>>(),
+                RoadPreset::OneWay,
+            );
+            author_scenario_road_line(
+                &mut map,
+                &(0..i32::from(MAP_HEIGHT))
+                    .rev()
+                    .map(|y| Point { x: 15, y })
+                    .collect::<Vec<_>>(),
+                RoadPreset::OneWay,
+            );
+            refresh_all_automatic_junctions(&mut map)
+                .map_err(|_| template_invariant_error(SandboxTemplateId::Crossroads))?;
+            let topology = RoadTopology::compile(&map)
+                .map_err(|_| template_invariant_error(SandboxTemplateId::Crossroads))?;
+            validate_crossroads_candidate(&map, &topology)?;
+            ("Crossroads", map, topology)
+        }
+    };
+    Ok(SandboxCandidate {
+        snapshot: snapshot_shell(validated, name, map),
+        road_topology,
+    })
+}
+
+fn blank_map() -> GameMap {
+    let tiles = (0..i32::from(MAP_HEIGHT))
+        .flat_map(|y| {
+            (0..i32::from(MAP_WIDTH)).map(move |x| Tile {
+                id: tile_id(x, y),
+                x,
+                y,
+                kind: "empty".to_string(),
+                area: None,
+                has_track: false,
+                one_way: None,
+                road_connections: Vec::new(),
+                road_structure_id: None,
+            })
+        })
+        .collect();
+    GameMap {
+        width: MAP_WIDTH,
+        height: MAP_HEIGHT,
+        tiles,
+        road_structures: Vec::new(),
+    }
+}
+
+fn validate_crossroads_candidate(
+    map: &GameMap,
+    topology: &RoadTopology,
+) -> Result<(), SandboxCreationError> {
+    let fail = || template_invariant_error(SandboxTemplateId::Crossroads);
+    let expected_footprint = [
+        Point { x: 14, y: 8 },
+        Point { x: 14, y: 9 },
+        Point { x: 15, y: 8 },
+        Point { x: 15, y: 9 },
+    ];
+    let expected_ports = vec![
+        (Point { x: 14, y: 8 }, Heading::North),
+        (Point { x: 14, y: 8 }, Heading::West),
+        (Point { x: 14, y: 9 }, Heading::South),
+        (Point { x: 14, y: 9 }, Heading::West),
+        (Point { x: 15, y: 8 }, Heading::North),
+        (Point { x: 15, y: 8 }, Heading::East),
+        (Point { x: 15, y: 9 }, Heading::East),
+        (Point { x: 15, y: 9 }, Heading::South),
+    ];
+    let structure = map
+        .road_structures
+        .iter()
+        .find(|structure| structure.id() == CROSSROADS_STRUCTURE_ID)
+        .ok_or_else(fail)?;
+    if map.road_structures.len() != 1 || !structure.is_automatic_junction() {
+        return Err(fail());
+    }
+    let mut footprint = structure.footprint().to_vec();
+    footprint.sort();
+    if footprint != expected_footprint || structure.port_keys() != expected_ports {
+        return Err(fail());
+    }
+
+    let expected_connections = [Heading::North, Heading::East, Heading::South, Heading::West];
+    for point in expected_footprint {
+        let Some(tile) = map.tile(point) else {
+            return Err(fail());
+        };
+        if tile.kind != "road"
+            || tile.one_way.is_some()
+            || tile.road_connections != expected_connections
+            || tile.road_structure_id.as_deref() != Some(CROSSROADS_STRUCTURE_ID)
+        {
+            return Err(fail());
+        }
+    }
+
+    let required = [
+        (
+            RoadState {
+                position: Point { x: 14, y: 8 },
+                incoming_heading: Heading::South,
+            },
+            [
+                (Heading::South, MovementKind::Straight),
+                (Heading::West, MovementKind::RightTurn),
+                (Heading::East, MovementKind::LeftTurn),
+            ],
+        ),
+        (
+            RoadState {
+                position: Point { x: 15, y: 8 },
+                incoming_heading: Heading::West,
+            },
+            [
+                (Heading::West, MovementKind::Straight),
+                (Heading::North, MovementKind::RightTurn),
+                (Heading::South, MovementKind::LeftTurn),
+            ],
+        ),
+        (
+            RoadState {
+                position: Point { x: 15, y: 9 },
+                incoming_heading: Heading::North,
+            },
+            [
+                (Heading::North, MovementKind::Straight),
+                (Heading::East, MovementKind::RightTurn),
+                (Heading::West, MovementKind::LeftTurn),
+            ],
+        ),
+        (
+            RoadState {
+                position: Point { x: 14, y: 9 },
+                incoming_heading: Heading::East,
+            },
+            [
+                (Heading::East, MovementKind::Straight),
+                (Heading::South, MovementKind::RightTurn),
+                (Heading::North, MovementKind::LeftTurn),
+            ],
+        ),
+    ];
+    for (entry, movements) in required {
+        for (outgoing, expected_movement) in movements {
+            if !topology
+                .transition_for(entry, outgoing)
+                .is_some_and(|transition| transition.movement == expected_movement)
+            {
+                return Err(fail());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_shell(
+    validated: ValidatedSandboxCreationRequest,
+    name: &str,
+    map: GameMap,
+) -> GameSnapshot {
+    GameSnapshot {
+        schema_version: SNAPSHOT_SCHEMA_VERSION,
+        time: 0.0,
+        day: day_index(0.0),
+        clock_minutes: clock_minutes(0.0),
+        speed: 1,
+        paused: true,
+        budget: validated.starting_capital.value(),
+        rules: GameRules {
+            game_mode: GameMode::Sandbox,
+            economy_preset: validated.economy_preset,
+            sandbox: SandboxSettings {
+                template_id: validated.template_id,
+                starting_capital: validated.starting_capital,
+                demand_multiplier: validated.demand_multiplier,
+                move_in_rate: validated.move_in_rate,
+            },
+        },
+        map,
+        buildings: Vec::new(),
+        transit: TransitNetwork {
+            stops: Vec::new(),
+            stations: Vec::new(),
+            routes: Vec::new(),
+            metro_lines: Vec::new(),
+            vehicles: Vec::new(),
+        },
+        sims: Vec::new(),
+        active_trips: Vec::new(),
+        trip_sequence_day: day_index(0.0),
+        next_trip_sequence: 1,
+        metrics: Metrics {
+            late_trips: 0,
+            completed_trips: 0,
+            unserved_trips: 0,
+            total_wait_seconds: 0.0,
+            waiting_trip_count: 0,
+            average_wait_seconds: 0.0,
+            trip_outcomes: Vec::new(),
+            state: MetricsState::Running,
+            loss_reason: None,
+        },
+        scenario: ScenarioConfig {
+            name: name.to_string(),
+            objectives: None,
+            growth_waves: Vec::new(),
+        },
+    }
+}
+
+fn template_invariant_error(template_id: SandboxTemplateId) -> SandboxCreationError {
+    SandboxCreationError {
+        code: SandboxCreationErrorCode::TemplateInvariantViolation,
+        context: SandboxCreationErrorContext {
+            field: None,
+            attempted_value: None,
+            template_id: Some(
+                match template_id {
+                    SandboxTemplateId::BlankGrid => "blankGrid",
+                    SandboxTemplateId::Crossroads => "crossroads",
+                }
+                .to_string(),
+            ),
+        },
+    }
 }
 
 fn parse_template(value: &str) -> Result<SandboxTemplateId, SandboxCreationError> {
@@ -201,7 +486,12 @@ fn creation_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_request, SandboxCreationErrorCode, SandboxCreationRequest};
+    use super::{
+        create_sandbox_candidate, validate_crossroads_candidate, validate_request,
+        SandboxCreationErrorCode, SandboxCreationRequest,
+    };
+    use crate::model::{Heading, Point};
+    use crate::road_topology::RoadTopology;
 
     fn raw_request() -> SandboxCreationRequest {
         SandboxCreationRequest {
@@ -283,5 +573,23 @@ mod tests {
             );
             assert_eq!(error.context.attempted_value.as_deref(), Some(attempted));
         }
+    }
+
+    #[test]
+    fn crossroads_validator_rejects_a_missing_required_center_connection() {
+        let candidate = create_sandbox_candidate(raw_request()).unwrap();
+        let mut map = candidate.snapshot.map;
+        map.tile_mut(Point { x: 14, y: 8 })
+            .unwrap()
+            .road_connections
+            .retain(|heading| *heading != Heading::West);
+        let topology = RoadTopology::compile(&map).unwrap();
+
+        let error = validate_crossroads_candidate(&map, &topology).unwrap_err();
+        assert_eq!(
+            error.code,
+            SandboxCreationErrorCode::TemplateInvariantViolation
+        );
+        assert_eq!(error.context.template_id.as_deref(), Some("crossroads"));
     }
 }
