@@ -376,9 +376,13 @@ amendment). Each field is a `validated_threshold_newtype!` (`MaxLateRatio`,
 `MaxUnservedRatio`, `MaxAverageWaitSeconds` require finite and non-negative;
 `RollingWindowSeconds`, `SurvivalTimeSeconds` require finite and strictly
 positive). Invalid values are rejected at the Rust deserialization boundary
-with a structured `GameplayRejection` rather than coerced at evaluation time.
-Custom-threshold tests use valid finite values; rejection tests cover NaN,
-infinity, negative, and (where applicable) zero values. The rolling window
+as serde deserialization errors (see §2), not as `GameplayRejection` —
+`GameplayRejection::unsupported_snapshot_schema` remains reserved for a
+successfully deserialized `GameSnapshot` whose `schema_version` is not `3`.
+Bad authoring therefore fails loudly at load instead of being silently
+coerced at evaluation time. Custom-threshold tests use valid finite values;
+rejection tests cover NaN, infinity, negative, and (where applicable) zero
+values. The rolling window
 newtype also replaces the §3.3 point-of-use finiteness guard — the configured
 value is guaranteed usable, so `effective_rolling_window_seconds` returns it
 directly and the 300-second fallback applies only when objectives are
