@@ -23,7 +23,7 @@ use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
     DispatchResult, GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset,
-    RoutePreviewRequest,
+    RoutePreviewRequest, StartingCapital,
 };
 use serde_json::json;
 
@@ -284,6 +284,14 @@ fn demand_multiplier_rejects_non_positive_and_non_finite_values() {
 
     let multiplier = DemandMultiplier::try_from(1.5).unwrap();
     assert_eq!(serde_json::to_value(multiplier).unwrap(), json!(1.5));
+}
+
+#[test]
+fn starting_capital_is_available_from_the_crate_root() {
+    let capital = StartingCapital::new(120_000).unwrap();
+
+    assert_eq!(capital.value(), 120_000);
+    assert_eq!(serde_json::to_value(capital).unwrap(), json!(120_000));
 }
 
 #[test]

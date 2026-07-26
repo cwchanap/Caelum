@@ -54,7 +54,8 @@ pub mod trips;
 pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
 pub use model::{
-    GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StopRoadAccess, SNAPSHOT_SCHEMA_VERSION,
+    GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StartingCapital, StopRoadAccess,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,
