@@ -571,11 +571,27 @@ Tauri adds a `game_create_sandbox` command. The command constructs a complete
 candidate engine before replacing managed state. It acquires the managed lock
 only for the final swap, so invalid input and template defects leave the
 current engine unchanged and cannot poison the mutex through a panic.
-The command returns `Result<GameSnapshot, SandboxCreationError>`.
+Both creation and reset use a Tauri-only command error transport:
 
+```rust
+#[derive(Serialize)]
+#[serde(untagged)]
+enum TauriCommandError<E> {
+    Domain(E),
+    Host(String),
+}
+```
+
+`game_create_sandbox` returns
+`Result<GameSnapshot, TauriCommandError<SandboxCreationError>>`, and
 `game_reset` delegates to the same mode-aware reset and returns
-`Result<GameSnapshot, SandboxResetError>`. Mutex and serialization failures
-remain host failures rather than being mislabeled as sandbox-domain errors.
+`Result<GameSnapshot, TauriCommandError<SandboxResetError>>`. Core
+creation/reset errors use `Domain` and therefore reach JavaScript as the plain
+serialized Rust error object. Mutex failures use `Host` and reach JavaScript as
+strings. Tauri/framework serialization failures remain unexpected command
+rejections. The adapters recognize only the domain object; strings and other
+unrecognized rejection values are rethrown as host failures.
+
 The command-facing raw request keeps numeric fields nullable so JSON-normalized
 non-finite values reach core validation as `None` rather than failing before a
 typed creation error can be produced.
@@ -610,23 +626,43 @@ the corresponding `{ ok: false, error }` variant. Because WASM `Err` values and
 Tauri command rejections arrive as untyped JavaScript values, recognition uses
 explicit `isSandboxCreationError` and `isSandboxResetError` guards. Each guard
 requires a plain object, a `context` object, and membership in the complete
-known code set for that operation. An arbitrary object with a string `code`
-does not become a domain result. Unexpected transport, serialization,
-module-loading, or mutex failures still reject the promise. Adapters do not
-validate template geometry, reinterpret settings, or manufacture fallback
-snapshots.
+known code set for that operation. Every recognized optional context field must
+also have its declared primitive or enum type when present:
+
+- creation `field`, `attemptedValue`, and `templateId` values are strings; and
+- reset `gameMode` is `"sandbox"` or `"campaign"`, while reset `templateId` is
+  `"blankGrid"` or `"crossroads"`.
+
+Unknown extra context fields may be ignored for forward compatibility, but a
+known code paired with a malformed recognized field does not become a domain
+result. Unexpected transport, serialization, module-loading, or mutex failures
+still reject the promise. Adapters do not validate template geometry,
+reinterpret settings, or manufacture fallback snapshots.
 
 This discriminated-result convention applies only to sandbox creation and reset
 in HPA-339. Existing `loadSnapshot` schema/gameplay failures retain their
 current rejected-promise shape; changing that established host contract is
 outside this issue.
 
-The existing runtime reset path commits the returned snapshot only for
-`ok: true`. For `ok: false`, it preserves the current runtime snapshot and
-surfaces the reset failure through existing shell/backend error handling.
+`RuntimeSnapshot` adds a non-fatal
+`sandboxResetError: SandboxResetError | null` lifecycle channel. The existing
+runtime reset path commits the returned snapshot, recreates UI state, and clears
+that channel only for `ok: true`. For `ok: false`, it publishes the typed reset
+error while preserving the current `GameState`, `UiState`, gameplay rejection,
+and null `backendError`. It does not set the runtime's fatal `dead` flag or stop
+the animation loop, so later commands remain usable. The error stays available
+until the next successful reset; HPA-345 may add player-facing dismissal when
+it adds the New City workflow.
 
-HPA-339 exposes the backend capability but does not add a runtime controller
-or player-facing New City flow. HPA-345 owns that workflow.
+An unexpected reset promise rejection continues through the existing fatal
+`failBackend` path. Runtime tests distinguish these cases by proving that a
+typed reset failure preserves state and UI, leaves the runtime running, and
+allows a subsequent backend command, while an unexpected rejection sets
+`backendError` and stops further backend work.
+
+HPA-339 exposes `createSandbox` at the backend boundary but does not add a
+corresponding `RuntimeController` method or player-facing New City flow.
+HPA-345 owns that workflow.
 
 ## 7. Schema and Compatibility
 
@@ -768,23 +804,46 @@ Add explicit regressions proving:
 
 ### 8.7 Host parity
 
-WASM and Tauri adapter contract tests submit the same JSON-representable raw
-requests and compare their normalized output with the core factory result. They
-also compare typed error codes, contexts, and discriminated backend results for
-the same JSON-representable invalid requests. Non-finite WASM inputs and their
-Tauri `null` equivalents are tested separately for the same typed code because
-JSON has already discarded the original non-finite value before Rust receives
-the Tauri request.
+Parity is proved at the real host boundaries, not by supplying expected
+snapshots through adapter mocks.
 
-TypeScript backend tests verify operation names, request forwarding, atomic
-local-engine replacement, reset forwarding, domain-result normalization, and
-preservation of unexpected promise rejections. They also prove that only the
-known creation/reset code sets pass the domain-error guards and that an unknown
-object with a `code` property remains an unexpected rejection.
+Real built-artifact WASM tests submit representative JSON-representable raw
+requests through the generated module, then compare the complete normalized
+snapshot, typed error code/context, and reset result with the core factory
+contract. They also assert that failed creation does not replace the active
+local engine.
 
-Host-boundary tests assert that the default WASM constructor and Tauri managed
-default snapshot equal the canonical default Crossroads factory result. This
-parity assertion does not live in Rust-only factory tests.
+Real Tauri command tests use the existing `tauri::test::mock_builder` and
+`get_ipc_response` harness. They invoke `game_create_sandbox`, `game_reset`, and
+`game_snapshot` through IPC and compare decoded complete snapshots with direct
+core factory results for the same requests. Those tests cover:
+
+- default and representative non-default Blank Grid and Crossroads requests;
+- successful managed-engine replacement and exact-request reset;
+- typed invalid and nullable-input creation errors;
+- typed campaign reset rejection;
+- unchanged managed state after every typed failure; and
+- string-shaped unexpected host errors separately from object-shaped domain
+  errors.
+
+For JSON-representable inputs, the real WASM and Tauri tests use the same
+request cases and require identical normalized snapshots and domain
+code/context values. Non-finite WASM inputs and their Tauri `null` equivalents
+are tested separately for the same typed code because JSON has already
+discarded the original non-finite value before Rust receives the Tauri request.
+
+Mocked TypeScript backend tests remain responsible only for operation names,
+request forwarding, local-engine replacement timing, reset forwarding,
+domain-result normalization, and preservation of unexpected promise
+rejections. They prove that only the complete known creation/reset code sets
+with well-typed recognized context fields pass the domain-error guards. Cases
+include an unknown code, a non-object context, and a known code with a malformed
+recognized field; each remains an unexpected rejection. Mocked `invoke`
+responses are not accepted as Tauri host-parity evidence.
+
+Host-boundary tests also assert that the default WASM constructor and Tauri
+managed default snapshot equal the canonical default Crossroads factory result.
+This parity assertion does not live only in Rust factory tests.
 
 ### 8.8 Regression suite
 
