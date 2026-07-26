@@ -11,28 +11,13 @@ use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
 use crate::route_editor;
 use crate::route_lifecycle;
-use crate::state::create_initial_snapshot;
+use crate::sandbox::{
+    canonical_default_request, create_sandbox_candidate, sandbox_candidate_from_persisted_rules,
+    SandboxCandidate, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
+};
 use crate::stop_access;
 use crate::transit;
 use crate::trips;
-
-/// Compile the road topology for an initial/reset snapshot without panicking.
-/// The initial map has no roads or road structures, so `compile` succeeds
-/// trivially; the `debug_assert!` surfaces any unexpected failure in dev
-/// builds, while release builds fall back to an empty topology instead of
-/// poisoning a host `Mutex`.
-fn compile_initial_topology(map: &crate::model::GameMap) -> RoadTopology {
-    match RoadTopology::compile(map) {
-        Ok(topology) => topology,
-        Err(rejection) => {
-            debug_assert!(
-                false,
-                "initial/reset road topology compile failed: {rejection:?}"
-            );
-            RoadTopology::empty()
-        }
-    }
-}
 
 fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
     // Whole-map linear scans: tiles, buildings, stops, and stations are each
@@ -235,27 +220,37 @@ impl Default for GameEngine {
 
 impl GameEngine {
     pub fn new() -> Self {
-        let snapshot = create_initial_snapshot();
-        // The initial snapshot carries no roads or road structures, so
-        // `compile` is infallible here in practice. Use a panic-free fallback
-        // (+ `debug_assert!` to surface unexpected failures in dev) so a
-        // future change to the initial map cannot poison a host `Mutex` via
-        // a panic — `reset()` is reachable from `game_reset` under
-        // `Mutex::lock()` in the Tauri host.
-        let road_topology = compile_initial_topology(&snapshot.map);
+        let SandboxCandidate {
+            snapshot,
+            road_topology,
+        } = create_sandbox_candidate(canonical_default_request())
+            .expect("canonical default sandbox request and template must remain valid");
         Self {
             snapshot,
             road_topology,
         }
     }
 
-    /// Construct an engine from a serialized schema-v3 snapshot, normalizing
+    pub fn from_sandbox_request(
+        request: SandboxCreationRequest,
+    ) -> Result<Self, SandboxCreationError> {
+        let SandboxCandidate {
+            snapshot,
+            road_topology,
+        } = create_sandbox_candidate(request)?;
+        Ok(Self {
+            snapshot,
+            road_topology,
+        })
+    }
+
+    /// Construct an engine from a serialized schema-v4 snapshot, normalizing
     /// roadside stop state before rebuilding the non-serialized topology cache.
     pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
         // Defense-in-depth: the WASM and Tauri hosts each probe
         // `schemaVersion` before deserializing the full `GameSnapshot` (see
         // `caelum-wasm/src/lib.rs::WasmGameEngine::from_snapshot` and
-        // `src-tauri/src/lib.rs::game_load_snapshot`) so a legacy schema-v2
+        // `src-tauri/src/lib.rs::game_load_snapshot`) so a legacy schema-v3
         // save is rejected with a structured `UnsupportedSnapshotSchema` code
         // rather than a generic missing-field serde error. This engine-level
         // re-check guards against direct Rust callers that bypass the host
@@ -287,12 +282,11 @@ impl GameEngine {
         self.snapshot.clone()
     }
 
-    pub fn reset(&mut self) -> GameSnapshot {
-        let snapshot = create_initial_snapshot();
-        let road_topology = compile_initial_topology(&snapshot.map);
-        self.snapshot = snapshot;
-        self.road_topology = road_topology;
-        self.snapshot()
+    pub fn reset(&mut self) -> Result<GameSnapshot, SandboxResetError> {
+        let candidate = sandbox_candidate_from_persisted_rules(&self.snapshot.rules)?;
+        self.snapshot = candidate.snapshot;
+        self.road_topology = candidate.road_topology;
+        Ok(self.snapshot())
     }
 
     pub(crate) fn routing_context(&self) -> RoutingContext<'_> {

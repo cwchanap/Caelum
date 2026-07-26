@@ -43,7 +43,7 @@ fn new_and_reset_cache_match_the_serialized_authored_map() {
     );
 
     lay_an_extra_road(&mut engine);
-    let reset = engine.reset();
+    let reset = engine.reset().unwrap();
     assert_eq!(
         engine.road_topology_for_test(),
         &RoadTopology::compile(&reset.map).unwrap()
