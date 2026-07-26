@@ -541,19 +541,15 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
 }
 
 fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
-    let after = state.time + EPSILON;
     let mut next = None;
     let active_thresholds = active_objective_thresholds(state);
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
-    if next_day_boundary > after {
-        next = Some(next_day_boundary);
-    }
+    track_next_boundary(&mut next, next_day_boundary, state.time);
 
-    if let Some(survival_time) = active_thresholds
-        .map(|thresholds| thresholds.survival_time.value())
-        .filter(|survival_time| *survival_time > after)
+    if let Some(survival_time) =
+        active_thresholds.map(|thresholds| thresholds.survival_time.value())
     {
-        track_next_boundary(&mut next, survival_time, after);
+        track_next_boundary(&mut next, survival_time, state.time);
     }
 
     for sim in &state.sims {
@@ -573,7 +569,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             track_next_boundary(
                 &mut next,
                 scheduled_time_seconds(state.day, departure),
-                after,
+                state.time,
             );
         }
 
@@ -585,7 +581,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             track_next_boundary(
                 &mut next,
                 scheduled_time_seconds(state.day, return_departure),
-                after,
+                state.time,
             );
         }
     }
@@ -595,7 +591,6 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             &mut next,
             state,
             trip,
-            after,
             active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
         );
     }
@@ -603,20 +598,19 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     track_aggregate_wait_boundary(
         &mut next,
         state,
-        after,
         active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
     );
 
     for vehicle in &state.transit.vehicles {
         if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
-            track_next_boundary(&mut next, state.time + seconds, after);
+            track_next_boundary(&mut next, state.time + seconds, state.time);
         }
     }
 
     if state.rules.game_mode == GameMode::Campaign {
         for wave in &state.scenario.growth_waves {
             if !wave.applied {
-                track_next_boundary(&mut next, wave.trigger_time, after);
+                track_next_boundary(&mut next, wave.trigger_time, state.time);
             }
         }
     }
@@ -631,20 +625,22 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     // campaign objectives are active; sandbox mode never evaluates loss gates.
     //
     // The `2 * EPSILON` offset (rather than the single `EPSILON` used elsewhere)
-    // ensures the candidate is strictly later than `after = state.time + EPSILON`
-    // even when `state.time` is exactly at the expiry (`outcome.time +
-    // retention_window`). With a single `EPSILON`, the candidate would equal
-    // `after` and `track_next_boundary` would discard it, causing a coarse tick
-    // starting at the exact expiry to skip the boundary and prune both the
-    // expiring and later outcomes together — missing the loss gate that fine
-    // ticks detect.
+    // ensures the candidate is strictly later than `state.time + EPSILON` even
+    // when `state.time` is exactly at the expiry (`outcome.time +
+    // retention_window`). `track_next_boundary` now promotes candidates in
+    // `(state.time, state.time + EPSILON]` to `state.time + 2 * EPSILON`, so a
+    // single `EPSILON` would also suffice, but the explicit `2 * EPSILON` keeps
+    // the expiry sample strictly beyond the equality band without relying on
+    // the promotion — preventing a coarse tick starting at the exact expiry
+    // from skipping the boundary and pruning both the expiring and later
+    // outcomes together, missing the loss gate that fine ticks detect.
     if active_thresholds.is_some() {
         let retention_window = objectives::effective_rolling_window_seconds(state);
         for outcome in &state.metrics.trip_outcomes {
             track_next_boundary(
                 &mut next,
                 outcome.time + retention_window + 2.0 * EPSILON,
-                after,
+                state.time,
             );
         }
     }
@@ -681,7 +677,6 @@ fn active_objective_thresholds(state: &GameSnapshot) -> Option<&ObjectiveThresho
 fn track_aggregate_wait_boundary(
     next: &mut Option<f64>,
     state: &GameSnapshot,
-    after: f64,
     max_average_wait: Option<f64>,
 ) {
     let Some(max_average_wait) = max_average_wait else {
@@ -703,12 +698,17 @@ fn track_aggregate_wait_boundary(
     let average_wait_seconds = current_wait_seconds / f64::from(waiting_trips.len() as u32);
     let seconds_to_threshold = max_average_wait - average_wait_seconds;
     if seconds_to_threshold > EPSILON {
-        track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
+        track_next_boundary(
+            next,
+            state.time + seconds_to_threshold + EPSILON,
+            state.time,
+        );
     } else if seconds_to_threshold >= -EPSILON {
         // Equality needs one sample strictly beyond the `>` threshold. Use a
-        // boundary later than `after`; after that substep the wait is beyond
-        // this equality band, preventing repeated epsilon-boundary loops.
-        track_next_boundary(next, after + EPSILON, after);
+        // boundary later than `state.time + EPSILON`; after that substep the
+        // wait is beyond this equality band, preventing repeated epsilon-boundary
+        // loops.
+        track_next_boundary(next, state.time + 2.0 * EPSILON, state.time);
     }
 }
 
@@ -716,7 +716,6 @@ fn track_active_trip_boundary(
     next: &mut Option<f64>,
     state: &GameSnapshot,
     trip: &ActiveTrip,
-    after: f64,
     max_average_wait: Option<f64>,
 ) {
     if is_terminal_status(trip.status)
@@ -753,12 +752,12 @@ fn track_active_trip_boundary(
             return;
         };
         if leg.mode != TransitMode::Walk {
-            track_waiting_terminal_boundaries(next, state, trip, after, max_average_wait);
+            track_waiting_terminal_boundaries(next, state, trip, max_average_wait);
             return;
         }
         match seconds_to_next_walk_boundary(&trip.position, &leg.to) {
             Some(seconds) => {
-                track_next_boundary(next, state.time + seconds, after);
+                track_next_boundary(next, state.time + seconds, state.time);
                 return;
             }
             None => leg_index += 1,
@@ -770,7 +769,6 @@ fn track_waiting_terminal_boundaries(
     next: &mut Option<f64>,
     state: &GameSnapshot,
     trip: &ActiveTrip,
-    after: f64,
     max_average_wait: Option<f64>,
 ) {
     // Break at the average-wait loss threshold so a coarse substep doesn't span
@@ -784,21 +782,25 @@ fn track_waiting_terminal_boundaries(
         let seconds_to_threshold =
             trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait);
         if seconds_to_threshold > EPSILON {
-            track_next_boundary(next, state.time + seconds_to_threshold + EPSILON, after);
+            track_next_boundary(
+                next,
+                state.time + seconds_to_threshold + EPSILON,
+                state.time,
+            );
         } else if seconds_to_threshold >= -EPSILON {
             // As with the aggregate tracker, advance once beyond equality and
             // then fall out of the epsilon band to avoid a zero-progress loop.
-            track_next_boundary(next, after + EPSILON, after);
+            track_next_boundary(next, state.time + 2.0 * EPSILON, state.time);
         }
     }
 
     if trip.patience_remaining > EPSILON {
-        track_next_boundary(next, state.time + trip.patience_remaining, after);
+        track_next_boundary(next, state.time + trip.patience_remaining, state.time);
     }
 
     let deadline_timeout = trip.deadline + DEADLINE_GRACE_SECONDS;
     if deadline_timeout > state.time {
-        track_next_boundary(next, deadline_timeout, after);
+        track_next_boundary(next, deadline_timeout, state.time);
     }
 }
 
@@ -816,13 +818,32 @@ fn seconds_to_next_walk_boundary(position: &TripPosition, target: &Point) -> Opt
     None
 }
 
-fn track_next_boundary(next: &mut Option<f64>, candidate: f64, after: f64) {
-    if candidate <= after {
+fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) {
+    // A candidate at or before `state_time` is already due and was (or should
+    // have been) processed during current-time pre-processing (growth waves,
+    // commute spawning). Reject it so the substep doesn't revisit the current
+    // instant.
+    if candidate <= state_time {
         return;
     }
+    // A candidate in `(state_time, state_time + EPSILON]` is not yet due (the
+    // pre-processing checks `trigger_time <= state.time`) but would be
+    // discarded by a strict `> after` filter — lost between the current-time
+    // pre-processing and the next-boundary schedule. Promote it to a strictly
+    // forward sample so the substep machinery breaks here, applies the event,
+    // and re-evaluates objectives at a deterministic timestamp regardless of
+    // tick granularity. Without this, a survival objective or growth wave at
+    // `state.time + EPSILON/2` is skipped until the next unrelated boundary,
+    // and coarse vs fine ticks terminate at different timestamps.
+    let after = state_time + EPSILON;
+    let sample = if candidate <= after {
+        after + EPSILON
+    } else {
+        candidate
+    };
 
-    if next.as_ref().map_or(true, |current| candidate < *current) {
-        *next = Some(candidate);
+    if next.as_ref().map_or(true, |current| sample < *current) {
+        *next = Some(sample);
     }
 }
 
@@ -1606,6 +1627,119 @@ mod tests {
         assert_eq!(
             next.time, 100.0,
             "terminal timestamp is the current time, not the next boundary"
+        );
+    }
+
+    /// Regression test for the near-current boundary gap: when `state.time` is
+    /// within `EPSILON` below a survival boundary, the boundary falls in
+    /// `(state.time, state.time + EPSILON]`. It is not yet due during
+    /// current-time pre-processing (`survivalTime > state.time`) but was also
+    /// discarded by the old `> after` filter in `next_boundary_after` — lost
+    /// until the next unrelated boundary. A 1s tick and a 300s tick would then
+    /// terminate at different timestamps, breaking granularity independence.
+    /// `track_next_boundary` now promotes such candidates to
+    /// `state.time + 2 * EPSILON` so both granularities fire at the same
+    /// promoted boundary.
+    #[test]
+    fn survival_boundary_in_epsilon_gap_fires_deterministically_across_granularities() {
+        let survival_time = 100.0;
+        let objectives = objectives_with(300.0, survival_time);
+        let mut state = campaign_snapshot(objectives, Vec::new());
+        // Land `state.time` halfway into the epsilon gap below the boundary.
+        state.time = survival_time - EPSILON / 2.0;
+        state.day = clock::day_index(state.time);
+        state.clock_minutes = clock::clock_minutes(state.time);
+        state.metrics.completed_trips = 1;
+
+        // Coarse: one 300s tick spanning well past the survival boundary.
+        let coarse = tick_trips_with_objectives(&state, 300.0);
+
+        // Fine: 300 × 1s ticks; the survival boundary fires inside the first.
+        let mut fine = state.clone();
+        for _ in 0..300 {
+            if fine.metrics.state != MetricsState::Running {
+                break;
+            }
+            fine = tick_trips_with_objectives(&fine, 1.0);
+        }
+
+        assert_eq!(
+            coarse.metrics.state,
+            MetricsState::Won,
+            "coarse tick detects the survival win"
+        );
+        assert_eq!(
+            fine.metrics.state,
+            MetricsState::Won,
+            "fine ticks detect the survival win"
+        );
+        assert_eq!(
+            coarse.time, fine.time,
+            "coarse and fine terminate at the same promoted boundary timestamp"
+        );
+    }
+
+    /// Regression test for the near-current boundary gap on growth waves: a
+    /// wave whose `trigger_time` falls in `(state.time, state.time + EPSILON]`
+    /// must still fire at a deterministic substep boundary regardless of tick
+    /// granularity. Without the promotion in `track_next_boundary`, the wave
+    /// was discarded by the `<= after` filter and only applied at the
+    /// post-loop cleanup — at different timestamps for coarse vs fine ticks.
+    /// By aligning the wave's `trigger_time` with the survival win time, the
+    /// terminal timestamp becomes the observable: coarse and fine must both
+    /// terminate at the same promoted boundary with the wave applied.
+    #[test]
+    fn growth_wave_in_epsilon_gap_fires_deterministically_across_granularities() {
+        let trigger_time = 120.0;
+        let mut seed_waves = growing_suburb_growth_waves();
+        seed_waves[0].trigger_time = trigger_time;
+
+        // Survival win coincides with the wave so the terminal timestamp
+        // observes whether the wave boundary was tracked or lost.
+        let objectives = objectives_with(300.0, trigger_time);
+        let mut state = campaign_snapshot(objectives, seed_waves);
+        // Land `state.time` halfway into the epsilon gap below the trigger.
+        state.time = trigger_time - EPSILON / 2.0;
+        state.day = clock::day_index(state.time);
+        state.clock_minutes = clock::clock_minutes(state.time);
+        state.metrics.completed_trips = 1;
+
+        // Coarse: one 300s tick spanning past the trigger.
+        let coarse = tick_trips_with_objectives(&state, 300.0);
+
+        // Fine: 300 × 1s ticks; the wave fires inside the first.
+        let mut fine = state.clone();
+        for _ in 0..300 {
+            if fine.metrics.state != MetricsState::Running {
+                break;
+            }
+            fine = tick_trips_with_objectives(&fine, 1.0);
+        }
+
+        assert!(
+            coarse.scenario.growth_waves[0].applied,
+            "coarse tick applied the epsilon-gap wave"
+        );
+        assert!(
+            fine.scenario.growth_waves[0].applied,
+            "fine ticks applied the epsilon-gap wave"
+        );
+        assert_eq!(
+            coarse.metrics.state,
+            MetricsState::Won,
+            "coarse tick detects the win at the wave/survival boundary"
+        );
+        assert_eq!(
+            fine.metrics.state,
+            MetricsState::Won,
+            "fine ticks detect the win at the wave/survival boundary"
+        );
+        assert_eq!(coarse.buildings, fine.buildings, "buildings match");
+        assert_eq!(coarse.sims, fine.sims, "spawned sims match");
+        assert_eq!(coarse.map, fine.map, "map/zoning match");
+        assert_eq!(
+            coarse.time, fine.time,
+            "both terminate at the same promoted boundary timestamp"
         );
     }
 }
