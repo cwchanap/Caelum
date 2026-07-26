@@ -1,6 +1,6 @@
 # HPA-339: Deterministic Sandbox Template Factory
 
-**Status:** Approved in conversation; awaiting written-spec approval
+**Status:** Revised after review; awaiting written-spec approval
 
 **Linear:** [HPA-339](https://linear.app/cwchanap/issue/HPA-339/add-a-deterministic-sandbox-template-factory-with-blank-grid-and)
 
@@ -18,9 +18,11 @@ HPA-339 ships two 28×18 templates:
   corrected center junction that supports every legal straight, left, and
   right movement without player repair.
 
-Every sandbox template has no objectives and no growth waves. Reset recreates
-the active sandbox from its complete original creation request instead of
-silently returning a different template or a hard-coded set of settings.
+Every sandbox template has no objectives and no growth waves. Sandbox reset
+recreates the active city from its complete original creation request instead
+of silently returning a different template or a hard-coded set of settings.
+Campaign reset is rejected explicitly because this factory cannot reconstruct
+campaign objectives or authored growth waves from sandbox settings.
 
 ## Current State
 
@@ -62,6 +64,15 @@ The following decisions were approved during design review:
    authored, yielding 12 required center movements.
 5. A dedicated Rust sandbox factory owns creation and validation. It does not
    extend `GameplayRejection` or introduce a generic template registry.
+6. The existing default snapshot, `GameEngine::new()`, and Rust/WASM `Default`
+   implementations remain infallible compatibility paths for the statically
+   known default Crossroads request. User-provided creation and reset remain
+   fallible.
+7. Reset matches on `GameMode`: sandbox performs exact replay, while campaign
+   returns a typed `unsupportedGameMode` reset error without changing state.
+8. The TypeScript backend returns discriminated creation/reset results for
+   expected domain failures. Unexpected transport failures still reject the
+   promise.
 
 ## Goals
 
@@ -75,6 +86,7 @@ The following decisions were approved during design review:
 - Return typed creation errors for unknown IDs and invalid settings.
 - Expose equivalent core, WASM, Tauri, and TypeScript backend operations.
 - Make reset reproduce the active sandbox request atomically.
+- Reject campaign reset without replacing or converting the campaign.
 - Characterize template maps, settings, IDs, host parity, and repeated
   construction with deterministic tests.
 
@@ -87,7 +99,8 @@ The following decisions were approved during design review:
 - Population occupancy or gradual move-in.
 - New demand profiles or operational move-in rates.
 - Saving, storage adapters, city-library UI, or new-city UI.
-- Campaign selection or campaign-reset redesign.
+- Campaign selection or reconstruction of campaign reset state. HPA-339 only
+  makes the unsupported reset case explicit and non-destructive.
 - Creative purchase behavior. HPA-338 remains responsible for applying the
   Creative cost policy to gameplay mutations.
 - A trait-based or dynamic template registry.
@@ -103,6 +116,8 @@ Add a focused Rust module under `caelum-core` for sandbox creation. It owns:
 - the raw creation request;
 - validated creation settings;
 - creation-specific errors;
+- reset-specific errors;
+- the canonical default Crossroads request and sandbox settings;
 - the common initial snapshot shell;
 - Blank Grid construction;
 - Crossroads construction;
@@ -110,9 +125,17 @@ Add a focused Rust module under `caelum-core` for sandbox creation. It owns:
 - reconstruction of a request from persisted sandbox rules.
 
 `scenario.rs` retains campaign-specific Growing Suburb objectives and growth
-authoring. It no longer owns the default sandbox map or sandbox settings.
+authoring. It no longer owns the default sandbox map or defines
+`growing_suburb_sandbox_settings()`. Its `growing_suburb_campaign()` helper
+imports the canonical default Crossroads sandbox settings from the new sandbox
+module, then layers campaign mode, objectives, and growth waves over them.
 Growing Suburb remains a campaign/scenario name; it is not a sandbox template
 identifier.
+
+Existing campaign fixtures may continue to call the infallible
+`create_initial_snapshot()` and then replace rules/scenario for focused tests.
+Because the compatibility helper stays infallible, HPA-339 does not force the
+large existing snapshot-fixture inventory to unwrap a built-in default.
 
 This split keeps the authoritative construction path in Rust without mixing
 new-city validation into campaign helpers. It also gives HPA-350 one explicit
@@ -234,12 +257,17 @@ The compatibility/default request is:
 }
 ```
 
-`create_initial_snapshot()` becomes a thin fallible wrapper around this
-request. `GameEngine::new()` remains the zero-argument default constructor but
-returns `Result<GameEngine, SandboxCreationError>`. Production startup callers
-must surface a built-in template failure rather than silently falling back to
-an empty topology. The existing `Default` implementation is removed because
-`Default` cannot represent that failure.
+`create_initial_snapshot()` becomes a thin infallible compatibility wrapper
+around this statically known request. `GameEngine::new()` continues to return
+`GameEngine`, and both `GameEngine` and `WasmGameEngine` retain their existing
+`Default` implementations.
+
+The compatibility wrapper delegates to the same factory, then asserts that the
+built-in default satisfies its compile-time/template invariants. This is a
+programmer assertion, not validation of user input. Tauri constructs the
+default engine before placing it inside `Mutex`, so an invariant failure cannot
+poison an already-managed engine. Requested creation and reset never use this
+asserting path; they propagate typed failures and preserve active state.
 
 ## 3. Typed Creation Errors
 
@@ -279,8 +307,32 @@ mutate the active WASM or Tauri engine.
 `templateInvariantViolation` represents a defect in a built-in template, such
 as topology compilation failure or a missing required Crossroads movement. It
 is not used for player-provided settings. Debug assertions may make the defect
-prominent locally, but production hosts still receive a typed error rather
-than a panic or a degraded map.
+prominent locally. Requested construction and reset return the typed error
+rather than a degraded map. The statically known infallible default wrapper
+treats the same defect as a programmer assertion before an active engine is
+installed, as defined in section 2.4.
+
+Reset has a separate error contract because an active engine already exists:
+
+```typescript
+type SandboxResetErrorCode =
+  | "unsupportedGameMode"
+  | "templateInvariantViolation";
+
+interface SandboxResetError {
+  code: SandboxResetErrorCode;
+  context: {
+    gameMode?: "sandbox" | "campaign";
+    templateId?: "blankGrid" | "crossroads";
+  };
+}
+```
+
+`unsupportedGameMode` is returned when reset is requested for a campaign
+snapshot. The engine remains unchanged. Persisted sandbox request fields use
+validated Rust types, so reset cannot rediscover an unknown template or invalid
+numeric setting after a schema-v4 snapshot has been constructed or
+deserialized.
 
 ## 4. Deterministic Snapshot Construction
 
@@ -303,6 +355,10 @@ The factory builds a common snapshot shell with:
   `nextTripSequence` equal to `1`);
 - zeroed running metrics; and
 - a template-named scenario with `objectives: null` and `growthWaves: []`.
+
+The exact sandbox scenario names are `"Blank Grid"` and `"Crossroads"`.
+Growing Suburb campaign snapshots retain the separate `"Growing Suburb"`
+scenario name.
 
 The template builder supplies only the deterministic `GameMap`. Snapshot
 assembly therefore cannot accidentally give one template different counters,
@@ -344,6 +400,11 @@ geometry:
 - column 14, southbound; and
 - column 15, northbound.
 
+`author_scenario_road_line()` already connects each arm's ordered sequence
+through `connect_authored_sequence()`. Crossroads reuses that behavior; the new
+authoring is limited to the reciprocal center facts and automatic-junction
+structure needed to connect the four otherwise-complete arms.
+
 The center footprint is:
 
 ```text
@@ -373,9 +434,12 @@ The outbound arm on the same side as the inbound arm would be a U-turn and is
 not authored. This produces exactly 12 required non-U-turn movements.
 
 The factory compiles `RoadTopology` before returning. It queries the compiled
-topology for the required matrix and rejects an invalid built-in template with
-`templateInvariantViolation`. This makes the routing graph—not visual tile
-occupancy—the acceptance oracle.
+topology through the existing public `transition_for()` method for the required
+matrix and rejects an invalid built-in template with
+`templateInvariantViolation`. `transition_for()` is marked `#[doc(hidden)]`,
+but it is already a production query used by the network layer; HPA-339 does
+not add a second topology-inspection API. This makes the routing graph—not
+visual tile occupancy—the acceptance oracle.
 
 ## 5. Engine and Reset Lifecycle
 
@@ -391,34 +455,37 @@ Construction validates the request, builds the snapshot, compiles the topology,
 and creates the engine as one operation. There is never an engine whose
 snapshot and cached topology came from different template candidates.
 
-The existing zero-argument `GameEngine::new()` delegates to the default
-validated request and becomes fallible. It remains the default Crossroads
-entry point for app startup and tests that do not need a custom request, with
-callers explicitly handling or asserting the result.
+The existing zero-argument `GameEngine::new()` delegates to the infallible
+default compatibility wrapper and keeps its current signature. Requested
+construction uses a separate fallible constructor, so existing direct engine
+tests and campaign fixtures do not acquire unrelated result-handling noise.
 
 ### 5.2 Exact-request reset
 
-For an active sandbox, reset:
+Reset first matches on `snapshot.rules.gameMode`.
+
+For an active sandbox, it:
 
 1. reads `economyPreset` and the persisted sandbox settings;
 2. reconstructs the validated creation request;
 3. builds a replacement snapshot and topology off to the side;
 4. swaps both into the engine only after successful construction; and
-5. returns the fresh snapshot.
+5. returns the fresh snapshot in a successful reset result.
 
 Reset discards all player mutations and restores the original starting
 capital. It preserves the original template and demand settings. A Blank Grid
 reset cannot produce Crossroads, and a Crossroads reset cannot produce Blank
 Grid.
 
-The reset operation becomes fallible so a built-in template invariant failure
-can be returned without corrupting the current engine. Existing runtime error
-handling treats such a failure as a host/backend error, not a recoverable
-gameplay rejection.
+For an active campaign, reset returns
+`SandboxResetError { code: UnsupportedGameMode, ... }` without constructing or
+swapping a candidate. HPA-339 does not guess how to reconstruct objectives or
+growth waves, and it no longer allows the existing reset behavior to silently
+replace a campaign with the default sandbox.
 
-Campaign-reset semantics are not expanded by HPA-339. The exact replay
-guarantee applies to `GameMode::Sandbox`, which is the only player-facing mode
-created by this factory.
+The reset operation is fallible so both unsupported mode and built-in template
+invariant failures can be returned without corrupting the current engine.
+These are sandbox lifecycle results, not recoverable gameplay rejections.
 
 ## 6. Host and Frontend Boundary
 
@@ -430,16 +497,24 @@ validation.
 
 ### 6.2 WASM
 
-`WasmGameEngine` exposes requested sandbox construction in addition to its
-default constructor. It:
+`WasmGameEngine::new() -> WasmGameEngine` and its `Default` implementation keep
+their current infallible signatures. Requested construction is a separate
+fallible static operation:
+
+```rust
+from_sandbox_request(request: JsValue) -> Result<WasmGameEngine, JsValue>
+```
+
+That operation:
 
 - converts the JavaScript request into the Rust raw request;
 - delegates validation and engine creation to `caelum-core`;
 - returns the new engine on success; and
 - serializes `SandboxCreationError` on failure.
 
-The WASM reset method delegates to the exact-request engine reset and propagates
-typed creation failures.
+The WASM reset method delegates to the mode-aware engine reset and serializes
+`SandboxResetError` on failure. The WASM backend distinguishes serialized
+sandbox errors from unexpected JavaScript/serialization failures.
 
 ### 6.3 Tauri
 
@@ -447,27 +522,46 @@ Tauri adds a `game_create_sandbox` command. The command constructs a complete
 candidate engine before replacing managed state. It acquires the managed lock
 only for the final swap, so invalid input and template defects leave the
 current engine unchanged and cannot poison the mutex through a panic.
+The command returns `Result<GameSnapshot, SandboxCreationError>`.
 
-`game_reset` delegates to the same exact-request reset and returns the same
-typed creation-error shape as requested construction.
+`game_reset` delegates to the same mode-aware reset and returns
+`Result<GameSnapshot, SandboxResetError>`. Mutex and serialization failures
+remain host failures rather than being mislabeled as sandbox-domain errors.
 
 ### 6.4 TypeScript backend
 
-The shared `GameBackend` contract adds:
+The shared backend contract uses discriminated results for expected sandbox
+domain failures:
 
 ```typescript
+type SandboxCreationResult =
+  | { ok: true; snapshot: RustGameSnapshot }
+  | { ok: false; error: SandboxCreationError };
+
+type SandboxResetResult =
+  | { ok: true; snapshot: RustGameSnapshot }
+  | { ok: false; error: SandboxResetError };
+
 createSandbox(
   request: SandboxCreationRequest,
-): Promise<RustGameSnapshot>;
+): Promise<SandboxCreationResult>;
+
+reset(): Promise<SandboxResetResult>;
 ```
 
 The WASM backend replaces its local engine only after construction succeeds.
 The Tauri backend invokes `game_create_sandbox`, whose command performs the
 atomic managed-engine replacement.
 
-Both adapters normalize creation failures into the shared
-`SandboxCreationError` shape. They do not validate template geometry,
-reinterpret settings, or manufacture fallback snapshots.
+Both adapters catch and recognize the serialized Rust domain error, then return
+the corresponding `{ ok: false, error }` variant. Unexpected transport,
+serialization, module-loading, or mutex failures still reject the promise.
+Adapters do not validate template geometry, reinterpret settings, or
+manufacture fallback snapshots.
+
+The existing runtime reset path commits the returned snapshot only for
+`ok: true`. For `ok: false`, it preserves the current runtime snapshot and
+surfaces the reset failure through existing shell/backend error handling.
 
 HPA-339 exposes the backend capability but does not add a runtime controller
 or player-facing New City flow. HPA-345 owns that workflow.
@@ -514,6 +608,12 @@ snapshot equality. Repeat with representative valid combinations of:
 
 Changing one request setting changes only the expected rules/budget fields,
 not the authored template map.
+
+Assert that `create_initial_snapshot()`, `GameEngine::new()`, and the default
+WASM constructor all produce the same snapshot as the canonical default
+Crossroads request. Campaign helper tests assert that
+`growing_suburb_campaign()` reuses those Crossroads sandbox settings while
+retaining campaign mode and the `"Growing Suburb"` scenario name.
 
 ### 8.2 Characterization fixtures
 
@@ -564,7 +664,9 @@ Test every creation error code, including:
 - unsupported move-in rate.
 
 For host and engine replacement operations, assert that a failed request leaves
-the previous snapshot unchanged.
+the previous snapshot unchanged. Backend adapter tests also assert that expected
+Rust domain errors become `{ ok: false, error }`, while unrelated host failures
+still reject.
 
 ### 8.6 Reset
 
@@ -578,16 +680,20 @@ Add explicit regressions proving:
 - Crossroads reset stays Crossroads;
 - starting capital is restored;
 - economy and demand settings are preserved; and
-- reset produces the same topology as fresh construction.
+- reset produces the same topology as fresh construction;
+- campaign reset returns `unsupportedGameMode`; and
+- rejected campaign reset leaves the complete campaign snapshot unchanged.
 
 ### 8.7 Host parity
 
 WASM and Tauri adapter contract tests submit the same raw requests and compare
 their normalized output with the core factory result. They also compare typed
-error codes and contexts for the same invalid requests.
+error codes, contexts, and discriminated backend results for the same invalid
+requests.
 
 TypeScript backend tests verify operation names, request forwarding, atomic
-local-engine replacement, reset forwarding, and error normalization.
+local-engine replacement, reset forwarding, domain-result normalization, and
+preservation of unexpected promise rejections.
 
 ### 8.8 Regression suite
 
@@ -621,6 +727,7 @@ HPA-339 is complete when:
 - Blank Grid is structurally blank;
 - Crossroads passes its 12-movement topology matrix;
 - reset exactly replays active sandbox creation settings;
+- campaign reset is rejected without replacing state;
 - WASM and Tauri expose equivalent operations and outputs;
 - invalid requests return typed errors without replacing active state; and
 - schema-v4 fixtures and verification gates pass.
