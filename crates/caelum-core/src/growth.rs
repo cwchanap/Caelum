@@ -1,6 +1,6 @@
 use crate::areas;
 use crate::buildings;
-use crate::model::{GameSnapshot, GrowthAction};
+use crate::model::{GameMode, GameSnapshot, GrowthAction};
 
 /// Apply every growth wave whose `trigger_time` has arrived, in declared order,
 /// by replaying its actions through the engine's own handlers. Placements are
@@ -9,6 +9,10 @@ use crate::model::{GameSnapshot, GrowthAction};
 /// action is invalid at fire time (e.g. an unzoned placement) skips that action
 /// deterministically, exactly as a player's invalid click is a no-op.
 pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
+    if state.rules.game_mode != GameMode::Campaign {
+        return;
+    }
+
     let due: Vec<usize> = state
         .scenario
         .growth_waves
@@ -50,15 +54,47 @@ pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
 #[cfg(test)]
 mod tests {
     use crate::model::{GameSnapshot, GrowthAction, GrowthWave, Point};
-    use crate::scenario::growing_suburb_growth_waves;
+    use crate::scenario::{
+        growing_suburb_campaign, growing_suburb_growth_waves, growing_suburb_objectives,
+    };
     use crate::state::create_initial_snapshot;
     use crate::trips;
 
-    fn seeded() -> GameSnapshot {
+    fn campaign_with_waves(waves: Vec<GrowthWave>) -> GameSnapshot {
         let mut state = create_initial_snapshot();
+        let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), waves);
+        state.rules = rules;
+        state.scenario = scenario;
         state.paused = false;
-        state.scenario.growth_waves = growing_suburb_growth_waves();
         state
+    }
+
+    fn seeded() -> GameSnapshot {
+        campaign_with_waves(growing_suburb_growth_waves())
+    }
+
+    #[test]
+    fn sandbox_attached_growth_waves_remain_unapplied() {
+        let mut start = create_initial_snapshot();
+        start.paused = false;
+        start.scenario.growth_waves = growing_suburb_growth_waves();
+
+        let next = trips::tick_trips(&start, 1.0);
+
+        assert!(next.buildings.is_empty());
+        assert!(next.sims.is_empty());
+        assert!(!next.scenario.growth_waves[0].applied);
+    }
+
+    #[test]
+    fn campaign_without_objectives_still_applies_growth() {
+        let mut start = campaign_with_waves(growing_suburb_growth_waves());
+        start.scenario.objectives = None;
+
+        let next = trips::tick_trips(&start, 1.0);
+
+        assert_eq!(next.buildings.len(), 5);
+        assert!(next.scenario.growth_waves[0].applied);
     }
 
     #[test]
@@ -115,9 +151,7 @@ mod tests {
 
     #[test]
     fn placement_without_zoning_is_skipped_but_wave_marked_applied() {
-        let mut start = create_initial_snapshot();
-        start.paused = false;
-        start.scenario.growth_waves = vec![GrowthWave {
+        let start = campaign_with_waves(vec![GrowthWave {
             id: "w".to_string(),
             trigger_time: 0.0,
             message: String::new(),
@@ -127,7 +161,7 @@ mod tests {
                 origin: Point { x: 2, y: 3 },
                 rotation: 0,
             }],
-        }];
+        }]);
         let next = trips::tick_trips(&start, 1.0);
         assert!(next.buildings.is_empty(), "unzoned placement skipped");
         assert!(next.scenario.growth_waves[0].applied);
@@ -142,9 +176,7 @@ mod tests {
     /// the substep cap truncating the tick.
     #[test]
     fn multiple_waves_in_one_tick_all_fire_in_declared_order() {
-        let mut start = create_initial_snapshot();
-        start.paused = false;
-        start.scenario.growth_waves = vec![
+        let start = campaign_with_waves(vec![
             GrowthWave {
                 id: "wave-a".to_string(),
                 trigger_time: 50.0,
@@ -199,7 +231,7 @@ mod tests {
                     },
                 ],
             },
-        ];
+        ]);
 
         let next = trips::tick_trips(&start, 300.0);
 
@@ -231,9 +263,7 @@ mod tests {
         let mut seed_waves = growing_suburb_growth_waves();
         seed_waves[0].trigger_time = 120.0;
 
-        let mut start = create_initial_snapshot();
-        start.paused = false;
-        start.scenario.growth_waves = seed_waves;
+        let start = campaign_with_waves(seed_waves);
 
         // Coarse: one 300s tick spanning well past the 120s trigger.
         let coarse = trips::tick_trips(&start, 300.0);
