@@ -236,7 +236,7 @@ describe("Rust backend contract", () => {
         time: 555,
       },
     ]);
-    expect(snapshot.scenario.name).toBe("Growing Suburb");
+    expect(snapshot.scenario.name).toBe("Crossroads");
     expect(snapshot.day).toBe(1);
     expect(snapshot.clockMinutes).toBe(555);
     expect(snapshot.sims).toHaveLength(1);
@@ -382,7 +382,7 @@ describe("Rust backend contract", () => {
     const tauri = normalizeRustSnapshot(
       createRustSnapshot({
         scenario: {
-          name: "Growing Suburb",
+          name: "Crossroads",
           objectives: null,
           growthWaves: [],
         },
@@ -391,7 +391,7 @@ describe("Rust backend contract", () => {
     const wasm = normalizeRustSnapshot(
       createRustSnapshot({
         scenario: {
-          name: "Growing Suburb",
+          name: "Crossroads",
           objectives: undefined,
           growthWaves: [],
         },
@@ -411,7 +411,7 @@ describe("Rust backend contract", () => {
     const normalized = normalizeRustSnapshot(raw);
 
     expect(normalized.scenario).toEqual({
-      name: "Growing Suburb",
+      name: "Crossroads",
       objectives: null,
       growthWaves: [],
     });
@@ -421,7 +421,12 @@ describe("Rust backend contract", () => {
   it("sources objective thresholds from the Rust snapshot, not a local shim", () => {
     // Guards against the drift that motivated this contract: a previous TS shim
     // hard-coded `rollingWindowSeconds = 600` while the core evaluates at 300.
+    const campaignRules = {
+      ...createRustSnapshot().rules,
+      gameMode: "campaign" as const,
+    };
     const withThresholds = createRustSnapshot({
+      rules: campaignRules,
       scenario: {
         name: "Growing Suburb",
         objectives: {
@@ -445,6 +450,7 @@ describe("Rust backend contract", () => {
     // is read from the snapshot, not overwritten by a constant).
     const custom = normalizeRustSnapshot(
       createRustSnapshot({
+        rules: campaignRules,
         scenario: {
           name: "Tight Suburb",
           objectives: {
@@ -540,6 +546,10 @@ describe("Rust backend contract", () => {
 
   it("passes growth waves through from the Rust snapshot", () => {
     const withWave = createRustSnapshot({
+      rules: {
+        ...createRustSnapshot().rules,
+        gameMode: "campaign",
+      },
       scenario: {
         name: "Growing Suburb",
         objectives: {

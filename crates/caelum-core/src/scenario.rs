@@ -1,7 +1,7 @@
 use crate::model::{
     EconomyPreset, GameMode, GameRules, GrowthAction, GrowthWave, MaxAverageWaitSeconds,
     MaxLateRatio, MaxUnservedRatio, ObjectiveThresholds, Point, RollingWindowSeconds,
-    SandboxSettings, ScenarioConfig, SurvivalTimeSeconds,
+    ScenarioConfig, SurvivalTimeSeconds,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
@@ -42,11 +42,6 @@ pub fn growing_suburb_scenario() -> ScenarioConfig {
     }
 }
 
-/// Shared default sandbox settings for the current campaign and initial snapshot.
-pub fn growing_suburb_sandbox_settings() -> SandboxSettings {
-    canonical_default_settings()
-}
-
 pub fn growing_suburb_campaign(
     objectives: ObjectiveThresholds,
     growth_waves: Vec<GrowthWave>,
@@ -55,7 +50,7 @@ pub fn growing_suburb_campaign(
         GameRules {
             game_mode: GameMode::Campaign,
             economy_preset: EconomyPreset::Standard,
-            sandbox: growing_suburb_sandbox_settings(),
+            sandbox: canonical_default_settings(),
         },
         ScenarioConfig {
             name: SCENARIO_NAME.to_string(),

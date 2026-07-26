@@ -1000,6 +1000,7 @@ describe("selectShellState Brief", () => {
         economyPreset: "standard" as const,
         templateId: "crossroads" as const,
       },
+      scenarioName: "Crossroads",
       objectives: null,
       title: "Standard Sandbox",
       context: "Template · Crossroads",
@@ -1013,6 +1014,7 @@ describe("selectShellState Brief", () => {
         economyPreset: "standard" as const,
         templateId: "blankGrid" as const,
       },
+      scenarioName: "Blank Grid",
       objectives: null,
       title: "Standard Sandbox",
       context: "Template · Blank Grid",
@@ -1026,6 +1028,7 @@ describe("selectShellState Brief", () => {
         economyPreset: "creative" as const,
         templateId: "crossroads" as const,
       },
+      scenarioName: "Crossroads",
       objectives: thresholds,
       title: "Creative Sandbox",
       context: "Template · Crossroads",
@@ -1039,6 +1042,7 @@ describe("selectShellState Brief", () => {
         economyPreset: "standard" as const,
         templateId: "crossroads" as const,
       },
+      scenarioName: "Growing Suburb",
       objectives: thresholds,
       title: "Growing Suburb",
       context: "Campaign · Growing Suburb",
@@ -1053,6 +1057,7 @@ describe("selectShellState Brief", () => {
         economyPreset: "creative" as const,
         templateId: "crossroads" as const,
       },
+      scenarioName: "Growing Suburb",
       objectives: null,
       title: "Growing Suburb",
       context: "Campaign · Growing Suburb",
@@ -1071,7 +1076,7 @@ describe("selectShellState Brief", () => {
         },
       },
       scenario: {
-        name: "Growing Suburb",
+        name: entry.scenarioName,
         objectives: entry.objectives,
         growthWaves: [],
       },
@@ -1125,7 +1130,7 @@ describe("selectShellState Brief", () => {
   it("ignores sandbox-attached objectives and waves", () => {
     const state = createTestGameState({
       scenario: {
-        name: "Growing Suburb",
+        name: "Crossroads",
         objectives: thresholds,
         growthWaves: [
           {

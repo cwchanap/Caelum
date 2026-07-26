@@ -1,6 +1,6 @@
 # HPA-339: Deterministic Sandbox Template Factory
 
-**Status:** Revised after topology review; awaiting written-spec approval
+**Status:** Approved and implemented
 
 **Linear:** [HPA-339](https://linear.app/cwchanap/issue/HPA-339/add-a-deterministic-sandbox-template-factory-with-blank-grid-and)
 

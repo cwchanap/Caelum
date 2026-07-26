@@ -6,10 +6,10 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 
-// Build a full in-bounds empty grid so the default snapshot is valid on its
-// own (matching what the Rust backend returns), instead of an empty `tiles`
-// array that every downstream helper had to patch. Dimensions come from the
-// single TS mirror of `crates/caelum-core/src/scenario.rs`.
+// Build a full in-bounds empty grid so this minimal fixture is valid on its own,
+// instead of an empty `tiles` array that every downstream helper had to patch.
+// It intentionally omits the canonical Crossroads roads; authoritative sandbox
+// templates and dimensions live in `crates/caelum-core/src/sandbox.rs`.
 function createEmptyTiles(
   width = MAP_WIDTH,
   height = MAP_HEIGHT,
@@ -80,7 +80,7 @@ export function createRustSnapshot(
       lossReason: null,
     },
     scenario: {
-      name: "Growing Suburb",
+      name: "Crossroads",
       objectives: null,
       growthWaves: [],
     },
