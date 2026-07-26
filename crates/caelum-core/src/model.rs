@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 3;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,8 @@ pub enum EconomyPreset {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxTemplateId {
-    GrowingSuburb,
+    BlankGrid,
+    Crossroads,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,10 +67,43 @@ impl From<DemandMultiplier> for f64 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "i32", into = "i32")]
+pub struct StartingCapital(i32);
+
+impl StartingCapital {
+    pub fn new(value: i32) -> Result<Self, &'static str> {
+        Self::try_from(value)
+    }
+
+    pub fn value(self) -> i32 {
+        self.0
+    }
+}
+
+impl TryFrom<i32> for StartingCapital {
+    type Error = &'static str;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        if value >= 0 {
+            Ok(Self(value))
+        } else {
+            Err("starting capital must be non-negative")
+        }
+    }
+}
+
+impl From<StartingCapital> for i32 {
+    fn from(value: StartingCapital) -> Self {
+        value.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxSettings {
     pub template_id: SandboxTemplateId,
+    pub starting_capital: StartingCapital,
     pub demand_multiplier: DemandMultiplier,
     pub move_in_rate: MoveInRateSelection,
 }

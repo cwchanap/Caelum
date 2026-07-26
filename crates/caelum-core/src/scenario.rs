@@ -1,15 +1,15 @@
 use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GrowthAction, GrowthWave,
-    MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio, MoveInRateSelection,
-    ObjectiveThresholds, Point, RollingWindowSeconds, SandboxSettings, SandboxTemplateId,
-    ScenarioConfig, SurvivalTimeSeconds, Tile,
+    EconomyPreset, GameMap, GameMode, GameRules, GrowthAction, GrowthWave, MaxAverageWaitSeconds,
+    MaxLateRatio, MaxUnservedRatio, ObjectiveThresholds, Point, RollingWindowSeconds,
+    SandboxSettings, ScenarioConfig, SurvivalTimeSeconds, Tile,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
     SURVIVAL_TIME_SECONDS,
 };
+use crate::sandbox::canonical_default_settings;
 
 pub const MAP_WIDTH: u8 = 28;
 pub const MAP_HEIGHT: u8 = 18;
@@ -47,16 +47,9 @@ pub fn growing_suburb_scenario() -> ScenarioConfig {
     }
 }
 
-/// Shared `SandboxSettings` for the Growing Suburb template. Used by both the
-/// sandbox initial snapshot (`state::create_initial_snapshot`) and the campaign
-/// rules (`growing_suburb_campaign`) so the template id, default demand
-/// multiplier, and paused move-in rate stay in sync if the defaults change.
+/// Shared default sandbox settings for the current campaign and initial snapshot.
 pub fn growing_suburb_sandbox_settings() -> SandboxSettings {
-    SandboxSettings {
-        template_id: SandboxTemplateId::GrowingSuburb,
-        demand_multiplier: DemandMultiplier::default(),
-        move_in_rate: MoveInRateSelection::Paused,
-    }
+    canonical_default_settings()
 }
 
 pub fn growing_suburb_campaign(

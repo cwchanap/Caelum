@@ -3,9 +3,8 @@ use crate::model::{
     EconomyPreset, GameMode, GameRules, GameSnapshot, Metrics, MetricsState, TransitNetwork,
     SNAPSHOT_SCHEMA_VERSION,
 };
-use crate::scenario::{
-    create_growing_suburb_map, growing_suburb_sandbox_settings, growing_suburb_scenario,
-};
+use crate::sandbox::{canonical_default_settings, DEFAULT_STARTING_CAPITAL};
+use crate::scenario::{create_growing_suburb_map, growing_suburb_scenario};
 
 pub fn create_initial_snapshot() -> GameSnapshot {
     GameSnapshot {
@@ -15,11 +14,11 @@ pub fn create_initial_snapshot() -> GameSnapshot {
         clock_minutes: clock_minutes(0.0),
         speed: 1,
         paused: true,
-        budget: 120_000,
+        budget: DEFAULT_STARTING_CAPITAL,
         rules: GameRules {
             game_mode: GameMode::Sandbox,
             economy_preset: EconomyPreset::Standard,
-            sandbox: growing_suburb_sandbox_settings(),
+            sandbox: canonical_default_settings(),
         },
         map: create_growing_suburb_map(),
         buildings: Vec::new(),

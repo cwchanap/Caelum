@@ -42,6 +42,7 @@ pub mod roundabouts;
 pub mod route_editor;
 pub mod route_lifecycle;
 pub mod router;
+pub mod sandbox;
 pub mod scenario;
 pub mod service_itinerary;
 pub mod state;
@@ -62,3 +63,8 @@ pub use preview::{
 };
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 pub use route_lifecycle::{project_position_onto_path, PathProjection};
+pub use sandbox::{
+    canonical_default_request, canonical_default_settings, validate_request, SandboxCreationError,
+    SandboxCreationErrorCode, SandboxCreationErrorContext, SandboxCreationRequest,
+    ValidatedSandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
+};
