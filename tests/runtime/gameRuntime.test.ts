@@ -17,6 +17,7 @@ import type {
   RoadMutationPreviewResponse,
   RoutePreviewResponse,
   RustGameSnapshot,
+  SandboxResetError,
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
@@ -1582,6 +1583,83 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.state.paused).toBe(true);
     expect(snapshot.state.speed).toBe(1);
+    expect(snapshot.sandboxResetError).toBeNull();
+  });
+
+  it("surfaces a typed sandbox reset failure without changing runtime lifecycle state", async () => {
+    const backend = backendSpy();
+    const resetError: SandboxResetError = {
+      code: "unsupportedGameMode",
+      context: { gameMode: "campaign" },
+    };
+    backend.reset = vi.fn(
+      async () => ({ ok: false, error: resetError }) as const,
+    );
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("busRoute");
+    backend.rejectNextDispatch();
+    await runtime.setSpeed(4);
+    runtime.start();
+    const beforeReset = runtime.getSnapshot();
+
+    const resetSnapshot = await runtime.reset();
+
+    expect(resetSnapshot.state).toBe(beforeReset.state);
+    expect(resetSnapshot.ui).toBe(beforeReset.ui);
+    expect(resetSnapshot.rejection).toEqual(TEST_REJECTION);
+    expect(resetSnapshot.sandboxResetError).toEqual(resetError);
+    expect(resetSnapshot.backendError).toBeNull();
+    expect(runtime.isRunning()).toBe(true);
+
+    await runtime.setSpeed(2);
+    expect(backend.intents).toContainEqual({ type: "setSpeed", speed: 2 });
+  });
+
+  it("clears a typed sandbox reset error after the next successful reset", async () => {
+    const backend = backendSpy();
+    const resetError: SandboxResetError = {
+      code: "unsupportedGameMode",
+      context: { gameMode: "campaign" },
+    };
+    let shouldRejectReset = true;
+    backend.reset = async () => {
+      if (shouldRejectReset) {
+        shouldRejectReset = false;
+        return { ok: false, error: resetError } as const;
+      }
+      return { ok: true, snapshot: fullRustSnapshot() } as const;
+    };
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    expect((await runtime.reset()).sandboxResetError).toEqual(resetError);
+    expect((await runtime.reset()).sandboxResetError).toBeNull();
+  });
+
+  it("treats a rejected reset promise as a fatal backend failure", async () => {
+    const backend = backendSpy();
+    backend.reset = vi.fn(async () => {
+      throw new Error("reset host unavailable");
+    });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.start();
+    const resetSnapshot = await runtime.reset();
+
+    expect(resetSnapshot.backendError).toBe("reset host unavailable");
+    expect(runtime.isRunning()).toBe(false);
+
+    await runtime.setSpeed(2);
+    expect(backend.intents).toEqual([]);
   });
 
   it("resets transient UI state without changing simulation state", async () => {

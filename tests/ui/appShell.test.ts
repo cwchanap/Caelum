@@ -98,6 +98,7 @@ function createRuntimeHarness(
     shell: selectShellState(state, ui, rejection),
     backendError,
     rejection,
+    sandboxResetError: null,
   });
 
   const publish = (): RuntimeSnapshot => {
@@ -465,6 +466,7 @@ describe("App shell bootstrap", () => {
       shell: selectShellState(nextState, nextUi),
       backendError: null,
       rejection: null,
+      sandboxResetError: null,
     });
 
     await waitFor(() =>
