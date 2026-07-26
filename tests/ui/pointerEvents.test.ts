@@ -210,7 +210,7 @@ function backendSpy(): GameBackend {
         map: initial.map,
         budget: initial.budget,
       });
-      return snapshot;
+      return { ok: true, snapshot };
     },
   };
 }

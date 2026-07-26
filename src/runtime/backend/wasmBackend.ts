@@ -1,4 +1,5 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
+import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import {
   normalizeDispatchResult,
   normalizeRoadMutationPreviewResponse,
@@ -13,6 +14,7 @@ import type {
   RoutePreviewRequest,
   RoutePreviewResponse,
   RustGameSnapshot,
+  SandboxCreationRequest,
 } from "./types";
 
 let initPromise: Promise<unknown> | null = null;
@@ -62,6 +64,19 @@ export async function createWasmBackend(): Promise<GameBackend> {
       engine = WasmGameEngine.from_snapshot(snapshot);
       return engine.snapshot() as RustGameSnapshot;
     },
+    async createSandbox(request: SandboxCreationRequest) {
+      try {
+        const candidate = WasmGameEngine.from_sandbox_request(request);
+        const snapshot = candidate.snapshot() as RustGameSnapshot;
+        engine = candidate;
+        return { ok: true, snapshot } as const;
+      } catch (error: unknown) {
+        if (isSandboxCreationError(error)) {
+          return { ok: false, error } as const;
+        }
+        throw error;
+      }
+    },
     async dispatch(intent: GameIntent) {
       return normalizeDispatchResult(engine.dispatch(intent) as DispatchResult);
     },
@@ -71,7 +86,15 @@ export async function createWasmBackend(): Promise<GameBackend> {
       );
     },
     async reset() {
-      return engine.reset() as RustGameSnapshot;
+      try {
+        const snapshot = engine.reset() as RustGameSnapshot;
+        return { ok: true, snapshot } as const;
+      } catch (error: unknown) {
+        if (isSandboxResetError(error)) {
+          return { ok: false, error } as const;
+        }
+        throw error;
+      }
     },
     async previewRoute(request: RoutePreviewRequest) {
       const response = engine.preview_route(request) as RoutePreviewResponse;

@@ -5,14 +5,23 @@ import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import type {
   RustGameSnapshot,
   RustObjectiveThresholds,
+  SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
+
+const canonicalCrossroadsRequest: SandboxCreationRequest = {
+  templateId: "crossroads",
+  economyPreset: "standard",
+  startingCapital: 120_000,
+  demandMultiplier: 1,
+  moveInRate: "paused",
+};
 
 /**
  * Loads the real built WASM artifact (not the vi.mock in wasmBackend.test.ts).
  * Requires `bun run ensure-wasm` / pretest hook so src/generated/caelum_wasm exists.
  */
 describe("real WASM artifact smoke", () => {
-  it("loads the built module and returns a schema-v3 snapshot", async () => {
+  it("loads the built module and returns a schema-v4 snapshot", async () => {
     const backend = await createWasmBackend();
     const snapshot = await backend.snapshot();
 
@@ -27,7 +36,8 @@ describe("real WASM artifact smoke", () => {
       gameMode: "sandbox",
       economyPreset: "standard",
       sandbox: {
-        templateId: "growingSuburb",
+        templateId: "crossroads",
+        startingCapital: 120_000,
         demandMultiplier: 1,
         moveInRate: "paused",
       },
@@ -49,7 +59,7 @@ describe("real WASM artifact smoke", () => {
     expect(rejected.rejection?.code).toBe("invalidSpeed");
   });
 
-  it("replaces and loads a schema-v3 snapshot through the real artifact", async () => {
+  it("replaces and loads a schema-v4 snapshot through the real artifact", async () => {
     const backend = await createWasmBackend();
     const initial = await backend.snapshot();
     const replacement: RustGameSnapshot = {
@@ -97,7 +107,7 @@ describe("real WASM artifact smoke", () => {
         state: "running",
       }),
       scenario: expect.objectContaining({
-        name: "Growing Suburb",
+        name: "Crossroads",
         growthWaves: [],
       }),
     });
@@ -203,8 +213,8 @@ describe("real WASM artifact smoke", () => {
     }
   });
 
-  it("rejects a schema-v2 save missing required v3 fields with unsupportedSnapshotSchema", async () => {
-    // A legacy schema-v2 save lacks the required v3 `rules` field. The two-phase
+  it("rejects a schema-v3 save missing required v4 fields with unsupportedSnapshotSchema", async () => {
+    // A legacy schema-v3 save lacks the required v4 `startingCapital` field. The two-phase
     // probe must reject it with the structured `unsupportedSnapshotSchema` code
     // (surfaced as a serialized GameplayRejection object) instead of a generic
     // missing-field serde error string.
@@ -279,5 +289,173 @@ describe("real WASM artifact smoke", () => {
     expect(Array.isArray(preview.legs)).toBe(true);
     expect(preview.legs.length).toBeGreaterThanOrEqual(1);
     expect(preview.missingWaypointIds).toEqual([]);
+  });
+
+  it.each([
+    {
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 42_000,
+      demandMultiplier: 1.5,
+      moveInRate: "paused",
+    },
+    canonicalCrossroadsRequest,
+  ] satisfies SandboxCreationRequest[])(
+    "creates deterministic $templateId snapshots with the exact requested rules",
+    async (request) => {
+      const firstBackend = await createWasmBackend();
+      const secondBackend = await createWasmBackend();
+
+      const first = await firstBackend.createSandbox(request);
+      const second = await secondBackend.createSandbox(request);
+
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      if (!first.ok || !second.ok) {
+        throw new Error("expected requested sandbox creation to succeed");
+      }
+      expect(first.snapshot.schemaVersion).toBe(4);
+      expect(first.snapshot.budget).toBe(request.startingCapital);
+      expect(first.snapshot.rules).toEqual({
+        gameMode: "sandbox",
+        economyPreset: request.economyPreset,
+        sandbox: {
+          templateId: request.templateId,
+          startingCapital: request.startingCapital,
+          demandMultiplier: request.demandMultiplier,
+          moveInRate: request.moveInRate,
+        },
+      });
+      expect(second.snapshot).toEqual(first.snapshot);
+    },
+  );
+
+  it.each([
+    {
+      request: { ...canonicalCrossroadsRequest, templateId: "unknown" },
+      error: {
+        code: "unknownTemplateId",
+        context: { field: "templateId", attemptedValue: "unknown" },
+      },
+    },
+    {
+      request: { ...canonicalCrossroadsRequest, economyPreset: "unknown" },
+      error: {
+        code: "unknownEconomyPreset",
+        context: { field: "economyPreset", attemptedValue: "unknown" },
+      },
+    },
+    {
+      request: { ...canonicalCrossroadsRequest, startingCapital: -1 },
+      error: {
+        code: "invalidStartingCapital",
+        context: { field: "startingCapital", attemptedValue: "-1" },
+      },
+    },
+    {
+      request: { ...canonicalCrossroadsRequest, demandMultiplier: 0 },
+      error: {
+        code: "invalidDemandMultiplier",
+        context: { field: "demandMultiplier", attemptedValue: "0" },
+      },
+    },
+    {
+      request: { ...canonicalCrossroadsRequest, moveInRate: "steady" },
+      error: {
+        code: "unknownMoveInRate",
+        context: { field: "moveInRate", attemptedValue: "steady" },
+      },
+    },
+    {
+      request: {
+        ...canonicalCrossroadsRequest,
+        startingCapital: Number.NaN,
+      },
+      error: {
+        code: "invalidStartingCapital",
+        context: { field: "startingCapital", attemptedValue: "NaN" },
+      },
+    },
+    {
+      request: {
+        ...canonicalCrossroadsRequest,
+        demandMultiplier: Number.POSITIVE_INFINITY,
+      },
+      error: {
+        code: "invalidDemandMultiplier",
+        context: { field: "demandMultiplier", attemptedValue: "Infinity" },
+      },
+    },
+  ])(
+    "returns the exact typed creation error for %#",
+    async ({ request, error }) => {
+      const backend = await createWasmBackend();
+
+      await expect(
+        backend.createSandbox(request as SandboxCreationRequest),
+      ).resolves.toEqual({ ok: false, error });
+    },
+  );
+
+  it("keeps the active engine unchanged after failed requested creation", async () => {
+    const backend = await createWasmBackend();
+    const created = await backend.createSandbox({
+      ...canonicalCrossroadsRequest,
+      templateId: "blankGrid",
+      startingCapital: 42_000,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("expected setup creation to succeed");
+
+    await expect(
+      backend.createSandbox({
+        ...canonicalCrossroadsRequest,
+        startingCapital: -1,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalidStartingCapital" },
+    });
+    await expect(backend.snapshot()).resolves.toEqual(created.snapshot);
+  });
+
+  it("resets to the exact successful request after budget and map mutation", async () => {
+    const backend = await createWasmBackend();
+    const created = await backend.createSandbox({
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 42_000,
+      demandMultiplier: 1.5,
+      moveInRate: "paused",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("expected setup creation to succeed");
+
+    await backend.dispatch({ type: "setBudget", budget: 7 });
+    const mutated = await backend.dispatch({
+      type: "placeRoundabout",
+      origin: { x: 2, y: 2 },
+      size: "compact2x2",
+    });
+    expect(mutated.snapshot).not.toEqual(created.snapshot);
+
+    const reset = await backend.reset();
+    expect(reset).toEqual({ ok: true, snapshot: created.snapshot });
+    await expect(backend.snapshot()).resolves.toEqual(created.snapshot);
+  });
+
+  it("keeps the default constructor equal to canonical Crossroads", async () => {
+    const defaultBackend = await createWasmBackend();
+    const requestedBackend = await createWasmBackend();
+    const canonical = await requestedBackend.createSandbox(
+      canonicalCrossroadsRequest,
+    );
+
+    expect(canonical.ok).toBe(true);
+    if (!canonical.ok)
+      throw new Error("expected canonical creation to succeed");
+    await expect(defaultBackend.snapshot()).resolves.toEqual(
+      canonical.snapshot,
+    );
   });
 });

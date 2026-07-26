@@ -750,7 +750,7 @@ function deferredDispatchBackend(
     },
     async reset() {
       snapshot = fullRustSnapshot();
-      return snapshot;
+      return { ok: true, snapshot };
     },
     async resolveNext() {
       const resolve = pending.shift();
@@ -855,7 +855,7 @@ function backendSpy(
     },
     async reset() {
       snapshot = fullRustSnapshot();
-      return snapshot;
+      return { ok: true, snapshot };
     },
   };
 }

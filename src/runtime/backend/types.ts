@@ -232,12 +232,62 @@ export interface RoadMutationPreviewResponse {
   rejection: GameplayRejection | null;
 }
 
+export interface SandboxCreationRequest {
+  templateId: string;
+  economyPreset: string;
+  startingCapital: number;
+  demandMultiplier: number;
+  moveInRate: string;
+}
+
+export type SandboxCreationErrorCode =
+  | "unknownTemplateId"
+  | "unknownEconomyPreset"
+  | "invalidStartingCapital"
+  | "invalidDemandMultiplier"
+  | "unknownMoveInRate"
+  | "templateInvariantViolation";
+
+export interface SandboxCreationError {
+  code: SandboxCreationErrorCode;
+  context: {
+    field?: string;
+    attemptedValue?: string;
+    templateId?: string;
+    [key: string]: unknown;
+  };
+}
+
+export type SandboxResetErrorCode =
+  | "unsupportedGameMode"
+  | "templateInvariantViolation";
+
+export interface SandboxResetError {
+  code: SandboxResetErrorCode;
+  context: {
+    gameMode?: "sandbox" | "campaign";
+    templateId?: "blankGrid" | "crossroads";
+    [key: string]: unknown;
+  };
+}
+
+export type SandboxCreationResult =
+  | { ok: true; snapshot: RustGameSnapshot }
+  | { ok: false; error: SandboxCreationError };
+
+export type SandboxResetResult =
+  | { ok: true; snapshot: RustGameSnapshot }
+  | { ok: false; error: SandboxResetError };
+
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
   loadSnapshot?(snapshot: RustGameSnapshot): Promise<RustGameSnapshot>;
+  createSandbox(
+    request: SandboxCreationRequest,
+  ): Promise<SandboxCreationResult>;
   dispatch(intent: GameIntent): Promise<DispatchResult>;
   tick(deltaSeconds: number): Promise<DispatchResult>;
-  reset(): Promise<RustGameSnapshot>;
+  reset(): Promise<SandboxResetResult>;
   previewRoute(request: RoutePreviewRequest): Promise<RoutePreviewResponse>;
   previewRoadMutation(
     request: RoadMutationPreviewRequest,

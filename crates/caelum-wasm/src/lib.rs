@@ -1,6 +1,6 @@
 use caelum_core::{
     GameEngine, GameIntent, GameSnapshot, GameplayRejection, RoadMutationPreviewRequest,
-    RoutePreviewRequest, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
+    RoutePreviewRequest, SandboxCreationRequest, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use wasm_bindgen::prelude::*;
 
@@ -53,6 +53,14 @@ impl WasmGameEngine {
         Ok(WasmGameEngine { inner })
     }
 
+    pub fn from_sandbox_request(request: JsValue) -> Result<WasmGameEngine, JsValue> {
+        let request: SandboxCreationRequest =
+            serde_wasm_bindgen::from_value(request).map_err(to_js_error)?;
+        let inner = GameEngine::from_sandbox_request(request)
+            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
+        Ok(WasmGameEngine { inner })
+    }
+
     pub fn snapshot(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.inner.snapshot()).map_err(to_js_error)
     }
@@ -67,7 +75,11 @@ impl WasmGameEngine {
     }
 
     pub fn reset(&mut self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.inner.reset()).map_err(to_js_error)
+        let snapshot = self
+            .inner
+            .reset()
+            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
+        serde_wasm_bindgen::to_value(&snapshot).map_err(to_js_error)
     }
 
     pub fn preview_route(&self, request: JsValue) -> Result<JsValue, JsValue> {

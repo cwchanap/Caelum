@@ -38,7 +38,8 @@ export function createRustSnapshot(
       gameMode: "sandbox",
       economyPreset: "standard",
       sandbox: {
-        templateId: "growingSuburb",
+        templateId: "crossroads",
+        startingCapital: 120_000,
         demandMultiplier: 1,
         moveInRate: "paused",
       },
@@ -105,9 +106,27 @@ export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
 
 export function previewBackendStubs(): Pick<
   GameBackend,
-  "previewRoute" | "previewRoadMutation"
+  "createSandbox" | "previewRoute" | "previewRoadMutation"
 > {
   return {
+    async createSandbox(request) {
+      const snapshot = createRustSnapshot({
+        budget: request.startingCapital,
+        rules: {
+          gameMode: "sandbox",
+          economyPreset:
+            request.economyPreset === "creative" ? "creative" : "standard",
+          sandbox: {
+            templateId:
+              request.templateId === "blankGrid" ? "blankGrid" : "crossroads",
+            startingCapital: request.startingCapital,
+            demandMultiplier: request.demandMultiplier,
+            moveInRate: "paused",
+          },
+        },
+      });
+      return { ok: true, snapshot };
+    },
     async previewRoute(request) {
       return {
         generation: request.generation,

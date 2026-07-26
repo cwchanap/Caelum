@@ -1020,7 +1020,11 @@ export async function createGameRuntime({
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return queueBackend(async () => {
-        const snapshot = await backend.reset();
+        const result = await backend.reset();
+        if (!result.ok) {
+          throw result.error;
+        }
+        const snapshot = result.snapshot;
         backendError = null;
         rejection = null;
         state = normalizeRustSnapshot(snapshot);

@@ -2,6 +2,7 @@ import { createTauriBackend } from "./tauriBackend";
 import type { GameBackend } from "./types";
 import { createWasmBackend } from "./wasmBackend";
 
+export { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 export type {
   AuthoredRoadTilePreview,
   DispatchResult,
@@ -19,6 +20,13 @@ export type {
   RustGameSnapshot,
   RustMetrics,
   RustTripOutcome,
+  SandboxCreationError,
+  SandboxCreationErrorCode,
+  SandboxCreationRequest,
+  SandboxCreationResult,
+  SandboxResetError,
+  SandboxResetErrorCode,
+  SandboxResetResult,
   TurnSummary,
   WarningCode,
 } from "./types";
