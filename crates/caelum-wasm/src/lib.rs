@@ -26,11 +26,11 @@ impl WasmGameEngine {
 
     pub fn from_snapshot(snapshot: JsValue) -> Result<WasmGameEngine, JsValue> {
         // Two-phase: probe `schemaVersion` before the full `GameSnapshot`
-        // deserialization so a legacy schema-v2 save (which lacks the required
-        // v3 `rules` / `scenario.objectives` / `scenario.growthWaves` fields)
-        // is rejected with the structured `UnsupportedSnapshotSchema` code
-        // instead of a generic missing-field serde error. If the probe cannot
-        // read a schema version, treat it as unknown (0) and still reject.
+        // deserialization so a legacy schema-v3 save (which lacks the required
+        // v4 `rules.sandbox.startingCapital` field) is rejected with the
+        // structured `UnsupportedSnapshotSchema` code instead of a generic
+        // missing-field serde error. If the probe cannot read a schema version,
+        // treat it as unknown (0) and still reject.
         //
         // Defense-in-depth: `GameEngine::from_snapshot` (engine.rs) and the
         // Tauri host (`src-tauri/src/lib.rs::game_load_snapshot`) re-check the

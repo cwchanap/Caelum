@@ -70,12 +70,12 @@ fn game_load_snapshot(
     snapshot: serde_json::Value,
 ) -> Result<GameSnapshot, serde_json::Value> {
     // Two-phase: probe `schemaVersion` before the full `GameSnapshot`
-    // deserialization so a legacy schema-v2 save (which lacks the required v3
-    // `rules` / `scenario.objectives` / `scenario.growthWaves` fields) is
-    // rejected with the structured `UnsupportedSnapshotSchema` code instead of
-    // a generic missing-field serde error. If the probe itself cannot read a
-    // schema version (truly malformed payload), treat the version as unknown
-    // (0) and still reject as unsupported.
+    // deserialization so a legacy schema-v3 save (which lacks the required v4
+    // `rules.sandbox.startingCapital` field) is rejected with the structured
+    // `UnsupportedSnapshotSchema` code instead of a generic missing-field serde
+    // error. If the probe itself cannot read a schema version (truly malformed
+    // payload), treat the version as unknown (0) and still reject as
+    // unsupported.
     //
     // Defense-in-depth: `GameEngine::from_snapshot` (engine.rs) and the WASM
     // host (`caelum-wasm/src/lib.rs::WasmGameEngine::from_snapshot`) re-check
@@ -463,11 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_v2_save_missing_required_v3_fields_is_structurally_rejected() {
-        // A legacy schema-v2 save lacks the required v3 `rules` field (and the
-        // tightened `scenario.objectives` / `scenario.growthWaves` keys). The
-        // two-phase probe must reject it with `UnsupportedSnapshotSchema`
-        // before the full deserialize fails with a generic missing-field error.
+    fn schema_v3_save_missing_required_v4_starting_capital_is_structurally_rejected() {
+        // A legacy schema-v3 save lacks the required v4
+        // `rules.sandbox.startingCapital` field. The two-phase probe must reject
+        // it with `UnsupportedSnapshotSchema` before the full deserialize fails
+        // with a generic missing-field error.
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());
         context.runtime_authority_mut().__allow_command(
             "game_load_snapshot".to_string(),
@@ -482,12 +482,15 @@ mod tests {
             .build()
             .expect("test webview should build");
 
-        // Start from a valid v3 snapshot's JSON, then regress it to a v2 shape:
-        // drop the required `rules` field and set `schemaVersion` to v2.
+        // Start from a valid v4 snapshot's JSON, then regress it to a v3 shape:
+        // drop the required sandbox setting and set `schemaVersion` to v3.
         let mut snapshot_value =
             serde_json::to_value(GameEngine::new().snapshot()).expect("snapshot serializes");
         let snapshot_obj = snapshot_value.as_object_mut().expect("snapshot is object");
-        snapshot_obj.remove("rules");
+        snapshot_obj["rules"]["sandbox"]
+            .as_object_mut()
+            .expect("sandbox rules are an object")
+            .remove("startingCapital");
         snapshot_obj["schemaVersion"] = json!(SNAPSHOT_SCHEMA_VERSION - 1);
 
         let response = get_ipc_response(
@@ -502,7 +505,7 @@ mod tests {
                 invoke_key: INVOKE_KEY.to_string(),
             },
         );
-        let error = response.expect_err("v2 save must be rejected as unsupported schema");
+        let error = response.expect_err("v3 save must be rejected as unsupported schema");
 
         assert_eq!(error["code"], json!("unsupportedSnapshotSchema"));
         assert_eq!(
