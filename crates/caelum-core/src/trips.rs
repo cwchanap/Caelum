@@ -82,6 +82,22 @@ fn tick_trips_substepped(
     let final_time = next.time + scaled_delta;
     sync_clock(&mut next);
 
+    // Evaluate objectives at the current timestamp before advancing time.
+    // A loaded snapshot whose metrics already satisfy a terminal condition
+    // (e.g. `time >= survivalTime` with completed trips, or `average_wait`
+    // already above the loss threshold) must be detected at its current
+    // timestamp, not at the next boundary — otherwise coarse and fine ticks
+    // produce different terminal timestamps, breaking the granularity-
+    // independence invariant. Process due events (growth, daily flags, trip
+    // spawning) first so the evaluation sees the correct state at the current
+    // time, then evaluate. If terminal, return immediately.
+    crate::growth::apply_due_growth_waves(&mut next);
+    reset_daily_commute_flags(&mut next);
+    spawn_due_commute_trips(&mut next);
+    if on_substep(&mut next) {
+        return next;
+    }
+
     let mut early_termination = false;
     let mut steps = 0;
     // The substep budget is computed from the current snapshot, but growth
@@ -123,6 +139,13 @@ fn tick_trips_substepped(
 
         next = advance_tick_substep(&next, substep_delta);
         steps += 1;
+        // Apply growth waves whose trigger time was reached by this substep
+        // before evaluating objectives. Without this, a wave due at the same
+        // timestamp as a terminal objective would never fire: `on_substep` would
+        // break the loop, and the wave would remain permanently unapplied in the
+        // terminal snapshot (growth is otherwise applied only at the top of the
+        // next iteration, which never runs).
+        crate::growth::apply_due_growth_waves(&mut next);
         if on_substep(&mut next) {
             early_termination = true;
             break;
@@ -164,6 +187,9 @@ fn tick_trips_substepped(
             }
 
             next = advance_tick_substep(&next, substep_delta);
+            // Same post-substep growth application as the main loop — see the
+            // comment there for why this must precede `on_substep`.
+            crate::growth::apply_due_growth_waves(&mut next);
             if on_substep(&mut next) {
                 early_termination = true;
                 break;
@@ -600,10 +626,23 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     // ratio above the threshold and is missed because both groups are pruned
     // together by the time the final substep evaluates. Only meaningful when
     // campaign objectives are active; sandbox mode never evaluates loss gates.
+    //
+    // The `2 * EPSILON` offset (rather than the single `EPSILON` used elsewhere)
+    // ensures the candidate is strictly later than `after = state.time + EPSILON`
+    // even when `state.time` is exactly at the expiry (`outcome.time +
+    // retention_window`). With a single `EPSILON`, the candidate would equal
+    // `after` and `track_next_boundary` would discard it, causing a coarse tick
+    // starting at the exact expiry to skip the boundary and prune both the
+    // expiring and later outcomes together — missing the loss gate that fine
+    // ticks detect.
     if active_thresholds.is_some() {
         let retention_window = objectives::effective_rolling_window_seconds(state);
         for outcome in &state.metrics.trip_outcomes {
-            track_next_boundary(&mut next, outcome.time + retention_window + EPSILON, after);
+            track_next_boundary(
+                &mut next,
+                outcome.time + retention_window + 2.0 * EPSILON,
+                after,
+            );
         }
     }
 
@@ -1388,8 +1427,40 @@ fn same_position_and_point(position: &TripPosition, point: &Point) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::growing_suburb_growth_waves;
+    use crate::model::{
+        GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio,
+        MetricsState, ObjectiveThresholds, Point, RollingWindowSeconds, SurvivalTimeSeconds,
+        TripOutcome, TripOutcomeKind,
+    };
+    use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
     use crate::state::create_initial_snapshot;
+
+    /// Build a campaign snapshot with custom objectives, paused=false, speed=1.
+    fn campaign_snapshot(
+        objectives: ObjectiveThresholds,
+        growth_waves: Vec<GrowthWave>,
+    ) -> GameSnapshot {
+        let mut state = create_initial_snapshot();
+        let (rules, scenario) = growing_suburb_campaign(objectives, growth_waves);
+        state.rules = rules;
+        state.scenario = scenario;
+        state.paused = false;
+        state
+    }
+
+    /// Custom objectives with the given rolling window and survival time.
+    fn objectives_with(rolling_window: f64, survival_time: f64) -> ObjectiveThresholds {
+        ObjectiveThresholds {
+            max_late_ratio: MaxLateRatio::new(0.25).expect("valid MaxLateRatio"),
+            max_unserved_ratio: MaxUnservedRatio::new(0.20).expect("valid MaxUnservedRatio"),
+            max_average_wait: MaxAverageWaitSeconds::new(180.0)
+                .expect("valid MaxAverageWaitSeconds"),
+            rolling_window_seconds: RollingWindowSeconds::new(rolling_window)
+                .expect("valid RollingWindowSeconds"),
+            survival_time: SurvivalTimeSeconds::new(survival_time)
+                .expect("valid SurvivalTimeSeconds"),
+        }
+    }
 
     #[test]
     fn sandbox_mid_tick_growth_wave_does_not_schedule_or_apply_growth() {
@@ -1420,5 +1491,118 @@ mod tests {
         assert_eq!(next.buildings, baseline.buildings);
         assert_eq!(next.sims, baseline.sims);
         assert!(!next.scenario.growth_waves[0].applied);
+    }
+
+    /// Regression test for Finding 1: when `state.time` is exactly at the first
+    /// outcome's expiry time, the expiry boundary must still be tracked so a
+    /// coarse tick samples the loss gate there. With a single `EPSILON` offset,
+    /// the candidate equals `after = state.time + EPSILON` and is discarded,
+    /// causing the tick to skip to the next expiry where both outcome groups are
+    /// pruned together — missing the loss that fine ticks detect.
+    #[test]
+    fn outcome_expiry_boundary_at_exact_start_time_is_sampled() {
+        let objectives = objectives_with(10.0, 1200.0);
+        let mut state = campaign_snapshot(objectives, Vec::new());
+        state.time = 10.0;
+        state.day = clock::day_index(state.time);
+        state.clock_minutes = clock::clock_minutes(state.time);
+
+        // 40 Arrived outcomes at t=0 (expire at t=10), 10 Unserved at t=5
+        // (expire at t=15). At t=10 the 40 arrivals fall out of the window,
+        // leaving 10 unserved out of 10 total → ratio 1.0 > 0.2 → loss.
+        state.metrics.completed_trips = 40;
+        state.metrics.unserved_trips = 10;
+        state.metrics.trip_outcomes = (0..40)
+            .map(|_| TripOutcome {
+                outcome: TripOutcomeKind::Arrived,
+                wait_seconds: 0.0,
+                time: 0.0,
+            })
+            .chain((0..10).map(|_| TripOutcome {
+                outcome: TripOutcomeKind::Unserved,
+                wait_seconds: 0.0,
+                time: 5.0,
+            }))
+            .collect();
+
+        // Coarse tick from t=10 to t=20 — spans past the unserved expiry at t=15.
+        let next = tick_trips_with_objectives(&state, 10.0);
+
+        assert_eq!(
+            next.metrics.state,
+            MetricsState::Lost,
+            "coarse tick starting at exact expiry must detect the loss"
+        );
+    }
+
+    /// Regression test for Finding 2: a growth wave whose `trigger_time` equals
+    /// the survival win time must be applied before the terminal snapshot is
+    /// returned. Without post-substep growth application, `on_substep` terminates
+    /// the loop at the win boundary, and the wave remains permanently unapplied.
+    #[test]
+    fn growth_wave_at_survival_time_is_applied_before_termination() {
+        let objectives = objectives_with(300.0, 100.0);
+        let wave = GrowthWave {
+            id: "wave-at-win".to_string(),
+            trigger_time: 100.0,
+            message: String::new(),
+            applied: false,
+            actions: vec![
+                GrowthAction::PaintAreaRectangle {
+                    area: "residential".to_string(),
+                    start: Point { x: 2, y: 3 },
+                    end: Point { x: 3, y: 3 },
+                },
+                GrowthAction::PlaceBuilding {
+                    building_type: "smallHouse".to_string(),
+                    origin: Point { x: 2, y: 3 },
+                    rotation: 0,
+                },
+            ],
+        };
+        let mut state = campaign_snapshot(objectives, vec![wave]);
+        state.time = 99.0;
+        state.day = clock::day_index(state.time);
+        state.clock_minutes = clock::clock_minutes(state.time);
+        state.metrics.completed_trips = 1;
+
+        let next = tick_trips_with_objectives(&state, 2.0);
+
+        assert_eq!(
+            next.metrics.state,
+            MetricsState::Won,
+            "campaign wins at survival time"
+        );
+        assert!(
+            next.scenario.growth_waves[0].applied,
+            "growth wave at survival time must be applied before termination"
+        );
+    }
+
+    /// Regression test for Finding 3: a loaded campaign whose `state.time` is
+    /// already past `survivalTime` with completed trips must be detected as won
+    /// at the current timestamp, without advancing to the next boundary. Without
+    /// pre-loop objective evaluation, a 1s tick and a 300s tick would produce
+    /// different terminal timestamps.
+    #[test]
+    fn already_satisfied_survival_objective_detected_at_current_time() {
+        let objectives = objectives_with(300.0, 100.0);
+        let mut state = campaign_snapshot(objectives, Vec::new());
+        state.time = 100.0;
+        state.day = clock::day_index(state.time);
+        state.clock_minutes = clock::clock_minutes(state.time);
+        state.metrics.completed_trips = 1;
+
+        let next = tick_trips_with_objectives(&state, 1.0);
+
+        assert_eq!(
+            next.metrics.state,
+            MetricsState::Won,
+            "already-satisfied survival objective detected without advancing"
+        );
+        assert_eq!(
+            next.time, 100.0,
+            "terminal timestamp is the current time, not the next boundary"
+        );
     }
 }
