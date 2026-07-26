@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 
+use serde::Deserialize;
+
 use caelum_core::{
     DispatchResult, GameEngine, GameIntent, GameSnapshot, GameplayRejection,
     RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
@@ -54,7 +56,7 @@ fn game_load_snapshot(
     // the schema version after deserialization. The three checks are
     // intentionally redundant — this probe exists to surface the structured
     // code before the full deserialize can fail generically.
-    let probe_schema_version = serde_json::from_value::<SnapshotSchemaProbe>(snapshot.clone())
+    let probe_schema_version = SnapshotSchemaProbe::deserialize(&snapshot)
         .map(|probe| probe.schema_version)
         .unwrap_or(0);
     if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
