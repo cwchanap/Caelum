@@ -1,19 +1,13 @@
 use caelum_core::model::{
-    ActiveTrip, MetricsState, PlacedBuilding, Point, RouteLeg, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome,
-    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point, RollingWindowSeconds,
+    RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
+    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
+    WorkerProfile,
 };
-use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
 use caelum_core::{GameEngine, GameIntent};
 
-fn campaign_state() -> caelum_core::GameSnapshot {
-    let mut state = create_initial_snapshot();
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
-    state.rules = rules;
-    state.scenario = scenario;
-    state
-}
+mod common;
 
 fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
@@ -1784,7 +1778,7 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
 /// ticks (which sample metrics each tick) would lose.
 #[test]
 fn coarse_tick_detects_wait_loss_before_patience_expiry() {
-    let mut state = campaign_state();
+    let mut state = common::campaign_state();
     state.paused = false;
     let mut waiting = trip(
         "trip-001",
@@ -1820,7 +1814,7 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
 /// t=31s and t=61s is never sampled and the simulation incorrectly continues.
 #[test]
 fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
-    let mut state = campaign_state();
+    let mut state = common::campaign_state();
     state.paused = false;
     state.time = 0.0;
 
@@ -1877,9 +1871,10 @@ fn assert_average_wait_loss_matches_coarse_and_fine(state: &caelum_core::GameSna
 
 #[test]
 fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
-    let mut state = campaign_state();
+    let mut state = common::campaign_state();
     state.paused = false;
-    state.scenario.objectives.as_mut().unwrap().max_average_wait = 149.0;
+    state.scenario.objectives.as_mut().unwrap().max_average_wait =
+        MaxAverageWaitSeconds::new(149.0).unwrap();
 
     let mut trip_a = trip(
         "trip-001",
@@ -1906,9 +1901,10 @@ fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
 
 #[test]
 fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
-    let mut state = campaign_state();
+    let mut state = common::campaign_state();
     state.paused = false;
-    state.scenario.objectives.as_mut().unwrap().max_average_wait = 0.0;
+    state.scenario.objectives.as_mut().unwrap().max_average_wait =
+        MaxAverageWaitSeconds::new(0.0).unwrap();
 
     // Idle is intentional: aggregate tracking sees no waiting trip yet, so the
     // per-trip terminal tracker must schedule the strict-threshold sample.
@@ -1925,7 +1921,7 @@ fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
 /// final snapshot and `evaluate_objectives` sees an empty in-range window.
 #[test]
 fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
-    let mut state = campaign_state();
+    let mut state = common::campaign_state();
     state.paused = false;
     state.time = 0.0;
     // Ten trips that will time out (unserved) at t=10s, each with 10s patience.
@@ -1959,15 +1955,16 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
 #[test]
 fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
     fn build() -> caelum_core::GameSnapshot {
-        let mut state = campaign_state();
+        let mut state = common::campaign_state();
         state.paused = false;
         state
             .scenario
             .objectives
             .as_mut()
             .unwrap()
-            .rolling_window_seconds = 600.0;
-        state.scenario.objectives.as_mut().unwrap().max_average_wait = 300.0;
+            .rolling_window_seconds = RollingWindowSeconds::new(600.0).unwrap();
+        state.scenario.objectives.as_mut().unwrap().max_average_wait =
+            MaxAverageWaitSeconds::new(300.0).unwrap();
         state.active_trips = (0..10)
             .map(|index| {
                 let mut waiting = trip(
@@ -1986,9 +1983,25 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
 
     let coarse = trips::tick_trips_with_objectives(&build(), 700.0);
     let mut fine = build();
+    // Bound the fine-grained loop so a regression that never reaches a terminal
+    // state fails the test instead of hanging CI. 700 seconds of game time at
+    // 1-second ticks is the same horizon as the coarse tick; the cap is generous
+    // beyond that to absorb substep re-evaluations.
+    const MAX_FINE_TICKS: usize = 2_000;
+    let mut iterations = 0;
     while fine.metrics.state == MetricsState::Running {
+        iterations += 1;
+        assert!(
+            iterations <= MAX_FINE_TICKS,
+            "fine-grained loop did not reach a terminal state within {MAX_FINE_TICKS} ticks"
+        );
         fine = trips::tick_trips_with_objectives(&fine, 1.0);
     }
+    assert_ne!(
+        fine.metrics.state,
+        MetricsState::Running,
+        "fine-grained loop must reach a terminal state"
+    );
 
     assert_eq!(coarse.metrics.state, MetricsState::Lost);
     assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
