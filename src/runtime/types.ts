@@ -17,7 +17,11 @@ import type {
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
 import type { HudCategory, RouteDraftNotice, UiState } from "../ui/uiState";
 import type { RouteDraft } from "../ui/routeDraft";
-import type { AuthoredRoadTilePreview, RoadMutation } from "./backend/types";
+import type {
+  AuthoredRoadTilePreview,
+  RoadMutation,
+  SandboxResetError,
+} from "./backend/types";
 
 export type {
   RouteDraft,
@@ -195,6 +199,7 @@ export interface RuntimeSnapshot {
   // a rejection does not stop the runtime and is dismissible by the player.
   // Auto-clears on the next successful dispatch.
   rejection: GameplayRejection | null;
+  sandboxResetError: SandboxResetError | null;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;

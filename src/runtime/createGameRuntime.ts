@@ -35,7 +35,12 @@ import {
   type RouteDraftHistory,
   type UiState,
 } from "../ui/uiState";
-import type { GameBackend, GameIntent, RoadMutation } from "./backend";
+import type {
+  GameBackend,
+  GameIntent,
+  RoadMutation,
+  SandboxResetError,
+} from "./backend";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
@@ -188,6 +193,7 @@ export async function createGameRuntime({
   let ui = createUiState();
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
+  let sandboxResetError: SandboxResetError | null = null;
   let gameplayQueue: Promise<void> = Promise.resolve();
   const previewCoordinator = createPreviewCoordinator(backend);
   let nextRouteDraftInstanceId = 1;
@@ -206,6 +212,7 @@ export async function createGameRuntime({
     shell: selectShellState(state, ui, rejection),
     backendError,
     rejection,
+    sandboxResetError,
   });
 
   // The canvas surface, 2D context, and requestAnimationFrame loop live in a
@@ -1022,9 +1029,11 @@ export async function createGameRuntime({
       return queueBackend(async () => {
         const result = await backend.reset();
         if (!result.ok) {
-          throw result.error;
+          sandboxResetError = result.error;
+          return publish();
         }
         const snapshot = result.snapshot;
+        sandboxResetError = null;
         backendError = null;
         rejection = null;
         state = normalizeRustSnapshot(snapshot);
