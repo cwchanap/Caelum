@@ -201,6 +201,11 @@ fn tick_trips_substepped(
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
 /// - campaign `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
 ///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`).
+/// - campaign `trip_outcomes.len()` — one boundary per in-window outcome expiry, since
+///   `next_boundary_after` breaks at the instant each outcome falls out of the rolling
+///   evaluation window so a coarse tick samples the loss gates there (see
+///   `next_boundary_after`'s outcome-expiry block). The vector is pruned to the window,
+///   so this term is bounded by the recent trip-resolution count.
 ///
 /// then `+1`. Without `vehicle_bound`, a large delta advanced while a metro runs on
 /// short segments exhausts the per-second budget before reaching `final_time` and
@@ -227,12 +232,18 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     } else {
         0
     };
+    let outcome_expiry_bound = if state.rules.game_mode == GameMode::Campaign {
+        state.metrics.trip_outcomes.len()
+    } else {
+        0
+    };
 
     day_count
         .saturating_mul(events_per_day)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
         .saturating_add(growth_wave_bound)
+        .saturating_add(outcome_expiry_bound)
         .saturating_add(1)
 }
 
@@ -578,6 +589,21 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
             if !wave.applied {
                 track_next_boundary(&mut next, wave.trigger_time, after);
             }
+        }
+    }
+
+    // Track the instant each in-window trip outcome falls out of the rolling
+    // evaluation window. A coarse tick that spans an outcome expiry must break
+    // there so `evaluate_objectives` samples the rolling counts after the
+    // expiring outcomes are pruned but before later outcomes expire — otherwise
+    // a burst of good outcomes expiring before bad ones flips the unserved/late
+    // ratio above the threshold and is missed because both groups are pruned
+    // together by the time the final substep evaluates. Only meaningful when
+    // campaign objectives are active; sandbox mode never evaluates loss gates.
+    if active_thresholds.is_some() {
+        let retention_window = objectives::effective_rolling_window_seconds(state);
+        for outcome in &state.metrics.trip_outcomes {
+            track_next_boundary(&mut next, outcome.time + retention_window + EPSILON, after);
         }
     }
 

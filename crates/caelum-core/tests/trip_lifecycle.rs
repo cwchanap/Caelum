@@ -2008,3 +2008,70 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
     assert_eq!(coarse.time, fine.time);
     assert_eq!(coarse.metrics.unserved_trips, fine.metrics.unserved_trips);
 }
+
+/// Regression: a coarse tick that spans the expiry of "good" outcomes (arrived)
+/// while "bad" outcomes (unserved) are still in the rolling window must break at
+/// the good-outcome expiry boundary and detect the loss there. Without an
+/// outcome-expiry boundary in `next_boundary_after`, the coarse tick prunes both
+/// groups together by the final substep and the loss — which fine ticks detect
+/// the instant the good outcomes expire — is missed.
+///
+/// Scenario: a 10s custom rolling window, 40 arrived outcomes at t=0, 10
+/// unserved outcomes at t=5. At t=5 the unserved ratio is 10/50 = 0.20 (not
+/// above the default 0.20 threshold). At t=10+eps the 40 arrivals expire,
+/// leaving 10/10 = 1.0 unserved in the window — a loss. A coarse tick from
+/// t=5 to t=20 must sample that instant rather than jumping to t=20 where both
+/// groups are gone.
+#[test]
+fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
+    let mut state = common::campaign_state();
+    state.paused = false;
+    state.time = 5.0;
+    state
+        .scenario
+        .objectives
+        .as_mut()
+        .unwrap()
+        .rolling_window_seconds = RollingWindowSeconds::new(10.0).unwrap();
+    state.metrics.completed_trips = 40;
+    state.metrics.unserved_trips = 10;
+    state.metrics.trip_outcomes = (0..40)
+        .map(|_| TripOutcome {
+            outcome: TripOutcomeKind::Arrived,
+            wait_seconds: 0.0,
+            time: 0.0,
+        })
+        .chain((0..10).map(|_| TripOutcome {
+            outcome: TripOutcomeKind::Unserved,
+            wait_seconds: 0.0,
+            time: 5.0,
+        }))
+        .collect();
+
+    // The coarse tick spans both expiry instants (arrivals at t=10, unserved at
+    // t=15). The substep must break at t=10+eps, prune the arrivals, and
+    // evaluate the loss gate on the remaining 10 unserved outcomes.
+    let coarse = trips::tick_trips_with_objectives(&state, 15.0);
+
+    assert_eq!(coarse.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        coarse.metrics.loss_reason.as_deref(),
+        Some("Too many unserved citizens")
+    );
+
+    // Fine ticks must also detect the loss, confirming the coarse tick's
+    // terminal state is not a divergence from the granularity-independent
+    // invariant.
+    let mut fine = state.clone();
+    let mut iterations = 0;
+    while fine.metrics.state == MetricsState::Running {
+        iterations += 1;
+        assert!(
+            iterations <= 100,
+            "fine-grained loop did not reach a terminal state within 100 ticks"
+        );
+        fine = trips::tick_trips_with_objectives(&fine, 1.0);
+    }
+    assert_eq!(fine.metrics.state, MetricsState::Lost);
+    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
+}
