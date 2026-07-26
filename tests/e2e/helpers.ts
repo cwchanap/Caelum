@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 
 export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
@@ -98,8 +98,8 @@ export async function startAppServer(): Promise<AppServer> {
   return { server, url: resolved };
 }
 
-// Authoritative dimensions imported from the Growing Suburb scenario, so the
-// e2e board transform tracks the actual map size without silent drift.
+// Shared sandbox dimensions keep the e2e board transform aligned with both
+// canonical Rust-owned templates without duplicating map geometry constants.
 const mapWidth = MAP_WIDTH;
 const mapHeight = MAP_HEIGHT;
 

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Route, RouteLegPath } from "../../src/domain/types";
-import { MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_WIDTH } from "../../src/scenario/sandbox";
 import {
   buildItem,
   clickMapTile,

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { getBoardTransform } from "../../src/render/canvas";
 import type { GameMap } from "../../src/domain/types";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import { _boardTransformForTest as boardTransform } from "../e2e/helpers";
 
-// The Growing Suburb scenario map dimensions, taken from the TS-side mirror of
-// the Rust constants in `crates/caelum-core/src/scenario.rs`. getBoardTransform
+// Shared sandbox dimensions mirror the Rust template factory. getBoardTransform
 // only reads width/height, so an empty tiles array is fine.
 const map: GameMap = {
   width: MAP_WIDTH,

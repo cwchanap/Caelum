@@ -565,7 +565,7 @@ export function selectShellState(
           ? "Creative Sandbox"
           : "Standard Sandbox",
       context: isCampaign
-        ? `Campaign · ${templateLabel}`
+        ? `Campaign · ${state.scenario.name}`
         : `Template · ${templateLabel}`,
       status: state.metrics.state.toUpperCase(),
       objective: isCampaign

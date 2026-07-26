@@ -10,7 +10,8 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 - `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
 - `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
 - `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
-- `scenario.rs`, `clock.rs` — Growing Suburb scenario and deterministic clock.
+- `sandbox.rs` — validated sandbox creation requests, deterministic Blank Grid/Crossroads maps, canonical defaults, template invariants, and reset reconstruction.
+- `scenario.rs`, `clock.rs` — Growing Suburb campaign configuration and deterministic clock.
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde used by the active WASM and Tauri host boundaries.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 
@@ -28,18 +29,77 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 3`. Every snapshot carries
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 4`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
+`rules.sandbox.startingCapital` is required and records the exact amount reset
+must restore; it is an integer from `0` through `i32::MAX`.
 `scenario.objectives` is a required-but-nullable wire key: it is an object or
 explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
 the host normalizes it to `null`.
 `scenario.growthWaves` is also required and may be empty. Omitting either key,
-or supplying any other malformed schema-v3 content, rejects the snapshot;
-schema-v2 snapshots are never heuristically migrated.
+omitting `startingCapital`, or supplying any other malformed schema-v4 content,
+rejects the snapshot. Schema-v3 and older snapshots are never heuristically
+migrated.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
 Linear road, track, remove, and area strokes may partially apply in authored order where their intent allows skipped tiles. Direction changes, route creation/updates, and roundabout placement/removal are atomic mutations. A tile owned by any road structure blocks every other infrastructure or zoning operation until that structure is removed through its owning mutation.
+
+### Sandbox factory and reset
+
+Rust owns sandbox construction through `create_sandbox_snapshot()` and
+`GameEngine::from_sandbox_request()`. The raw request contains `templateId`,
+`economyPreset`, `startingCapital`, `demandMultiplier`, and `moveInRate`;
+validation returns typed `SandboxCreationError` values for unsupported or
+invalid fields before any engine state changes. The canonical default request
+is exactly Crossroads, Standard economy, `$120,000` starting capital, demand
+multiplier `1`, and paused move-in. `GameEngine::new()` delegates to that
+request, so the browser and Tauri defaults share the factory rather than
+maintaining separate startup snapshots.
+
+Both templates use the shared 28×18 map:
+
+- **Blank Grid** contains the deterministic row-major tile inventory and no
+  authored roads, connections, structures, zoning, track, buildings,
+  residents, trips, transit nodes, routes, lines, or vehicles.
+- **Crossroads** starts from Blank Grid and authors row 8 westbound, row 9
+  eastbound, column 14 southbound, and column 15 northbound. Refreshing
+  automatic junctions produces one existing, routable 2×2 center structure at
+  `(14,8)`, `(15,8)`, `(14,9)`, and `(15,9)`. Its compiled topology must expose
+  the required 12-movement subset: straight, right, and left transitions for
+  each of the four accepted inbound approaches. The current compiler also
+  exposes four center U-turns, but those are characterized separately rather
+  than required by the template contract.
+
+Equal validated requests produce equal complete snapshots, including stable
+tile and structure IDs. Changing economy, starting capital, or demand settings
+changes rules/budget only; it does not change the authored template map.
+Checked-in deterministic characterizations cover the complete ordered tile
+IDs, non-default tiles, structures, rules, budget, counters, scenario, and
+entity-ID collections.
+
+`GameEngine::reset()` reconstructs a candidate from the active snapshot's
+persisted sandbox rules, then swaps snapshot and compiled topology together
+only after successful construction. Reset therefore discards every player
+mutation and restores the exact active template, economy, starting capital,
+demand multiplier, and paused move-in setting; Blank Grid cannot reset to
+Crossroads or vice versa. Campaign reset is deliberately unsupported: it
+returns `SandboxResetError { code: "unsupportedGameMode", context:
+{ gameMode: "campaign" } }` and leaves the complete campaign state unchanged.
+
+WASM and Tauri keep domain failures separate from host failures. Their adapters
+recognize complete typed creation/reset error objects and return `{ ok: false,
+error }`; module loading, serialization, IPC, mutex, and other transport
+failures still reject. Built-artifact WASM tests and real Tauri command tests
+compare creation, canonical defaults, typed invalid-request errors, and reset
+behavior with the direct Rust factory, preventing either host from inventing
+fallback state.
+
+At the TypeScript runtime boundary, a recognized reset domain failure is stored
+as `sandboxResetError`. It is nonfatal: the current gameplay state, UI state,
+existing gameplay rejection, subscriptions, and animation lifecycle remain
+active. The next successful reset clears it. An unrecognized rejected reset
+promise remains a fatal `backendError`.
 
 ### Authored roads and cached topology
 
@@ -61,8 +121,9 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
-The fresh Growing Suburb game is Standard Sandbox: `growingSuburb`, demand
-multiplier `1.0`, paused move-in, no campaign objectives, and no growth waves.
+The fresh game is the canonical Standard Crossroads sandbox: `$120,000`
+starting capital, demand multiplier `1.0`, paused move-in, no campaign
+objectives, and no growth waves.
 Sandbox ticks continue trips and metrics but never newly win, lose, or apply
 authored growth. Explicit campaign snapshots may independently attach
 objective thresholds and ordered growth waves; Rust evaluates and applies
@@ -82,9 +143,11 @@ objective scoring when objectives are inactive or absent in their allowed mode
 configuration; a present-but-invalid configured rolling window is unreachable
 because the newtype rejects it at load.
 
-Growing Suburb retains its authored dual-bidirectional arterial cross, with no
-pre-seeded districts, timed sandbox growth waves, buildings, or citizens.
-Growth is player-driven through area painting and building placement.
+Growing Suburb remains a campaign scenario name, independent from sandbox
+template identity. Its campaign helper currently reuses the canonical
+Crossroads sandbox settings while retaining campaign mode, objectives/growth
+ownership, and the `"Growing Suburb"` scenario name. Sandboxes use only the
+`"Blank Grid"` and `"Crossroads"` scenario/template labels.
 
 ## UI shell
 

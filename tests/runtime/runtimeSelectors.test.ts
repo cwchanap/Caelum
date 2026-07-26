@@ -998,6 +998,7 @@ describe("selectShellState Brief", () => {
       rules: {
         gameMode: "sandbox" as const,
         economyPreset: "standard" as const,
+        templateId: "crossroads" as const,
       },
       objectives: null,
       title: "Standard Sandbox",
@@ -1006,10 +1007,24 @@ describe("selectShellState Brief", () => {
       lossNote: "Metrics continue without win/loss.",
     },
     {
+      name: "blank grid sandbox",
+      rules: {
+        gameMode: "sandbox" as const,
+        economyPreset: "standard" as const,
+        templateId: "blankGrid" as const,
+      },
+      objectives: null,
+      title: "Standard Sandbox",
+      context: "Template · Blank Grid",
+      objective: "Open-ended city — no campaign objective.",
+      lossNote: "Metrics continue without win/loss.",
+    },
+    {
       name: "creative sandbox",
       rules: {
         gameMode: "sandbox" as const,
         economyPreset: "creative" as const,
+        templateId: "crossroads" as const,
       },
       objectives: thresholds,
       title: "Creative Sandbox",
@@ -1022,10 +1037,11 @@ describe("selectShellState Brief", () => {
       rules: {
         gameMode: "campaign" as const,
         economyPreset: "standard" as const,
+        templateId: "crossroads" as const,
       },
       objectives: thresholds,
       title: "Growing Suburb",
-      context: "Campaign · Crossroads",
+      context: "Campaign · Growing Suburb",
       objective:
         "Hold late trips below 25%, unserved below 20%, average wait under 180s.",
       lossNote: "Within tolerances. Hold the line.",
@@ -1035,10 +1051,11 @@ describe("selectShellState Brief", () => {
       rules: {
         gameMode: "campaign" as const,
         economyPreset: "creative" as const,
+        templateId: "crossroads" as const,
       },
       objectives: null,
       title: "Growing Suburb",
-      context: "Campaign · Crossroads",
+      context: "Campaign · Growing Suburb",
       objective: "No campaign objective.",
       lossNote: "Metrics continue without win/loss.",
     },
@@ -1048,6 +1065,10 @@ describe("selectShellState Brief", () => {
         ...createTestGameState().rules,
         gameMode: entry.rules.gameMode,
         economyPreset: entry.rules.economyPreset,
+        sandbox: {
+          ...createTestGameState().rules.sandbox,
+          templateId: entry.rules.templateId,
+        },
       },
       scenario: {
         name: "Growing Suburb",
@@ -1095,7 +1116,7 @@ describe("selectShellState Brief", () => {
 
     expect(selectShellState(state, createUiState()).brief).toMatchObject({
       title: "Authored Campaign",
-      context: "Campaign · Crossroads",
+      context: "Campaign · Authored Campaign",
       lossNote: "Existing campaign loss",
       nextGrowth: "New residents arrive soon.",
     });
