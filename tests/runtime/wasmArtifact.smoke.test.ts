@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
-import type { RustGameSnapshot } from "../../src/runtime/backend/types";
+import type {
+  RustGameSnapshot,
+  RustObjectiveThresholds,
+} from "../../src/runtime/backend/types";
 
 /**
  * Loads the real built WASM artifact (not the vi.mock in wasmBackend.test.ts).
@@ -138,6 +141,65 @@ describe("real WASM artifact smoke", () => {
       await expect(backend.loadSnapshot!(raw)).rejects.toThrow(
         /demand multiplier/i,
       );
+    }
+  });
+
+  it("rejects invalid ObjectiveThresholds fields at the real WASM Rust boundary", async () => {
+    // Threshold fields are validated newtypes (see model::ObjectiveThresholds).
+    // The default sandbox snapshot has no objectives, so attach a valid
+    // campaign objectives block first, then mutate one field to an invalid
+    // value and assert the Rust deserializer rejects it. This mirrors the
+    // demandMultiplier smoke test and closes the gap where only
+    // DemandMultiplier rejection was exercised at the WASM boundary.
+    const validThresholds: RustObjectiveThresholds = {
+      maxLateRatio: 0.25,
+      maxUnservedRatio: 0.2,
+      maxAverageWait: 180,
+      rollingWindowSeconds: 300,
+      survivalTime: 1_200,
+    };
+    const cases: Array<{
+      field: keyof RustObjectiveThresholds;
+      invalid: number[];
+      pattern: RegExp;
+    }> = [
+      {
+        field: "maxLateRatio",
+        invalid: [-0.1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max late ratio/i,
+      },
+      {
+        field: "maxUnservedRatio",
+        invalid: [-0.1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max unserved ratio/i,
+      },
+      {
+        field: "maxAverageWait",
+        invalid: [-1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max average wait/i,
+      },
+      {
+        field: "rollingWindowSeconds",
+        invalid: [0, -1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /rolling window/i,
+      },
+      {
+        field: "survivalTime",
+        invalid: [0, -1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /survival time/i,
+      },
+    ];
+
+    for (const { field, invalid, pattern } of cases) {
+      for (const value of invalid) {
+        const backend = await createWasmBackend();
+        const raw = await backend.snapshot();
+        raw.rules.gameMode = "campaign";
+        raw.scenario.objectives = { ...validThresholds };
+        (raw.scenario.objectives as RustObjectiveThresholds)[field] = value;
+
+        await expect(backend.loadSnapshot!(raw)).rejects.toThrow(pattern);
+      }
     }
   });
 

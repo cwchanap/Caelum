@@ -31,6 +31,12 @@ impl WasmGameEngine {
         // is rejected with the structured `UnsupportedSnapshotSchema` code
         // instead of a generic missing-field serde error. If the probe cannot
         // read a schema version, treat it as unknown (0) and still reject.
+        //
+        // Defense-in-depth: `GameEngine::from_snapshot` (engine.rs) and the
+        // Tauri host (`src-tauri/src/lib.rs::game_load_snapshot`) re-check the
+        // schema version after deserialization. The three checks are
+        // intentionally redundant — this probe exists to surface the
+        // structured code before the full deserialize can fail generically.
         let probe_schema_version =
             serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(snapshot.clone())
                 .map(|probe| probe.schema_version)

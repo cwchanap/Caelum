@@ -53,8 +53,22 @@ contracts can drift.
 - Population occupancy or active move-in behavior; Phase 2 owns those systems.
 - New campaign content or player-facing campaign selection.
 - General validation of every existing snapshot number and relationship.
-- Numeric validation of `ObjectiveThresholds`; HPA-337 requires only their
-  structural presence or explicit absence.
+- Numeric validation of fields other than `ObjectiveThresholds` and
+  `DemandMultiplier`; HPA-337 requires only structural presence or explicit
+  absence for those other fields.
+
+> **Amendment (post-implementation):** During implementation the scope was
+> narrowed to also enforce wire-level range and finiteness validation on every
+> `ObjectiveThresholds` field, via validated newtypes (`MaxLateRatio`,
+> `MaxUnservedRatio`, `MaxAverageWaitSeconds`, `RollingWindowSeconds`,
+> `SurvivalTimeSeconds`). Invalid values are rejected at the Rust
+> deserialization boundary rather than coerced at evaluation time. This
+> supersedes the original §3.2 "does not add wire-level range or finiteness
+> rejection" clause and the §3.3 runtime finiteness fallback for
+> `rolling_window_seconds` (the newtype makes non-finite/non-positive values
+> unreachable, so the 300-second fallback now applies only when objectives are
+> inactive or absent, never to a present-but-invalid configured window).
+> Stakeholders accepted this tighter contract on review.
 
 ## 1. Authoritative Snapshot Model
 
@@ -356,11 +370,19 @@ objective evaluation. `ROLLING_WINDOW_SECONDS` also supplies the 300-second
 history-retention fallback for snapshots without a usable active campaign
 window, but it does not score or terminate those snapshots.
 
-HPA-337 does not add wire-level range or finiteness rejection to the existing
-`ObjectiveThresholds` fields. Custom-threshold tests use valid finite values,
-and broader scenario-authoring validation remains outside this slice. The
-rolling window receives the point-of-use safety guard in Section 3.3 because
-it directly controls both memory retention and scoring.
+HPA-337 enforces wire-level range and finiteness validation on every
+`ObjectiveThresholds` field via validated newtypes (see the Non-goals
+amendment). Each field is a `validated_threshold_newtype!` (`MaxLateRatio`,
+`MaxUnservedRatio`, `MaxAverageWaitSeconds` require finite and non-negative;
+`RollingWindowSeconds`, `SurvivalTimeSeconds` require finite and strictly
+positive). Invalid values are rejected at the Rust deserialization boundary
+with a structured `GameplayRejection` rather than coerced at evaluation time.
+Custom-threshold tests use valid finite values; rejection tests cover NaN,
+infinity, negative, and (where applicable) zero values. The rolling window
+newtype also replaces the §3.3 point-of-use finiteness guard — the configured
+value is guaranteed usable, so `effective_rolling_window_seconds` returns it
+directly and the 300-second fallback applies only when objectives are
+inactive or absent.
 
 ### 3.3 Metrics history remains bounded
 
@@ -379,28 +401,30 @@ pub fn prune_trip_outcomes(
 
 The trip pipeline derives one effective retention window. It considers the
 serialized `rolling_window_seconds` only when the snapshot is in campaign mode
-and objectives are present, and uses that value only when it is finite and
-strictly greater than zero. Sandbox mode, campaigns without objectives, and
-campaigns with a zero, negative, NaN, or infinite rolling window use the
-existing `ROLLING_WINDOW_SECONDS` fallback of 300 seconds.
+and objectives are present. Because `RollingWindowSeconds` is a validated
+newtype (finite and strictly positive, enforced at the deserialization
+boundary — see §3.2), the configured value is used directly. Sandbox mode and
+campaigns without objectives use the existing `ROLLING_WINDOW_SECONDS`
+fallback of 300 seconds. A present-but-invalid configured window is
+unreachable: it is rejected at load before the trip pipeline ever runs.
 
 `objective_counts` accepts `rolling_window_seconds: f64`, and both
 `prune_trip_outcomes` and `evaluate_objectives` receive the same effective
-value. Evaluation must not re-read the unsanitized serialized field after the
-trip pipeline has selected the window.
+value. Evaluation must not re-read the serialized field after the trip
+pipeline has selected the window.
 
 Therefore the recent `trip_outcomes` sample uses:
 
 - the campaign objective's `rolling_window_seconds` when campaign objectives
-  exist and the value is finite and greater than zero;
-- the existing 300-second retention window in sandbox, when campaign
-  objectives are absent, or when the configured window is unusable.
+  exist (guaranteed finite and greater than zero by the newtype);
+- the existing 300-second retention window in sandbox and when campaign
+  objectives are absent.
 
 This keeps sandbox metrics bounded and inspectable while retaining enough
 campaign history to evaluate its configured window. In particular, a
 600-second campaign window cannot be truncated to 300 seconds before
-evaluation. Invalid-window tests cover zero, negative, NaN, and infinity and
-prove that pruning and scoring both fall back deterministically to 300 seconds.
+evaluation. Rejection tests at the deserialization boundary cover zero,
+negative, NaN, and infinity and prove such snapshots never reach evaluation.
 
 ### 3.4 Growth waves are campaign-only
 

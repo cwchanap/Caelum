@@ -48,6 +48,12 @@ fn game_load_snapshot(
     // a generic missing-field serde error. If the probe itself cannot read a
     // schema version (truly malformed payload), treat the version as unknown
     // (0) and still reject as unsupported.
+    //
+    // Defense-in-depth: `GameEngine::from_snapshot` (engine.rs) and the WASM
+    // host (`caelum-wasm/src/lib.rs::WasmGameEngine::from_snapshot`) re-check
+    // the schema version after deserialization. The three checks are
+    // intentionally redundant — this probe exists to surface the structured
+    // code before the full deserialize can fail generically.
     let probe_schema_version = serde_json::from_value::<SnapshotSchemaProbe>(snapshot.clone())
         .map(|probe| probe.schema_version)
         .unwrap_or(0);

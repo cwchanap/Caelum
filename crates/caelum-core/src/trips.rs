@@ -619,9 +619,6 @@ fn track_aggregate_wait_boundary(
     let Some(max_average_wait) = max_average_wait else {
         return;
     };
-    if !max_average_wait.is_finite() {
-        return;
-    }
     let waiting_trips: Vec<&ActiveTrip> = state
         .active_trips
         .iter()
@@ -715,7 +712,7 @@ fn track_waiting_terminal_boundaries(
     // after `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)`
     // more seconds. A tiny `EPSILON` offset lands the sample strictly above the
     // threshold because the loss gate uses `>` not `>=`.
-    if let Some(max_average_wait) = max_average_wait.filter(|value| value.is_finite()) {
+    if let Some(max_average_wait) = max_average_wait {
         let seconds_to_threshold =
             trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait);
         if seconds_to_threshold > EPSILON {
