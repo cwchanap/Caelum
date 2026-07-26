@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::model::{GameSnapshot, MetricsState, TripOutcome, TripOutcomeKind};
+use crate::model::{GameMode, GameSnapshot, MetricsState, TripOutcome, TripOutcomeKind};
 
 pub const MAX_LATE_RATIO: f64 = 0.25;
 pub const MAX_UNSERVED_RATIO: f64 = 0.20;
@@ -13,7 +13,7 @@ pub const SURVIVAL_TIME_SECONDS: f64 = 1_200.0;
 /// serialization/inspection of a non-empty sample).
 ///
 /// Note: the retained fallback does **not** influence scoring. `objective_counts`
-/// re-filters `trip_outcomes` by the same [`ROLLING_WINDOW_SECONDS`] window before
+/// re-filters `trip_outcomes` by the same effective rolling window before
 /// counting, and the fallback is, by construction, older than the window — it was pruned
 /// precisely because it fell outside it, and `state.time` only advances, so the window
 /// start only moves forward. The scoring filter can therefore still yield zero in-range
@@ -22,13 +22,37 @@ pub const SURVIVAL_TIME_SECONDS: f64 = 1_200.0;
 /// `completed_trips` counter rather than the rolling window.
 ///
 /// Intentional divergence from the TS oracle: TS keeps the full outcome history, while
-/// the Rust core trims to a [`ROLLING_WINDOW_SECONDS`] window each evaluation. This makes
+/// the Rust core trims to the effective rolling window each evaluation. This makes
 /// late/unserved ratios responsive to recent demand rather than lifetime totals, and is a
 /// deliberate "more correct" choice. The in-range counts still match TS, which filters
 /// its full history by the same window; only the pruned fallback is Rust-specific and is
 /// not scored. A WASM/Tauri consumer expecting the TS snapshot shape must account for the
 /// trimmed `trip_outcomes` vector.
-pub fn prune_trip_outcomes(outcomes: &mut Vec<TripOutcome>, current_time: f64) {
+///
+/// Campaign snapshots may configure a positive, finite rolling window. All other
+/// snapshots use the stable default so retention remains bounded even when no
+/// objectives are active.
+pub fn effective_rolling_window_seconds(state: &GameSnapshot) -> f64 {
+    if state.rules.game_mode != GameMode::Campaign {
+        return ROLLING_WINDOW_SECONDS;
+    }
+
+    let Some(objectives) = state.scenario.objectives.as_ref() else {
+        return ROLLING_WINDOW_SECONDS;
+    };
+    let configured = objectives.rolling_window_seconds;
+    if configured.is_finite() && configured > 0.0 {
+        configured
+    } else {
+        ROLLING_WINDOW_SECONDS
+    }
+}
+
+pub fn prune_trip_outcomes(
+    outcomes: &mut Vec<TripOutcome>,
+    current_time: f64,
+    retention_window_seconds: f64,
+) {
     if outcomes.is_empty() {
         return;
     }
@@ -38,7 +62,7 @@ pub fn prune_trip_outcomes(outcomes: &mut Vec<TripOutcome>, current_time: f64) {
             .partial_cmp(&right.time)
             .unwrap_or(Ordering::Equal)
     });
-    let window_start = current_time - ROLLING_WINDOW_SECONDS;
+    let window_start = current_time - retention_window_seconds;
     outcomes.retain(|outcome| outcome.time >= window_start);
 
     if outcomes.is_empty() {
@@ -52,29 +76,37 @@ pub fn evaluate_objectives(state: &GameSnapshot) -> GameSnapshot {
     if state.metrics.state != MetricsState::Running {
         return state.clone();
     }
+    if state.rules.game_mode != GameMode::Campaign {
+        return state.clone();
+    }
+    let Some(thresholds) = state.scenario.objectives.as_ref() else {
+        return state.clone();
+    };
 
-    let counts = objective_counts(state);
+    let rolling_window_seconds = effective_rolling_window_seconds(state);
+    let counts = objective_counts(state, rolling_window_seconds);
     let total_trips = counts.completed_trips + counts.unserved_trips;
 
     if total_trips >= 10
-        && f64::from(counts.unserved_trips) / f64::from(total_trips) > MAX_UNSERVED_RATIO
+        && f64::from(counts.unserved_trips) / f64::from(total_trips) > thresholds.max_unserved_ratio
     {
         return lose(state, "Too many unserved citizens");
     }
 
     if counts.completed_trips >= 10
-        && f64::from(counts.late_trips) / f64::from(counts.completed_trips) > MAX_LATE_RATIO
+        && f64::from(counts.late_trips) / f64::from(counts.completed_trips)
+            > thresholds.max_late_ratio
     {
         return lose(state, "Too many late arrivals");
     }
 
     if state.metrics.waiting_trip_count > 0
-        && state.metrics.average_wait_seconds > MAX_AVERAGE_WAIT_SECONDS
+        && state.metrics.average_wait_seconds > thresholds.max_average_wait
     {
         return lose(state, "Average wait time is too high");
     }
 
-    if state.time >= SURVIVAL_TIME_SECONDS && state.metrics.completed_trips > 0 {
+    if state.time >= thresholds.survival_time && state.metrics.completed_trips > 0 {
         let mut next = state.clone();
         next.metrics.state = MetricsState::Won;
         next.metrics.loss_reason = None;
@@ -97,7 +129,7 @@ struct ObjectiveCounts {
     unserved_trips: u32,
 }
 
-fn objective_counts(state: &GameSnapshot) -> ObjectiveCounts {
+fn objective_counts(state: &GameSnapshot, rolling_window_seconds: f64) -> ObjectiveCounts {
     if state.metrics.trip_outcomes.is_empty() {
         return ObjectiveCounts {
             completed_trips: state.metrics.completed_trips,
@@ -106,7 +138,7 @@ fn objective_counts(state: &GameSnapshot) -> ObjectiveCounts {
         };
     }
 
-    let window_start = state.time - ROLLING_WINDOW_SECONDS;
+    let window_start = state.time - rolling_window_seconds;
     let mut completed_trips = 0;
     let mut late_trips = 0;
     let mut unserved_trips = 0;

@@ -1,7 +1,11 @@
 use caelum_core::model::{
     MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
 };
-use caelum_core::{clock, transit, trips, GameEngine, GameIntent};
+use caelum_core::{
+    clock,
+    scenario::{growing_suburb_campaign, growing_suburb_objectives},
+    transit, trips, GameEngine, GameIntent,
+};
 
 #[test]
 fn zone_build_and_route_sequence_has_stable_counts() {
@@ -77,6 +81,15 @@ fn nearby_walker_engine() -> GameEngine {
     engine
 }
 
+fn nearby_walker_campaign_engine() -> GameEngine {
+    let engine = nearby_walker_engine();
+    let mut snapshot = engine.snapshot();
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    snapshot.rules = rules;
+    snapshot.scenario = scenario;
+    GameEngine::from_snapshot(snapshot).unwrap()
+}
+
 /// Golden trace over a full day-0 commute. By 900s every resident has completed the
 /// outbound leg and two have completed the return; the other two (3-tile walks to
 /// tiles (4,4)/(5,4)) are still mid-return. So the pipeline shows six lifetime
@@ -135,7 +148,7 @@ fn large_tick_matches_stepped_tick_for_full_commute() {
 
 #[test]
 fn won_via_real_tick_pipeline() {
-    let mut engine = nearby_walker_engine();
+    let mut engine = nearby_walker_campaign_engine();
 
     // Tick past the survival threshold with real completed demand in the pipeline.
     let result = engine.tick(clock::GAME_DAY_SECONDS + 1.0);
@@ -155,10 +168,9 @@ fn commute_respawns_across_day_boundary() {
     assert_eq!(snapshot.metrics.state, MetricsState::Running);
     assert!(snapshot.active_trips.is_empty());
 
-    // Drive the raw tick across the day boundary. We call trips::tick_trips directly
-    // because the engine wraps it with evaluate_objectives, which would terminate the
-    // game by winning at exactly GAME_DAY_SECONDS. This isolates the day-rollover path
-    // (reset_daily_commute_flags + spawn_due_commute_trips + sequence/day math).
+    // Drive the raw tick across the day boundary. This isolates the day-rollover path
+    // (reset_daily_commute_flags + spawn_due_commute_trips + sequence/day math); it no
+    // longer needs to avoid a default-sandbox win.
     snapshot = trips::tick_trips(&snapshot, 400.0);
 
     assert_eq!(snapshot.day, 1);
