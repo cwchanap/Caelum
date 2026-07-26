@@ -252,6 +252,14 @@ impl GameEngine {
     /// Construct an engine from a serialized schema-v3 snapshot, normalizing
     /// roadside stop state before rebuilding the non-serialized topology cache.
     pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
+        // Defense-in-depth: the WASM and Tauri hosts each probe
+        // `schemaVersion` before deserializing the full `GameSnapshot` (see
+        // `caelum-wasm/src/lib.rs::WasmGameEngine::from_snapshot` and
+        // `src-tauri/src/lib.rs::game_load_snapshot`) so a legacy schema-v2
+        // save is rejected with a structured `UnsupportedSnapshotSchema` code
+        // rather than a generic missing-field serde error. This engine-level
+        // re-check guards against direct Rust callers that bypass the host
+        // probe; the three checks are intentionally redundant.
         if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
             return Err(GameplayRejection::unsupported_snapshot_schema(
                 snapshot.schema_version,
