@@ -705,7 +705,11 @@ export function renderOverlays(
     }
   }
 
-  if (ui.activeOverlay === "growth") {
+  // Rust only applies growth waves in campaign mode
+  // (`growth::apply_due_growth_waves` returns early otherwise), so the overlay
+  // must also gate on campaign mode — otherwise a sandbox snapshot carrying a
+  // non-empty `growthWaves` list would preview changes Rust will never make.
+  if (ui.activeOverlay === "growth" && state.rules.gameMode === "campaign") {
     ctx.fillStyle = colors.growth;
 
     for (const wave of state.scenario.growthWaves) {

@@ -1178,6 +1178,7 @@ describe("growth overlay", () => {
     const ctx = fakeCtx();
     const state = {
       ...createTestGameState(),
+      rules: { ...createTestGameState().rules, gameMode: "campaign" as const },
       scenario: {
         ...createTestGameState().scenario,
         growthWaves: [
@@ -1239,6 +1240,7 @@ describe("growth overlay", () => {
     const ctx = fakeCtx();
     const state = {
       ...createTestGameState(),
+      rules: { ...createTestGameState().rules, gameMode: "campaign" as const },
       scenario: {
         ...createTestGameState().scenario,
         growthWaves: [
@@ -1274,6 +1276,40 @@ describe("growth overlay", () => {
       tileSize,
       tileSize,
     );
+  });
+
+  it("does not paint growth waves in sandbox mode even when the list is non-empty", () => {
+    const ctx = fakeCtx();
+    // Sandbox snapshots may carry a non-empty growthWaves list, but Rust only
+    // applies waves in campaign mode (`growth::apply_due_growth_waves` returns
+    // early otherwise). The overlay must not preview changes Rust will never
+    // make.
+    const state = {
+      ...createTestGameState(),
+      rules: { ...createTestGameState().rules, gameMode: "sandbox" as const },
+      scenario: {
+        ...createTestGameState().scenario,
+        growthWaves: [
+          {
+            id: "wave-sandbox",
+            triggerTime: 100,
+            message: "Never applied",
+            applied: false,
+            actions: [
+              {
+                type: "paintAreaRectangle" as const,
+                area: "residential" as const,
+                start: { x: 5, y: 5 },
+                end: { x: 6, y: 5 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const ui = { ...createUiState(), activeOverlay: "growth" as const };
+    renderOverlays(ctx, state, ui);
+    expect(ctx.fillRect).not.toHaveBeenCalled();
   });
 });
 
