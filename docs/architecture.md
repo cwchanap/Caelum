@@ -29,10 +29,13 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
 The host contract is `SNAPSHOT_SCHEMA_VERSION = 3`. Every snapshot carries
-required Rust-owned `GameRules` plus a required `ScenarioConfig`; objectives
-are explicitly an object or absent campaign content (`null` in JSON and
-normalized from WASM `undefined`). Loading is strict: schema-v2 or malformed
-schema-v3 snapshots are rejected rather than heuristically migrated.
+required Rust-owned `GameRules` plus a required `ScenarioConfig`.
+`scenario.objectives` is a required-but-nullable wire key: it is an object or
+explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
+the host normalizes it to `null`.
+`scenario.growthWaves` is also required and may be empty. Omitting either key,
+or supplying any other malformed schema-v3 content, rejects the snapshot;
+schema-v2 snapshots are never heuristically migrated.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
@@ -66,9 +69,12 @@ objective thresholds and ordered growth waves; Rust evaluates and applies
 those features only in campaign mode.
 
 Serialized campaign thresholds are authoritative: hosts display the values
-Rust enforces and do not derive or hard-code a local copy. A missing, non-finite,
-or non-positive campaign rolling window falls back to the deterministic
-300-second constant for both trip-outcome retention and objective scoring.
+Rust enforces and do not derive or hard-code a local copy. When an objectives
+object is present, its `rollingWindowSeconds` field is required; omitting it is
+malformed. The deterministic 300-second constant applies to both trip-outcome
+retention and objective scoring when objectives are inactive or absent in their
+allowed mode configuration, or when a configured rolling window is non-finite
+or non-positive.
 
 Growing Suburb retains its authored dual-bidirectional arterial cross, with no
 pre-seeded districts, timed sandbox growth waves, buildings, or citizens.
