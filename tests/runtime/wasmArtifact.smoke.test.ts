@@ -431,13 +431,30 @@ describe("real WASM artifact smoke", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) throw new Error("expected setup creation to succeed");
 
-    await backend.dispatch({ type: "setBudget", budget: 7 });
-    const mutated = await backend.dispatch({
+    const mapMutation = await backend.dispatch({
       type: "placeRoundabout",
       origin: { x: 2, y: 2 },
       size: "compact2x2",
     });
-    expect(mutated.snapshot).not.toEqual(created.snapshot);
+    expect(mapMutation.applied).toBe(true);
+    expect(mapMutation.rejection).toBeNull();
+    expect(mapMutation.snapshot.map.roadStructures).toHaveLength(
+      created.snapshot.map.roadStructures.length + 1,
+    );
+    expect(
+      mapMutation.snapshot.map.roadStructures.some(
+        (structure) => structure.kind === "roundabout",
+      ),
+    ).toBe(true);
+
+    const budgetMutation = await backend.dispatch({
+      type: "setBudget",
+      budget: 7,
+    });
+    expect(budgetMutation.applied).toBe(true);
+    expect(budgetMutation.snapshot.budget).toBe(7);
+    expect(budgetMutation.snapshot.map).toEqual(mapMutation.snapshot.map);
+    expect(budgetMutation.snapshot.map).not.toEqual(created.snapshot.map);
 
     const reset = await backend.reset();
     expect(reset).toEqual({ ok: true, snapshot: created.snapshot });
