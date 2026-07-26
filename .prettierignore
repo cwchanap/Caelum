@@ -1,4 +1,5 @@
 dist
+crates/caelum-core/tests/fixtures/sandbox_templates.json
 docs/superpowers
 .devin
 node_modules

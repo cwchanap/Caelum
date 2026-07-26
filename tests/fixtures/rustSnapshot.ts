@@ -1,6 +1,6 @@
 import { tileId } from "../../src/domain/ids";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type {
   GameBackend,
   RustGameSnapshot,

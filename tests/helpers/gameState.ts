@@ -22,7 +22,7 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Caelum is a 2D city / public-transport simulation. The player places roads, bus stops/routes, metro stations/lines, and buildings to keep citizens commuting in a deterministic "Growing Suburb" scenario. It ships as both a browser app (Vite dev server) and a macOS desktop app (Tauri 2).
+Caelum is a 2D city / public-transport simulation. The player places roads, bus stops/routes, metro stations/lines, and buildings in deterministic Blank Grid or Crossroads sandboxes, while Growing Suburb remains the separate campaign identity. It ships as both a browser app (Vite dev server) and a macOS desktop app (Tauri 2).
 
 **The authoritative simulation core is the Rust crate `crates/caelum-core`.** It owns the tick pipeline, transit routing, trip/commute lifecycle, objectives, metrics, and gameplay mutations, and is gated by CI (fmt/clippy/test/build) and `lint-staged`. Browser gameplay uses WASM from `crates/caelum-wasm`; Tauri gameplay uses managed Rust command state. TypeScript contains UI, rendering, host adapters, and read-only helpers only. New gameplay logic belongs in `crates/caelum-core`.
 
@@ -55,7 +55,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 **Layers (`src/`):**
 
 - `domain/` — `types.ts` is the shared data model (`GameState`, `Citizen`, `TransitNetwork`, `Tool`, etc.); `ids.ts` generates stable IDs (`tileId`, zero-padded `entityId`, `nextEntityId`).
-- `scenario/growingSuburb.ts` — authoritative Growing Suburb map dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/scenario.rs`, exported so e2e helpers and tests reference the source of truth. The authoritative map layout, scenario, objectives, and clock all live in `crates/caelum-core`; the Growing Suburb sandbox ships with no timed growth waves and no starting citizens (see `docs/architecture.md`).
+- `scenario/sandbox.ts` — shared sandbox dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/sandbox.rs`, exported so render/e2e helpers reference the source of truth. The authoritative Blank Grid and Crossroads maps, sandbox factory, scenario data, objectives, and clock all live in `crates/caelum-core` (see `docs/architecture.md`).
 - `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`), `snapshotView.ts` (read-only views over a snapshot).
 - `runtime/backend/` — the host boundary. `createBackend()` (`index.ts`) picks `wasmBackend.ts` or `tauriBackend.ts` via `isTauriRuntime()` (presence of `__TAURI_INTERNALS__`); both implement the `GameBackend` interface (`types.ts`) and forward ticks/intents to the Rust `GameEngine`. Wire types (`RustGameSnapshot`, `GameIntent`, `DispatchResult`) live here.
 - `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts` (ordered-ID draft reducers), and `uiState.ts` (`UiState` + factory). Production TypeScript has no route pathfinder.
@@ -63,7 +63,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 - `render/` — imperative canvas drawing. `canvas.ts` owns board sizing, tile↔pixel mapping (`tileSize = 32`), and the render pass; it composes per-concern renderers (map/buildings/transit/citizens/overlays). The runtime creates the real `<canvas>` and attaches it to `GameCanvas.svelte`'s host element.
 - `components/` — `Topbar.svelte` (stats), `GameCanvas.svelte`, and the bottom HUD: `hud/BottomHud.svelte` (slim always-docked bar) + `hud/HudDrawer.svelte` opening one of `hud/panels/*` (Build · Routes · Manage · Data · Brief, plus contextual Inspect). `App.svelte` composes them and surfaces shell errors. (The old monolithic `ControlTower.svelte` was split into these.)
 
-**Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
+**Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, sandbox factory/reset, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
 
 **Tauri host (`src-tauri/`)** exposes gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`.
 
@@ -85,8 +85,8 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 
 - **Svelte 5 runes mode** is enabled globally (`svelte.config.js`). Use `$state`, `$props`, `$derived`, `$effect` — not legacy `export let` / stores.
 - **Immutable state, reference-equality dispatch.** Sim and action functions return new `GameState` objects; the runtime's `commit` publishes only when `nextState !== state` (or ui changed). Never mutate `GameState` in place, or the runtime will skip the re-render.
-- **Determinism is a contract.** The Growing Suburb scenario — initial state, growth thresholds, generated citizens, IDs, and objective evaluation — must stay stable across runs. Don't introduce nondeterminism (`Math.random`, wall-clock time) into gameplay code.
-- **Schema and rejection contract.** `SNAPSHOT_SCHEMA_VERSION = 2`; hosts reject other versions instead of heuristically loading legacy snapshots. Gameplay failures use `GameplayRejection { code, context }`, not message parsing.
+- **Determinism is a contract.** Equal sandbox requests must produce equal complete snapshots and stable IDs; Growing Suburb campaign thresholds and objective evaluation must also stay stable across runs. Don't introduce nondeterminism (`Math.random`, wall-clock time) into gameplay code.
+- **Schema and rejection contract.** `SNAPSHOT_SCHEMA_VERSION = 4`; `rules.sandbox.startingCapital` is required, and hosts reject older versions instead of heuristically loading legacy snapshots. Gameplay failures use `GameplayRejection { code, context }`, not message parsing.
 - **Preview generations are independent.** Route previews and road-mutation previews use separate generation counters, and late responses may update only the matching current draft or gesture.
 - **Mutation boundaries are explicit.** Linear strokes may partially apply where their intent permits skipped tiles; direction, route, and roundabout mutations are atomic. Structure-owned tiles block every other infrastructure and zoning operation.
 - **`tests/` mirrors `src/`** by domain. Put runtime/host tests under `tests/runtime` (node env) and DOM/Svelte/render tests under `tests/ui` or `tests/render` (jsdom). End-to-end smoke flows go in `tests/e2e` (Playwright).

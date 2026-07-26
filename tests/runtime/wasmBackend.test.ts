@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/growingSuburb";
+import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import {
   isSandboxCreationError,
   isSandboxResetError,

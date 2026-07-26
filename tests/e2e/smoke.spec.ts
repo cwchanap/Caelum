@@ -23,7 +23,8 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await expect(topbar.getByText("$120,000")).toBeVisible();
   await expect(clockReadout.getByText("Day 1 00:00")).toBeVisible();
   await expect(populationReadout.getByText("0")).toBeVisible();
-  await expect(page.getByText("Growing Suburb")).toBeVisible();
+  await expect(page.getByText("Standard Sandbox")).toBeVisible();
+  await expect(page.getByText("Template · Crossroads")).toBeVisible();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
