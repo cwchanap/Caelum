@@ -1,6 +1,6 @@
 # HPA-339: Deterministic Sandbox Template Factory
 
-**Status:** Revised after review; awaiting written-spec approval
+**Status:** Revised after topology review; awaiting written-spec approval
 
 **Linear:** [HPA-339](https://linear.app/cwchanap/issue/HPA-339/add-a-deterministic-sandbox-template-factory-with-blank-grid-and)
 
@@ -14,9 +14,10 @@ Tauri hosts.
 HPA-339 ships two 28×18 templates:
 
 - **Blank Grid** contains no authored city entities.
-- **Crossroads** contains the current paired one-way arterial scaffold with a
-  corrected center junction that supports every legal straight, left, and
-  right movement without player repair.
+- **Crossroads** contains the current paired one-way arterial network. Its
+  existing automatically discovered center junction is promoted from
+  best-effort scenario setup to a required template invariant and verified for
+  every straight, left, and right movement.
 
 Every sandbox template has no objectives and no growth waves. Sandbox reset
 recreates the active city from its complete original creation request instead
@@ -39,10 +40,22 @@ snapshot is always Standard Sandbox with 120,000 budget.
 - southbound on column 14; and
 - northbound on column 15.
 
-The four authored sequences overlap at the 2×2 center. They do not author the
-complete reciprocal facts needed for the center to become a routable junction.
-The subsequent automatic-junction refresh is best-effort, so the current
-arterial cross is a visual scaffold rather than a guaranteed routing graph.
+The four authored sequences overlap at the 2×2 center.
+`connect_authored_sequence()` delegates each adjacent pair to `connect()`,
+which writes both the requested heading and its reciprocal onto the neighboring
+tile. The overlapping sequences therefore leave every center tile with North,
+East, South, and West road connections. The subsequent
+`refresh_all_automatic_junctions()` already discovers a stable 2×2 automatic
+junction with eight ports, and `RoadTopology::compile()` exposes the required
+four straight, four left-turn, and four right-turn movements.
+
+The current gap is enforcement rather than geometry. Scenario construction
+treats automatic-junction refresh as best-effort: an unexpected failure is only
+surfaced by `debug_assert!` and degrades to a map without the structure in a
+release build. There is also no explicit verification of the required movement
+matrix, and the source comment describing the cross as a non-routable visual
+scaffold is stale. HPA-339 turns the existing routable layout into a validated
+template contract with typed failure.
 
 `GameEngine::new()` and `GameEngine::reset()` always use the same hard-coded
 initial snapshot. WASM and Tauri expose that default construction/reset path,
@@ -60,8 +73,9 @@ The following decisions were approved during design review:
 3. Starting capital is persisted in sandbox rules so exact reset remains
    possible after future save/load restoration.
 4. Crossroads guarantees straight, left, and right travel from each of its four
-   inbound approaches. The same-arm outbound movement is a U-turn and is not
-   authored, yielding 12 required center movements.
+   inbound approaches, yielding 12 required center movements. The shared
+   automatic-junction compiler also exposes four same-side U-turn transitions;
+   retaining or changing that general compiler behavior is outside HPA-339.
 5. A dedicated Rust sandbox factory owns creation and validation. It does not
    extend `GameplayRejection` or introduce a generic template registry.
 6. The existing default snapshot, `GameEngine::new()`, and Rust/WASM `Default`
@@ -82,7 +96,8 @@ The following decisions were approved during design review:
 - Build complete deterministic snapshots rather than partially initialized
   maps.
 - Make Blank Grid structurally empty of authored city content.
-- Make Crossroads immediately routable for all 12 required center movements.
+- Enforce and verify Crossroads routability for all 12 required center
+  movements.
 - Return typed creation errors for unknown IDs and invalid settings.
 - Expose equivalent core, WASM, Tauri, and TypeScript backend operations.
 - Make reset reproduce the active sandbox request atomically.
@@ -178,9 +193,9 @@ those strings exactly. `SandboxTemplateId::GrowingSuburb` and the
 `"growingSuburb"` wire value are removed.
 
 Campaign fixtures that need an underlying sandbox-template field use
-`Crossroads`, because it is the corrected successor to the current arterial
-map. Their `ScenarioConfig.name` may remain `"Growing Suburb"`; scenario
-identity and sandbox template identity are distinct.
+`Crossroads`, because it is the canonical successor identifier for the current
+arterial map. Their `ScenarioConfig.name` may remain `"Growing Suburb"`;
+scenario identity and sandbox template identity are distinct.
 
 ### 2.2 Raw and validated requests
 
@@ -198,9 +213,18 @@ interface SandboxCreationRequest {
 
 Rust owns the corresponding request type and converts it into an internal
 validated request before constructing any map, topology, or engine. Keeping
-the raw fields primitive lets Rust classify unknown strings and invalid
-numbers. Host-side enum deserialization must not turn an unknown template into
-an opaque Tauri or WASM transport failure.
+the public fields primitive lets Rust classify unknown strings and invalid
+numbers. Host-side enum or integer deserialization must not turn an unknown
+template, fractional capital, or invalid number into an opaque Tauri or WASM
+transport failure.
+
+The Rust raw request represents both numeric fields as `Option<f64>` (or an
+equivalent missing/null-aware raw value) until validation. WASM preserves
+JavaScript non-finite numbers as `f64`; Tauri IPC serializes them through JSON,
+where `NaN` and positive or negative infinity arrive as `null`. The Tauri
+command therefore accepts nullable raw numeric fields and maps `null` or
+missing values to the corresponding typed invalid-value code instead of
+failing command argument deserialization.
 
 The validated request contains:
 
@@ -280,10 +304,10 @@ The wire contract is:
 ```typescript
 type SandboxCreationErrorCode =
   | "unknownTemplateId"
-  | "invalidEconomyPreset"
+  | "unknownEconomyPreset"
   | "invalidStartingCapital"
   | "invalidDemandMultiplier"
-  | "unsupportedMoveInRate"
+  | "unknownMoveInRate"
   | "templateInvariantViolation";
 
 interface SandboxCreationError {
@@ -297,9 +321,12 @@ interface SandboxCreationError {
 ```
 
 `attemptedValue` is diagnostic only. Callers branch on `code`, never by parsing
-text. Non-finite numeric values use canonical diagnostic strings such as
+text. WASM non-finite numeric values use canonical diagnostic strings such as
 `"NaN"`, `"Infinity"`, and `"-Infinity"` so error serialization itself remains
-valid JSON.
+valid. Tauri has already normalized those values to `null`, so it reports the
+canonical attempted value `"null"`. Exact cross-host context equality is
+required only for JSON-representable raw requests; the corresponding typed
+error code remains required for null-normalized non-finite input.
 
 Validation stops before template construction. A failed request does not
 mutate the active WASM or Tauri engine.
@@ -401,9 +428,8 @@ geometry:
 - column 15, northbound.
 
 `author_scenario_road_line()` already connects each arm's ordered sequence
-through `connect_authored_sequence()`. Crossroads reuses that behavior; the new
-authoring is limited to the reciprocal center facts and automatic-junction
-structure needed to connect the four otherwise-complete arms.
+through `connect_authored_sequence()`, including reciprocal neighbor headings.
+Crossroads reuses that behavior unchanged for all four complete arterial lines.
 
 The center footprint is:
 
@@ -412,34 +438,49 @@ The center footprint is:
 (14,9) (15,9)
 ```
 
-A dedicated Crossroads center helper authors the reciprocal road facts,
-structure ownership, and deterministic automatic-junction ports required by
-`RoadTopology`. It does not rely on a best-effort whole-map junction refresh
-to discover or repair the center after the fact.
+After authoring the arms, the template calls
+`refresh_all_automatic_junctions()`. This is a required factory step rather than
+best-effort repair: a refresh failure becomes
+`templateInvariantViolation`, and requested construction returns no snapshot.
+The factory does not duplicate structure ownership, port capture, ordering, or
+junction-ID generation. The shared refresh pass remains the sole producer of
+automatic-junction identity, which also guarantees that the first player road
+edit cannot silently rewrite a hand-authored variant.
 
-The automatic-junction ID is derived from the canonical sorted footprint and
-sorted port keys using the same stable identity rule as other automatic
-junctions. The builder must not depend on hash-map iteration order.
+The resulting automatic junction must have the exact canonical footprint above,
+eight ordered ports, stable shared-refresh ID, and `one_way: None` on all four
+owned center tiles. These facts are validated after refresh and captured by the
+template characterization.
 
 ### 4.4 Required movement matrix
 
-Crossroads has four inbound and four outbound arms. From each inbound arm, the
-junction exposes:
+Crossroads has four accepted inbound and four accepted outbound ports. An
+automatic-junction transition is port-to-port: its entry state is the owned
+port tile with `incoming_heading = opposite(entry.edge)`, and one transition
+spans the complete 2×2 structure to the tile immediately outside the selected
+exit port. It does not produce per-tile internal steps.
+
+From each inbound port, the required matrix contains:
 
 - the opposite outbound arm as `Straight`;
 - one adjacent outbound arm as `RightTurn`; and
 - the other adjacent outbound arm as `LeftTurn`.
 
-The outbound arm on the same side as the inbound arm would be a U-turn and is
-not authored. This produces exactly 12 required non-U-turn movements.
+This produces 12 required non-U-turn movements. The general automatic-junction
+compiler also emits the accepted same-side entry/exit pair as a U-turn, for 16
+current transitions in total. HPA-339 validates the required 12 as a subset and
+does not reject the additional U-turn transitions or change shared terminal
+reversal behavior.
 
-The factory compiles `RoadTopology` before returning. It queries the compiled
-topology through the existing public `transition_for()` method for the required
-matrix and rejects an invalid built-in template with
-`templateInvariantViolation`. `transition_for()` is marked `#[doc(hidden)]`,
-but it is already a production query used by the network layer; HPA-339 does
-not add a second topology-inspection API. This makes the routing graph—not
-visual tile occupancy—the acceptance oracle.
+The factory compiles `RoadTopology` before returning. A private pure invariant
+validator queries the compiled topology through the existing public
+`transition_for()` method for the required matrix and rejects an invalid
+built-in template with `templateInvariantViolation`. `transition_for()` is
+marked `#[doc(hidden)]`, but it is already a production query used by the
+network layer; HPA-339 does not add a second topology-inspection API. This makes
+the routing graph—not visual tile occupancy—the acceptance oracle, while the
+pure validator can be unit-tested with an intentionally malformed candidate
+without a production injection hook.
 
 ## 5. Engine and Reset Lifecycle
 
@@ -487,6 +528,12 @@ The reset operation is fallible so both unsupported mode and built-in template
 invariant failures can be returned without corrupting the current engine.
 These are sandbox lifecycle results, not recoverable gameplay rejections.
 
+Changing `GameEngine::reset()` to return a result requires updating every direct
+caller rather than only the two hosts. The inventory includes the Rust
+`engine_topology` reset test, the WASM wrapper, Tauri `game_reset`, the shared
+TypeScript backend signature, both backend adapters, the runtime reset queue,
+and their corresponding contract tests.
+
 ## 6. Host and Frontend Boundary
 
 ### 6.1 Core operation
@@ -512,6 +559,8 @@ That operation:
 - returns the new engine on success; and
 - serializes `SandboxCreationError` on failure.
 
+`serde_wasm_bindgen` may pass non-finite JavaScript numbers into the raw
+`Option<f64>` values. They reach core validation and produce typed errors.
 The WASM reset method delegates to the mode-aware engine reset and serializes
 `SandboxResetError` on failure. The WASM backend distinguishes serialized
 sandbox errors from unexpected JavaScript/serialization failures.
@@ -527,6 +576,9 @@ The command returns `Result<GameSnapshot, SandboxCreationError>`.
 `game_reset` delegates to the same mode-aware reset and returns
 `Result<GameSnapshot, SandboxResetError>`. Mutex and serialization failures
 remain host failures rather than being mislabeled as sandbox-domain errors.
+The command-facing raw request keeps numeric fields nullable so JSON-normalized
+non-finite values reach core validation as `None` rather than failing before a
+typed creation error can be produced.
 
 ### 6.4 TypeScript backend
 
@@ -554,10 +606,20 @@ The Tauri backend invokes `game_create_sandbox`, whose command performs the
 atomic managed-engine replacement.
 
 Both adapters catch and recognize the serialized Rust domain error, then return
-the corresponding `{ ok: false, error }` variant. Unexpected transport,
-serialization, module-loading, or mutex failures still reject the promise.
-Adapters do not validate template geometry, reinterpret settings, or
-manufacture fallback snapshots.
+the corresponding `{ ok: false, error }` variant. Because WASM `Err` values and
+Tauri command rejections arrive as untyped JavaScript values, recognition uses
+explicit `isSandboxCreationError` and `isSandboxResetError` guards. Each guard
+requires a plain object, a `context` object, and membership in the complete
+known code set for that operation. An arbitrary object with a string `code`
+does not become a domain result. Unexpected transport, serialization,
+module-loading, or mutex failures still reject the promise. Adapters do not
+validate template geometry, reinterpret settings, or manufacture fallback
+snapshots.
+
+This discriminated-result convention applies only to sandbox creation and reset
+in HPA-339. Existing `loadSnapshot` schema/gameplay failures retain their
+current rejected-promise shape; changing that established host contract is
+outside this issue.
 
 The existing runtime reset path commits the returned snapshot only for
 `ok: true`. For `ok: false`, it preserves the current runtime snapshot and
@@ -588,11 +650,21 @@ Update:
 
 - Rust model wire tests;
 - TypeScript domain/backend types;
+- the exhaustive `SANDBOX_TEMPLATE_LABELS` mapping in
+  `src/runtime/runtimeSelectors.ts`;
 - Rust and TypeScript schema constants;
 - snapshot fixtures;
 - backend normalization tests;
-- unsupported-schema expected versions; and
-- default-start characterizations.
+- unsupported-schema expected versions;
+- default-start characterizations;
+- sandbox scenario-name expectations in `tests/ui/hudPanels.test.ts`,
+  `tests/ui/appShell.test.ts`, and
+  `tests/runtime/runtimeSelectors.test.ts`;
+- the shared map-dimension module by renaming
+  `src/scenario/growingSuburb.ts` to `src/scenario/sandbox.ts` and updating its
+  imports and header comment; and
+- the sandbox and current-architecture descriptions in `CLAUDE.md` and
+  `docs/architecture.md`.
 
 ## 8. Verification
 
@@ -609,11 +681,12 @@ snapshot equality. Repeat with representative valid combinations of:
 Changing one request setting changes only the expected rules/budget fields,
 not the authored template map.
 
-Assert that `create_initial_snapshot()`, `GameEngine::new()`, and the default
-WASM constructor all produce the same snapshot as the canonical default
-Crossroads request. Campaign helper tests assert that
-`growing_suburb_campaign()` reuses those Crossroads sandbox settings while
-retaining campaign mode and the `"Growing Suburb"` scenario name.
+Rust tests assert that `create_initial_snapshot()` and `GameEngine::new()`
+produce the same snapshot as the canonical default Crossroads request.
+Campaign helper tests assert that `growing_suburb_campaign()` reuses those
+Crossroads sandbox settings while retaining campaign mode and the
+`"Growing Suburb"` scenario name. Default WASM/Tauri constructor parity is
+verified at the host boundary in section 8.7.
 
 ### 8.2 Characterization fixtures
 
@@ -624,6 +697,7 @@ a full 504-tile snapshot blindly. Each characterization records:
 - ordered tile IDs;
 - every non-default tile fact;
 - road structures, footprints, ports, and IDs;
+- `one_way: None` on every automatic-junction-owned center tile;
 - rules and starting budget;
 - scenario identity and empty campaign content;
 - deterministic counters; and
@@ -645,13 +719,16 @@ Tests assert:
 - exact arterial coordinates and one-way directions;
 - reciprocal road connections;
 - exact center footprint;
+- `one_way: None` on all four center tiles;
 - stable automatic-junction ID and ordered ports;
 - successful topology compilation;
-- all 12 required straight/left/right transitions; and
-- absence of same-arm U-turn transitions.
+- all 12 required straight/left/right transitions with their exact
+  `MovementKind`.
 
 Routeability tests use `RoadTopology` states or route resolution rather than
-checking only that road tiles exist.
+checking only that road tiles exist. The factory assertion treats those 12
+transitions as a required subset; it does not require the absence of the four
+same-side U-turn transitions currently supplied by the shared compiler.
 
 ### 8.5 Validation and atomicity
 
@@ -659,14 +736,19 @@ Test every creation error code, including:
 
 - unknown template ID;
 - unknown economy preset;
-- negative and greater-than-`i32::MAX` capital;
+- negative, fractional, greater-than-`i32::MAX`, NaN, and infinite capital;
 - zero, negative, NaN, and infinite demand multipliers; and
-- unsupported move-in rate.
+- unknown move-in rate.
 
 For host and engine replacement operations, assert that a failed request leaves
 the previous snapshot unchanged. Backend adapter tests also assert that expected
 Rust domain errors become `{ ok: false, error }`, while unrelated host failures
 still reject.
+
+Exercise `templateInvariantViolation` through the module-private invariant
+validator with an intentionally malformed Crossroads candidate, including a
+missing required movement. This tests the typed mapping without exposing a
+production test-injection API.
 
 ### 8.6 Reset
 
@@ -686,14 +768,23 @@ Add explicit regressions proving:
 
 ### 8.7 Host parity
 
-WASM and Tauri adapter contract tests submit the same raw requests and compare
-their normalized output with the core factory result. They also compare typed
-error codes, contexts, and discriminated backend results for the same invalid
-requests.
+WASM and Tauri adapter contract tests submit the same JSON-representable raw
+requests and compare their normalized output with the core factory result. They
+also compare typed error codes, contexts, and discriminated backend results for
+the same JSON-representable invalid requests. Non-finite WASM inputs and their
+Tauri `null` equivalents are tested separately for the same typed code because
+JSON has already discarded the original non-finite value before Rust receives
+the Tauri request.
 
 TypeScript backend tests verify operation names, request forwarding, atomic
 local-engine replacement, reset forwarding, domain-result normalization, and
-preservation of unexpected promise rejections.
+preservation of unexpected promise rejections. They also prove that only the
+known creation/reset code sets pass the domain-error guards and that an unknown
+object with a `code` property remains an unexpected rejection.
+
+Host-boundary tests assert that the default WASM constructor and Tauri managed
+default snapshot equal the canonical default Crossroads factory result. This
+parity assertion does not live in Rust-only factory tests.
 
 ### 8.8 Regression suite
 
