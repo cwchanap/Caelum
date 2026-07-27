@@ -711,14 +711,16 @@ pub fn reset(&mut self) -> Result<JsValue, JsValue> {
 
 The error is thrown as a serialized `SandboxResetError` object; the TS-side `wasmBackend` still rejects on throw (handled by `failBackend`) until Task 4 introduces the discriminated-union contract and guard-based catch.
 
-In `src-tauri/src/lib.rs`, map `SandboxResetError` to a string for now (Task 5 replaces this with `TauriCommandError<SandboxResetError>`):
+In `src-tauri/src/lib.rs`, map `SandboxResetError` to a string for now (Task 5 replaces this with `TauriCommandError<SandboxResetError>`). `SandboxResetError` is a structured serializable error with no `Display` impl (matching the codebase convention in `crates/caelum-core/src/rejection.rs`, which derives only `Clone, Debug, PartialEq, Eq, Serialize, Deserialize` and has no `thiserror`/`Display` dependency), so use the derived `Debug` representation via `format!("{error:?}")` rather than `error.to_string()`:
 
 ```rust
 fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
     let mut engine = state.lock().map_err(|error| error.to_string())?;
-    engine.reset().map_err(|error| error.to_string())
+    engine.reset().map_err(|error| format!("{error:?}"))
 }
 ```
+
+`Mutex::PoisonError` does implement `Display`, so `error.to_string()` remains correct on the `state.lock()` branch. Task 5 replaces the `format!("{error:?}")` transport with `TauriCommandError::Domain`.
 
 - [ ] **Step 7: Run the core lifecycle gate and workspace check**
 
@@ -762,6 +764,7 @@ git commit -m "feat(core): reset active sandbox exactly"
 - Modify: `tests/runtime/gameRuntime.test.ts` (reset test backends to return `{ ok: true, snapshot }`)
 - Modify: `tests/runtime/backendContract.test.ts` (reset doubles return discriminated result)
 - Modify: `tests/ui/pointerEvents.test.ts` (reset doubles return discriminated result)
+- Modify: `tests/runtime/previewCoordinator.test.ts` (add unused `createSandbox` stub to the `satisfies GameBackend` double; `reset` is unused by the coordinator and needs no change)
 
 **Interfaces:**
 - Consumes: core request/error/reset types and `WasmGameEngine`.
@@ -886,7 +889,13 @@ reset() {
 },
 ```
 
-Update every test backend double (`tests/runtime/gameRuntime.test.ts`, `tests/runtime/backendContract.test.ts`, `tests/ui/pointerEvents.test.ts`, and any other `GameBackend` implementor surfaced by `rg -n 'reset\(\)' tests`) to return `{ ok: true, snapshot: resetSnapshot }` instead of the bare snapshot. Add no `ok: false` doubles here — Task 6 introduces the typed reset rejection test backend.
+Update every test backend double (`tests/runtime/gameRuntime.test.ts`, `tests/runtime/backendContract.test.ts`, `tests/ui/pointerEvents.test.ts`, and any other `GameBackend` implementor surfaced by `rg -n 'satisfies GameBackend|as GameBackend|GameBackend &' tests`) to return `{ ok: true, snapshot: resetSnapshot }` instead of the bare snapshot. Add no `ok: false` doubles here — Task 6 introduces the typed reset rejection test backend.
+
+Inventory `GameBackend` implementors by the type relationship, not by `reset()` call sites: `rg -n 'satisfies GameBackend|as GameBackend|GameBackend &' tests` finds every double. `rg -n 'reset\(\)' tests` is insufficient because some doubles (e.g. `tests/runtime/previewCoordinator.test.ts`) declare `reset` as a property (`reset: unused as unknown as GameBackend["reset"]`) and never call it. `as GameBackend` casts of empty objects (e.g. `tests/runtime/backendSelection.test.ts`) still compile when required members are added because `as` is an unchecked assertion, so they need no change. `satisfies GameBackend` doubles do check shape and need an unused `createSandbox` stub:
+
+```typescript
+createSandbox: unused as unknown as GameBackend["createSandbox"],
+```
 
 Update `tests/fixtures/rustSnapshot.ts` and any fixture referenced by `rg -n '"growingSuburb"|templateId' tests` to schema `4` with `templateId: "crossroads"` and `startingCapital`. Task 7 performs the exhaustive fixture/label/E2E migration; this step only updates the fixtures needed for `bun run check` and the Task 4 smoke tests to pass.
 
@@ -910,7 +919,7 @@ Run:
 
 ```bash
 bun run wasm:build
-bunx vitest run tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/ui/pointerEvents.test.ts
+bunx vitest run tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/runtime/previewCoordinator.test.ts tests/ui/pointerEvents.test.ts
 bun run check
 ```
 
@@ -919,7 +928,7 @@ Expected: all selected tests and TypeScript/Svelte checks pass.
 - [ ] **Step 8: Commit the WASM/backend contract**
 
 ```bash
-git add crates/caelum-wasm/src/lib.rs src/domain/types.ts src/runtime/backend/types.ts src/runtime/backend/index.ts src/runtime/backend/sandboxErrors.ts src/runtime/backend/wasmBackend.ts src/runtime/backend/tauriBackend.ts src/runtime/createGameRuntime.ts src/runtime/runtimeSelectors.ts tests/fixtures/rustSnapshot.ts tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/ui/pointerEvents.test.ts
+git add crates/caelum-wasm/src/lib.rs src/domain/types.ts src/runtime/backend/types.ts src/runtime/backend/index.ts src/runtime/backend/sandboxErrors.ts src/runtime/backend/wasmBackend.ts src/runtime/backend/tauriBackend.ts src/runtime/createGameRuntime.ts src/runtime/runtimeSelectors.ts tests/fixtures/rustSnapshot.ts tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/runtime/previewCoordinator.test.ts tests/ui/pointerEvents.test.ts
 git commit -m "feat(runtime): expose sandbox factory through WASM"
 ```
 
