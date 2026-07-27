@@ -714,8 +714,13 @@ snapshot equality. Repeat with representative valid combinations of:
 - default and non-default positive demand multiplier; and
 - paused move-in.
 
-Changing one request setting changes only the expected rules/budget fields,
-not the authored template map.
+Changing one of economy, starting capital, demand multiplier, or move-in
+rate changes only the expected rules/budget fields, not the authored
+template map. `templateId` is excluded from this invariance: each
+`templateId` produces its corresponding characterized authored map, and
+the assertions distinguish Blank Grid (structurally empty) from
+Crossroads (existing routable automatic junction with the required
+12-movement subset).
 
 Rust tests assert that `create_initial_snapshot()` and `GameEngine::new()`
 produce the same snapshot as the canonical default Crossroads request.
