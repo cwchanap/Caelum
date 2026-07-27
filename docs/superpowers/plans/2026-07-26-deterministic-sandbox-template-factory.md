@@ -602,6 +602,8 @@ git commit -m "feat(core): build deterministic sandbox templates"
 - Modify: `crates/caelum-core/tests/engine_topology.rs:1-125`
 - Create: `crates/caelum-core/tests/sandbox_engine.rs`
 - Modify: `crates/caelum-core/tests/stop_migration.rs:170-285`
+- Modify: `crates/caelum-wasm/src/lib.rs:1-89`
+- Modify: `src-tauri/src/lib.rs:33-39`
 
 **Interfaces:**
 - Consumes: `SandboxCandidate`, canonical default request, persisted `GameRules`, and `GameMode`.
@@ -616,6 +618,8 @@ impl GameEngine {
     pub fn reset(&mut self) -> Result<GameSnapshot, SandboxResetError>;
 }
 ```
+
+Both hosts are updated in this task so the workspace compiles end-to-end. The WASM wrapper serializes the typed reset error as an object (thrown as `JsValue`); the Tauri command maps `SandboxResetError` to a string for now — Task 5 upgrades the Tauri command to `TauriCommandError<SandboxResetError>` and Task 4 upgrades the TS-side `wasmBackend` to return the discriminated union.
 
 - [ ] **Step 1: Write failing requested-constructor and reset tests**
 
@@ -692,7 +696,31 @@ Update `engine_topology.rs` callers to unwrap successful sandbox reset and retai
 
 Update schema comments/expected versions in `engine.rs` and `stop_migration.rs`. Build a schema-v3-shaped JSON object, omit schema-v4 `startingCapital`, and assert the schema probe returns `unsupportedSnapshotSchema` with expected `4` and actual `3`.
 
-- [ ] **Step 6: Run the core lifecycle gate**
+- [ ] **Step 6: Update both hosts so the workspace compiles**
+
+In `crates/caelum-wasm/src/lib.rs`, change `reset` to handle the new `Result` without serializing the nested Rust `Result` representation:
+
+```rust
+pub fn reset(&mut self) -> Result<JsValue, JsValue> {
+    self.inner
+        .reset()
+        .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))
+        .and_then(|snapshot| serde_wasm_bindgen::to_value(&snapshot).map_err(to_js_error))
+}
+```
+
+The error is thrown as a serialized `SandboxResetError` object; the TS-side `wasmBackend` still rejects on throw (handled by `failBackend`) until Task 4 introduces the discriminated-union contract and guard-based catch.
+
+In `src-tauri/src/lib.rs`, map `SandboxResetError` to a string for now (Task 5 replaces this with `TauriCommandError<SandboxResetError>`):
+
+```rust
+fn game_reset(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
+    let mut engine = state.lock().map_err(|error| error.to_string())?;
+    engine.reset().map_err(|error| error.to_string())
+}
+```
+
+- [ ] **Step 7: Run the core lifecycle gate and workspace check**
 
 Run:
 
@@ -701,14 +729,15 @@ cargo test -p caelum-core --test sandbox_engine
 cargo test -p caelum-core --test engine_topology
 cargo test -p caelum-core --test stop_migration
 cargo test -p caelum-core
+cargo check --workspace
 ```
 
-Expected: all core unit/integration tests pass.
+Expected: all core unit/integration tests pass and the entire workspace (including `caelum-wasm` and `src-tauri`) compiles.
 
-- [ ] **Step 7: Commit engine lifecycle**
+- [ ] **Step 8: Commit engine lifecycle and host adapters**
 
 ```bash
-git add crates/caelum-core/src/engine.rs crates/caelum-core/src/sandbox.rs crates/caelum-core/src/lib.rs crates/caelum-core/tests/sandbox_engine.rs crates/caelum-core/tests/engine_topology.rs crates/caelum-core/tests/stop_migration.rs
+git add crates/caelum-core/src/engine.rs crates/caelum-core/src/sandbox.rs crates/caelum-core/src/lib.rs crates/caelum-core/tests/sandbox_engine.rs crates/caelum-core/tests/engine_topology.rs crates/caelum-core/tests/stop_migration.rs crates/caelum-wasm/src/lib.rs src-tauri/src/lib.rs
 git commit -m "feat(core): reset active sandbox exactly"
 ```
 
@@ -724,10 +753,15 @@ git commit -m "feat(core): reset active sandbox exactly"
 - Modify: `crates/caelum-wasm/src/lib.rs:1-89`
 - Modify: `src/runtime/backend/wasmBackend.ts:1-87`
 - Modify: `src/runtime/backend/tauriBackend.ts:1-63`
+- Modify: `src/runtime/createGameRuntime.ts:1018-1030`
+- Modify: `src/runtime/runtimeSelectors.ts:44-46`
 - Modify: `tests/fixtures/rustSnapshot.ts:1-95`
 - Modify: `tests/runtime/wasmBackend.test.ts`
 - Modify: `tests/runtime/tauriBackend.test.ts`
 - Modify: `tests/runtime/wasmArtifact.smoke.test.ts`
+- Modify: `tests/runtime/gameRuntime.test.ts` (reset test backends to return `{ ok: true, snapshot }`)
+- Modify: `tests/runtime/backendContract.test.ts` (reset doubles return discriminated result)
+- Modify: `tests/ui/pointerEvents.test.ts` (reset doubles return discriminated result)
 
 **Interfaces:**
 - Consumes: core request/error/reset types and `WasmGameEngine`.
@@ -800,7 +834,7 @@ Validate code membership, a plain `context`, and every recognized present field.
 
 - [ ] **Step 4: Add the WASM requested constructor and typed reset**
 
-In Rust:
+In Rust, add the requested constructor (the `reset` wrapper was already updated in Task 3 to serialize `SandboxResetError` as an object):
 
 ```rust
 pub fn from_sandbox_request(request: JsValue) -> Result<WasmGameEngine, JsValue> {
@@ -812,13 +846,51 @@ pub fn from_sandbox_request(request: JsValue) -> Result<WasmGameEngine, JsValue>
 }
 ```
 
-Serialize `SandboxResetError` as an object from `reset`. Leave serialization/module failures as strings.
+Leave serialization/module failures as strings.
 
 In `wasmBackend.ts`, construct a candidate first and replace `engine` only after success. Catch only values passing the relevant guard; rethrow everything else. Return discriminated reset results.
 
-Update `tauriBackend.ts` to the same public TypeScript contract by invoking `game_create_sandbox`/`game_reset`; its real Rust commands arrive in Task 5.
+Update `tauriBackend.ts` to the same public TypeScript contract by invoking `game_create_sandbox`/`game_reset`; `game_reset` already compiles from Task 3 (stringified error) and is upgraded to `TauriCommandError<SandboxResetError>` in Task 5.
 
-- [ ] **Step 5: Add real built-artifact creation/reset tests**
+- [ ] **Step 5: Migrate TS consumers so `bun run check` compiles**
+
+The `GameBackend.reset()` signature and template union change ripple to `createGameRuntime`, `runtimeSelectors`, and every test backend double. Apply the minimal adaptations here so the TypeScript workspace compiles end-to-end; Task 6 refines the `ok: false` branch from fatal to nonfatal, and Task 7 keeps the file rename + docs.
+
+In `src/runtime/runtimeSelectors.ts`, replace the label map (Task 7 renames the shared dimension module and updates docs):
+
+```typescript
+const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
+  blankGrid: "Blank Grid",
+  crossroads: "Crossroads",
+};
+```
+
+In `src/runtime/createGameRuntime.ts`, branch on the discriminated result. For `ok: false`, route through the existing `failBackend` path for now (Task 6 replaces this with the nonfatal `sandboxResetError` channel):
+
+```typescript
+reset() {
+  clearHoverPreviewTimer();
+  previewCoordinator.invalidateRoute();
+  invalidateRoadPreview();
+  return queueBackend(async () => {
+    const result = await backend.reset();
+    if (!result.ok) {
+      return failBackend(result.error);
+    }
+    backendError = null;
+    rejection = null;
+    state = normalizeRustSnapshot(result.snapshot);
+    ui = createUiState();
+    return publish();
+  });
+},
+```
+
+Update every test backend double (`tests/runtime/gameRuntime.test.ts`, `tests/runtime/backendContract.test.ts`, `tests/ui/pointerEvents.test.ts`, and any other `GameBackend` implementor surfaced by `rg -n 'reset\(\)' tests`) to return `{ ok: true, snapshot: resetSnapshot }` instead of the bare snapshot. Add no `ok: false` doubles here — Task 6 introduces the typed reset rejection test backend.
+
+Update `tests/fixtures/rustSnapshot.ts` and any fixture referenced by `rg -n '"growingSuburb"|templateId' tests` to schema `4` with `templateId: "crossroads"` and `startingCapital`. Task 7 performs the exhaustive fixture/label/E2E migration; this step only updates the fixtures needed for `bun run check` and the Task 4 smoke tests to pass.
+
+- [ ] **Step 6: Add real built-artifact creation/reset tests**
 
 In `wasmArtifact.smoke.test.ts`, use the real generated module through `createWasmBackend()` and assert:
 
@@ -832,22 +904,22 @@ In `wasmArtifact.smoke.test.ts`, use the real generated module through `createWa
 
 The production changes these tests catch are bypassing Rust validation, replacing the engine before validation, stringifying domain errors, or resetting to the hard-coded default.
 
-- [ ] **Step 6: Rebuild WASM and run the host gate**
+- [ ] **Step 7: Rebuild WASM and run the host gate**
 
 Run:
 
 ```bash
 bun run wasm:build
-bunx vitest run tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts
+bunx vitest run tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/ui/pointerEvents.test.ts
 bun run check
 ```
 
 Expected: all selected tests and TypeScript/Svelte checks pass.
 
-- [ ] **Step 7: Commit the WASM/backend contract**
+- [ ] **Step 8: Commit the WASM/backend contract**
 
 ```bash
-git add crates/caelum-wasm/src/lib.rs src/domain/types.ts src/runtime/backend/types.ts src/runtime/backend/index.ts src/runtime/backend/sandboxErrors.ts src/runtime/backend/wasmBackend.ts src/runtime/backend/tauriBackend.ts tests/fixtures/rustSnapshot.ts tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts
+git add crates/caelum-wasm/src/lib.rs src/domain/types.ts src/runtime/backend/types.ts src/runtime/backend/index.ts src/runtime/backend/sandboxErrors.ts src/runtime/backend/wasmBackend.ts src/runtime/backend/tauriBackend.ts src/runtime/createGameRuntime.ts src/runtime/runtimeSelectors.ts tests/fixtures/rustSnapshot.ts tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/backendContract.test.ts tests/ui/pointerEvents.test.ts
 git commit -m "feat(runtime): expose sandbox factory through WASM"
 ```
 
@@ -860,7 +932,7 @@ git commit -m "feat(runtime): expose sandbox factory through WASM"
 - Modify: `tests/runtime/tauriBackend.test.ts`
 
 **Interfaces:**
-- Consumes: `GameEngine::from_sandbox_request`, fallible `GameEngine::reset`, `SandboxCreationRequest`, and serialized domain errors.
+- Consumes: `GameEngine::from_sandbox_request`, fallible `GameEngine::reset`, `SandboxCreationRequest`, and serialized domain errors. The `game_reset` command already compiles from Task 3 (stringified `SandboxResetError`); this task introduces `TauriCommandError<E>` and upgrades both commands to typed domain/host error transport.
 - Produces:
 
 ```rust
@@ -1011,6 +1083,15 @@ Assert after `await runtime.reset()`:
 - `runtime.isRunning()` remains true when started;
 - a subsequent `setSpeed(2)` reaches the backend.
 
+Add a pending-preview rejection test: arm a bus/metro route draft, add waypoints so a route preview is in flight (`ui.routeDraft.previewPending === true` and a `previewCoordinator.requestRoute` promise is unresolved), then call `runtime.reset()` against the `ok: false` backend. Assert after the reset resolves:
+
+- `ui.routeDraft` is still present (not cleared);
+- `ui.routeDraft.previewPending` is still `true`;
+- the in-flight `requestRoute` promise resolves to the preview response (not `null`), i.e. the route epoch was NOT bumped by reset;
+- `ui.roadMutationPreview` and the hover preview timer are untouched (a scheduled hover preview still fires).
+
+This catches the regression where the reset preamble invalidates previews before the backend result is known, disturbing UI state on a typed rejection.
+
 Add a separate rejected-promise test proving reset still sets `backendError`, stops the runtime, and prevents a subsequent backend call.
 
 - [ ] **Step 2: Run the runtime test and verify red**
@@ -1025,22 +1106,30 @@ Expected: type/test failure because `RuntimeSnapshot` and reset do not distingui
 
 - [ ] **Step 3: Implement the lifecycle channel without touching shell errors**
 
-Initialize `sandboxResetError = null`, include it in `getSnapshot`, and branch:
+Initialize `sandboxResetError = null`, include it in `getSnapshot`, and move the preview invalidation preamble INTO the success branch so a typed rejection does not disturb pending previews:
 
 ```typescript
-const result = await backend.reset();
-if (!result.ok) {
-  sandboxResetError = result.error;
-  return publish();
-}
-
-sandboxResetError = null;
-backendError = null;
-rejection = null;
-state = normalizeRustSnapshot(result.snapshot);
-ui = createUiState();
-return publish();
+reset() {
+  return queueBackend(async () => {
+    const result = await backend.reset();
+    if (!result.ok) {
+      sandboxResetError = result.error;
+      return publish();
+    }
+    clearHoverPreviewTimer();
+    previewCoordinator.invalidateRoute();
+    invalidateRoadPreview();
+    sandboxResetError = null;
+    backendError = null;
+    rejection = null;
+    state = normalizeRustSnapshot(result.snapshot);
+    ui = createUiState();
+    return publish();
+  });
+},
 ```
+
+The previous preamble (`clearHoverPreviewTimer` / `invalidateRoute` / `invalidateRoadPreview` before the backend call) is removed from `reset()` — it bumped the route epoch and cancelled the hover timer before the result was known, so an `ok: false` response would resolve an in-flight route preview as `null` (clearing `previewPending`) and prevent a scheduled hover preview from firing. On success, invalidation still runs before `ui = createUiState()` replaces the UI, so stale previews do not leak into the fresh state.
 
 Do not set `dead`, call `stop`, clear the gameplay rejection, or replace UI for `ok: false`. Leave rejected promises on the existing `failBackend` path. Keep the typed reset error until the next successful reset.
 
@@ -1069,8 +1158,7 @@ git commit -m "feat(runtime): surface sandbox reset errors nonfatally"
 **Files:**
 - Rename: `src/scenario/growingSuburb.ts` → `src/scenario/sandbox.ts`
 - Modify: all imports returned by `rg -l 'scenario/growingSuburb' src tests`
-- Modify: `src/runtime/runtimeSelectors.ts:44-46`
-- Modify: `tests/fixtures/rustSnapshot.ts`
+- Modify: `tests/fixtures/rustSnapshot.ts` (exhaustive migration beyond the Task 4 minimal subset)
 - Modify: `tests/helpers/gameState.ts`
 - Modify: `tests/e2e/helpers.ts`
 - Modify: `tests/e2e/roundabouts.spec.ts`
@@ -1085,15 +1173,8 @@ git commit -m "feat(runtime): surface sandbox reset errors nonfatally"
 - Modify: `docs/architecture.md`
 
 **Interfaces:**
-- Consumes: schema-v4 domain contract and canonical template labels.
-- Produces:
-
-```typescript
-const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
-  blankGrid: "Blank Grid",
-  crossroads: "Crossroads",
-};
-```
+- Consumes: schema-v4 domain contract and canonical template labels. The `SANDBOX_TEMPLATE_LABELS` map and the minimal fixture subset were already migrated in Task 4 so `bun run check` compiles; this task performs the exhaustive fixture/E2E/docs migration and the shared-dimension module rename.
+- Produces: exhaustive schema-v4 fixture/label/E2E/docs coverage with no remaining `"growingSuburb"` or schema-v3 references.
 
 - [ ] **Step 1: Write failing selector/UI expectations**
 
