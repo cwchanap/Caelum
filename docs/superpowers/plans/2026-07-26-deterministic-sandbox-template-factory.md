@@ -1129,10 +1129,10 @@ Add Blank Grid fixture overrides only where a test explicitly exercises that tem
 Run:
 
 ```bash
-rg -n '"growingSuburb"|schema-v3|schemaVersion.?[:=].?3|scenario/growingSuburb' crates src src-tauri tests CLAUDE.md docs/architecture.md
+rg -n '"growingSuburb"|schema-v3|schemaVersion.?[:=].?3|SNAPSHOT_SCHEMA_VERSION\s*[:=]\s*3|schema_version\s*[:=]\s*3|scenario/growingSuburb' crates src src-tauri tests CLAUDE.md docs/architecture.md
 ```
 
-Every remaining match must refer to a deliberate rejected legacy payload or historical issue text; rewrite all current-contract matches.
+The gate covers both JSON-style schema fields (`"schemaVersion": 3`) and language-level constant declarations (TypeScript `SNAPSHOT_SCHEMA_VERSION = 3`, Rust `schema_version = 3`). Every remaining match must refer to a deliberate rejected legacy payload or historical issue text; rewrite all current-contract matches.
 
 - [ ] **Step 4: Update architecture documentation**
 
@@ -1202,6 +1202,6 @@ Expected: no whitespace errors and only intentional task-owned changes.
 - [ ] **Step 8: Commit compatibility and documentation**
 
 ```bash
-git add src/scenario/growingSuburb.ts src/scenario/sandbox.ts src/runtime/runtimeSelectors.ts tests/fixtures/rustSnapshot.ts tests/helpers/gameState.ts tests/e2e/helpers.ts tests/e2e/roundabouts.spec.ts tests/e2e/smoke.spec.ts tests/runtime/backendContract.test.ts tests/runtime/e2eHelpers.test.ts tests/runtime/runtimeSelectors.test.ts tests/runtime/wasmBackend.test.ts tests/ui/appShell.test.ts tests/ui/hudPanels.test.ts CLAUDE.md docs/architecture.md
+git add src/scenario/sandbox.ts src/runtime/runtimeSelectors.ts tests/fixtures/rustSnapshot.ts tests/helpers/gameState.ts tests/e2e/helpers.ts tests/e2e/roundabouts.spec.ts tests/e2e/smoke.spec.ts tests/runtime/backendContract.test.ts tests/runtime/e2eHelpers.test.ts tests/runtime/runtimeSelectors.test.ts tests/runtime/wasmBackend.test.ts tests/ui/appShell.test.ts tests/ui/hudPanels.test.ts CLAUDE.md docs/architecture.md
 git commit -m "docs: align sandbox factory compatibility contracts"
 ```
