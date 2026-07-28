@@ -1,0 +1,67 @@
+use caelum_core::{GameEngine, GameIntent};
+
+#[test]
+fn save_changes_only_paused_on_a_validated_clone() {
+    let mut engine = GameEngine::new();
+    let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
+    assert!(resumed.applied);
+    let before = engine.snapshot();
+
+    let saved = engine.snapshot_for_save().unwrap();
+
+    assert!(saved.paused);
+    assert_eq!(engine.snapshot(), before);
+    let mut expected = before;
+    expected.paused = true;
+    assert_eq!(saved, expected);
+}
+
+#[test]
+fn invalid_live_state_cannot_be_handed_out_for_save() {
+    let mut engine = GameEngine::new();
+    engine.set_budget_for_test(-1);
+
+    assert!(engine.snapshot_for_save().is_err());
+}
+
+#[test]
+fn strict_construction_preserves_the_snapshot_and_rebuilds_equal_topology() {
+    let source = GameEngine::new();
+    let expected_snapshot = source.snapshot_for_save().unwrap();
+    let expected_topology = source.road_topology_for_test().clone();
+
+    let restored = GameEngine::from_snapshot(expected_snapshot.clone()).unwrap();
+
+    assert_eq!(restored.snapshot(), expected_snapshot);
+    assert_eq!(restored.road_topology_for_test(), &expected_topology);
+}
+
+#[test]
+fn late_restore_failure_preserves_snapshot_and_topology() {
+    let mut engine = GameEngine::new();
+    let before_snapshot = engine.snapshot();
+    let before_topology = engine.road_topology_for_test().clone();
+    let mut corrupt = before_snapshot.clone();
+    corrupt.metrics.total_wait_seconds = f64::NAN;
+
+    assert!(engine.restore_snapshot(corrupt).is_err());
+
+    assert_eq!(engine.snapshot(), before_snapshot);
+    assert_eq!(engine.road_topology_for_test(), &before_topology);
+}
+
+#[test]
+fn valid_restore_swaps_snapshot_and_topology_together() {
+    let mut source = GameEngine::new();
+    let changed = source.dispatch(GameIntent::SetSpeed { speed: 2 });
+    assert!(changed.applied);
+    let expected_snapshot = source.snapshot_for_save().unwrap();
+    let expected_topology = source.road_topology_for_test().clone();
+
+    let mut target = GameEngine::new();
+    let restored = target.restore_snapshot(expected_snapshot.clone()).unwrap();
+
+    assert_eq!(restored, expected_snapshot);
+    assert_eq!(target.snapshot(), expected_snapshot);
+    assert_eq!(target.road_topology_for_test(), &expected_topology);
+}

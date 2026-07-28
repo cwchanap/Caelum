@@ -8,7 +8,7 @@ use crate::model::{
     GameMap, Heading, LegFailureReason, MovementKind, PathGeometry, Point, RoadPathStep,
     RoadStructure, TransitPath, TripPosition,
 };
-use crate::rejection::GameplayResult;
+use crate::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use crate::roundabouts::compile_roundabout_transitions;
 
 pub const BUS_TILE_MILLIS: u32 = 1_250;
@@ -37,6 +37,32 @@ pub struct RoadTopology {
     transitions: BTreeMap<RoadState, Vec<RoadTransition>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoadTopologyCompileError {
+    UnsafeRoundaboutPortMapping {
+        structure_id: String,
+        footprint: Vec<Point>,
+    },
+}
+
+impl From<RoadTopologyCompileError> for GameplayRejection {
+    fn from(error: RoadTopologyCompileError) -> Self {
+        match error {
+            RoadTopologyCompileError::UnsafeRoundaboutPortMapping {
+                structure_id,
+                footprint,
+            } => Self {
+                code: RejectionCode::UnsafeRoundaboutPortMapping,
+                context: RejectionContext {
+                    structure_id: Some(structure_id),
+                    footprint,
+                    ..RejectionContext::default()
+                },
+            },
+        }
+    }
+}
+
 impl RoadTopology {
     /// An empty topology with no transitions. Used as a panic-free fallback
     /// when `compile` fails on a snapshot that is expected to be trivially
@@ -50,8 +76,8 @@ impl RoadTopology {
         }
     }
 
-    pub fn compile(map: &GameMap) -> GameplayResult<Self> {
-        let ordinary = compile_reciprocal_lane_transitions(map)?;
+    pub fn compile(map: &GameMap) -> Result<Self, RoadTopologyCompileError> {
+        let ordinary = compile_reciprocal_lane_transitions(map);
         let structures = compile_structure_transitions(map)?;
         Ok(Self {
             transitions: merge_and_canonicalize(ordinary, structures),
@@ -227,7 +253,7 @@ pub fn movement_extra_millis(movement: MovementKind) -> u32 {
 
 type CompiledTransition = (RoadState, RoadTransition);
 
-fn compile_reciprocal_lane_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTransition>> {
+fn compile_reciprocal_lane_transitions(map: &GameMap) -> Vec<CompiledTransition> {
     let mut compiled = Vec::new();
     for tile in &map.tiles {
         if tile.kind != "road" || tile.road_structure_id.is_some() {
@@ -287,10 +313,12 @@ fn compile_reciprocal_lane_transitions(map: &GameMap) -> GameplayResult<Vec<Comp
             }
         }
     }
-    Ok(compiled)
+    compiled
 }
 
-fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTransition>> {
+fn compile_structure_transitions(
+    map: &GameMap,
+) -> Result<Vec<CompiledTransition>, RoadTopologyCompileError> {
     let mut structures: Vec<_> = map.road_structures.iter().collect();
     structures.sort_by(|left, right| left.id().cmp(right.id()));
     let mut compiled = Vec::new();
@@ -298,7 +326,7 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
     for structure in structures {
         match structure {
             RoadStructure::AutomaticJunction { .. } => {
-                compiled.extend(compile_automatic_junction_transitions(map, structure)?);
+                compiled.extend(compile_automatic_junction_transitions(map, structure));
             }
             RoadStructure::Roundabout {
                 id,
@@ -338,7 +366,7 @@ fn compile_structure_transitions(map: &GameMap) -> GameplayResult<Vec<CompiledTr
 fn compile_automatic_junction_transitions(
     map: &GameMap,
     structure: &RoadStructure,
-) -> GameplayResult<Vec<CompiledTransition>> {
+) -> Vec<CompiledTransition> {
     let mut compiled = Vec::new();
     let mut ports: Vec<_> = structure.ports().iter().collect();
     ports.sort_by(|left, right| {
@@ -413,7 +441,7 @@ fn compile_automatic_junction_transitions(
             ));
         }
     }
-    Ok(compiled)
+    compiled
 }
 
 fn merge_and_canonicalize(

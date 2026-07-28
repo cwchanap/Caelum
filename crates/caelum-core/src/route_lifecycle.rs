@@ -156,6 +156,61 @@ pub fn recompute_all_routes(
     candidate
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RouteDerivedState {
+    pub route_id: String,
+    pub mode: TransitMode,
+    pub legs: Vec<RouteLegPath>,
+    pub path_broken: bool,
+}
+
+pub(crate) fn derive_route_states(
+    snapshot: &GameSnapshot,
+    context: RoutingContext<'_>,
+) -> Vec<RouteDerivedState> {
+    let mut derived =
+        Vec::with_capacity(snapshot.transit.routes.len() + snapshot.transit.metro_lines.len());
+    for route in &snapshot.transit.routes {
+        let resolved = resolve_route_legs(
+            snapshot,
+            context,
+            TransitMode::Bus,
+            &route.stop_ids,
+            route.pattern,
+        );
+        let legs = merge_resolved_legs(Some(&route.legs), resolved);
+        let path_broken = legs
+            .iter()
+            .any(|leg| leg.status != RouteLegStatus::Connected);
+        derived.push(RouteDerivedState {
+            route_id: route.id.clone(),
+            mode: TransitMode::Bus,
+            legs,
+            path_broken,
+        });
+    }
+    for line in &snapshot.transit.metro_lines {
+        let resolved = resolve_route_legs(
+            snapshot,
+            context,
+            TransitMode::Metro,
+            &line.station_ids,
+            line.pattern,
+        );
+        let legs = merge_resolved_legs(Some(&line.legs), resolved);
+        let path_broken = legs
+            .iter()
+            .any(|leg| leg.status != RouteLegStatus::Connected);
+        derived.push(RouteDerivedState {
+            route_id: line.id.clone(),
+            mode: TransitMode::Metro,
+            legs,
+            path_broken,
+        });
+    }
+    derived
+}
+
 fn recompute_bus_routes(
     previous: &GameSnapshot,
     candidate: &mut GameSnapshot,
@@ -1061,6 +1116,30 @@ mod tests {
         TransitMode, TransitNodeStatus, TripPosition, Vehicle,
     };
     use crate::state::create_initial_snapshot;
+
+    #[test]
+    fn route_state_oracle_is_read_only_and_idempotent() {
+        let snapshot = create_initial_snapshot();
+        let topology = crate::road_topology::RoadTopology::compile(&snapshot.map).unwrap();
+        let before = snapshot.clone();
+
+        let first = derive_route_states(
+            &snapshot,
+            RoutingContext {
+                road_topology: &topology,
+            },
+        );
+        let second = derive_route_states(
+            &snapshot,
+            RoutingContext {
+                road_topology: &topology,
+            },
+        );
+
+        assert!(first.is_empty());
+        assert_eq!(first, second);
+        assert_eq!(snapshot, before);
+    }
 
     /// Control: Line geometry step_progress uses only add/mul/div (no
     /// transcendentals), so it must be bit-identical across all hosts.

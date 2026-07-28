@@ -65,13 +65,11 @@ describe("real WASM artifact smoke", () => {
     const replacement: RustGameSnapshot = {
       ...initial,
       time: 123.5,
-      day: 4,
-      clockMinutes: 615,
+      day: 0,
+      clockMinutes: 148,
       speed: 4,
-      paused: false,
+      paused: true,
       budget: 110_000,
-      tripSequenceDay: 4,
-      nextTripSequence: 19,
     };
 
     expect(backend.loadSnapshot).toBeDefined();
@@ -80,13 +78,11 @@ describe("real WASM artifact smoke", () => {
     expect(loaded).toMatchObject({
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
       time: 123.5,
-      day: 4,
-      clockMinutes: 615,
+      day: 0,
+      clockMinutes: 148,
       speed: 4,
-      paused: false,
+      paused: true,
       budget: 110_000,
-      tripSequenceDay: 4,
-      nextTripSequence: 19,
       map: {
         width: initial.map.width,
         height: initial.map.height,
@@ -213,10 +209,24 @@ describe("real WASM artifact smoke", () => {
     }
   });
 
-  it("rejects a schema-v3 save missing required v4 fields with unsupportedSnapshotSchema", async () => {
+  it("rejects an unpaused schema-v4 snapshot with the persistence error", async () => {
+    const backend = await createWasmBackend();
+    const raw = await backend.snapshot();
+    raw.paused = false;
+
+    await expect(backend.loadSnapshot!(raw)).rejects.toMatchObject({
+      code: "invalidModeSettings",
+      context: {
+        field: "paused",
+        reason: { kind: "persistenceRequiresPaused" },
+      },
+    });
+  });
+
+  it("rejects a schema-v3 save missing required v4 fields with unsupportedSchema", async () => {
     // A legacy schema-v3 save lacks the required v4 `startingCapital` field. The two-phase
-    // probe must reject it with the structured `unsupportedSnapshotSchema` code
-    // (surfaced as a serialized GameplayRejection object) instead of a generic
+    // probe must reject it with the structured `unsupportedSchema` code
+    // (surfaced as a serialized PersistenceError object) instead of a generic
     // missing-field serde error string.
     const backend = await createWasmBackend();
     const raw = await backend.snapshot();
@@ -229,10 +239,10 @@ describe("real WASM artifact smoke", () => {
     await expect(
       backend.loadSnapshot!(legacy as RustGameSnapshot),
     ).rejects.toMatchObject({
-      code: "unsupportedSnapshotSchema",
+      code: "unsupportedSchema",
       context: {
-        expectedSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
-        actualSchemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
+        expected: SNAPSHOT_SCHEMA_VERSION,
+        actual: SNAPSHOT_SCHEMA_VERSION - 1,
       },
     });
   });

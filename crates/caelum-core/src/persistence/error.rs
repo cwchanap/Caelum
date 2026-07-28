@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{Heading, Point};
+use crate::road_topology::RoadTopologyCompileError;
 
 pub type PersistenceResult<T> = Result<T, PersistenceError>;
 
@@ -401,4 +402,20 @@ pub enum RoadTopologyError {
         structure_id: String,
         footprint: Vec<Point>,
     },
+}
+
+impl From<RoadTopologyCompileError> for PersistenceError {
+    fn from(error: RoadTopologyCompileError) -> Self {
+        match error {
+            RoadTopologyCompileError::UnsafeRoundaboutPortMapping {
+                structure_id,
+                footprint,
+            } => Self::InvalidRoadTopology {
+                reason: RoadTopologyError::UnsafeRoundaboutPortMapping {
+                    structure_id,
+                    footprint,
+                },
+            },
+        }
+    }
 }

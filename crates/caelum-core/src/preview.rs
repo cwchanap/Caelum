@@ -270,8 +270,8 @@ pub fn preview_road_mutation(
     };
     let topology = match RoadTopology::compile(&candidate.snapshot.map) {
         Ok(topology) => topology,
-        Err(rejection) => {
-            return rejected_road_preview(snapshot, generation, &request.mutation, rejection)
+        Err(error) => {
+            return rejected_road_preview(snapshot, generation, &request.mutation, error.into())
         }
     };
     let authored_tiles = candidate

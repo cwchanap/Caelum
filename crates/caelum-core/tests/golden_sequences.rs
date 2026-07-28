@@ -1,3 +1,5 @@
+mod common;
+
 use caelum_core::model::{
     MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
 };
@@ -87,7 +89,7 @@ fn nearby_walker_campaign_engine() -> GameEngine {
     let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
     snapshot.rules = rules;
     snapshot.scenario = scenario;
-    GameEngine::from_snapshot(snapshot).unwrap()
+    common::running_engine_from_fixture(snapshot)
 }
 
 /// Golden trace over a full day-0 commute. By 900s every resident has completed the

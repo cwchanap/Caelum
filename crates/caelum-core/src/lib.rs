@@ -59,9 +59,9 @@ pub use model::{
     SNAPSHOT_SCHEMA_VERSION,
 };
 pub use persistence::{
-    AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
-    NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
-    RoadTopologyError, ScenarioError, SnapshotField, TileError,
+    validate_snapshot, AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef,
+    MapSize, ModeError, NumericError, OwnershipError, PersistenceError, PersistenceResult,
+    RoadStructureError, RoadTopologyError, ScenarioError, SnapshotField, TileError,
 };
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,

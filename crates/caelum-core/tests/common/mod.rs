@@ -4,9 +4,11 @@
 //! live here and are pulled in via `mod common;` (with `#[path]` when the test
 //! file is not directly under `tests/`).
 
+#![allow(dead_code)]
+
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
-use caelum_core::GameSnapshot;
+use caelum_core::{GameEngine, GameIntent, GameSnapshot};
 
 /// A campaign-mode `GameSnapshot` for the Growing Suburb scenario with the
 /// default objective thresholds and no growth waves. Used by integration tests
@@ -17,4 +19,17 @@ pub fn campaign_state() -> GameSnapshot {
     state.rules = rules;
     state.scenario = scenario;
     state
+}
+
+pub fn strict_engine_from_fixture(mut snapshot: GameSnapshot) -> GameEngine {
+    snapshot.paused = true;
+    GameEngine::from_snapshot(snapshot).expect("fixture must be persistence-valid")
+}
+
+pub fn running_engine_from_fixture(snapshot: GameSnapshot) -> GameEngine {
+    let mut engine = strict_engine_from_fixture(snapshot);
+    let result = engine.dispatch(GameIntent::SetPaused { paused: false });
+    assert!(result.applied, "fixture must resume: {result:?}");
+    assert!(result.rejection.is_none());
+    engine
 }

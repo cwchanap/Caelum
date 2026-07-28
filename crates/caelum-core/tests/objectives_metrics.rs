@@ -6,7 +6,7 @@ use caelum_core::{
     objectives,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
     state::create_initial_snapshot,
-    GameEngine, GameIntent,
+    GameEngine, GameIntent, ModeError, PersistenceError, SnapshotField,
 };
 
 mod common;
@@ -150,9 +150,8 @@ fn already_finished_objective_states_are_preserved() {
 #[test]
 fn sandbox_with_served_demand_runs_past_campaign_survival_time() {
     let mut snapshot = create_initial_snapshot();
-    snapshot.paused = false;
     snapshot.metrics.completed_trips = 1;
-    let mut engine = GameEngine::from_snapshot(snapshot).unwrap();
+    let mut engine = common::running_engine_from_fixture(snapshot);
 
     let result = engine.tick(1_201.0);
 
@@ -310,15 +309,14 @@ fn sandbox_and_objective_less_campaign_use_default_retention() {
 }
 
 #[test]
-fn loaded_terminal_sandbox_remains_frozen() {
+fn terminal_sandbox_snapshot_is_rejected_by_persistence() {
     let mut snapshot = create_initial_snapshot();
-    snapshot.paused = false;
     snapshot.metrics.state = MetricsState::Won;
-    let mut engine = GameEngine::from_snapshot(snapshot).unwrap();
-
-    let result = engine.tick(60.0);
-
-    assert!(!result.applied);
-    assert_eq!(result.snapshot.time, 0.0);
-    assert_eq!(result.snapshot.metrics.state, MetricsState::Won);
+    assert_eq!(
+        GameEngine::from_snapshot(snapshot).err().unwrap(),
+        PersistenceError::InvalidModeSettings {
+            field: SnapshotField::MetricsState,
+            reason: ModeError::SandboxTerminalState,
+        }
+    );
 }

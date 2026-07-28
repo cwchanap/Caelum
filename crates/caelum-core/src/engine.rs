@@ -1,7 +1,8 @@
 use crate::areas;
 use crate::buildings;
 use crate::intent::{DispatchContext, DispatchResult, GameIntent};
-use crate::model::{GameSnapshot, Point, SNAPSHOT_SCHEMA_VERSION};
+use crate::model::{GameSnapshot, Point};
+use crate::persistence::{prepare_snapshot, validate_snapshot, PersistenceResult};
 use crate::preview::{
     self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
     RoutePreviewResponse,
@@ -244,42 +245,33 @@ impl GameEngine {
         })
     }
 
-    /// Construct an engine from a serialized schema-v4 snapshot, normalizing
-    /// roadside stop state before rebuilding the non-serialized topology cache.
-    pub fn from_snapshot(snapshot: GameSnapshot) -> GameplayResult<Self> {
-        // Defense-in-depth: the WASM and Tauri hosts each probe
-        // `schemaVersion` before deserializing the full `GameSnapshot` (see
-        // `caelum-wasm/src/lib.rs::WasmGameEngine::from_snapshot` and
-        // `src-tauri/src/lib.rs::game_load_snapshot`) so a legacy schema-v3
-        // save is rejected with a structured `UnsupportedSnapshotSchema` code
-        // rather than a generic missing-field serde error. This engine-level
-        // re-check guards against direct Rust callers that bypass the host
-        // probe; the three checks are intentionally redundant.
-        if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
-            return Err(GameplayRejection::unsupported_snapshot_schema(
-                snapshot.schema_version,
-            ));
-        }
-        let normalized = stop_access::normalize_snapshot_stops(snapshot);
-        let road_topology = RoadTopology::compile(&normalized.map)?;
-        // Saved route legs are derived state. Re-resolve them after stop access
-        // normalization so they cannot continue to reference removed roads.
-        let previous = normalized.clone();
-        let snapshot = route_lifecycle::recompute_all_routes(
-            &previous,
-            normalized,
-            RoutingContext {
-                road_topology: &road_topology,
-            },
-        );
+    /// Construct an engine from an already-paused, persistence-valid schema-v4
+    /// snapshot. Serialized fields are retained exactly; only the topology cache
+    /// is rebuilt.
+    pub fn from_snapshot(snapshot: GameSnapshot) -> PersistenceResult<Self> {
+        let prepared = prepare_snapshot(snapshot)?;
         Ok(Self {
-            snapshot,
-            road_topology,
+            snapshot: prepared.snapshot,
+            road_topology: prepared.road_topology,
         })
     }
 
     pub fn snapshot(&self) -> GameSnapshot {
         self.snapshot.clone()
+    }
+
+    pub fn snapshot_for_save(&self) -> PersistenceResult<GameSnapshot> {
+        let mut candidate = self.snapshot.clone();
+        candidate.paused = true;
+        validate_snapshot(&candidate)?;
+        Ok(candidate)
+    }
+
+    pub fn restore_snapshot(&mut self, snapshot: GameSnapshot) -> PersistenceResult<GameSnapshot> {
+        let prepared = prepare_snapshot(snapshot)?;
+        self.snapshot = prepared.snapshot;
+        self.road_topology = prepared.road_topology;
+        Ok(self.snapshot())
     }
 
     pub fn reset(&mut self) -> Result<GameSnapshot, SandboxResetError> {
@@ -604,7 +596,9 @@ impl GameEngine {
         } else {
             match RoadTopology::compile(&network_candidate.snapshot.map) {
                 Ok(topology) => topology,
-                Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+                Err(error) => {
+                    return DispatchResult::rejected(self.snapshot(), error.into());
+                }
             }
         };
         let candidate = route_lifecycle::recompute_all_routes(
