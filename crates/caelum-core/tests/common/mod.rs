@@ -6,6 +6,8 @@
 
 #![allow(dead_code)]
 
+pub mod persistence_fixtures;
+
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{GameEngine, GameIntent, GameSnapshot};

@@ -1,0 +1,264 @@
+//! Shared fixtures for the `persistence_*_validation` integration tests.
+//!
+//! Each persistence validation test file builds a persistence-valid baseline
+//! snapshot (via the engine's own intent pipeline + `snapshot_for_save`) and
+//! then mutates a single field to exercise one rejection branch. The helpers
+//! here produce those baselines so each test file does not need to reconstruct
+//! them.
+
+#![allow(dead_code)]
+
+use caelum_core::model::{
+    self, ActiveTrip, Point, RouteLeg, RoutePlan, ServicePattern, Sim, TransitMode, TripPosition,
+    TripPurpose, TripStatus, WorkerProfile,
+};
+use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
+use caelum_core::{EntityKind, EntityRef, GameEngine, GameIntent, GameSnapshot, RoadPreset};
+
+/// Dispatch an intent and assert it was applied (not rejected or unchanged).
+pub fn apply(engine: &mut GameEngine, intent: GameIntent) {
+    let result = engine.dispatch(intent);
+    assert!(
+        result.applied,
+        "fixture intent was rejected or unchanged: {:?}",
+        result.rejection
+    );
+}
+
+/// A paused, persistence-valid snapshot with a bus route (two stops + vehicle),
+/// a metro line (two stations + vehicle), residential + commercial buildings,
+/// a sim with a walking commute trip, and a riding trip on the bus route.
+pub fn rich_fixture() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+
+    // Bus road along y=5, stops at x=2 and x=10.
+    apply(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    for point in [Point { x: 2, y: 4 }, Point { x: 10, y: 4 }] {
+        apply(&mut engine, GameIntent::AddBusStop { point });
+    }
+    apply(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        },
+    );
+
+    // Metro track along y=12, stations at x=2 and x=10.
+    apply(
+        &mut engine,
+        GameIntent::LayTrackLine {
+            points: (2..=12).map(|x| Point { x, y: 12 }).collect(),
+        },
+    );
+    for point in [Point { x: 2, y: 12 }, Point { x: 10, y: 12 }] {
+        apply(&mut engine, GameIntent::AddMetroStation { point });
+    }
+    apply(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Metro,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+        },
+    );
+
+    // Residential + commercial buildings so sims can commute.
+    engine.set_budget_for_test(100_000);
+    apply(
+        &mut engine,
+        GameIntent::PaintAreaRectangle {
+            area: "residential".to_string(),
+            start: Point { x: 2, y: 2 },
+            end: Point { x: 3, y: 2 },
+        },
+    );
+    apply(
+        &mut engine,
+        GameIntent::PlaceBuilding {
+            building_type: "smallHouse".to_string(),
+            origin: Point { x: 2, y: 2 },
+            rotation: 0,
+        },
+    );
+    apply(
+        &mut engine,
+        GameIntent::PaintAreaRectangle {
+            area: "commercial".to_string(),
+            start: Point { x: 10, y: 2 },
+            end: Point { x: 11, y: 3 },
+        },
+    );
+    apply(
+        &mut engine,
+        GameIntent::PlaceBuilding {
+            building_type: "supermarket".to_string(),
+            origin: Point { x: 10, y: 2 },
+            rotation: 0,
+        },
+    );
+
+    // Run the clock long enough to spawn a sim and an active trip, then pause.
+    apply(&mut engine, GameIntent::SetPaused { paused: false });
+    assert!(engine.tick(350.9).applied);
+    let mut ticks = 0;
+    loop {
+        if !engine.snapshot().sims.is_empty()
+            && !engine.snapshot().active_trips.is_empty()
+            && engine.snapshot().active_trips.iter().any(|trip| {
+                matches!(
+                    trip.status,
+                    TripStatus::Walking | TripStatus::Waiting | TripStatus::Riding
+                )
+            })
+        {
+            break;
+        }
+        assert!(engine.tick(1.0).applied);
+        ticks += 1;
+        if ticks > 600 {
+            panic!("fixture did not produce a riding trip within 600 ticks");
+        }
+    }
+    apply(&mut engine, GameIntent::SetPaused { paused: true });
+    engine.snapshot_for_save().expect("rich fixture must save")
+}
+
+/// A minimal paused snapshot (no transit) for tests that only need the shell.
+pub fn paused_snapshot() -> GameSnapshot {
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot.paused = true;
+    snapshot
+}
+
+/// A campaign-mode paused snapshot (Growing Suburb) for rules/scenario tests.
+pub fn campaign_snapshot() -> GameSnapshot {
+    let mut snapshot = paused_snapshot();
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    snapshot.rules = rules;
+    snapshot.scenario = scenario;
+    snapshot
+}
+
+/// A paused snapshot with a single road roundabout structure, for tests that
+/// need an existing road structure on the map.
+pub fn road_with_structure() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    apply(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    apply(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: Point { x: 6, y: 5 },
+            size: model::RoundaboutSize::Compact2x2,
+        },
+    );
+    // Engine starts paused; snapshot_for_save enforces paused state.
+    engine.snapshot_for_save().expect("fixture must save")
+}
+
+/// A paused snapshot with a single bus route (two stops + one vehicle), for
+/// route shape and vehicle validation tests.
+pub fn fixture_with_bus_route() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    apply(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    for point in [Point { x: 2, y: 4 }, Point { x: 10, y: 4 }] {
+        apply(&mut engine, GameIntent::AddBusStop { point });
+    }
+    apply(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        },
+    );
+    // Engine starts paused; snapshot_for_save enforces paused state.
+    engine.snapshot_for_save().expect("fixture must save")
+}
+
+/// Build an `EntityRef` for use in expected `PersistenceError` assertions.
+pub fn entity_ref(kind: EntityKind, id: &str) -> EntityRef {
+    EntityRef {
+        kind,
+        id: id.to_string(),
+    }
+}
+
+/// Construct a worker sim with the given id, home tile, and optional workplace.
+pub fn worker_sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home,
+        position: home,
+        worker_profile: WorkerProfile::Worker,
+        shift_template: Some("standard".to_string()),
+        workplace,
+        commute_day: 0,
+        outbound_resolved_today: false,
+        outbound_arrived_today: false,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }
+}
+
+/// A paused snapshot with one worker sim and one idle commute trip, for trip
+/// endpoint and position validation tests.
+pub fn trip_fixture() -> GameSnapshot {
+    let home = Point { x: 2, y: 3 };
+    let mut snapshot = paused_snapshot();
+    snapshot.sims = vec![worker_sim("sim-001", home, Some(Point { x: 4, y: 3 }))];
+    snapshot.active_trips = vec![ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: home,
+        destination: Point { x: 4, y: 3 },
+        position: TripPosition::from(home),
+        status: TripStatus::Idle,
+        deadline: 900.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+    }];
+    snapshot.trip_sequence_day = 0;
+    snapshot.next_trip_sequence = 2;
+    snapshot
+}
+
+/// A walking `RoutePlan` from `home` to `destination` with the correct
+/// estimated seconds, for positive router validation cases.
+pub fn walking_plan(home: Point, destination: Point) -> RoutePlan {
+    RoutePlan {
+        legs: vec![RouteLeg {
+            mode: TransitMode::Walk,
+            from: home,
+            to: destination,
+            line_id: None,
+            service_direction: None,
+            board_itinerary_index: None,
+            alight_itinerary_index: None,
+        }],
+        estimated_seconds: f64::from(
+            (home.x - destination.x).abs() + (home.y - destination.y).abs(),
+        ) * 20.0,
+    }
+}
