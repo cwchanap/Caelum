@@ -4,8 +4,8 @@ use crate::building_catalog::building_definition;
 use crate::engine::RoutingContext;
 use crate::ids::entity_id;
 use crate::model::{
-    GameSnapshot, Platform, RouteLegPath, Sim, TransitMode, TransitNodeStatus, TransitPath,
-    TripStatus,
+    ActiveTrip, GameSnapshot, MetroLine, PathGeometry, Platform, Point, Route, RouteLegPath, Sim,
+    Station, Stop, TransitMode, TransitNodeStatus, TransitPath, TripPosition, TripStatus, Vehicle,
 };
 use crate::platforms;
 use crate::road_topology::RoadTopology;
@@ -21,11 +21,56 @@ use super::{
 pub(super) struct EntityIndexes<'a> {
     kinds: BTreeMap<&'a str, EntityKind>,
     sims: BTreeMap<&'a str, &'a Sim>,
+    trips: BTreeMap<&'a str, &'a ActiveTrip>,
+    stops: BTreeMap<&'a str, &'a Stop>,
+    stations: BTreeMap<&'a str, &'a Station>,
+    platforms: BTreeMap<&'a str, &'a Platform>,
+    routes: BTreeMap<&'a str, &'a Route>,
+    metro_lines: BTreeMap<&'a str, &'a MetroLine>,
+    vehicles: BTreeMap<&'a str, &'a Vehicle>,
+    /// Reverse index: waypoint node ID → route/line IDs that include it.
+    node_routes: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    /// Reverse index: trip ID → vehicle IDs that carry it as a passenger.
+    trip_vehicles: BTreeMap<&'a str, BTreeSet<&'a str>>,
 }
 
 impl EntityIndexes<'_> {
     pub(super) fn sim(&self, id: &str) -> Option<&Sim> {
         self.sims.get(id).copied()
+    }
+
+    pub(super) fn trip(&self, id: &str) -> Option<&ActiveTrip> {
+        self.trips.get(id).copied()
+    }
+
+    pub(super) fn stop(&self, id: &str) -> Option<&Stop> {
+        self.stops.get(id).copied()
+    }
+
+    pub(super) fn station(&self, id: &str) -> Option<&Station> {
+        self.stations.get(id).copied()
+    }
+
+    pub(super) fn vehicle(&self, id: &str) -> Option<&Vehicle> {
+        self.vehicles.get(id).copied()
+    }
+
+    pub(super) fn route(&self, id: &str) -> Option<&Route> {
+        self.routes.get(id).copied()
+    }
+
+    pub(super) fn metro_line(&self, id: &str) -> Option<&MetroLine> {
+        self.metro_lines.get(id).copied()
+    }
+
+    /// Returns the set of route/line IDs that include `node_id` as a waypoint.
+    pub(super) fn routes_for_node(&self, node_id: &str) -> Option<&BTreeSet<&str>> {
+        self.node_routes.get(node_id)
+    }
+
+    /// Returns the set of vehicle IDs that carry `trip_id` as a passenger.
+    pub(super) fn vehicles_for_trip(&self, trip_id: &str) -> Option<&BTreeSet<&str>> {
+        self.trip_vehicles.get(trip_id)
     }
 }
 
@@ -36,6 +81,15 @@ pub(super) fn validate_entities<'a>(
     let mut indexes = EntityIndexes {
         kinds: BTreeMap::new(),
         sims: BTreeMap::new(),
+        trips: BTreeMap::new(),
+        stops: BTreeMap::new(),
+        stations: BTreeMap::new(),
+        platforms: BTreeMap::new(),
+        routes: BTreeMap::new(),
+        metro_lines: BTreeMap::new(),
+        vehicles: BTreeMap::new(),
+        node_routes: BTreeMap::new(),
+        trip_vehicles: BTreeMap::new(),
     };
     for building in &snapshot.buildings {
         register(&mut indexes, EntityKind::Building, &building.id, "building")?;
@@ -46,33 +100,62 @@ pub(super) fn validate_entities<'a>(
     }
     for trip in &snapshot.active_trips {
         register_trip(&mut indexes, &trip.id)?;
+        indexes.trips.insert(&trip.id, trip);
     }
     for stop in &snapshot.transit.stops {
         register(&mut indexes, EntityKind::Stop, &stop.id, "stop")?;
+        indexes.stops.insert(&stop.id, stop);
         for platform in &stop.platforms {
             register_platform(&mut indexes, platform, &stop.id)?;
+            indexes.platforms.insert(&platform.id, platform);
         }
     }
     for station in &snapshot.transit.stations {
         register(&mut indexes, EntityKind::Station, &station.id, "station")?;
+        indexes.stations.insert(&station.id, station);
         for platform in &station.platforms {
             register_platform(&mut indexes, platform, &station.id)?;
+            indexes.platforms.insert(&platform.id, platform);
         }
     }
     for route in &snapshot.transit.routes {
         register(&mut indexes, EntityKind::BusRoute, &route.id, "route")?;
+        indexes.routes.insert(&route.id, route);
+        for stop_id in &route.stop_ids {
+            indexes
+                .node_routes
+                .entry(stop_id.as_str())
+                .or_default()
+                .insert(&route.id);
+        }
     }
     for line in &snapshot.transit.metro_lines {
         register(&mut indexes, EntityKind::MetroLine, &line.id, "metro")?;
+        indexes.metro_lines.insert(&line.id, line);
+        for station_id in &line.station_ids {
+            indexes
+                .node_routes
+                .entry(station_id.as_str())
+                .or_default()
+                .insert(&line.id);
+        }
     }
     for vehicle in &snapshot.transit.vehicles {
         register(&mut indexes, EntityKind::Vehicle, &vehicle.id, "vehicle")?;
+        indexes.vehicles.insert(&vehicle.id, vehicle);
+        for passenger_id in &vehicle.passenger_ids {
+            indexes
+                .trip_vehicles
+                .entry(passenger_id.as_str())
+                .or_default()
+                .insert(&vehicle.id);
+        }
     }
 
-    validate_buildings(snapshot)?;
-    validate_nodes_and_platforms(snapshot)?;
-    validate_routes(snapshot, topology)?;
-    validate_vehicles(snapshot)?;
+    validate_buildings(snapshot, &indexes)?;
+    validate_nodes_and_platforms(snapshot, &indexes)?;
+    validate_routes(snapshot, &indexes, topology)?;
+    validate_vehicles(snapshot, &indexes)?;
     Ok(indexes)
 }
 
@@ -180,7 +263,10 @@ fn invalid_entity(kind: EntityKind, id: &str, reason: EntityError) -> Persistenc
     }
 }
 
-fn validate_buildings(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+fn validate_buildings(
+    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
+) -> PersistenceResult<()> {
     let mut occupied: BTreeMap<crate::model::Point, EntityRef> = BTreeMap::new();
     let mut claimed_nodes = BTreeSet::new();
     for building in &snapshot.buildings {
@@ -248,13 +334,13 @@ fn validate_buildings(snapshot: &GameSnapshot) -> PersistenceResult<()> {
                 });
             }
         }
-        validate_building_node(snapshot, building, definition.effect, &mut claimed_nodes)?;
+        validate_building_node(indexes, building, definition.effect, &mut claimed_nodes)?;
     }
     Ok(())
 }
 
 fn validate_building_node(
-    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
     building: &crate::model::PlacedBuilding,
     effect: &str,
     claimed_nodes: &mut BTreeSet<String>,
@@ -286,19 +372,16 @@ fn validate_building_node(
                 });
             }
             let matches = match kind {
-                EntityKind::Stop => snapshot.transit.stops.iter().any(|node| {
-                    node.id == id
-                        && node.status == TransitNodeStatus::Present
+                EntityKind::Stop => indexes.stop(id).is_some_and(|node| {
+                    node.status == TransitNodeStatus::Present
                         && node.position == building.origin
                         && ((effect == "busStop"
                             && node.kind == crate::model::BusStopKind::BusStop)
                             || (effect == "busTerminal"
                                 && node.kind == crate::model::BusStopKind::BusTerminal))
                 }),
-                EntityKind::Station => snapshot.transit.stations.iter().any(|node| {
-                    node.id == id
-                        && node.status == TransitNodeStatus::Present
-                        && node.position == building.origin
+                EntityKind::Station => indexes.station(id).is_some_and(|node| {
+                    node.status == TransitNodeStatus::Present && node.position == building.origin
                 }),
                 _ => false,
             };
@@ -314,7 +397,10 @@ fn validate_building_node(
     }
 }
 
-fn validate_nodes_and_platforms(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+fn validate_nodes_and_platforms(
+    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
+) -> PersistenceResult<()> {
     let mut anchors = BTreeMap::new();
     for stop in &snapshot.transit.stops {
         let node = entity_ref(EntityKind::Stop, &stop.id);
@@ -323,11 +409,9 @@ fn validate_nodes_and_platforms(snapshot: &GameSnapshot) -> PersistenceResult<()
             node.clone(),
             stop.status,
             stop.position,
-            snapshot
-                .transit
-                .routes
-                .iter()
-                .any(|route| route.stop_ids.contains(&stop.id)),
+            indexes
+                .routes_for_node(&stop.id)
+                .is_some_and(|routes| !routes.is_empty()),
             &mut anchors,
         )?;
         if stop.status == TransitNodeStatus::Present
@@ -343,13 +427,7 @@ fn validate_nodes_and_platforms(snapshot: &GameSnapshot) -> PersistenceResult<()
             &stop.platforms,
             platforms::bus_platforms(&stop.id, stop.kind),
         )?;
-        validate_platform_assignments(
-            snapshot,
-            &node,
-            &stop.id,
-            TransitMode::Bus,
-            &stop.platforms,
-        )?;
+        validate_platform_assignments(indexes, &node, &stop.id, TransitMode::Bus, &stop.platforms)?;
     }
     for station in &snapshot.transit.stations {
         let node = entity_ref(EntityKind::Station, &station.id);
@@ -358,11 +436,9 @@ fn validate_nodes_and_platforms(snapshot: &GameSnapshot) -> PersistenceResult<()
             node.clone(),
             station.status,
             station.position,
-            snapshot
-                .transit
-                .metro_lines
-                .iter()
-                .any(|line| line.station_ids.contains(&station.id)),
+            indexes
+                .routes_for_node(&station.id)
+                .is_some_and(|routes| !routes.is_empty()),
             &mut anchors,
         )?;
         if station.status == TransitNodeStatus::Present
@@ -383,7 +459,7 @@ fn validate_nodes_and_platforms(snapshot: &GameSnapshot) -> PersistenceResult<()
             platforms::metro_platforms(&station.id),
         )?;
         validate_platform_assignments(
-            snapshot,
+            indexes,
             &node,
             &station.id,
             TransitMode::Metro,
@@ -474,7 +550,7 @@ fn validate_platform_shape(
 }
 
 fn validate_platform_assignments(
-    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
     node: &EntityRef,
     node_id: &str,
     mode: TransitMode,
@@ -492,17 +568,11 @@ fn validate_platform_assignments(
                 });
             }
             let contains_node = match mode {
-                TransitMode::Bus => snapshot
-                    .transit
-                    .routes
-                    .iter()
-                    .find(|route| route.id == *route_id)
+                TransitMode::Bus => indexes
+                    .route(route_id)
                     .is_some_and(|route| route.stop_ids.iter().any(|id| id == node_id)),
-                TransitMode::Metro => snapshot
-                    .transit
-                    .metro_lines
-                    .iter()
-                    .find(|line| line.id == *route_id)
+                TransitMode::Metro => indexes
+                    .metro_line(route_id)
                     .is_some_and(|line| line.station_ids.iter().any(|id| id == node_id)),
                 TransitMode::Walk => false,
             };
@@ -514,23 +584,10 @@ fn validate_platform_assignments(
             }
         }
     }
-    let expected: BTreeSet<&str> = match mode {
-        TransitMode::Bus => snapshot
-            .transit
-            .routes
-            .iter()
-            .filter(|route| route.stop_ids.iter().any(|id| id == node_id))
-            .map(|route| route.id.as_str())
-            .collect(),
-        TransitMode::Metro => snapshot
-            .transit
-            .metro_lines
-            .iter()
-            .filter(|line| line.station_ids.iter().any(|id| id == node_id))
-            .map(|line| line.id.as_str())
-            .collect(),
-        TransitMode::Walk => BTreeSet::new(),
-    };
+    let expected: BTreeSet<&str> = indexes
+        .routes_for_node(node_id)
+        .map(|routes| routes.iter().copied().collect())
+        .unwrap_or_default();
     if assigned != expected {
         return Err(PersistenceError::InvalidOwnership {
             owner: node.clone(),
@@ -541,10 +598,15 @@ fn validate_platform_assignments(
     Ok(())
 }
 
-fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> PersistenceResult<()> {
+fn validate_routes(
+    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
+    topology: &RoadTopology,
+) -> PersistenceResult<()> {
     for route in &snapshot.transit.routes {
         validate_route_shape(
             snapshot,
+            indexes,
             EntityKind::BusRoute,
             &route.id,
             TransitMode::Bus,
@@ -556,6 +618,7 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
     for line in &snapshot.transit.metro_lines {
         validate_route_shape(
             snapshot,
+            indexes,
             EntityKind::MetroLine,
             &line.id,
             TransitMode::Metro,
@@ -578,7 +641,11 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
                     .routes
                     .iter_mut()
                     .find(|route| route.id == state.route_id)
-                    .expect("derived bus route retains source identity");
+                    .ok_or_else(|| PersistenceError::DanglingReference {
+                        source: entity_ref(EntityKind::BusRoute, &state.route_id),
+                        field: SnapshotField::RouteLegs,
+                        target: entity_ref(EntityKind::BusRoute, &state.route_id),
+                    })?;
                 route.legs.clone_from(&state.legs);
                 route.path_broken = state.path_broken;
             }
@@ -588,7 +655,11 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
                     .metro_lines
                     .iter_mut()
                     .find(|line| line.id == state.route_id)
-                    .expect("derived metro line retains source identity");
+                    .ok_or_else(|| PersistenceError::DanglingReference {
+                        source: entity_ref(EntityKind::MetroLine, &state.route_id),
+                        field: SnapshotField::RouteLegs,
+                        target: entity_ref(EntityKind::MetroLine, &state.route_id),
+                    })?;
                 line.legs.clone_from(&state.legs);
                 line.path_broken = state.path_broken;
             }
@@ -616,6 +687,11 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
         });
     }
     for state in derived {
+        let kind = if state.mode == TransitMode::Bus {
+            EntityKind::BusRoute
+        } else {
+            EntityKind::MetroLine
+        };
         let (kind, legs, path_broken) = match state.mode {
             TransitMode::Bus => snapshot
                 .transit
@@ -631,7 +707,11 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
                 .map(|line| (EntityKind::MetroLine, &line.legs, line.path_broken)),
             TransitMode::Walk => None,
         }
-        .expect("derived route retains source identity");
+        .ok_or_else(|| PersistenceError::DanglingReference {
+            source: entity_ref(kind, &state.route_id),
+            field: SnapshotField::RouteLegs,
+            target: entity_ref(kind, &state.route_id),
+        })?;
         let route_ref = entity_ref(kind, &state.route_id);
         if legs != &state.legs {
             return Err(PersistenceError::InvalidDerivedState {
@@ -649,8 +729,10 @@ fn validate_routes(snapshot: &GameSnapshot, topology: &RoadTopology) -> Persiste
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_route_shape(
     snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
     kind: EntityKind,
     route_id: &str,
     mode: TransitMode,
@@ -675,16 +757,8 @@ fn validate_route_shape(
             });
         }
         let exists = match mode {
-            TransitMode::Bus => snapshot
-                .transit
-                .stops
-                .iter()
-                .any(|stop| stop.id == *waypoint_id),
-            TransitMode::Metro => snapshot
-                .transit
-                .stations
-                .iter()
-                .any(|station| station.id == *waypoint_id),
+            TransitMode::Bus => indexes.stop(waypoint_id).is_some(),
+            TransitMode::Metro => indexes.station(waypoint_id).is_some(),
             TransitMode::Walk => false,
         };
         if !exists {
@@ -710,12 +784,7 @@ fn validate_route_shape(
                 reason: AssignmentError::DuplicateAssignment,
             });
         }
-        let Some(vehicle) = snapshot
-            .transit
-            .vehicles
-            .iter()
-            .find(|vehicle| vehicle.id == *vehicle_id)
-        else {
+        let Some(vehicle) = indexes.vehicle(vehicle_id) else {
             return Err(PersistenceError::DanglingReference {
                 source: route.clone(),
                 field: SnapshotField::RouteVehicleIds,
@@ -730,12 +799,13 @@ fn validate_route_shape(
         }
     }
     for leg in legs {
-        validate_route_leg(route.clone(), mode, leg)?;
+        validate_route_leg(snapshot, route.clone(), mode, leg)?;
     }
     Ok(())
 }
 
 fn validate_route_leg(
+    snapshot: &GameSnapshot,
     route: EntityRef,
     mode: TransitMode,
     leg: &RouteLegPath,
@@ -774,11 +844,79 @@ fn validate_route_leg(
                 step.travel_seconds(),
             )?;
         }
+        validate_path_structure(snapshot, route.clone(), path)?;
     }
     Ok(())
 }
 
-fn validate_vehicles(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+fn validate_path_structure(
+    snapshot: &GameSnapshot,
+    route: EntityRef,
+    path: &TransitPath,
+) -> PersistenceResult<()> {
+    let width = snapshot.map.width;
+    let height = snapshot.map.height;
+    let steps: Vec<(&Point, &PathGeometry)> = match path {
+        TransitPath::Road { steps, .. } => {
+            steps.iter().map(|s| (&s.position, &s.geometry)).collect()
+        }
+        TransitPath::Track { steps, .. } => {
+            steps.iter().map(|s| (&s.position, &s.geometry)).collect()
+        }
+    };
+    for (index, (position, geometry)) in steps.iter().enumerate() {
+        if !tile_point_in_bounds(position, width, height) {
+            return Err(PersistenceError::InvalidEntity {
+                entity: route.clone(),
+                field: SnapshotField::RouteLegs,
+                reason: EntityError::InvalidStaticShape,
+            });
+        }
+        let (geo_from, geo_to) = geometry_endpoints(geometry);
+        if !world_position_in_bounds(snapshot, &geo_from)
+            || !world_position_in_bounds(snapshot, &geo_to)
+        {
+            return Err(PersistenceError::InvalidEntity {
+                entity: route.clone(),
+                field: SnapshotField::RouteLegs,
+                reason: EntityError::InvalidStaticShape,
+            });
+        }
+        if geo_from != TripPosition::from(**position) {
+            return Err(PersistenceError::InvalidEntity {
+                entity: route.clone(),
+                field: SnapshotField::RouteLegs,
+                reason: EntityError::InvalidStaticShape,
+            });
+        }
+        if let Some((next_position, _)) = steps.get(index + 1) {
+            if geo_to != TripPosition::from(**next_position) {
+                return Err(PersistenceError::InvalidEntity {
+                    entity: route.clone(),
+                    field: SnapshotField::RouteLegs,
+                    reason: EntityError::InvalidStaticShape,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tile_point_in_bounds(point: &Point, width: u8, height: u8) -> bool {
+    point.x >= 0 && point.y >= 0 && point.x < i32::from(width) && point.y < i32::from(height)
+}
+
+fn geometry_endpoints(geometry: &PathGeometry) -> (TripPosition, TripPosition) {
+    match geometry {
+        PathGeometry::Line { from, to } => (from.clone(), to.clone()),
+        PathGeometry::QuadraticBezier { from, to, .. } => (from.clone(), to.clone()),
+    }
+}
+
+fn validate_vehicles(
+    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
+) -> PersistenceResult<()> {
     let mut line_owners = BTreeMap::new();
     for route in &snapshot.transit.routes {
         for vehicle_id in &route.vehicle_ids {
@@ -816,7 +954,7 @@ fn validate_vehicles(snapshot: &GameSnapshot) -> PersistenceResult<()> {
                 reason: AssignmentError::ModeMismatch,
             });
         }
-        let line = line_view(snapshot, vehicle.mode, &vehicle.line_id);
+        let line = line_view(indexes, vehicle.mode, &vehicle.line_id);
         let Some((waypoints, legs, vehicle_ids)) = line else {
             return Err(PersistenceError::InvalidAssignment {
                 entity,
@@ -912,11 +1050,7 @@ fn validate_vehicles(snapshot: &GameSnapshot) -> PersistenceResult<()> {
                     reason: AssignmentError::PassengerInMultipleVehicles,
                 });
             }
-            let Some(trip) = snapshot
-                .active_trips
-                .iter()
-                .find(|trip| trip.id == *passenger_id)
-            else {
+            let Some(trip) = indexes.trip(passenger_id) else {
                 return Err(PersistenceError::DanglingReference {
                     source: entity.clone(),
                     field: SnapshotField::VehiclePassengerIds,
@@ -944,35 +1078,25 @@ fn validate_vehicles(snapshot: &GameSnapshot) -> PersistenceResult<()> {
 }
 
 fn line_view<'a>(
-    snapshot: &'a GameSnapshot,
+    indexes: &'a EntityIndexes<'a>,
     mode: TransitMode,
     line_id: &str,
 ) -> Option<(&'a [String], &'a [RouteLegPath], &'a [String])> {
     match mode {
-        TransitMode::Bus => snapshot
-            .transit
-            .routes
-            .iter()
-            .find(|route| route.id == line_id)
-            .map(|route| {
-                (
-                    route.stop_ids.as_slice(),
-                    route.legs.as_slice(),
-                    route.vehicle_ids.as_slice(),
-                )
-            }),
-        TransitMode::Metro => snapshot
-            .transit
-            .metro_lines
-            .iter()
-            .find(|line| line.id == line_id)
-            .map(|line| {
-                (
-                    line.station_ids.as_slice(),
-                    line.legs.as_slice(),
-                    line.vehicle_ids.as_slice(),
-                )
-            }),
+        TransitMode::Bus => indexes.route(line_id).map(|route| {
+            (
+                route.stop_ids.as_slice(),
+                route.legs.as_slice(),
+                route.vehicle_ids.as_slice(),
+            )
+        }),
+        TransitMode::Metro => indexes.metro_line(line_id).map(|line| {
+            (
+                line.station_ids.as_slice(),
+                line.legs.as_slice(),
+                line.vehicle_ids.as_slice(),
+            )
+        }),
         TransitMode::Walk => None,
     }
 }

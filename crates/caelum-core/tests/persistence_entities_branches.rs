@@ -7,8 +7,9 @@
 mod common;
 
 use caelum_core::model::{
-    self, PlacedBuilding, Point, RouteLeg, RoutePlan, StopRoadAccess, TransitMode,
-    TransitNodeStatus, TransitPath, TripPosition, TripStatus,
+    self, Heading, MovementKind, PathGeometry, PlacedBuilding, Point, RoadPathStep, RouteLeg,
+    RoutePlan, StopRoadAccess, TransitMode, TransitNodeStatus, TransitPath, TripPosition,
+    TripStatus,
 };
 use caelum_core::{
     validate_snapshot, AssignmentError, EntityError, EntityKind, NumericError, OwnershipError,
@@ -634,6 +635,111 @@ fn vehicle_with_passenger_not_riding_is_rejected() {
         PersistenceError::InvalidAssignment {
             entity: entity_ref(EntityKind::Vehicle, "vehicle-001"),
             reason: AssignmentError::PassengerNotRiding,
+        }
+    );
+}
+
+// ===========================================================================
+// path structure: in-bounds points and step adjacency
+// ===========================================================================
+
+fn adversarial_road_path(
+    position: Point,
+    geo_from: TripPosition,
+    geo_to: TripPosition,
+) -> TransitPath {
+    TransitPath::Road {
+        steps: vec![RoadPathStep {
+            position,
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: geo_from,
+                to: geo_to,
+            },
+            travel_seconds: 1.0,
+        }],
+        total_travel_seconds: 1.0,
+    }
+}
+
+#[test]
+fn route_leg_with_out_of_bounds_step_position_is_rejected() {
+    let mut snapshot = fixture_with_bus_route();
+    // Step position at (255, 255) is outside the sandbox map bounds.
+    snapshot.transit.routes[0].legs[0].last_valid_path = Some(adversarial_road_path(
+        Point { x: 255, y: 255 },
+        TripPosition { x: 255.0, y: 255.0 },
+        TripPosition { x: 255.0, y: 255.0 },
+    ));
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidEntity {
+            entity: entity_ref(EntityKind::BusRoute, "route-001"),
+            field: SnapshotField::RouteLegs,
+            reason: EntityError::InvalidStaticShape,
+        }
+    );
+}
+
+#[test]
+fn route_leg_with_geometry_from_mismatching_step_position_is_rejected() {
+    let mut snapshot = fixture_with_bus_route();
+    // Step position is in-bounds (5, 5) but geometry.from is (3, 5) —
+    // self-inconsistency.
+    snapshot.transit.routes[0].legs[0].last_valid_path = Some(adversarial_road_path(
+        Point { x: 5, y: 5 },
+        TripPosition { x: 3.0, y: 5.0 },
+        TripPosition { x: 6.0, y: 5.0 },
+    ));
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidEntity {
+            entity: entity_ref(EntityKind::BusRoute, "route-001"),
+            field: SnapshotField::RouteLegs,
+            reason: EntityError::InvalidStaticShape,
+        }
+    );
+}
+
+#[test]
+fn route_leg_with_broken_step_adjacency_is_rejected() {
+    let mut snapshot = fixture_with_bus_route();
+    // Two steps: step[0] ends at (6, 5) but step[1] starts at (8, 5) — gap.
+    snapshot.transit.routes[0].legs[0].last_valid_path = Some(TransitPath::Road {
+        steps: vec![
+            RoadPathStep {
+                position: Point { x: 5, y: 5 },
+                entering_heading: Heading::East,
+                leaving_heading: Heading::East,
+                movement: MovementKind::Straight,
+                geometry: PathGeometry::Line {
+                    from: TripPosition { x: 5.0, y: 5.0 },
+                    to: TripPosition { x: 6.0, y: 5.0 },
+                },
+                travel_seconds: 1.0,
+            },
+            RoadPathStep {
+                position: Point { x: 8, y: 5 },
+                entering_heading: Heading::East,
+                leaving_heading: Heading::East,
+                movement: MovementKind::Straight,
+                geometry: PathGeometry::Line {
+                    from: TripPosition { x: 8.0, y: 5.0 },
+                    to: TripPosition { x: 9.0, y: 5.0 },
+                },
+                travel_seconds: 1.0,
+            },
+        ],
+        total_travel_seconds: 2.0,
+    });
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidEntity {
+            entity: entity_ref(EntityKind::BusRoute, "route-001"),
+            field: SnapshotField::RouteLegs,
+            reason: EntityError::InvalidStaticShape,
         }
     );
 }
