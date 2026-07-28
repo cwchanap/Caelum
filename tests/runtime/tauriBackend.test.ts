@@ -8,6 +8,7 @@ import type {
   RustGameSnapshot,
   SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
+import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 // Mock the Tauri IPC bridge so the backend can be exercised in a node test
@@ -347,5 +348,54 @@ describe("createTauriBackend", () => {
         request: roadRequest,
       },
     );
+  });
+
+  it("loadSnapshot() propagates a persistenceRequiresPaused error from the Rust command", async () => {
+    const snapshot = createRustSnapshot({ paused: false });
+    // The Rust game_load_snapshot command validates pause state and rejects
+    // with a serialized PersistenceError. The Tauri backend must propagate
+    // that structured error unchanged — same wire shape the WASM backend
+    // surfaces.
+    invokeMock.mockRejectedValueOnce({
+      code: "invalidModeSettings",
+      context: {
+        field: "paused",
+        reason: { kind: "persistenceRequiresPaused" },
+      },
+    });
+
+    const backend = await createTauriBackend();
+    await expect(backend.loadSnapshot!(snapshot)).rejects.toMatchObject({
+      code: "invalidModeSettings",
+      context: {
+        field: "paused",
+        reason: { kind: "persistenceRequiresPaused" },
+      },
+    });
+    expect(invokeMock).toHaveBeenCalledWith("game_load_snapshot", {
+      snapshot,
+    });
+  });
+
+  it("loadSnapshot() propagates an unsupportedSchema error for a legacy schema version", async () => {
+    const snapshot = createRustSnapshot({ paused: true });
+    // Simulate a legacy schema-v3 snapshot being rejected by the Rust
+    // command's schema probe.
+    invokeMock.mockRejectedValueOnce({
+      code: "unsupportedSchema",
+      context: {
+        expected: SNAPSHOT_SCHEMA_VERSION,
+        actual: SNAPSHOT_SCHEMA_VERSION - 1,
+      },
+    });
+
+    const backend = await createTauriBackend();
+    await expect(backend.loadSnapshot!(snapshot)).rejects.toMatchObject({
+      code: "unsupportedSchema",
+      context: {
+        expected: SNAPSHOT_SCHEMA_VERSION,
+        actual: SNAPSHOT_SCHEMA_VERSION - 1,
+      },
+    });
   });
 });

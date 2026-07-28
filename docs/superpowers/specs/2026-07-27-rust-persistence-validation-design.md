@@ -636,6 +636,7 @@ pub enum ScenarioError {
 
 pub enum TileError {
     WrongRowMajorCoordinate { expected: Point, actual: Point },
+    CountMismatch { expected: usize, actual: usize },
     NonCanonicalId { expected: String },
     UnsupportedKind,
     UnsupportedArea,
@@ -753,6 +754,19 @@ Exact top-level and nested serialization follows these examples:
     "reason": {
       "kind": "nonReciprocalConnection",
       "details": { "neighbor": { "x": 5, "y": 2 } }
+    }
+  }
+}
+```
+
+```json
+{
+  "code": "invalidTile",
+  "context": {
+    "tileId": "",
+    "reason": {
+      "kind": "countMismatch",
+      "details": { "expected": 504, "actual": 503 }
     }
   }
 }

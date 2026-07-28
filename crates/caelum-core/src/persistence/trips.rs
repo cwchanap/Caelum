@@ -32,7 +32,11 @@ pub(super) fn validate_trips(
             });
         };
         let (service_day, sequence) =
-            parse_trip_id(&trip.id).expect("entity stage validates canonical trip IDs");
+            parse_trip_id(&trip.id).ok_or_else(|| PersistenceError::InvalidEntity {
+                entity: entity.clone(),
+                field: SnapshotField::EntityId,
+                reason: EntityError::NonCanonicalId,
+            })?;
         if service_day > snapshot.day {
             return Err(PersistenceError::InvalidEntity {
                 entity: entity.clone(),
@@ -71,7 +75,7 @@ pub(super) fn validate_trips(
         )?;
         validate_world_position(snapshot, trip, entity.clone())?;
         validate_route_plan(snapshot, &services, trip, entity.clone())?;
-        validate_vehicle_membership(snapshot, trip, entity)?;
+        validate_vehicle_membership(indexes, trip, entity)?;
     }
 
     validate_trip_counters(snapshot, max_current_day_sequence)?;
@@ -252,16 +256,14 @@ fn validate_route_plan(
 }
 
 fn validate_vehicle_membership(
-    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
     trip: &ActiveTrip,
     entity: EntityRef,
 ) -> PersistenceResult<()> {
-    let memberships = snapshot
-        .transit
-        .vehicles
-        .iter()
-        .filter(|vehicle| vehicle.passenger_ids.iter().any(|id| id == &trip.id))
-        .count();
+    let memberships = indexes
+        .vehicles_for_trip(&trip.id)
+        .map(|vehicles| vehicles.len())
+        .unwrap_or(0);
     let valid = if trip.status == TripStatus::Riding {
         memberships == 1
     } else {
