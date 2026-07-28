@@ -109,19 +109,19 @@ impl SandboxResetError {
     }
 }
 
-impl From<SandboxCreationError> for SandboxResetError {
-    fn from(error: SandboxCreationError) -> Self {
-        match error.code {
-            SandboxCreationErrorCode::TemplateInvariantViolation => {
-                let template_id = match error.context.template_id.as_deref() {
-                    Some("blankGrid") => SandboxTemplateId::BlankGrid,
-                    Some("crossroads") => SandboxTemplateId::Crossroads,
-                    _ => unreachable!("factory invariant failures identify a known template"),
-                };
-                Self::template_invariant_violation(template_id)
-            }
-            _ => unreachable!("persisted sandbox rules reconstruct only validated requests"),
+/// Map a `SandboxCreationError` from reconstructing a persisted sandbox's
+/// `GameRules` back into a `SandboxResetError`. Only template-invariant
+/// violations can occur at this stage: the persisted rules were validated on
+/// save, so field-level validation errors are unreachable here.
+fn sandbox_reset_error_from_creation_error(
+    error: SandboxCreationError,
+    rules: &GameRules,
+) -> SandboxResetError {
+    match error.code {
+        SandboxCreationErrorCode::TemplateInvariantViolation => {
+            SandboxResetError::template_invariant_violation(rules.sandbox.template_id)
         }
+        _ => unreachable!("persisted sandbox rules reconstruct only validated requests"),
     }
 }
 
@@ -136,12 +136,18 @@ pub fn canonical_default_request() -> SandboxCreationRequest {
 }
 
 pub fn canonical_default_settings() -> SandboxSettings {
+    sandbox_settings_from_validated(
+        &validate_request(canonical_default_request())
+            .expect("canonical default request must validate"),
+    )
+}
+
+fn sandbox_settings_from_validated(validated: &ValidatedSandboxCreationRequest) -> SandboxSettings {
     SandboxSettings {
-        template_id: SandboxTemplateId::Crossroads,
-        starting_capital: StartingCapital::new(DEFAULT_STARTING_CAPITAL)
-            .expect("default starting capital is valid"),
-        demand_multiplier: DemandMultiplier::default(),
-        move_in_rate: MoveInRateSelection::Paused,
+        template_id: validated.template_id,
+        starting_capital: validated.starting_capital,
+        demand_multiplier: validated.demand_multiplier,
+        move_in_rate: validated.move_in_rate,
     }
 }
 
@@ -261,7 +267,8 @@ pub(crate) fn sandbox_candidate_from_persisted_rules(
         .to_string(),
     };
 
-    create_sandbox_candidate(request).map_err(SandboxResetError::from)
+    create_sandbox_candidate(request)
+        .map_err(|error| sandbox_reset_error_from_creation_error(error, rules))
 }
 
 fn blank_map() -> GameMap {
@@ -412,12 +419,7 @@ fn snapshot_shell(
         rules: GameRules {
             game_mode: GameMode::Sandbox,
             economy_preset: validated.economy_preset,
-            sandbox: SandboxSettings {
-                template_id: validated.template_id,
-                starting_capital: validated.starting_capital,
-                demand_multiplier: validated.demand_multiplier,
-                move_in_rate: validated.move_in_rate,
-            },
+            sandbox: sandbox_settings_from_validated(&validated),
         },
         map,
         buildings: Vec::new(),

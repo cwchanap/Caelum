@@ -461,8 +461,7 @@ fn gameplay_rejection_uses_stable_camel_case_wire_names() {
             "code": "insufficientBudget",
             "context": {
                 "requiredBudget": 8000,
-                "availableBudget": 7999,
-                "affectedRouteIds": []
+                "availableBudget": 7999
             }
         })
     );
@@ -485,8 +484,7 @@ fn route_revision_exhausted_rejection_uses_stable_camel_case_wire_name() {
             "code": "routeRevisionExhausted",
             "context": {
                 "routeId": "route-001",
-                "actualRevision": 4294967295_u64,
-                "affectedRouteIds": []
+                "actualRevision": 4294967295_u64
             }
         })
     );
@@ -1244,7 +1242,7 @@ fn dispatch_result_round_trips_through_serde_json() {
     assert_eq!(value["applied"], json!(false));
     assert_eq!(
         value["rejection"],
-        json!({ "code": "invalidSpeed", "context": { "affectedRouteIds": [] } })
+        json!({ "code": "invalidSpeed", "context": {} })
     );
     assert_eq!(
         value["context"],
@@ -1415,8 +1413,7 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
             "code": "insufficientBudget",
             "context": {
                 "requiredBudget": 100,
-                "availableBudget": 99,
-                "affectedRouteIds": []
+                "availableBudget": 99
             }
         })
     );

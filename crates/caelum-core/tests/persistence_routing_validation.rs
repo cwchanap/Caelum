@@ -47,17 +47,12 @@ fn unsafe_roundabout_port_mapping_surfaces_as_persistence_error() {
 #[test]
 fn derive_route_states_matches_stored_legs_on_a_valid_fixture() {
     let snapshot = fixture_with_bus_route();
-    let topology = caelum_core::road_topology::RoadTopology::compile(&snapshot.map).unwrap();
-    let context = caelum_core::RoutingContext {
-        road_topology: &topology,
-    };
     // derive_route_states is crate-private; exercise it indirectly through
     // validate_snapshot, which calls it internally and must succeed.
     validate_snapshot(&snapshot).unwrap();
     // The fixture has exactly one bus route with derived legs.
     assert_eq!(snapshot.transit.routes.len(), 1);
     assert!(!snapshot.transit.routes[0].legs.is_empty());
-    let _ = context;
 }
 
 #[test]

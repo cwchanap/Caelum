@@ -43,7 +43,7 @@ pub mod roundabouts;
 pub mod route_editor;
 pub mod route_lifecycle;
 pub mod router;
-pub mod sandbox;
+pub(crate) mod sandbox;
 pub mod scenario;
 pub mod service_itinerary;
 pub mod state;

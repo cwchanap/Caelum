@@ -571,15 +571,6 @@ fn metro_line_with_dangling_station_is_rejected() {
     // Remove the line from station-002's platform so platform assignment
     // validation doesn't fire before route shape validation.
     let line_id = snapshot.transit.metro_lines[0].id.clone();
-    if let Some(station) = snapshot
-        .transit
-        .stations
-        .iter_mut()
-        .find(|s| s.id == snapshot.transit.metro_lines[0].station_ids[0])
-    {
-        // Keep station-001's platform referencing the line.
-        let _ = station;
-    }
     // Remove the line from station-002's platform route_ids.
     for station in &mut snapshot.transit.stations {
         if station.id != snapshot.transit.metro_lines[0].station_ids[0] {

@@ -112,12 +112,11 @@ pub fn rich_fixture() -> GameSnapshot {
     loop {
         if !engine.snapshot().sims.is_empty()
             && !engine.snapshot().active_trips.is_empty()
-            && engine.snapshot().active_trips.iter().any(|trip| {
-                matches!(
-                    trip.status,
-                    TripStatus::Walking | TripStatus::Waiting | TripStatus::Riding
-                )
-            })
+            && engine
+                .snapshot()
+                .active_trips
+                .iter()
+                .any(|trip| matches!(trip.status, TripStatus::Riding))
         {
             break;
         }
@@ -128,7 +127,24 @@ pub fn rich_fixture() -> GameSnapshot {
         }
     }
     apply(&mut engine, GameIntent::SetPaused { paused: true });
-    engine.snapshot_for_save().expect("rich fixture must save")
+    let snapshot = engine.snapshot_for_save().expect("rich fixture must save");
+    // Verify the riding trip is associated with its vehicle: some vehicle must
+    // list the riding trip among its passenger_ids.
+    let riding = snapshot
+        .active_trips
+        .iter()
+        .find(|trip| matches!(trip.status, TripStatus::Riding))
+        .expect("fixture must contain a riding trip at save time");
+    assert!(
+        snapshot
+            .transit
+            .vehicles
+            .iter()
+            .any(|v| v.passenger_ids.iter().any(|id| id == &riding.id)),
+        "riding trip {} must be listed among some vehicle's passengers",
+        riding.id
+    );
+    snapshot
 }
 
 /// A minimal paused snapshot (no transit) for tests that only need the shell.

@@ -29,7 +29,7 @@ pub(super) fn validate_shell_rules_map_and_compile(
 }
 
 fn validate_scalar_state(snapshot: &GameSnapshot) -> PersistenceResult<()> {
-    finite_non_negative(SnapshotField::Time, snapshot.time)?;
+    super::finite_non_negative(None, SnapshotField::Time, snapshot.time)?;
     let maximum_time = (f64::from(u32::MAX) + 1.0) * GAME_DAY_SECONDS;
     if snapshot.time >= maximum_time {
         return Err(PersistenceError::InvalidNumericValue {
@@ -70,24 +70,6 @@ fn validate_scalar_state(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         return Err(PersistenceError::InvalidNumericValue {
             entity: None,
             field: SnapshotField::Budget,
-            reason: NumericError::Negative,
-        });
-    }
-    Ok(())
-}
-
-fn finite_non_negative(field: SnapshotField, value: f64) -> PersistenceResult<()> {
-    if !value.is_finite() {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity: None,
-            field,
-            reason: NumericError::NotFinite,
-        });
-    }
-    if value < 0.0 {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity: None,
-            field,
             reason: NumericError::Negative,
         });
     }
@@ -176,7 +158,11 @@ fn validate_rules_and_scenario(snapshot: &GameSnapshot) -> PersistenceResult<()>
                 },
             });
         }
-        finite_non_negative(SnapshotField::GrowthWaveTriggerTime, wave.trigger_time)?;
+        super::finite_non_negative(
+            None,
+            SnapshotField::GrowthWaveTriggerTime,
+            wave.trigger_time,
+        )?;
         if let Some((previous_id, previous_time)) = previous {
             if wave.trigger_time < previous_time {
                 return Err(PersistenceError::InvalidScenario {
@@ -298,15 +284,9 @@ fn validate_map(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     if map.tiles.len() != expected_count {
         return Err(PersistenceError::InvalidTile {
             tile_id: String::new(),
-            reason: TileError::WrongRowMajorCoordinate {
-                expected: Point {
-                    x: i32::from(MAP_WIDTH),
-                    y: i32::from(MAP_HEIGHT),
-                },
-                actual: Point {
-                    x: i32::try_from(map.tiles.len()).unwrap_or(i32::MAX),
-                    y: 0,
-                },
+            reason: TileError::CountMismatch {
+                expected: expected_count,
+                actual: map.tiles.len(),
             },
         });
     }

@@ -60,7 +60,7 @@ pub struct RejectionContext {
     pub required_budget: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_budget: Option<i32>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub affected_route_ids: Vec<String>,
 }
 

@@ -4,14 +4,12 @@ use caelum_core::model::{
 };
 use caelum_core::{
     clock, objectives, scenario, validate_snapshot, DerivedStateError, EntityError, EntityKind,
-    EntityRef, GameEngine, PersistenceError, ScenarioError, SnapshotField,
+    EntityRef, PersistenceError, ScenarioError, SnapshotField,
 };
 
-fn paused_snapshot() -> caelum_core::GameSnapshot {
-    let mut snapshot = GameEngine::new().snapshot();
-    snapshot.paused = true;
-    snapshot
-}
+mod common;
+
+use common::persistence_fixtures::paused_snapshot;
 
 fn worker(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {

@@ -19,6 +19,7 @@ pub(super) fn validate_trips(
 ) -> PersistenceResult<()> {
     validate_sims(snapshot)?;
 
+    let services = router::active_services(snapshot);
     let mut trip_keys = BTreeSet::new();
     let mut max_current_day_sequence = 0;
     for trip in &snapshot.active_trips {
@@ -56,7 +57,7 @@ pub(super) fn validate_trips(
         }
 
         validate_trip_endpoints(snapshot, trip, sim)?;
-        finite_non_negative(
+        super::finite_non_negative(
             Some(entity.clone()),
             SnapshotField::TripDeadline,
             trip.deadline,
@@ -69,7 +70,7 @@ pub(super) fn validate_trips(
             trips::WAIT_PATIENCE_SECONDS,
         )?;
         validate_world_position(snapshot, trip, entity.clone())?;
-        validate_route_plan(snapshot, trip, entity.clone())?;
+        validate_route_plan(snapshot, &services, trip, entity.clone())?;
         validate_vehicle_membership(snapshot, trip, entity)?;
     }
 
@@ -196,6 +197,7 @@ fn validate_world_position(
 
 fn validate_route_plan(
     snapshot: &GameSnapshot,
+    services: &[router::TransitService],
     trip: &ActiveTrip,
     entity: EntityRef,
 ) -> PersistenceResult<()> {
@@ -208,7 +210,7 @@ fn validate_route_plan(
         return Ok(());
     };
 
-    finite_non_negative(
+    super::finite_non_negative(
         Some(entity.clone()),
         SnapshotField::TripEstimatedSeconds,
         plan.estimated_seconds,
@@ -228,7 +230,7 @@ fn validate_route_plan(
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.from)?;
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.to)?;
     }
-    if router::route_plan_estimated_seconds(snapshot, plan) != Some(plan.estimated_seconds) {
+    if router::route_plan_estimated_seconds(services, plan) != Some(plan.estimated_seconds) {
         return Err(trip_state_error(SnapshotField::TripRoutePlan, entity));
     }
 
@@ -290,12 +292,12 @@ fn validate_trip_counters(
 }
 
 fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
-    finite_non_negative(
+    super::finite_non_negative(
         None,
         SnapshotField::MetricsWaits,
         snapshot.metrics.total_wait_seconds,
     )?;
-    finite_non_negative(
+    super::finite_non_negative(
         None,
         SnapshotField::MetricsWaits,
         snapshot.metrics.average_wait_seconds,
@@ -325,12 +327,12 @@ fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     let mut retained_unserved = 0_u32;
     let mut previous_time = None;
     for outcome in &snapshot.metrics.trip_outcomes {
-        finite_non_negative(
+        super::finite_non_negative(
             None,
             SnapshotField::OutcomeWaitSeconds,
             outcome.wait_seconds,
         )?;
-        finite_non_negative(None, SnapshotField::OutcomeTimestamp, outcome.time)?;
+        super::finite_non_negative(None, SnapshotField::OutcomeTimestamp, outcome.time)?;
         if outcome.time > snapshot.time
             || previous_time.is_some_and(|previous| outcome.time < previous)
         {
@@ -435,28 +437,6 @@ fn validate_point(
     Ok(())
 }
 
-fn finite_non_negative(
-    entity: Option<EntityRef>,
-    field: SnapshotField,
-    value: f64,
-) -> PersistenceResult<()> {
-    if !value.is_finite() {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity,
-            field,
-            reason: NumericError::NotFinite,
-        });
-    }
-    if value < 0.0 {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity,
-            field,
-            reason: NumericError::Negative,
-        });
-    }
-    Ok(())
-}
-
 fn finite_range(
     entity: Option<EntityRef>,
     field: SnapshotField,
@@ -464,7 +444,7 @@ fn finite_range(
     minimum: f64,
     maximum: f64,
 ) -> PersistenceResult<()> {
-    finite_non_negative(entity.clone(), field, value)?;
+    super::finite_non_negative(entity.clone(), field, value)?;
     if !(minimum..=maximum).contains(&value) {
         return Err(PersistenceError::InvalidNumericValue {
             entity,
