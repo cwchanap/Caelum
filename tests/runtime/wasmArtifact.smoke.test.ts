@@ -429,7 +429,7 @@ describe("real WASM artifact smoke", () => {
     await expect(backend.snapshot()).resolves.toEqual(created.snapshot);
   });
 
-  it("resets to the exact successful request after budget and map mutation", async () => {
+  it("resets to the exact successful request after a cost-bearing map mutation", async () => {
     const backend = await createWasmBackend();
     const created = await backend.createSandbox({
       templateId: "blankGrid",
@@ -448,6 +448,8 @@ describe("real WASM artifact smoke", () => {
     });
     expect(mapMutation.applied).toBe(true);
     expect(mapMutation.rejection).toBeNull();
+    expect(mapMutation.context.cost).toBe(1_000);
+    expect(mapMutation.snapshot.budget).toBe(41_000);
     expect(mapMutation.snapshot.map.roadStructures).toHaveLength(
       created.snapshot.map.roadStructures.length + 1,
     );
@@ -456,15 +458,7 @@ describe("real WASM artifact smoke", () => {
         (structure) => structure.kind === "roundabout",
       ),
     ).toBe(true);
-
-    const budgetMutation = await backend.dispatch({
-      type: "setBudget",
-      budget: 7,
-    });
-    expect(budgetMutation.applied).toBe(true);
-    expect(budgetMutation.snapshot.budget).toBe(7);
-    expect(budgetMutation.snapshot.map).toEqual(mapMutation.snapshot.map);
-    expect(budgetMutation.snapshot.map).not.toEqual(created.snapshot.map);
+    expect(mapMutation.snapshot.map).not.toEqual(created.snapshot.map);
 
     const reset = await backend.reset();
     expect(reset).toEqual({ ok: true, snapshot: created.snapshot });
