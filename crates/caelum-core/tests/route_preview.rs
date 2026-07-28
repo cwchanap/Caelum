@@ -192,7 +192,7 @@ fn shared_access_shuttle_preview_and_commit_match_zero_step_terminal_legs() {
         committed_legs
             .iter()
             .filter_map(|leg| leg.estimated_seconds)
-            .sum()
+            .sum::<f64>()
     );
     assert_eq!(preview.legs.len(), committed_legs.len());
     for (preview_leg, committed_leg) in preview.legs.iter().zip(committed_legs) {

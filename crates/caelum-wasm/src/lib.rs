@@ -34,7 +34,10 @@ impl WasmGameEngine {
         //
         // `GameEngine::from_snapshot` validates the version again after full
         // deserialization; this probe exists to surface the typed persistence
-        // error before deserialization can fail on a schema-v4-only field.
+        // error before deserialization can fail on a schema-v4-only field. A
+        // full-deserialization failure after the schema check passes is also
+        // converted to `UnsupportedSchema { actual: 0 }` so `loadSnapshot`
+        // exposes one consistent typed error shape.
         let probe_schema_version =
             serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(snapshot.clone())
                 .map(|probe| probe.schema_version)
@@ -46,8 +49,13 @@ impl WasmGameEngine {
             };
             return Err(serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error));
         }
-        let snapshot: GameSnapshot =
-            serde_wasm_bindgen::from_value(snapshot).map_err(to_js_error)?;
+        let snapshot: GameSnapshot = serde_wasm_bindgen::from_value(snapshot).map_err(|_| {
+            let error = PersistenceError::UnsupportedSchema {
+                expected: SNAPSHOT_SCHEMA_VERSION,
+                actual: 0,
+            };
+            serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error)
+        })?;
         let inner = GameEngine::from_snapshot(snapshot)
             .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
         Ok(WasmGameEngine { inner })
