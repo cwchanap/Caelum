@@ -33,6 +33,7 @@ pub mod intent;
 pub mod model;
 pub mod network;
 pub mod objectives;
+pub(crate) mod persistence;
 pub mod platforms;
 pub mod preview;
 pub mod rejection;
@@ -56,6 +57,11 @@ pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
 pub use model::{
     GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StartingCapital, StopRoadAccess,
     SNAPSHOT_SCHEMA_VERSION,
+};
+pub use persistence::{
+    AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
+    NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
+    RoadTopologyError, ScenarioError, SnapshotField, TileError,
 };
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,
