@@ -682,4 +682,77 @@ mod tests {
         );
         assert_eq!(error.context.template_id.as_deref(), Some("crossroads"));
     }
+
+    #[test]
+    fn crossroads_validator_rejects_an_extra_structure() {
+        let candidate = create_sandbox_candidate(raw_request()).unwrap();
+        let mut map = candidate.snapshot.map;
+        // Push a benign second structure so `road_structures.len() != 1`.
+        map.road_structures
+            .push(crate::model::RoadStructure::AutomaticJunction {
+                id: "extra".to_string(),
+                footprint: Vec::new(),
+                ports: Vec::new(),
+            });
+        let topology = RoadTopology::compile(&map).unwrap();
+
+        let error = validate_crossroads_candidate(&map, &topology).unwrap_err();
+        assert_eq!(
+            error.code,
+            SandboxCreationErrorCode::TemplateInvariantViolation
+        );
+        assert_eq!(error.context.template_id.as_deref(), Some("crossroads"));
+    }
+
+    #[test]
+    fn crossroads_validator_rejects_a_wrong_structure_port_set() {
+        let candidate = create_sandbox_candidate(raw_request()).unwrap();
+        let mut map = candidate.snapshot.map;
+        // Drop one captured port so `structure.port_keys()` no longer matches
+        // the expected canonical port set.
+        if let crate::model::RoadStructure::AutomaticJunction {
+            id,
+            footprint,
+            mut ports,
+        } = map.road_structures[0].clone()
+        {
+            ports.pop();
+            map.road_structures[0] = crate::model::RoadStructure::AutomaticJunction {
+                id,
+                footprint,
+                ports,
+            };
+        }
+        let topology = RoadTopology::compile(&map).unwrap();
+
+        let error = validate_crossroads_candidate(&map, &topology).unwrap_err();
+        assert_eq!(
+            error.code,
+            SandboxCreationErrorCode::TemplateInvariantViolation
+        );
+        assert_eq!(error.context.template_id.as_deref(), Some("crossroads"));
+    }
+
+    #[test]
+    fn crossroads_validator_rejects_a_broken_approach_movement() {
+        let candidate = create_sandbox_candidate(raw_request()).unwrap();
+        let mut map = candidate.snapshot.map;
+        // Demolish the approach tile west of the (14,8) footprint tile. The
+        // four footprint tiles keep their canonical connections, so the
+        // connection check passes, but the (14,8) incoming-South → West
+        // transition no longer exists, so a required movement is missing.
+        let approach = map.tile_mut(Point { x: 13, y: 8 }).unwrap();
+        approach.kind = "empty".to_string();
+        approach.one_way = None;
+        approach.road_connections.clear();
+        approach.road_structure_id = None;
+        let topology = RoadTopology::compile(&map).unwrap();
+
+        let error = validate_crossroads_candidate(&map, &topology).unwrap_err();
+        assert_eq!(
+            error.code,
+            SandboxCreationErrorCode::TemplateInvariantViolation
+        );
+        assert_eq!(error.context.template_id.as_deref(), Some("crossroads"));
+    }
 }
