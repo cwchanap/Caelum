@@ -1,5 +1,5 @@
 use caelum_core::{
-    GameEngine, GameIntent, GameSnapshot, GameplayRejection, RoadMutationPreviewRequest,
+    GameEngine, GameIntent, GameSnapshot, PersistenceError, RoadMutationPreviewRequest,
     RoutePreviewRequest, SandboxCreationRequest, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use wasm_bindgen::prelude::*;
@@ -28,28 +28,28 @@ impl WasmGameEngine {
         // Two-phase: probe `schemaVersion` before the full `GameSnapshot`
         // deserialization so a legacy schema-v3 save (which lacks the required
         // v4 `rules.sandbox.startingCapital` field) is rejected with the
-        // structured `UnsupportedSnapshotSchema` code instead of a generic
+        // structured persistence error instead of a generic
         // missing-field serde error. If the probe cannot read a schema version,
         // treat it as unknown (0) and still reject.
         //
-        // Defense-in-depth: `GameEngine::from_snapshot` (engine.rs) and the
-        // Tauri host (`src-tauri/src/lib.rs::game_load_snapshot`) re-check the
-        // schema version after deserialization. The three checks are
-        // intentionally redundant — this probe exists to surface the
-        // structured code before the full deserialize can fail generically.
+        // `GameEngine::from_snapshot` validates the version again after full
+        // deserialization; this probe exists to surface the typed persistence
+        // error before deserialization can fail on a schema-v4-only field.
         let probe_schema_version =
             serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(snapshot.clone())
                 .map(|probe| probe.schema_version)
                 .unwrap_or(0);
         if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
-            let rejection = GameplayRejection::unsupported_snapshot_schema(probe_schema_version);
-            return Err(serde_wasm_bindgen::to_value(&rejection).unwrap_or_else(to_js_error));
+            let error = PersistenceError::UnsupportedSchema {
+                expected: SNAPSHOT_SCHEMA_VERSION,
+                actual: probe_schema_version,
+            };
+            return Err(serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error));
         }
         let snapshot: GameSnapshot =
             serde_wasm_bindgen::from_value(snapshot).map_err(to_js_error)?;
-        let inner = GameEngine::from_snapshot(snapshot).map_err(|rejection| {
-            serde_wasm_bindgen::to_value(&rejection).unwrap_or_else(to_js_error)
-        })?;
+        let inner = GameEngine::from_snapshot(snapshot)
+            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
         Ok(WasmGameEngine { inner })
     }
 

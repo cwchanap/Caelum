@@ -88,6 +88,43 @@ pub fn find_route_plan(
     best_candidate(candidates)
 }
 
+pub(crate) fn route_plan_estimated_seconds(state: &GameSnapshot, plan: &RoutePlan) -> Option<f64> {
+    let services = active_services(state);
+    plan.legs.iter().try_fold(0.0, |total, leg| {
+        let seconds = match leg.mode {
+            TransitMode::Walk => {
+                if leg.line_id.is_some()
+                    || leg.service_direction.is_some()
+                    || leg.board_itinerary_index.is_some()
+                    || leg.alight_itinerary_index.is_some()
+                {
+                    return None;
+                }
+                walk_seconds(&leg.from, &leg.to)
+            }
+            TransitMode::Bus | TransitMode::Metro => {
+                let line_id = leg.line_id.as_deref()?;
+                let direction = leg.service_direction?;
+                let board = leg.board_itinerary_index?;
+                let alight = leg.alight_itinerary_index?;
+                let service = services
+                    .iter()
+                    .find(|service| service.mode == leg.mode && service.line_id == line_id)?;
+                let edge = service.ride_edges.iter().find(|edge| {
+                    edge.service_direction == direction
+                        && edge.board_itinerary_index == board
+                        && edge.alight_itinerary_index == alight
+                        && service.waypoint_positions.get(&edge.board_waypoint_id)
+                            == Some(&leg.from)
+                        && service.waypoint_positions.get(&edge.alight_waypoint_id) == Some(&leg.to)
+                })?;
+                ride_seconds(service.mode, &service.legs, edge)
+            }
+        };
+        Some(total + seconds)
+    })
+}
+
 /// Plan a multi-modal commute route from `origin` to `destination`.
 ///
 /// Uses precomputed `leg.current_path` steps from the snapshot's route/metro-line

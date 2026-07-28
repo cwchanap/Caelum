@@ -9,7 +9,9 @@ use crate::model::{
 };
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::RoadMutationResult;
-use crate::road_topology::{RoadState, RoadTransition, BUS_TILE_MILLIS, ROUNDABOUT_ENTRY_MILLIS};
+use crate::road_topology::{
+    RoadState, RoadTopologyCompileError, RoadTransition, BUS_TILE_MILLIS, ROUNDABOUT_ENTRY_MILLIS,
+};
 use crate::transit_nodes::is_present_node;
 
 pub const COMPACT_ROUNDABOUT_COST: i32 = 1_000;
@@ -591,9 +593,16 @@ fn unsafe_template_mapping(template: &RoundaboutTemplate) -> GameplayRejection {
     }
 }
 
+fn unsafe_topology_template_mapping(template: &RoundaboutTemplate) -> RoadTopologyCompileError {
+    RoadTopologyCompileError::UnsafeRoundaboutPortMapping {
+        structure_id: roundabout_structure_id(template.size, template.origin),
+        footprint: template.footprint.clone(),
+    }
+}
+
 pub fn compile_roundabout_transitions(
     structure: &RoadStructure,
-) -> GameplayResult<Vec<(RoadState, RoadTransition)>> {
+) -> Result<Vec<(RoadState, RoadTransition)>, RoadTopologyCompileError> {
     let parts = roundabout_parts(structure)?;
     let template = roundabout_template(parts.size, parts.origin);
     let mut transitions = circulation_edges(parts.id, &template)?;
@@ -727,7 +736,9 @@ struct RoundaboutParts<'a> {
     captured_ports: &'a [RoadPort],
 }
 
-fn roundabout_parts(structure: &RoadStructure) -> GameplayResult<RoundaboutParts<'_>> {
+fn roundabout_parts(
+    structure: &RoadStructure,
+) -> Result<RoundaboutParts<'_>, RoadTopologyCompileError> {
     match structure {
         RoadStructure::Roundabout {
             id,
@@ -741,14 +752,16 @@ fn roundabout_parts(structure: &RoadStructure) -> GameplayResult<RoundaboutParts
             origin: *origin,
             captured_ports: ports,
         }),
-        RoadStructure::AutomaticJunction { id, .. } => Err(unsafe_port_mapping(id)),
+        RoadStructure::AutomaticJunction { id, footprint, .. } => {
+            Err(unsafe_port_mapping(id, footprint))
+        }
     }
 }
 
 fn circulation_edges(
     id: &str,
     template: &RoundaboutTemplate,
-) -> GameplayResult<Vec<(RoadState, RoadTransition)>> {
+) -> Result<Vec<(RoadState, RoadTransition)>, RoadTopologyCompileError> {
     let ring = &template.counterclockwise_ring;
     (0..ring.len())
         .map(|index| {
@@ -756,9 +769,9 @@ fn circulation_edges(
             let current = ring[index];
             let next = ring[(index + 1) % ring.len()];
             let incoming = heading_between(previous, current)
-                .ok_or_else(|| unsafe_template_mapping(template))?;
-            let outgoing =
-                heading_between(current, next).ok_or_else(|| unsafe_template_mapping(template))?;
+                .ok_or_else(|| unsafe_topology_template_mapping(template))?;
+            let outgoing = heading_between(current, next)
+                .ok_or_else(|| unsafe_topology_template_mapping(template))?;
             Ok((
                 RoadState {
                     position: current,
@@ -790,11 +803,11 @@ fn entry_transition(
     id: &str,
     template: &RoundaboutTemplate,
     port: &RoadPort,
-) -> GameplayResult<(RoadState, RoadTransition)> {
+) -> Result<(RoadState, RoadTransition), RoadTopologyCompileError> {
     let (_, next) = ring_neighbors(template, port.point)?;
     let incoming = opposite(port.edge);
-    let outgoing =
-        heading_between(port.point, next).ok_or_else(|| unsafe_template_mapping(template))?;
+    let outgoing = heading_between(port.point, next)
+        .ok_or_else(|| unsafe_topology_template_mapping(template))?;
     Ok((
         RoadState {
             position: port.point,
@@ -820,10 +833,10 @@ fn exit_transition(
     id: &str,
     template: &RoundaboutTemplate,
     port: &RoadPort,
-) -> GameplayResult<(RoadState, RoadTransition)> {
+) -> Result<(RoadState, RoadTransition), RoadTopologyCompileError> {
     let (previous, _) = ring_neighbors(template, port.point)?;
-    let incoming =
-        heading_between(previous, port.point).ok_or_else(|| unsafe_template_mapping(template))?;
+    let incoming = heading_between(previous, port.point)
+        .ok_or_else(|| unsafe_topology_template_mapping(template))?;
     let destination = offset(port.point, port.edge);
     Ok((
         RoadState {
@@ -875,26 +888,35 @@ pub(crate) fn port_matches_current_map(map: &GameMap, port: &RoadPort) -> bool {
     }
 }
 
-fn port_accepts_inbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
+fn port_accepts_inbound(
+    template: &RoundaboutTemplate,
+    port: &RoadPort,
+) -> Result<bool, RoadTopologyCompileError> {
     let (_, next) = ring_neighbors(template, port.point)?;
-    let outgoing =
-        heading_between(port.point, next).ok_or_else(|| unsafe_template_mapping(template))?;
+    let outgoing = heading_between(port.point, next)
+        .ok_or_else(|| unsafe_topology_template_mapping(template))?;
     Ok(opposite(port.edge) == outgoing)
 }
 
-fn port_accepts_outbound(template: &RoundaboutTemplate, port: &RoadPort) -> GameplayResult<bool> {
+fn port_accepts_outbound(
+    template: &RoundaboutTemplate,
+    port: &RoadPort,
+) -> Result<bool, RoadTopologyCompileError> {
     let (previous, _) = ring_neighbors(template, port.point)?;
-    let incoming =
-        heading_between(previous, port.point).ok_or_else(|| unsafe_template_mapping(template))?;
+    let incoming = heading_between(previous, port.point)
+        .ok_or_else(|| unsafe_topology_template_mapping(template))?;
     Ok(port.edge == incoming)
 }
 
-fn ring_neighbors(template: &RoundaboutTemplate, point: Point) -> GameplayResult<(Point, Point)> {
+fn ring_neighbors(
+    template: &RoundaboutTemplate,
+    point: Point,
+) -> Result<(Point, Point), RoadTopologyCompileError> {
     let ring = &template.counterclockwise_ring;
     let index = ring
         .iter()
         .position(|candidate| *candidate == point)
-        .ok_or_else(|| unsafe_template_mapping(template))?;
+        .ok_or_else(|| unsafe_topology_template_mapping(template))?;
     Ok((
         ring[(index + ring.len() - 1) % ring.len()],
         ring[(index + 1) % ring.len()],
@@ -919,13 +941,10 @@ fn canonicalize_transitions(transitions: &mut Vec<(RoadState, RoadTransition)>) 
     transitions.dedup_by(|(_, left), (_, right)| left.stable_key == right.stable_key);
 }
 
-fn unsafe_port_mapping(structure_id: &str) -> GameplayRejection {
-    GameplayRejection {
-        code: RejectionCode::UnsafeRoundaboutPortMapping,
-        context: RejectionContext {
-            structure_id: Some(structure_id.to_string()),
-            ..RejectionContext::default()
-        },
+fn unsafe_port_mapping(structure_id: &str, footprint: &[Point]) -> RoadTopologyCompileError {
+    RoadTopologyCompileError::UnsafeRoundaboutPortMapping {
+        structure_id: structure_id.to_string(),
+        footprint: footprint.to_vec(),
     }
 }
 
