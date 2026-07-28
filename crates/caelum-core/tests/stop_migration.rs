@@ -1,7 +1,7 @@
-use caelum_core::model::{Point, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};
+use caelum_core::model::{Point, SNAPSHOT_SCHEMA_VERSION};
 use caelum_core::{
-    DerivedStateError, EntityKind, EntityRef, GameEngine, GameIntent, PersistenceError, RoadPreset,
-    SnapshotField,
+    load_snapshot_from_json, DerivedStateError, EntityKind, EntityRef, GameEngine, GameIntent,
+    PersistenceError, RoadPreset, SnapshotField,
 };
 
 fn point(x: i32, y: i32) -> Point {
@@ -65,15 +65,10 @@ fn schema_v3_json_missing_starting_capital_is_rejected_before_full_deserializati
         .expect("sandbox rules are an object")
         .remove("startingCapital");
 
-    let probe: SnapshotSchemaProbe =
-        serde_json::from_value(value.clone()).expect("schema probe reads schema-v3 JSON");
-    let error = PersistenceError::UnsupportedSchema {
-        expected: SNAPSHOT_SCHEMA_VERSION,
-        actual: probe.schema_version,
-    };
+    let error = load_snapshot_from_json(value)
+        .expect_err("schema-v3 JSON must be rejected before full deserialization");
     let wire = serde_json::to_value(error).expect("persistence error serializes");
 
-    assert!(serde_json::from_value::<caelum_core::GameSnapshot>(value).is_err());
     assert_eq!(wire["code"], serde_json::json!("unsupportedSchema"));
     assert_eq!(wire["context"]["expected"], serde_json::json!(4));
     assert_eq!(wire["context"]["actual"], serde_json::json!(3));

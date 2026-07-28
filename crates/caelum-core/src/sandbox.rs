@@ -111,18 +111,17 @@ impl SandboxResetError {
 
 /// Map a `SandboxCreationError` from reconstructing a persisted sandbox's
 /// `GameRules` back into a `SandboxResetError`. Only template-invariant
-/// violations can occur at this stage: the persisted rules were validated on
-/// save, so field-level validation errors are unreachable here.
+/// violations are expected at this stage: the persisted rules were validated
+/// on save, so field-level validation errors should be unreachable here. If
+/// an unexpected error code is observed anyway (e.g. corrupted persisted
+/// state), it is surfaced as a `TemplateInvariantViolation` using
+/// `rules.sandbox.template_id` rather than panicking.
 fn sandbox_reset_error_from_creation_error(
     error: SandboxCreationError,
     rules: &GameRules,
 ) -> SandboxResetError {
-    match error.code {
-        SandboxCreationErrorCode::TemplateInvariantViolation => {
-            SandboxResetError::template_invariant_violation(rules.sandbox.template_id)
-        }
-        _ => unreachable!("persisted sandbox rules reconstruct only validated requests"),
-    }
+    let _ = error;
+    SandboxResetError::template_invariant_violation(rules.sandbox.template_id)
 }
 
 pub fn canonical_default_request() -> SandboxCreationRequest {
