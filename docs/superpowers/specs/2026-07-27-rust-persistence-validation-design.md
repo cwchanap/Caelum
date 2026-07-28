@@ -1,6 +1,6 @@
 # HPA-340: Rust Persistence Validation and Atomic Engine Restoration
 
-**Status:** Revised after third-pass code review; awaiting written-spec approval
+**Status:** Approved for implementation planning on 2026-07-27; execution blocked on HPA-339 implementation
 
 **Linear:** [HPA-340](https://linear.app/cwchanap/issue/HPA-340/implement-rust-persistence-snapshots-and-atomic-validated-engine)
 
@@ -31,6 +31,15 @@ on top of that schema-v4 state rather than adding temporary schema-v3
 persistence or compatibility behavior. HPA-340 implementation must not land
 schema-v4 constants, fields, factories, or compatibility shims ahead of
 HPA-339; it starts only after the HPA-339 schema-v4 implementation is present.
+
+The prerequisite was rechecked against a freshly fetched `origin/main` on
+2026-07-27. Linear marked HPA-339 Done, but the repository still had schema v3,
+`SandboxTemplateId::GrowingSuburb`, no persisted `starting_capital`, and no
+Rust sandbox factory; HPA-339's linked PR contained its design and
+implementation plan rather than the implementation. Approval of this document
+therefore authorizes the HPA-340 implementation plan, not an implicit expansion
+into HPA-339. The implementation plan begins with a hard source-level gate and
+must stop without editing HPA-340 if that gate still fails.
 
 HPA-340 is a core persistence-authority slice. HPA-341 subsequently adds the
 public save/import operations and equivalent TypeScript result contracts.
