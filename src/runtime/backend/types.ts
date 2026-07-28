@@ -138,7 +138,7 @@ export type GameIntent =
 export interface DispatchContext {
   changedTiles: Point[];
   skippedTiles: Point[];
-  affectedRouteIds: string[];
+  affectedRouteIds?: string[];
   cost: number;
 }
 

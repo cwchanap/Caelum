@@ -1,3 +1,4 @@
+use caelum_core::model::Point;
 use caelum_core::{GameEngine, GameIntent};
 
 #[test]
@@ -53,6 +54,14 @@ fn late_restore_failure_preserves_snapshot_and_topology() {
 #[test]
 fn valid_restore_swaps_snapshot_and_topology_together() {
     let mut source = GameEngine::new();
+    // Mutate the road network so the source topology differs from the default
+    // engine's topology. This ensures the topology comparison below actually
+    // verifies that restore_snapshot replaces the target's cached topology,
+    // rather than trivially matching two identical default topologies.
+    let laid = source.dispatch(GameIntent::LayRoad {
+        point: Point { x: 3, y: 3 },
+    });
+    assert!(laid.applied, "fixture road should apply: {laid:?}");
     let changed = source.dispatch(GameIntent::SetSpeed { speed: 2 });
     assert!(changed.applied);
     let expected_snapshot = source.snapshot_for_save().unwrap();

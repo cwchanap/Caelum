@@ -741,7 +741,7 @@ fn validate_route_leg(
     leg: &RouteLegPath,
 ) -> PersistenceResult<()> {
     if let Some(seconds) = leg.estimated_seconds {
-        finite_non_negative(
+        super::finite_non_negative(
             Some(route.clone()),
             SnapshotField::RouteEstimatedSeconds,
             seconds,
@@ -762,13 +762,13 @@ fn validate_route_leg(
                 reason: AssignmentError::ModeMismatch,
             });
         }
-        finite_non_negative(
+        super::finite_non_negative(
             Some(route.clone()),
             SnapshotField::RouteEstimatedSeconds,
             path.total_travel_seconds(),
         )?;
         for step in path.step_refs() {
-            finite_non_negative(
+            super::finite_non_negative(
                 Some(route.clone()),
                 SnapshotField::RouteEstimatedSeconds,
                 step.travel_seconds(),
@@ -987,28 +987,6 @@ fn world_position_in_bounds(
         && position.y >= 0.0
         && position.x < f64::from(snapshot.map.width)
         && position.y < f64::from(snapshot.map.height)
-}
-
-fn finite_non_negative(
-    entity: Option<EntityRef>,
-    field: SnapshotField,
-    value: f64,
-) -> PersistenceResult<()> {
-    if !value.is_finite() {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity,
-            field,
-            reason: NumericError::NotFinite,
-        });
-    }
-    if value < 0.0 {
-        return Err(PersistenceError::InvalidNumericValue {
-            entity,
-            field,
-            reason: NumericError::Negative,
-        });
-    }
-    Ok(())
 }
 
 fn entity_ref(kind: EntityKind, id: &str) -> EntityRef {

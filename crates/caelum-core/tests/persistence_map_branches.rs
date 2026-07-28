@@ -139,9 +139,9 @@ fn wrong_tile_count_is_rejected() {
         validate_snapshot(&snapshot).unwrap_err(),
         PersistenceError::InvalidTile {
             tile_id: String::new(),
-            reason: TileError::WrongRowMajorCoordinate {
-                expected: Point { x: 28, y: 18 },
-                actual: Point { x: 503, y: 0 },
+            reason: TileError::CountMismatch {
+                expected: 504,
+                actual: 503,
             },
         }
     );

@@ -1,6 +1,6 @@
 # HPA-340: Rust Persistence Validation and Atomic Engine Restoration
 
-**Status:** Approved for implementation planning on 2026-07-27; execution blocked on HPA-339 implementation
+**Status:** Implemented in PR #17 (HPA-339/340). The HPA-339 schema-v4 sandbox prerequisite and the HPA-340 persistence pipeline are both complete; the HPA-339 dependency below is preserved as historical context.
 
 **Linear:** [HPA-340](https://linear.app/cwchanap/issue/HPA-340/implement-rust-persistence-snapshots-and-atomic-validated-engine)
 

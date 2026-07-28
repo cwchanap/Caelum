@@ -275,6 +275,7 @@ pub enum ScenarioError {
 )]
 pub enum TileError {
     WrongRowMajorCoordinate { expected: Point, actual: Point },
+    CountMismatch { expected: usize, actual: usize },
     NonCanonicalId { expected: String },
     UnsupportedKind,
     UnsupportedArea,

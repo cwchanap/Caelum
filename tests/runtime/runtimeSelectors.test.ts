@@ -992,6 +992,9 @@ describe("selectShellState Brief", () => {
     survivalTime: 1_200,
   };
 
+  const defaultRules = createTestGameState().rules;
+  const defaultSandbox = defaultRules.sandbox;
+
   it.each([
     {
       name: "standard sandbox",
@@ -1067,11 +1070,11 @@ describe("selectShellState Brief", () => {
   ])("renders $name", (entry) => {
     const state = createTestGameState({
       rules: {
-        ...createTestGameState().rules,
+        ...defaultRules,
         gameMode: entry.rules.gameMode,
         economyPreset: entry.rules.economyPreset,
         sandbox: {
-          ...createTestGameState().rules.sandbox,
+          ...defaultSandbox,
           templateId: entry.rules.templateId,
         },
       },

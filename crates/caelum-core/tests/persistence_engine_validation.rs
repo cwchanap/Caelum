@@ -5,10 +5,9 @@
 use caelum_core::{GameEngine, DEFAULT_STARTING_CAPITAL};
 
 #[test]
-fn snapshot_for_save_rejects_a_nonfinite_metric() {
+fn restore_snapshot_rejects_a_nonfinite_metric() {
     let mut engine = GameEngine::new();
-    engine.set_budget_for_test(1);
-    // Corrupt a metric after construction; snapshot_for_save must reject it.
+    // Corrupt a metric after construction; restore_snapshot must reject it.
     let mut corrupt = engine.snapshot();
     corrupt.metrics.total_wait_seconds = f64::NAN;
     // restore_snapshot is the path that runs validation on an external snapshot.

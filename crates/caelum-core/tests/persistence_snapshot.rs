@@ -4,11 +4,9 @@ use caelum_core::{
     RoadPreset, SnapshotField, TileError,
 };
 
-fn paused_snapshot() -> caelum_core::GameSnapshot {
-    let mut snapshot = GameEngine::new().snapshot();
-    snapshot.paused = true;
-    snapshot
-}
+mod common;
+
+use common::persistence_fixtures::paused_snapshot;
 
 #[test]
 fn canonical_schema_v4_snapshot_is_persistence_valid() {

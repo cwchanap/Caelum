@@ -7,7 +7,7 @@ use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 use crate::transit_nodes::is_present_node;
 
 #[derive(Clone)]
-struct TransitService {
+pub(crate) struct TransitService {
     mode: TransitMode,
     line_id: String,
     waypoint_positions: HashMap<String, Point>,
@@ -88,8 +88,10 @@ pub fn find_route_plan(
     best_candidate(candidates)
 }
 
-pub(crate) fn route_plan_estimated_seconds(state: &GameSnapshot, plan: &RoutePlan) -> Option<f64> {
-    let services = active_services(state);
+pub(crate) fn route_plan_estimated_seconds(
+    services: &[TransitService],
+    plan: &RoutePlan,
+) -> Option<f64> {
     plan.legs.iter().try_fold(0.0, |total, leg| {
         let seconds = match leg.mode {
             TransitMode::Walk => {
@@ -133,7 +135,7 @@ pub fn plan_route(state: &GameSnapshot, origin: &Point, destination: &Point) -> 
     find_route_plan(state, origin, destination)
 }
 
-fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
+pub(crate) fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
     let mut services = Vec::new();
 
     for route in &state.transit.routes {

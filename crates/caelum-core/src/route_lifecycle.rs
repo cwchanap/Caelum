@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::RoutingContext;
 use crate::model::{
     GameSnapshot, Heading, PathGeometry, Platform, RouteLegPath, RouteLegStatus, ServiceDirection,
-    TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
+    ServicePattern, TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
 use crate::network::resolve_route_legs;
 use crate::service_itinerary::{service_visits, ServiceVisit};
@@ -171,44 +171,50 @@ pub(crate) fn derive_route_states(
     let mut derived =
         Vec::with_capacity(snapshot.transit.routes.len() + snapshot.transit.metro_lines.len());
     for route in &snapshot.transit.routes {
-        let resolved = resolve_route_legs(
+        derived.push(derive_single_route_state(
             snapshot,
             context,
             TransitMode::Bus,
+            &route.id,
             &route.stop_ids,
             route.pattern,
-        );
-        let legs = merge_resolved_legs(Some(&route.legs), resolved);
-        let path_broken = legs
-            .iter()
-            .any(|leg| leg.status != RouteLegStatus::Connected);
-        derived.push(RouteDerivedState {
-            route_id: route.id.clone(),
-            mode: TransitMode::Bus,
-            legs,
-            path_broken,
-        });
+            &route.legs,
+        ));
     }
     for line in &snapshot.transit.metro_lines {
-        let resolved = resolve_route_legs(
+        derived.push(derive_single_route_state(
             snapshot,
             context,
             TransitMode::Metro,
+            &line.id,
             &line.station_ids,
             line.pattern,
-        );
-        let legs = merge_resolved_legs(Some(&line.legs), resolved);
-        let path_broken = legs
-            .iter()
-            .any(|leg| leg.status != RouteLegStatus::Connected);
-        derived.push(RouteDerivedState {
-            route_id: line.id.clone(),
-            mode: TransitMode::Metro,
-            legs,
-            path_broken,
-        });
+            &line.legs,
+        ));
     }
     derived
+}
+
+fn derive_single_route_state(
+    snapshot: &GameSnapshot,
+    context: RoutingContext<'_>,
+    mode: TransitMode,
+    route_id: &str,
+    waypoint_ids: &[String],
+    pattern: ServicePattern,
+    legs: &[RouteLegPath],
+) -> RouteDerivedState {
+    let resolved = resolve_route_legs(snapshot, context, mode, waypoint_ids, pattern);
+    let legs = merge_resolved_legs(Some(legs), resolved);
+    let path_broken = legs
+        .iter()
+        .any(|leg| leg.status != RouteLegStatus::Connected);
+    RouteDerivedState {
+        route_id: route_id.to_string(),
+        mode,
+        legs,
+        path_broken,
+    }
 }
 
 fn recompute_bus_routes(
@@ -1110,6 +1116,8 @@ pub fn structurally_changed_route_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::GameEngine;
+    use crate::intent::{GameIntent, RoadPreset};
     use crate::model::{
         BusStopKind, MovementKind, PathGeometry, Point, RoadPathStep, Route, RouteLegKind,
         RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, Stop, StopRoadAccess,
@@ -1117,9 +1125,29 @@ mod tests {
     };
     use crate::state::create_initial_snapshot;
 
+    fn snapshot_with_bus_route() -> GameSnapshot {
+        let mut engine = GameEngine::new();
+        let laid = engine.dispatch(GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(laid.applied, "fixture road should apply: {laid:?}");
+        for point in [Point { x: 2, y: 4 }, Point { x: 10, y: 4 }] {
+            let added = engine.dispatch(GameIntent::AddBusStop { point });
+            assert!(added.applied, "fixture stop should apply: {added:?}");
+        }
+        let created = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        });
+        assert!(created.applied, "fixture route should apply: {created:?}");
+        engine.snapshot()
+    }
+
     #[test]
     fn route_state_oracle_is_read_only_and_idempotent() {
-        let snapshot = create_initial_snapshot();
+        let snapshot = snapshot_with_bus_route();
         let topology = crate::road_topology::RoadTopology::compile(&snapshot.map).unwrap();
         let before = snapshot.clone();
 
@@ -1136,7 +1164,9 @@ mod tests {
             },
         );
 
-        assert!(first.is_empty());
+        // The fixture has exactly one bus route with derived legs.
+        assert_eq!(first.len(), 1);
+        assert!(!first[0].legs.is_empty());
         assert_eq!(first, second);
         assert_eq!(snapshot, before);
     }

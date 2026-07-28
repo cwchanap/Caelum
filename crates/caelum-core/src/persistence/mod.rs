@@ -12,6 +12,31 @@ pub use error::{
 use crate::model::GameSnapshot;
 use crate::road_topology::RoadTopology;
 
+/// Shared finite-and-non-negative validation for `f64` snapshot fields.
+/// `entity` is `None` for shell/rules/scenario fields and `Some(_)` for
+/// entity-scoped fields.
+pub(super) fn finite_non_negative(
+    entity: Option<EntityRef>,
+    field: SnapshotField,
+    value: f64,
+) -> PersistenceResult<()> {
+    if !value.is_finite() {
+        return Err(PersistenceError::InvalidNumericValue {
+            entity,
+            field,
+            reason: NumericError::NotFinite,
+        });
+    }
+    if value < 0.0 {
+        return Err(PersistenceError::InvalidNumericValue {
+            entity,
+            field,
+            reason: NumericError::Negative,
+        });
+    }
+    Ok(())
+}
+
 fn validate_and_compile(snapshot: &GameSnapshot) -> PersistenceResult<RoadTopology> {
     let topology = map::validate_shell_rules_map_and_compile(snapshot)?;
     let indexes = entities::validate_entities(snapshot, &topology)?;

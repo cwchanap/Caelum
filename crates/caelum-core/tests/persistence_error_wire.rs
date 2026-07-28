@@ -1,4 +1,6 @@
-use caelum_core::{DerivedStateError, EntityKind, EntityRef, PersistenceError, SnapshotField};
+use caelum_core::{
+    DerivedStateError, EntityKind, EntityRef, PersistenceError, SnapshotField, TileError,
+};
 use serde_json::json;
 
 #[test]
@@ -35,6 +37,30 @@ fn persistence_errors_use_the_exact_closed_camel_case_shape() {
                     "details": {
                         "route": { "kind": "busRoute", "id": "route-001" }
                     }
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn tile_count_mismatch_serializes_with_expected_and_actual_counts() {
+    let error = PersistenceError::InvalidTile {
+        tile_id: String::new(),
+        reason: TileError::CountMismatch {
+            expected: 504,
+            actual: 503,
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(error).unwrap(),
+        json!({
+            "code": "invalidTile",
+            "context": {
+                "tileId": "",
+                "reason": {
+                    "kind": "countMismatch",
+                    "details": { "expected": 504, "actual": 503 }
                 }
             }
         })

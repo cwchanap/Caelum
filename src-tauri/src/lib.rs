@@ -12,6 +12,17 @@ use tauri::State;
 
 type EngineState = Mutex<GameEngine>;
 
+/// Wire-format contract for Tauri command errors.
+///
+/// Uses `#[serde(untagged)]` so that `Domain(E)` serializes as `E`'s JSON
+/// representation (a structured object with `code`/`context` fields) and
+/// `Host(String)` serializes as a plain JSON string. Frontend consumers
+/// discriminate between the two by `typeof error === "string"` (host) vs
+/// `typeof error === "object" && error.code !== undefined` (domain). This
+/// matches the existing `shared.ts` normalization layer, which handles both
+/// shapes. Changing to explicit tagged variants would be a wire-format break
+/// requiring frontend consumer updates; the typeof-based contract is
+/// intentional and documented here.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum TauriCommandError<E> {
