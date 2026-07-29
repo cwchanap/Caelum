@@ -173,10 +173,6 @@ fn metro_station_building_on_track_tile_is_valid() {
         transit_node_id: Some("station-001".to_string()),
     });
     validate_snapshot(&snapshot).expect("metro station building on track is valid");
-    assert!(snapshot
-        .buildings
-        .iter()
-        .any(|b| b.building_type == "metroStation"));
 }
 
 // ===========================================================================

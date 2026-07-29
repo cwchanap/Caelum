@@ -16,7 +16,9 @@ use caelum_core::{
     validate_snapshot, NumericError, PersistenceError, RoadStructureError, ScenarioError,
     SnapshotField, TileError,
 };
-use common::persistence_fixtures::{campaign_snapshot, paused_snapshot, road_with_structure};
+use common::persistence_fixtures::{
+    campaign_snapshot, paused_snapshot, road_with_structure, tile_index,
+};
 
 // ===========================================================================
 // finite_non_negative — negative / not-finite growth-wave trigger times
@@ -252,6 +254,10 @@ fn duplicate_structure_id_is_rejected() {
     let mut snapshot = road_with_structure();
     let existing = snapshot.map.road_structures[0].clone();
     let id = existing.id().to_string();
+    // A second structure with the same ID is reported as
+    // `RoadStructureError::NonCanonicalId` (the structure-id uniqueness pass
+    // treats a repeated ID as non-canonical rather than emitting a dedicated
+    // "duplicate" variant).
     snapshot.map.road_structures.push(existing);
     assert_eq!(
         validate_snapshot(&snapshot).unwrap_err(),
@@ -288,7 +294,7 @@ fn duplicate_footprint_point_is_rejected() {
     // The first footprint point must pass all per-point checks (road tile with
     // a matching road_structure_id) so the loop reaches the second, duplicate
     // point and trips the `local.insert` guard.
-    let index = 10 * 28 + 10;
+    let index = tile_index(&snapshot, 10, 10);
     snapshot.map.tiles[index].kind = "road".to_string();
     snapshot.map.tiles[index].road_structure_id = Some("dup-footprint-junction".to_string());
     snapshot
@@ -374,7 +380,7 @@ fn structure_footprint_tile_not_road_is_rejected() {
 fn structure_tile_owner_mismatch_is_rejected() {
     let mut snapshot = paused_snapshot();
     // Make tile (10, 10) a bare road tile with no structure owner.
-    let index = 10 * 28 + 10;
+    let index = tile_index(&snapshot, 10, 10);
     snapshot.map.tiles[index].kind = "road".to_string();
     snapshot
         .map

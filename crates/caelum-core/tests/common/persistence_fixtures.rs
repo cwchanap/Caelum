@@ -9,8 +9,8 @@
 #![allow(dead_code)]
 
 use caelum_core::model::{
-    self, ActiveTrip, Point, RouteLeg, RoutePlan, ServicePattern, Sim, TransitMode, TripPosition,
-    TripPurpose, TripStatus, WorkerProfile,
+    self, ActiveTrip, Point, RoadStructure, RouteLeg, RoutePlan, ServicePattern, Sim, TransitMode,
+    TripPosition, TripPurpose, TripStatus, WorkerProfile,
 };
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::{EntityKind, EntityRef, GameEngine, GameIntent, GameSnapshot, RoadPreset};
@@ -277,4 +277,26 @@ pub fn walking_plan(home: Point, destination: Point) -> RoutePlan {
             (home.x - destination.x).abs() + (home.y - destination.y).abs(),
         ) * 20.0,
     }
+}
+
+/// Derive a row-major tile index from `snapshot.map.width` and `(x, y)`
+/// coordinates, replacing hardcoded `y * 28 + x` calculations in the
+/// persistence map/entity tests so they track the fixture's actual map width.
+pub fn tile_index(snapshot: &GameSnapshot, x: i32, y: i32) -> usize {
+    (usize::try_from(y).unwrap() * usize::from(snapshot.map.width)) + usize::try_from(x).unwrap()
+}
+
+/// Find the roundabout structure ID in the snapshot, panicking when the
+/// snapshot lacks one. Shared by the persistence map coverage tests that need
+/// to reference the fixture's roundabout by ID.
+pub fn roundabout_id(snapshot: &GameSnapshot) -> String {
+    snapshot
+        .map
+        .road_structures
+        .iter()
+        .find_map(|structure| match structure {
+            RoadStructure::Roundabout { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .expect("snapshot must contain a roundabout")
 }

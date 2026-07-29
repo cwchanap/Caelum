@@ -141,11 +141,14 @@ fn metro_platform_capacity_mismatch_is_rejected() {
 #[test]
 fn metro_platform_with_duplicate_route_is_rejected() {
     let mut snapshot = metro_fixture();
-    // Find the platform that carries metro-001 and duplicate the assignment.
+    // The fixture platform must already carry at least one route assignment;
+    // duplicate that existing ID so the test reliably exercises
+    // `DuplicateAssignment` rather than depending on a hardcoded route ID.
     let platform = &mut snapshot.transit.stations[0].platforms;
-    if platform[0].route_ids.is_empty() {
-        platform[0].route_ids = vec!["metro-001".to_string()];
-    }
+    assert!(
+        !platform[0].route_ids.is_empty(),
+        "fixture platform must already carry a route assignment"
+    );
     let existing = platform[0].route_ids[0].clone();
     platform[0].route_ids.push(existing);
     assert_eq!(
@@ -189,13 +192,19 @@ fn route_path_broken_mismatch_is_rejected() {
 #[test]
 fn route_leg_with_negative_path_total_seconds_is_rejected() {
     let mut snapshot = fixture_with_bus_route();
-    if let Some(TransitPath::Road {
+    // The fixture route leg must carry a Road `current_path`; panic if it is
+    // absent or a different variant so the mutation below is guaranteed to run.
+    let TransitPath::Road {
         total_travel_seconds,
         ..
-    }) = &mut snapshot.transit.routes[0].legs[0].current_path
-    {
-        *total_travel_seconds = -1.0;
-    }
+    } = snapshot.transit.routes[0].legs[0]
+        .current_path
+        .as_mut()
+        .expect("fixture route leg must have a current_path")
+    else {
+        panic!("fixture route leg current_path must be a Road path");
+    };
+    *total_travel_seconds = -1.0;
     assert_eq!(
         validate_snapshot(&snapshot).unwrap_err(),
         PersistenceError::InvalidNumericValue {
@@ -211,11 +220,17 @@ fn route_leg_with_negative_path_total_seconds_is_rejected() {
 #[test]
 fn route_leg_with_negative_step_travel_seconds_is_rejected() {
     let mut snapshot = fixture_with_bus_route();
-    if let Some(TransitPath::Road { steps, .. }) =
-        &mut snapshot.transit.routes[0].legs[0].current_path
-    {
-        steps[0].travel_seconds = -1.0;
-    }
+    // The fixture route leg must carry a Road `current_path` with at least one
+    // step; panic if absent or a different variant so the mutation is
+    // guaranteed to run.
+    let TransitPath::Road { steps, .. } = snapshot.transit.routes[0].legs[0]
+        .current_path
+        .as_mut()
+        .expect("fixture route leg must have a current_path")
+    else {
+        panic!("fixture route leg current_path must be a Road path");
+    };
+    steps[0].travel_seconds = -1.0;
     assert_eq!(
         validate_snapshot(&snapshot).unwrap_err(),
         PersistenceError::InvalidNumericValue {

@@ -203,7 +203,7 @@ fn campaign_won_state_but_no_objective_fires_is_rejected() {
 // ===========================================================================
 
 #[test]
-fn campaign_lost_state_with_wrong_loss_reason_is_rejected() {
+fn campaign_lost_state_with_wrong_loss_reason_late_arrivals_is_rejected() {
     let mut snapshot = campaign_snapshot();
     // Trigger the late-arrivals loss gate: completed_trips >= 10 and
     // late_trips / completed_trips > 0.25. With state=Running,

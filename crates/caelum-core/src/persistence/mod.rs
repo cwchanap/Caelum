@@ -11,6 +11,8 @@ pub use error::{
 
 use crate::model::{GameSnapshot, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};
 use crate::road_topology::RoadTopology;
+use serde::de::IntoDeserializer;
+use serde::Deserialize;
 
 /// Shared finite-and-non-negative validation for `f64` snapshot fields.
 /// `entity` is `None` for shell/rules/scenario fields and `Some(_)` for
@@ -86,7 +88,7 @@ pub fn check_schema_version(actual: u16) -> Result<(), PersistenceError> {
 /// via `serde_wasm_bindgen` and calls [`check_schema_version`] with the
 /// resulting version.
 pub fn check_snapshot_schema(value: &serde_json::Value) -> Result<(), PersistenceError> {
-    let actual = serde_json::from_value::<SnapshotSchemaProbe>(value.clone())
+    let actual = SnapshotSchemaProbe::deserialize(value.into_deserializer())
         .map(|probe| probe.schema_version)
         .unwrap_or(0);
     check_schema_version(actual)
