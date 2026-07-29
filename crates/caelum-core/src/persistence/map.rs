@@ -4,8 +4,12 @@ use crate::building_catalog::building_definition;
 use crate::clock::{self, GAME_DAY_SECONDS};
 use crate::heading::{heading_rank, offset, opposite};
 use crate::ids::tile_id;
-use crate::model::{EconomyPreset, GameMode, GameSnapshot, GrowthAction, MetricsState, Point};
+use crate::model::{
+    EconomyPreset, GameMap, GameMode, GameSnapshot, GrowthAction, Heading, MetricsState, Point,
+    RoadStructure,
+};
 use crate::road_topology::RoadTopology;
+use crate::roundabouts::{recapture_boundary_ports, roundabout_structure_id, roundabout_template};
 use crate::sandbox::{MAP_HEIGHT, MAP_WIDTH};
 
 use super::{
@@ -329,7 +333,7 @@ fn validate_map(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         if tile.kind != "road"
             && (tile.one_way.is_some()
                 || !tile.road_connections.is_empty()
-                || tile.road_structure_id.is_some())
+                || (tile.road_structure_id.is_some() && tile.kind != "empty"))
         {
             return Err(invalid_tile(tile, TileError::NonRoadHasRoadState));
         }
@@ -431,7 +435,14 @@ fn validate_structures(snapshot: &GameSnapshot) -> PersistenceResult<()> {
                     reason: RoadStructureError::NonRoadFootprintTile,
                 });
             };
-            if tile.kind != "road" {
+            // Roundabout protected-island tiles are "empty"; all other
+            // structure-owned tiles must be "road". The canonical
+            // reconstruction check below verifies the exact kind per template.
+            let kind_ok = match structure {
+                RoadStructure::Roundabout { .. } => tile.kind == "road" || tile.kind == "empty",
+                RoadStructure::AutomaticJunction { .. } => tile.kind == "road",
+            };
+            if !kind_ok {
                 return Err(PersistenceError::InvalidRoadStructure {
                     structure_id: id.to_string(),
                     reason: RoadStructureError::NonRoadFootprintTile,
@@ -470,6 +481,220 @@ fn validate_structures(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             }
         }
     }
+
+    // Canonical reconstruction: verify each structure matches what the
+    // authoritative roundabout/automatic-junction helpers would produce from
+    // the map's current road state. A self-consistent but forged structure
+    // would pass the basic checks above but diverge from reconstruction.
+    for structure in &map.road_structures {
+        match structure {
+            RoadStructure::Roundabout { .. } => {
+                validate_roundabout_canonical(map, structure)?;
+            }
+            RoadStructure::AutomaticJunction { .. } => {
+                // Handled collectively by reconstruction below.
+            }
+        }
+    }
+    validate_automatic_junction_reconstruction(snapshot)?;
+
+    Ok(())
+}
+
+/// Reconstruct each roundabout from its `(size, origin)` via the authoritative
+/// `roundabout_template` helper and compare its canonical ID, footprint, lane
+/// facts, movement facts, and boundary ports against the serialized structure.
+fn validate_roundabout_canonical(
+    map: &GameMap,
+    structure: &RoadStructure,
+) -> PersistenceResult<()> {
+    let RoadStructure::Roundabout {
+        id,
+        origin,
+        size,
+        footprint,
+        ports,
+    } = structure
+    else {
+        return Ok(());
+    };
+
+    // 1. Canonical ID.
+    let expected_id = roundabout_structure_id(*size, *origin);
+    if id != &expected_id {
+        return Err(PersistenceError::InvalidRoadStructure {
+            structure_id: id.to_string(),
+            reason: RoadStructureError::NonCanonicalId,
+        });
+    }
+
+    // 2. Canonical footprint.
+    let template = roundabout_template(*size, *origin);
+    if footprint.as_slice() != template.footprint.as_slice() {
+        return Err(PersistenceError::InvalidRoadStructure {
+            structure_id: id.to_string(),
+            reason: RoadStructureError::NonCanonicalFootprint,
+        });
+    }
+
+    // 3. Lane facts: all footprint tiles must have one_way == None and
+    //    must not carry track (roundabout tiles are road/empty infrastructure,
+    //    not track infrastructure).
+    for point in footprint {
+        if map
+            .tile(*point)
+            .is_some_and(|tile| tile.one_way.is_some() || tile.has_track)
+        {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: id.to_string(),
+                reason: RoadStructureError::NonCanonicalLaneFacts,
+            });
+        }
+    }
+
+    // 4. Movement facts: kind and road_connections match the canonical state
+    //    derived from the template + current boundary ports.
+    let expected_ports = recapture_boundary_ports(map, &template);
+    let mut expected_port_edges: BTreeMap<Point, Vec<Heading>> = BTreeMap::new();
+    for port in &expected_ports {
+        expected_port_edges
+            .entry(port.point)
+            .or_default()
+            .push(port.edge);
+    }
+    for edges in expected_port_edges.values_mut() {
+        edges.sort_by_key(|heading| heading_rank(*heading));
+        edges.dedup();
+    }
+    for point in footprint {
+        let Some(tile) = map.tile(*point) else {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: id.to_string(),
+                reason: RoadStructureError::NonCanonicalMovementFacts,
+            });
+        };
+        let expected_kind = if template.circulation_tiles.contains(point) {
+            "road"
+        } else {
+            "empty"
+        };
+        if tile.kind != expected_kind {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: id.to_string(),
+                reason: RoadStructureError::NonCanonicalMovementFacts,
+            });
+        }
+        let expected_connections = expected_port_edges.get(point).cloned().unwrap_or_default();
+        if tile.road_connections != expected_connections {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: id.to_string(),
+                reason: RoadStructureError::NonCanonicalMovementFacts,
+            });
+        }
+    }
+
+    // 5. Boundary ports match the canonical reconstruction.
+    let mut serialized_ports = ports.clone();
+    serialized_ports.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    serialized_ports.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    let mut reconstructed_ports = expected_ports;
+    reconstructed_ports.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
+    reconstructed_ports
+        .dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
+    if serialized_ports != reconstructed_ports {
+        return Err(PersistenceError::InvalidRoadStructure {
+            structure_id: id.to_string(),
+            reason: RoadStructureError::NonCanonicalMovementFacts,
+        });
+    }
+
+    Ok(())
+}
+
+/// Reconstruct every automatic junction by cloning the map, clearing all
+/// automatic-junction structures and tile ownership, and running the
+/// authoritative `refresh_all_automatic_junctions` on the clone. Compare the
+/// reconstructed structures' IDs, footprints, and ports against the serialized
+/// structures. Any mismatch indicates a forged or stale serialized junction.
+fn validate_automatic_junction_reconstruction(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+    let serialized_junctions: Vec<&RoadStructure> = snapshot
+        .map
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .collect();
+
+    if serialized_junctions.is_empty() {
+        return Ok(());
+    }
+
+    // Clone the map and strip all automatic-junction state so the
+    // reconstruction starts from the same authored-road baseline.
+    let mut clone = snapshot.map.clone();
+    let automatic_ids: BTreeSet<String> = snapshot
+        .map
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .map(|structure| structure.id().to_string())
+        .collect();
+    for tile in &mut clone.tiles {
+        if tile
+            .road_structure_id
+            .as_ref()
+            .is_some_and(|id| automatic_ids.contains(id))
+        {
+            tile.road_structure_id = None;
+        }
+    }
+    clone
+        .road_structures
+        .retain(|structure| !structure.is_automatic_junction());
+
+    // Rebuild automatic junctions from the authored-road state.
+    crate::road::refresh_all_automatic_junctions(&mut clone).map_err(|_| {
+        PersistenceError::InvalidRoadStructure {
+            structure_id: String::new(),
+            reason: RoadStructureError::AutomaticJunctionMismatch,
+        }
+    })?;
+
+    let reconstructed_junctions: Vec<&RoadStructure> = clone
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .collect();
+
+    // The reconstructed set must match the serialized set exactly.
+    if reconstructed_junctions.len() != serialized_junctions.len() {
+        return Err(PersistenceError::InvalidRoadStructure {
+            structure_id: String::new(),
+            reason: RoadStructureError::AutomaticJunctionMismatch,
+        });
+    }
+
+    let reconstructed_by_id: BTreeMap<&str, &RoadStructure> = reconstructed_junctions
+        .iter()
+        .map(|junction| (junction.id(), *junction))
+        .collect();
+
+    for serialized in &serialized_junctions {
+        let Some(reconstructed) = reconstructed_by_id.get(serialized.id()) else {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: serialized.id().to_string(),
+                reason: RoadStructureError::AutomaticJunctionMismatch,
+            });
+        };
+        if serialized.footprint() != reconstructed.footprint()
+            || serialized.ports() != reconstructed.ports()
+        {
+            return Err(PersistenceError::InvalidRoadStructure {
+                structure_id: serialized.id().to_string(),
+                reason: RoadStructureError::AutomaticJunctionMismatch,
+            });
+        }
+    }
+
     Ok(())
 }
 
