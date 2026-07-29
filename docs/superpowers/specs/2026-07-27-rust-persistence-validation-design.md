@@ -659,6 +659,7 @@ pub enum RoadStructureError {
     TileOwnerMismatch,
     DanglingTileOwner,
     DuplicatePortId,
+    DuplicatePortPointEdge,
     InvalidBoundaryPort,
     NonCanonicalFootprint,
     NonCanonicalLaneFacts,
@@ -805,6 +806,16 @@ Exact top-level and nested serialization follows these examples:
         "route": { "kind": "busRoute", "id": "route-001" }
       }
     }
+  }
+}
+```
+
+```json
+{
+  "code": "invalidRoadStructure",
+  "context": {
+    "structureId": "roundabout:compact2x2:4,2",
+    "reason": { "kind": "duplicatePortPointEdge" }
   }
 }
 ```
