@@ -12,6 +12,7 @@ use crate::road_topology::RoadTopology;
 use crate::route_lifecycle::derive_route_states;
 use crate::service_itinerary::service_visits;
 use crate::stop_access;
+use crate::transit::vehicle_capacity;
 
 use super::{
     AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, NumericError,
@@ -995,11 +996,7 @@ fn validate_vehicles(
                 reason: AssignmentError::VehicleMissingFromLine,
             });
         }
-        let expected_capacity = if vehicle.mode == TransitMode::Bus {
-            18
-        } else {
-            90
-        };
+        let expected_capacity = vehicle_capacity(vehicle.mode);
         if vehicle.capacity != expected_capacity {
             return Err(PersistenceError::InvalidEntity {
                 entity: entity.clone(),

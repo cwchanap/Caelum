@@ -1,6 +1,6 @@
 use caelum_core::model::{Point, SNAPSHOT_SCHEMA_VERSION};
 use caelum_core::{
-    load_snapshot_from_json, DerivedStateError, EntityKind, EntityRef, GameEngine, GameIntent,
+    check_snapshot_schema, DerivedStateError, EntityKind, EntityRef, GameEngine, GameIntent,
     PersistenceError, RoadPreset, SnapshotField,
 };
 
@@ -65,7 +65,7 @@ fn schema_v3_json_missing_starting_capital_is_rejected_before_full_deserializati
         .expect("sandbox rules are an object")
         .remove("startingCapital");
 
-    let error = load_snapshot_from_json(value)
+    let error = check_snapshot_schema(&value)
         .expect_err("schema-v3 JSON must be rejected before full deserialization");
     let wire = serde_json::to_value(error).expect("persistence error serializes");
 

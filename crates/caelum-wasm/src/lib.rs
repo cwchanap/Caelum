@@ -1,6 +1,6 @@
 use caelum_core::{
-    GameEngine, GameIntent, GameSnapshot, PersistenceError, RoadMutationPreviewRequest,
-    RoutePreviewRequest, SandboxCreationRequest, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
+    check_schema_version, GameEngine, GameIntent, GameSnapshot, RoadMutationPreviewRequest,
+    RoutePreviewRequest, SandboxCreationRequest, SnapshotSchemaProbe,
 };
 use wasm_bindgen::prelude::*;
 
@@ -32,9 +32,8 @@ impl WasmGameEngine {
         // missing-field serde error. If the probe cannot read a schema version,
         // treat it as unknown (0) and still reject.
         //
-        // `GameEngine::from_snapshot` validates the version again after full
-        // deserialization; this probe exists to surface the typed persistence
-        // error before deserialization can fail on a schema-v4-only field. A
+        // The version comparison is delegated to `check_schema_version` (the
+        // single shared comparison used by both host bridges). A
         // full-deserialization failure after the schema check passes is a raw
         // transport/deserialization error, not a typed persistence error: it
         // rejects with a JavaScript string via `to_js_error`, matching the
@@ -44,13 +43,8 @@ impl WasmGameEngine {
             serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(snapshot.clone())
                 .map(|probe| probe.schema_version)
                 .unwrap_or(0);
-        if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
-            let error = PersistenceError::UnsupportedSchema {
-                expected: SNAPSHOT_SCHEMA_VERSION,
-                actual: probe_schema_version,
-            };
-            return Err(serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error));
-        }
+        check_schema_version(probe_schema_version)
+            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
         let snapshot: GameSnapshot =
             serde_wasm_bindgen::from_value(snapshot).map_err(to_js_error)?;
         let inner = GameEngine::from_snapshot(snapshot)
