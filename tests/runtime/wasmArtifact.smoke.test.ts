@@ -16,14 +16,6 @@ const canonicalCrossroadsRequest: SandboxCreationRequest = {
   moveInRate: "paused",
 };
 
-const unsupportedSchemaError = {
-  code: "unsupportedSchema",
-  context: {
-    expected: SNAPSHOT_SCHEMA_VERSION,
-    actual: 0,
-  },
-};
-
 /**
  * Loads the real built WASM artifact (not the vi.mock in wasmBackend.test.ts).
  * Requires `bun run ensure-wasm` / pretest hook so src/generated/caelum_wasm exists.
@@ -143,7 +135,7 @@ describe("real WASM artifact smoke", () => {
 
     await expect(
       backend.loadSnapshot!(missing as RustGameSnapshot),
-    ).rejects.toMatchObject(unsupportedSchemaError);
+    ).rejects.toThrow(/objectives|missing field/i);
   });
 
   it("rejects invalid demand multipliers at the real WASM Rust boundary", async () => {
@@ -152,8 +144,8 @@ describe("real WASM artifact smoke", () => {
       const raw = await backend.snapshot();
       raw.rules.sandbox.demandMultiplier = invalid;
 
-      await expect(backend.loadSnapshot!(raw)).rejects.toMatchObject(
-        unsupportedSchemaError,
+      await expect(backend.loadSnapshot!(raw)).rejects.toThrow(
+        /demand multiplier/i,
       );
     }
   });
@@ -175,30 +167,36 @@ describe("real WASM artifact smoke", () => {
     const cases: Array<{
       field: keyof RustObjectiveThresholds;
       invalid: number[];
+      pattern: RegExp;
     }> = [
       {
         field: "maxLateRatio",
         invalid: [-0.1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max late ratio/i,
       },
       {
         field: "maxUnservedRatio",
         invalid: [-0.1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max unserved ratio/i,
       },
       {
         field: "maxAverageWait",
         invalid: [-1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /max average wait/i,
       },
       {
         field: "rollingWindowSeconds",
         invalid: [0, -1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /rolling window/i,
       },
       {
         field: "survivalTime",
         invalid: [0, -1, Number.NaN, Number.POSITIVE_INFINITY],
+        pattern: /survival time/i,
       },
     ];
 
-    for (const { field, invalid } of cases) {
+    for (const { field, invalid, pattern } of cases) {
       for (const value of invalid) {
         const backend = await createWasmBackend();
         const raw = await backend.snapshot();
@@ -206,9 +204,7 @@ describe("real WASM artifact smoke", () => {
         raw.scenario.objectives = { ...validThresholds };
         (raw.scenario.objectives as RustObjectiveThresholds)[field] = value;
 
-        await expect(backend.loadSnapshot!(raw)).rejects.toMatchObject(
-          unsupportedSchemaError,
-        );
+        await expect(backend.loadSnapshot!(raw)).rejects.toThrow(pattern);
       }
     }
   });
