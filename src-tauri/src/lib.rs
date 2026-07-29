@@ -519,4 +519,56 @@ mod tests {
             json!(SNAPSHOT_SCHEMA_VERSION - 1)
         );
     }
+
+    #[test]
+    fn malformed_schema_v4_full_deserialization_failure_is_raw_string() {
+        // A payload whose `schemaVersion` is v4 but whose body cannot
+        // deserialize into `GameSnapshot` (e.g. a required field has the
+        // wrong type) must reject with a raw JSON string command error, not a
+        // typed `PersistenceError` object. This matches the WASM bridge
+        // (which rejects via `to_js_error`) and the host contract in design
+        // §12.7: raw deserialization failures are strings on both hosts.
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.runtime_authority_mut().__allow_command(
+            "game_load_snapshot".to_string(),
+            tauri::utils::acl::ExecutionContext::Local,
+        );
+        let app = tauri::test::mock_builder()
+            .manage(Mutex::new(GameEngine::new()))
+            .invoke_handler(tauri::generate_handler![game_load_snapshot])
+            .build(context)
+            .expect("test Tauri app should build");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("test webview should build");
+
+        // Start from a valid v4 snapshot, then corrupt a required field so
+        // full deserialization fails while the schema probe still reads v4.
+        let mut snapshot_value =
+            serde_json::to_value(GameEngine::new().snapshot()).expect("snapshot serializes");
+        let snapshot_obj = snapshot_value.as_object_mut().expect("snapshot is object");
+        // `tiles` must be an array; set it to a string to force a serde type
+        // error during full deserialization.
+        snapshot_obj["map"]["tiles"] = json!("not-an-array");
+
+        let response = get_ipc_response(
+            &webview,
+            InvokeRequest {
+                cmd: "game_load_snapshot".into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: InvokeBody::Json(json!({ "snapshot": snapshot_value })),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        );
+        let error = response.expect_err("malformed v4 payload must reject");
+
+        // Raw deserialization failures are JSON strings, not typed objects.
+        assert!(
+            error.is_string(),
+            "expected a raw string error, got: {error}"
+        );
+    }
 }

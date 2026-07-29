@@ -152,11 +152,18 @@ pub(super) fn validate_entities<'a>(
         }
     }
 
-    validate_buildings(snapshot, &indexes)?;
-    validate_nodes_and_platforms(snapshot, &indexes)?;
+    let building_footprint = validate_buildings(snapshot, &indexes)?;
+    validate_nodes_and_platforms(snapshot, &indexes, &building_footprint)?;
     validate_routes(snapshot, &indexes, topology)?;
     validate_vehicles(snapshot, &indexes)?;
     Ok(indexes)
+}
+
+/// Building footprint occupancy entry used by node validation to reject
+/// present transit nodes that overlap a building without being declared by it.
+pub(super) struct BuildingOccupant<'a> {
+    pub id: &'a str,
+    pub transit_node_id: Option<&'a str>,
 }
 
 fn register<'a>(
@@ -263,11 +270,11 @@ fn invalid_entity(kind: EntityKind, id: &str, reason: EntityError) -> Persistenc
     }
 }
 
-fn validate_buildings(
-    snapshot: &GameSnapshot,
+fn validate_buildings<'a>(
+    snapshot: &'a GameSnapshot,
     indexes: &EntityIndexes<'_>,
-) -> PersistenceResult<()> {
-    let mut occupied: BTreeMap<crate::model::Point, EntityRef> = BTreeMap::new();
+) -> PersistenceResult<BTreeMap<crate::model::Point, BuildingOccupant<'a>>> {
+    let mut occupied: BTreeMap<crate::model::Point, BuildingOccupant<'a>> = BTreeMap::new();
     let mut claimed_nodes = BTreeSet::new();
     for building in &snapshot.buildings {
         let entity = entity_ref(EntityKind::Building, &building.id);
@@ -326,9 +333,13 @@ fn validate_buildings(
                     reason: EntityError::InvalidStaticShape,
                 });
             }
-            if let Some(first) = occupied.insert(*point, entity.clone()) {
+            let occupant = BuildingOccupant {
+                id: &building.id,
+                transit_node_id: building.transit_node_id.as_deref(),
+            };
+            if let Some(first) = occupied.insert(*point, occupant) {
                 return Err(PersistenceError::InvalidOwnership {
-                    owner: first,
+                    owner: entity_ref(EntityKind::Building, first.id),
                     owned: entity.clone(),
                     reason: OwnershipError::SpatialOverlap,
                 });
@@ -336,7 +347,7 @@ fn validate_buildings(
         }
         validate_building_node(indexes, building, definition.effect, &mut claimed_nodes)?;
     }
-    Ok(())
+    Ok(occupied)
 }
 
 fn validate_building_node(
@@ -400,6 +411,7 @@ fn validate_building_node(
 fn validate_nodes_and_platforms(
     snapshot: &GameSnapshot,
     indexes: &EntityIndexes<'_>,
+    building_footprint: &BTreeMap<crate::model::Point, BuildingOccupant<'_>>,
 ) -> PersistenceResult<()> {
     let mut anchors = BTreeMap::new();
     for stop in &snapshot.transit.stops {
@@ -413,6 +425,7 @@ fn validate_nodes_and_platforms(
                 .routes_for_node(&stop.id)
                 .is_some_and(|routes| !routes.is_empty()),
             &mut anchors,
+            building_footprint,
         )?;
         if stop.status == TransitNodeStatus::Present
             && stop.road_access != stop_access::resolve_stop_access(snapshot, &stop.id)
@@ -440,6 +453,7 @@ fn validate_nodes_and_platforms(
                 .routes_for_node(&station.id)
                 .is_some_and(|routes| !routes.is_empty()),
             &mut anchors,
+            building_footprint,
         )?;
         if station.status == TransitNodeStatus::Present
             && !snapshot
@@ -476,6 +490,7 @@ fn validate_node_lifetime(
     point: crate::model::Point,
     referenced: bool,
     anchors: &mut BTreeMap<crate::model::Point, EntityRef>,
+    building_footprint: &BTreeMap<crate::model::Point, BuildingOccupant<'_>>,
 ) -> PersistenceResult<()> {
     if status == TransitNodeStatus::Missing {
         if !referenced {
@@ -500,6 +515,19 @@ fn validate_node_lifetime(
             field: SnapshotField::NodeAnchor,
             reason: EntityError::InvalidStaticShape,
         });
+    }
+    // A present transit node may overlap a building footprint only when that
+    // exact building declares the node through `transit_node_id` (validated
+    // reciprocally by `validate_building_node`). An unowned node sitting on an
+    // ordinary building's footprint is a malformed spatial state.
+    if let Some(occupant) = building_footprint.get(&point) {
+        if occupant.transit_node_id != Some(node.id.as_str()) {
+            return Err(PersistenceError::InvalidOwnership {
+                owner: entity_ref(EntityKind::Building, occupant.id),
+                owned: node,
+                reason: OwnershipError::SpatialOverlap,
+            });
+        }
     }
     if let Some(first) = anchors.insert(point, node.clone()) {
         return Err(PersistenceError::InvalidOwnership {

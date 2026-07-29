@@ -229,6 +229,49 @@ fn overlapping_building_footprints_are_rejected() {
     );
 }
 
+#[test]
+fn unowned_present_node_overlapping_building_footprint_is_rejected() {
+    // A canonical bus stop placed at an ordinary building's origin (without
+    // the building declaring it via `transit_node_id`) is a malformed spatial
+    // state. The building's footprint tiles are valid for the building, and
+    // the stop's platform/road-access fields are individually consistent, so
+    // only the cross-entity building↔node occupancy check catches it.
+    let mut snapshot = paused_snapshot();
+    for index in 0..4 {
+        snapshot.map.tiles[index].area = Some("residential".to_string());
+    }
+    snapshot.buildings = vec![model::PlacedBuilding {
+        id: "building-001".to_string(),
+        building_type: "smallHouse".to_string(),
+        origin: Point { x: 0, y: 0 },
+        rotation: 0,
+        occupied_tiles: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 0 }],
+        transit_node_id: None,
+    }];
+    // Inject an unrelated present bus stop at the building's origin.
+    snapshot.transit.stops = vec![Stop {
+        id: "stop-001".to_string(),
+        kind: BusStopKind::BusStop,
+        status: TransitNodeStatus::Present,
+        position: Point { x: 0, y: 0 },
+        platforms: vec![model::Platform {
+            id: "stop-001-p0".to_string(),
+            label: "A".to_string(),
+            capacity: 1,
+            route_ids: vec![],
+        }],
+        road_access: None,
+    }];
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidOwnership {
+            owner: entity_ref(EntityKind::Building, "building-001"),
+            owned: entity_ref(EntityKind::Stop, "stop-001"),
+            reason: OwnershipError::SpatialOverlap,
+        }
+    );
+}
+
 // ===========================================================================
 // transit node & platform validation
 // ===========================================================================

@@ -517,7 +517,10 @@ pub fn sync_roundabout_ports(map: &mut GameMap) {
     }
 }
 
-fn recapture_boundary_ports(map: &GameMap, template: &RoundaboutTemplate) -> Vec<RoadPort> {
+pub(crate) fn recapture_boundary_ports(
+    map: &GameMap,
+    template: &RoundaboutTemplate,
+) -> Vec<RoadPort> {
     let mut captured = Vec::new();
     for candidate in scan_boundary_port_candidates(map, template) {
         let Some(slot) = template
