@@ -1,5 +1,6 @@
 use caelum_core::{
-    DerivedStateError, EntityKind, EntityRef, PersistenceError, SnapshotField, TileError,
+    DerivedStateError, EntityKind, EntityRef, PersistenceError, RoadStructureError, SnapshotField,
+    TileError,
 };
 use serde_json::json;
 
@@ -64,6 +65,60 @@ fn tile_count_mismatch_serializes_with_expected_and_actual_counts() {
                 }
             }
         })
+    );
+}
+
+#[test]
+fn duplicate_port_point_edge_serializes_with_the_exact_closed_shape() {
+    let error = PersistenceError::InvalidRoadStructure {
+        structure_id: "roundabout:compact2x2:4,2".to_string(),
+        reason: RoadStructureError::DuplicatePortPointEdge,
+    };
+    let expected = json!({
+        "code": "invalidRoadStructure",
+        "context": {
+            "structureId": "roundabout:compact2x2:4,2",
+            "reason": { "kind": "duplicatePortPointEdge" }
+        }
+    });
+    assert_eq!(serde_json::to_value(&error).unwrap(), expected);
+    let round_trip: PersistenceError = serde_json::from_value(expected.clone()).unwrap();
+    assert_eq!(round_trip, error);
+    // The closed v1 wire policy rejects additive keys inside the context and
+    // inside the unit-variant `reason` payload.
+    let extra_context = json!({
+        "code": "invalidRoadStructure",
+        "context": {
+            "structureId": "roundabout:compact2x2:4,2",
+            "reason": { "kind": "duplicatePortPointEdge" },
+            "extra": true
+        }
+    });
+    assert!(
+        serde_json::from_value::<PersistenceError>(extra_context).is_err(),
+        "invalidRoadStructure context must reject unknown keys"
+    );
+    let extra_reason = json!({
+        "code": "invalidRoadStructure",
+        "context": {
+            "structureId": "roundabout:compact2x2:4,2",
+            "reason": { "kind": "duplicatePortPointEdge", "details": {} }
+        }
+    });
+    assert!(
+        serde_json::from_value::<PersistenceError>(extra_reason).is_err(),
+        "unit-variant road structure reasons must not carry a details payload"
+    );
+    let unknown_kind = json!({
+        "code": "invalidRoadStructure",
+        "context": {
+            "structureId": "roundabout:compact2x2:4,2",
+            "reason": { "kind": "unknown" }
+        }
+    });
+    assert!(
+        serde_json::from_value::<PersistenceError>(unknown_kind).is_err(),
+        "unknown road structure reason kind must be rejected"
     );
 }
 
