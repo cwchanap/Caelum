@@ -456,11 +456,24 @@ fn validate_structures(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             }
         }
         let mut port_ids = BTreeSet::new();
+        let mut port_point_edges: BTreeSet<(Point, Heading)> = BTreeSet::new();
         for port in structure.ports() {
             if !port_ids.insert(port.id.as_str()) {
                 return Err(PersistenceError::InvalidRoadStructure {
                     structure_id: id.to_string(),
                     reason: RoadStructureError::DuplicatePortId,
+                });
+            }
+            // Reject duplicate (point, edge) pairs even when the port IDs
+            // differ. Without this, a forged second port at the same boundary
+            // edge could pass the basic checks, be concealed by the dedup in
+            // `validate_roundabout_canonical`, yet still emit additional
+            // entry/exit transitions during topology compilation (which
+            // iterates the original non-deduped port list).
+            if !port_point_edges.insert((port.point, port.edge)) {
+                return Err(PersistenceError::InvalidRoadStructure {
+                    structure_id: id.to_string(),
+                    reason: RoadStructureError::DuplicatePortPointEdge,
                 });
             }
             if !local.contains(&port.point) {
@@ -473,10 +486,26 @@ fn validate_structures(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     }
     for tile in &map.tiles {
         if let Some(owner) = &tile.road_structure_id {
-            if !structures.contains_key(owner.as_str()) {
+            let Some(structure) = structures.get(owner.as_str()) else {
                 return Err(PersistenceError::InvalidRoadStructure {
                     structure_id: owner.clone(),
                     reason: RoadStructureError::DanglingTileOwner,
+                });
+            };
+            // The tile must actually belong to the resolved structure's
+            // footprint. Without this, an unrelated road or empty tile can
+            // borrow an existing structure ID, pass validation, and either
+            // disappear from ordinary topology (road tiles with an owner are
+            // excluded from `compile_reciprocal_lane_transitions`) or become
+            // permanently blocked by false ownership.
+            let tile_point = Point {
+                x: tile.x,
+                y: tile.y,
+            };
+            if !structure.footprint().contains(&tile_point) {
+                return Err(PersistenceError::InvalidRoadStructure {
+                    structure_id: owner.clone(),
+                    reason: RoadStructureError::TileOwnerMismatch,
                 });
             }
         }
@@ -593,14 +622,15 @@ fn validate_roundabout_canonical(
         }
     }
 
-    // 5. Boundary ports match the canonical reconstruction.
+    // 5. Boundary ports match the canonical reconstruction. Compare the
+    //    exact sorted vectors without deduplication — duplicate (point, edge)
+    //    pairs are already rejected by the forward pass, and deduplicating
+    //    only for validation could hide ports that remain observable to
+    //    topology compilation (which iterates the original port list).
     let mut serialized_ports = ports.clone();
     serialized_ports.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
-    serialized_ports.dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
     let mut reconstructed_ports = expected_ports;
     reconstructed_ports.sort_by_key(|port| (port.point, port.edge, port.id.clone()));
-    reconstructed_ports
-        .dedup_by(|left, right| left.point == right.point && left.edge == right.edge);
     if serialized_ports != reconstructed_ports {
         return Err(PersistenceError::InvalidRoadStructure {
             structure_id: id.to_string(),
@@ -624,10 +654,13 @@ fn validate_automatic_junction_reconstruction(snapshot: &GameSnapshot) -> Persis
         .filter(|structure| structure.is_automatic_junction())
         .collect();
 
-    if serialized_junctions.is_empty() {
-        return Ok(());
-    }
-
+    // Always run reconstruction even when no junctions are serialized.
+    // A blank map naturally reconstructs an empty set, but a crossroads map
+    // with every serialized junction removed (and road_structure_id cleared)
+    // must be rejected — the crossing would otherwise compile as ordinary
+    // roads. Skipping reconstruction when the candidate claims no junctions
+    // lets the corrupted snapshot control whether the canonical oracle runs.
+    //
     // Clone the map and strip all automatic-junction state so the
     // reconstruction starts from the same authored-road baseline.
     let mut clone = snapshot.map.clone();
