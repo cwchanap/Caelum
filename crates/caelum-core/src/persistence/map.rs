@@ -330,11 +330,13 @@ fn validate_map(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         }) {
             return Err(invalid_tile(tile, TileError::UnsupportedArea));
         }
-        if tile.kind != "road"
-            && (tile.one_way.is_some()
-                || !tile.road_connections.is_empty()
-                || (tile.road_structure_id.is_some() && tile.kind != "empty"))
-        {
+        // At this point `tile.kind` is either "empty" or "road" (the
+        // `UnsupportedKind` check above rejected everything else), so a
+        // non-road tile here is always "empty". Structure-owned empty tiles
+        // (e.g. roundabout centers) are intentionally allowed to carry a
+        // `road_structure_id` without other road state, so the
+        // `road_structure_id` field is deliberately excluded from this check.
+        if tile.kind != "road" && (tile.one_way.is_some() || !tile.road_connections.is_empty()) {
             return Err(invalid_tile(tile, TileError::NonRoadHasRoadState));
         }
         if tile.kind == "road" && tile.has_track {

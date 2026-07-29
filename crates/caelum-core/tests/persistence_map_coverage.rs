@@ -16,7 +16,9 @@ use caelum_core::{
     create_sandbox_snapshot, validate_snapshot, GameEngine, GameIntent, PersistenceError,
     RoadPreset, RoadStructureError, SandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
 };
-use common::persistence_fixtures::{apply, campaign_snapshot, road_with_structure};
+use common::persistence_fixtures::{
+    apply, campaign_snapshot, road_with_structure, roundabout_id, tile_index,
+};
 
 // ===========================================================================
 // validate_rules_and_scenario / validate_growth_action — successful path
@@ -102,19 +104,11 @@ fn roundabout_protected_island_wrong_kind_is_rejected() {
     let mut snapshot = standard_roundabout_snapshot();
     // The 3x3 roundabout at origin (6, 5) has its protected island at (7, 6)
     // (offset (1, 1)), which the canonical template expects to be "empty".
-    let index = 6 * 28 + 7;
+    let index = tile_index(&snapshot, 7, 6);
     assert_eq!(snapshot.map.tiles[index].kind, "empty");
     snapshot.map.tiles[index].kind = "road".to_string();
     // Find the roundabout structure id for the expected error.
-    let id = snapshot
-        .map
-        .road_structures
-        .iter()
-        .find_map(|structure| match structure {
-            RoadStructure::Roundabout { id, .. } => Some(id.clone()),
-            _ => None,
-        })
-        .expect("fixture must contain a roundabout");
+    let id = roundabout_id(&snapshot);
     assert_eq!(
         validate_snapshot(&snapshot).unwrap_err(),
         PersistenceError::InvalidRoadStructure {
@@ -157,7 +151,7 @@ fn extra_automatic_junction_count_mismatch_is_rejected() {
     // straight segment (only East/West connections), so reconstruction will not
     // create a junction there.
     let fake_point = Point { x: 2, y: 5 };
-    let fake_index = 5 * 28 + 2;
+    let fake_index = tile_index(&snapshot, 2, 5);
     assert_eq!(snapshot.map.tiles[fake_index].kind, "road");
     let fake_id = "fake-junction-001".to_string();
     snapshot.map.tiles[fake_index].road_structure_id = Some(fake_id.clone());
@@ -238,19 +232,6 @@ fn crossroads_with_all_junctions_stripped_is_rejected() {
 // validate_structures — reverse ownership pass: tile must be in owner footprint
 // ===========================================================================
 
-/// Find the roundabout structure ID in the snapshot.
-fn roundabout_id(snapshot: &caelum_core::GameSnapshot) -> String {
-    snapshot
-        .map
-        .road_structures
-        .iter()
-        .find_map(|structure| match structure {
-            RoadStructure::Roundabout { id, .. } => Some(id.clone()),
-            _ => None,
-        })
-        .expect("snapshot must contain a roundabout")
-}
-
 /// A road tile outside the roundabout footprint borrows the roundabout's
 /// structure ID. The forward pass (footprint tiles must own the structure) is
 /// unaffected, and the reverse pass previously only checked that the owner
@@ -265,7 +246,7 @@ fn road_tile_outside_owner_footprint_is_rejected() {
     // Tile (2, 5) is on the horizontal road but far from the compact 2x2
     // roundabout at origin (6, 5) — its footprint is [(6,5), (7,5), (6,6),
     // (7,6)].
-    let index = 5 * 28 + 2;
+    let index = tile_index(&snapshot, 2, 5);
     assert_eq!(snapshot.map.tiles[index].kind, "road");
     assert!(snapshot.map.tiles[index].road_structure_id.is_none());
     snapshot.map.tiles[index].road_structure_id = Some(id.clone());

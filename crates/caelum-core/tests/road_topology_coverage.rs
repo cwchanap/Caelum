@@ -14,8 +14,8 @@
 //! - `deterministic_access_tile_dijkstra` off-map endpoint rejections.
 //!
 //! `transition_geometry`'s `RoundaboutEntry | RoundaboutCirculation |
-//! RoundaboutExit` arm (lines 781-786) is genuinely unreachable through the
-//! public API: `transition_geometry` is only called from
+//! RoundaboutExit` arm is genuinely unreachable through the public API:
+//! `transition_geometry` is only called from
 //! `compile_reciprocal_lane_transitions` and
 //! `compile_automatic_junction_transitions`, both of which classify movements
 //! via `classify_movement`, which never produces a `Roundabout*` variant.

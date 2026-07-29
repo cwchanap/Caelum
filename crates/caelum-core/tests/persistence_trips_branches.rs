@@ -201,10 +201,11 @@ fn route_plan_estimated_seconds_mismatch_is_rejected() {
     let mut snapshot = trip_fixture();
     let home = snapshot.active_trips[0].origin;
     let dest = snapshot.active_trips[0].destination;
-    // Correct walking plan but bump estimated_seconds by +1.0 so it no longer
-    // equals router::route_plan_estimated_seconds (232).
-    let mut plan = walk_plan_with_seconds(home, dest, 41.0);
-    plan.estimated_seconds = 41.0;
+    // Build a walking plan whose estimated_seconds matches the router's
+    // formula (manhattan distance * 20.0), then bump it by +1.0 so it no
+    // longer equals router::route_plan_estimated_seconds (232).
+    let correct_seconds = f64::from((home.x - dest.x).abs() + (home.y - dest.y).abs()) * 20.0;
+    let plan = walk_plan_with_seconds(home, dest, correct_seconds + 1.0);
     snapshot.active_trips[0].route_plan = Some(plan);
     snapshot.active_trips[0].status = TripStatus::Walking;
     snapshot.active_trips[0].current_leg_index = 0;
