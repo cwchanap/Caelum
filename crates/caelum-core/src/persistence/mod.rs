@@ -61,28 +61,33 @@ pub fn validate_snapshot(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     validate_and_compile(snapshot).map(drop)
 }
 
-/// Load a `GameSnapshot` from a JSON value using the production two-phase
-/// probe-then-deserialize path. The schema version is probed via
-/// [`SnapshotSchemaProbe`] before the full `GameSnapshot` deserialization so a
-/// legacy schema-v3 save (which lacks the required v4
-/// `rules.sandbox.startingCapital` field) is rejected with a typed
-/// [`PersistenceError::UnsupportedSchema`] instead of a generic missing-field
-/// serde error. If the probe cannot read a schema version, `actual` is `0`.
-/// A full-deserialization failure after the schema check passes is also
-/// surfaced as `UnsupportedSchema { actual: 0 }` so callers see one consistent
-/// typed error shape.
-pub fn load_snapshot_from_json(value: serde_json::Value) -> PersistenceResult<GameSnapshot> {
-    let probe_schema_version = serde_json::from_value::<SnapshotSchemaProbe>(value.clone())
-        .map(|probe| probe.schema_version)
-        .unwrap_or(0);
-    if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
+/// Check a probed schema version against the current
+/// [`SNAPSHOT_SCHEMA_VERSION`]. Returns `Ok(())` when it matches, or
+/// [`PersistenceError::UnsupportedSchema`] with `actual` set to the probed
+/// version (or `0` when the probe could not read one). This is the single
+/// source of truth for the version-comparison step shared by the WASM and
+/// Tauri host bridges; each host performs its own backend-specific probe
+/// deserialization and then delegates the comparison here.
+pub fn check_schema_version(actual: u16) -> Result<(), PersistenceError> {
+    if actual != SNAPSHOT_SCHEMA_VERSION {
         return Err(PersistenceError::UnsupportedSchema {
             expected: SNAPSHOT_SCHEMA_VERSION,
-            actual: probe_schema_version,
+            actual,
         });
     }
-    serde_json::from_value(value).map_err(|_| PersistenceError::UnsupportedSchema {
-        expected: SNAPSHOT_SCHEMA_VERSION,
-        actual: 0,
-    })
+    Ok(())
+}
+
+/// Probe `schemaVersion` from a JSON value via [`SnapshotSchemaProbe`] and
+/// check it with [`check_schema_version`]. If the probe cannot deserialize
+/// (missing `schemaVersion`, wrong type, or truly malformed payload), `actual`
+/// is `0` and the snapshot is rejected as unsupported. Hosts that use
+/// `serde_json` (Tauri, core tests) call this directly; the WASM host probes
+/// via `serde_wasm_bindgen` and calls [`check_schema_version`] with the
+/// resulting version.
+pub fn check_snapshot_schema(value: &serde_json::Value) -> Result<(), PersistenceError> {
+    let actual = serde_json::from_value::<SnapshotSchemaProbe>(value.clone())
+        .map(|probe| probe.schema_version)
+        .unwrap_or(0);
+    check_schema_version(actual)
 }

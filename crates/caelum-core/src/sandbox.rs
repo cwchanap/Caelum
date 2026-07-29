@@ -78,6 +78,13 @@ pub struct SandboxResetErrorContext {
     pub game_mode: Option<GameMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_id: Option<SandboxTemplateId>,
+    /// The original `SandboxCreationErrorCode` that triggered the reset
+    /// failure, when the reset path reconstructs sandbox rules and the
+    /// reconstruction fails. Only present when the code differs from
+    /// `TemplateInvariantViolation` (the expected case), so callers can
+    /// distinguish corrupted-state failures from genuine template mismatches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_error_code: Option<SandboxCreationErrorCode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,16 +101,7 @@ impl SandboxResetError {
             context: SandboxResetErrorContext {
                 game_mode: Some(game_mode),
                 template_id: None,
-            },
-        }
-    }
-
-    fn template_invariant_violation(template_id: SandboxTemplateId) -> Self {
-        Self {
-            code: SandboxResetErrorCode::TemplateInvariantViolation,
-            context: SandboxResetErrorContext {
-                game_mode: None,
-                template_id: Some(template_id),
+                creation_error_code: None,
             },
         }
     }
@@ -115,13 +113,27 @@ impl SandboxResetError {
 /// on save, so field-level validation errors should be unreachable here. If
 /// an unexpected error code is observed anyway (e.g. corrupted persisted
 /// state), it is surfaced as a `TemplateInvariantViolation` using
-/// `rules.sandbox.template_id` rather than panicking.
+/// `rules.sandbox.template_id`, and the original `SandboxCreationErrorCode`
+/// is preserved in `context.creation_error_code` so the diagnostic is not
+/// lost.
 fn sandbox_reset_error_from_creation_error(
     error: SandboxCreationError,
     rules: &GameRules,
 ) -> SandboxResetError {
-    let _ = error;
-    SandboxResetError::template_invariant_violation(rules.sandbox.template_id)
+    let creation_error_code = if error.code == SandboxCreationErrorCode::TemplateInvariantViolation
+    {
+        None
+    } else {
+        Some(error.code)
+    };
+    SandboxResetError {
+        code: SandboxResetErrorCode::TemplateInvariantViolation,
+        context: SandboxResetErrorContext {
+            game_mode: None,
+            template_id: Some(rules.sandbox.template_id),
+            creation_error_code,
+        },
+    }
 }
 
 pub fn canonical_default_request() -> SandboxCreationRequest {

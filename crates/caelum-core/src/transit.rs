@@ -24,6 +24,8 @@ pub const BUS_STOP_COST: i32 = 2_000;
 pub const METRO_STATION_COST: i32 = 25_000;
 pub const BUS_COST: i32 = 8_000;
 pub const METRO_COST: i32 = 50_000;
+pub const BUS_CAPACITY: u16 = 18;
+pub const METRO_CAPACITY: u16 = 90;
 pub const ROAD_COST: i32 = 100;
 pub const TRACK_COST: i32 = 500;
 pub const BUS_TILES_PER_SECOND: f64 = 0.8;
@@ -388,6 +390,17 @@ pub fn vehicle_cost(mode: TransitMode) -> i32 {
     }
 }
 
+/// The passenger capacity for a vehicle of the given mode. This is the single
+/// source of truth used by both the vehicle constructor and the snapshot
+/// validator, so a forged or stale capacity is caught consistently.
+pub fn vehicle_capacity(mode: TransitMode) -> u16 {
+    match mode {
+        TransitMode::Bus => BUS_CAPACITY,
+        TransitMode::Metro => METRO_CAPACITY,
+        TransitMode::Walk => 0,
+    }
+}
+
 pub(crate) fn initial_vehicle(state: &GameSnapshot, mode: TransitMode, route_id: &str) -> Vehicle {
     Vehicle {
         id: next_entity_id(
@@ -400,7 +413,7 @@ pub(crate) fn initial_vehicle(state: &GameSnapshot, mode: TransitMode, route_id:
         ),
         mode,
         line_id: route_id.to_string(),
-        capacity: if mode == TransitMode::Bus { 18 } else { 90 },
+        capacity: vehicle_capacity(mode),
         passenger_ids: Vec::new(),
         itinerary_index: 0,
         path_step_index: 0,

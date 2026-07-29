@@ -693,6 +693,37 @@ fn validate_automatic_junction_reconstruction(snapshot: &GameSnapshot) -> Persis
                 reason: RoadStructureError::AutomaticJunctionMismatch,
             });
         }
+        // Per-tile invariant check: each footprint tile's kind, one_way,
+        // has_track, road_connections, and road_structure_id must match the
+        // reconstructed state. This closes the asymmetry with roundabout
+        // validation, which checks lane facts and movement facts per tile.
+        // Without this, a forged snapshot with correct junction footprints
+        // and ports but wrong per-tile state would pass validation.
+        for point in serialized.footprint() {
+            let Some(serialized_tile) = snapshot.map.tile(*point) else {
+                return Err(PersistenceError::InvalidRoadStructure {
+                    structure_id: serialized.id().to_string(),
+                    reason: RoadStructureError::AutomaticJunctionMismatch,
+                });
+            };
+            let Some(reconstructed_tile) = clone.tile(*point) else {
+                return Err(PersistenceError::InvalidRoadStructure {
+                    structure_id: serialized.id().to_string(),
+                    reason: RoadStructureError::AutomaticJunctionMismatch,
+                });
+            };
+            if serialized_tile.kind != reconstructed_tile.kind
+                || serialized_tile.one_way != reconstructed_tile.one_way
+                || serialized_tile.has_track != reconstructed_tile.has_track
+                || serialized_tile.road_connections != reconstructed_tile.road_connections
+                || serialized_tile.road_structure_id != reconstructed_tile.road_structure_id
+            {
+                return Err(PersistenceError::InvalidRoadStructure {
+                    structure_id: serialized.id().to_string(),
+                    reason: RoadStructureError::AutomaticJunctionMismatch,
+                });
+            }
+        }
     }
 
     Ok(())

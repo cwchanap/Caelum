@@ -1,12 +1,11 @@
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use caelum_core::{
-    DispatchResult, GameEngine, GameIntent, GameSnapshot, PersistenceError,
+    check_snapshot_schema, DispatchResult, GameEngine, GameIntent, GameSnapshot,
     RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
     RoutePreviewResponse, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
-    SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION,
 };
 use tauri::State;
 
@@ -84,23 +83,18 @@ fn game_load_snapshot(
     // deserialization so a legacy schema-v3 save (which lacks the required v4
     // `rules.sandbox.startingCapital` field) is rejected with the structured
     // typed persistence error instead of a generic missing-field serde
-    // error. If the probe itself cannot read a schema version (truly malformed
-    // payload), treat the version as unknown (0) and still reject as
-    // unsupported.
+    // error. The version comparison is delegated to `check_snapshot_schema`
+    // (the single shared comparison used by both host bridges).
     //
-    // `GameEngine::from_snapshot` validates the version again after full
-    // deserialization; this probe exists to surface the typed persistence
-    // error before deserialization can fail on a schema-v4-only field.
-    let probe_schema_version = SnapshotSchemaProbe::deserialize(&snapshot)
-        .map(|probe| probe.schema_version)
-        .unwrap_or(0);
-    if probe_schema_version != SNAPSHOT_SCHEMA_VERSION {
-        return Err(serde_json::to_value(PersistenceError::UnsupportedSchema {
-            expected: SNAPSHOT_SCHEMA_VERSION,
-            actual: probe_schema_version,
-        })
-        .unwrap_or_else(|error| serde_json::Value::String(error.to_string())));
-    }
+    // A full-deserialization failure after the schema check passes is a raw
+    // transport/deserialization error, not a typed persistence error: it
+    // rejects with a JSON string, matching the WASM bridge's `to_js_error`
+    // string and the host contract (design §12.7: raw deserialization
+    // failures are strings on both hosts).
+    check_snapshot_schema(&snapshot).map_err(|error| {
+        serde_json::to_value(&error)
+            .unwrap_or_else(|error| serde_json::Value::String(error.to_string()))
+    })?;
     let snapshot: GameSnapshot = serde_json::from_value(snapshot)
         .map_err(|error| serde_json::Value::String(error.to_string()))?;
     let loaded = GameEngine::from_snapshot(snapshot).map_err(|error| {
