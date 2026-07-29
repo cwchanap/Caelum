@@ -7,6 +7,8 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use caelum_core::model::{
     EconomyPreset, GrowthAction, GrowthWave, Heading, MetricsState, Point, RoadStructure,
     RoundaboutSize,
@@ -647,15 +649,26 @@ fn automatic_junction_with_forged_port_is_rejected() {
     let mut snapshot = snapshot_with_automatic_junction();
     let index = first_automatic_junction(&snapshot);
     // Add a forged port that the reconstruction would not produce. The basic
-    // checks only verify the port point is in the footprint, so a forged port
-    // with a valid point passes the basic checks but diverges from the
-    // authoritative reconstruction.
+    // checks verify the port point is in the footprint, the port ID is unique,
+    // and the (point, edge) pair is unique, so the forged port must use a
+    // non-colliding (point, edge) to reach the reconstruction comparison.
     let footprint: Vec<Point> = snapshot.map.road_structures[index].footprint().to_vec();
     let id = snapshot.map.road_structures[index].id().to_string();
+    let existing: BTreeSet<(Point, Heading)> = snapshot.map.road_structures[index]
+        .ports()
+        .iter()
+        .map(|port| (port.point, port.edge))
+        .collect();
+    let headings = [Heading::North, Heading::East, Heading::South, Heading::West];
+    let (forged_point, forged_edge) = footprint
+        .iter()
+        .flat_map(|point| headings.iter().map(move |edge| (*point, *edge)))
+        .find(|(point, edge)| !existing.contains(&(*point, *edge)))
+        .expect("must find a non-colliding (point, edge) in the footprint");
     let forged_port = caelum_core::model::RoadPort {
         id: format!("{id}-forged-port"),
-        point: footprint[0],
-        edge: Heading::North,
+        point: forged_point,
+        edge: forged_edge,
         direction: None,
     };
     if let RoadStructure::AutomaticJunction { ports, .. } = &mut snapshot.map.road_structures[index]

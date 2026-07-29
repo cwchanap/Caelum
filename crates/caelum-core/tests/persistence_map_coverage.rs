@@ -16,7 +16,7 @@ use caelum_core::{
     create_sandbox_snapshot, validate_snapshot, GameEngine, GameIntent, PersistenceError,
     RoadPreset, RoadStructureError, SandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
 };
-use common::persistence_fixtures::{apply, campaign_snapshot};
+use common::persistence_fixtures::{apply, campaign_snapshot, road_with_structure};
 
 // ===========================================================================
 // validate_rules_and_scenario / validate_growth_action — successful path
@@ -46,12 +46,13 @@ fn valid_campaign_with_growth_wave_validates() {
 }
 
 // ===========================================================================
-// validate_automatic_junction_reconstruction — empty early return (line 628)
+// validate_automatic_junction_reconstruction — empty junctions positive case
 // ===========================================================================
 
-/// A paused blank-grid sandbox snapshot has no road structures, so
-/// `validate_automatic_junction_reconstruction` hits the empty-junctions early
-/// return (line 628). The snapshot is otherwise persistence-valid, so the full
+/// A paused blank-grid sandbox snapshot has no road structures.
+/// `validate_automatic_junction_reconstruction` runs reconstruction (no early
+/// return on empty), which produces an empty junction set matching the empty
+/// serialized set. The snapshot is otherwise persistence-valid, so the full
 /// pipeline succeeds.
 #[test]
 fn blank_grid_with_no_junctions_validates() {
@@ -178,6 +179,166 @@ fn extra_automatic_junction_count_mismatch_is_rejected() {
         PersistenceError::InvalidRoadStructure {
             structure_id: String::new(),
             reason: RoadStructureError::AutomaticJunctionMismatch,
+        }
+    );
+}
+
+// ===========================================================================
+// validate_automatic_junction_reconstruction — stripped junctions must be
+// rejected even when the serialized junction list is empty
+// ===========================================================================
+
+/// Starting from a valid crossroads snapshot, remove every AutomaticJunction
+/// structure and clear the corresponding `road_structure_id` fields while
+/// keeping the reciprocal road connections intact. The early return on empty
+/// serialized junctions would skip reconstruction, letting the crossing
+/// compile as ordinary roads. With the early return removed, reconstruction
+/// produces a junction that has no serialized counterpart, so the count
+/// mismatch rejects the forged snapshot.
+#[test]
+fn crossroads_with_all_junctions_stripped_is_rejected() {
+    let mut snapshot = crossroads_snapshot();
+    // Collect automatic-junction IDs before stripping.
+    let automatic_ids: Vec<String> = snapshot
+        .map
+        .road_structures
+        .iter()
+        .filter(|structure| structure.is_automatic_junction())
+        .map(|structure| structure.id().to_string())
+        .collect();
+    assert!(
+        !automatic_ids.is_empty(),
+        "crossroads fixture must contain automatic junctions"
+    );
+    // Clear ownership on every tile that belonged to an automatic junction.
+    for tile in &mut snapshot.map.tiles {
+        if tile
+            .road_structure_id
+            .as_ref()
+            .is_some_and(|id| automatic_ids.contains(id))
+        {
+            tile.road_structure_id = None;
+        }
+    }
+    // Remove all automatic-junction structures.
+    snapshot
+        .map
+        .road_structures
+        .retain(|structure| !structure.is_automatic_junction());
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidRoadStructure {
+            structure_id: String::new(),
+            reason: RoadStructureError::AutomaticJunctionMismatch,
+        }
+    );
+}
+
+// ===========================================================================
+// validate_structures — reverse ownership pass: tile must be in owner footprint
+// ===========================================================================
+
+/// Find the roundabout structure ID in the snapshot.
+fn roundabout_id(snapshot: &caelum_core::GameSnapshot) -> String {
+    snapshot
+        .map
+        .road_structures
+        .iter()
+        .find_map(|structure| match structure {
+            RoadStructure::Roundabout { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .expect("snapshot must contain a roundabout")
+}
+
+/// A road tile outside the roundabout footprint borrows the roundabout's
+/// structure ID. The forward pass (footprint tiles must own the structure) is
+/// unaffected, and the reverse pass previously only checked that the owner
+/// resolves to an existing structure. Without the footprint containment check,
+/// this tile would pass validation but be silently excluded from
+/// `compile_reciprocal_lane_transitions` (which skips tiles with an owner),
+/// disappearing from routable topology.
+#[test]
+fn road_tile_outside_owner_footprint_is_rejected() {
+    let mut snapshot = road_with_structure();
+    let id = roundabout_id(&snapshot);
+    // Tile (2, 5) is on the horizontal road but far from the compact 2x2
+    // roundabout at origin (6, 5) — its footprint is [(6,5), (7,5), (6,6),
+    // (7,6)].
+    let index = 5 * 28 + 2;
+    assert_eq!(snapshot.map.tiles[index].kind, "road");
+    assert!(snapshot.map.tiles[index].road_structure_id.is_none());
+    snapshot.map.tiles[index].road_structure_id = Some(id.clone());
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidRoadStructure {
+            structure_id: id,
+            reason: RoadStructureError::TileOwnerMismatch,
+        }
+    );
+}
+
+/// An empty tile outside the roundabout footprint borrows the roundabout's
+/// structure ID. Empty tiles are permitted to carry `road_structure_id` by
+/// the per-tile check (for roundabout protected-island tiles), so without the
+/// footprint containment check this would pass validation and become
+/// permanently blocked by false ownership.
+#[test]
+fn empty_tile_outside_owner_footprint_is_rejected() {
+    let mut snapshot = road_with_structure();
+    let id = roundabout_id(&snapshot);
+    // Tile (0, 0) is an empty tile far from the roundabout.
+    let index = 0;
+    assert_eq!(snapshot.map.tiles[index].kind, "empty");
+    assert!(snapshot.map.tiles[index].road_structure_id.is_none());
+    snapshot.map.tiles[index].road_structure_id = Some(id.clone());
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidRoadStructure {
+            structure_id: id,
+            reason: RoadStructureError::TileOwnerMismatch,
+        }
+    );
+}
+
+// ===========================================================================
+// validate_structures — duplicate (point, edge) ports are rejected
+// ===========================================================================
+
+/// A roundabout with two ports sharing the same (point, edge) but different
+/// IDs passes the duplicate-ID check but must be rejected by the new
+/// duplicate (point, edge) check. Without it, the dedup in
+/// `validate_roundabout_canonical` would conceal the forged port during
+/// comparison while `compile_roundabout_transitions` iterates the original
+/// non-deduped list, emitting additional entry/exit transitions.
+#[test]
+fn roundabout_with_duplicate_port_point_edge_is_rejected() {
+    let mut snapshot = road_with_structure();
+    let id = roundabout_id(&snapshot);
+    // Find the roundabout and duplicate one of its ports with a new ID.
+    let structure = snapshot
+        .map
+        .road_structures
+        .iter_mut()
+        .find_map(|structure| match structure {
+            RoadStructure::Roundabout { ports, .. } => Some(ports),
+            _ => None,
+        })
+        .expect("snapshot must contain a roundabout");
+    assert!(!structure.is_empty(), "roundabout must have ports");
+    let original = structure[0].clone();
+    let forged = RoadPort {
+        id: format!("{}-dup", original.id),
+        point: original.point,
+        edge: original.edge,
+        direction: original.direction,
+    };
+    structure.push(forged);
+    assert_eq!(
+        validate_snapshot(&snapshot).unwrap_err(),
+        PersistenceError::InvalidRoadStructure {
+            structure_id: id,
+            reason: RoadStructureError::DuplicatePortPointEdge,
         }
     );
 }

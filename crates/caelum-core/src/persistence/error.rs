@@ -306,6 +306,7 @@ pub enum RoadStructureError {
     TileOwnerMismatch,
     DanglingTileOwner,
     DuplicatePortId,
+    DuplicatePortPointEdge,
     InvalidBoundaryPort,
     NonCanonicalFootprint,
     NonCanonicalLaneFacts,
