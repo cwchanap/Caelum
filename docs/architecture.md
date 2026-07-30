@@ -32,7 +32,8 @@ accumulate each newly authored paid tile in input order. Scenario-authored
 Rust results. TypeScript never derives or enforces authoritative cost policy:
 it consumes Rust-provided route-preview affordability for route-draft
 presentation and save gating, and its only direct economy-preset
-interpretation is the read-only building-hover helper.
+interpretation for affordability or cost behavior is the read-only
+building-hover helper.
 
 ## Runtime boundary (TypeScript host)
 
