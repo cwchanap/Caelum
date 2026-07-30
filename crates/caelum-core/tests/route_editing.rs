@@ -585,6 +585,7 @@ fn route_creation_checks_connectivity_before_the_policy_quote_in_both_presets() 
             Some(&RejectionCode::DisconnectedLeg),
         );
     }
+    assert_eq!(standard_result.rejection, creative_result.rejection);
     // Snapshot equality includes routes, lines, vehicles, platforms, budget, and
     // the entity inventories that determine the next stable IDs.
     assert_eq!(standard.snapshot(), standard_before);
@@ -623,15 +624,21 @@ fn vehicle_assignment_keeps_budget_first_and_preserves_later_rejections() {
     assert_eq!(standard.snapshot(), standard_before);
     assert_eq!(creative.snapshot(), creative_before);
 
-    for intent in [
-        GameIntent::AssignVehicle {
-            mode: "tram".into(),
-            line_id: "route-001".into(),
-        },
-        GameIntent::AssignVehicle {
-            mode: "bus".into(),
-            line_id: "route-missing".into(),
-        },
+    for (intent, expected) in [
+        (
+            GameIntent::AssignVehicle {
+                mode: "tram".into(),
+                line_id: "route-001".into(),
+            },
+            RejectionCode::IncompatibleRouteNode,
+        ),
+        (
+            GameIntent::AssignVehicle {
+                mode: "bus".into(),
+                line_id: "route-missing".into(),
+            },
+            RejectionCode::RouteNotFound,
+        ),
     ] {
         let mut funded_standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST);
         let mut funded_creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST);
@@ -640,6 +647,13 @@ fn vehicle_assignment_keeps_budget_first_and_preserves_later_rejections() {
         let standard_result = funded_standard.dispatch(intent.clone());
         let creative_result = funded_creative.dispatch(intent);
 
+        assert_eq!(
+            standard_result
+                .rejection
+                .as_ref()
+                .map(|rejection| &rejection.code),
+            Some(&expected),
+        );
         assert_eq!(standard_result.rejection, creative_result.rejection);
         assert_eq!(funded_standard.snapshot(), standard_before);
         assert_eq!(funded_creative.snapshot(), creative_before);
