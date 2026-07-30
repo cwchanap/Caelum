@@ -41,6 +41,18 @@ fn editable_network_engine() -> GameEngine {
     engine
 }
 
+fn engine_for(
+    snapshot: &caelum_core::GameSnapshot,
+    preset: EconomyPreset,
+    budget: i32,
+) -> GameEngine {
+    let mut candidate = snapshot.clone();
+    candidate.rules.economy_preset = preset;
+    candidate.budget = budget;
+    candidate.paused = true;
+    GameEngine::from_snapshot(candidate).expect("fixture snapshot should be valid")
+}
+
 fn existing_route_engine() -> GameEngine {
     let mut engine = editable_network_engine();
     dispatch(
@@ -623,6 +635,119 @@ fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
         .expect("insufficient budget warning");
     assert_eq!(budget_warning.context.required_budget, Some(BUS_COST));
     assert_eq!(budget_warning.context.available_budget, Some(BUS_COST - 1));
+}
+
+#[test]
+fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
+    let prepared = editable_network_engine().snapshot();
+    let standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
+    let standard_preview = standard.preview_route(valid_route_preview(61));
+    let creative_preview = creative.preview_route(valid_route_preview(61));
+
+    assert_eq!(standard_preview.initial_vehicle_cost, BUS_COST);
+    assert_eq!(creative_preview.initial_vehicle_cost, BUS_COST);
+    assert!(!standard_preview.affordable);
+    assert!(creative_preview.affordable);
+    assert_eq!(
+        standard_preview
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InsufficientBudget),
+    );
+    assert!(creative_preview.rejection.is_none(), "{creative_preview:?}");
+
+    let standard_early = standard.preview_route(RoutePreviewRequest {
+        waypoint_ids: ids(&["stop-001"]),
+        generation: 62,
+        ..valid_route_preview(62)
+    });
+    let creative_early = creative.preview_route(RoutePreviewRequest {
+        waypoint_ids: ids(&["stop-001"]),
+        generation: 62,
+        ..valid_route_preview(62)
+    });
+    assert!(!standard_early.affordable);
+    assert!(creative_early.affordable);
+    assert_eq!(
+        standard_early
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::TooFewRouteNodes),
+    );
+    assert_eq!(standard_early.rejection, creative_early.rejection);
+}
+
+#[test]
+fn route_preview_suppresses_only_creative_budget_feedback_and_keeps_edits_free() {
+    let mut disconnected = editable_network_engine();
+    road_line(&mut disconnected, (2..=10).map(|x| point(x, 11)).collect());
+    dispatch(
+        &mut disconnected,
+        GameIntent::AddBusStop {
+            point: point(2, 10),
+        },
+    );
+    let prepared = disconnected.snapshot();
+    let standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
+    let request = RoutePreviewRequest {
+        waypoint_ids: ids(&["stop-001", "stop-003"]),
+        generation: 63,
+        ..valid_route_preview(63)
+    };
+    let standard_preview = standard.preview_route(request.clone());
+    let creative_preview = creative.preview_route(request);
+
+    assert_eq!(standard_preview.initial_vehicle_cost, BUS_COST);
+    assert_eq!(creative_preview.initial_vehicle_cost, BUS_COST);
+    assert!(!standard_preview.affordable);
+    assert!(creative_preview.affordable);
+    assert_eq!(
+        standard_preview
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::DisconnectedLeg),
+    );
+    assert_eq!(standard_preview.rejection, creative_preview.rejection);
+    assert!(standard_preview
+        .warnings
+        .iter()
+        .any(|warning| warning.code == WarningCode::InsufficientBudget));
+    assert!(!creative_preview
+        .warnings
+        .iter()
+        .any(|warning| warning.code == WarningCode::InsufficientBudget));
+
+    let existing = existing_route_engine().snapshot();
+    let standard_edit = engine_for(&existing, EconomyPreset::Standard, 0);
+    let creative_edit = engine_for(&existing, EconomyPreset::Creative, 0);
+    let edit = RoutePreviewRequest {
+        route_id: Some("route-001".into()),
+        expected_revision: Some(4),
+        generation: 64,
+        ..valid_route_preview(64)
+    };
+    let standard_edit_preview = standard_edit.preview_route(edit.clone());
+    let creative_edit_preview = creative_edit.preview_route(edit);
+    assert_eq!(standard_edit_preview.initial_vehicle_cost, 0);
+    assert_eq!(creative_edit_preview.initial_vehicle_cost, 0);
+    assert!(standard_edit_preview.affordable);
+    assert!(creative_edit_preview.affordable);
+    assert_eq!(
+        standard_edit_preview.rejection,
+        creative_edit_preview.rejection
+    );
+    assert_eq!(
+        standard_edit_preview
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::RouteChangedWhileEditing),
+    );
 }
 
 #[test]

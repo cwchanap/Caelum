@@ -1,7 +1,11 @@
 use caelum_core::building_catalog::building_definition;
-use caelum_core::model::{EconomyPreset, GameSnapshot, Point, RoundaboutSize};
+use caelum_core::model::{
+    EconomyPreset, GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode,
+};
 use caelum_core::roundabouts::roundabout_cost;
-use caelum_core::transit::{BUS_STOP_COST, METRO_STATION_COST, ROAD_COST, TRACK_COST};
+use caelum_core::transit::{
+    BUS_COST, BUS_STOP_COST, METRO_COST, METRO_STATION_COST, ROAD_COST, TRACK_COST,
+};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -169,6 +173,74 @@ fn prepared_bus_terminal() -> GameSnapshot {
             .dispatch(GameIntent::LayRoadLine {
                 points: vec![point(2, 5), point(3, 5)],
                 preset: RoadPreset::TwoWay,
+            })
+            .applied
+    );
+    engine.snapshot()
+}
+
+fn prepared_bus_route_network() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::LayRoadLine {
+                points: (2..=10).map(|x| point(x, 5)).collect(),
+                preset: RoadPreset::TwoWay,
+            })
+            .applied
+    );
+    for x in [2, 10] {
+        assert!(
+            engine
+                .dispatch(GameIntent::AddBusStop { point: point(x, 4) })
+                .applied
+        );
+    }
+    engine.snapshot()
+}
+
+fn prepared_metro_route_network() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::LayTrackLine {
+                points: (2..=10).map(|x| point(x, 5)).collect(),
+            })
+            .applied
+    );
+    for x in [2, 10] {
+        assert!(
+            engine
+                .dispatch(GameIntent::AddMetroStation { point: point(x, 5) })
+                .applied
+        );
+    }
+    engine.snapshot()
+}
+
+fn prepared_route(mode: TransitMode) -> GameSnapshot {
+    let prepared = match mode {
+        TransitMode::Bus => prepared_bus_route_network(),
+        TransitMode::Metro => prepared_metro_route_network(),
+        TransitMode::Walk => unreachable!("fixtures only prepare purchasable service modes"),
+    };
+    let cost = match mode {
+        TransitMode::Bus => BUS_COST,
+        TransitMode::Metro => METRO_COST,
+        TransitMode::Walk => unreachable!("fixtures only prepare purchasable service modes"),
+    };
+    let mut engine = engine_for(&prepared, EconomyPreset::Standard, cost);
+    let waypoint_ids = match mode {
+        TransitMode::Bus => vec!["stop-001".into(), "stop-002".into()],
+        TransitMode::Metro => vec!["station-001".into(), "station-002".into()],
+        TransitMode::Walk => unreachable!("fixtures only prepare purchasable service modes"),
+    };
+    assert!(
+        engine
+            .dispatch(GameIntent::CreateRoute {
+                mode,
+                pattern: ServicePattern::Loop,
+                waypoint_ids,
             })
             .applied
     );
@@ -364,6 +436,50 @@ fn funded_transit_nodes_tracks_and_buildings_have_nominal_cost_parity() {
         },
         METRO_STATION_COST,
     );
+}
+
+#[test]
+fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
+    for (mode, creation_cost, creation_intent, assignment_mode, line_id) in [
+        (
+            TransitMode::Bus,
+            BUS_COST,
+            GameIntent::CreateRoute {
+                mode: TransitMode::Bus,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+            },
+            "bus",
+            "route-001",
+        ),
+        (
+            TransitMode::Metro,
+            METRO_COST,
+            GameIntent::CreateRoute {
+                mode: TransitMode::Metro,
+                pattern: ServicePattern::Loop,
+                waypoint_ids: vec!["station-001".into(), "station-002".into()],
+            },
+            "metro",
+            "metro-001",
+        ),
+    ] {
+        let network = match mode {
+            TransitMode::Bus => prepared_bus_route_network(),
+            TransitMode::Metro => prepared_metro_route_network(),
+            TransitMode::Walk => unreachable!("fixtures only prepare purchasable service modes"),
+        };
+        assert_low_budget_pair(&network, creation_intent.clone(), creation_cost);
+        assert_funded_pair(&network, creation_intent, creation_cost);
+
+        let route = prepared_route(mode);
+        let assignment_intent = GameIntent::AssignVehicle {
+            mode: assignment_mode.into(),
+            line_id: line_id.into(),
+        };
+        assert_low_budget_pair(&route, assignment_intent.clone(), creation_cost);
+        assert_funded_pair(&route, assignment_intent, creation_cost);
+    }
 }
 
 #[test]

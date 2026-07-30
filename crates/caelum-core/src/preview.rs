@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cost_policy::CostPolicy;
 use crate::engine::{dispatch_context, RoutingContext};
 use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
@@ -13,7 +14,7 @@ use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
 use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost};
 use crate::route_lifecycle::merge_resolved_legs;
-use crate::transit::{self, BUS_COST, METRO_COST};
+use crate::transit;
 use crate::transit_nodes::validate_present_compatible_node;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -125,11 +126,12 @@ pub fn preview_route(
     request: RoutePreviewRequest,
 ) -> RoutePreviewResponse {
     let initial_vehicle_cost = if request.route_id.is_none() {
-        vehicle_cost(request.mode)
+        crate::transit::vehicle_cost(request.mode)
     } else {
         0
     };
-    let affordable = request.route_id.is_some() || snapshot.budget >= initial_vehicle_cost;
+    let quote = CostPolicy::from_snapshot(snapshot).quote(initial_vehicle_cost, snapshot.budget);
+    let affordable = quote.affordable();
     let missing_waypoint_ids = missing_waypoint_ids(snapshot, &request);
     let mut response = RoutePreviewResponse {
         generation: request.generation,
@@ -331,14 +333,6 @@ pub fn preview_road_mutation(
         route_impacts,
         warnings,
         rejection: None,
-    }
-}
-
-fn vehicle_cost(mode: TransitMode) -> i32 {
-    match mode {
-        TransitMode::Bus => BUS_COST,
-        TransitMode::Metro => METRO_COST,
-        TransitMode::Walk => 0,
     }
 }
 

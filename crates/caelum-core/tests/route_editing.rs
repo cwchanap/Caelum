@@ -1,8 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, GameMap, GameSnapshot, Heading, LegFailureReason, Point, RoadPort, RoadStructure,
-    Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, StopRoadAccess, TransitMode, TransitNodeStatus, TripPosition, TripPurpose,
-    TripStatus, Vehicle,
+    ActiveTrip, EconomyPreset, GameMap, GameSnapshot, Heading, LegFailureReason, Point, RoadPort,
+    RoadStructure, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
+    ServiceDirection, ServicePattern, StopRoadAccess, TransitMode, TransitNodeStatus, TripPosition,
+    TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -71,6 +71,28 @@ fn editable_metro_engine(station_xs: &[i32], budget: i32) -> GameEngine {
     }
     engine.set_budget_for_test(budget);
     engine
+}
+
+fn engine_for(snapshot: &GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
+    let mut candidate = snapshot.clone();
+    candidate.rules.economy_preset = preset;
+    candidate.budget = budget;
+    candidate.paused = true;
+    GameEngine::from_snapshot(candidate).expect("fixture snapshot should be valid")
+}
+
+fn disconnected_bus_network() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 6);
+    road_line(&mut engine, 12, 2, 6);
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 4) });
+    dispatch(
+        &mut engine,
+        GameIntent::AddBusStop {
+            point: point(2, 11),
+        },
+    );
+    engine.snapshot()
 }
 
 fn create_route(
@@ -538,6 +560,147 @@ fn failed_create_commits_none_of_the_staged_entities_or_budget() {
         RejectionCode::InsufficientBudget
     );
     assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn route_creation_checks_connectivity_before_the_policy_quote_in_both_presets() {
+    let prepared = disconnected_bus_network();
+    let intent = GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    };
+    let mut standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
+    let mut creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    for result in [&standard_result, &creative_result] {
+        assert!(!result.applied, "{result:?}");
+        assert_eq!(
+            result.rejection.as_ref().map(|rejection| &rejection.code),
+            Some(&RejectionCode::DisconnectedLeg),
+        );
+    }
+    // Snapshot equality includes routes, lines, vehicles, platforms, budget, and
+    // the entity inventories that determine the next stable IDs.
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
+}
+
+#[test]
+fn vehicle_assignment_keeps_budget_first_and_preserves_later_rejections() {
+    let prepared = editable_bus_engine(&[2, 10], BUS_COST).snapshot();
+    let mut standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
+    let mut creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let missing = GameIntent::AssignVehicle {
+        mode: "bus".into(),
+        line_id: "route-missing".into(),
+    };
+
+    let standard_result = standard.dispatch(missing.clone());
+    let creative_result = creative.dispatch(missing);
+
+    assert_eq!(
+        standard_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InsufficientBudget),
+    );
+    assert_eq!(
+        creative_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::RouteNotFound),
+    );
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
+
+    for intent in [
+        GameIntent::AssignVehicle {
+            mode: "tram".into(),
+            line_id: "route-001".into(),
+        },
+        GameIntent::AssignVehicle {
+            mode: "bus".into(),
+            line_id: "route-missing".into(),
+        },
+    ] {
+        let mut funded_standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST);
+        let mut funded_creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST);
+        let standard_before = funded_standard.snapshot();
+        let creative_before = funded_creative.snapshot();
+        let standard_result = funded_standard.dispatch(intent.clone());
+        let creative_result = funded_creative.dispatch(intent);
+
+        assert_eq!(standard_result.rejection, creative_result.rejection);
+        assert_eq!(funded_standard.snapshot(), standard_before);
+        assert_eq!(funded_creative.snapshot(), creative_before);
+    }
+}
+
+#[test]
+fn funded_inactive_and_disconnected_assignments_remain_atomic_in_both_presets() {
+    let mut inactive = editable_bus_engine(&[2, 10], BUS_COST * 2);
+    create_route(
+        &mut inactive,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    dispatch(
+        &mut inactive,
+        GameIntent::SetRouteActive {
+            route_id: "route-001".into(),
+            active: false,
+        },
+    );
+
+    let mut disconnected = editable_bus_engine(&[2, 10], BUS_COST * 2);
+    create_route(
+        &mut disconnected,
+        TransitMode::Bus,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+    dispatch(
+        &mut disconnected,
+        GameIntent::RemoveAtTile { point: point(6, 5) },
+    );
+
+    for (prepared, expected) in [
+        (inactive.snapshot(), RejectionCode::InactiveRoute),
+        (disconnected.snapshot(), RejectionCode::DisconnectedLeg),
+    ] {
+        let mut standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST);
+        let mut creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST);
+        let standard_before = standard.snapshot();
+        let creative_before = creative.snapshot();
+        let intent = GameIntent::AssignVehicle {
+            mode: "bus".into(),
+            line_id: "route-001".into(),
+        };
+
+        let standard_result = standard.dispatch(intent.clone());
+        let creative_result = creative.dispatch(intent);
+        assert_eq!(
+            standard_result
+                .rejection
+                .as_ref()
+                .map(|rejection| &rejection.code),
+            Some(&expected),
+        );
+        assert_eq!(standard_result.rejection, creative_result.rejection);
+        assert_eq!(standard.snapshot(), standard_before);
+        assert_eq!(creative.snapshot(), creative_before);
+    }
 }
 
 #[test]

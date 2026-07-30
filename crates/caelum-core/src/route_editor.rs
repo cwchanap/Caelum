@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::cost_policy::CostedMutation;
+use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::model::{
@@ -44,10 +44,9 @@ pub(crate) fn create_route_costed(
     validate_waypoints(state, mode, &waypoint_ids, None, None)?;
     let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
     require_all_connected(&legs, None)?;
-    let cost = vehicle_cost(mode);
-    if state.budget < cost {
-        return Err(GameplayRejection::budget(cost, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(vehicle_cost(mode), state.budget)
+        .authorize()?;
 
     let mut candidate = state.clone();
     let route_id = next_route_id(&candidate, mode)?;
@@ -64,7 +63,7 @@ pub(crate) fn create_route_costed(
         vehicle_id,
     )?;
     candidate.transit.vehicles.push(vehicle);
-    candidate.budget -= cost;
+    let cost = authorized.apply_to(&mut candidate.budget)?;
     Ok(CostedMutation::new(candidate, cost))
 }
 

@@ -379,10 +379,9 @@ pub(crate) fn assign_vehicle_costed(
             ));
         }
     };
-    let cost = vehicle_cost(transit_mode);
-    if state.budget < cost {
-        return Err(GameplayRejection::budget(cost, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(vehicle_cost(transit_mode), state.budget)
+        .authorize()?;
 
     let vehicle = initial_vehicle(state, transit_mode, line_id);
     let mut next = state.clone();
@@ -421,8 +420,8 @@ pub(crate) fn assign_vehicle_costed(
         line.vehicle_ids.push(vehicle.id.clone());
     }
 
-    next.budget -= cost;
     next.transit.vehicles.push(vehicle);
+    let cost = authorized.apply_to(&mut next.budget)?;
     Ok(CostedMutation::new(next, cost))
 }
 
