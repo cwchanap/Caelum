@@ -17,6 +17,21 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
+### Purchase cost policy
+
+Rust derives a transient purchase `CostPolicy` from the active snapshot's
+`rules.economyPreset` for every player purchase. Standard requires and deducts
+the full catalog price; Creative treats the same quote as affordable and
+deducts zero. Both retain the same positive nominal price in dispatch and
+preview responses. Nominal cost is carried explicitly rather than inferred
+from a budget delta.
+
+Atomic purchases remain atomic, while road and track strokes authorize and
+accumulate each newly authored paid tile in input order. Scenario-authored
+`place_building_core()` remains free. WASM and Tauri only forward the existing
+Rust results; TypeScript's economy use is limited to read-only hover
+presentation.
+
 ## Runtime boundary (TypeScript host)
 
 Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, animation scheduling, host backend calls, canvas mounting, and snapshot publication.
