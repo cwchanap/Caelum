@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::commute::trip_deadline_seconds;
+use crate::cost_policy::CostedMutation;
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
@@ -58,6 +59,13 @@ pub fn lay_road(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnaps
 }
 
 pub fn lay_track(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
+    lay_track_costed(state, point).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn lay_track_costed(
+    state: &GameSnapshot,
+    point: &Point,
+) -> GameplayResult<CostedMutation> {
     if state.budget < TRACK_COST {
         return Err(GameplayRejection::budget(TRACK_COST, state.budget));
     }
@@ -73,7 +81,7 @@ pub fn lay_track(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnap
     let mut next = state.clone();
     next.budget -= TRACK_COST;
     set_tile_track(&mut next.map, point, true);
-    Ok(next)
+    Ok(CostedMutation::new(next, TRACK_COST))
 }
 
 pub fn lay_road_line(
@@ -92,17 +100,26 @@ pub fn lay_road_line(
 }
 
 pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
+    lay_track_line_costed(state, points).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn lay_track_line_costed(
+    state: &GameSnapshot,
+    points: &[Point],
+) -> GameplayResult<CostedMutation> {
     if points.is_empty() {
         return Err(GameplayRejection::new(RejectionCode::InvalidTrackStroke));
     }
 
     let mut next = state.clone();
     let mut changed = false;
+    let mut cost = 0;
     for point in points {
         if next.budget < TRACK_COST || !is_valid_track_placement(&next, point) {
             continue;
         }
         next.budget -= TRACK_COST;
+        cost += TRACK_COST;
         set_tile_track(&mut next.map, point, true);
         changed = true;
     }
@@ -113,7 +130,7 @@ pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<
             points[0],
         ));
     }
-    Ok(next)
+    Ok(CostedMutation::new(next, cost))
 }
 
 pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
@@ -216,6 +233,13 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
 }
 
 pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
+    add_bus_stop_costed(state, point).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn add_bus_stop_costed(
+    state: &GameSnapshot,
+    point: &Point,
+) -> GameplayResult<CostedMutation> {
     if state.budget < BUS_STOP_COST {
         return Err(GameplayRejection::budget(BUS_STOP_COST, state.budget));
     }
@@ -263,10 +287,17 @@ pub fn add_bus_stop(state: &GameSnapshot, point: &Point) -> GameplayResult<GameS
     }
     next.budget -= BUS_STOP_COST;
 
-    Ok(next)
+    Ok(CostedMutation::new(next, BUS_STOP_COST))
 }
 
 pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
+    add_metro_station_costed(state, point).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn add_metro_station_costed(
+    state: &GameSnapshot,
+    point: &Point,
+) -> GameplayResult<CostedMutation> {
     if state.budget < METRO_STATION_COST {
         return Err(GameplayRejection::budget(METRO_STATION_COST, state.budget));
     }
@@ -315,7 +346,7 @@ pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<
         })?;
     next.budget -= METRO_STATION_COST;
 
-    Ok(next)
+    Ok(CostedMutation::new(next, METRO_STATION_COST))
 }
 
 pub fn assign_vehicle(
@@ -323,6 +354,14 @@ pub fn assign_vehicle(
     mode: &str,
     line_id: &str,
 ) -> GameplayResult<GameSnapshot> {
+    assign_vehicle_costed(state, mode, line_id).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn assign_vehicle_costed(
+    state: &GameSnapshot,
+    mode: &str,
+    line_id: &str,
+) -> GameplayResult<CostedMutation> {
     // `mode` arrives as a string from `GameIntent::AssignVehicle`; validate and lift it to
     // the typed enum once at this boundary so everything downstream is compiler-checked.
     let transit_mode = match mode {
@@ -379,7 +418,7 @@ pub fn assign_vehicle(
 
     next.budget -= cost;
     next.transit.vehicles.push(vehicle);
-    Ok(next)
+    Ok(CostedMutation::new(next, cost))
 }
 
 pub fn vehicle_cost(mode: TransitMode) -> i32 {

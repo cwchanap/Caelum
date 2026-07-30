@@ -554,7 +554,7 @@ fn preview_network_candidate(
     let result = match mutation {
         RoadMutation::RemoveAtTile { point } => {
             let candidate = transit::remove_at_tile(snapshot, point)?;
-            let context = dispatch_context(snapshot, &candidate, &[*point]);
+            let context = dispatch_context(snapshot, &candidate, &[*point], 0);
             Ok(RoadMutationResult {
                 snapshot: candidate,
                 changed_tiles: context.changed_tiles,
@@ -564,7 +564,7 @@ fn preview_network_candidate(
         }
         RoadMutation::RemoveAtTiles { points } => {
             let candidate = transit::remove_at_tiles(snapshot, points)?;
-            let context = dispatch_context(snapshot, &candidate, points);
+            let context = dispatch_context(snapshot, &candidate, points, 0);
             Ok(RoadMutationResult {
                 snapshot: candidate,
                 changed_tiles: context.changed_tiles,

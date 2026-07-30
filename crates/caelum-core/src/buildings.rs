@@ -1,5 +1,6 @@
 use crate::building_catalog::{building_definition, BuildingDefinition};
 use crate::commute::{shift_template_for_id, worker_profile_for_id};
+use crate::cost_policy::CostedMutation;
 use crate::ids::next_entity_id;
 use crate::model::{
     BusStopKind, GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, TransitNodeStatus,
@@ -211,6 +212,15 @@ pub fn place_building(
     origin: &Point,
     rotation: u16,
 ) -> GameplayResult<GameSnapshot> {
+    place_building_costed(state, building_type, origin, rotation).map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn place_building_costed(
+    state: &GameSnapshot,
+    building_type: &str,
+    origin: &Point,
+    rotation: u16,
+) -> GameplayResult<CostedMutation> {
     let definition = building_definition(building_type)
         .ok_or_else(|| GameplayRejection::at(RejectionCode::InvalidBuildingPlacement, *origin))?;
     if state.budget < definition.cost {
@@ -218,7 +228,7 @@ pub fn place_building(
     }
     let mut next = place_building_core(state, building_type, origin, rotation)?;
     next.budget -= definition.cost;
-    Ok(next)
+    Ok(CostedMutation::new(next, definition.cost))
 }
 
 pub fn place_building_core(
