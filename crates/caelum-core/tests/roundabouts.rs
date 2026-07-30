@@ -628,9 +628,9 @@ fn unsafe_port_mapping_and_structure_ownership_reject_identically_in_both_preset
     assert!(!standard_result.applied, "{standard_result:?}");
     assert!(!creative_result.applied, "{creative_result:?}");
     assert_eq!(standard_result.rejection, creative_result.rejection);
-    assert_ne!(
+    assert_eq!(
         standard_result.rejection.as_ref().unwrap().code,
-        RejectionCode::InsufficientBudget
+        RejectionCode::BlockedFootprint
     );
     assert_eq!(standard.snapshot(), standard_before);
     assert_eq!(creative.snapshot(), creative_before);
