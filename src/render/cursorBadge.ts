@@ -9,6 +9,7 @@ import {
   canPlaceBuilding,
   getTile,
   isAreaPaintable,
+  isBuildingAffordableForPresentation,
   isValidRoadPlacement,
   isValidTrackPlacement,
 } from "./placementValidation";
@@ -28,7 +29,7 @@ function badgeText(state: GameState, ui: UiState): string | null {
   if (ui.selectedBuilding !== null) {
     const def = BUILDING_CATALOG[ui.selectedBuilding];
     const ok =
-      state.budget >= def.cost &&
+      isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
       canPlaceBuilding(state, ui.selectedBuilding, cursor, ui.buildingRotation);
     return `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}`;
   }

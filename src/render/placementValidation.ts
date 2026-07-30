@@ -122,6 +122,16 @@ export function canPlaceBuilding(
   );
 }
 
+export function isBuildingAffordableForPresentation(
+  state: GameState,
+  buildingType: BuildingType,
+): boolean {
+  return (
+    state.rules.economyPreset === "creative" ||
+    state.budget >= BUILDING_CATALOG[buildingType].cost
+  );
+}
+
 export function isValidRoadPlacement(state: GameState, point: Point): boolean {
   const tile = getTile(state.map, point);
   return (

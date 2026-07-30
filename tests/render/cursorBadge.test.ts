@@ -393,8 +393,8 @@ describe("renderCursorBadge", () => {
     expect(text).not.toContain("⊘");
   });
 
-  it("marks a building placement blocked when the budget is insufficient", () => {
-    const { ctx, calls } = badgeCtx();
+  it("marks a zero-budget building blocked in Standard but not Creative", () => {
+    const { ctx: standardCtx, calls: standardCalls } = badgeCtx();
     let state = createTestGameState();
     const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
     if (emptyTile === undefined) {
@@ -404,15 +404,33 @@ describe("renderCursorBadge", () => {
       emptyTile,
       { x: emptyTile.x + 1, y: emptyTile.y },
     ]);
-    state = { ...state, budget: 0 };
+    const standard = { ...state, budget: 0 };
+    const creative = {
+      ...standard,
+      rules: { ...standard.rules, economyPreset: "creative" as const },
+    };
     const ui = {
       ...createUiState(),
       selectedBuilding: "smallHouse" as const,
       buildingRotation: 0 as const,
       hoverTile: { x: emptyTile.x, y: emptyTile.y },
     };
-    renderCursorBadge(ctx, state, ui, getBoardTransform(ctx.canvas, state.map));
-    expect(calls.join("")).toContain("⊘");
+    renderCursorBadge(
+      standardCtx,
+      standard,
+      ui,
+      getBoardTransform(standardCtx.canvas, standard.map),
+    );
+    expect(standardCalls.join("")).toContain("⊘");
+
+    const { ctx: creativeCtx, calls: creativeCalls } = badgeCtx();
+    renderCursorBadge(
+      creativeCtx,
+      creative,
+      ui,
+      getBoardTransform(creativeCtx.canvas, creative.map),
+    );
+    expect(creativeCalls.join("")).not.toContain("⊘");
   });
 
   it("marks a building placement blocked over an occupied tile", () => {
@@ -428,6 +446,10 @@ describe("renderCursorBadge", () => {
     ]);
     // Place a building on the target tile so the footprint collides.
     state = placeTestBuilding(state, "smallHouse", emptyTile, 0);
+    state = {
+      ...state,
+      rules: { ...state.rules, economyPreset: "creative" as const },
+    };
     const ui = {
       ...createUiState(),
       selectedBuilding: "smallHouse" as const,

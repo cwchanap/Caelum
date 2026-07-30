@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canPlaceBusStop,
   canPlaceBuilding,
+  isBuildingAffordableForPresentation,
   isAreaPaintable,
   isValidRoadPlacement,
   isValidTrackPlacement,
@@ -75,6 +76,38 @@ describe("placement validation blocks structure-owned tiles", () => {
     expect(isValidRoadPlacement(state, center)).toBe(true);
     expect(isValidTrackPlacement(state, center)).toBe(true);
     expect(isAreaPaintable(state, center)).toBe(true);
+  });
+});
+
+describe("building affordability presentation", () => {
+  it("treats a zero-budget building as affordable only in Creative", () => {
+    const standard = { ...createTestGameState(), budget: 0 };
+    const creative = {
+      ...standard,
+      rules: { ...standard.rules, economyPreset: "creative" as const },
+    };
+
+    expect(isBuildingAffordableForPresentation(standard, "smallHouse")).toBe(
+      false,
+    );
+    expect(isBuildingAffordableForPresentation(creative, "smallHouse")).toBe(
+      true,
+    );
+  });
+
+  it("keeps building geometry validation independent of economy preset", () => {
+    const standard = withAreas(createTestGameState(), "residential", [
+      { x: 5, y: 5 },
+      { x: 6, y: 5 },
+    ]);
+    const creative = {
+      ...standard,
+      rules: { ...standard.rules, economyPreset: "creative" as const },
+    };
+
+    expect(canPlaceBuilding(standard, "smallHouse", { x: 5, y: 5 }, 0)).toBe(
+      canPlaceBuilding(creative, "smallHouse", { x: 5, y: 5 }, 0),
+    );
   });
 });
 
