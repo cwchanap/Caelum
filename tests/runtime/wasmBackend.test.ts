@@ -526,16 +526,16 @@ describe("sandbox domain error guards", () => {
     // still recognize as a plain object (the `prototype === null` branch).
     const context = Object.create(null);
     context.templateId = "crossroads";
-    expect(
-      isSandboxCreationError({ code: "unknownTemplateId", context }),
-    ).toBe(true);
+    expect(isSandboxCreationError({ code: "unknownTemplateId", context })).toBe(
+      true,
+    );
   });
 
   it("accepts a null-prototype plain object as the reset context", () => {
     const context = Object.create(null);
-    expect(
-      isSandboxResetError({ code: "unsupportedGameMode", context }),
-    ).toBe(true);
+    expect(isSandboxResetError({ code: "unsupportedGameMode", context })).toBe(
+      true,
+    );
   });
 
   it.each(["unsupportedGameMode", "templateInvariantViolation"])(
