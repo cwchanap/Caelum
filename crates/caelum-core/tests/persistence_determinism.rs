@@ -5,7 +5,9 @@ use caelum_core::model::{
     TripStatus,
 };
 use caelum_core::transit::ROAD_COST;
-use caelum_core::{commute, validate_snapshot, GameEngine, GameIntent, RoadPreset};
+use caelum_core::{
+    commute, validate_snapshot, GameEngine, GameIntent, RoadPreset, SandboxCreationRequest,
+};
 
 fn apply(engine: &mut GameEngine, intent: GameIntent) {
     let result = engine.dispatch(intent);
@@ -106,14 +108,26 @@ fn restored_engine_has_identical_future_results_and_topology() {
 
 #[test]
 fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_deduction() {
-    let mut snapshot = GameEngine::new().snapshot();
-    snapshot.paused = true;
-    snapshot.budget = 0;
-    snapshot.rules.economy_preset = EconomyPreset::Creative;
+    let mut direct = GameEngine::from_sandbox_request(SandboxCreationRequest {
+        template_id: "blankGrid".to_string(),
+        economy_preset: "creative".to_string(),
+        starting_capital: Some(0.0),
+        demand_multiplier: Some(1.0),
+        move_in_rate: "paused".to_string(),
+    })
+    .expect("Creative Blank Grid request should construct directly");
+    let snapshot = direct.snapshot();
+    assert_eq!(snapshot.rules.economy_preset, EconomyPreset::Creative);
+    assert_eq!(snapshot.budget, 0);
+    assert!(snapshot.paused);
 
     let mut restored = GameEngine::from_snapshot(snapshot.clone()).unwrap();
-    let mut direct = GameEngine::from_snapshot(snapshot).unwrap();
     let restored_before = restored.snapshot();
+    assert_eq!(restored.snapshot(), snapshot);
+    assert_eq!(
+        restored.road_topology_for_test(),
+        direct.road_topology_for_test()
+    );
 
     let result = restored.dispatch(GameIntent::LayRoad {
         point: Point { x: 2, y: 2 },

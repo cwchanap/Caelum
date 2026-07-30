@@ -117,8 +117,8 @@ describe("real WASM artifact smoke", () => {
   });
 
   it("immediately applies Creative road policy after loading a zero-budget snapshot", async () => {
-    const backend = await createWasmBackend();
-    const created = await backend.createSandbox({
+    const source = await createWasmBackend();
+    const created = await source.createSandbox({
       templateId: "blankGrid",
       economyPreset: "creative",
       startingCapital: 0,
@@ -130,15 +130,25 @@ describe("real WASM artifact smoke", () => {
       throw new Error("expected Creative Blank Grid creation to succeed");
     }
 
-    const loaded = await backend.loadSnapshot!(created.snapshot);
-    const result = await backend.dispatch({
+    const destination = await createWasmBackend();
+    const destinationBeforeLoad = await destination.snapshot();
+    expect(destinationBeforeLoad.rules.economyPreset).toBe("standard");
+    expect(destinationBeforeLoad.budget).not.toBe(0);
+
+    const loaded = await destination.loadSnapshot!(created.snapshot);
+    expect(loaded.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
+    expect(loaded.paused).toBe(true);
+    expect(loaded.budget).toBe(0);
+    expect(loaded.rules.economyPreset).toBe("creative");
+
+    const result = await destination.dispatch({
       type: "layRoad",
       point: { x: 2, y: 2 },
     });
 
     expect(result.applied).toBe(true);
     expect(result.context.cost).toBe(100);
-    expect(result.snapshot.budget).toBe(loaded.budget);
+    expect(result.snapshot.budget).toBe(0);
     expect(result.snapshot.rules.economyPreset).toBe("creative");
     expect(result.snapshot.map.tiles.find((tile) => tile.x === 2 && tile.y === 2))
       .toMatchObject({ kind: "road" });
