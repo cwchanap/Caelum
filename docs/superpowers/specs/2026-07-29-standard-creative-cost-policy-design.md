@@ -155,6 +155,11 @@ an atomic Standard purchase is unaffordable, and can apply its deduction to a
 candidate budget after authorization. Commit code does not independently
 recompute affordability or deduction.
 
+After an atomic quote is authorized, that same quote is threaded to the
+candidate update and its `deduction` is applied exactly once. Covered mutation
+helpers do not retain direct `candidate.budget -= nominal_cost` operations or
+recompute a second quote at the deduction site.
+
 All covered prices are internal non-negative values. The policy may enforce
 that invariant with a debug assertion; it does not add a player-visible error
 for invalid internal catalog data.
@@ -211,10 +216,36 @@ The engine wraps them with cost zero where it needs a common commit path.
 `dispatch_context()` accepts the authoritative nominal cost instead of deriving
 cost only from `before.budget - after.budget`. It continues deriving changed
 tiles, skipped tiles, and structurally affected route IDs from the two
-snapshots.
+snapshots. Its contract is equivalent to
+`dispatch_context(before, after, requested_tiles, cost)`.
 
-The relevant engine commit helpers propagate the mutation's explicit cost into
-`DispatchContext.cost`. This produces:
+Two existing road-specific budget-delta conversions are explicitly part of
+this change:
+
+- `apply_linear_tiles_in_order()` accumulates and returns the nominal price of
+  successfully authored paid tiles instead of returning
+  `original.budget - candidate.budget`; and
+- `normalize_road_mutation_result()` passes `RoadMutationResult.cost` into
+  `dispatch_context()` and must not overwrite that cost with a derived budget
+  delta.
+
+The normalization change is load-bearing even though road mutations already
+carry a cost. `place_roundabout()` sets the correct size-specific
+`RoadMutationResult.cost`, but the current normalizer immediately replaces it
+with the budget delta. Without preserving the result's explicit cost, an
+otherwise correct Creative roundabout reports zero.
+
+The non-road engine paths propagate cost explicitly as well:
+
+- `network_candidate_for_tiles()` accepts a costed mutation, or an equivalent
+  explicit cost argument, for tracks, stops, stations, and buildings;
+- `commit_result()` and `commit_result_for_tiles()` carry the explicit cost for
+  route creation and vehicle assignment; and
+- every free intent using those shared helpers supplies or is wrapped with cost
+  zero.
+
+All three helpers pass that value to `dispatch_context()` rather than asking it
+to inspect the budget. This produces:
 
 - the current positive price for a successful Standard purchase;
 - the same positive price for the equivalent successful Creative purchase; and
@@ -260,6 +291,19 @@ domain rules that already choose the purchased item.
 Every row uses the same policy quote for Standard and Creative. The world
 mutation code is not forked by preset.
 
+The existing transit-node intent paths are all covered:
+
+- `GameIntent::AddBusStop` dispatches to `transit::add_bus_stop()`;
+- `GameIntent::AddMetroStation` dispatches to
+  `transit::add_metro_station()`; and
+- `GameIntent::PlaceBuilding` dispatches to `buildings::place_building()`.
+
+The current UI uses the dedicated transit intents for bus stops and metro
+stations and uses `PlaceBuilding` for the bus terminal. The generic
+`PlaceBuilding` wire path can also receive the existing bus-stop and
+metro-station catalog types, so those compatibility calls must use the same
+policy rather than becoming an alternate purchase bypass.
+
 ### 3.2 Atomic paths
 
 Replace each direct budget comparison/deduction at its current point with the
@@ -296,12 +340,19 @@ For each tile that would create new paid infrastructure:
 6. add the nominal per-tile price to the stroke result's cost.
 
 Existing road tiles updated by a preset continue to cost zero. Invalid,
-out-of-bounds, occupied, structure-owned, or duplicate tiles retain their
-existing skip behavior. A dual-bidirectional road stroke charges only newly
-authored tiles across both carriageways, just as Standard does today.
+out-of-bounds, occupied, and structure-owned tiles retain their existing skip
+behavior. A repeated road point may re-enter the free existing-road overlay
+path, while a repeated track point becomes invalid after the first track is
+authored; neither incurs a second charge. A dual-bidirectional road stroke
+charges only newly authored tiles across both carriageways, just as Standard
+does today.
 
 The nominal stroke cost is accumulated from successfully authored paid tiles,
-not inferred from the budget delta. The fixed map bounds keep that sum within
+not inferred from the budget delta. Each map tile can therefore contribute a
+paid road or track price at most once per stroke: subsequent road occurrences
+see an existing road and subsequent track occurrences see an already tracked
+tile. This remains true for host-sent duplicate points and overlapping
+dual-carriageway points. The fixed map bounds consequently keep the sum within
 the existing `i32` cost contract.
 
 If no tile changes, the existing typed stroke rejection remains unchanged.
@@ -353,6 +404,11 @@ first vehicle:
 - Standard retains the existing insufficient-budget rejection or warning; and
 - Creative emits neither an insufficient-budget rejection nor warning.
 
+Preview does not keep a separate vehicle-price selector. It obtains the mode's
+nominal price from the same `transit::vehicle_cost()` helper used by route
+creation and vehicle assignment. The underlying constants remain in their
+current transit domain.
+
 If route geometry is invalid, Creative still receives the route rejection. A
 Creative disconnected route does not add an irrelevant budget warning merely
 because the displayed budget is below the nominal first-vehicle cost.
@@ -363,24 +419,35 @@ does not learn a Creative exception; Rust expresses that exception through
 
 ### 4.3 Building hover
 
-The existing building hover is a best-effort TypeScript presentation helper,
-not an authoritative preview API. Its affordability portion changes from:
+Building hover is a best-effort TypeScript presentation surface, not an
+authoritative preview API. Two render consumers currently combine local
+placement validation with a budget comparison:
+
+- `renderBuildingPreview()` in `src/render/overlayRenderer.ts`; and
+- `badgeText()` in `src/render/cursorBadge.ts`.
+
+Add one shared, read-only helper alongside the existing render placement
+helpers in `src/render/placementValidation.ts`, equivalent to:
 
 ```typescript
-state.budget >= definition.cost
+export function isBuildingAffordableForPresentation(
+  state: GameState,
+  buildingType: BuildingType,
+): boolean {
+  const definition = BUILDING_CATALOG[buildingType];
+  return (
+    state.rules.economyPreset === "creative" ||
+    state.budget >= definition.cost
+  );
+}
 ```
 
-to the read-only equivalent of:
-
-```typescript
-state.rules.economyPreset === "creative" ||
-  state.budget >= definition.cost
-```
-
-The existing footprint check still controls geometric hover feedback. The
+Both render consumers combine this helper with the existing
+`canPlaceBuilding()` footprint check. `canPlaceBuilding()` remains
+geometry-only; affordability does not leak into its existing callers. The
 actual click always dispatches `PlaceBuilding` to Rust, which revalidates both
-geometry and policy. This TypeScript branch can remove a false red Creative
-hover but cannot make Rust accept a mutation.
+geometry and policy. These presentation branches can remove a false red
+Creative hover but cannot make Rust accept a mutation.
 
 Cursor-badge and overlay-preview tests cover the same rule. No generic
 TypeScript cost-policy layer is introduced.
@@ -418,8 +485,17 @@ Creative suppresses only the affordability failure. It still rejects:
   and
 - invalid platform or vehicle assignment.
 
-The same invalid mutation against equivalent Standard and Creative snapshots
-produces the same non-budget rejection and leaves both snapshots unchanged.
+Against equivalent snapshots where Standard has sufficient budget, the same
+invalid mutation produces the same non-budget rejection and context in both
+presets and leaves both snapshots unchanged.
+
+When an operation is simultaneously unaffordable and invalid on an existing
+budget-first path, rejection precedence intentionally differs. Standard retains
+its current `insufficientBudget` rejection; Creative bypasses only that
+affordability gate and reaches the underlying placement, topology, route, or
+compatibility rejection. Neither preset commits any candidate state. This
+dual-failure behavior preserves Standard semantics without treating Creative as
+a validation bypass.
 
 ### 5.3 Deterministic world parity
 
@@ -433,13 +509,21 @@ Creative produce equal gameplay world state:
 - sims, trips, metrics, and scenario state; and
 - changed/skipped/affected-route dispatch metadata.
 
+Budget-limited partial strokes are explicitly outside this whole-world parity
+guarantee. When the total price of valid new tiles exceeds the candidate
+Standard budget, both dispatches may apply but their authored worlds
+intentionally differ. Standard continues scanning the ordered stroke, skips
+unaffordable new tiles, and may still process later free existing-road
+overlays; Creative authors every geometrically valid new tile.
+
 The intentional differences are:
 
 - `rules.economyPreset`;
 - budget after a charged purchase; and
 - policy-derived affordability/deduction state that is not serialized.
 
-Both dispatches report the same nominal `context.cost`.
+For the sufficiently affordable paired cases above, both dispatches report the
+same nominal `context.cost`.
 
 ## 6. Host Boundaries
 
@@ -479,12 +563,26 @@ Add deterministic Standard/Creative coverage for:
 
 - a road tile and a multi-tile road stroke;
 - a track tile and a multi-tile track stroke;
-- a bus stop;
-- a metro station;
+- a bus stop through `AddBusStop`;
+- a metro station through `AddMetroStation`;
 - compact and standard roundabouts;
-- representative ordinary and transit buildings;
+- representative ordinary buildings and the bus terminal through
+  `PlaceBuilding`;
+- direct `PlaceBuilding` compatibility calls for the existing bus-stop and
+  metro-station catalog types;
 - bus and metro route creation; and
 - additional bus and metro vehicle assignment.
+
+The transit-node compatibility cases include price-drift guards:
+
+- `BUS_STOP_COST` equals `building_definition("busStop").cost`;
+- `METRO_STATION_COST` equals
+  `building_definition("metroStation").cost`; and
+- the dedicated transit intent and `PlaceBuilding` compatibility intent report
+  the same nominal `context.cost` for each corresponding node type.
+
+These assertions protect the intentionally separate constant and building
+catalog sources without consolidating them.
 
 For each atomic category, a low-budget fixture proves:
 
@@ -500,9 +598,13 @@ after removing only budget and economy-preset differences.
 Stroke tests separately prove:
 
 - Standard input-order partial application is unchanged;
-- unaffordable Standard tiles are skipped;
-- Creative applies every geometrically valid tile regardless of displayed
-  budget;
+- paired all-new road and track strokes whose valid nominal total exceeds the
+  displayed budget make Standard author only the affordable new tiles in input
+  order while Creative authors every geometrically valid new tile;
+- Standard continues scanning after an unaffordable tile and may still process
+  a later free existing-road overlay;
+- host-sent duplicate road and track points never increase nominal cost beyond
+  one paid authoring per unique new tile;
 - both report cost only for newly authored paid tiles; and
 - fully skipped strokes preserve their existing rejection codes.
 
@@ -513,6 +615,21 @@ topology, structure ownership, zoning, route connectivity, route activity,
 route lookup, and compatibility. Each rejects without mutation. Paired
 Standard fixtures with sufficient funds assert the same rejection code and
 context.
+
+Separate dual-failure fixtures cover the existing budget-first single-road,
+single-track, bus-stop, metro-station, player-building, and vehicle-assignment
+paths. Each fixture is both invalid and unaffordable and asserts that:
+
+- Standard retains `insufficientBudget`;
+- Creative returns the underlying non-budget rejection; and
+- neither engine commits a snapshot, budget, topology, entity, or route change.
+
+Complementary geometry-first dual-failure fixtures cover an unaffordable
+roundabout with invalid geometry or port mapping and an unaffordable route
+creation with invalid connectivity. Because those paths validate before
+quoting their cost, Standard and Creative both return the same non-budget
+rejection and context, neither commits any state, and Standard is not expected
+to return `insufficientBudget`.
 
 ### 7.4 Preview tests
 
@@ -573,7 +690,7 @@ boundary; no new Tauri command is required.
 | Equivalent valid world mutation in Standard and Creative | Shared mutation path plus deterministic paired-state tests |
 | Standard unaffordable purchase rejects without partial mutation | Atomic policy authorization and per-category atomicity matrix |
 | Creative accepts and leaves budget unchanged | Creative zero-deduction quote and low-budget matrix |
-| Creative still rejects invalid operations | Shared validation paths and invalid-operation parity tests |
+| Creative still rejects invalid operations | Sufficient-budget parity plus intentional dual-failure precedence tests |
 | Preview affordability and commit cannot disagree | Shared policy quote in route preview and shared road mutation preview path |
 | No TypeScript-only cost bypass | Rust-only commit policy; TypeScript changes are read-only presentation |
 | WASM/Tauri parity | Unchanged wire contract plus restored-snapshot host tests |
@@ -582,8 +699,8 @@ boundary; no new Tauri command is required.
 
 HPA-338 is complete when every listed existing player purchase uses the policy,
 nominal cost survives Creative dispatch/preview, Standard regression behavior
-is preserved, Creative invalid-operation parity is proven, host-boundary tests
-pass, and the full verification gates are green.
+is preserved, Creative validation and qualified invalid-operation parity are
+proven, host-boundary tests pass, and the full verification gates are green.
 
 The implementation does not absorb the New City UI, persistence storage,
 operating economy, fleet variants, or transit-operations roadmap work.
