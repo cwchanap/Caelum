@@ -18,10 +18,7 @@ import type {
   RoadMutationPreviewView,
   RouteEditorView,
 } from "../runtime/types";
-import {
-  BUILDING_CATALOG,
-  getBuildingFootprint,
-} from "../domain/catalog/buildings";
+import { getBuildingFootprint } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { axisLockedLine } from "../ui/roadDrag";
@@ -33,6 +30,7 @@ import { pointAndTangentAt } from "./pathRenderer";
 import {
   canPlaceBuilding,
   canPlaceBusStop,
+  isBuildingAffordableForPresentation,
   isAreaPaintable,
 } from "./placementValidation";
 
@@ -107,7 +105,7 @@ function renderBuildingPreview(
   }
 
   const validPlacement =
-    state.budget >= BUILDING_CATALOG[ui.selectedBuilding].cost &&
+    isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
     canPlaceBuilding(
       state,
       ui.selectedBuilding,

@@ -1336,8 +1336,9 @@ describe("building preview", () => {
     expect(fillStyles).toContain(colors.previewValid);
   });
 
-  it("renders an invalid placement in the invalid tint when budget is insufficient", () => {
-    const { ctx, fillStyles } = recordingFillCtx();
+  it("renders a zero-budget building valid in Creative but invalid in Standard", () => {
+    const { ctx: standardCtx, fillStyles: standardFillStyles } =
+      recordingFillCtx();
     let state = createTestGameState();
     const emptyTile = state.map.tiles.find((tile) => tile.kind === "empty");
     if (emptyTile === undefined) {
@@ -1347,15 +1348,24 @@ describe("building preview", () => {
       emptyTile,
       { x: emptyTile.x + 1, y: emptyTile.y },
     ]);
-    state = { ...state, budget: 0 };
+    const standard = { ...state, budget: 0 };
+    const creative = {
+      ...standard,
+      rules: { ...standard.rules, economyPreset: "creative" as const },
+    };
     const ui = {
       ...createUiState(),
       selectedBuilding: "smallHouse" as const,
       buildingRotation: 0 as const,
       hoverTile: { x: emptyTile.x, y: emptyTile.y },
     };
-    renderOverlays(ctx, state, ui);
-    expect(fillStyles).toContain(colors.previewInvalid);
+    renderOverlays(standardCtx, standard, ui);
+    expect(standardFillStyles).toContain(colors.previewInvalid);
+
+    const { ctx: creativeCtx, fillStyles: creativeFillStyles } =
+      recordingFillCtx();
+    renderOverlays(creativeCtx, creative, ui);
+    expect(creativeFillStyles).toContain(colors.previewValid);
   });
 
   it("renders an invalid placement when the tile is occupied by a building", () => {
@@ -1370,6 +1380,10 @@ describe("building preview", () => {
       { x: emptyTile.x + 1, y: emptyTile.y },
     ]);
     state = withBuildingAt(state, [emptyTile]);
+    state = {
+      ...state,
+      rules: { ...state.rules, economyPreset: "creative" as const },
+    };
     const ui = {
       ...createUiState(),
       selectedBuilding: "smallHouse" as const,
