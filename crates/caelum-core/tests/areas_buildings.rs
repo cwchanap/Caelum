@@ -1,7 +1,7 @@
 use caelum_core::{
     buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::{BusStopKind, PlacedBuilding, Point, Sim, WorkerProfile},
+    model::{BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim, WorkerProfile},
     state::create_initial_snapshot,
     GameEngine, GameIntent, RejectionCode,
 };
@@ -595,4 +595,68 @@ fn place_building_core_is_budget_exempt_but_place_building_charges() {
         budget - 4_000,
         "player placement deducts cost"
     );
+}
+
+fn policy_engine(snapshot: GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
+    let mut snapshot = snapshot;
+    snapshot.rules.economy_preset = preset;
+    snapshot.budget = budget;
+    GameEngine::from_snapshot(snapshot).expect("policy fixture is valid")
+}
+
+#[test]
+fn creative_building_construction_preserves_budget_and_standard_is_budget_first() {
+    let mut prepared = GameEngine::new();
+    assert!(
+        prepared
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: (2, 3).into(),
+                end: (3, 3).into(),
+            })
+            .applied
+    );
+    let base = prepared.snapshot();
+    let mut standard = policy_engine(base.clone(), EconomyPreset::Standard, 0);
+    let mut creative = policy_engine(base, EconomyPreset::Creative, 0);
+    let intent = GameIntent::PlaceBuilding {
+        building_type: "smallHouse".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    };
+
+    let standard_before = standard.snapshot();
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+    assert_eq!(
+        standard_result.rejection.unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(standard_result.snapshot, standard_before);
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(creative_result.snapshot.budget, 0);
+    assert_eq!(creative_result.context.cost, 4_000);
+
+    let invalid_base = GameEngine::new().snapshot();
+    let mut invalid_standard = policy_engine(invalid_base.clone(), EconomyPreset::Standard, 0);
+    let mut invalid_creative = policy_engine(invalid_base, EconomyPreset::Creative, 0);
+    let invalid = GameIntent::PlaceBuilding {
+        building_type: "smallHouse".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    };
+    let invalid_standard_before = invalid_standard.snapshot();
+    let invalid_creative_before = invalid_creative.snapshot();
+    let invalid_standard_result = invalid_standard.dispatch(invalid.clone());
+    let invalid_creative_result = invalid_creative.dispatch(invalid);
+    assert_eq!(
+        invalid_standard_result.rejection.unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(invalid_standard_result.snapshot, invalid_standard_before);
+    assert_eq!(
+        invalid_creative_result.rejection.unwrap().code,
+        RejectionCode::InvalidBuildingPlacement
+    );
+    assert_eq!(invalid_creative_result.snapshot, invalid_creative_before);
 }

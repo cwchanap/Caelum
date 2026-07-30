@@ -1,7 +1,8 @@
+use caelum_core::building_catalog::building_definition;
 use caelum_core::model::{EconomyPreset, GameSnapshot, Point, RoundaboutSize};
 use caelum_core::roundabouts::roundabout_cost;
-use caelum_core::transit::ROAD_COST;
-use caelum_core::{GameEngine, GameIntent, RejectionCode};
+use caelum_core::transit::{BUS_STOP_COST, METRO_STATION_COST, ROAD_COST, TRACK_COST};
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -122,4 +123,251 @@ fn funded_roundabouts_have_world_parity_and_equal_nominal_cost() {
             &creative_result.snapshot,
         );
     }
+}
+
+fn prepared_bus_stop() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::LayRoadLine {
+                points: vec![point(4, 5), point(5, 5)],
+                preset: RoadPreset::TwoWay,
+            })
+            .applied
+    );
+    engine.snapshot()
+}
+
+fn prepared_metro_station() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::LayTrack { point: point(4, 4) })
+            .applied
+    );
+    engine.snapshot()
+}
+
+fn prepared_small_house() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: point(2, 3),
+                end: point(3, 3),
+            })
+            .applied
+    );
+    engine.snapshot()
+}
+
+fn prepared_bus_terminal() -> GameSnapshot {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::LayRoadLine {
+                points: vec![point(2, 5), point(3, 5)],
+                preset: RoadPreset::TwoWay,
+            })
+            .applied
+    );
+    engine.snapshot()
+}
+
+fn assert_low_budget_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
+    let mut standard = engine_for(prepared, EconomyPreset::Standard, cost - 1);
+    let mut creative = engine_for(prepared, EconomyPreset::Creative, cost - 1);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(!standard_result.applied, "{standard_result:?}");
+    assert_eq!(
+        standard_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InsufficientBudget),
+    );
+    assert_eq!(standard_result.snapshot, standard_before);
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
+    assert_eq!(creative_result.context.cost, cost);
+}
+
+fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
+    let mut standard = engine_for(prepared, EconomyPreset::Standard, cost);
+    let mut creative = engine_for(prepared, EconomyPreset::Creative, cost);
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(standard_result.applied, "{standard_result:?}");
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(standard_result.context.cost, cost);
+    assert_eq!(creative_result.context.cost, cost);
+    assert_eq!(
+        standard_result.context.changed_tiles,
+        creative_result.context.changed_tiles
+    );
+    assert_eq!(
+        standard_result.context.skipped_tiles,
+        creative_result.context.skipped_tiles
+    );
+    assert_world_equal_ignoring_cost_policy(&standard_result.snapshot, &creative_result.snapshot);
+}
+
+#[test]
+fn low_budget_transit_nodes_tracks_and_buildings_reject_standard_and_apply_creative() {
+    let small_house_cost = building_definition("smallHouse").unwrap().cost;
+    let terminal_cost = building_definition("busTerminal").unwrap().cost;
+
+    assert_low_budget_pair(
+        &GameEngine::new().snapshot(),
+        GameIntent::LayTrack { point: point(2, 2) },
+        TRACK_COST,
+    );
+    assert_low_budget_pair(
+        &prepared_bus_stop(),
+        GameIntent::AddBusStop { point: point(4, 4) },
+        BUS_STOP_COST,
+    );
+    assert_low_budget_pair(
+        &prepared_metro_station(),
+        GameIntent::AddMetroStation { point: point(4, 4) },
+        METRO_STATION_COST,
+    );
+    assert_low_budget_pair(
+        &prepared_small_house(),
+        GameIntent::PlaceBuilding {
+            building_type: "smallHouse".to_string(),
+            origin: point(2, 3),
+            rotation: 0,
+        },
+        small_house_cost,
+    );
+    assert_low_budget_pair(
+        &prepared_bus_terminal(),
+        GameIntent::PlaceBuilding {
+            building_type: "busTerminal".to_string(),
+            origin: point(2, 3),
+            rotation: 0,
+        },
+        terminal_cost,
+    );
+    assert_low_budget_pair(
+        &prepared_bus_stop(),
+        GameIntent::PlaceBuilding {
+            building_type: "busStop".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+        BUS_STOP_COST,
+    );
+    assert_low_budget_pair(
+        &prepared_metro_station(),
+        GameIntent::PlaceBuilding {
+            building_type: "metroStation".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+        METRO_STATION_COST,
+    );
+}
+
+#[test]
+fn funded_transit_nodes_tracks_and_buildings_have_nominal_cost_parity() {
+    let small_house_cost = building_definition("smallHouse").unwrap().cost;
+    let terminal_cost = building_definition("busTerminal").unwrap().cost;
+
+    assert_funded_pair(
+        &GameEngine::new().snapshot(),
+        GameIntent::LayTrack { point: point(2, 2) },
+        TRACK_COST,
+    );
+    assert_funded_pair(
+        &prepared_bus_stop(),
+        GameIntent::AddBusStop { point: point(4, 4) },
+        BUS_STOP_COST,
+    );
+    assert_funded_pair(
+        &prepared_metro_station(),
+        GameIntent::AddMetroStation { point: point(4, 4) },
+        METRO_STATION_COST,
+    );
+    assert_funded_pair(
+        &prepared_small_house(),
+        GameIntent::PlaceBuilding {
+            building_type: "smallHouse".to_string(),
+            origin: point(2, 3),
+            rotation: 0,
+        },
+        small_house_cost,
+    );
+    assert_funded_pair(
+        &prepared_bus_terminal(),
+        GameIntent::PlaceBuilding {
+            building_type: "busTerminal".to_string(),
+            origin: point(2, 3),
+            rotation: 0,
+        },
+        terminal_cost,
+    );
+}
+
+#[test]
+fn dedicated_and_generic_transit_node_intents_report_the_same_nominal_price() {
+    let bus_dedicated = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0)
+        .dispatch(GameIntent::AddBusStop { point: point(4, 4) });
+    let bus_generic = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0).dispatch(
+        GameIntent::PlaceBuilding {
+            building_type: "busStop".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+    );
+    let metro_dedicated = engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0)
+        .dispatch(GameIntent::AddMetroStation { point: point(4, 4) });
+    let metro_generic = engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0).dispatch(
+        GameIntent::PlaceBuilding {
+            building_type: "metroStation".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+    );
+
+    assert_eq!(bus_dedicated.context.cost, BUS_STOP_COST);
+    assert_eq!(bus_generic.context.cost, BUS_STOP_COST);
+    assert_eq!(metro_dedicated.context.cost, METRO_STATION_COST);
+    assert_eq!(metro_generic.context.cost, METRO_STATION_COST);
+}
+
+#[test]
+fn over_budget_track_stroke_truncates_standard_but_creative_authors_every_valid_tile() {
+    let prepared = GameEngine::new().snapshot();
+    let mut standard = engine_for(&prepared, EconomyPreset::Standard, TRACK_COST);
+    let mut creative = engine_for(&prepared, EconomyPreset::Creative, TRACK_COST);
+    let intent = GameIntent::LayTrackLine {
+        points: vec![point(2, 2), point(3, 2), point(4, 2)],
+    };
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(standard_result.applied, "{standard_result:?}");
+    assert_eq!(standard_result.context.cost, TRACK_COST);
+    assert_eq!(standard_result.context.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(
+        standard_result.context.skipped_tiles,
+        vec![point(3, 2), point(4, 2)]
+    );
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(creative_result.context.cost, 3 * TRACK_COST);
+    assert_eq!(creative_result.snapshot.budget, TRACK_COST);
+    assert_eq!(
+        creative_result.context.changed_tiles,
+        vec![point(2, 2), point(3, 2), point(4, 2)]
+    );
 }
