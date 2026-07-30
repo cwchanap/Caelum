@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::cost_policy::CostedMutation;
 use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::model::{
@@ -29,6 +30,17 @@ pub fn create_route(
     pattern: ServicePattern,
     waypoint_ids: Vec<String>,
 ) -> GameplayResult<GameSnapshot> {
+    create_route_costed(state, context, mode, pattern, waypoint_ids)
+        .map(CostedMutation::into_snapshot)
+}
+
+pub(crate) fn create_route_costed(
+    state: &GameSnapshot,
+    context: RoutingContext<'_>,
+    mode: TransitMode,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+) -> GameplayResult<CostedMutation> {
     validate_waypoints(state, mode, &waypoint_ids, None, None)?;
     let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
     require_all_connected(&legs, None)?;
@@ -53,7 +65,7 @@ pub fn create_route(
     )?;
     candidate.transit.vehicles.push(vehicle);
     candidate.budget -= cost;
-    Ok(candidate)
+    Ok(CostedMutation::new(candidate, cost))
 }
 
 pub fn update_route(

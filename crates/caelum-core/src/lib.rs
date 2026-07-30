@@ -25,6 +25,7 @@ pub mod building_catalog;
 pub mod buildings;
 pub mod clock;
 pub mod commute;
+pub(crate) mod cost_policy;
 pub mod engine;
 pub mod growth;
 pub mod heading;
