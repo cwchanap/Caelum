@@ -150,8 +150,9 @@ describe("real WASM artifact smoke", () => {
     expect(result.context.cost).toBe(100);
     expect(result.snapshot.budget).toBe(0);
     expect(result.snapshot.rules.economyPreset).toBe("creative");
-    expect(result.snapshot.map.tiles.find((tile) => tile.x === 2 && tile.y === 2))
-      .toMatchObject({ kind: "road" });
+    expect(
+      result.snapshot.map.tiles.find((tile) => tile.x === 2 && tile.y === 2),
+    ).toMatchObject({ kind: "road" });
   });
 
   it("round-trips present undefined objectives but rejects an omitted key", async () => {
