@@ -1,6 +1,6 @@
 # HPA-338: Standard and Creative Cost Policy
 
-**Status:** Design approved; awaiting written-spec approval
+**Status:** Approved for implementation
 
 **Linear:** [HPA-338](https://linear.app/cwchanap/issue/HPA-338/apply-standard-and-creative-cost-policy-to-existing-player-purchases)
 
