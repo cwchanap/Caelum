@@ -1,6 +1,9 @@
 use std::collections::{BTreeSet, VecDeque};
 
-use caelum_core::model::{Heading, MovementKind, Point, RoadPort, RoadStructure, RoundaboutSize};
+use caelum_core::model::{
+    EconomyPreset, GameSnapshot, Heading, MovementKind, Point, RoadPort, RoadStructure,
+    RoundaboutSize,
+};
 use caelum_core::preview::RoadMutationPreviewRequest;
 use caelum_core::road::RoadMutation;
 use caelum_core::road_topology::{RoadState, RoadTransition};
@@ -360,6 +363,14 @@ fn crossing_engine() -> GameEngine {
     engine
 }
 
+fn engine_for(snapshot: &GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
+    let mut candidate = snapshot.clone();
+    candidate.rules.economy_preset = preset;
+    candidate.budget = budget;
+    candidate.paused = true;
+    GameEngine::from_snapshot(candidate).expect("fixture snapshot should be valid")
+}
+
 fn place_standard_roundabout() -> GameIntent {
     GameIntent::PlaceRoundabout {
         origin: point(5, 4),
@@ -523,6 +534,102 @@ fn invalid_footprint_rejections_are_all_or_nothing() {
         assert!(result.rejection.is_some());
         assert_eq!(result.snapshot, before);
     }
+}
+
+#[test]
+fn roundabout_geometry_rejection_precedes_budget_in_both_presets() {
+    let prepared = GameEngine::new().snapshot();
+    let mut standard = engine_for(&prepared, EconomyPreset::Standard, 0);
+    let mut creative = engine_for(&prepared, EconomyPreset::Creative, 0);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let intent = GameIntent::PlaceRoundabout {
+        origin: point(-1, 0),
+        size: RoundaboutSize::Compact2x2,
+    };
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(!standard_result.applied);
+    assert!(!creative_result.applied);
+    assert_eq!(standard_result.rejection, creative_result.rejection);
+    assert_eq!(
+        standard_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::OutOfBounds)
+    );
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
+}
+
+#[test]
+fn unsafe_port_mapping_and_structure_ownership_reject_identically_in_both_presets() {
+    let mut unsafe_mapping = GameEngine::new();
+    road_line(&mut unsafe_mapping, (2..=10).map(|x| point(x, 5)).collect());
+    let mut unsafe_snapshot = unsafe_mapping.snapshot();
+    unsafe_snapshot.map.tile_mut(point(4, 5)).unwrap().one_way = Some(Heading::North);
+
+    let mut structure_owned = GameEngine::new();
+    dispatch(
+        &mut structure_owned,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    let structure_snapshot = structure_owned.snapshot();
+
+    let mut unsafe_standard = unsafe_snapshot.clone();
+    unsafe_standard.rules.economy_preset = EconomyPreset::Standard;
+    unsafe_standard.budget = 10_000;
+    let mut unsafe_creative = unsafe_snapshot;
+    unsafe_creative.rules.economy_preset = EconomyPreset::Creative;
+    unsafe_creative.budget = 10_000;
+    let unsafe_standard_rejection = match caelum_core::roundabouts::place_roundabout(
+        &unsafe_standard,
+        point(5, 4),
+        RoundaboutSize::Standard3x3,
+    ) {
+        Ok(_) => panic!("unsafe port mapping should reject"),
+        Err(rejection) => rejection,
+    };
+    let unsafe_creative_rejection = match caelum_core::roundabouts::place_roundabout(
+        &unsafe_creative,
+        point(5, 4),
+        RoundaboutSize::Standard3x3,
+    ) {
+        Ok(_) => panic!("unsafe port mapping should reject"),
+        Err(rejection) => rejection,
+    };
+    assert_eq!(unsafe_standard_rejection, unsafe_creative_rejection);
+    assert_eq!(
+        unsafe_standard_rejection.code,
+        RejectionCode::UnsafeRoundaboutPortMapping
+    );
+
+    let intent = GameIntent::PlaceRoundabout {
+        origin: point(5, 5),
+        size: RoundaboutSize::Compact2x2,
+    };
+    let mut standard = engine_for(&structure_snapshot, EconomyPreset::Standard, 10_000);
+    let mut creative = engine_for(&structure_snapshot, EconomyPreset::Creative, 10_000);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(!standard_result.applied, "{standard_result:?}");
+    assert!(!creative_result.applied, "{creative_result:?}");
+    assert_eq!(standard_result.rejection, creative_result.rejection);
+    assert_ne!(
+        standard_result.rejection.as_ref().unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
 }
 
 #[test]

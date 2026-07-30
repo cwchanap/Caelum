@@ -1,4 +1,6 @@
-use caelum_core::model::{GameMap, GameSnapshot, Heading, Point, RoadStructure, RoundaboutSize};
+use caelum_core::model::{
+    EconomyPreset, GameMap, GameSnapshot, Heading, Point, RoadStructure, RoundaboutSize,
+};
 use caelum_core::road::{apply_road_mutation, RoadMutation};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::transit::ROAD_COST;
@@ -137,6 +139,13 @@ fn tile(state: &GameSnapshot, point: Point) -> &caelum_core::model::Tile {
     state.map.tile(point).expect("fixture tile exists")
 }
 
+fn snapshot_for_preset(state: &GameSnapshot, preset: EconomyPreset, budget: i32) -> GameSnapshot {
+    let mut candidate = state.clone();
+    candidate.rules.economy_preset = preset;
+    candidate.budget = budget;
+    candidate
+}
+
 #[test]
 fn dual_bidirectional_crossing_preserves_both_corridors_and_lane_directions() {
     let mut engine = GameEngine::new();
@@ -249,6 +258,168 @@ fn partial_stroke_skips_invalid_tiles_in_input_order() {
     assert_eq!(result.changed_tiles, vec![point(2, 2), point(4, 2)]);
     assert_eq!(result.skipped_tiles, vec![point(3, 2), point(5, 2)]);
     assert_eq!(result.snapshot.budget, state.budget - ROAD_COST * 2);
+}
+
+#[test]
+fn budget_limited_road_stroke_diverges_only_by_ordered_affordability() {
+    let prepared = create_initial_snapshot();
+    let mutation = RoadMutation::LayRoadLine {
+        points: vec![point(2, 2), point(3, 2), point(4, 2)],
+        preset: RoadPreset::TwoWay,
+    };
+    let standard = apply_road_mutation(
+        &snapshot_for_preset(&prepared, EconomyPreset::Standard, ROAD_COST * 2),
+        &mutation,
+    )
+    .expect("standard stroke should partially apply");
+    let creative = apply_road_mutation(
+        &snapshot_for_preset(&prepared, EconomyPreset::Creative, ROAD_COST * 2),
+        &mutation,
+    )
+    .expect("creative stroke should apply");
+
+    assert_eq!(standard.changed_tiles, vec![point(2, 2), point(3, 2)]);
+    assert_eq!(standard.skipped_tiles, vec![point(4, 2)]);
+    assert_eq!(standard.cost, ROAD_COST * 2);
+    assert_eq!(standard.snapshot.budget, 0);
+    assert_eq!(
+        creative.changed_tiles,
+        vec![point(2, 2), point(3, 2), point(4, 2)]
+    );
+    assert!(creative.skipped_tiles.is_empty());
+    assert_eq!(creative.cost, ROAD_COST * 3);
+    assert_eq!(creative.snapshot.budget, ROAD_COST * 2);
+}
+
+#[test]
+fn road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay() {
+    let initial = create_initial_snapshot();
+    let prepared = apply_road_mutation(&initial, &RoadMutation::LayRoad { point: point(4, 2) })
+        .expect("fixture road should apply")
+        .snapshot;
+    let state = snapshot_for_preset(&prepared, EconomyPreset::Standard, ROAD_COST);
+
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::LayRoadLine {
+            points: vec![point(2, 2), point(3, 2), point(4, 2)],
+            preset: RoadPreset::OneWay,
+        },
+    )
+    .expect("stroke should retain the free existing overlay");
+
+    assert_eq!(result.changed_tiles, vec![point(2, 2), point(4, 2)]);
+    assert_eq!(result.skipped_tiles, vec![point(3, 2)]);
+    assert_eq!(result.cost, ROAD_COST);
+    assert_eq!(result.snapshot.budget, 0);
+    assert_eq!(
+        tile(&result.snapshot, point(4, 2)).one_way,
+        Some(Heading::East)
+    );
+}
+
+#[test]
+fn duplicate_road_points_contribute_nominal_cost_once() {
+    let prepared = create_initial_snapshot();
+    let mutation = RoadMutation::LayRoadLine {
+        points: vec![point(2, 2), point(2, 2), point(2, 2)],
+        preset: RoadPreset::TwoWay,
+    };
+
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let budget = ROAD_COST;
+        let result =
+            apply_road_mutation(&snapshot_for_preset(&prepared, preset, budget), &mutation)
+                .expect("duplicate stroke should author its unique tile once");
+
+        assert_eq!(result.changed_tiles, vec![point(2, 2)]);
+        assert!(result.skipped_tiles.is_empty());
+        assert_eq!(result.cost, ROAD_COST);
+        assert_eq!(
+            result.snapshot.budget,
+            if preset == EconomyPreset::Standard {
+                0
+            } else {
+                budget
+            }
+        );
+    }
+}
+
+#[test]
+fn dual_bidirectional_overlapping_carriageways_charge_each_new_tile_once() {
+    let prepared = create_initial_snapshot();
+    let mutation = RoadMutation::LayRoadLine {
+        // The reverse east-bound carriageway is shifted north, so its middle
+        // point overlaps the final forward-carriageway point at (4, 2).
+        points: vec![point(3, 3), point(4, 3), point(4, 2)],
+        preset: RoadPreset::DualBidirectional,
+    };
+
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let budget = ROAD_COST * 5;
+        let result =
+            apply_road_mutation(&snapshot_for_preset(&prepared, preset, budget), &mutation)
+                .expect("overlapping dual stroke should apply");
+
+        assert_eq!(result.cost, ROAD_COST * 5);
+        assert_eq!(
+            result.snapshot.budget,
+            if preset == EconomyPreset::Standard {
+                0
+            } else {
+                budget
+            }
+        );
+    }
+}
+
+#[test]
+fn fully_skipped_paired_stroke_retains_invalid_road_stroke() {
+    let mut prepared = create_initial_snapshot();
+    prepared.map.tile_mut(point(2, 2)).unwrap().kind = "blocked".to_string();
+    let mutation = RoadMutation::LayRoadLine {
+        points: vec![point(2, 2)],
+        preset: RoadPreset::TwoWay,
+    };
+
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let state = snapshot_for_preset(&prepared, preset, ROAD_COST);
+        let rejection = match apply_road_mutation(&state, &mutation) {
+            Ok(_) => panic!("fully skipped stroke should reject"),
+            Err(rejection) => rejection,
+        };
+        assert_eq!(rejection.code, RejectionCode::InvalidRoadStroke);
+        assert_eq!(rejection.context.point, Some(point(2, 2)));
+    }
+}
+
+#[test]
+fn single_road_is_budget_first_in_standard_and_geometry_first_in_creative() {
+    let prepared = create_initial_snapshot();
+    let mutation = RoadMutation::LayRoad {
+        point: point(-1, 0),
+    };
+    let standard = snapshot_for_preset(&prepared, EconomyPreset::Standard, ROAD_COST - 1);
+    let creative = snapshot_for_preset(&prepared, EconomyPreset::Creative, ROAD_COST - 1);
+
+    let standard_rejection = match apply_road_mutation(&standard, &mutation) {
+        Ok(_) => panic!("standard invalid point should reject"),
+        Err(rejection) => rejection,
+    };
+    let creative_rejection = match apply_road_mutation(&creative, &mutation) {
+        Ok(_) => panic!("creative invalid point should reject"),
+        Err(rejection) => rejection,
+    };
+
+    assert_eq!(standard_rejection.code, RejectionCode::InsufficientBudget);
+    assert_eq!(standard_rejection.context.required_budget, Some(ROAD_COST));
+    assert_eq!(
+        standard_rejection.context.available_budget,
+        Some(ROAD_COST - 1)
+    );
+    assert_eq!(creative_rejection.code, RejectionCode::OutOfBounds);
+    assert_eq!(creative_rejection.context.point, Some(point(-1, 0)));
 }
 
 #[test]
