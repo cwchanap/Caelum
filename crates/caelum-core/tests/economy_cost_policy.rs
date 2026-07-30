@@ -273,6 +273,8 @@ fn assert_low_budget_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32
 fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
     let mut standard = engine_for(prepared, EconomyPreset::Standard, cost);
     let mut creative = engine_for(prepared, EconomyPreset::Creative, cost);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
     let standard_result = standard.dispatch(intent.clone());
     let creative_result = creative.dispatch(intent);
 
@@ -280,6 +282,11 @@ fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
     assert!(creative_result.applied, "{creative_result:?}");
     assert_eq!(standard_result.context.cost, cost);
     assert_eq!(creative_result.context.cost, cost);
+    assert_eq!(
+        standard_result.snapshot.budget,
+        standard_before.budget - cost,
+    );
+    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
     assert_eq!(standard_result.context, creative_result.context);
     assert_world_equal_ignoring_cost_policy(&standard_result.snapshot, &creative_result.snapshot);
 }
