@@ -668,15 +668,15 @@ affordability while retaining Standard unaffordable feedback.
 The completed implementation runs at least:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-bun run check
-bun run lint
-bun run format:check
-bun run test
-bun run build
-bun run test:e2e
+rtk cargo fmt --all --check
+rtk cargo clippy --workspace --all-targets -- -D warnings
+rtk cargo test --workspace
+rtk bun run check
+rtk bun run lint
+rtk bun run format:check
+rtk bun run test
+rtk bun run build
+rtk bun run test:e2e
 ```
 
 The browser build regenerates the release WASM artifact through the existing
