@@ -9,7 +9,7 @@ pub(crate) enum CostPolicy {
     Creative,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CostQuote {
     nominal_cost: i32,
     available_budget: i32,
@@ -54,15 +54,15 @@ impl CostPolicy {
 }
 
 impl CostQuote {
-    pub(crate) fn nominal_cost(self) -> i32 {
+    pub(crate) fn nominal_cost(&self) -> i32 {
         self.nominal_cost
     }
 
-    pub(crate) fn available_budget(self) -> i32 {
+    pub(crate) fn available_budget(&self) -> i32 {
         self.available_budget
     }
 
-    pub(crate) fn affordable(self) -> bool {
+    pub(crate) fn affordable(&self) -> bool {
         self.affordable
     }
 
@@ -81,9 +81,16 @@ impl CostQuote {
 }
 
 impl AuthorizedCost {
-    pub(crate) fn apply_to(self, budget: &mut i32) -> i32 {
-        *budget -= self.deduction;
-        self.nominal_cost
+    pub(crate) fn apply_to(self, budget: &mut i32) -> GameplayResult<i32> {
+        let available_budget = *budget;
+        if available_budget < self.deduction {
+            return Err(GameplayRejection::budget(self.deduction, available_budget));
+        }
+        let remaining_budget = available_budget
+            .checked_sub(self.deduction)
+            .ok_or_else(|| GameplayRejection::budget(self.deduction, available_budget))?;
+        *budget = remaining_budget;
+        Ok(self.nominal_cost)
     }
 }
 
@@ -118,7 +125,7 @@ mod tests {
         assert_eq!(quote.available_budget(), 700);
 
         let mut budget = 700;
-        let reported = quote.authorize().unwrap().apply_to(&mut budget);
+        let reported = quote.authorize().unwrap().apply_to(&mut budget).unwrap();
         assert_eq!(reported, 500);
         assert_eq!(budget, 200);
     }
@@ -142,7 +149,7 @@ mod tests {
         assert_eq!(quote.nominal_cost(), 500);
 
         let mut budget = 0;
-        let reported = quote.authorize().unwrap().apply_to(&mut budget);
+        let reported = quote.authorize().unwrap().apply_to(&mut budget).unwrap();
         assert_eq!(reported, 500);
         assert_eq!(budget, 0);
     }
@@ -155,9 +162,23 @@ mod tests {
                 .quote(0, budget)
                 .authorize()
                 .unwrap()
-                .apply_to(&mut budget);
+                .apply_to(&mut budget)
+                .unwrap();
             assert_eq!(reported, 0);
             assert_eq!(budget, 0);
         }
+    }
+
+    #[test]
+    fn authorization_rechecks_the_current_budget_before_deducting() {
+        let authorized = CostPolicy::Standard.quote(500, 700).authorize().unwrap();
+        let mut budget = 499;
+
+        let rejection = authorized.apply_to(&mut budget).unwrap_err();
+
+        assert_eq!(rejection.code, RejectionCode::InsufficientBudget);
+        assert_eq!(rejection.context.required_budget, Some(500));
+        assert_eq!(rejection.context.available_budget, Some(499));
+        assert_eq!(budget, 499);
     }
 }

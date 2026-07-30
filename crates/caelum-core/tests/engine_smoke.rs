@@ -340,6 +340,7 @@ fn set_budget_intent_is_debug_only() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn set_budget_debug_intent_reports_zero_purchase_cost() {
     let mut engine = GameEngine::new();
