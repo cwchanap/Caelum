@@ -577,22 +577,23 @@ fn place_building_core_is_budget_exempt_but_place_building_charges() {
         &Point { x: 3, y: 3 },
     )
     .expect("residential zone applied");
-    let budget = zoned.budget;
-
-    let core = buildings::place_building_core(&zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
-        .expect("core placement succeeds");
-    assert_eq!(
-        core.budget, budget,
-        "world growth must not charge the player"
-    );
-    assert_eq!(core.buildings.len(), 1);
-    assert_eq!(core.sims.len(), 4);
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let mut policy_zoned = zoned.clone();
+        policy_zoned.rules.economy_preset = preset;
+        policy_zoned.budget = 0;
+        let core =
+            buildings::place_building_core(&policy_zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
+                .expect("core placement succeeds");
+        assert_eq!(core.budget, 0, "world growth must not charge the player");
+        assert_eq!(core.buildings.len(), 1);
+        assert_eq!(core.sims.len(), 4);
+    }
 
     let charged = buildings::place_building(&zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
         .expect("player placement succeeds");
     assert_eq!(
         charged.budget,
-        budget - 4_000,
+        zoned.budget - 4_000,
         "player placement deducts cost"
     );
 }
@@ -636,6 +637,26 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
     assert!(creative_result.applied, "{creative_result:?}");
     assert_eq!(creative_result.snapshot.budget, 0);
     assert_eq!(creative_result.context.cost, 4_000);
+
+    let mut terminal_fixture = GameEngine::new();
+    assert!(
+        terminal_fixture
+            .dispatch(GameIntent::LayRoadLine {
+                points: vec![(2, 5).into(), (3, 5).into()],
+                preset: caelum_core::RoadPreset::TwoWay,
+            })
+            .applied
+    );
+    let mut creative_terminal =
+        policy_engine(terminal_fixture.snapshot(), EconomyPreset::Creative, 0);
+    let terminal_result = creative_terminal.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busTerminal".to_string(),
+        origin: (2, 3).into(),
+        rotation: 0,
+    });
+    assert!(terminal_result.applied, "{terminal_result:?}");
+    assert_eq!(terminal_result.snapshot.budget, 0);
+    assert_eq!(terminal_result.context.cost, 12_000);
 
     let invalid_base = GameEngine::new().snapshot();
     let mut invalid_standard = policy_engine(invalid_base.clone(), EconomyPreset::Standard, 0);
