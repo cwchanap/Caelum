@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
 use caelum_core::model::{
-    ActiveTrip, Point, ServicePattern, Sim, TransitMode, TripPosition, TripPurpose, TripStatus,
+    ActiveTrip, EconomyPreset, Point, ServicePattern, Sim, TransitMode, TripPosition, TripPurpose,
+    TripStatus,
 };
+use caelum_core::transit::ROAD_COST;
 use caelum_core::{commute, validate_snapshot, GameEngine, GameIntent, RoadPreset};
 
 fn apply(engine: &mut GameEngine, intent: GameIntent) {
@@ -100,6 +102,39 @@ fn restored_engine_has_identical_future_results_and_topology() {
             restored.road_topology_for_test()
         );
     }
+}
+
+#[test]
+fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_deduction() {
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot.paused = true;
+    snapshot.budget = 0;
+    snapshot.rules.economy_preset = EconomyPreset::Creative;
+
+    let mut restored = GameEngine::from_snapshot(snapshot.clone()).unwrap();
+    let mut direct = GameEngine::from_snapshot(snapshot).unwrap();
+    let restored_before = restored.snapshot();
+
+    let result = restored.dispatch(GameIntent::LayRoad {
+        point: Point { x: 2, y: 2 },
+    });
+    let direct_result = direct.dispatch(GameIntent::LayRoad {
+        point: Point { x: 2, y: 2 },
+    });
+
+    assert!(result.applied);
+    assert_eq!(result.context.cost, ROAD_COST);
+    assert_eq!(result.snapshot.budget, restored_before.budget);
+    assert_eq!(
+        result.snapshot.rules.economy_preset,
+        EconomyPreset::Creative
+    );
+    assert_eq!(result, direct_result);
+    assert_eq!(restored.snapshot(), direct.snapshot());
+    assert_eq!(
+        restored.road_topology_for_test(),
+        direct.road_topology_for_test()
+    );
 }
 
 enum Either {
