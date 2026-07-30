@@ -29,8 +29,10 @@ from a budget delta.
 Atomic purchases remain atomic, while road and track strokes authorize and
 accumulate each newly authored paid tile in input order. Scenario-authored
 `place_building_core()` remains free. WASM and Tauri only forward the existing
-Rust results; TypeScript's economy use is limited to read-only hover
-presentation.
+Rust results. TypeScript never derives or enforces authoritative cost policy:
+it consumes Rust-provided route-preview affordability for route-draft
+presentation and save gating, and its only direct economy-preset
+interpretation is the read-only building-hover helper.
 
 ## Runtime boundary (TypeScript host)
 
