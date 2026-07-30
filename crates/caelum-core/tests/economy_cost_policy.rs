@@ -208,15 +208,39 @@ fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
     assert!(creative_result.applied, "{creative_result:?}");
     assert_eq!(standard_result.context.cost, cost);
     assert_eq!(creative_result.context.cost, cost);
-    assert_eq!(
-        standard_result.context.changed_tiles,
-        creative_result.context.changed_tiles
-    );
-    assert_eq!(
-        standard_result.context.skipped_tiles,
-        creative_result.context.skipped_tiles
-    );
+    assert_eq!(standard_result.context, creative_result.context);
     assert_world_equal_ignoring_cost_policy(&standard_result.snapshot, &creative_result.snapshot);
+}
+
+fn assert_funded_paired_rejection(
+    prepared: &GameSnapshot,
+    intent: GameIntent,
+    expected: RejectionCode,
+) {
+    let mut standard = engine_for(prepared, EconomyPreset::Standard, 120_000);
+    let mut creative = engine_for(prepared, EconomyPreset::Creative, 120_000);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let standard_topology = standard.road_topology_for_test().clone();
+    let creative_topology = creative.road_topology_for_test().clone();
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(!standard_result.applied, "{standard_result:?}");
+    assert!(!creative_result.applied, "{creative_result:?}");
+    assert_eq!(
+        standard_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&expected)
+    );
+    assert_eq!(standard_result.rejection, creative_result.rejection);
+    assert_eq!(standard_result.snapshot, standard_before);
+    assert_eq!(creative_result.snapshot, creative_before);
+    assert_eq!(standard.road_topology_for_test(), &standard_topology);
+    assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
 
 #[test]
@@ -288,6 +312,13 @@ fn funded_transit_nodes_tracks_and_buildings_have_nominal_cost_parity() {
         TRACK_COST,
     );
     assert_funded_pair(
+        &GameEngine::new().snapshot(),
+        GameIntent::LayTrackLine {
+            points: vec![point(2, 2), point(3, 2)],
+        },
+        2 * TRACK_COST,
+    );
+    assert_funded_pair(
         &prepared_bus_stop(),
         GameIntent::AddBusStop { point: point(4, 4) },
         BUS_STOP_COST,
@@ -314,6 +345,24 @@ fn funded_transit_nodes_tracks_and_buildings_have_nominal_cost_parity() {
             rotation: 0,
         },
         terminal_cost,
+    );
+    assert_funded_pair(
+        &prepared_bus_stop(),
+        GameIntent::PlaceBuilding {
+            building_type: "busStop".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+        BUS_STOP_COST,
+    );
+    assert_funded_pair(
+        &prepared_metro_station(),
+        GameIntent::PlaceBuilding {
+            building_type: "metroStation".to_string(),
+            origin: point(4, 4),
+            rotation: 0,
+        },
+        METRO_STATION_COST,
     );
 }
 
@@ -369,5 +418,53 @@ fn over_budget_track_stroke_truncates_standard_but_creative_authors_every_valid_
     assert_eq!(
         creative_result.context.changed_tiles,
         vec![point(2, 2), point(3, 2), point(4, 2)]
+    );
+}
+
+#[test]
+fn funded_rejections_preserve_policy_parity_and_engine_state() {
+    assert_funded_paired_rejection(
+        &GameEngine::new().snapshot(),
+        GameIntent::LayTrack {
+            point: point(999, 999),
+        },
+        RejectionCode::OutOfBounds,
+    );
+
+    let mut structure = GameEngine::new();
+    assert!(
+        structure
+            .dispatch(GameIntent::PlaceRoundabout {
+                origin: point(5, 5),
+                size: RoundaboutSize::Compact2x2,
+            })
+            .applied
+    );
+    assert_funded_paired_rejection(
+        &structure.snapshot(),
+        GameIntent::LayTrack { point: point(5, 5) },
+        RejectionCode::BlockedTile,
+    );
+
+    let mut existing_node = engine_for(&prepared_bus_stop(), EconomyPreset::Standard, 120_000);
+    assert!(
+        existing_node
+            .dispatch(GameIntent::AddBusStop { point: point(4, 4) })
+            .applied
+    );
+    assert_funded_paired_rejection(
+        &existing_node.snapshot(),
+        GameIntent::AddBusStop { point: point(4, 4) },
+        RejectionCode::BlockedTile,
+    );
+
+    assert_funded_paired_rejection(
+        &prepared_bus_stop(),
+        GameIntent::PlaceBuilding {
+            building_type: "busStop".to_string(),
+            origin: point(4, 5),
+            rotation: 0,
+        },
+        RejectionCode::BlockedFootprint,
     );
 }

@@ -2430,6 +2430,10 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
     let base = GameEngine::new().snapshot();
     let mut standard_track = policy_engine(base.clone(), EconomyPreset::Standard, 0);
     let mut creative_track = policy_engine(base.clone(), EconomyPreset::Creative, 0);
+    let standard_track_before = standard_track.snapshot();
+    let creative_track_before = creative_track.snapshot();
+    let standard_track_topology = standard_track.road_topology_for_test().clone();
+    let creative_track_topology = creative_track.road_topology_for_test().clone();
     let standard_track_result = standard_track.dispatch(GameIntent::LayTrack {
         point: point(999, 999),
     });
@@ -2444,9 +2448,23 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
         creative_track_result.rejection.unwrap().code,
         RejectionCode::OutOfBounds
     );
+    assert_eq!(standard_track_result.snapshot, standard_track_before);
+    assert_eq!(creative_track_result.snapshot, creative_track_before);
+    assert_eq!(
+        standard_track.road_topology_for_test(),
+        &standard_track_topology
+    );
+    assert_eq!(
+        creative_track.road_topology_for_test(),
+        &creative_track_topology
+    );
 
     let mut standard_stop = policy_engine(base.clone(), EconomyPreset::Standard, 0);
     let mut creative_stop = policy_engine(base.clone(), EconomyPreset::Creative, 0);
+    let standard_stop_before = standard_stop.snapshot();
+    let creative_stop_before = creative_stop.snapshot();
+    let standard_stop_topology = standard_stop.road_topology_for_test().clone();
+    let creative_stop_topology = creative_stop.road_topology_for_test().clone();
     let standard_stop_result =
         standard_stop.dispatch(GameIntent::AddBusStop { point: point(2, 2) });
     let creative_stop_result =
@@ -2459,9 +2477,23 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
         creative_stop_result.rejection.unwrap().code,
         RejectionCode::NoRoadAccess
     );
+    assert_eq!(standard_stop_result.snapshot, standard_stop_before);
+    assert_eq!(creative_stop_result.snapshot, creative_stop_before);
+    assert_eq!(
+        standard_stop.road_topology_for_test(),
+        &standard_stop_topology
+    );
+    assert_eq!(
+        creative_stop.road_topology_for_test(),
+        &creative_stop_topology
+    );
 
     let mut standard_station = policy_engine(base.clone(), EconomyPreset::Standard, 0);
     let mut creative_station = policy_engine(base, EconomyPreset::Creative, 0);
+    let standard_station_before = standard_station.snapshot();
+    let creative_station_before = creative_station.snapshot();
+    let standard_station_topology = standard_station.road_topology_for_test().clone();
+    let creative_station_topology = creative_station.road_topology_for_test().clone();
     let standard_station_result =
         standard_station.dispatch(GameIntent::AddMetroStation { point: point(2, 2) });
     let creative_station_result =
@@ -2473,6 +2505,16 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
     assert_eq!(
         creative_station_result.rejection.unwrap().code,
         RejectionCode::TrackRequired
+    );
+    assert_eq!(standard_station_result.snapshot, standard_station_before);
+    assert_eq!(creative_station_result.snapshot, creative_station_before);
+    assert_eq!(
+        standard_station.road_topology_for_test(),
+        &standard_station_topology
+    );
+    assert_eq!(
+        creative_station.road_topology_for_test(),
+        &creative_station_topology
     );
 }
 
