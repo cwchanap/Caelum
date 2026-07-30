@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cost_policy::CostPolicy;
 use crate::heading::{heading_between, offset, opposite};
 use crate::intent::RoadPreset;
 use crate::model::{
@@ -82,24 +83,24 @@ fn apply_linear_tiles_in_order(
     changed_tiles: &mut Vec<Point>,
     skipped_tiles: &mut Vec<Point>,
 ) -> GameplayResult<i32> {
-    match mutation {
+    let cost = match mutation {
         RoadMutation::LayRoad { point } => {
-            lay_single_road(original, candidate, *point)?;
+            let cost = lay_single_road(original, candidate, *point)?;
             changed_tiles.push(*point);
+            cost
         }
-        RoadMutation::LayRoadLine { points, preset } => {
-            lay_road_line(
-                original,
-                candidate,
-                points,
-                *preset,
-                changed_tiles,
-                skipped_tiles,
-            )?;
-        }
+        RoadMutation::LayRoadLine { points, preset } => lay_road_line(
+            original,
+            candidate,
+            points,
+            *preset,
+            changed_tiles,
+            skipped_tiles,
+        )?,
         RoadMutation::CycleRoadDirection { point } => {
             cycle_road_direction(candidate, *point)?;
             changed_tiles.push(*point);
+            0
         }
         RoadMutation::PlaceRoundabout { .. } => {
             // Roundabout mutations are handled atomically by a dedicated path
@@ -111,6 +112,7 @@ fn apply_linear_tiles_in_order(
         RoadMutation::RemoveAtTile { point } => {
             remove_road(candidate, *point)?;
             changed_tiles.push(*point);
+            0
         }
         RoadMutation::RemoveAtTiles { points } => {
             if points.is_empty() {
@@ -126,20 +128,21 @@ fn apply_linear_tiles_in_order(
             if changed_tiles.is_empty() {
                 return Err(GameplayRejection::at(RejectionCode::BlockedTile, points[0]));
             }
+            0
         }
-    }
+    };
 
-    Ok(original.budget.saturating_sub(candidate.budget))
+    Ok(cost)
 }
 
 fn lay_single_road(
     original: &GameSnapshot,
     candidate: &mut GameSnapshot,
     point: Point,
-) -> GameplayResult<()> {
-    if original.budget < ROAD_COST {
-        return Err(GameplayRejection::budget(ROAD_COST, original.budget));
-    }
+) -> GameplayResult<i32> {
+    let authorized = CostPolicy::from_snapshot(original)
+        .quote(ROAD_COST, original.budget)
+        .authorize()?;
     if !is_valid_road_placement(original, point) {
         let code = if original.map.tile(point).is_none() {
             RejectionCode::OutOfBounds
@@ -149,7 +152,7 @@ fn lay_single_road(
         return Err(GameplayRejection::at(code, point));
     }
 
-    candidate.budget -= ROAD_COST;
+    let cost = authorized.apply_to(&mut candidate.budget)?;
     // The tile's existence was checked above; `expect` would poison the Tauri
     // Mutex if a future regression invalidated the tile between the check and
     // this point. Surface an `OutOfBounds` rejection instead.
@@ -158,7 +161,7 @@ fn lay_single_road(
     };
     initialize_road_tile(tile, None);
     connect_neighbor_endpoints(&mut candidate.map, point);
-    Ok(())
+    Ok(cost)
 }
 
 fn lay_road_line(
@@ -168,7 +171,7 @@ fn lay_road_line(
     preset: RoadPreset,
     changed_tiles: &mut Vec<Point>,
     skipped_tiles: &mut Vec<Point>,
-) -> GameplayResult<()> {
+) -> GameplayResult<i32> {
     if points.is_empty() {
         return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
     }
@@ -188,16 +191,17 @@ fn lay_road_line(
         RoadPreset::OneWay => forward,
         RoadPreset::DualBidirectional => dual_direction,
     };
-    let forward_points = author_lane_tiles(candidate, original, points, direction, false);
-    connect_authored_sequence(&mut candidate.map, &forward_points);
-    for point in &forward_points {
+    let forward = author_lane_tiles(candidate, original, points, direction, false)?;
+    let mut cost = forward.cost;
+    connect_authored_sequence(&mut candidate.map, &forward.points);
+    for point in &forward.points {
         connect_neighbor_endpoints(&mut candidate.map, *point);
     }
     record_line_results(
         original,
         candidate,
         points,
-        &forward_points,
+        &forward.points,
         changed_tiles,
         skipped_tiles,
     );
@@ -219,16 +223,17 @@ fn lay_road_line(
                 &reverse_points,
                 Some(opposite(canonical)),
                 true,
-            );
-            connect_authored_sequence(&mut candidate.map, &authored);
-            for point in &authored {
+            )?;
+            cost += authored.cost;
+            connect_authored_sequence(&mut candidate.map, &authored.points);
+            for point in &authored.points {
                 connect_neighbor_endpoints(&mut candidate.map, *point);
             }
             record_line_results(
                 original,
                 candidate,
                 &reverse_points,
-                &authored,
+                &authored.points,
                 changed_tiles,
                 skipped_tiles,
             );
@@ -244,7 +249,12 @@ fn lay_road_line(
             points[0],
         ));
     }
-    Ok(())
+    Ok(cost)
+}
+
+struct AuthoredLane {
+    points: Vec<Point>,
+    cost: i32,
 }
 
 fn author_lane_tiles(
@@ -253,8 +263,11 @@ fn author_lane_tiles(
     points: &[Point],
     direction: Option<Heading>,
     reverse_lane: bool,
-) -> Vec<Point> {
-    let mut authored = Vec::new();
+) -> GameplayResult<AuthoredLane> {
+    let mut lane = AuthoredLane {
+        points: Vec::new(),
+        cost: 0,
+    };
     for point in points {
         let Some(existing) = candidate.map.tile(*point).cloned() else {
             continue;
@@ -272,22 +285,28 @@ fn author_lane_tiles(
                 continue;
             };
             merge_lane_direction(tile, direction);
-            authored.push(*point);
+            lane.points.push(*point);
             continue;
         }
-        if candidate.budget < ROAD_COST || !is_valid_road_placement(original, *point) {
+        if !is_valid_road_placement(original, *point) {
             continue;
         }
-        candidate.budget -= ROAD_COST;
+        let quote = CostPolicy::from_snapshot(original).quote(ROAD_COST, candidate.budget);
+        if !quote.affordable() {
+            continue;
+        }
+        let authorized = quote.authorize()?;
+        let nominal_cost = authorized.apply_to(&mut candidate.budget)?;
         // `is_valid_road_placement` checked the point; skip defensively if a
         // future regression invalidates it between the check and this write.
         let Some(tile) = candidate.map.tile_mut(*point) else {
             continue;
         };
         initialize_road_tile(tile, direction);
-        authored.push(*point);
+        lane.points.push(*point);
+        lane.cost += nominal_cost;
     }
-    authored
+    Ok(lane)
 }
 
 fn can_overlay_reverse_lane(tile: &Tile, direction: Option<Heading>) -> bool {

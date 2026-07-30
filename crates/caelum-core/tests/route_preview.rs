@@ -1,12 +1,12 @@
 use caelum_core::model::{
-    Heading, LegFailureReason, Point, RoadStructure, RoundaboutSize, Route, RouteLegKind,
-    RouteLegStatus, ServicePattern, TransitMode,
+    EconomyPreset, Heading, LegFailureReason, Point, RoadStructure, RoundaboutSize, Route,
+    RouteLegKind, RouteLegStatus, ServicePattern, TransitMode,
 };
 use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
 };
 use caelum_core::road::RoadMutation;
-use caelum_core::transit::BUS_COST;
+use caelum_core::transit::{BUS_COST, ROAD_COST};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -892,6 +892,13 @@ fn unaffordable_road_preview_preserves_required_cost_and_engine_state() {
     engine.set_budget_for_test(99);
     let before_snapshot = engine.snapshot();
     let before_topology = engine.road_topology_for_test().clone();
+    let mut creative_snapshot = before_snapshot.clone();
+    creative_snapshot.rules.economy_preset = EconomyPreset::Creative;
+    creative_snapshot.paused = true;
+    let creative_before_snapshot = creative_snapshot.clone();
+    let creative = GameEngine::from_snapshot(creative_snapshot)
+        .expect("creative preview fixture snapshot should be valid");
+    let creative_before_topology = creative.road_topology_for_test().clone();
 
     let response = engine.preview_road_mutation(RoadMutationPreviewRequest {
         mutation: RoadMutation::LayRoad { point: point(2, 2) },
@@ -909,6 +916,18 @@ fn unaffordable_road_preview_preserves_required_cost_and_engine_state() {
     assert_eq!(response.changed_tiles, vec![point(2, 2)]);
     assert_eq!(engine.snapshot(), before_snapshot);
     assert_eq!(engine.road_topology_for_test(), &before_topology);
+
+    let creative_response = creative.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoad { point: point(2, 2) },
+        generation: 81,
+    });
+    assert!(
+        creative_response.rejection.is_none(),
+        "{creative_response:?}"
+    );
+    assert_eq!(creative_response.cost, ROAD_COST);
+    assert_eq!(creative.snapshot(), creative_before_snapshot);
+    assert_eq!(creative.road_topology_for_test(), &creative_before_topology);
 }
 
 #[test]

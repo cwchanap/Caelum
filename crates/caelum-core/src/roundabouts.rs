@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
+use crate::cost_policy::CostPolicy;
 use crate::heading::{
     canonical_headings, heading_between, heading_key, heading_rank, offset, opposite,
 };
@@ -104,19 +105,19 @@ pub fn place_roundabout(
     let captured_ports = capture_boundary_connections(&state.map, &template)?;
     validate_port_mapping(&state.map, &template, &captured_ports)?;
     let cost = roundabout_cost(size);
-    if state.budget < cost {
-        return Err(GameplayRejection::budget(cost, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(cost, state.budget)
+        .authorize()?;
 
     let mut candidate = state.clone();
     remove_contained_automatic_junctions(&mut candidate.map, &template);
     install_roundabout(&mut candidate.map, &template, captured_ports);
-    candidate.budget -= cost;
+    let nominal_cost = authorized.apply_to(&mut candidate.budget)?;
     Ok(RoadMutationResult {
         snapshot: candidate,
         changed_tiles: template.footprint,
         skipped_tiles: Vec::new(),
-        cost,
+        cost: nominal_cost,
     })
 }
 
