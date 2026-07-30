@@ -116,6 +116,34 @@ describe("real WASM artifact smoke", () => {
     expect(loaded.map.tiles).toHaveLength(loaded.map.width * loaded.map.height);
   });
 
+  it("immediately applies Creative road policy after loading a zero-budget snapshot", async () => {
+    const backend = await createWasmBackend();
+    const created = await backend.createSandbox({
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 0,
+      demandMultiplier: 1,
+      moveInRate: "paused",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected Creative Blank Grid creation to succeed");
+    }
+
+    const loaded = await backend.loadSnapshot!(created.snapshot);
+    const result = await backend.dispatch({
+      type: "layRoad",
+      point: { x: 2, y: 2 },
+    });
+
+    expect(result.applied).toBe(true);
+    expect(result.context.cost).toBe(100);
+    expect(result.snapshot.budget).toBe(loaded.budget);
+    expect(result.snapshot.rules.economyPreset).toBe("creative");
+    expect(result.snapshot.map.tiles.find((tile) => tile.x === 2 && tile.y === 2))
+      .toMatchObject({ kind: "road" });
+  });
+
   it("round-trips present undefined objectives but rejects an omitted key", async () => {
     const backend = await createWasmBackend();
     const raw = await backend.snapshot();
@@ -445,7 +473,7 @@ describe("real WASM artifact smoke", () => {
     await expect(backend.snapshot()).resolves.toEqual(created.snapshot);
   });
 
-  it("resets to the exact successful request after a cost-bearing map mutation", async () => {
+  it("resets to the exact successful request after a nominal-cost map mutation", async () => {
     const backend = await createWasmBackend();
     const created = await backend.createSandbox({
       templateId: "blankGrid",
@@ -465,7 +493,7 @@ describe("real WASM artifact smoke", () => {
     expect(mapMutation.applied).toBe(true);
     expect(mapMutation.rejection).toBeNull();
     expect(mapMutation.context.cost).toBe(1_000);
-    expect(mapMutation.snapshot.budget).toBe(41_000);
+    expect(mapMutation.snapshot.budget).toBe(created.snapshot.budget);
     expect(mapMutation.snapshot.map.roadStructures).toHaveLength(
       created.snapshot.map.roadStructures.length + 1,
     );

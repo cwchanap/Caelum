@@ -167,7 +167,13 @@ mod tests {
 
     fn sandbox_test_app(engine: GameEngine) -> App<MockRuntime> {
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-        for command in ["game_create_sandbox", "game_reset", "game_snapshot"] {
+        for command in [
+            "game_create_sandbox",
+            "game_reset",
+            "game_snapshot",
+            "game_load_snapshot",
+            "game_dispatch",
+        ] {
             context.runtime_authority_mut().__allow_command(
                 command.to_string(),
                 tauri::utils::acl::ExecutionContext::Local,
@@ -178,7 +184,9 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 game_create_sandbox,
                 game_reset,
-                game_snapshot
+                game_snapshot,
+                game_load_snapshot,
+                game_dispatch
             ])
             .build(context)
             .expect("test Tauri app should build")
@@ -213,10 +221,79 @@ mod tests {
         InvokeBody::Json(json!({ "request": request }))
     }
 
+    fn load_snapshot_body(snapshot: &Value) -> InvokeBody {
+        InvokeBody::Json(json!({ "snapshot": snapshot }))
+    }
+
+    fn dispatch_body(intent: Value) -> InvokeBody {
+        InvokeBody::Json(json!({ "intent": intent }))
+    }
+
     fn decode_snapshot(response: InvokeResponseBody) -> GameSnapshot {
         response
             .deserialize()
             .expect("successful IPC response should decode to GameSnapshot")
+    }
+
+    fn decode_dispatch_result(response: InvokeResponseBody) -> DispatchResult {
+        response
+            .deserialize()
+            .expect("successful IPC response should decode to DispatchResult")
+    }
+
+    #[test]
+    fn restored_creative_snapshot_dispatch_matches_direct_core_oracle() {
+        let mut snapshot = GameEngine::new().snapshot();
+        snapshot.paused = true;
+        snapshot.budget = 0;
+        snapshot.rules.economy_preset = caelum_core::model::EconomyPreset::Creative;
+        let snapshot_value = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        let direct_snapshot =
+            serde_json::from_value(snapshot_value.clone()).expect("snapshot JSON should decode");
+        let mut direct = GameEngine::from_snapshot(direct_snapshot)
+            .expect("Creative snapshot should restore directly");
+        let expected = direct.dispatch(GameIntent::LayRoad {
+            point: Point { x: 2, y: 2 },
+        });
+
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+        let loaded = ipc(
+            &webview,
+            "game_load_snapshot",
+            load_snapshot_body(&snapshot_value),
+        )
+        .expect("Creative snapshot should load through IPC");
+        assert_eq!(decode_snapshot(loaded), snapshot);
+
+        let actual = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body(json!({
+                "type": "layRoad",
+                "point": { "x": 2, "y": 2 }
+            })),
+        )
+        .expect("Creative road should dispatch through IPC");
+        let actual = decode_dispatch_result(actual);
+
+        assert_eq!(actual, expected);
+        assert!(actual.applied);
+        assert_eq!(actual.context.cost, 100);
+        assert_eq!(actual.snapshot.budget, 0);
+        assert_eq!(
+            actual.snapshot.rules.economy_preset,
+            caelum_core::model::EconomyPreset::Creative
+        );
+        assert_eq!(
+            actual
+                .snapshot
+                .map
+                .tile(Point { x: 2, y: 2 })
+                .expect("road tile should exist")
+                .kind,
+            "road"
+        );
     }
 
     #[test]
