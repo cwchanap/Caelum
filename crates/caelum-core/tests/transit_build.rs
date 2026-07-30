@@ -2251,16 +2251,34 @@ fn lay_track_line_empty_points_is_rejected() {
 fn lay_track_line_all_invalid_tiles_is_unchanged() {
     // Every tile is out of bounds / invalid, so no track is laid and the line
     // is rejected as "track line unchanged" rather than silently succeeding.
-    let mut engine = GameEngine::new();
-    let result = engine.dispatch(GameIntent::LayTrackLine {
+    let base = GameEngine::new().snapshot();
+    let mut standard = policy_engine(base.clone(), EconomyPreset::Standard, 120_000);
+    let mut creative = policy_engine(base, EconomyPreset::Creative, 120_000);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let standard_topology = standard.road_topology_for_test().clone();
+    let creative_topology = creative.road_topology_for_test().clone();
+    let intent = GameIntent::LayTrackLine {
         points: vec![(100, 100).into()],
-    });
-    assert!(!result.applied);
+    };
+
+    let standard_result = standard.dispatch(intent.clone());
+    let creative_result = creative.dispatch(intent);
+
+    assert!(!standard_result.applied);
+    assert!(!creative_result.applied);
     assert_eq!(
-        result.rejection.map(|rejection| rejection.code),
-        Some(RejectionCode::InvalidTrackStroke)
+        standard_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidTrackStroke)
     );
-    assert_eq!(result.snapshot.budget, 120_000);
+    assert_eq!(standard_result.rejection, creative_result.rejection);
+    assert_eq!(standard_result.snapshot, standard_before);
+    assert_eq!(creative_result.snapshot, creative_before);
+    assert_eq!(standard.road_topology_for_test(), &standard_topology);
+    assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
 
 #[test]
