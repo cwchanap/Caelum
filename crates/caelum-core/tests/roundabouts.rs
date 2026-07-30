@@ -543,6 +543,8 @@ fn roundabout_geometry_rejection_precedes_budget_in_both_presets() {
     let mut creative = engine_for(&prepared, EconomyPreset::Creative, 0);
     let standard_before = standard.snapshot();
     let creative_before = creative.snapshot();
+    let standard_topology = standard.road_topology_for_test().clone();
+    let creative_topology = creative.road_topology_for_test().clone();
     let intent = GameIntent::PlaceRoundabout {
         origin: point(-1, 0),
         size: RoundaboutSize::Compact2x2,
@@ -563,6 +565,8 @@ fn roundabout_geometry_rejection_precedes_budget_in_both_presets() {
     );
     assert_eq!(standard.snapshot(), standard_before);
     assert_eq!(creative.snapshot(), creative_before);
+    assert_eq!(standard.road_topology_for_test(), &standard_topology);
+    assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
 
 #[test]
@@ -761,6 +765,48 @@ fn preview_matches_roundabout_cost_footprint_ports_and_structure() {
             (point(7, 5), Heading::East),
         ]
     );
+}
+
+#[test]
+fn low_budget_roundabout_preview_rejects_standard_and_preserves_creative_without_mutation() {
+    let prepared = GameEngine::new().snapshot();
+    for (origin, size) in [
+        (point(5, 5), RoundaboutSize::Compact2x2),
+        (point(9, 8), RoundaboutSize::Standard3x3),
+    ] {
+        let cost = match size {
+            RoundaboutSize::Compact2x2 => COMPACT_ROUNDABOUT_COST,
+            RoundaboutSize::Standard3x3 => STANDARD_ROUNDABOUT_COST,
+        };
+        let standard = engine_for(&prepared, EconomyPreset::Standard, cost - 1);
+        let creative = engine_for(&prepared, EconomyPreset::Creative, cost - 1);
+        let standard_before = standard.snapshot();
+        let creative_before = creative.snapshot();
+        let standard_topology = standard.road_topology_for_test().clone();
+        let creative_topology = creative.road_topology_for_test().clone();
+        let request = |generation| RoadMutationPreviewRequest {
+            generation,
+            mutation: RoadMutation::PlaceRoundabout { origin, size },
+        };
+
+        let standard_response = standard.preview_road_mutation(request(61));
+        let creative_response = creative.preview_road_mutation(request(62));
+
+        let standard_rejection = standard_response.rejection.expect("budget rejection");
+        assert_eq!(standard_rejection.code, RejectionCode::InsufficientBudget);
+        assert_eq!(standard_rejection.context.required_budget, Some(cost));
+        assert_eq!(standard_rejection.context.available_budget, Some(cost - 1));
+        assert_eq!(standard_response.cost, cost);
+        assert!(
+            creative_response.rejection.is_none(),
+            "{creative_response:?}"
+        );
+        assert_eq!(creative_response.cost, cost);
+        assert_eq!(standard.snapshot(), standard_before);
+        assert_eq!(creative.snapshot(), creative_before);
+        assert_eq!(standard.road_topology_for_test(), &standard_topology);
+        assert_eq!(creative.road_topology_for_test(), &creative_topology);
+    }
 }
 
 #[test]

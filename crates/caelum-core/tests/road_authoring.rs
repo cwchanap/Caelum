@@ -397,20 +397,31 @@ fn fully_skipped_paired_stroke_retains_invalid_road_stroke() {
 #[test]
 fn single_road_is_budget_first_in_standard_and_geometry_first_in_creative() {
     let prepared = create_initial_snapshot();
-    let mutation = RoadMutation::LayRoad {
-        point: point(-1, 0),
-    };
-    let standard = snapshot_for_preset(&prepared, EconomyPreset::Standard, ROAD_COST - 1);
-    let creative = snapshot_for_preset(&prepared, EconomyPreset::Creative, ROAD_COST - 1);
+    let mut standard = GameEngine::from_snapshot(snapshot_for_preset(
+        &prepared,
+        EconomyPreset::Standard,
+        ROAD_COST - 1,
+    ))
+    .expect("standard fixture snapshot should be valid");
+    let mut creative = GameEngine::from_snapshot(snapshot_for_preset(
+        &prepared,
+        EconomyPreset::Creative,
+        ROAD_COST - 1,
+    ))
+    .expect("creative fixture snapshot should be valid");
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
+    let standard_topology = standard.road_topology_for_test().clone();
+    let creative_topology = creative.road_topology_for_test().clone();
 
-    let standard_rejection = match apply_road_mutation(&standard, &mutation) {
-        Ok(_) => panic!("standard invalid point should reject"),
-        Err(rejection) => rejection,
-    };
-    let creative_rejection = match apply_road_mutation(&creative, &mutation) {
-        Ok(_) => panic!("creative invalid point should reject"),
-        Err(rejection) => rejection,
-    };
+    let standard_result = standard.dispatch(GameIntent::LayRoad {
+        point: point(-1, 0),
+    });
+    let creative_result = creative.dispatch(GameIntent::LayRoad {
+        point: point(-1, 0),
+    });
+    let standard_rejection = standard_result.rejection.expect("standard rejection");
+    let creative_rejection = creative_result.rejection.expect("creative rejection");
 
     assert_eq!(standard_rejection.code, RejectionCode::InsufficientBudget);
     assert_eq!(standard_rejection.context.required_budget, Some(ROAD_COST));
@@ -420,6 +431,10 @@ fn single_road_is_budget_first_in_standard_and_geometry_first_in_creative() {
     );
     assert_eq!(creative_rejection.code, RejectionCode::OutOfBounds);
     assert_eq!(creative_rejection.context.point, Some(point(-1, 0)));
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
+    assert_eq!(standard.road_topology_for_test(), &standard_topology);
+    assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
 
 #[test]
