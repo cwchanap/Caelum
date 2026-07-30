@@ -1,8 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, GameSnapshot, Heading, MovementKind, PathGeometry, PlacedBuilding,
-    Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan,
-    ServiceDirection, ServicePattern, Sim, TransitMode, TransitNodeStatus, TransitPath,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, Heading, MovementKind, PathGeometry,
+    PlacedBuilding, Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind,
+    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
+    TransitNodeStatus, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -2390,6 +2390,104 @@ fn track_stroke_dispatch_context_reports_changed_skipped_and_cost() {
     assert_eq!(result.context.skipped_tiles, vec![skipped]);
     assert_eq!(result.context.cost, 500);
     assert!(result.context.affected_route_ids.is_empty());
+}
+
+fn policy_engine(snapshot: GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
+    let mut snapshot = snapshot;
+    snapshot.rules.economy_preset = preset;
+    snapshot.budget = budget;
+    GameEngine::from_snapshot(snapshot).expect("policy fixture is valid")
+}
+
+#[test]
+fn track_stroke_charges_each_unique_new_tile_and_creative_ignores_budget() {
+    let base = GameEngine::new().snapshot();
+    let mut standard = policy_engine(base.clone(), EconomyPreset::Standard, transit::TRACK_COST);
+    let mut creative = policy_engine(base, EconomyPreset::Creative, 0);
+    let points = vec![point(2, 2), point(2, 2), point(3, 2)];
+
+    let standard_result = standard.dispatch(GameIntent::LayTrackLine {
+        points: points.clone(),
+    });
+    let creative_result = creative.dispatch(GameIntent::LayTrackLine { points });
+
+    assert!(standard_result.applied, "{standard_result:?}");
+    assert_eq!(standard_result.context.cost, transit::TRACK_COST);
+    assert_eq!(standard_result.context.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(standard_result.context.skipped_tiles, vec![point(3, 2)]);
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(creative_result.context.cost, 2 * transit::TRACK_COST);
+    assert_eq!(creative_result.snapshot.budget, 0);
+    assert_eq!(
+        creative_result.context.changed_tiles,
+        vec![point(2, 2), point(3, 2)]
+    );
+    assert_eq!(creative_result.context.skipped_tiles, Vec::<Point>::new());
+}
+
+#[test]
+fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
+    let base = GameEngine::new().snapshot();
+    let mut standard_track = policy_engine(base.clone(), EconomyPreset::Standard, 0);
+    let mut creative_track = policy_engine(base.clone(), EconomyPreset::Creative, 0);
+    let standard_track_result = standard_track.dispatch(GameIntent::LayTrack {
+        point: point(999, 999),
+    });
+    let creative_track_result = creative_track.dispatch(GameIntent::LayTrack {
+        point: point(999, 999),
+    });
+    assert_eq!(
+        standard_track_result.rejection.unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(
+        creative_track_result.rejection.unwrap().code,
+        RejectionCode::OutOfBounds
+    );
+
+    let mut standard_stop = policy_engine(base.clone(), EconomyPreset::Standard, 0);
+    let mut creative_stop = policy_engine(base.clone(), EconomyPreset::Creative, 0);
+    let standard_stop_result =
+        standard_stop.dispatch(GameIntent::AddBusStop { point: point(2, 2) });
+    let creative_stop_result =
+        creative_stop.dispatch(GameIntent::AddBusStop { point: point(2, 2) });
+    assert_eq!(
+        standard_stop_result.rejection.unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(
+        creative_stop_result.rejection.unwrap().code,
+        RejectionCode::NoRoadAccess
+    );
+
+    let mut standard_station = policy_engine(base.clone(), EconomyPreset::Standard, 0);
+    let mut creative_station = policy_engine(base, EconomyPreset::Creative, 0);
+    let standard_station_result =
+        standard_station.dispatch(GameIntent::AddMetroStation { point: point(2, 2) });
+    let creative_station_result =
+        creative_station.dispatch(GameIntent::AddMetroStation { point: point(2, 2) });
+    assert_eq!(
+        standard_station_result.rejection.unwrap().code,
+        RejectionCode::InsufficientBudget
+    );
+    assert_eq!(
+        creative_station_result.rejection.unwrap().code,
+        RejectionCode::TrackRequired
+    );
+}
+
+#[test]
+fn track_stroke_continues_after_invalid_points_against_the_running_candidate() {
+    let base = GameEngine::new().snapshot();
+    let mut standard = policy_engine(base, EconomyPreset::Standard, 2 * transit::TRACK_COST);
+    let result = standard.dispatch(GameIntent::LayTrackLine {
+        points: vec![point(999, 999), point(2, 2), point(3, 2)],
+    });
+
+    assert!(result.applied, "{result:?}");
+    assert_eq!(result.context.cost, 2 * transit::TRACK_COST);
+    assert_eq!(result.context.changed_tiles, vec![point(2, 2), point(3, 2)]);
+    assert_eq!(result.context.skipped_tiles, vec![point(999, 999)]);
 }
 
 #[test]

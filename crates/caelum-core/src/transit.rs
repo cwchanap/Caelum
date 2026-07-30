@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::commute::trip_deadline_seconds;
-use crate::cost_policy::CostedMutation;
+use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
@@ -66,9 +66,9 @@ pub(crate) fn lay_track_costed(
     state: &GameSnapshot,
     point: &Point,
 ) -> GameplayResult<CostedMutation> {
-    if state.budget < TRACK_COST {
-        return Err(GameplayRejection::budget(TRACK_COST, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(TRACK_COST, state.budget)
+        .authorize()?;
     if !is_valid_track_placement(state, point) {
         let code = if get_tile(&state.map, point).is_none() {
             RejectionCode::OutOfBounds
@@ -79,9 +79,9 @@ pub(crate) fn lay_track_costed(
     }
 
     let mut next = state.clone();
-    next.budget -= TRACK_COST;
+    let cost = authorized.apply_to(&mut next.budget)?;
     set_tile_track(&mut next.map, point, true);
-    Ok(CostedMutation::new(next, TRACK_COST))
+    Ok(CostedMutation::new(next, cost))
 }
 
 pub fn lay_road_line(
@@ -112,14 +112,19 @@ pub(crate) fn lay_track_line_costed(
     }
 
     let mut next = state.clone();
+    let policy = CostPolicy::from_snapshot(state);
     let mut changed = false;
     let mut cost = 0;
     for point in points {
-        if next.budget < TRACK_COST || !is_valid_track_placement(&next, point) {
+        if !is_valid_track_placement(&next, point) {
             continue;
         }
-        next.budget -= TRACK_COST;
-        cost += TRACK_COST;
+        let quote = policy.quote(TRACK_COST, next.budget);
+        if !quote.affordable() {
+            continue;
+        }
+        let nominal_cost = quote.authorize()?.apply_to(&mut next.budget)?;
+        cost += nominal_cost;
         set_tile_track(&mut next.map, point, true);
         changed = true;
     }
@@ -240,9 +245,9 @@ pub(crate) fn add_bus_stop_costed(
     state: &GameSnapshot,
     point: &Point,
 ) -> GameplayResult<CostedMutation> {
-    if state.budget < BUS_STOP_COST {
-        return Err(GameplayRejection::budget(BUS_STOP_COST, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(BUS_STOP_COST, state.budget)
+        .authorize()?;
     if !is_valid_bus_stop_placement(state, point) {
         let rejection = match get_tile(&state.map, point) {
             None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
@@ -285,9 +290,9 @@ pub(crate) fn add_bus_stop_costed(
     {
         stop.road_access = Some(access);
     }
-    next.budget -= BUS_STOP_COST;
+    let cost = authorized.apply_to(&mut next.budget)?;
 
-    Ok(CostedMutation::new(next, BUS_STOP_COST))
+    Ok(CostedMutation::new(next, cost))
 }
 
 pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
@@ -298,9 +303,9 @@ pub(crate) fn add_metro_station_costed(
     state: &GameSnapshot,
     point: &Point,
 ) -> GameplayResult<CostedMutation> {
-    if state.budget < METRO_STATION_COST {
-        return Err(GameplayRejection::budget(METRO_STATION_COST, state.budget));
-    }
+    let authorized = CostPolicy::from_snapshot(state)
+        .quote(METRO_STATION_COST, state.budget)
+        .authorize()?;
     if !is_valid_metro_station_placement(state, point) {
         let rejection = match get_tile(&state.map, point) {
             None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
@@ -344,9 +349,9 @@ pub(crate) fn add_metro_station_costed(
             });
             Ok(allocated)
         })?;
-    next.budget -= METRO_STATION_COST;
+    let cost = authorized.apply_to(&mut next.budget)?;
 
-    Ok(CostedMutation::new(next, METRO_STATION_COST))
+    Ok(CostedMutation::new(next, cost))
 }
 
 pub fn assign_vehicle(
@@ -1743,6 +1748,22 @@ mod tests {
     use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
     use crate::stop_access::resolve_stop_access;
+
+    #[test]
+    fn dedicated_and_building_catalog_transit_node_prices_match() {
+        assert_eq!(
+            BUS_STOP_COST,
+            crate::building_catalog::building_definition("busStop")
+                .unwrap()
+                .cost,
+        );
+        assert_eq!(
+            METRO_STATION_COST,
+            crate::building_catalog::building_definition("metroStation")
+                .unwrap()
+                .cost,
+        );
+    }
 
     #[test]
     fn tick_vehicles_skips_vehicle_whose_from_waypoint_lacks_road_access() {
