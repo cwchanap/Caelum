@@ -1,6 +1,6 @@
 # HPA-341: Equivalent WASM and Tauri Persistence Backends
 
-**Status:** Proposed
+**Status:** Proposed, consolidated after three design-review passes
 
 **This pull request:** Design documentation only; it does not implement HPA-341.
 
@@ -16,20 +16,24 @@ host-neutral `GameBackend` contract.
 
 Browser WASM and Tauri expose the same operation names, persistence success shapes,
 error categories, core validation payloads, and replacement semantics. Rust remains
-the only authority that can accept gameplay state. TypeScript never repairs,
-normalizes as gameplay authority, or directly installs an imported snapshot.
+the only authority that can accept gameplay state. TypeScript may transport and
+normalize snapshots for read-only view consumption, but it never repairs gameplay
+state or installs an imported candidate directly.
+
+This document is the single normative HPA-341 design. Earlier amendment documents are
+retired; implementers must not need precedence rules between multiple specifications.
 
 ## Current State
 
 HPA-340 established the authoritative core persistence boundary:
 
-- `GameEngine::snapshot_for_save` clones the committed state, sets only
-  `paused = true`, validates the clone, and leaves the live engine unchanged;
+- `GameEngine::snapshot_for_save` clones committed state, sets only `paused = true`,
+  validates the clone, and leaves the live engine unchanged;
 - `validate_snapshot` performs pure, deterministic whole-snapshot validation;
 - `GameEngine::from_snapshot` validates the complete snapshot and recompiles the
   non-serialized road topology before constructing an engine;
-- `GameEngine::restore_snapshot` prepares the complete candidate before mutating
-  the target engine; and
+- `GameEngine::restore_snapshot` prepares a complete candidate before mutating the
+  target engine; and
 - `PersistenceError` is a closed Serde-tagged contract independent of ordinary
   gameplay rejection.
 
@@ -41,11 +45,13 @@ The host boundary has not yet adopted those APIs as its public contract:
   `WasmGameEngine::from_snapshot` constructor;
 - Tauri exposes `game_load_snapshot`, which returns structured core errors but raw
   string deserialization and mutex failures;
-- TypeScript does not have a closed persistence error model; and
-- ordinary WASM snapshot serialization differs from Tauri JSON for Rust
-  `Option::None` fields that are not skipped by Serde.
+- TypeScript does not have a closed persistence error model;
+- several raw Rust wire fields are typed as already-normalized domain values even
+  though ordinary WASM may emit `undefined`; and
+- ordinary WASM snapshot serialization differs from Tauri JSON for non-skipped
+  `Option::None` fields.
 
-HPA-340 intentionally preserved that compatibility path only until HPA-341 could
+HPA-340 intentionally preserved the compatibility path only until HPA-341 could
 replace it with explicit save, validate, and restore operations. HPA-341 removes the
 compatibility API rather than layering a second persistence API beside it.
 
@@ -55,98 +61,110 @@ compatibility API rather than layering a second persistence API beside it.
    not land independently behind an optional frontend contract.
 2. The public operations are `snapshotForSave`, `validateSnapshot`, and
    `restoreSnapshot`.
-3. Imported snapshot input is `unknown` at the TypeScript boundary. It does not
-   become a trusted `RustGameSnapshot` until Rust deserialization succeeds.
-4. Expected persistence failures resolve as typed result unions. Consumers do not
-   classify rejected promises or parse human-readable messages.
-5. Core validation failures preserve the exact serialized `PersistenceError`
-   payload inside a host-neutral wrapper.
-6. Validation failures identify whether Rust rejected an untrusted `candidate` or
-   discovered corruption in the `activeEngine` while producing a save snapshot.
-7. Full snapshot deserialization and response serialization failures are separate
+3. Imported input is `unknown` at the TypeScript boundary. It does not become a
+   trusted `GameSnapshot` until Rust deserialization succeeds.
+4. Once a `GameBackend` exists, expected persistence failures resolve as typed result
+   unions. Consumers do not classify rejected promises or parse diagnostics.
+5. Every operation error carries its originating `PersistenceOperation`.
+6. Core validation failures preserve the exact serialized `PersistenceError` and
+   identify whether Rust rejected an untrusted `candidate` or found corruption in the
+   `activeEngine` while producing a save.
+7. Full snapshot deserialization and response serialization failures remain separate
    from semantic validation failures.
-8. `validateSnapshot` is pure and returns no gameplay snapshot on success.
-9. Only Rust-backed `restoreSnapshot` may replace authoritative gameplay state.
-10. Core exposes one prepared-restore token containing the validated candidate
-    engine and its exact accepted snapshot. Both hosts encode that snapshot before
-    consuming the token and committing the candidate.
-11. A response-encoding failure cannot leave either host mutated while returning
-    failure.
-12. A successful restore preserves every serialized gameplay field exactly. Only
-    the non-serialized road topology is recompiled.
-13. Persistence operations use JSON-compatible WASM serialization so browser and
-    Tauri expose the same persistable shape. Existing gameplay
-    `snapshot`/`dispatch`/`tick` wire serialization is not changed by this issue.
-14. The raw runtime and persistence wire shapes may differ in `undefined` versus
-    `null`, but the shared runtime-view normalizer must produce equal `GameState`
-    values for equal logical Rust state.
-15. `loadSnapshot`, `game_load_snapshot`, and the wasm-bindgen-exported
+8. Successful validation accepts only raw WASM `undefined` or Tauri `null`.
+9. `validateSnapshot` is pure and returns no snapshot on success.
+10. Only Rust-backed `restoreSnapshot` may replace authoritative gameplay state.
+11. Core exposes one must-use prepared-restore token containing the validated
+    candidate engine and its exact accepted snapshot.
+12. Both hosts encode that snapshot before consuming the token and committing the
+    candidate. A response-encoding or lock failure cannot leave the host mutated while
+    returning failure.
+13. Tauri save captures only a typed, engine-minted committed-snapshot token while
+    holding the mutex. It does not clone `GameEngine` or cached `RoadTopology`.
+14. A successful restore preserves every serialized gameplay field exactly. Only the
+    non-serialized road topology is recompiled.
+15. Persistence operations use JSON-compatible WASM serialization. Ordinary gameplay
+    `snapshot`/`dispatch`/`tick` wire serialization remains unchanged.
+16. Persistence success values remain raw backend wire snapshots. Backend adapters do
+    not call `normalizeRustSnapshot`.
+17. Raw runtime and persistence wire shapes may differ in `undefined` versus `null`,
+    but the shared runtime-view normalizer must produce equal `GameState` values for
+    equal logical Rust state.
+18. Snapshot success transport checks require
+    `schemaVersion === SNAPSHOT_SCHEMA_VERSION`, not merely a numeric version.
+19. `loadSnapshot`, `game_load_snapshot`, and the wasm-bindgen-exported
     `WasmGameEngine::from_snapshot` constructor are removed.
-16. The full Rust persistence-error vocabulary is mirrored by TypeScript and
-    guarded through a shared cross-language fixture catalogue.
-17. Runtime state publication, transient UI reset, save envelopes, and storage
-    belong to HPA-342 and later persistence issues.
-18. `validateSnapshot` remains a method on the initialized host capability. A
-    separate pre-initialization validator is not introduced.
-19. No worker boundary is introduced without measured WASM evidence that the
-    synchronous core operation exceeds the interaction budget.
-20. No dynamic production serializer injection or mutable test hook is introduced.
+20. The full Rust persistence-error vocabulary is mirrored by TypeScript and guarded
+    through a shared cross-language fixture catalogue.
+21. The catalogue is a manual bidirectional tripwire, not code generation. Vocabulary
+    changes must update Rust, fixtures, TypeScript types, guards, and tests together.
+22. `validateSnapshot` remains on the initialized `GameBackend`; a separate
+    pre-initialization validator is not introduced.
+23. No dynamic production serializer injection or mutable test hook is introduced.
+24. Runtime publication, transient UI reset, envelopes, storage, dirty tracking, and
+    autosave scheduling belong to HPA-342 and later issues.
+25. No worker boundary is introduced without measured WASM evidence. HPA-342 must
+    nevertheless revisit main-thread save latency before enabling autosave.
 
 ## Goals
 
-- Expose a safe save snapshot from both hosts without changing the live pause
-  state.
-- Validate untrusted snapshots without acquiring or mutating managed engine state.
+- Expose a safe save snapshot from both hosts without changing the live pause state.
+- Make the provenance of save preparation type-enforced rather than prose-enforced.
+- Validate untrusted snapshots without reading or mutating live engine state.
 - Restore snapshots atomically in WASM and Tauri.
 - Return equal persistable JSON values for equal engine state.
+- Prove that JSON text round-trip preserves a save that Rust accepts again.
 - Produce equal runtime `GameState` values from ordinary and persistence wire
   encodings of equal logical state.
 - Give frontend consumers one closed result/error contract.
 - Distinguish invalid candidate data from invariant-corrupt active engine state.
-- Preserve every core validation error without variant-specific host mapping.
-- Distinguish unsupported schema, semantic corruption, malformed current-schema
-  payloads, response-encoding failures, invocation failures, malformed successes,
-  malformed errors, and unavailable managed state.
+- Preserve every core validation error without host-specific variant mapping.
+- Distinguish schema rejection, semantic corruption, malformed current-schema input,
+  response encoding failure, invocation failure, malformed success, malformed error,
+  and unavailable managed state.
+- Assert that representative states reachable through public gameplay operations
+  remain savable after every accepted dispatch and tick.
 - Remove every production TypeScript path that directly constructs or replaces an
   engine from imported state.
-- Keep current dispatch, tick, preview, sandbox creation, and reset behavior
+- Keep gameplay dispatch, tick, preview, sandbox construction, and reset behavior
   unchanged.
 
 ## Non-goals
 
 - Save-envelope IDs, names, timestamps, checksums, app versions, or metadata.
-- UTF-8, JSON text, or portable `.caelum` file parsing.
+- UTF-8, JSON text, or portable `.caelum` file parsing outside the focused
+  JSON-stringify round-trip proof.
 - Browser IndexedDB or Tauri filesystem storage.
-- Active-city tracking, dirty tracking, autosave scheduling, checkpoints, or
-  recovery generations.
+- Active-city tracking, dirty tracking, autosave scheduling, checkpoints, or recovery
+  generations.
 - Runtime UI reset or city-library presentation.
 - Schema migration, compatibility aliases, repair, or normalization of imported
   gameplay state.
 - Replacing the complete persistence error contract with generated TypeScript.
-- A validator that works before the selected host runtime initializes.
+- A validator that works before the selected Rust host initializes.
 - Moving the WASM engine to a Web Worker without performance evidence.
-- Changing ordinary gameplay backend wire values or the runtime's existing
-  dispatch/tick error behavior.
+- Changing ordinary gameplay backend wire values or dispatch/tick error behavior.
+- Making a shared-CI wall-clock assertion without a controlled performance runner.
 
 ## 1. Terminology and Invariants
 
 ### 1.1 Runtime snapshot
 
 `GameBackend.snapshot()` and gameplay dispatch/tick results return the host's
-ordinary gameplay wire value. Browser WASM retains the default
-`serde_wasm_bindgen` behavior, under which a non-skipped Rust `Option::None` may
-arrive as `undefined`; Tauri JSON emits `null` for the same field.
+ordinary gameplay wire value. Browser WASM retains default `serde_wasm_bindgen`
+behavior, under which a non-skipped Rust `Option::None` may arrive as `undefined`;
+Tauri JSON emits `null` for the same field.
 
-HPA-341 does not change those ordinary host wire methods. The runtime must not expose
-their serializer differences to UI consumers; Section 12 defines the shared view
+HPA-341 does not change those ordinary host methods. The runtime must not expose their
+serializer differences to UI consumers; Section 11 defines the shared view
 normalization requirement.
 
 ### 1.2 Persistence snapshot
 
 A persistence snapshot is the output of `snapshotForSave`. It is:
 
-- produced by `GameEngine::snapshot_for_save`;
-- paused in the returned clone;
+- derived from an engine-minted capture of committed state;
+- paused in the returned value;
 - validated by the same complete core pipeline used for import;
 - JSON-compatible on both hosts; and
 - safe to place inside the future HPA-342 `SaveEnvelope`.
@@ -156,31 +174,29 @@ The operation does not pause or otherwise mutate the live engine.
 ### 1.3 Imported candidate
 
 An imported candidate is an arbitrary JavaScript value supplied to
-`validateSnapshot` or `restoreSnapshot`. TypeScript treats it as `unknown`. The
-host bridge performs the schema probe, complete deserialization, and core
-validation.
+`validateSnapshot` or `restoreSnapshot`. TypeScript treats it as `unknown`. The host
+bridge performs the schema probe, complete deserialization, and core validation.
 
-### 1.4 Canonical snapshot
+### 1.4 Canonical raw snapshot
 
 For HPA-341, “canonical” means the canonical JSON-compatible host serialization of
 the exact Rust-accepted snapshot.
 
 It does **not** mean that Rust repairs or rewrites the candidate. A valid restore
-preserves the supplied `GameSnapshot` exactly; only the internal, non-serialized
-`RoadTopology` is rebuilt. Fields carrying
-`skip_serializing_if = "Option::is_none"` remain omitted on both hosts. Other
+preserves the supplied `GameSnapshot` exactly; only internal `RoadTopology` is rebuilt.
+Fields carrying `skip_serializing_if = "Option::is_none"` remain omitted. Other
 `Option::None` fields serialize as `null` on the persistence path.
 
 ### 1.5 Parsed JSON equality
 
 “Deeply equal persistence JSON” means equality of parsed JavaScript/JSON values. It
-does not mean byte-for-byte JSON text equality. Object-key ordering, whitespace,
-and floating-point text formatting are not persistence parity requirements.
+does not mean byte-for-byte JSON text equality. Object-key ordering, whitespace, and
+floating-point text formatting are not parity requirements.
 
 ### 1.6 State authority
 
-TypeScript may store, forward, normalize for read-only view consumption, and display
-snapshots. It may not:
+TypeScript may store, forward, transport-check, normalize for read-only view
+consumption, and display snapshots. It may not:
 
 - cast an imported value and install it as authoritative state;
 - construct a replacement WASM engine from imported state;
@@ -192,18 +208,13 @@ snapshots. It may not:
 
 The file placement is fixed before implementation:
 
-- `src/runtime/backend/persistenceContract.ts` owns the closed persistence error
-  vocabulary and host-neutral generic request/result/error types. It imports only
-  stable domain value types such as `Point` and `Heading`; it does not import
-  `RustGameSnapshot`.
-- `src/runtime/backend/types.ts` defines the concrete
-  `PersistenceSnapshotResult = PersistenceSnapshotResultOf<RustGameSnapshot>` alias
-  and extends `GameBackend`.
-- `src/runtime/backend/persistence.ts` owns runtime guards, safe diagnostics, and
-  shared WASM/Tauri operation normalization.
-
-This avoids a type-only cycle between `types.ts` and the persistence vocabulary
-while keeping the large closed union out of the already broad backend wire file.
+- `src/runtime/backend/persistenceContract.ts` owns the closed persistence vocabulary
+  and host-neutral generic request/result/error types. It imports stable domain shapes
+  such as `Point` and `Heading`, but not `RustGameSnapshot`.
+- `src/runtime/backend/types.ts` owns raw Rust wire mirrors, the concrete persistence
+  result alias, and `GameBackend`.
+- `src/runtime/backend/persistence.ts` owns strict guards, safe diagnostics, transport
+  success checks, and shared WASM/Tauri operation normalization.
 
 ```ts
 export interface PersistenceSnapshotRequest {
@@ -230,18 +241,20 @@ export type PersistenceHostErrorCode =
 export type PersistenceOperationError =
   | {
       kind: "validation";
+      operation: PersistenceOperation;
       source: PersistenceValidationSource;
       error: PersistenceValidationError;
     }
   | {
       kind: "serialization";
+      operation: PersistenceOperation;
       phase: PersistenceSerializationPhase;
       diagnostic: string;
     }
   | {
       kind: "host";
-      code: PersistenceHostErrorCode;
       operation: PersistenceOperation;
+      code: PersistenceHostErrorCode;
       diagnostic: string;
     };
 
@@ -283,71 +296,101 @@ export interface GameBackend {
 }
 ```
 
-`loadSnapshot` is removed rather than retained as deprecated or optional. Keeping
-an alias would preserve the rejected-promise contract and make it possible for new
-code to bypass the explicit result model.
+`loadSnapshot` is removed rather than retained as deprecated or optional. Keeping an
+alias would preserve the rejected-promise contract and allow new code to bypass the
+explicit result model.
 
 ### 2.1 Result semantics
 
-- `ok: true` means the Rust operation completed and its success value was encoded.
-- `ok: false, kind: "validation", source: "candidate"` means an untrusted candidate
-  failed the schema probe or complete core persistence contract.
-- `ok: false, kind: "validation", source: "activeEngine"` is emitted only by
-  `snapshotForSave`; it means the engine failed to produce a snapshot that its own
-  restoration contract would accept. Consumers must treat this as an internal
-  invariant failure, not as a bad imported file.
-- `ok: false, kind: "serialization"` means a current-schema candidate could not be
-  decoded into `GameSnapshot`, or a successful Rust snapshot could not be encoded
+- `ok: true` means the Rust operation completed and its success value passed the
+  operation-specific transport check.
+- `validation/candidate` means an untrusted candidate failed schema probing or core
+  persistence validation.
+- `validation/activeEngine` is emitted only by `snapshotForSave`; it means the engine
+  failed to produce a snapshot accepted by its own restore contract. Consumers treat
+  it as an internal invariant failure, not a bad imported file.
+- `serialization/snapshotDecode` means a current-schema candidate could not deserialize
+  into `GameSnapshot`.
+- `serialization/snapshotEncode` means a successful Rust snapshot could not be encoded
   for the host response.
-- `host/stateUnavailable` means Tauri managed state could not be acquired. WASM has
-  no mutex and never emits this code.
-- `host/invokeFailed` means the invocation failed outside the known bridge contract,
-  such as a JavaScript `Error`, string, primitive, or transport failure.
-- `host/malformedSuccess` means an invocation resolved with an unrecognized success
-  value.
-- `host/malformedError` means an invocation rejected with a plain-object value that
-  is neither a recognized bridge error nor a normal host `Error`.
+- `host/stateUnavailable` means Tauri managed state could not be acquired. WASM never
+  emits this code.
+- `host/invokeFailed` means the invocation failed outside the recognized bridge
+  contract, including an opaque fallback when bridge-error encoding itself fails.
+- `host/malformedSuccess` means an invocation resolved with an unrecognized value.
+- `host/malformedError` means an invocation rejected with a plain object that is not a
+  recognized bridge error.
 
-The `diagnostic` string is opaque, host-local troubleshooting information. It may be
-logged or displayed, but no code may branch on its text.
+The `operation` property is present on all failures, so logging and HPA-342 can
+attribute the failure without reconstructing call context. `diagnostic` is opaque and
+must never be parsed for control flow.
 
-### 2.2 Why validation remains on `GameBackend`
+### 2.2 Validation success
 
-`GameBackend` represents an initialized host capability, not merely mutable city
-state. Caelum currently always constructs a default Rust engine when the host starts;
-there is no supported “host initialized but no engine exists” lifecycle.
+The raw Rust methods return unit on success:
 
-Keeping `validateSnapshot` on `GameBackend` means import and recovery code does not
-repeat WASM/Tauri detection or obtain a second host object. The underlying Tauri
-command remains stateless, and the WASM method does not read its receiver.
+```rust
+pub fn validate_snapshot(&self, snapshot: JsValue) -> Result<(), JsValue>;
 
-A free-standing validator would not solve initialization failure: browser validation
-still requires the WASM module to initialize, and no Rust-backed persistence contract
-is available when that initialization fails. If a future bootstrap design supports a
-host with no active engine, that work may extract a separate validator capability;
-HPA-341 does not add one speculatively.
+#[tauri::command]
+fn game_validate_snapshot(
+    snapshot: serde_json::Value,
+) -> Result<(), PersistenceBridgeError>;
+```
 
-### 2.3 Backend initialization
+wasm-bindgen returns `undefined`; Tauri JSON returns `null`. The shared normalizer
+accepts exactly those values:
 
-`createWasmBackend()` must finish WASM initialization before constructing and
-returning a backend. Initialization failure remains a backend-factory rejection,
-because no `GameBackend` exists yet to return a persistence result.
+```ts
+export async function runPersistenceValidationOperation(
+  invoke: () => Promise<unknown> | unknown,
+): Promise<PersistenceValidationResult> {
+  try {
+    const value = await invoke();
+    if (value === undefined || value === null) return { ok: true };
+    return {
+      ok: false,
+      error: malformedSuccess("validateSnapshot", value),
+    };
+  } catch (error: unknown) {
+    return normalizePersistenceFailure("validateSnapshot", error);
+  }
+}
+```
 
-Focused tests prove that failed initialization:
+Resolved booleans, numbers, strings, arrays, plain objects, and snapshot-shaped values
+are `host/malformedSuccess`. Success never depends on truthiness.
 
-- rejects backend creation;
-- does not construct a `WasmGameEngine`; and
-- does not cache a false successful initialization state.
+### 2.3 Why validation remains on `GameBackend`
 
-No new application-wide initialization-error API is introduced.
+`GameBackend` represents an initialized Rust host capability, not merely mutable city
+state. Caelum currently always constructs a default engine when the host starts; there
+is no supported “host initialized but no engine exists” lifecycle.
+
+Keeping validation on `GameBackend` means import and recovery code do not repeat host
+detection or obtain a second capability. The Tauri command remains stateless and the
+WASM method does not read its receiver. A free-standing browser validator would still
+require WASM initialization and would not solve initialization failure.
+
+### 2.4 Backend initialization
+
+`createWasmBackend()` finishes WASM initialization before constructing and returning a
+backend. Initialization failure remains a backend-factory rejection because no
+`GameBackend` exists yet to return a persistence result.
+
+Tests prove failed initialization:
+
+- rejects backend construction;
+- does not construct `WasmGameEngine`; and
+- does not cache a false successful state.
 
 ## 3. Closed Core Validation Error Mirror
 
 `PersistenceValidationError` is a closed TypeScript mirror of the Rust
-`PersistenceError` wire contract. TypeScript does not recreate validation logic; it
-only recognizes the exact tagged payload emitted by Rust.
+`PersistenceError` wire contract. TypeScript recognizes Rust output; it does not
+recreate validation logic.
 
-### 3.1 Shared context types
+### 3.1 Shared shapes
 
 ```ts
 export type PersistenceEntityKind =
@@ -479,10 +522,7 @@ export type PersistenceModeError =
   | { kind: "campaignTerminalWithoutObjectives" };
 
 export type PersistenceScenarioError =
-  | {
-      kind: "duplicateGrowthWaveId";
-      details: { waveId: string };
-    }
+  | { kind: "duplicateGrowthWaveId"; details: { waveId: string } }
   | {
       kind: "triggerTimesOutOfOrder";
       details: { previousWaveId: string; waveId: string };
@@ -512,10 +552,7 @@ export type PersistenceTileError =
       kind: "wrongRowMajorCoordinate";
       details: { expected: Point; actual: Point };
     }
-  | {
-      kind: "countMismatch";
-      details: { expected: number; actual: number };
-    }
+  | { kind: "countMismatch"; details: { expected: number; actual: number } }
   | { kind: "nonCanonicalId"; details: { expected: string } }
   | { kind: "unsupportedKind" }
   | { kind: "unsupportedArea" }
@@ -573,14 +610,8 @@ export type PersistenceAssignmentError =
 
 export type PersistenceDerivedStateError =
   | { kind: "clockMismatch" }
-  | {
-      kind: "stopAccessMismatch";
-      details: { node: PersistenceEntityRef };
-    }
-  | {
-      kind: "routeLegMismatch";
-      details: { route: PersistenceEntityRef };
-    }
+  | { kind: "stopAccessMismatch"; details: { node: PersistenceEntityRef } }
+  | { kind: "routeLegMismatch"; details: { route: PersistenceEntityRef } }
   | {
       kind: "routePathBrokenMismatch";
       details: { route: PersistenceEntityRef };
@@ -589,14 +620,8 @@ export type PersistenceDerivedStateError =
       kind: "routeOracleNotIdempotent";
       details: { route: PersistenceEntityRef };
     }
-  | {
-      kind: "tripStateMismatch";
-      details: { trip: PersistenceEntityRef };
-    }
-  | {
-      kind: "tripPositionMismatch";
-      details: { trip: PersistenceEntityRef };
-    }
+  | { kind: "tripStateMismatch"; details: { trip: PersistenceEntityRef } }
+  | { kind: "tripPositionMismatch"; details: { trip: PersistenceEntityRef } }
   | { kind: "tripCounterMismatch" }
   | { kind: "metricsRelationshipMismatch" }
   | { kind: "outcomeWindowMismatch" }
@@ -711,168 +736,88 @@ export type PersistenceValidationError =
 
 ### 3.4 Strict runtime guard
 
-Implement `isPersistenceValidationError(value: unknown)` as a strict structural
-guard:
+`isPersistenceValidationError(value)` is a strict structural guard:
 
-- the outer value and every context/details value must be a plain object;
-- arrays are accepted only for documented array fields and every element is checked
-  recursively;
-- `Point` is exactly `{ x: number, y: number }` with no unknown keys;
+- the outer value and every context/details value is a plain object;
+- arrays are accepted only for documented fields and every element is checked;
+- `Point` is exactly `{ x: number, y: number }`;
 - `PersistenceMapSize` is exactly `{ width: number, height: number }`;
 - `PersistenceEntityRef` is exactly `{ kind: PersistenceEntityKind, id: string }`;
-- `Heading` is exactly one of `north`, `east`, `south`, or `west`;
-- each `code`, `field`, entity `kind`, and reason `kind` belongs to the closed
-  vocabulary above;
-- required keys are present with the documented primitive or structured type;
-- optional `entity` on `invalidNumericValue.context` is the only optional member in
-  the top-level validation contexts, and omission is distinct from `entity: null`;
-- unit reason variants must not contain `details`;
-- structured reason variants contain exactly the documented `details` keys;
+- `Heading` is exactly `north | east | south | west`;
+- each `code`, `field`, entity kind, and reason kind belongs to the closed vocabulary;
+- required keys have the documented primitive or structured type;
+- omitted `entity` on `invalidNumericValue.context` is distinct from `entity: null`;
+- unit reason variants do not carry `details`;
+- structured variants carry exactly the documented `details` keys;
 - unknown keys are rejected at every closed object level; and
-- numeric members must be finite JavaScript numbers only where the Rust wire
-  contract guarantees finiteness; semantic gameplay ranges remain Rust-owned.
+- numbers are finite wherever the Rust error wire guarantees finiteness, while
+  gameplay ranges remain Rust-owned.
 
-The guard recognizes Rust output. It is not an alternate validator for imported
+The guard recognizes Rust output. It is not an alternate validator for candidate
 snapshots.
 
-### 3.5 Cross-language drift boundary
+### 3.5 Vocabulary-change checklist
 
-The error catalogue is a bidirectional tripwire, not source generation:
+Every change to the persistence wire vocabulary or an embedded closed shape updates
+all affected artifacts in one reviewed change:
 
-- Rust tests prove the catalogue matches the Rust vocabulary and exact Serde shape;
-- TypeScript tests prove the same catalogue matches the TypeScript unions and strict
-  guards.
+1. the Rust enum/reason type or embedded shape (`Point`, `Heading`, `EntityRef`, or
+   `MapSize`);
+2. the Rust exhaustive vocabulary/shape list and exact Serde tests;
+3. `tests/fixtures/persistence/persistence-errors.json`;
+4. the TypeScript union and strict structural guard; and
+5. the TypeScript catalogue test.
 
-A Rust test cannot inspect TypeScript source, and a TypeScript test cannot exhaustively
-reflect over Rust enums. A coordinated incorrect edit could therefore defeat both
-sides. Code generation would be stronger, but adding a Rust-to-TypeScript generator
-for this one contract is outside HPA-341. Every future Rust vocabulary change must
-update the Rust exhaustive list, fixture catalogue, TypeScript union, and guard in one
-reviewed change.
+A Rust test cannot inspect TypeScript source and a TypeScript test cannot reflect over
+Rust enums. The catalogue is therefore a manual tripwire rather than code generation.
 
-## 4. Host Bridge Error Contract
+## 4. Core Preparation Boundaries
 
-WASM and Tauri use the same tagged bridge-error wire shapes.
+### 4.1 Type-enforced save capture
 
-Candidate validation failure:
+A public free function that accepts arbitrary `GameSnapshot` and force-pauses it would
+allow Rust callers to launder an untrusted unpaused candidate past
+`PersistenceRequiresPaused`. HPA-341 therefore does **not** expose
+`prepare_snapshot_for_save(GameSnapshot)`.
 
-```json
-{
-  "kind": "validation",
-  "source": "candidate",
-  "error": {
-    "code": "invalidModeSettings",
-    "context": {
-      "field": "paused",
-      "reason": { "kind": "persistenceRequiresPaused" }
-    }
-  }
-}
-```
-
-Active-engine save failure:
-
-```json
-{
-  "kind": "validation",
-  "source": "activeEngine",
-  "error": {
-    "code": "invalidDerivedState",
-    "context": {
-      "field": "routeLegs",
-      "reason": {
-        "kind": "routeLegMismatch",
-        "details": {
-          "route": { "kind": "busRoute", "id": "route-001" }
-        }
-      }
-    }
-  }
-}
-```
-
-Serialization failure:
-
-```json
-{
-  "kind": "serialization",
-  "phase": "snapshotDecode",
-  "diagnostic": "opaque host diagnostic"
-}
-```
-
-Tauri managed-state failure:
-
-```json
-{
-  "kind": "host",
-  "code": "stateUnavailable",
-  "operation": "restoreSnapshot",
-  "diagnostic": "opaque host diagnostic"
-}
-```
-
-The Rust host bridges directly emit:
-
-- `validation/activeEngine` for `snapshot_for_save` `PersistenceError`;
-- `validation/candidate` for schema and semantic candidate `PersistenceError`;
-- `serialization/snapshotDecode` for full `GameSnapshot` deserialization failure
-  after the schema probe accepts the declared version;
-- `serialization/snapshotEncode` for success-value encoding failure; and
-- Tauri `host/stateUnavailable` for poisoned managed state.
-
-WASM never emits `stateUnavailable`; it has no managed-state mutex.
-
-The TypeScript shared normalizer synthesizes:
-
-- `host/invokeFailed` for host/runtime/transport rejection outside the known bridge
-  contract;
-- `host/malformedSuccess` for an unrecognized resolved value; and
-- `host/malformedError` for an unrecognized plain-object rejection.
-
-No host branch translates individual core error variants. It wraps the complete
-`PersistenceError` generically.
-
-## 5. Shared Decode Contract
-
-Both Rust hosts use the same logical two-phase decoder.
-
-1. Probe `schemaVersion` without requiring the remaining snapshot fields.
-2. Delegate the version comparison to the existing core schema-check helper.
-3. When the probe is missing, has the wrong type, or cannot deserialize, use
-   `actual = 0` and return `PersistenceError::UnsupportedSchema`.
-4. Only after the schema matches, deserialize the complete `GameSnapshot`.
-5. A complete-deserialization failure is
-   `serialization/snapshotDecode`, not a core validation error.
-6. Pass the typed snapshot to complete core validation or prepared restoration.
-
-`actual = 0` is a reserved sentinel meaning “the schema version was unreadable.” It
-does not assert that the payload belongs to a real schema version zero. A literal
-numeric `schemaVersion: 0` is intentionally indistinguishable and receives the same
-unsupported-schema payload.
-
-The decoder performs two Serde deserialization passes over the same already
-materialized JavaScript/JSON value: one shallow schema probe and one complete model
-deserialization. It does not parse JSON text twice. The shallow probe is intentional
-because it preserves typed schema rejection before required fields from a newer
-schema are examined.
-
-| Candidate failure | Public category |
-| --- | --- |
-| Missing or unreadable `schemaVersion` | `validation/candidate/unsupportedSchema(actual: 0)` |
-| Explicit old or future schema | `validation/candidate/unsupportedSchema` |
-| Matching schema with wrong field type or missing required field | `serialization/snapshotDecode` |
-| Typed snapshot violates semantic invariants | `validation/candidate/PersistenceError` |
-
-The two host implementations may use host-specific deserializers, but the decision
-order and public category must be identical.
-
-## 6. Core Prepared-Restore Boundary
-
-HPA-341 adds a narrow core token so WASM and Tauri do not separately reconstruct the
-relationship between a validated engine and the exact snapshot they must encode.
+Instead, only `GameEngine` can mint an opaque capture of committed state:
 
 ```rust
+#[must_use = "a captured committed snapshot must be prepared or deliberately discarded"]
+pub struct SaveSnapshotCapture {
+    snapshot: GameSnapshot,
+}
+
+impl GameEngine {
+    pub fn capture_snapshot_for_save(&self) -> SaveSnapshotCapture {
+        SaveSnapshotCapture {
+            snapshot: self.snapshot(),
+        }
+    }
+
+    pub fn snapshot_for_save(&self) -> PersistenceResult<GameSnapshot> {
+        self.capture_snapshot_for_save().prepare()
+    }
+}
+
+impl SaveSnapshotCapture {
+    pub fn prepare(mut self) -> PersistenceResult<GameSnapshot> {
+        self.snapshot.paused = true;
+        validate_snapshot(&self.snapshot)?;
+        Ok(self.snapshot)
+    }
+}
+```
+
+`SaveSnapshotCapture.snapshot` is private and there is no public constructor from
+`GameSnapshot`. Tauri can carry the capture outside the mutex, but untrusted import
+code cannot manufacture one. Candidate validation and restoration still require the
+candidate itself to already be paused.
+
+### 4.2 Prepared restore
+
+```rust
+#[must_use = "a prepared restore has no effect until its engine is consumed and assigned by the host"]
 pub struct PreparedEngineRestore {
     engine: GameEngine,
 }
@@ -890,11 +835,10 @@ impl GameEngine {
 ```
 
 `prepare_restore` delegates to the existing private `prepare_snapshot` pipeline,
-retains the compiled topology, and creates one complete candidate engine. The token
-exposes a borrowed snapshot for host encoding and consumes itself when yielding the
-candidate engine.
+retains compiled topology, and creates one complete candidate engine. Dropping the
+token is a no-op on host state.
 
-Existing APIs delegate to the same token:
+Existing APIs delegate to the token:
 
 ```rust
 pub fn from_snapshot(snapshot: GameSnapshot) -> PersistenceResult<GameEngine> {
@@ -912,27 +856,91 @@ pub fn restore_snapshot(
 }
 ```
 
-This keeps `GameEngine::restore_snapshot` as the tested atomic in-place core API
-rather than orphaning it. Host restoration has a wider transaction boundary than
-core restoration because host success also depends on host-specific response
-encoding. Core cannot enforce “encode before host commit” without depending on WASM
-or `serde_json`; each bridge must still encode the token's borrowed snapshot before
-calling `into_engine`. Host tests enforce that ordering.
+Host restoration has a wider transaction boundary than core restoration because host
+success also depends on host-specific encoding. Each bridge encodes the token's
+borrowed snapshot before calling `into_engine`.
+
+## 5. Shared Decode Contract
+
+Both Rust hosts use the same logical two-phase decoder:
+
+1. Probe `schemaVersion` without requiring remaining fields.
+2. Delegate version comparison to the core schema helper.
+3. When the probe is missing, wrong-typed, or unreadable, use `actual = 0` and return
+   `UnsupportedSchema`.
+4. Only after the schema matches, deserialize complete `GameSnapshot`.
+5. Full-deserialization failure is `serialization/snapshotDecode`.
+6. Pass the typed snapshot to pure validation or prepared restoration.
+
+`actual = 0` is a reserved unreadable-schema sentinel, not a real schema version.
+A literal numeric zero is intentionally indistinguishable and receives the same error.
+
+The decoder performs one shallow and one complete Serde pass over an already
+materialized JS/JSON value. It does not parse JSON text twice.
+
+| Candidate failure | Public category |
+| --- | --- |
+| Missing/unreadable `schemaVersion` | `validation/candidate/unsupportedSchema(actual: 0)` |
+| Explicit old/future schema | `validation/candidate/unsupportedSchema` |
+| Matching schema with wrong/missing required body field | `serialization/snapshotDecode` |
+| Typed snapshot violates semantic invariants | `validation/candidate/PersistenceError` |
+
+## 6. Host Bridge Error Contract
+
+Both bridges emit the same tagged shapes. Every variant carries `operation`.
+
+Candidate validation example:
+
+```json
+{
+  "kind": "validation",
+  "operation": "restoreSnapshot",
+  "source": "candidate",
+  "error": {
+    "code": "invalidModeSettings",
+    "context": {
+      "field": "paused",
+      "reason": { "kind": "persistenceRequiresPaused" }
+    }
+  }
+}
+```
+
+Active-engine save failure uses `operation: "snapshotForSave"` and
+`source: "activeEngine"`.
+
+The bridges directly emit:
+
+- `validation/activeEngine` for save preparation failure;
+- `validation/candidate` for schema or semantic candidate failure;
+- `serialization/snapshotDecode` for complete candidate deserialization failure;
+- `serialization/snapshotEncode` for success-value encoding failure; and
+- Tauri `host/stateUnavailable` for poisoned managed state.
+
+The TypeScript normalizer synthesizes:
+
+- `host/invokeFailed` for runtime/transport rejection outside the recognized bridge;
+- `host/malformedSuccess` for an unrecognized resolved value; and
+- `host/malformedError` for an unrecognized plain-object rejection.
+
+If encoding a structured `PersistenceOperationError` itself fails, the host produces
+an opaque fallback rejection. The adapter maps it to `host/invokeFailed`; it is never
+reclassified as validation or treated as success.
 
 ## 7. WASM Bridge
 
-### 7.1 JSON-compatible persistence serializer
+### 7.1 Persistence serializer
 
-Add one focused helper in `crates/caelum-wasm` using
-`serde_wasm_bindgen::Serializer::json_compatible()`.
+Add one focused helper using
+`serde_wasm_bindgen::Serializer::json_compatible()`. It is used only for persistence
+successes and structured bridge errors. Ordinary gameplay methods retain
+`serde_wasm_bindgen::to_value`.
 
-It is used only for HPA-341 persistence operation successes and structured bridge
-errors. Ordinary gameplay methods retain `serde_wasm_bindgen::to_value`. No JSON
-text round-trip is introduced.
+The persistence serializer must keep `serialize_large_number_types_as_bigints(false)`.
+Tests recursively reject `bigint`, `undefined`, JavaScript `Map`, and typed-array-only
+values in persistence snapshots.
 
 ### 7.2 Operations
-
-Expose instance methods on `WasmGameEngine`:
 
 ```rust
 pub fn snapshot_for_save(&self) -> Result<JsValue, JsValue>;
@@ -940,75 +948,50 @@ pub fn validate_snapshot(&self, snapshot: JsValue) -> Result<(), JsValue>;
 pub fn restore_snapshot(&mut self, snapshot: JsValue) -> Result<JsValue, JsValue>;
 ```
 
-#### `snapshot_for_save`
+`snapshot_for_save`:
 
-1. Call `self.inner.snapshot_for_save()`.
-2. Wrap any `PersistenceError` as `validation/activeEngine`.
-3. Encode the snapshot with the JSON-compatible serializer.
-4. Map encoding failure to `serialization/snapshotEncode`.
-5. Never assign to `self.inner`.
+1. call `self.inner.snapshot_for_save()`;
+2. map failure to `validation/activeEngine` with operation;
+3. JSON-compatibly encode the snapshot;
+4. map encode failure to `snapshotEncode`; and
+5. never mutate `self.inner`.
 
-An `activeEngine` result indicates an internal invariant failure. HPA-342 may surface
-a “current city cannot be saved” error and must not present it as an invalid import.
+`validate_snapshot`:
 
-#### `validate_snapshot`
+1. decode the untrusted value;
+2. call core `validate_snapshot`;
+3. map schema/semantic errors to `validation/candidate` with operation;
+4. return unit; and
+5. never read or assign `self.inner`.
 
-1. Decode the untrusted `JsValue` through the shared two-phase decoder.
-2. Call `caelum_core::validate_snapshot(&snapshot)`.
-3. Wrap schema or semantic errors as `validation/candidate`.
-4. Return unit on success.
-5. Never read or assign `self.inner`.
+The unused receiver exists for `GameBackend` capability symmetry. Do not add a dummy
+state read to satisfy a hypothetical future lint; use a narrowly scoped lint allowance.
 
-The method remains on the wrapper for `GameBackend` capability symmetry. Its receiver
-is deliberately unused.
+`restore_snapshot`:
 
-#### `restore_snapshot`
-
-1. Decode the untrusted `JsValue`.
-2. Call `GameEngine::prepare_restore(snapshot)`.
-3. Encode `prepared.snapshot()` with the JSON-compatible serializer.
-4. Only after encoding succeeds, assign
-   `self.inner = prepared.into_engine()`.
-5. Return the already-encoded value.
-
-The prepared token centralizes validation, topology compilation, and accepted
-snapshot identity. The wrapper owns only host-specific encode-before-commit ordering.
+1. decode the untrusted value;
+2. call `GameEngine::prepare_restore`;
+3. JSON-compatibly encode `prepared.snapshot()`;
+4. only after encoding succeeds, assign `self.inner = prepared.into_engine()`; and
+5. return the already-encoded value.
 
 ### 7.3 Remove direct construction
 
-Remove the wasm-bindgen-exported `WasmGameEngine::from_snapshot` function. Core
-`GameEngine::from_snapshot` remains available for core callers and tests, but
-TypeScript can no longer construct a replacement engine directly from imported
-state.
+Remove wasm-bindgen-exported `WasmGameEngine::from_snapshot`. Core
+`GameEngine::from_snapshot` remains available internally and in core tests.
+The TypeScript adapter keeps one stable wrapper instance and never reassigns its
+`engine` variable during restore.
 
-The adapter keeps one stable `WasmGameEngine` wrapper instance. Restore mutates its
-Rust-owned inner engine only through `restore_snapshot`.
-
-### 7.4 Initialization
-
-Keep the current single cached initialization promise, but test successful sharing
-and failed initialization. A failed promise is not reset implicitly; retry policy is
-an application-bootstrap concern.
-
-### 7.5 Serializer-failure testing
+### 7.4 Serializer-failure testing
 
 Do not add a runtime-injectable serializer, trait object, mutable global hook, or
-production configuration branch.
-
-Use one of these compile-time-safe patterns:
-
-- a private generic `prepare_encode_commit` helper monomorphized with the real
-  serializer in production and a failing closure in Rust unit tests; or
-- a `#[cfg(test)]` wrapper that invokes the same production encoder-result mapping
-  with a synthetic failure.
-
-The test must prove an encode error maps to `snapshotEncode` and assignment has not
-occurred. The real-artifact tests continue exercising the actual
-`Serializer::json_compatible()` implementation on success.
+production configuration branch. Use a private generic helper monomorphized with the
+real serializer in production and a failing closure in Rust tests, or a `#[cfg(test)]`
+wrapper around the same result-mapping path.
 
 ## 8. Tauri Bridge
 
-Replace `game_load_snapshot` with three commands:
+Replace `game_load_snapshot` with:
 
 ```rust
 #[tauri::command]
@@ -1030,125 +1013,141 @@ fn game_restore_snapshot(
 
 ### 8.1 Save lock boundary
 
-`game_snapshot_for_save` follows this order:
+`game_snapshot_for_save` follows this exact order:
 
-1. acquire the engine mutex;
-2. clone the complete `GameEngine`;
+1. acquire the mutex;
+2. call `engine.capture_snapshot_for_save()` and retain only the opaque capture;
 3. release the mutex;
-4. call `snapshot_for_save` on the clone;
-5. wrap a core failure as `validation/activeEngine`;
-6. encode the snapshot to `serde_json::Value`; and
+4. call `capture.prepare()` outside the lock;
+5. map failure to `validation/activeEngine` with operation;
+6. encode the prepared snapshot; and
 7. return the encoded value.
 
-Validation and topology checks do not hold the managed-state mutex. Poisoned state
-returns `host/stateUnavailable` before a clone is obtained.
+The path does not clone `GameEngine` or `RoadTopology`. The private capture field proves
+the snapshot came from committed engine state and prevents force-pausing arbitrary
+untrusted input.
 
 ### 8.2 Pure validation
 
-`game_validate_snapshot`:
-
-1. performs the two-phase decode;
-2. calls `caelum_core::validate_snapshot`;
-3. wraps schema or semantic errors as `validation/candidate`; and
-4. returns unit.
-
-It takes no `State`, so the command cannot acquire or mutate the live engine.
+`game_validate_snapshot` takes no `State`, performs two-phase decode, calls core
+validation, and returns unit. It cannot acquire or mutate live engine state.
 
 ### 8.3 Restore lock boundary
 
-`game_restore_snapshot` follows this exact order:
+`game_restore_snapshot`:
 
-1. decode the untrusted `serde_json::Value`;
-2. call `GameEngine::prepare_restore` outside the mutex;
-3. encode `prepared.snapshot()` to `serde_json::Value` outside the mutex;
-4. acquire the managed engine mutex;
-5. replace `*engine` with `prepared.into_engine()`; and
-6. return the already-encoded value.
+1. decodes untrusted `serde_json::Value`;
+2. calls `GameEngine::prepare_restore` outside the mutex;
+3. encodes `prepared.snapshot()` outside the mutex;
+4. acquires the mutex;
+5. replaces `*engine` with `prepared.into_engine()`; and
+6. returns the already-encoded value.
 
 Every fallible validation, topology, and response-encoding step completes before
-state replacement. Mutex poisoning occurs before the swap and leaves the old engine
-unchanged.
+replacement. Returning `serde_json::Value` makes pre-commit response encoding explicit
+instead of framework-owned after mutation.
 
-Returning `serde_json::Value` rather than `GameSnapshot` is intentional: response
-serialization is an explicit pre-commit step rather than a framework-owned step
-after mutation.
+## 9. Raw Wire Types and Adapter Normalization
 
-### 8.4 Command errors
+### 9.1 Raw Rust snapshot graph
 
-Replace raw persistence-path `serde_json::Value` errors with a dedicated serializable
-bridge error. Existing sandbox and gameplay command contracts remain unchanged.
-
-The bridge error serializes as the same tagged object used by WASM. Unit tests assert
-exact JSON for candidate validation, active-engine validation, decode, encode, and
-state-unavailable variants.
-
-### 8.5 Serializer-failure testing
-
-As in WASM, do not carry a dynamic injection seam in production. Prefer a private
-generic helper whose production monomorphization receives `serde_json::to_value`, or
-a `#[cfg(test)]` wrapper around the same result-mapping path. The test must prove the
-candidate is not swapped when encoding fails.
-
-## 9. TypeScript Adapter Normalization
-
-Create one shared helper used by `wasmBackend.ts` and `tauriBackend.ts`.
+`RustGameSnapshot` must stop reusing normalized domain types for shapes whose ordinary
+WASM representation may contain `undefined`. Add explicit raw mirrors in
+`src/runtime/backend/types.ts`:
 
 ```ts
-export function isPersistenceValidationError(
-  value: unknown,
-): value is PersistenceValidationError;
+export interface RustRouteLegPath
+  extends Omit<
+    RouteLegPath,
+    | "currentPath"
+    | "lastValidPath"
+    | "estimatedSeconds"
+    | "failureReason"
+  > {
+  currentPath: TransitPath | null | undefined;
+  lastValidPath: TransitPath | null | undefined;
+  estimatedSeconds: number | null | undefined;
+  failureReason?: LegFailureReason;
+}
 
-export function isPersistenceOperationError(
-  value: unknown,
-): value is PersistenceOperationError;
+export interface RustRoute
+  extends Omit<Route, "legs"> {
+  legs: RustRouteLegPath[];
+}
 
-export async function runPersistenceSnapshotOperation(
-  operation: "snapshotForSave" | "restoreSnapshot",
-  invoke: () => Promise<unknown> | unknown,
-): Promise<PersistenceSnapshotResult>;
+export interface RustMetroLine
+  extends Omit<MetroLine, "legs"> {
+  legs: RustRouteLegPath[];
+}
 
-export async function runPersistenceValidationOperation(
-  invoke: () => Promise<unknown> | unknown,
-): Promise<PersistenceValidationResult>;
+export interface RustVehicle
+  extends Omit<Vehicle, "parkedPosition"> {
+  parkedPosition: TripPosition | null | undefined;
+}
+
+export interface RustTransitNetwork
+  extends Omit<TransitNetwork, "routes" | "metroLines" | "vehicles"> {
+  routes: RustRoute[];
+  metroLines: RustMetroLine[];
+  vehicles: RustVehicle[];
+}
+
+export interface RustRoutePlanLeg
+  extends Omit<
+    RouteLeg,
+    "serviceDirection" | "boardItineraryIndex" | "alightItineraryIndex"
+  > {
+  serviceDirection: ServiceDirection | null | undefined;
+  boardItineraryIndex: number | null | undefined;
+  alightItineraryIndex: number | null | undefined;
+}
+
+export interface RustRoutePlan
+  extends Omit<RoutePlan, "legs"> {
+  legs: RustRoutePlanLeg[];
+}
+
+export interface RustActiveTrip
+  extends Omit<ActiveTrip, "routePlan"> {
+  routePlan: RustRoutePlan | null | undefined;
+}
+
+export interface RustMetrics {
+  // Existing counters and outcome fields remain unchanged.
+  lossReason: string | null | undefined;
+}
+
+export interface RustGameSnapshot {
+  // Existing shell, rules, map, buildings, sims, and counters remain unchanged.
+  transit: RustTransitNetwork;
+  activeTrips: RustActiveTrip[];
+  metrics: RustMetrics;
+  scenario: RustScenarioConfig;
+}
 ```
 
-The helper:
+The implementation uses complete definitions rather than comments in the actual source.
+Skipped optionals such as `lineId`, sim `shiftTemplate`, and sim `workplace` remain
+optional and are not widened to required `null` values.
 
-- accepts synchronous WASM methods and asynchronous Tauri invocations;
-- converts known bridge rejections directly into `{ ok: false, error }`;
-- verifies that snapshot success is a non-array object with a numeric
-  `schemaVersion` before casting it to the raw `RustGameSnapshot` wire type;
-- maps invalid resolved values to `host/malformedSuccess`;
-- maps unrecognized plain-object rejections to `host/malformedError`;
-- maps normal `Error`, string, primitive, and transport rejections to
-  `host/invokeFailed`;
-- creates an opaque diagnostic through safe stringification; and
-- never parses or pattern-matches diagnostic text.
+### 9.2 Snapshot operation success check
 
-The minimal success check is transport validation, not gameplay validation. Deep
-snapshot correctness remains exclusively Rust-owned.
+`runPersistenceSnapshotOperation` performs transport recognition only. Success must:
 
-### 9.1 WASM adapter
+- be a plain non-array object;
+- own a `schemaVersion` property; and
+- satisfy `schemaVersion === SNAPSHOT_SCHEMA_VERSION`.
 
-`createWasmBackend` initializes WASM, constructs one `WasmGameEngine`, forwards all
-three instance persistence methods through the shared normalizer, and no longer
-reassigns the TypeScript `engine` variable during restore.
+The same raw object is returned as `RustGameSnapshot`. No defaults are added, no nested
+objects are rebuilt, and `normalizeRustSnapshot` is never called inside either adapter.
+A wrong-version resolved value is `host/malformedSuccess`, preventing a later untyped
+throw from `normalizeRustSnapshot`.
 
-### 9.2 Tauri adapter
+### 9.3 Failure normalization
 
-`createTauriBackend` invokes:
-
-- `game_snapshot_for_save` with no arguments;
-- `game_validate_snapshot` with `{ snapshot: request.snapshot }`; and
-- `game_restore_snapshot` with `{ snapshot: request.snapshot }`.
-
-It uses the same normalizer and returns the same result unions as WASM.
-
-### 9.3 Exports
-
-`src/runtime/backend/index.ts` exports the persistence request, concrete result,
-operation, validation-error, validation-source, and guard types needed by HPA-342.
-It does not export raw host-specific bridge DTOs or Rust wrapper constructors.
+Both adapters use the same helper. Known bridge rejections become `{ ok: false }`
+unchanged. Normal `Error`, string, primitive, and transport rejection becomes
+`invokeFailed`; unrecognized plain-object rejection becomes `malformedError`.
 
 ## 10. Operation Data Flows
 
@@ -1157,16 +1156,17 @@ It does not export raw host-specific bridge DTOs or Rust wrapper constructors.
 ```text
 frontend
   -> GameBackend.snapshotForSave()
-  -> host clones or borrows current Rust engine
-  -> GameEngine::snapshot_for_save()
+  -> host captures committed state through engine-minted SaveSnapshotCapture
+  -> capture.prepare()
   -> complete core validation
   -> validation/activeEngine on invariant failure
   -> JSON-compatible host encoding
+  -> exact schema-version transport check
   -> { ok: true, snapshot }
 ```
 
-A running engine may return `snapshot.paused === true`, while a subsequent ordinary
-`backend.snapshot()` still reports the live engine's original pause state.
+A running engine may return `snapshot.paused === true`, while an ordinary subsequent
+`backend.snapshot()` still reports the live pause state.
 
 ### 10.2 Validate
 
@@ -1175,14 +1175,11 @@ frontend unknown value
   -> GameBackend.validateSnapshot({ snapshot })
   -> schema probe
   -> full Rust deserialization
-  -> caelum_core::validate_snapshot
-  -> validation/candidate on schema or semantic failure
+  -> core validate_snapshot
+  -> validation/candidate on failure
+  -> raw undefined (WASM) or null (Tauri)
   -> { ok: true }
 ```
-
-No engine state is read, cloned, locked, constructed, or replaced after the
-candidate becomes typed, except for topology compiled and discarded inside core
-validation.
 
 ### 10.3 Restore
 
@@ -1195,216 +1192,229 @@ frontend unknown value
   -> topology compiled into PreparedEngineRestore
   -> prepared snapshot encoded
   -> prepared candidate consumed into host state
+  -> exact schema-version transport check
   -> { ok: true, snapshot }
 ```
 
-The returned snapshot is the exact committed candidate. HPA-342 consumes that
-success result to reset local UI state and publish a normalized runtime view.
+HPA-342 consumes the success result, normalizes it, resets transient UI state, and
+publishes the runtime view.
 
-## 11. Atomicity and Publication Boundaries
+## 11. Serialization and Runtime-View Parity
 
-### 11.1 Failed save
-
-A save failure never mutates the live engine. This includes an
-`activeEngine` validation failure and success-response encoding failure.
-
-### 11.2 Failed validation
-
-Validation has no mutable host-state dependency and cannot change the active engine.
-
-### 11.3 Failed restore
-
-A restore is failed when any of these occurs:
-
-- schema rejection;
-- full snapshot decode failure;
-- semantic validation failure;
-- topology compilation failure;
-- success snapshot encoding failure;
-- managed-state lock failure; or
-- unexpected host invocation failure.
-
-For every failure, the active engine and topology remain unchanged.
-
-### 11.4 Successful restore
-
-A successful restore:
-
-- commits the complete prepared engine;
-- returns the already-encoded candidate snapshot;
-- makes a subsequent ordinary `snapshot()` observe the restored state; and
-- makes subsequent dispatch/tick operations use the recompiled topology.
-
-HPA-341's guarantee ends at the backend boundary. It does **not** publish into
-`createGameRuntime`, clear UI state, or notify runtime subscribers. HPA-342 owns
-those operations.
-
-## 12. Cross-host Serialization and Runtime-View Parity
-
-### 12.1 Persistence JSON parity
+### 11.1 Persistence JSON parity
 
 For equal Rust state, WASM and Tauri produce deeply equal parsed persistence JSON:
 
-- required non-skipped `Option::None` fields serialize as `null`;
-- fields carrying `skip_serializing_if = "Option::is_none"` are omitted on both
-  hosts;
+- non-skipped `Option::None` fields serialize as `null`;
+- skipped `None` fields are omitted;
 - maps serialize as plain objects;
 - bytes serialize as JSON arrays; and
 - no `Map`, `BigInt`, `undefined`, or typed-array-only value appears.
 
-Parity tests compare parsed values, not JSON strings or bytes.
+### 11.2 Complete schema-v4 optional inventory
 
-### 12.2 Raw runtime wire difference
-
-Ordinary WASM responses continue using the default serializer. Therefore equal
-logical state may have two raw JavaScript representations:
-
-- ordinary WASM response: non-skipped `None` may be `undefined`;
-- persistence response and Tauri JSON: the same value is `null`.
-
-This is an intentional wire-level non-goal, but it must not leak into runtime view
-state.
-
-### 12.3 Required view normalization
-
-HPA-341 extends `normalizeRustSnapshot` so every nullable domain field that differs
-across the serializers is normalized recursively before UI publication. At minimum,
-cover:
+Non-skipped options that create the ordinary-WASM `undefined` versus persistence/Tauri
+`null` difference:
 
 - `scenario.objectives`;
-- `metrics.lossReason`;
-- route and metro leg `currentPath`, `lastValidPath`, `estimatedSeconds`, and
-  `failureReason`;
+- route/metro-leg `currentPath`, `lastValidPath`, and `estimatedSeconds`;
 - vehicle `parkedPosition`;
-- active-trip `routePlan`; and
-- each route-plan leg's `serviceDirection`, `boardItineraryIndex`, and
-  `alightItineraryIndex`.
+- active-trip `routePlan`;
+- route-plan-leg `serviceDirection`, `boardItineraryIndex`, and
+  `alightItineraryIndex`; and
+- `metrics.lossReason`.
 
-Raw backend wire types must accurately allow the `undefined` forms that WASM can
-produce; normalized `GameState` types retain explicit `null` where the domain model
-requires it.
+Options that skip `None` and are omitted by both hosts:
 
-A regression test constructs ordinary-WASM-shaped and JSON-compatible-shaped raw
-snapshots for equal logical state, runs both through `normalizeRustSnapshot`, and
-asserts deeply equal `GameState`. This prevents a `null`/`undefined` flicker after
-restore and again after the next dispatch or snapshot.
+- road-port `direction`;
+- tile `area`, `oneWay`, and `roadStructureId`;
+- building `transitNodeId`;
+- route/metro-leg `failureReason`;
+- stop `roadAccess`;
+- stop-road-access `preferredHeading`;
+- sim `shiftTemplate` and `workplace`; and
+- route-plan-leg `lineId`.
 
-HPA-342 must publish `normalizeRustSnapshot(result.snapshot)`, never the raw restore
-value.
+### 11.3 View normalization
+
+`normalizeRustSnapshot` recursively converts every non-skipped field above from
+`undefined | null` into the explicit nullable `GameState` representation. It also
+continues converting omitted `failureReason` to explicit `null` because normalized
+`RouteLegPath` requires it.
+
+Genuinely optional fields such as `lineId`, `shiftTemplate`, `workplace`, tile/building
+optionals, stop access, and road-port direction remain optional. TypeScript never
+invents gameplay values.
+
+A parity test constructs ordinary-WASM-shaped and JSON-compatible-shaped inputs for
+every non-skipped field plus skipped `failureReason`, normalizes both, and asserts
+deeply equal `GameState`.
+
+### 11.4 JSON text round-trip proof
+
+A real-WASM test must prove the reason for JSON-compatible persistence serialization:
+
+1. obtain `snapshotForSave()` from the built artifact;
+2. recursively assert there is no `undefined`, `bigint`, `Map`, or typed-array-only
+   value;
+3. run `JSON.stringify(snapshot)` without error;
+4. parse the resulting string;
+5. restore the parsed value through a fresh backend;
+6. assert restoration succeeds; and
+7. assert the returned parsed persistence snapshot is deeply equal to the saved value.
+
+The fixture includes `None` for presence-required optional fields such as
+`scenario.objectives` and route-plan service/index fields, proving `null` survives JSON
+text while ordinary key-present `undefined` would not.
+
+## 12. Atomicity and Reachable-State Savability
+
+### 12.1 Failure atomicity
+
+Save never mutates the active engine. Validation has no mutable host dependency.
+Restore leaves snapshot and topology unchanged on:
+
+- schema rejection;
+- full decode failure;
+- semantic validation or topology failure;
+- success-snapshot encoding failure;
+- structured-error encoding fallback;
+- managed-state lock failure; or
+- unexpected host invocation failure.
+
+### 12.2 Successful restore
+
+A successful restore commits the complete prepared engine, returns the already-encoded
+raw snapshot, makes subsequent `snapshot()` observe restored state, and makes subsequent
+dispatch/tick use recompiled topology. HPA-341 does not publish into
+`createGameRuntime`; HPA-342 does.
+
+### 12.3 Reachable states remain savable
+
+Add a core invariant test using only public gameplay operations. It drives the
+nontrivial production fixture through its construction sequence and continuation
+sequence, calling `snapshot_for_save()` after **every** accepted dispatch and applied
+tick, including running states.
+
+The test must cover zoning, building placement, pause/resume, multiple ticks, speed
+changes, road mutation, generated sims/trips, route invalidation, and final pause. It
+fails immediately with the operation label and exact `PersistenceError` if any
+reachable state is not savable.
+
+Corruption tests remain necessary, but they do not substitute for this positive
+invariant. Save being unavailable in a publicly reachable engine state is a core bug.
 
 ## 13. Fixture Corpus
 
-Create checked-in fixtures under `tests/fixtures/persistence/` from real schema-v4
-Rust snapshots:
+Create shared fixtures under `tests/fixtures/persistence/`:
 
-- `valid-paused.json` — a nontrivial valid snapshot;
-- `unsupported-schema.json` — older schema plus a removed current field;
-- `unpaused.json` — only `paused = false`;
-- `malformed-current-schema.json` — current schema with a wrong JSON type;
-- `late-derived-corruption.json` — late semantic failure for atomicity; and
-- `persistence-errors.json` — representative exact payloads covering every top-level
-  code, snapshot field, entity kind, nested reason kind, and structured details
-  shape.
+- `valid-paused.json`;
+- `unsupported-schema.json`;
+- `unpaused.json`;
+- `malformed-current-schema.json`;
+- `late-derived-corruption.json`; and
+- `persistence-errors.json`.
 
-A Rust test helper generates the valid baseline. A regeneration note records the
-command used when the schema intentionally changes. Fixtures do not become a second
-source of sandbox content.
+Rust tests use this exact root constant:
+
+```rust
+const PERSISTENCE_FIXTURES_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/persistence",
+);
+```
+
+They join fixture names through `std::path::Path` rather than duplicating relative
+paths.
+
+`unsupported-schema.json` remains deliberately legacy-shaped: it declares schema 3
+and omits at least one required schema-v4 field. This proves schema probing occurs
+before full deserialization. `malformed-current-schema.json` separately proves body
+decode failure for the current schema.
+
+A Rust generator/test helper creates the valid baseline. Fixtures do not become a
+second source of sandbox content.
 
 ## 14. Test Strategy
 
-### 14.1 Core prepared-restore tests
+### 14.1 Core preparation and savability
 
-Add tests proving:
+Test:
 
-- `prepare_restore` returns a candidate whose borrowed snapshot equals the supplied
-  valid snapshot;
-- consuming the token yields an engine with the compiled topology;
-- failure produces no token and cannot mutate an existing engine;
-- `from_snapshot` delegates to the token; and
-- `restore_snapshot` remains atomic and returns the same accepted snapshot.
+- `SaveSnapshotCapture` can be minted only by `GameEngine` public APIs;
+- capture preparation changes only `paused`;
+- engine `snapshot_for_save` delegates consistently;
+- corrupted active state returns the exact error;
+- reachable production states save after every accepted dispatch/applied tick;
+- `PreparedEngineRestore` is `must_use` and dropping it is a no-op;
+- token snapshot equals input and `into_engine` retains compiled topology;
+- `from_snapshot` and `restore_snapshot` delegate and retain atomicity.
 
-### 14.2 Core wire-catalogue tests
+### 14.2 Wire catalogue
 
-Load `persistence-errors.json`, deserialize each validation payload into
-`PersistenceError`, reserialize it, and assert exact equality. Maintain an explicit
-Rust-side exhaustive vocabulary list/match so adding a Rust variant requires a
-fixture update. This test does not claim to inspect TypeScript source.
+Rust loads `persistence-errors.json`, deserializes every validation payload, and
+reserializes it exactly. Explicit exhaustive lists cover 14 top-level codes, 83
+`SnapshotField` values, 9 entity kinds, every nested reason kind, and the embedded
+`Point`, `Heading`, `EntityRef`, and `MapSize` shapes.
 
-### 14.3 WASM Rust tests
+TypeScript accepts every catalogue entry and rejects unknown codes, fields, kinds,
+headings, keys, missing details, inappropriate details, malformed points/entity
+references/map sizes, and `entity: null`.
 
-Assert:
+### 14.3 WASM wrapper and real artifact
 
-- save changes only the returned pause field and does not pause the engine;
-- active-engine save validation failure has the distinct source;
-- pure validation succeeds without mutation;
-- schema and semantic candidate failures preserve exact errors;
-- malformed current-schema input maps to `snapshotDecode`;
-- early and late restore failures preserve the wrapper state;
-- restore success commits the prepared candidate;
-- subsequent dispatch uses restored rules/topology;
-- JSON-compatible success contains no `undefined`; and
-- compile-time-safe serializer-failure coverage proves encode-before-assignment.
+Test:
 
-### 14.4 Tauri command tests
+- save changes only returned pause and does not pause the engine;
+- active-engine failure is distinct;
+- validation success is raw `undefined`;
+- validation does not read the receiver;
+- schema, semantic, malformed, early, and late failures preserve state;
+- restore success commits prepared candidate and subsequent dispatch uses restored
+  rules/topology;
+- serializer failure is compile-time-injected and proves encode-before-assignment;
+- structured-error encoding fallback maps to an opaque host failure;
+- persistence success is raw and never view-normalized;
+- JSON-compatible output contains no unsupported JavaScript value;
+- JSON stringify/parse/restore round-trip is equal; and
+- exact schema-version success check rejects a wrong-version resolved object.
 
-Using the same fixtures, assert:
+### 14.4 Tauri commands
 
-- save clones under the lock and validates after releasing it;
-- save invariant failure is `validation/activeEngine`;
-- validation has no managed-state dependency;
-- schema, semantic, and malformed categories match WASM;
-- early and late failures preserve managed state;
-- prepared response encoding precedes replacement;
-- poisoned mutex maps to `stateUnavailable`;
-- compile-time-safe serializer-failure coverage proves no swap; and
+Using the same fixtures, test:
+
+- save captures only `SaveSnapshotCapture` under the lock;
+- no complete engine/topology clone occurs;
+- preparation/validation and encoding happen after lock release;
+- validation success serializes as `null` and has no managed-state dependency;
+- early, late, encode, error-encode, and lock failures preserve state;
+- restore encoding precedes final swap;
+- poisoned mutex maps to `stateUnavailable`; and
 - `game_load_snapshot` is no longer registered.
 
-### 14.5 TypeScript contract tests
+### 14.5 TypeScript contract and raw wire tests
 
-Cover:
+Test:
 
-- every error-catalogue entry passes the strict guard;
-- unknown codes, fields, entity kinds, headings, reason kinds, missing keys,
-  unexpected keys, malformed points/entity refs/map sizes, and inappropriate
-  `details` are rejected;
-- candidate and active-engine validation sources are distinct;
-- known bridge errors become `{ ok: false }` unchanged;
-- normal host/transport rejections become `invokeFailed`;
+- validation accepts only `undefined` and `null`;
+- every other resolved value is `malformedSuccess`;
+- every error variant preserves `operation`;
+- known bridge errors remain unchanged;
+- transport/runtime failures become `invokeFailed`;
 - malformed rejected objects become `malformedError`;
-- malformed resolved values become `malformedSuccess`; and
-- diagnostics are never inspected to select a category.
+- snapshot success requires exact current `schemaVersion`;
+- adapters return raw snapshots and never call `normalizeRustSnapshot`;
+- raw Rust mirror types permit ordinary-WASM `undefined` where required; and
+- complete optional-field inventory normalizes to equal `GameState`.
 
-### 14.6 Adapter and backend contract tests
+### 14.6 Compatibility-path removal
 
-Update generated-wrapper mocks, exact Tauri command forwarding, backend stubs, and
-compile-time signatures for the three required methods. Remove every `loadSnapshot`
-assertion.
+Delete the stale adapter comments claiming `loadSnapshot` keeps
+`stop_access::normalize_snapshot_stops` covered. That normalization is used by the live
+network-mutation commit path, not strict `from_snapshot`/prepared restore. Do not retain
+`loadSnapshot` for a phantom migration responsibility.
 
-### 14.7 Real WASM artifact tests
-
-Exercise the built release artifact with shared fixtures and actual
-`Serializer::json_compatible()`. Record validation and restoration timing using a
-checked-in ignored/manual benchmark command.
-
-The implementation review target is:
-
-- real-WASM median no greater than `max(100 ms, 10 × same-machine native median)`
-  for the HPA-340 benchmark-class fixture.
-
-This is a review budget, not a CI assertion. If exceeded, report the evidence and
-open a host-execution follow-up rather than weakening validation or silently adding a
-worker inside HPA-341.
-
-### 14.8 Runtime-view parity tests
-
-Prove ordinary-WASM-shaped and JSON-compatible-shaped raw snapshots normalize to
-deeply equal `GameState`, including nested active-trip route plans and every nullable
-field listed in Section 12.3.
-
-### 14.9 Repository bypass search
-
-Use targeted searches rather than a naive `from_snapshot` grep. Review evidence must
-show no production occurrence of:
+Targeted searches prove no production occurrence of:
 
 ```text
 GameBackend.loadSnapshot
@@ -1414,11 +1424,10 @@ WasmGameEngine.from_snapshot
 pub fn from_snapshot   # scoped only to crates/caelum-wasm/src/lib.rs
 ```
 
-Core `GameEngine::from_snapshot`, `GameEngine::prepare_restore`, and core persistence
-tests remain expected. Search output must distinguish those allowed core uses from
-the removed wasm-bindgen export.
+Core `GameEngine::from_snapshot`, `prepare_restore`, and persistence tests remain
+expected.
 
-### 14.10 Regression suite
+### 14.7 Regression suite
 
 Run:
 
@@ -1434,163 +1443,172 @@ bun run test
 bun run build
 ```
 
-## 15. Performance and Concurrency
+## 15. Benchmark Methodology and Autosave Handoff
 
-- Build each ordered identity/reference index once and compile topology once through
-  the existing core pipeline.
-- The two-phase candidate decoder performs one shallow probe plus one full model
-  deserialization; do not add another full decode in an adapter.
-- Construct one `PreparedEngineRestore` and retain its compiled topology.
-- Keep Tauri validation and encoding outside the managed-state mutex.
-- Do not add a Web Worker or asynchronous Rust job boundary without measured need.
-- Keep the ignored/manual benchmark command reproducible and report same-machine
-  native and real-WASM medians in the implementation PR.
-- Do not add a wall-clock assertion to shared CI until the project has a controlled
-  performance runner.
+Update the existing ignored native persistence benchmark rather than leaving two
+conflicting methodologies. For both validation and prepared restore, native and real
+WASM use the same method:
 
-The WASM wrapper remains single-owner mutable state. Tauri serializes replacement
-through its mutex but holds it only for clone or final swap.
+1. record one cold invocation separately;
+2. run exactly two unmeasured warm-ups;
+3. run 25 measured iterations;
+4. report median and p95; and
+5. compare same-machine medians against:
+
+```text
+real-WASM median <= max(100 ms, 10 × same-machine native median)
+```
+
+The current native benchmark's five warm-ups, 25 samples, and median-only output are
+updated to this contract. The review budget is evidence, not a shared-CI assertion.
+
+The 100 ms ceiling is not a frame budget and must not be inherited as an autosave UX
+promise. HPA-342 must use measured real-WASM p95, serialize save operations with gameplay
+mutations, avoid invoking save work inside animation-frame-critical code, and revisit a
+worker or other host-execution boundary if autosave produces observable main-thread
+jank. That follow-up must not weaken core validation.
 
 ## 16. File Map
 
 ### Create
 
-- `src/runtime/backend/persistenceContract.ts` — closed static vocabulary and generic
-  persistence result/error types.
-- `src/runtime/backend/persistence.ts` — strict guards and shared operation
-  normalization.
+- `src/runtime/backend/persistenceContract.ts` — closed vocabulary and generic result
+  types.
+- `src/runtime/backend/persistence.ts` — guards and shared normalization.
 - `tests/runtime/persistenceContract.test.ts`.
-- shared snapshot and error-catalogue fixtures under
-  `tests/fixtures/persistence/`.
-- a focused fixture generator or documented test helper, not a production binary.
-- an ignored/manual real-WASM benchmark entrypoint or test command.
+- shared persistence fixtures under `tests/fixtures/persistence/`.
+- a fixture generator or test helper, not a production binary.
+- a real-WASM ignored/manual benchmark entrypoint or test command.
 
 ### Modify
 
-- `crates/caelum-core/src/engine.rs` — `PreparedEngineRestore` and delegation from
-  construction/in-place restoration.
-- `crates/caelum-core/src/lib.rs` — deliberate prepared-token export.
-- focused core persistence construction/atomicity tests.
+- `crates/caelum-core/src/engine.rs` — `SaveSnapshotCapture`,
+  `PreparedEngineRestore`, and delegated APIs.
+- `crates/caelum-core/src/lib.rs` — deliberate exports for both opaque tokens.
+- core persistence snapshot, atomicity, determinism, reachable-savability, wire, and
+  benchmark tests.
 - `crates/caelum-wasm/Cargo.toml` — direct Serde dependency.
-- `crates/caelum-wasm/src/lib.rs` — decoder, JSON-compatible operations, prepared
-  restore, bridge errors, and removal of exported direct construction.
-- `src-tauri/src/lib.rs` — three commands, prepared restore, lock discipline,
-  bridge errors, registration, and command tests.
-- `src/runtime/backend/types.ts` — concrete result alias, accurate raw nullable wire
-  types, and required `GameBackend` methods.
-- `src/runtime/backend/wasmBackend.ts` and `tauriBackend.ts` — operation forwarding.
+- `crates/caelum-wasm/src/lib.rs` — decoder, JSON-compatible operations, bridge errors,
+  token consumption, and removal of exported direct construction.
+- `src-tauri/src/lib.rs` — three commands, snapshot-only capture, outside-lock work,
+  bridge errors, registration, and tests.
+- `src/runtime/backend/types.ts` — concrete result alias, raw Rust snapshot graph, and
+  required `GameBackend` methods.
+- `src/runtime/backend/wasmBackend.ts` and `tauriBackend.ts` — raw operation forwarding
+  and removal of stale migration comments.
 - `src/runtime/backend/index.ts` — public exports.
-- `src/runtime/snapshotView.ts` — complete nullable-field view normalization.
-- backend, adapter, real-WASM, snapshot-view, and fixture tests.
+- `src/runtime/snapshotView.ts` — complete model-derived view normalization.
+- backend, adapter, real-WASM, snapshot-view, fixture, and contract tests.
 - `crates/caelum-core/tests/persistence_error_wire.rs` — shared catalogue coverage.
 - `docs/architecture.md` and relevant persistence documentation.
 
 ### Delete or retire
 
 - optional `GameBackend.loadSnapshot`;
-- WASM adapter engine replacement through a static constructor;
+- WASM adapter replacement through a static constructor;
 - wasm-bindgen-exported `WasmGameEngine::from_snapshot`;
-- Tauri `game_load_snapshot`; and
-- tests asserting the old rejected-promise compatibility contract.
+- Tauri `game_load_snapshot`;
+- stale load-path normalization comments; and
+- tests asserting the rejected-promise compatibility contract.
 
 ## 17. Review Gates
 
-### Gate 1: Contract
+### Gate 1: Contract and raw wire
 
-The fixed file split, TypeScript unions, validation-source distinction, strict guards,
-shared error catalogue, and failing backend signature tests are reviewable before
-host implementation.
+The fixed file split, operation-bearing error unions, exact validation success,
+strict guards, raw Rust mirrors, shared catalogue, fixture path, and failing backend
+signature tests are reviewable before host implementation.
 
-### Gate 2: Core prepared restore
+### Gate 2: Core preparation and savability
 
-The token, delegated existing APIs, and core construction/atomicity tests establish
-one candidate/snapshot preparation boundary.
+The engine-minted save capture, prepared restore token, delegated APIs, atomicity,
+reachable-savability invariant, and updated native benchmark are complete.
 
 ### Gate 3: WASM
 
-Raw operations, JSON-compatible persistence serialization, prepared
-encode-before-commit restore, initialization coverage, and removal of direct
-construction are complete.
+Raw operations, JSON-compatible persistence serialization, JSON round-trip,
+encode-before-commit, initialization coverage, exact schema transport check, and
+removal of direct construction are complete.
 
 ### Gate 4: Tauri
 
-Three commands, outside-lock preparation, pre-commit encoding, state-unavailable
-handling, and atomicity tests are complete.
+Three commands, snapshot-only capture, outside-lock work, pre-commit encoding,
+state-unavailable handling, and atomicity tests are complete.
 
 ### Gate 5: Adapter and view parity
 
-Both adapters use the same normalizer, implement required methods, pass the same
-fixture expectations, and ordinary/persistence raw values normalize to equal runtime
-views.
+Both adapters use the same normalizer, preserve raw values, implement required methods,
+pass shared fixture expectations, and ordinary/persistence raw values normalize to
+equal runtime views.
 
 ### Gate 6: Regression and evidence
 
-Documentation, targeted bypass search, complete checks, error-catalogue evidence, and
-same-machine native/real-WASM timing are present before implementation is marked ready.
+Documentation, targeted bypass search, complete checks, catalogue evidence, JSON
+round-trip evidence, and same-machine native/real-WASM cold/median/p95 measurements are
+present before implementation is marked ready.
 
 ## 18. Acceptance-Criteria Mapping
 
 ### Both hosts return the same persistence snapshot shape for equal engine state
 
-Covered by JSON-compatible persistence serialization and equality of parsed fixture
-values.
+Covered by JSON-compatible persistence serialization, parsed fixture equality, exact
+current-schema transport checks, and JSON text round-trip restoration.
 
 ### Both hosts map every core validation error to the same typed frontend contract
 
-Covered by generic error wrapping, the Rust catalogue, strict TypeScript mirror, and
-representative end-to-end failures. The catalogue tripwire's non-codegen limitation
-is explicit.
+Covered by generic wrapping, the Rust catalogue, strict TypeScript mirror, embedded
+shape checklist, operation attribution, and representative host failures.
 
 ### Failed restoration leaves managed host state unchanged
 
-Covered by core prepared restoration, host response encoding before token
-consumption, and early/late/encode/lock failure tests.
+Covered by prepared restoration, host encoding before token consumption, and
+early/late/encode/error-encode/lock failure tests.
 
 ### Successful restoration returns the validated canonical snapshot
 
-HPA-341 commits the prepared candidate inside the host and returns the exact encoded
-committed snapshot. HPA-342 owns runtime-view publication and transient UI reset.
+HPA-341 commits the prepared candidate inside the host and returns the exact encoded raw
+snapshot. HPA-342 normalizes and publishes it.
 
 ### No TypeScript path can directly replace gameplay state
 
-Covered by removing `loadSnapshot`, the exported WASM static constructor, and
-`game_load_snapshot`, plus targeted bypass searches.
+Covered by removing `loadSnapshot`, exported WASM construction, and
+`game_load_snapshot`, plus targeted searches.
 
 ### Existing gameplay dispatch/tick behavior remains unchanged
 
 Covered by limiting JSON-compatible serialization to persistence operations, changing
-only read-only runtime view normalization, and running the complete regression suite.
+only read-only raw typing/view normalization, and running the complete regression suite.
 
 ## 19. Downstream Contract for HPA-342
 
 HPA-342 may assume:
 
-- manual save calls `snapshotForSave` and stores only an `ok: true` snapshot;
-- `validation/activeEngine` means the running city cannot safely be saved and is not
-  an import-file error;
-- import/recovery can call `validateSnapshot` before store write or active-city
-  mutation;
-- load calls `restoreSnapshot` and receives the exact committed snapshot;
-- all persistence failures are typed data;
-- validation and failed restore never change the active engine; and
+- manual save calls `snapshotForSave` and stores only an `ok: true` raw snapshot;
+- `validation/activeEngine` means the current city cannot safely be saved and is not an
+  import-file error;
+- import/recovery can call `validateSnapshot` before storage or active-city mutation;
+- load calls `restoreSnapshot` and receives the exact committed raw snapshot;
+- every operation failure after backend initialization is typed and includes operation;
+- a successful raw snapshot always has the current schema version;
+- validation and failed restore never change active engine state; and
 - storage code never branches on WASM versus Tauri.
 
 HPA-342 must:
 
-- own `SaveEnvelope`, `SaveStore`, active-city identity, dirty tracking, and
-  mutation/save/load coordination;
-- call `normalizeRustSnapshot` before committing a restored value to runtime view
-  state;
+- own `SaveEnvelope`, `SaveStore`, active-city identity, dirty tracking, and mutation/
+  save/load coordination;
+- call `normalizeRustSnapshot(result.snapshot)` before runtime publication;
 - clear drafts, gestures, selections, previews, and transient errors after success;
-  and
-- notify runtime subscribers.
+- notify runtime subscribers;
+- use measured p95 rather than the 100 ms review ceiling as its autosave UX input; and
+- revisit browser host execution if synchronous WASM save work causes UI jank.
 
-It must never publish the raw persistence `RustGameSnapshot` directly.
+It must never publish the raw persistence snapshot directly.
 
 ## 20. Explicit Non-expansion
 
-Implementation must not absorb HPA-342 storage/coordinator work merely because the
-new methods have no production UI caller yet. Backend, view-normalization, and host
+Implementation must not absorb HPA-342 storage/coordinator work merely because the new
+methods initially have no production UI caller. Backend, view-normalization, and host
 tests are sufficient to land HPA-341 safely.
 
 Do not add:
@@ -1603,10 +1621,11 @@ Do not add:
 - runtime dirty tracking;
 - autosave scheduling;
 - migration or repair;
-- a separate pre-initialization validator capability;
+- a separate pre-initialization validator;
 - Rust-to-TypeScript code generation;
+- a publicly constructible save-preparation helper for arbitrary snapshots;
 - dynamic serializer injection;
 - a flaky shared-CI timing assertion;
-- a worker boundary without measured need; or
+- an unmeasured worker expansion; or
 - TypeScript gameplay validation beyond strict recognition of Rust error, transport,
-  and read-only runtime-view shapes.
+  raw wire, and read-only runtime-view shapes.
