@@ -33,7 +33,7 @@ export async function createTauriBackend(): Promise<GameBackend> {
       );
     },
     validateSnapshot(request) {
-      return runPersistenceValidationOperation(() =>
+      return runPersistenceValidationOperation(null, () =>
         invoke("game_validate_snapshot", { snapshot: request.snapshot }),
       );
     },
