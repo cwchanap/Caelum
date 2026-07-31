@@ -111,7 +111,12 @@ export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
 
 export function previewBackendStubs(): Pick<
   GameBackend,
-  "createSandbox" | "previewRoute" | "previewRoadMutation"
+  | "createSandbox"
+  | "snapshotForSave"
+  | "validateSnapshot"
+  | "restoreSnapshot"
+  | "previewRoute"
+  | "previewRoadMutation"
 > {
   return {
     async createSandbox(request) {
@@ -131,6 +136,18 @@ export function previewBackendStubs(): Pick<
         },
       });
       return { ok: true, snapshot };
+    },
+    async snapshotForSave() {
+      return { ok: true, snapshot: createRustSnapshot({ paused: true }) };
+    },
+    async validateSnapshot() {
+      return { ok: true };
+    },
+    async restoreSnapshot(request) {
+      return {
+        ok: true,
+        snapshot: request.snapshot as RustGameSnapshot,
+      };
     },
     async previewRoute(request) {
       return {

@@ -29,6 +29,11 @@ import type {
   TransitNetwork,
   Vehicle,
 } from "../../domain/types";
+import type {
+  PersistenceSnapshotRequest,
+  PersistenceSnapshotResultOf,
+  PersistenceValidationResult,
+} from "./persistenceContract";
 
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
 
@@ -341,9 +346,18 @@ export type SandboxResetResult =
   | { ok: true; snapshot: RustGameSnapshot }
   | { ok: false; error: SandboxResetError };
 
+export type PersistenceSnapshotResult =
+  PersistenceSnapshotResultOf<RustGameSnapshot>;
+
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
-  loadSnapshot?(snapshot: RustGameSnapshot): Promise<RustGameSnapshot>;
+  snapshotForSave(): Promise<PersistenceSnapshotResult>;
+  validateSnapshot(
+    request: PersistenceSnapshotRequest,
+  ): Promise<PersistenceValidationResult>;
+  restoreSnapshot(
+    request: PersistenceSnapshotRequest,
+  ): Promise<PersistenceSnapshotResult>;
   createSandbox(
     request: SandboxCreationRequest,
   ): Promise<SandboxCreationResult>;

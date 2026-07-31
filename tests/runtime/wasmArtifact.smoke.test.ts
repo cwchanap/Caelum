@@ -59,7 +59,7 @@ describe("real WASM artifact smoke", () => {
     expect(rejected.rejection?.code).toBe("invalidSpeed");
   });
 
-  it("replaces and loads a schema-v4 snapshot through the real artifact", async () => {
+  it("restores a schema-v4 snapshot through the real artifact", async () => {
     const backend = await createWasmBackend();
     const initial = await backend.snapshot();
     const replacement: RustGameSnapshot = {
@@ -72,8 +72,10 @@ describe("real WASM artifact smoke", () => {
       budget: 110_000,
     };
 
-    expect(backend.loadSnapshot).toBeDefined();
-    const loaded = await backend.loadSnapshot!(replacement);
+    const result = await backend.restoreSnapshot({ snapshot: replacement });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected restore success");
+    const loaded = result.snapshot;
 
     expect(loaded).toMatchObject({
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -112,7 +114,7 @@ describe("real WASM artifact smoke", () => {
     expect(loaded.metrics.lossReason ?? null).toBeNull();
     expect(loaded.rules).toEqual(initial.rules);
     expect(Object.hasOwn(loaded.scenario, "objectives")).toBe(true);
-    expect(loaded.scenario.objectives).toBeUndefined();
+    expect(loaded.scenario.objectives).toBeNull();
     expect(loaded.map.tiles).toHaveLength(loaded.map.width * loaded.map.height);
   });
 
@@ -135,7 +137,12 @@ describe("real WASM artifact smoke", () => {
     expect(destinationBeforeLoad.rules.economyPreset).toBe("standard");
     expect(destinationBeforeLoad.budget).not.toBe(0);
 
-    const loaded = await destination.loadSnapshot!(created.snapshot);
+    const restore = await destination.restoreSnapshot({
+      snapshot: created.snapshot,
+    });
+    expect(restore.ok).toBe(true);
+    if (!restore.ok) throw new Error("expected Creative restore to succeed");
+    const loaded = restore.snapshot;
     expect(loaded.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
     expect(loaded.paused).toBe(true);
     expect(loaded.budget).toBe(0);
@@ -161,10 +168,13 @@ describe("real WASM artifact smoke", () => {
 
     expect(Object.hasOwn(raw.scenario, "objectives")).toBe(true);
     expect(raw.scenario.objectives).toBeUndefined();
-    const loaded = await backend.loadSnapshot!(raw);
+    const restored = await backend.restoreSnapshot({ snapshot: raw });
+    expect(restored.ok).toBe(true);
+    if (!restored.ok) throw new Error("expected restore success");
+    const loaded = restored.snapshot;
     expect(loaded.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
     expect(Object.hasOwn(loaded.scenario, "objectives")).toBe(true);
-    expect(loaded.scenario.objectives).toBeUndefined();
+    expect(loaded.scenario.objectives).toBeNull();
 
     const missing = {
       ...raw,
@@ -173,8 +183,16 @@ describe("real WASM artifact smoke", () => {
     delete (missing.scenario as { objectives?: unknown }).objectives;
 
     await expect(
-      backend.loadSnapshot!(missing as RustGameSnapshot),
-    ).rejects.toThrow(/objectives|missing field/i);
+      backend.validateSnapshot({ snapshot: missing }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "serialization",
+        operation: "validateSnapshot",
+        phase: "snapshotDecode",
+        diagnostic: expect.stringMatching(/objectives|missing field/i),
+      },
+    });
   });
 
   it("rejects invalid demand multipliers at the real WASM Rust boundary", async () => {
@@ -183,9 +201,17 @@ describe("real WASM artifact smoke", () => {
       const raw = await backend.snapshot();
       raw.rules.sandbox.demandMultiplier = invalid;
 
-      await expect(backend.loadSnapshot!(raw)).rejects.toThrow(
-        /demand multiplier/i,
-      );
+      await expect(
+        backend.validateSnapshot({ snapshot: raw }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          kind: "serialization",
+          operation: "validateSnapshot",
+          phase: "snapshotDecode",
+          diagnostic: expect.stringMatching(/demand multiplier/i),
+        },
+      });
     }
   });
 
@@ -243,7 +269,17 @@ describe("real WASM artifact smoke", () => {
         raw.scenario.objectives = { ...validThresholds };
         (raw.scenario.objectives as RustObjectiveThresholds)[field] = value;
 
-        await expect(backend.loadSnapshot!(raw)).rejects.toThrow(pattern);
+        await expect(
+          backend.validateSnapshot({ snapshot: raw }),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: {
+            kind: "serialization",
+            operation: "validateSnapshot",
+            phase: "snapshotDecode",
+            diagnostic: expect.stringMatching(pattern),
+          },
+        });
       }
     }
   });
@@ -253,11 +289,19 @@ describe("real WASM artifact smoke", () => {
     const raw = await backend.snapshot();
     raw.paused = false;
 
-    await expect(backend.loadSnapshot!(raw)).rejects.toMatchObject({
-      code: "invalidModeSettings",
-      context: {
-        field: "paused",
-        reason: { kind: "persistenceRequiresPaused" },
+    await expect(backend.validateSnapshot({ snapshot: raw })).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "validation",
+        operation: "validateSnapshot",
+        source: "candidate",
+        error: {
+          code: "invalidModeSettings",
+          context: {
+            field: "paused",
+            reason: { kind: "persistenceRequiresPaused" },
+          },
+        },
       },
     });
   });
@@ -276,12 +320,20 @@ describe("real WASM artifact smoke", () => {
     delete (legacy as { rules?: unknown }).rules;
 
     await expect(
-      backend.loadSnapshot!(legacy as RustGameSnapshot),
-    ).rejects.toMatchObject({
-      code: "unsupportedSchema",
-      context: {
-        expected: SNAPSHOT_SCHEMA_VERSION,
-        actual: SNAPSHOT_SCHEMA_VERSION - 1,
+      backend.validateSnapshot({ snapshot: legacy }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "validation",
+        operation: "validateSnapshot",
+        source: "candidate",
+        error: {
+          code: "unsupportedSchema",
+          context: {
+            expected: SNAPSHOT_SCHEMA_VERSION,
+            actual: SNAPSHOT_SCHEMA_VERSION - 1,
+          },
+        },
       },
     });
   });
@@ -299,7 +351,19 @@ describe("real WASM artifact smoke", () => {
       map: { ...raw.map, tiles: "not-an-array" },
     } as unknown as RustGameSnapshot;
 
-    await expect(backend.loadSnapshot!(malformed)).rejects.toBeTypeOf("string");
+    const result = await backend.validateSnapshot({ snapshot: malformed });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "serialization",
+        operation: "validateSnapshot",
+        phase: "snapshotDecode",
+      },
+    });
+    if (result.ok || result.error.kind !== "serialization") {
+      throw new Error("expected snapshotDecode serialization failure");
+    }
+    expect(result.error.diagnostic).toBeTypeOf("string");
   });
 
   it("round-trips a placeRoundabout dispatch through wasm-bindgen", async () => {
