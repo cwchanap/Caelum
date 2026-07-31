@@ -7,6 +7,11 @@ import type {
   RustObjectiveThresholds,
   SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
+import lateDerivedCorruption from "../fixtures/persistence/late-derived-corruption.json";
+import malformedCurrentSchema from "../fixtures/persistence/malformed-current-schema.json";
+import unpaused from "../fixtures/persistence/unpaused.json";
+import unsupportedSchema from "../fixtures/persistence/unsupported-schema.json";
+import validPaused from "../fixtures/persistence/valid-paused.json";
 
 const canonicalCrossroadsRequest: SandboxCreationRequest = {
   templateId: "crossroads",
@@ -15,6 +20,25 @@ const canonicalCrossroadsRequest: SandboxCreationRequest = {
   demandMultiplier: 1,
   moveInRate: "paused",
 };
+
+function expectJsonCompatible(value: unknown, path = "$"): void {
+  expect(typeof value, `${path} must not be undefined`).not.toBe("undefined");
+  expect(typeof value, `${path} must not be bigint`).not.toBe("bigint");
+  expect(value instanceof Map, `${path} must not be Map`).toBe(false);
+  expect(ArrayBuffer.isView(value), `${path} must not be a typed array`).toBe(
+    false,
+  );
+
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      expectJsonCompatible(entry, `${path}[${index}]`),
+    );
+  } else if (typeof value === "object" && value !== null) {
+    for (const [key, entry] of Object.entries(value)) {
+      expectJsonCompatible(entry, `${path}.${key}`);
+    }
+  }
+}
 
 /**
  * Loads the real built WASM artifact (not the vi.mock in wasmBackend.test.ts).
@@ -58,6 +82,113 @@ describe("real WASM artifact smoke", () => {
     expect(rejected.applied).toBe(false);
     expect(rejected.rejection?.code).toBe("invalidSpeed");
   });
+
+  it("stringifies, parses, and restores a JSON-compatible saved fixture without loss", async () => {
+    const source = await createWasmBackend();
+
+    await expect(
+      source.validateSnapshot({ snapshot: validPaused }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      source.restoreSnapshot({ snapshot: validPaused }),
+    ).resolves.toEqual({
+      ok: true,
+      snapshot: validPaused,
+    });
+
+    const saved = await source.snapshotForSave();
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error("expected snapshotForSave success");
+    expectJsonCompatible(saved.snapshot);
+
+    const parsed: unknown = JSON.parse(JSON.stringify(saved.snapshot));
+    const destination = await createWasmBackend();
+    const restored = await destination.restoreSnapshot({ snapshot: parsed });
+
+    expect(restored).toEqual({
+      ok: true,
+      snapshot: saved.snapshot,
+    });
+  });
+
+  it.each([
+    {
+      name: "unsupported schema",
+      fixture: unsupportedSchema,
+      error: {
+        kind: "validation",
+        source: "candidate",
+        error: {
+          code: "unsupportedSchema",
+          context: {
+            expected: SNAPSHOT_SCHEMA_VERSION,
+            actual: SNAPSHOT_SCHEMA_VERSION - 1,
+          },
+        },
+      },
+    },
+    {
+      name: "unpaused snapshot",
+      fixture: unpaused,
+      error: {
+        kind: "validation",
+        source: "candidate",
+        error: {
+          code: "invalidModeSettings",
+          context: {
+            field: "paused",
+            reason: { kind: "persistenceRequiresPaused" },
+          },
+        },
+      },
+    },
+    {
+      name: "malformed current schema",
+      fixture: malformedCurrentSchema,
+      error: {
+        kind: "serialization",
+        phase: "snapshotDecode",
+        diagnostic: expect.any(String),
+      },
+    },
+    {
+      name: "late derived corruption",
+      fixture: lateDerivedCorruption,
+      error: {
+        kind: "validation",
+        source: "candidate",
+        error: {
+          code: "invalidDerivedState",
+          context: {
+            field: "metricsCounters",
+            reason: { kind: "metricsRelationshipMismatch" },
+          },
+        },
+      },
+    },
+  ])(
+    "returns the exact $name category and preserves active state",
+    async ({ fixture, error }) => {
+      const backend = await createWasmBackend();
+      const before = await backend.snapshot();
+
+      await expect(
+        backend.validateSnapshot({ snapshot: fixture }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { ...error, operation: "validateSnapshot" },
+      });
+      await expect(backend.snapshot()).resolves.toEqual(before);
+
+      await expect(
+        backend.restoreSnapshot({ snapshot: fixture }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { ...error, operation: "restoreSnapshot" },
+      });
+      await expect(backend.snapshot()).resolves.toEqual(before);
+    },
+  );
 
   it("restores a schema-v4 snapshot through the real artifact", async () => {
     const backend = await createWasmBackend();
@@ -184,7 +315,7 @@ describe("real WASM artifact smoke", () => {
 
     await expect(
       backend.validateSnapshot({ snapshot: missing }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       ok: false,
       error: {
         kind: "serialization",
@@ -203,7 +334,7 @@ describe("real WASM artifact smoke", () => {
 
       await expect(
         backend.validateSnapshot({ snapshot: raw }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
         ok: false,
         error: {
           kind: "serialization",
@@ -271,7 +402,7 @@ describe("real WASM artifact smoke", () => {
 
         await expect(
           backend.validateSnapshot({ snapshot: raw }),
-        ).resolves.toMatchObject({
+        ).resolves.toEqual({
           ok: false,
           error: {
             kind: "serialization",
@@ -352,12 +483,13 @@ describe("real WASM artifact smoke", () => {
     } as unknown as RustGameSnapshot;
 
     const result = await backend.validateSnapshot({ snapshot: malformed });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
       error: {
         kind: "serialization",
         operation: "validateSnapshot",
         phase: "snapshotDecode",
+        diagnostic: expect.any(String),
       },
     });
     if (result.ok || result.error.kind !== "serialization") {
