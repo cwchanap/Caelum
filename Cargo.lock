@@ -329,7 +329,9 @@ name = "caelum-wasm"
 version = "0.1.0"
 dependencies = [
  "caelum-core",
+ "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
 ]
 
