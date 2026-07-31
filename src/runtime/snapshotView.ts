@@ -1,13 +1,39 @@
 import {
   SNAPSHOT_SCHEMA_VERSION,
   type GameState,
+  type RoutePlan,
   type Station,
   type Stop,
 } from "../domain/types";
-import type { RustGameSnapshot } from "./backend/types";
+import type { RustGameSnapshot, RustRoutePlan } from "./backend/types";
 import { normalizeRouteLegPath } from "./backend/shared";
 
-export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
+type CompleteRuntimeGameState = GameState &
+  Required<
+    Pick<
+      GameState,
+      "sims" | "activeTrips" | "tripSequenceDay" | "nextTripSequence"
+    >
+  >;
+
+function normalizeRoutePlan(
+  plan: RustRoutePlan | null | undefined,
+): RoutePlan | null {
+  if (plan == null) return null;
+  return {
+    ...plan,
+    legs: plan.legs.map((leg) => ({
+      ...leg,
+      serviceDirection: leg.serviceDirection ?? null,
+      boardItineraryIndex: leg.boardItineraryIndex ?? null,
+      alightItineraryIndex: leg.alightItineraryIndex ?? null,
+    })),
+  };
+}
+
+export function normalizeRustSnapshot(
+  snapshot: RustGameSnapshot,
+): CompleteRuntimeGameState {
   if (snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
     throw new Error(
       `Unsupported snapshot schema version: ${String(snapshot.schemaVersion)}`,
@@ -32,9 +58,14 @@ export function normalizeRustSnapshot(snapshot: RustGameSnapshot): GameState {
         parkedPosition: vehicle.parkedPosition ?? null,
       })),
     },
+    activeTrips: snapshot.activeTrips.map((trip) => ({
+      ...trip,
+      routePlan: normalizeRoutePlan(trip.routePlan),
+    })),
     metrics: {
       ...snapshot.metrics,
       waitingCitizenCount: snapshot.metrics.waitingTripCount,
+      lossReason: snapshot.metrics.lossReason ?? null,
     },
     scenario: {
       name: snapshot.scenario.name,

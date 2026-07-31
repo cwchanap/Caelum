@@ -8,17 +8,26 @@ import type {
   GrowthWave,
   GameplayRejection,
   Heading,
+  LegFailureReason,
+  MetroLine,
   PlacedBuilding,
   Point,
   RoundaboutSize,
+  Route,
+  RouteLeg,
   SNAPSHOT_SCHEMA_VERSION,
+  RoutePlan,
+  ServiceDirection,
   RoadStructure,
   RouteLegPath,
   ServicePattern,
   Sim,
+  TransitPath,
   TransitMode,
   TripOutcomeKind,
+  TripPosition,
   TransitNetwork,
+  Vehicle,
 } from "../../domain/types";
 
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
@@ -27,6 +36,59 @@ export interface RustTripOutcome {
   outcome: TripOutcomeKind;
   waitSeconds: number;
   time: number;
+}
+
+export interface RustRouteLegPath extends Omit<
+  RouteLegPath,
+  "currentPath" | "lastValidPath" | "estimatedSeconds" | "failureReason"
+> {
+  currentPath: TransitPath | null | undefined;
+  lastValidPath: TransitPath | null | undefined;
+  estimatedSeconds: number | null | undefined;
+  failureReason?: LegFailureReason;
+}
+
+export interface RustRoute extends Omit<Route, "legs"> {
+  legs: RustRouteLegPath[];
+}
+
+export interface RustMetroLine extends Omit<MetroLine, "legs"> {
+  legs: RustRouteLegPath[];
+}
+
+export interface RustVehicle extends Omit<Vehicle, "parkedPosition"> {
+  parkedPosition: TripPosition | null | undefined;
+}
+
+export interface RustSim extends Omit<Sim, "shiftTemplate" | "workplace"> {
+  shiftTemplate?: "standard" | "early" | "late" | "offPeak";
+  workplace?: Point;
+}
+
+export interface RustTransitNetwork extends Omit<
+  TransitNetwork,
+  "routes" | "metroLines" | "vehicles"
+> {
+  routes: RustRoute[];
+  metroLines: RustMetroLine[];
+  vehicles: RustVehicle[];
+}
+
+export interface RustRoutePlanLeg extends Omit<
+  RouteLeg,
+  "serviceDirection" | "boardItineraryIndex" | "alightItineraryIndex"
+> {
+  serviceDirection: ServiceDirection | null | undefined;
+  boardItineraryIndex: number | null | undefined;
+  alightItineraryIndex: number | null | undefined;
+}
+
+export interface RustRoutePlan extends Omit<RoutePlan, "legs"> {
+  legs: RustRoutePlanLeg[];
+}
+
+export interface RustActiveTrip extends Omit<ActiveTrip, "routePlan"> {
+  routePlan: RustRoutePlan | null | undefined;
 }
 
 export interface RustMetrics {
@@ -38,7 +100,7 @@ export interface RustMetrics {
   averageWaitSeconds: number;
   tripOutcomes: RustTripOutcome[];
   state: "running" | "won" | "lost";
-  lossReason: string | null;
+  lossReason: string | null | undefined;
 }
 
 export interface RustObjectiveThresholds {
@@ -49,7 +111,7 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Schema-v3 raw snapshots always include scenario identity, growth waves, and
+/// Schema-v4 raw snapshots always include scenario identity, growth waves, and
 /// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
 /// or present WASM `undefined`; both host encodings of Rust `None` normalize
 /// to canonical `null`. Non-null thresholds remain authoritative core data.
@@ -70,9 +132,9 @@ export interface RustGameSnapshot {
   budget: number;
   map: GameMap;
   buildings: PlacedBuilding[];
-  transit: TransitNetwork;
-  sims: Sim[];
-  activeTrips: ActiveTrip[];
+  transit: RustTransitNetwork;
+  sims: RustSim[];
+  activeTrips: RustActiveTrip[];
   tripSequenceDay: number;
   nextTripSequence: number;
   metrics: RustMetrics;

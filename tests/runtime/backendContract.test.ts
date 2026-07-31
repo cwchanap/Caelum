@@ -2,7 +2,6 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   SNAPSHOT_SCHEMA_VERSION,
   type GameplayRejection,
-  type RouteLegPath,
 } from "../../src/domain/types";
 import type {
   DispatchResult,
@@ -13,6 +12,7 @@ import type {
   RoutePreviewRequest,
   RoutePreviewResponse,
   RustGameSnapshot,
+  RustRouteLegPath,
 } from "../../src/runtime/backend/types";
 import { rejectionMessage } from "../../src/runtime/rejectionMessages";
 import { normalizeRouteLegPath } from "../../src/runtime/backend/shared";
@@ -275,7 +275,6 @@ describe("Rust backend contract", () => {
       currentPath: undefined as unknown as null,
       lastValidPath: undefined as unknown as null,
       estimatedSeconds: undefined as unknown as null,
-      failureReason: undefined as unknown as null,
     };
     snapshot.transit.routes.push({
       id: "route-001",
@@ -330,7 +329,10 @@ describe("Rust backend contract", () => {
       direction: "loop" as const,
       kind: "service" as const,
       status: "networkDisconnected" as const,
-    } as unknown as RouteLegPath;
+      currentPath: undefined,
+      lastValidPath: undefined,
+      estimatedSeconds: undefined,
+    } satisfies RustRouteLegPath;
 
     const leg = normalizeRouteLegPath(legacyLeg);
 

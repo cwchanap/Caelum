@@ -3,10 +3,15 @@ import type {
   DispatchResult,
   RoadMutationPreviewResponse,
   RoutePreviewResponse,
+  RustRouteLegPath,
 } from "./types";
 
 /** Normalize Rust `Option` fields across serde-wasm-bindgen and Tauri JSON. */
-export function normalizeRouteLegPath(leg: RouteLegPath): RouteLegPath {
+export function normalizeRouteLegPath(leg: RustRouteLegPath): RouteLegPath;
+export function normalizeRouteLegPath(leg: RouteLegPath): RouteLegPath;
+export function normalizeRouteLegPath(
+  leg: RustRouteLegPath | RouteLegPath,
+): RouteLegPath {
   return {
     ...leg,
     currentPath: leg.currentPath ?? null,
