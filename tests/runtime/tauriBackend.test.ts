@@ -263,18 +263,127 @@ describe("createTauriBackend", () => {
     await expect(backend.reset()).rejects.toBe("mutex poisoned");
   });
 
-  it("loadSnapshot() invokes game_load_snapshot with the serialized snapshot", async () => {
-    const snapshot = createRustSnapshot({ day: 3, paused: false });
-    invokeMock.mockResolvedValueOnce(snapshot);
+  it("invokes exact persistence commands and preserves raw snapshot successes", async () => {
+    const saved = createRustSnapshot({
+      paused: true,
+      scenario: {
+        name: "Crossroads",
+        objectives: undefined,
+        growthWaves: [],
+      },
+    });
+    const restored = createRustSnapshot({ day: 3, paused: true });
+    invokeMock
+      .mockResolvedValueOnce(saved)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(restored);
 
     const backend = await createTauriBackend();
-    expect(backend.loadSnapshot).toBeDefined();
-    const result = await backend.loadSnapshot!(snapshot);
-
-    expect(invokeMock).toHaveBeenCalledWith("game_load_snapshot", {
-      snapshot,
+    const saveResult = await backend.snapshotForSave();
+    const validationResult = await backend.validateSnapshot({
+      snapshot: restored,
     });
-    expect(result).toEqual(snapshot);
+    const restoreResult = await backend.restoreSnapshot({
+      snapshot: restored,
+    });
+
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      1,
+      "game_snapshot_for_save",
+      undefined,
+    );
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "game_validate_snapshot", {
+      snapshot: restored,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "game_restore_snapshot", {
+      snapshot: restored,
+    });
+    expect(saveResult).toEqual({ ok: true, snapshot: saved });
+    expect(saveResult.ok && saveResult.snapshot).toBe(saved);
+    expect(validationResult).toEqual({ ok: true });
+    expect(restoreResult).toEqual({ ok: true, snapshot: restored });
+    expect(restoreResult.ok && restoreResult.snapshot).toBe(restored);
+  });
+
+  it.each([undefined, null])(
+    "accepts %s as Tauri validation success",
+    async (value) => {
+      invokeMock.mockResolvedValueOnce(value);
+      const candidate = createRustSnapshot();
+      const backend = await createTauriBackend();
+
+      await expect(
+        backend.validateSnapshot({ snapshot: candidate }),
+      ).resolves.toEqual({ ok: true });
+      expect(invokeMock).toHaveBeenCalledWith("game_validate_snapshot", {
+        snapshot: candidate,
+      });
+    },
+  );
+
+  it("preserves known Tauri bridge errors as typed results", async () => {
+    const error = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "unsupportedSchema",
+        context: {
+          expected: SNAPSHOT_SCHEMA_VERSION,
+          actual: SNAPSHOT_SCHEMA_VERSION - 1,
+        },
+      },
+    } as const;
+    invokeMock.mockRejectedValueOnce(error);
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toEqual({ ok: false, error });
+  });
+
+  it("maps malformed Tauri successes and errors through the shared contract", async () => {
+    invokeMock
+      .mockResolvedValueOnce({ schemaVersion: "4" })
+      .mockRejectedValueOnce({ unexpected: true });
+    const backend = await createTauriBackend();
+
+    await expect(backend.snapshotForSave()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "snapshotForSave",
+        code: "malformedSuccess",
+      },
+    });
+    await expect(
+      backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
+  it("rejects a wrong-schema Tauri snapshot success", async () => {
+    invokeMock.mockResolvedValueOnce({
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
+    });
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedSuccess",
+      },
+    });
   });
 
   it("invokes the immutable route and road preview commands", async () => {
@@ -348,54 +457,5 @@ describe("createTauriBackend", () => {
         request: roadRequest,
       },
     );
-  });
-
-  it("loadSnapshot() propagates a persistenceRequiresPaused error from the Rust command", async () => {
-    const snapshot = createRustSnapshot({ paused: false });
-    // The Rust game_load_snapshot command validates pause state and rejects
-    // with a serialized PersistenceError. The Tauri backend must propagate
-    // that structured error unchanged — same wire shape the WASM backend
-    // surfaces.
-    invokeMock.mockRejectedValueOnce({
-      code: "invalidModeSettings",
-      context: {
-        field: "paused",
-        reason: { kind: "persistenceRequiresPaused" },
-      },
-    });
-
-    const backend = await createTauriBackend();
-    await expect(backend.loadSnapshot!(snapshot)).rejects.toMatchObject({
-      code: "invalidModeSettings",
-      context: {
-        field: "paused",
-        reason: { kind: "persistenceRequiresPaused" },
-      },
-    });
-    expect(invokeMock).toHaveBeenCalledWith("game_load_snapshot", {
-      snapshot,
-    });
-  });
-
-  it("loadSnapshot() propagates an unsupportedSchema error for a legacy schema version", async () => {
-    const snapshot = createRustSnapshot({ paused: true });
-    // Simulate a legacy schema-v3 snapshot being rejected by the Rust
-    // command's schema probe.
-    invokeMock.mockRejectedValueOnce({
-      code: "unsupportedSchema",
-      context: {
-        expected: SNAPSHOT_SCHEMA_VERSION,
-        actual: SNAPSHOT_SCHEMA_VERSION - 1,
-      },
-    });
-
-    const backend = await createTauriBackend();
-    await expect(backend.loadSnapshot!(snapshot)).rejects.toMatchObject({
-      code: "unsupportedSchema",
-      context: {
-        expected: SNAPSHOT_SCHEMA_VERSION,
-        actual: SNAPSHOT_SCHEMA_VERSION - 1,
-      },
-    });
   });
 });

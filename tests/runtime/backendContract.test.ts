@@ -14,6 +14,11 @@ import type {
   RustGameSnapshot,
   RustRouteLegPath,
 } from "../../src/runtime/backend/types";
+import type {
+  PersistenceSnapshotRequest,
+  PersistenceSnapshotResult,
+  PersistenceValidationResult,
+} from "../../src/runtime/backend";
 import { rejectionMessage } from "../../src/runtime/rejectionMessages";
 import { normalizeRouteLegPath } from "../../src/runtime/backend/shared";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
@@ -22,6 +27,12 @@ import {
   createRustSnapshotWithRoadAccess,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
+
+function assertLoadSnapshotRemoved(backend: GameBackend): void {
+  // @ts-expect-error loadSnapshot is intentionally removed from GameBackend
+  void backend.loadSnapshot;
+}
+void assertLoadSnapshotRemoved;
 
 describe("Rust backend contract", () => {
   it("uses structured gameplay rejections and success context", () => {
@@ -531,8 +542,18 @@ describe("Rust backend contract", () => {
         request: RoadMutationPreviewRequest,
       ) => Promise<RoadMutationPreviewResponse>
     >();
-    expectTypeOf<NonNullable<GameBackend["loadSnapshot"]>>().toEqualTypeOf<
-      (snapshot: RustGameSnapshot) => Promise<RustGameSnapshot>
+    expectTypeOf<GameBackend["snapshotForSave"]>().toEqualTypeOf<
+      () => Promise<PersistenceSnapshotResult>
+    >();
+    expectTypeOf<GameBackend["validateSnapshot"]>().toEqualTypeOf<
+      (
+        request: PersistenceSnapshotRequest,
+      ) => Promise<PersistenceValidationResult>
+    >();
+    expectTypeOf<GameBackend["restoreSnapshot"]>().toEqualTypeOf<
+      (
+        request: PersistenceSnapshotRequest,
+      ) => Promise<PersistenceSnapshotResult>
     >();
     await expect(backend.previewRoute(routeRequest)).resolves.toMatchObject({
       generation: routeRequest.generation,

@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import {
+  runPersistenceSnapshotOperation,
+  runPersistenceValidationOperation,
+} from "./persistence";
+import {
   normalizeDispatchResult,
   normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
@@ -23,12 +27,20 @@ export async function createTauriBackend(): Promise<GameBackend> {
     async snapshot() {
       return invoke<RustGameSnapshot>("game_snapshot");
     },
-    // No production caller yet — save/load UI is deferred (see plan
-    // 2026-07-22-route-editing-frontend.md). Exercised by tauriBackend tests
-    // so the migration path through stop_access::normalize_snapshot_stops
-    // stays covered.
-    async loadSnapshot(snapshot: RustGameSnapshot) {
-      return invoke<RustGameSnapshot>("game_load_snapshot", { snapshot });
+    snapshotForSave() {
+      return runPersistenceSnapshotOperation("snapshotForSave", () =>
+        invoke("game_snapshot_for_save"),
+      );
+    },
+    validateSnapshot(request) {
+      return runPersistenceValidationOperation(() =>
+        invoke("game_validate_snapshot", { snapshot: request.snapshot }),
+      );
+    },
+    restoreSnapshot(request) {
+      return runPersistenceSnapshotOperation("restoreSnapshot", () =>
+        invoke("game_restore_snapshot", { snapshot: request.snapshot }),
+      );
     },
     async createSandbox(request: SandboxCreationRequest) {
       try {

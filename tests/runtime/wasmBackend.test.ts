@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import {
   isSandboxCreationError,
@@ -9,13 +10,34 @@ import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import type {
   RoadMutationPreviewRequest,
   RoutePreviewRequest,
-  RustGameSnapshot,
   SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
+import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 const dims = vi.hoisted(() => ({ width: 0, height: 0 }));
-const fromSnapshot = vi.hoisted(() => vi.fn());
 const fromSandboxRequest = vi.hoisted(() => vi.fn());
+const wasmControl = vi.hoisted(() => ({
+  init: vi.fn().mockResolvedValue(undefined),
+  constructed: [] as object[],
+  snapshotForSave: {
+    calls: [] as Array<{ receiver: object; args: unknown[] }>,
+    value: undefined as unknown,
+    error: undefined as unknown,
+    shouldThrow: false,
+  },
+  validateSnapshot: {
+    calls: [] as Array<{ receiver: object; snapshot: unknown }>,
+    value: undefined as unknown,
+    error: undefined as unknown,
+    shouldThrow: false,
+  },
+  restoreSnapshot: {
+    calls: [] as Array<{ receiver: object; snapshot: unknown }>,
+    value: undefined as unknown,
+    error: undefined as unknown,
+    shouldThrow: false,
+  },
+}));
 const sandboxFactory = vi.hoisted(
   (): {
     rejection: unknown;
@@ -29,7 +51,6 @@ const sandboxFactory = vi.hoisted(
 );
 
 vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
-  const init = vi.fn().mockResolvedValue(undefined);
   class WasmGameEngine {
     #snapshot: Record<string, unknown>;
     #paused = true;
@@ -42,15 +63,11 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
         map: { width: dims.width, height: dims.height },
       },
     ) {
+      wasmControl.constructed.push(this);
       this.#snapshot = snapshot;
       if (typeof snapshot.paused === "boolean") {
         this.#paused = snapshot.paused;
       }
-    }
-
-    static from_snapshot(snapshot: unknown) {
-      fromSnapshot(snapshot);
-      return new WasmGameEngine(snapshot as Record<string, unknown>);
     }
 
     static from_sandbox_request(request: SandboxCreationRequest) {
@@ -84,6 +101,34 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
         ...this.#snapshot,
         paused: this.#paused,
       };
+    }
+    snapshot_for_save(...args: unknown[]) {
+      wasmControl.snapshotForSave.calls.push({ receiver: this, args });
+      if (wasmControl.snapshotForSave.shouldThrow) {
+        throw wasmControl.snapshotForSave.error;
+      }
+      return wasmControl.snapshotForSave.value;
+    }
+    validate_snapshot(snapshot: unknown) {
+      wasmControl.validateSnapshot.calls.push({ receiver: this, snapshot });
+      if (wasmControl.validateSnapshot.shouldThrow) {
+        throw wasmControl.validateSnapshot.error;
+      }
+      return wasmControl.validateSnapshot.value;
+    }
+    restore_snapshot(snapshot: unknown) {
+      wasmControl.restoreSnapshot.calls.push({ receiver: this, snapshot });
+      if (wasmControl.restoreSnapshot.shouldThrow) {
+        throw wasmControl.restoreSnapshot.error;
+      }
+      const restored = wasmControl.restoreSnapshot.value;
+      if (typeof restored === "object" && restored !== null) {
+        this.#snapshot = restored as Record<string, unknown>;
+        if ("paused" in restored && typeof restored.paused === "boolean") {
+          this.#paused = restored.paused;
+        }
+      }
+      return restored;
     }
     dispatch(intent: { type: string; paused?: boolean }) {
       if (intent.type === "setPaused" && typeof intent.paused === "boolean") {
@@ -165,7 +210,11 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       };
     }
   }
-  return { default: init, init, WasmGameEngine };
+  return {
+    default: wasmControl.init,
+    init: wasmControl.init,
+    WasmGameEngine,
+  };
 });
 
 vi.mock("node:fs/promises", () => ({
@@ -182,6 +231,18 @@ describe("createWasmBackend", () => {
     sandboxFactory.rejection = undefined;
     sandboxFactory.snapshot = null;
     sandboxFactory.resetRejection = undefined;
+    wasmControl.init.mockResolvedValue(undefined);
+    wasmControl.constructed.length = 0;
+    for (const operation of [
+      wasmControl.snapshotForSave,
+      wasmControl.validateSnapshot,
+      wasmControl.restoreSnapshot,
+    ]) {
+      operation.calls.length = 0;
+      operation.value = undefined;
+      operation.error = undefined;
+      operation.shouldThrow = false;
+    }
   });
 
   it("creates a Rust WASM backend and dispatches pause intents", async () => {
@@ -383,34 +444,132 @@ describe("createWasmBackend", () => {
     await expect(backend.reset()).rejects.toBe("reset serialization failed");
   });
 
-  it("loads a serialized snapshot and replaces the WASM engine", async () => {
+  it("forwards persistence operations to the stable WASM wrapper and preserves raw snapshots", async () => {
     const backend = await createWasmBackend();
-    const replacement = {
-      ...(await backend.snapshot()),
+    const saved = createRustSnapshot({ paused: true });
+    const replacement = createRustSnapshot({
       day: 3,
       clockMinutes: 480,
-      paused: false,
-    } as RustGameSnapshot;
+    });
+    wasmControl.snapshotForSave.value = saved;
+    wasmControl.validateSnapshot.value = undefined;
+    wasmControl.restoreSnapshot.value = replacement;
+    const engine = wasmControl.constructed[0];
 
-    expect(backend.loadSnapshot).toBeDefined();
-    const loaded = await backend.loadSnapshot!(replacement);
+    await expect(backend.snapshotForSave()).resolves.toEqual({
+      ok: true,
+      snapshot: saved,
+    });
+    await expect(
+      backend.validateSnapshot({ snapshot: replacement }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      backend.restoreSnapshot({ snapshot: replacement }),
+    ).resolves.toEqual({
+      ok: true,
+      snapshot: replacement,
+    });
+    expect(wasmControl.snapshotForSave.calls).toEqual([
+      { receiver: engine, args: [] },
+    ]);
+    expect(wasmControl.validateSnapshot.calls).toEqual([
+      { receiver: engine, snapshot: replacement },
+    ]);
+    expect(wasmControl.restoreSnapshot.calls).toEqual([
+      { receiver: engine, snapshot: replacement },
+    ]);
+    expect(wasmControl.constructed).toEqual([engine]);
+  });
 
-    expect(fromSnapshot).toHaveBeenCalledWith(replacement);
-    expect(loaded).toMatchObject({
-      day: 3,
-      clockMinutes: 480,
-      paused: false,
+  it.each([undefined, null])(
+    "accepts %s as WASM validation success",
+    async (value) => {
+      wasmControl.validateSnapshot.value = value;
+      const backend = await createWasmBackend();
+
+      await expect(
+        backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+      ).resolves.toEqual({ ok: true });
+    },
+  );
+
+  it("preserves known WASM bridge errors as typed results", async () => {
+    const error = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "unsupportedSchema",
+        context: {
+          expected: SNAPSHOT_SCHEMA_VERSION,
+          actual: SNAPSHOT_SCHEMA_VERSION - 1,
+        },
+      },
+    } as const;
+    wasmControl.restoreSnapshot.shouldThrow = true;
+    wasmControl.restoreSnapshot.error = error;
+    const backend = await createWasmBackend();
+
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toEqual({ ok: false, error });
+  });
+
+  it("maps malformed WASM successes and errors through the shared contract", async () => {
+    wasmControl.snapshotForSave.value = { schemaVersion: "4" };
+    const backend = await createWasmBackend();
+
+    await expect(backend.snapshotForSave()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "snapshotForSave",
+        code: "malformedSuccess",
+      },
     });
 
-    const dispatched = await backend.dispatch({
-      type: "setPaused",
-      paused: true,
+    wasmControl.validateSnapshot.shouldThrow = true;
+    wasmControl.validateSnapshot.error = { unexpected: true };
+    await expect(
+      backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "malformedError",
+      },
     });
-    expect(dispatched.snapshot).toMatchObject({
-      day: 3,
-      clockMinutes: 480,
-      paused: true,
+  });
+
+  it("rejects a wrong-schema WASM snapshot success", async () => {
+    wasmControl.restoreSnapshot.value = {
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
+    };
+    const backend = await createWasmBackend();
+
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedSuccess",
+      },
     });
+  });
+
+  it("rejects backend creation on initialization failure without constructing an engine", async () => {
+    vi.resetModules();
+    wasmControl.constructed.length = 0;
+    const initError = new Error("WASM initialization failed");
+    wasmControl.init.mockRejectedValueOnce(initError);
+    const { createWasmBackend: create } =
+      await import("../../src/runtime/backend/wasmBackend");
+
+    await expect(create()).rejects.toBe(initError);
+    expect(wasmControl.constructed).toHaveLength(0);
   });
 
   it("forwards route and road preview requests to the WASM engine", async () => {

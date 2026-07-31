@@ -1,6 +1,10 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
 import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import {
+  runPersistenceSnapshotOperation,
+  runPersistenceValidationOperation,
+} from "./persistence";
+import {
   normalizeDispatchResult,
   normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
@@ -56,13 +60,20 @@ export async function createWasmBackend(): Promise<GameBackend> {
     async snapshot() {
       return engine.snapshot() as RustGameSnapshot;
     },
-    // No production caller yet — save/load UI is deferred (see plan
-    // 2026-07-22-route-editing-frontend.md). Exercised by backendContract,
-    // wasmArtifact.smoke, and wasmBackend tests so the migration path through
-    // stop_access::normalize_snapshot_stops stays covered.
-    async loadSnapshot(snapshot: RustGameSnapshot) {
-      engine = WasmGameEngine.from_snapshot(snapshot);
-      return engine.snapshot() as RustGameSnapshot;
+    snapshotForSave() {
+      return runPersistenceSnapshotOperation("snapshotForSave", () =>
+        engine.snapshot_for_save(),
+      );
+    },
+    validateSnapshot(request) {
+      return runPersistenceValidationOperation(() =>
+        engine.validate_snapshot(request.snapshot),
+      );
+    },
+    restoreSnapshot(request) {
+      return runPersistenceSnapshotOperation("restoreSnapshot", () =>
+        engine.restore_snapshot(request.snapshot),
+      );
     },
     async createSandbox(request: SandboxCreationRequest) {
       try {
