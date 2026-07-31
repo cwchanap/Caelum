@@ -805,13 +805,8 @@
         "pathBroken": true,
         "pattern": "loop",
         "revision": 1,
-        "stationIds": [
-          "station-001",
-          "station-002"
-        ],
-        "vehicleIds": [
-          "vehicle-002"
-        ]
+        "stationIds": ["station-001", "station-002"],
+        "vehicleIds": ["vehicle-002"]
       }
     ],
     "routes": [
@@ -1537,13 +1532,8 @@
         "pathBroken": false,
         "pattern": "loop",
         "revision": 0,
-        "stopIds": [
-          "stop-001",
-          "stop-002"
-        ],
-        "vehicleIds": [
-          "vehicle-001"
-        ]
+        "stopIds": ["stop-001", "stop-002"],
+        "vehicleIds": ["vehicle-001"]
       }
     ],
     "stations": [
@@ -1554,9 +1544,7 @@
             "capacity": 300,
             "id": "station-001-p0",
             "label": "A",
-            "routeIds": [
-              "metro-001"
-            ]
+            "routeIds": ["metro-001"]
           },
           {
             "capacity": 300,
@@ -1578,9 +1566,7 @@
             "capacity": 300,
             "id": "station-002-p0",
             "label": "A",
-            "routeIds": [
-              "metro-001"
-            ]
+            "routeIds": ["metro-001"]
           },
           {
             "capacity": 300,
@@ -1605,9 +1591,7 @@
             "capacity": 50,
             "id": "stop-001-p0",
             "label": "A",
-            "routeIds": [
-              "route-001"
-            ]
+            "routeIds": ["route-001"]
           }
         ],
         "position": {
@@ -1631,9 +1615,7 @@
             "capacity": 50,
             "id": "stop-002-p0",
             "label": "A",
-            "routeIds": [
-              "route-001"
-            ]
+            "routeIds": ["route-001"]
           }
         ],
         "position": {
@@ -1658,9 +1640,7 @@
         "lineId": "route-001",
         "mode": "bus",
         "parkedPosition": null,
-        "passengerIds": [
-          "trip-day-0-trip-003"
-        ],
+        "passengerIds": ["trip-day-0-trip-003"],
         "pathStepIndex": 0,
         "stepProgress": 0.7199999999999818
       },

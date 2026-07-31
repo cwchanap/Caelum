@@ -63,6 +63,45 @@ Rejected mutations cross the host boundary as `GameplayRejection { code, context
 
 Linear road, track, remove, and area strokes may partially apply in authored order where their intent allows skipped tiles. Direction changes, route creation/updates, and roundabout placement/removal are atomic mutations. A tile owned by any road structure blocks every other infrastructure or zoning operation until that structure is removed through its owning mutation.
 
+### Persistence host boundary
+
+Both hosts expose the same `GameBackend` persistence operations:
+`snapshotForSave`, `validateSnapshot`, and `restoreSnapshot`. Expected failures
+resolve through the shared typed result contract and always identify their
+operation. Rust remains the only layer that accepts gameplay state.
+
+Save capture is provenance-enforced. While holding authoritative state, only a
+`GameEngine` can mint the opaque `SaveSnapshotCapture` for its committed
+snapshot. Preparing that capture pauses only the returned snapshot and runs the
+complete core validator without changing the live engine. Tauri holds its
+managed-engine mutex only long enough to mint the capture; preparation and
+response encoding happen after the lock is released.
+
+Candidate validation is pure. Each host probes the schema, deserializes the
+complete candidate, and calls the core validator without reading or mutating
+the active engine. Restoration creates a must-use `PreparedEngineRestore`
+containing the validated candidate engine and its compiled road topology.
+Dropping this token has no effect. WASM and Tauri both encode the token's exact
+accepted snapshot before consuming the token and replacing host state, so a
+validation, topology, response-encoding, or Tauri lock failure cannot partially
+commit a restore.
+
+Persistence responses use a JSON-compatible serializer only on the persistence
+path. Ordinary `snapshot`, `dispatch`, and `tick` retain their existing host
+wire serialization. Persistence adapters therefore return the canonical raw
+`RustGameSnapshot` and never view-normalize it. The shared runtime-view boundary
+uses `normalizeRustSnapshot` to recursively turn host-specific
+`undefined`/`null` option representations into the equal read-only `GameState`
+view consumed by UI and rendering.
+
+HPA-342 owns save envelopes, storage, active-city identity, dirty tracking,
+save/load coordination, transient UI reset, and publication of a normalized
+successful restore. It must serialize persistence work with gameplay
+mutations. Before enabling autosave, it must use the measured real-WASM p95—not
+the HPA-341 review ceiling—as its main-thread latency input, keep save work out
+of animation-frame-critical code, and revisit a worker or other host-execution
+boundary if autosave causes observable jank without weakening core validation.
+
 ### Sandbox factory and reset
 
 Rust owns sandbox construction through `create_sandbox_snapshot()` and

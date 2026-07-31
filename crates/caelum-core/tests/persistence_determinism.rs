@@ -302,7 +302,7 @@ fn large_validation_fixture() -> caelum_core::GameSnapshot {
 }
 
 fn percentile(sorted: &[Duration], percentile: usize) -> Duration {
-    let rank = (sorted.len() * percentile + 99) / 100;
+    let rank = (sorted.len() * percentile).div_ceil(100);
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
