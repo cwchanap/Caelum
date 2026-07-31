@@ -8,8 +8,10 @@ rtk cargo test -p caelum-core --test persistence_fixture_export \
   -- --ignored --nocapture
 ```
 
-The exporter runs the repository-pinned Prettier binary after Rust serialization,
-so run `rtk bun install --frozen-lockfile` first when dependencies are absent.
+The exporter launches the repository-pinned
+`node_modules/prettier/bin/prettier.cjs` entrypoint through Bun from the
+repository root after Rust serialization. Install Bun and run
+`rtk bun install --frozen-lockfile` first when dependencies are absent.
 Regeneration is byte-stable and produces the same formatting enforced by the
 repository-wide format check.
 

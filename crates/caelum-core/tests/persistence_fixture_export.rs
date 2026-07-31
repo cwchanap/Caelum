@@ -41,9 +41,17 @@ fn write_json(name: &str, value: &Value) {
 }
 
 fn format_snapshot_fixtures() {
-    let fixture_root = Path::new(PERSISTENCE_FIXTURES_DIR);
-    let prettier = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node_modules/.bin/prettier");
-    let status = Command::new(&prettier)
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repository root must exist");
+    let fixture_root = Path::new(PERSISTENCE_FIXTURES_DIR)
+        .canonicalize()
+        .expect("persistence fixture root must exist");
+    let prettier = repo_root.join("node_modules/prettier/bin/prettier.cjs");
+    let status = Command::new("bun")
+        .current_dir(&repo_root)
+        .arg(&prettier)
         .arg("--write")
         .arg("--log-level")
         .arg("silent")
@@ -55,13 +63,14 @@ fn format_snapshot_fixtures() {
         .status()
         .unwrap_or_else(|error| {
             panic!(
-                "failed to run {}: {error}; run `bun install` at the repository root",
+                "failed to run Bun with repo-pinned Prettier at {}: {error}; \
+                 install Bun and run `bun install --frozen-lockfile` at the repository root",
                 prettier.display()
             )
         });
     assert!(
         status.success(),
-        "{} failed while formatting generated fixtures",
+        "Bun failed while running repo-pinned Prettier at {}",
         prettier.display()
     );
 }
