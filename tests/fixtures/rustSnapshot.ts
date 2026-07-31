@@ -4,6 +4,7 @@ import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type {
   GameBackend,
   RustGameSnapshot,
+  RustTransitNetwork,
 } from "../../src/runtime/backend/types";
 
 // Build a full in-bounds empty grid so this minimal fixture is valid on its own,
@@ -27,6 +28,16 @@ function createEmptyTiles(
     }
   }
   return tiles;
+}
+
+function createEmptyTransitNetwork(): RustTransitNetwork {
+  return {
+    stops: [],
+    stations: [],
+    routes: [],
+    metroLines: [],
+    vehicles: [],
+  };
 }
 
 export function createRustSnapshot(
@@ -57,13 +68,7 @@ export function createRustSnapshot(
       roadStructures: [],
     },
     buildings: [],
-    transit: {
-      stops: [],
-      stations: [],
-      routes: [],
-      metroLines: [],
-      vehicles: [],
-    },
+    transit: createEmptyTransitNetwork(),
     sims: [],
     activeTrips: [],
     tripSequenceDay: 0,

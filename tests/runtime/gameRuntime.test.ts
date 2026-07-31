@@ -16,6 +16,8 @@ import type {
   GameIntent,
   RoadMutationPreviewResponse,
   RoutePreviewResponse,
+  RustMetroLine,
+  RustRoute,
   RustGameSnapshot,
   SandboxResetError,
 } from "../../src/runtime/backend/types";
@@ -366,7 +368,7 @@ function applyIntent(
     const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
       .toString()
       .padStart(3, "0")}`;
-    const route: Route = {
+    const route: RustRoute = {
       id,
       name: `Bus ${snapshot.transit.routes.length + 1}`,
       color: "#2563eb",
@@ -524,7 +526,7 @@ function applyIntent(
     const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
       .toString()
       .padStart(3, "0")}`;
-    const line: MetroLine = {
+    const line: RustMetroLine = {
       id,
       name: `Metro ${snapshot.transit.metroLines.length + 1}`,
       color: "#2867b2",
