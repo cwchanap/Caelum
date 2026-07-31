@@ -2,6 +2,7 @@ mod common;
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use caelum_core::model::TripStatus;
 use caelum_core::{
@@ -16,6 +17,13 @@ const PERSISTENCE_FIXTURES_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/persistence",
 );
+const SNAPSHOT_FIXTURE_NAMES: [&str; 5] = [
+    "valid-paused.json",
+    "unsupported-schema.json",
+    "unpaused.json",
+    "malformed-current-schema.json",
+    "late-derived-corruption.json",
+];
 
 fn read_json(name: &str) -> Value {
     let path = Path::new(PERSISTENCE_FIXTURES_DIR).join(name);
@@ -30,6 +38,32 @@ fn write_json(name: &str, value: &Value) {
         format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
     )
     .unwrap();
+}
+
+fn format_snapshot_fixtures() {
+    let fixture_root = Path::new(PERSISTENCE_FIXTURES_DIR);
+    let prettier = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../node_modules/.bin/prettier");
+    let status = Command::new(&prettier)
+        .arg("--write")
+        .arg("--log-level")
+        .arg("silent")
+        .args(
+            SNAPSHOT_FIXTURE_NAMES
+                .iter()
+                .map(|name| fixture_root.join(name)),
+        )
+        .status()
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to run {}: {error}; run `bun install` at the repository root",
+                prettier.display()
+            )
+        });
+    assert!(
+        status.success(),
+        "{} failed while formatting generated fixtures",
+        prettier.display()
+    );
 }
 
 #[test]
@@ -77,6 +111,7 @@ fn export_snapshot_fixtures_from_authoritative_rust_state() {
     write_json("unpaused.json", &unpaused);
     write_json("malformed-current-schema.json", &malformed);
     write_json("late-derived-corruption.json", &late_corruption);
+    format_snapshot_fixtures();
 }
 
 #[test]
