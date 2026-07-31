@@ -1745,7 +1745,7 @@ Assert exact `{ ok: false, error }` objects rather than rejected promises.
 - [ ] **Step 2: Add a recursive JSON-compatible value assertion**
 
 ```ts
-function expectJsonCompatible(value: unknown, path = "$): void {
+function expectJsonCompatible(value: unknown, path = "$"): void {
   expect(typeof value, `${path} must not be undefined`).not.toBe("undefined");
   expect(typeof value, `${path} must not be bigint`).not.toBe("bigint");
   expect(value instanceof Map, `${path} must not be Map`).toBe(false);
