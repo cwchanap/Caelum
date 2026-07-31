@@ -685,7 +685,8 @@ function isPersistenceValidationErrorUnchecked(
         hasExactKeys(context, ["field", "reason"], ["entity"]) &&
         isSnapshotField(context.field) &&
         isPersistenceNumericError(context.reason) &&
-        (!("entity" in context) || isPersistenceEntityRef(context.entity))
+        (!Object.hasOwn(context, "entity") ||
+          isPersistenceEntityRef(context.entity))
       );
     case "invalidModeSettings":
       return (
@@ -852,21 +853,76 @@ function hostError(
   code: PersistenceHostErrorCode,
   value: unknown,
 ): PersistenceOperationError {
-  return { kind: "host", operation, code, diagnostic: safeDiagnostic(value) };
+  return hostErrorWithDiagnostic(operation, code, safeDiagnostic(value));
+}
+
+function hostErrorWithDiagnostic(
+  operation: PersistenceOperation,
+  code: PersistenceHostErrorCode,
+  diagnostic: string,
+): PersistenceOperationError {
+  return { kind: "host", operation, code, diagnostic };
+}
+
+type PersistenceFailureSnapshot =
+  | {
+      kind: "recognized";
+      error: PersistenceOperationError;
+      diagnostic: string;
+    }
+  | { kind: "unrecognized"; plain: boolean; diagnostic: string }
+  | { kind: "unreadable"; diagnostic: string };
+
+function snapshotPersistenceFailure(
+  value: unknown,
+): PersistenceFailureSnapshot {
+  try {
+    if (isPersistenceOperationErrorUnchecked(value)) {
+      const error = { ...value } as PersistenceOperationError;
+      return { kind: "recognized", error, diagnostic: safeDiagnostic(error) };
+    }
+    return {
+      kind: "unrecognized",
+      plain: isPlainObject(value),
+      diagnostic: safeDiagnostic(value),
+    };
+  } catch {
+    return {
+      kind: "unreadable",
+      diagnostic: "[unreadable persistence failure]",
+    };
+  }
 }
 
 function normalizePersistenceFailure(
   operation: PersistenceOperation,
   value: unknown,
 ): { ok: false; error: PersistenceOperationError } {
-  if (isPersistenceOperationError(value) && value.operation === operation)
-    return { ok: false, error: value };
+  const snapshot = snapshotPersistenceFailure(value);
+  if (
+    snapshot.kind === "recognized" &&
+    snapshot.error.operation === operation
+  ) {
+    return { ok: false, error: snapshot.error };
+  }
+  if (snapshot.kind === "unreadable") {
+    return {
+      ok: false,
+      error: hostErrorWithDiagnostic(
+        operation,
+        "invokeFailed",
+        snapshot.diagnostic,
+      ),
+    };
+  }
   return {
     ok: false,
-    error: hostError(
+    error: hostErrorWithDiagnostic(
       operation,
-      isPlainObject(value) ? "malformedError" : "invokeFailed",
-      value,
+      snapshot.kind === "recognized" || snapshot.plain
+        ? "malformedError"
+        : "invokeFailed",
+      snapshot.diagnostic,
     ),
   };
 }

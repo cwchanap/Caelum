@@ -261,6 +261,33 @@ describe("persistence contract types", () => {
     expect(accepted).toBe(false);
   });
 
+  it("ignores an inherited optional numeric-error entity", () => {
+    const previousEntity = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "entity",
+    );
+    let accepted: boolean | undefined;
+
+    try {
+      Object.defineProperty(Object.prototype, "entity", {
+        configurable: true,
+        value: null,
+      });
+      accepted = isPersistenceValidationError({
+        code: "invalidNumericValue",
+        context: { field: "time", reason: { kind: "notFinite" } },
+      });
+    } finally {
+      if (previousEntity === undefined) {
+        Reflect.deleteProperty(Object.prototype, "entity");
+      } else {
+        Object.defineProperty(Object.prototype, "entity", previousEntity);
+      }
+    }
+
+    expect(accepted).toBe(true);
+  });
+
   it.each([
     {
       name: "getPrototypeOf trap",
@@ -385,6 +412,39 @@ describe("persistence contract types", () => {
       error: {
         kind: "host",
         operation: "validateSnapshot",
+        code: "invokeFailed",
+      },
+    });
+  });
+
+  it("normalizes a stateful operation getter to host/invokeFailed", async () => {
+    let operationReads = 0;
+    const stateful = new Proxy(
+      {
+        kind: "serialization",
+        operation: "restoreSnapshot",
+        phase: "snapshotDecode",
+        diagnostic: "synthetic decode failure",
+      },
+      {
+        get(target, property, receiver) {
+          if (property === "operation" && operationReads++ > 0) {
+            throw new Error("hostile second operation read");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+
+    await expect(
+      runPersistenceSnapshotOperation("restoreSnapshot", () =>
+        Promise.reject(stateful),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
         code: "invokeFailed",
       },
     });
