@@ -205,6 +205,34 @@ impl NetworkCandidate {
     }
 }
 
+#[must_use = "a captured committed snapshot must be prepared or deliberately discarded"]
+pub struct SaveSnapshotCapture {
+    snapshot: GameSnapshot,
+}
+
+impl SaveSnapshotCapture {
+    pub fn prepare(mut self) -> PersistenceResult<GameSnapshot> {
+        self.snapshot.paused = true;
+        validate_snapshot(&self.snapshot)?;
+        Ok(self.snapshot)
+    }
+}
+
+#[must_use = "a prepared restore has no effect until its engine is consumed and assigned by the host"]
+pub struct PreparedEngineRestore {
+    engine: GameEngine,
+}
+
+impl PreparedEngineRestore {
+    pub fn snapshot(&self) -> &GameSnapshot {
+        &self.engine.snapshot
+    }
+
+    pub fn into_engine(self) -> GameEngine {
+        self.engine
+    }
+}
+
 /// Facade for the simulation core. Both the WASM and Tauri hosts drive this
 /// same engine: `tick` advances game time, `dispatch` applies a player intent.
 ///
@@ -250,10 +278,16 @@ impl GameEngine {
     /// snapshot. Serialized fields are retained exactly; only the topology cache
     /// is rebuilt.
     pub fn from_snapshot(snapshot: GameSnapshot) -> PersistenceResult<Self> {
+        Ok(Self::prepare_restore(snapshot)?.into_engine())
+    }
+
+    pub fn prepare_restore(snapshot: GameSnapshot) -> PersistenceResult<PreparedEngineRestore> {
         let prepared = prepare_snapshot(snapshot)?;
-        Ok(Self {
-            snapshot: prepared.snapshot,
-            road_topology: prepared.road_topology,
+        Ok(PreparedEngineRestore {
+            engine: Self {
+                snapshot: prepared.snapshot,
+                road_topology: prepared.road_topology,
+            },
         })
     }
 
@@ -261,18 +295,21 @@ impl GameEngine {
         self.snapshot.clone()
     }
 
+    pub fn capture_snapshot_for_save(&self) -> SaveSnapshotCapture {
+        SaveSnapshotCapture {
+            snapshot: self.snapshot(),
+        }
+    }
+
     pub fn snapshot_for_save(&self) -> PersistenceResult<GameSnapshot> {
-        let mut candidate = self.snapshot.clone();
-        candidate.paused = true;
-        validate_snapshot(&candidate)?;
-        Ok(candidate)
+        self.capture_snapshot_for_save().prepare()
     }
 
     pub fn restore_snapshot(&mut self, snapshot: GameSnapshot) -> PersistenceResult<GameSnapshot> {
-        let prepared = prepare_snapshot(snapshot)?;
-        self.snapshot = prepared.snapshot;
-        self.road_topology = prepared.road_topology;
-        Ok(self.snapshot())
+        let prepared = Self::prepare_restore(snapshot)?;
+        let restored = prepared.snapshot().clone();
+        *self = prepared.into_engine();
+        Ok(restored)
     }
 
     pub fn reset(&mut self) -> Result<GameSnapshot, SandboxResetError> {

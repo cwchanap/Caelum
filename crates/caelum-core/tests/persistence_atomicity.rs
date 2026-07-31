@@ -2,6 +2,55 @@ use caelum_core::model::Point;
 use caelum_core::{GameEngine, GameIntent};
 
 #[test]
+fn save_capture_prepares_only_an_engine_minted_snapshot() {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let before = engine.snapshot();
+
+    let saved = engine.capture_snapshot_for_save().prepare().unwrap();
+
+    let mut expected = before.clone();
+    expected.paused = true;
+    assert_eq!(saved, expected);
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
+fn dropping_a_prepared_restore_does_not_mutate_an_existing_engine() {
+    let source = GameEngine::new();
+    let candidate = source.snapshot_for_save().unwrap();
+    let target = GameEngine::new();
+    let before = target.snapshot();
+
+    let prepared = GameEngine::prepare_restore(candidate).unwrap();
+    drop(prepared);
+
+    assert_eq!(target.snapshot(), before);
+}
+
+#[test]
+fn prepared_restore_retains_the_supplied_snapshot_and_compiled_topology() {
+    let mut source = GameEngine::new();
+    let laid = source.dispatch(GameIntent::LayRoad {
+        point: Point { x: 3, y: 3 },
+    });
+    assert!(laid.applied, "fixture road should apply: {laid:?}");
+    let candidate = source.snapshot_for_save().unwrap();
+    let expected_topology = source.road_topology_for_test().clone();
+
+    let prepared = GameEngine::prepare_restore(candidate.clone()).unwrap();
+
+    assert_eq!(prepared.snapshot(), &candidate);
+    let restored = prepared.into_engine();
+    assert_eq!(restored.snapshot(), candidate);
+    assert_eq!(restored.road_topology_for_test(), &expected_topology);
+}
+
+#[test]
 fn save_changes_only_paused_on_a_validated_clone() {
     let mut engine = GameEngine::new();
     let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
