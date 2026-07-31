@@ -601,4 +601,226 @@ describe("persistence contract types", () => {
   ])("rejects malformed closed validation error %#", (error) => {
     expect(isPersistenceValidationError(error)).toBe(false);
   });
+
+  it.each([
+    { phase: "snapshotDecode", label: "decode" },
+    { phase: "snapshotEncode", label: "encode" },
+  ])("accepts a serialization operation error ($label)", ({ phase }) => {
+    expect(
+      isPersistenceOperationError({
+        kind: "serialization",
+        operation: "restoreSnapshot",
+        phase,
+        diagnostic: "synthetic failure",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a serialization operation error with an unknown phase", () => {
+    expect(
+      isPersistenceOperationError({
+        kind: "serialization",
+        operation: "restoreSnapshot",
+        phase: "unknown",
+        diagnostic: "synthetic failure",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "stateUnavailable",
+    "invokeFailed",
+    "malformedSuccess",
+    "malformedError",
+  ] as const)("accepts a host operation error with code %s", (code) => {
+    expect(
+      isPersistenceOperationError({
+        kind: "host",
+        operation: "validateSnapshot",
+        code,
+        diagnostic: "synthetic failure",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a host operation error with an unknown code", () => {
+    expect(
+      isPersistenceOperationError({
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "unknown",
+        diagnostic: "synthetic failure",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an operation error with an unknown kind", () => {
+    expect(
+      isPersistenceOperationError({
+        kind: "unknown",
+        operation: "restoreSnapshot",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false instead of throwing when an operation field getter throws", () => {
+    const throwing = Object.defineProperty(
+      {
+        kind: "validation",
+        source: "candidate",
+        error: {
+          code: "unsupportedSchema",
+          context: { expected: 4, actual: 3 },
+        },
+      },
+      "operation",
+      {
+        configurable: true,
+        get() {
+          throw new Error("hostile operation getter");
+        },
+      },
+    );
+    expect(() => isPersistenceOperationError(throwing)).not.toThrow();
+    expect(isPersistenceOperationError(throwing)).toBe(false);
+  });
+
+  it("returns a recognized operation error directly when the operation matches", async () => {
+    const error = {
+      kind: "serialization",
+      operation: "restoreSnapshot",
+      phase: "snapshotDecode",
+      diagnostic: "synthetic decode failure",
+    } as const;
+    await expect(
+      runPersistenceSnapshotOperation("restoreSnapshot", () =>
+        Promise.reject(error),
+      ),
+    ).resolves.toEqual({ ok: false, error });
+  });
+
+  it("normalizes a recognized operation error with a mismatched operation to malformedError", async () => {
+    const error = {
+      kind: "serialization",
+      operation: "snapshotForSave",
+      phase: "snapshotEncode",
+      diagnostic: "synthetic encode failure",
+    } as const;
+    await expect(
+      runPersistenceSnapshotOperation("restoreSnapshot", () =>
+        Promise.reject(error),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
+  it.each([
+    {
+      family: "numeric",
+      envelope: (reason: unknown) => ({
+        code: "invalidNumericValue",
+        context: { field: "time", reason },
+      }),
+    },
+    {
+      family: "mode",
+      envelope: (reason: unknown) => ({
+        code: "invalidModeSettings",
+        context: { field: "paused", reason },
+      }),
+    },
+    {
+      family: "scenario",
+      envelope: (reason: unknown) => ({
+        code: "invalidScenario",
+        context: { field: "scenarioGrowthWaves", reason },
+      }),
+    },
+    {
+      family: "tile",
+      envelope: (reason: unknown) => ({
+        code: "invalidTile",
+        context: { tileId: "tile-1-2", reason },
+      }),
+    },
+    {
+      family: "roadStructure",
+      envelope: (reason: unknown) => ({
+        code: "invalidRoadStructure",
+        context: { structureId: "roundabout:compact2x2:4,2", reason },
+      }),
+    },
+    {
+      family: "entity",
+      envelope: (reason: unknown) => ({
+        code: "invalidEntity",
+        context: {
+          entity: { kind: "building", id: "building-001" },
+          field: "entityId",
+          reason,
+        },
+      }),
+    },
+    {
+      family: "ownership",
+      envelope: (reason: unknown) => ({
+        code: "invalidOwnership",
+        context: {
+          owner: { kind: "building", id: "building-001" },
+          owned: { kind: "stop", id: "stop-001" },
+          reason,
+        },
+      }),
+    },
+    {
+      family: "assignment",
+      envelope: (reason: unknown) => ({
+        code: "invalidAssignment",
+        context: {
+          entity: { kind: "vehicle", id: "vehicle-001" },
+          reason,
+        },
+      }),
+    },
+    {
+      family: "derivedState",
+      envelope: (reason: unknown) => ({
+        code: "invalidDerivedState",
+        context: { field: "metricsState", reason },
+      }),
+    },
+    {
+      family: "roadTopology",
+      envelope: (reason: unknown) => ({
+        code: "invalidRoadTopology",
+        context: { reason },
+      }),
+    },
+  ] as const)(
+    "rejects a $family reason whose kind is outside the closed vocabulary",
+    ({ envelope }) => {
+      expect(isPersistenceValidationError(envelope({ kind: "bogus" }))).toBe(
+        false,
+      );
+    },
+  );
+
+  it("accepts a null-prototype plain object as a validation context", () => {
+    const context = Object.assign(Object.create(null), {
+      expected: 4,
+      actual: 3,
+    });
+    expect(
+      isPersistenceValidationError({
+        code: "unsupportedSchema",
+        context,
+      }),
+    ).toBe(true);
+  });
 });

@@ -391,19 +391,18 @@ function isPersistenceNumericError(
     !REASON_KINDS.numeric.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "notFinite":
-    case "negative":
-    case "overflow":
-      return isUnitReason(value);
+  const kind = value.kind as PersistenceNumericError["kind"];
+  switch (kind) {
     case "outOfRange":
       return isStructuredReason(value, ["minimum", "maximum", "actual"], {
         minimum: isFiniteNumber,
         maximum: isFiniteNumber,
         actual: isFiniteNumber,
       });
-    default:
-      return false;
+    case "notFinite":
+    case "negative":
+    case "overflow":
+      return isUnitReason(value);
   }
 }
 
@@ -414,18 +413,7 @@ function isPersistenceModeError(value: unknown): value is PersistenceModeError {
     !REASON_KINDS.mode.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "persistenceRequiresPaused":
-    case "unsupportedSpeed":
-    case "invalidEconomyForMode":
-    case "sandboxObjectivesPresent":
-    case "sandboxGrowthWavesPresent":
-    case "sandboxTerminalState":
-    case "campaignTerminalWithoutObjectives":
-      return isUnitReason(value);
-    default:
-      return false;
-  }
+  return isUnitReason(value);
 }
 
 function isPersistenceScenarioError(
@@ -437,7 +425,8 @@ function isPersistenceScenarioError(
     !REASON_KINDS.scenario.has(value.kind)
   )
     return false;
-  switch (value.kind) {
+  const kind = value.kind as PersistenceScenarioError["kind"];
+  switch (kind) {
     case "duplicateGrowthWaveId":
       return isStructuredReason(value, ["waveId"], { waveId: isString });
     case "triggerTimesOutOfOrder":
@@ -463,8 +452,6 @@ function isPersistenceScenarioError(
         waveId: isString,
         actionIndex: isFiniteNumber,
       });
-    default:
-      return false;
   }
 }
 
@@ -475,7 +462,8 @@ function isPersistenceTileError(value: unknown): value is PersistenceTileError {
     !REASON_KINDS.tile.has(value.kind)
   )
     return false;
-  switch (value.kind) {
+  const kind = value.kind as PersistenceTileError["kind"];
+  switch (kind) {
     case "wrongRowMajorCoordinate":
       return isStructuredReason(value, ["expected", "actual"], {
         expected: isPoint,
@@ -501,8 +489,6 @@ function isPersistenceTileError(value: unknown): value is PersistenceTileError {
     case "invalidOneWayAxis":
     case "invalidInfrastructureCoexistence":
       return isUnitReason(value);
-    default:
-      return false;
   }
 }
 
@@ -515,25 +501,7 @@ function isPersistenceRoadStructureError(
     !REASON_KINDS.roadStructure.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "nonCanonicalId":
-    case "emptyFootprint":
-    case "duplicateFootprintPoint":
-    case "overlappingFootprint":
-    case "nonRoadFootprintTile":
-    case "tileOwnerMismatch":
-    case "danglingTileOwner":
-    case "duplicatePortId":
-    case "duplicatePortPointEdge":
-    case "invalidBoundaryPort":
-    case "nonCanonicalFootprint":
-    case "nonCanonicalLaneFacts":
-    case "nonCanonicalMovementFacts":
-    case "automaticJunctionMismatch":
-      return isUnitReason(value);
-    default:
-      return false;
-  }
+  return isUnitReason(value);
 }
 
 function isPersistenceEntityError(
@@ -545,14 +513,7 @@ function isPersistenceEntityError(
     !REASON_KINDS.entity.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "emptyId":
-    case "nonCanonicalId":
-    case "invalidStaticShape":
-      return isUnitReason(value);
-    default:
-      return false;
-  }
+  return isUnitReason(value);
 }
 
 function isPersistenceOwnershipError(
@@ -564,18 +525,7 @@ function isPersistenceOwnershipError(
     !REASON_KINDS.ownership.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "missingOwner":
-    case "multipleOwners":
-    case "ownerTypeMismatch":
-    case "footprintMismatch":
-    case "anchorMismatch":
-    case "reciprocalLinkMissing":
-    case "spatialOverlap":
-      return isUnitReason(value);
-    default:
-      return false;
-  }
+  return isUnitReason(value);
 }
 
 function isPersistenceAssignmentError(
@@ -587,22 +537,7 @@ function isPersistenceAssignmentError(
     !REASON_KINDS.assignment.has(value.kind)
   )
     return false;
-  switch (value.kind) {
-    case "duplicateAssignment":
-    case "modeMismatch":
-    case "waypointMissing":
-    case "platformMismatch":
-    case "vehicleMissingFromLine":
-    case "vehicleListedByMultipleLines":
-    case "passengerNotRiding":
-    case "passengerInMultipleVehicles":
-    case "itineraryIndexOutOfBounds":
-    case "pathStepIndexOutOfBounds":
-    case "progressOutOfRange":
-      return isUnitReason(value);
-    default:
-      return false;
-  }
+  return isUnitReason(value);
 }
 
 function isPersistenceDerivedStateError(
@@ -614,7 +549,8 @@ function isPersistenceDerivedStateError(
     !REASON_KINDS.derivedState.has(value.kind)
   )
     return false;
-  switch (value.kind) {
+  const kind = value.kind as PersistenceDerivedStateError["kind"];
+  switch (kind) {
     case "stopAccessMismatch":
       return isStructuredReason(value, ["node"], {
         node: isPersistenceEntityRef,
@@ -637,8 +573,6 @@ function isPersistenceDerivedStateError(
     case "objectiveStateMismatch":
     case "lossReasonMismatch":
       return isUnitReason(value);
-    default:
-      return false;
   }
 }
 
@@ -673,7 +607,8 @@ function isPersistenceValidationErrorUnchecked(
   )
     return false;
   const context = value.context;
-  switch (value.code) {
+  const code = value.code as PersistenceValidationError["code"];
+  switch (code) {
     case "unsupportedSchema":
       return (
         hasExactKeys(context, ["expected", "actual"]) &&
@@ -763,8 +698,6 @@ function isPersistenceValidationErrorUnchecked(
         hasExactKeys(context, ["reason"]) &&
         isPersistenceRoadTopologyError(context.reason)
       );
-    default:
-      return false;
   }
 }
 
