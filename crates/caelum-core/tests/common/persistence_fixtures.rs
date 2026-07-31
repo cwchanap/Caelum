@@ -13,7 +13,9 @@ use caelum_core::model::{
     TripPosition, TripPurpose, TripStatus, WorkerProfile,
 };
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
-use caelum_core::{EntityKind, EntityRef, GameEngine, GameIntent, GameSnapshot, RoadPreset};
+use caelum_core::{
+    EntityKind, EntityRef, GameEngine, GameIntent, GameSnapshot, RoadPreset, SandboxCreationRequest,
+};
 
 /// Dispatch an intent and assert it was applied (not rejected or unchanged).
 pub fn apply(engine: &mut GameEngine, intent: GameIntent) {
@@ -29,7 +31,14 @@ pub fn apply(engine: &mut GameEngine, intent: GameIntent) {
 /// a metro line (two stations + vehicle), residential + commercial buildings,
 /// a sim with a walking commute trip, and a riding trip on the bus route.
 pub fn rich_fixture() -> GameSnapshot {
-    let mut engine = GameEngine::new();
+    let mut engine = GameEngine::from_sandbox_request(SandboxCreationRequest {
+        template_id: "crossroads".to_string(),
+        economy_preset: "standard".to_string(),
+        starting_capital: Some(150_000.0),
+        demand_multiplier: Some(1.0),
+        move_in_rate: "paused".to_string(),
+    })
+    .expect("rich fixture sandbox request must be supported");
 
     // Bus road along y=5, stops at x=2 and x=10.
     apply(
@@ -71,7 +80,6 @@ pub fn rich_fixture() -> GameSnapshot {
     );
 
     // Residential + commercial buildings so sims can commute.
-    engine.set_budget_for_test(100_000);
     apply(
         &mut engine,
         GameIntent::PaintAreaRectangle {
