@@ -85,6 +85,11 @@ fn checked_in_snapshot_fixtures_preserve_the_persistence_contract() {
     check_snapshot_schema(&valid).unwrap();
     let valid: GameSnapshot = serde_json::from_value(valid).unwrap();
     validate_snapshot(&valid).unwrap();
+    assert_eq!(
+        valid.rules.sandbox.starting_capital.value(),
+        150_000,
+        "fixture must preserve its public sandbox construction request"
+    );
 
     let unsupported = read_json("unsupported-schema.json");
     assert_eq!(

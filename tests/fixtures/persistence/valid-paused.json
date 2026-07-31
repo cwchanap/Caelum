@@ -190,7 +190,7 @@
       "status": "walking"
     }
   ],
-  "budget": 88000,
+  "budget": 19400,
   "buildings": [
     {
       "id": "building-001",
@@ -4283,7 +4283,7 @@
     "sandbox": {
       "demandMultiplier": 1.0,
       "moveInRate": "paused",
-      "startingCapital": 120000,
+      "startingCapital": 150000,
       "templateId": "crossroads"
     }
   },
