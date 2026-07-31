@@ -579,26 +579,43 @@ function normalizePersistenceFailure(
   operation: PersistenceOperation,
   value: unknown,
 ): { ok: false; error: PersistenceOperationError } {
+  const snapshot = snapshotPersistenceFailure(value);
   if (
-    isPersistenceOperationError(value) &&
-    value.operation === operation
+    snapshot.kind === "recognized" &&
+    snapshot.error.operation === operation
   ) {
-    return { ok: false, error: value };
+    return { ok: false, error: snapshot.error };
   }
 
-  if (isPlainObject(value)) {
+  if (snapshot.kind === "unreadable") {
     return {
       ok: false,
-      error: malformedError(operation, value),
+      error: hostErrorWithDiagnostic(
+        operation,
+        "invokeFailed",
+        snapshot.diagnostic,
+      ),
     };
   }
 
   return {
     ok: false,
-    error: invokeFailed(operation, value),
+    error: hostErrorWithDiagnostic(
+      operation,
+      snapshot.kind === "recognized" || snapshot.plain
+        ? "malformedError"
+        : "invokeFailed",
+      snapshot.diagnostic,
+    ),
   };
 }
 ```
+
+`snapshotPersistenceFailure` validates and shallow-copies a recognized operation error
+inside one exception boundary, captures its diagnostic/classification there, and never
+allows downstream normalization to re-read the hostile unknown value. Optional
+`invalidNumericValue.context.entity` presence uses `Object.hasOwn`; inherited prototype
+state is ignored, while an own malformed entity remains invalid.
 
 `runPersistenceSnapshotOperation` accepts only a plain object with an own exact current
 schema version. `runPersistenceValidationOperation` accepts only the marker selected by
