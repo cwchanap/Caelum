@@ -1,8 +1,8 @@
 # HPA-341: Equivalent WASM and Tauri Persistence Backends
 
-**Status:** Proposed, consolidated after three design-review passes
+**Status:** Implemented, including final whole-branch review fixes
 
-**This pull request:** Design documentation only; it does not implement HPA-341.
+**This pull request:** Implements the HPA-341 contract described here.
 
 **Linear:** [HPA-341](https://linear.app/cwchanap/issue/HPA-341/expose-persistence-validation-and-restoration-through-equivalent-wasm)
 
@@ -335,19 +335,20 @@ pub fn validate_snapshot(&self, snapshot: JsValue) -> Result<(), JsValue>;
 #[tauri::command]
 fn game_validate_snapshot(
     snapshot: serde_json::Value,
-) -> Result<(), PersistenceBridgeError>;
+) -> Result<(), EncodedPersistenceBridgeError>;
 ```
 
 wasm-bindgen returns `undefined`; Tauri JSON returns `null`. The shared normalizer
-accepts exactly those values:
+accepts exactly the marker selected by its adapter:
 
 ```ts
 export async function runPersistenceValidationOperation(
+  successMarker: null | undefined,
   invoke: () => Promise<unknown> | unknown,
 ): Promise<PersistenceValidationResult> {
   try {
     const value = await invoke();
-    if (value === undefined || value === null) return { ok: true };
+    if (value === successMarker) return { ok: true };
     return {
       ok: false,
       error: malformedSuccess("validateSnapshot", value),
@@ -358,8 +359,9 @@ export async function runPersistenceValidationOperation(
 }
 ```
 
-Resolved booleans, numbers, strings, arrays, plain objects, and snapshot-shaped values
-are `host/malformedSuccess`. Success never depends on truthiness.
+WASM passes `undefined`; Tauri passes `null`. The other nullish marker, resolved
+booleans, numbers, strings, arrays, plain objects, and snapshot-shaped values are
+`host/malformedSuccess`. Success never depends on truthiness.
 
 ### 2.3 Why validation remains on `GameBackend`
 
@@ -753,6 +755,12 @@ export type PersistenceValidationError =
 - numbers are finite wherever the Rust error wire guarantees finiteness, while
   gameplay ranges remain Rust-owned.
 
+Required keys must be own properties; inherited keys never satisfy a closed shape.
+Every public guard and normalization entrypoint is exception-safe for hostile unknown
+values, including proxies that throw from prototype/key traps and objects with throwing
+getters. Such values are rejected or converted into the typed host fallback result
+rather than escaping the backend contract.
+
 The guard recognizes Rust output. It is not an alternate validator for candidate
 snapshots.
 
@@ -997,19 +1005,28 @@ Replace `game_load_snapshot` with:
 #[tauri::command]
 fn game_snapshot_for_save(
     state: State<'_, EngineState>,
-) -> Result<serde_json::Value, PersistenceBridgeError>;
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError>;
 
 #[tauri::command]
 fn game_validate_snapshot(
     snapshot: serde_json::Value,
-) -> Result<(), PersistenceBridgeError>;
+) -> Result<(), EncodedPersistenceBridgeError>;
 
 #[tauri::command]
 fn game_restore_snapshot(
     state: State<'_, EngineState>,
     snapshot: serde_json::Value,
-) -> Result<serde_json::Value, PersistenceBridgeError>;
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError>;
 ```
+
+Command bodies first return the typed private `PersistenceBridgeError`. A private
+generic pre-return encoder converts that error into a `serde_json::Value`; the command
+error wrapper carries either that already-encoded value or an opaque string fallback
+when structured error encoding fails. Tauri therefore asks the framework to serialize
+only a JSON value or string, and the TypeScript adapter maps the opaque fallback to
+`host/invokeFailed`. Tests inject a failing error encoder through the private generic
+seam and prove that the fallback is produced while managed engine state remains
+unchanged.
 
 ### 8.1 Save lock boundary
 
@@ -1046,6 +1063,10 @@ validation, and returns unit. It cannot acquire or mutate live engine state.
 Every fallible validation, topology, and response-encoding step completes before
 replacement. Returning `serde_json::Value` makes pre-commit response encoding explicit
 instead of framework-owned after mutation.
+
+Structured error-response encoding is also explicit before returning from the command.
+It runs only after an operation has failed; every restore failure path reaches it before
+candidate consumption, so even failure of that encoder cannot commit managed state.
 
 ## 9. Raw Wire Types and Adapter Normalization
 

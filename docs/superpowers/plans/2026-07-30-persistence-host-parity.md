@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Implementation status:** Completed on the HPA-341 implementation branch,
+including the consolidated final-review fix wave.
+
 **Goal:** Expose persistence-safe save, pure validation, and atomic restoration through equivalent WASM and Tauri backends, with one closed TypeScript result/error contract, JSON-compatible persistence snapshots, exact raw-wire typing, and no TypeScript state-installation bypass.
 
 **Architecture:** `caelum-core` adds two opaque, engine-minted preparation tokens: `SaveSnapshotCapture` for moving a committed snapshot outside the Tauri mutex before validation, and `PreparedEngineRestore` for retaining one validated candidate engine plus its exact accepted snapshot until host encoding succeeds. The WASM and Tauri bridges share the same logical two-phase decoder and tagged bridge-error shape, but each performs its own serializer-specific encode-before-commit transaction. TypeScript owns only strict recognition of Rust errors, host-result normalization, raw Rust wire mirrors, and read-only runtime-view normalization; HPA-342 remains responsible for storage, runtime publication, and UI reset.
@@ -324,6 +327,7 @@ export function runPersistenceSnapshotOperation(
 ): Promise<PersistenceSnapshotResult>;
 
 export function runPersistenceValidationOperation(
+  successMarker: null | undefined,
   invoke: () => Promise<unknown> | unknown,
 ): Promise<PersistenceValidationResult>;
 ```
@@ -379,16 +383,24 @@ it("accepts every catalogued Rust persistence error", () => {
   }
 });
 
-it("accepts only nullish validation success", async () => {
+it("accepts every catalogued reason through its owning error envelope", () => {
+  // Table-drive each `catalogue.reasons` family through the corresponding
+  // top-level validation-error context.
+});
+
+it("accepts only the selected host validation success marker", async () => {
   await expect(
-    runPersistenceValidationOperation(() => undefined),
+    runPersistenceValidationOperation(undefined, () => undefined),
   ).resolves.toEqual({ ok: true });
   await expect(
-    runPersistenceValidationOperation(async () => null),
+    runPersistenceValidationOperation(null, async () => null),
   ).resolves.toEqual({ ok: true });
 
-  for (const value of [true, false, 0, "ok", [], {}, { schemaVersion: 4 }]) {
-    const result = await runPersistenceValidationOperation(() => value);
+  for (const value of [null, true, false, 0, "ok", [], {}, { schemaVersion: 4 }]) {
+    const result = await runPersistenceValidationOperation(
+      undefined,
+      () => value,
+    );
     expect(result).toMatchObject({
       ok: false,
       error: {
@@ -459,6 +471,11 @@ it("rejects unknown closed vocabulary and malformed embedded shapes", () => {
 ```
 
 Add table cases for unknown top-level `code`, unknown `field`, unknown entity kind, unknown heading, missing `details`, inappropriate `details`, `entity: null`, extra keys, malformed `EntityRef`, and malformed `MapSize`.
+Export narrow readonly vocabulary arrays used by the production guards. Compare
+`topLevelCodes`, `snapshotFields`, `entityKinds`, `headings`, and every `reasonKinds`
+family to those arrays, and use compile-time assertions to prove each array's element
+union exactly matches its TypeScript closed union. This makes vocabulary drift fail in
+either direction.
 
 - [ ] **Step 2: Run the focused test and confirm missing helpers/catalogue**
 
@@ -492,11 +509,15 @@ Create `src/runtime/backend/persistence.ts` with private helpers:
 type PlainObject = Record<string, unknown>;
 
 function isPlainObject(value: unknown): value is PlainObject {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
     return false;
   }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 function hasExactKeys(
@@ -504,9 +525,16 @@ function hasExactKeys(
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => key in value) &&
-    Object.keys(value).every((key) => allowed.has(key));
+  try {
+    const allowed = new Set([...required, ...optional]);
+    return required.every((key) =>
+      Object.prototype.hasOwnProperty.call(value, key)
+    ) && Reflect.ownKeys(value).every(
+      (key) => typeof key === "string" && allowed.has(key)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isPoint(value: unknown): value is Point {
@@ -525,6 +553,9 @@ function isHeading(value: unknown): value is Heading {
 ```
 
 Add equivalent exact helpers for `PersistenceEntityRef`, `PersistenceMapSize`, finite guaranteed numbers, arrays of points, and tagged reason objects.
+Wrap the public guards and snapshot-success recognition so hostile proxy traps or
+getters return `false`; normalization must always resolve a typed host fallback rather
+than throwing from the unknown boundary.
 
 - [ ] **Step 5: Implement exhaustive reason and top-level guards**
 
@@ -569,7 +600,10 @@ function normalizePersistenceFailure(
 }
 ```
 
-`runPersistenceSnapshotOperation` accepts only a plain object with an own exact current schema version. `runPersistenceValidationOperation` accepts only `undefined` or `null`. Diagnostics use safe stringification and are never parsed.
+`runPersistenceSnapshotOperation` accepts only a plain object with an own exact current
+schema version. `runPersistenceValidationOperation` accepts only the marker selected by
+the adapter: `undefined` for WASM and `null` for Tauri. Diagnostics use safe
+stringification and are never parsed.
 
 - [ ] **Step 7: Extend Rust catalogue round-trip tests**
 
@@ -1402,18 +1436,18 @@ rtk git commit -m "feat: expose WASM persistence operations"
 #[tauri::command]
 fn game_snapshot_for_save(
     state: State<'_, EngineState>,
-) -> Result<serde_json::Value, PersistenceBridgeError>;
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError>;
 
 #[tauri::command]
 fn game_validate_snapshot(
     snapshot: serde_json::Value,
-) -> Result<(), PersistenceBridgeError>;
+) -> Result<(), EncodedPersistenceBridgeError>;
 
 #[tauri::command]
 fn game_restore_snapshot(
     state: State<'_, EngineState>,
     snapshot: serde_json::Value,
-) -> Result<serde_json::Value, PersistenceBridgeError>;
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError>;
 ```
 
 - [ ] **Step 1: Add failing command-registration and wire tests**
@@ -1510,8 +1544,11 @@ Using shared fixtures, prove:
 - early and late failures preserve `game_snapshot`;
 - success returns the accepted snapshot and subsequent dispatch uses restored rules;
 - generic success-encoding failure occurs before swap;
+- private generic structured-error encoding failure produces an opaque string fallback
+  before any swap;
 - poisoned mutex produces `stateUnavailable`;
-- an opaque framework/serialization rejection is not classified as validation by the TypeScript layer in Task 9.
+- an opaque framework/serialization rejection is normalized to `host/invokeFailed` by
+  the TypeScript layer in Task 9.
 
 - [ ] **Step 10: Run Tauri tests and clippy**
 
@@ -1595,6 +1632,7 @@ snapshotForSave() {
 },
 validateSnapshot(request) {
   return runPersistenceValidationOperation(
+    undefined,
     () => engine.validate_snapshot(request.snapshot),
   );
 },
@@ -1619,6 +1657,7 @@ snapshotForSave() {
 },
 validateSnapshot(request) {
   return runPersistenceValidationOperation(
+    null,
     () => invoke("game_validate_snapshot", { snapshot: request.snapshot }),
   );
 },

@@ -86,6 +86,13 @@ accepted snapshot before consuming the token and replacing host state, so a
 validation, topology, response-encoding, or Tauri lock failure cannot partially
 commit a restore.
 
+Tauri also closes the error-response boundary before returning to the framework.
+Command bodies produce a private typed bridge error, then a private generic encoder
+converts it to an already-formed JSON value. If that structured encoding fails, the
+command returns an opaque string instead; the TypeScript adapter normalizes it to
+`host/invokeFailed`. Because restore failures reach this encoder without consuming the
+prepared token, even an error-encoding failure leaves managed engine state unchanged.
+
 Persistence responses use a JSON-compatible serializer only on the persistence
 path. Ordinary `snapshot`, `dispatch`, and `tick` retain their existing host
 wire serialization. Persistence adapters therefore return the canonical raw
