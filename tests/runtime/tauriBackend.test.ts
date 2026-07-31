@@ -275,7 +275,7 @@ describe("createTauriBackend", () => {
     const restored = createRustSnapshot({ day: 3, paused: true });
     invokeMock
       .mockResolvedValueOnce(saved)
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(restored);
 
     const backend = await createTauriBackend();
@@ -305,21 +305,34 @@ describe("createTauriBackend", () => {
     expect(restoreResult.ok && restoreResult.snapshot).toBe(restored);
   });
 
-  it.each([undefined, null])(
-    "accepts %s as Tauri validation success",
-    async (value) => {
-      invokeMock.mockResolvedValueOnce(value);
-      const candidate = createRustSnapshot();
-      const backend = await createTauriBackend();
+  it("accepts null as Tauri validation success", async () => {
+    invokeMock.mockResolvedValueOnce(null);
+    const candidate = createRustSnapshot();
+    const backend = await createTauriBackend();
 
-      await expect(
-        backend.validateSnapshot({ snapshot: candidate }),
-      ).resolves.toEqual({ ok: true });
-      expect(invokeMock).toHaveBeenCalledWith("game_validate_snapshot", {
-        snapshot: candidate,
-      });
-    },
-  );
+    await expect(
+      backend.validateSnapshot({ snapshot: candidate }),
+    ).resolves.toEqual({ ok: true });
+    expect(invokeMock).toHaveBeenCalledWith("game_validate_snapshot", {
+      snapshot: candidate,
+    });
+  });
+
+  it("rejects undefined as malformed Tauri validation success", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "malformedSuccess",
+      },
+    });
+  });
 
   it("preserves known Tauri bridge errors as typed results", async () => {
     const error = {

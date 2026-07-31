@@ -66,7 +66,7 @@ export async function createWasmBackend(): Promise<GameBackend> {
       );
     },
     validateSnapshot(request) {
-      return runPersistenceValidationOperation(() =>
+      return runPersistenceValidationOperation(undefined, () =>
         engine.validate_snapshot(request.snapshot),
       );
     },

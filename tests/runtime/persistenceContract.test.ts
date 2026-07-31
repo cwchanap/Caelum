@@ -54,16 +54,29 @@ describe("persistence contract types", () => {
     }
   });
 
-  it("accepts only nullish validation success", async () => {
+  it("requires the host-specific validation success marker", async () => {
     await expect(
-      runPersistenceValidationOperation(() => undefined),
+      runPersistenceValidationOperation(undefined, () => undefined),
     ).resolves.toEqual({ ok: true });
     await expect(
-      runPersistenceValidationOperation(async () => null),
+      runPersistenceValidationOperation(null, async () => null),
     ).resolves.toEqual({ ok: true });
 
-    for (const value of [true, false, 0, "ok", [], {}, { schemaVersion: 4 }]) {
-      const result = await runPersistenceValidationOperation(() => value);
+    for (const [expectedSuccess, value] of [
+      [undefined, null],
+      [null, undefined],
+      [undefined, true],
+      [undefined, false],
+      [undefined, 0],
+      [undefined, "ok"],
+      [undefined, []],
+      [undefined, {}],
+      [undefined, { schemaVersion: 4 }],
+    ] as const) {
+      const result = await runPersistenceValidationOperation(
+        expectedSuccess,
+        () => value,
+      );
       expect(result).toMatchObject({
         ok: false,
         error: {

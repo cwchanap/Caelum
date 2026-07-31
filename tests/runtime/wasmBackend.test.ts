@@ -481,17 +481,30 @@ describe("createWasmBackend", () => {
     expect(wasmControl.constructed).toEqual([engine]);
   });
 
-  it.each([undefined, null])(
-    "accepts %s as WASM validation success",
-    async (value) => {
-      wasmControl.validateSnapshot.value = value;
-      const backend = await createWasmBackend();
+  it("accepts undefined as WASM validation success", async () => {
+    wasmControl.validateSnapshot.value = undefined;
+    const backend = await createWasmBackend();
 
-      await expect(
-        backend.validateSnapshot({ snapshot: createRustSnapshot() }),
-      ).resolves.toEqual({ ok: true });
-    },
-  );
+    await expect(
+      backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects null as malformed WASM validation success", async () => {
+    wasmControl.validateSnapshot.value = null;
+    const backend = await createWasmBackend();
+
+    await expect(
+      backend.validateSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "malformedSuccess",
+      },
+    });
+  });
 
   it("preserves known WASM bridge errors as typed results", async () => {
     const error = {

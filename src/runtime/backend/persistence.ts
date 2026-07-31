@@ -675,11 +675,12 @@ export async function runPersistenceSnapshotOperation(
 }
 
 export async function runPersistenceValidationOperation(
+  successMarker: null | undefined,
   invoke: () => Promise<unknown> | unknown,
 ): Promise<PersistenceValidationResult> {
   try {
     const value = await invoke();
-    if (value === undefined || value === null) return { ok: true };
+    if (value === successMarker) return { ok: true };
     return {
       ok: false,
       error: hostError("validateSnapshot", "malformedSuccess", value),
