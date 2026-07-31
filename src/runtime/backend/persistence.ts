@@ -22,6 +22,7 @@ import type {
   PersistenceValidationError,
   PersistenceValidationResult,
 } from "./persistenceContract";
+import type { RustGameSnapshot } from "./types";
 
 type PlainObject = Record<string, unknown>;
 
@@ -649,9 +650,7 @@ function normalizePersistenceFailure(
   };
 }
 
-function isSnapshotSuccess(
-  value: unknown,
-): value is { schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION } {
+function isSnapshotSuccess(value: unknown): value is RustGameSnapshot {
   return (
     isPlainObject(value) &&
     Object.hasOwn(value, "schemaVersion") &&
@@ -662,9 +661,7 @@ function isSnapshotSuccess(
 export async function runPersistenceSnapshotOperation(
   operation: "snapshotForSave" | "restoreSnapshot",
   invoke: () => Promise<unknown> | unknown,
-): Promise<
-  PersistenceSnapshotResultOf<{ schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION }>
-> {
+): Promise<PersistenceSnapshotResultOf<RustGameSnapshot>> {
   try {
     const value = await invoke();
     if (isSnapshotSuccess(value)) return { ok: true, snapshot: value };
