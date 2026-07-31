@@ -9,17 +9,49 @@ use caelum_core::{
     commute, validate_snapshot, GameEngine, GameIntent, RoadPreset, SandboxCreationRequest,
 };
 
+fn assert_savable(engine: &GameEngine, label: &str) {
+    engine
+        .snapshot_for_save()
+        .unwrap_or_else(|error| panic!("{label} produced unsavable state: {error:?}"));
+}
+
 fn apply(engine: &mut GameEngine, intent: GameIntent) {
+    let label = format!("dispatch {intent:?}");
     let result = engine.dispatch(intent);
     assert!(
         result.applied,
         "fixture intent was rejected or unchanged: {:?}",
         result.rejection
     );
+    assert_savable(engine, &label);
+}
+
+fn apply_tick(engine: &mut GameEngine, seconds: f64) {
+    let result = engine.tick(seconds);
+    assert!(result.applied, "tick {seconds} must apply");
+    assert_savable(engine, &format!("tick {seconds}"));
 }
 
 fn production_fixture() -> GameEngine {
     let mut engine = GameEngine::new();
+    apply(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        },
+    );
+    for point in [Point { x: 2, y: 4 }, Point { x: 10, y: 4 }] {
+        apply(&mut engine, GameIntent::AddBusStop { point });
+    }
+    apply(
+        &mut engine,
+        GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        },
+    );
     apply(
         &mut engine,
         GameIntent::PaintAreaRectangle {
@@ -54,15 +86,35 @@ fn production_fixture() -> GameEngine {
     );
     apply(&mut engine, GameIntent::SetPaused { paused: false });
 
-    let first = engine.tick(350.9);
-    assert!(first.applied);
-    let second = engine.tick(80.1);
-    assert!(second.applied);
+    apply_tick(&mut engine, 350.9);
+    apply_tick(&mut engine, 80.1);
     let snapshot = engine.snapshot();
     assert!(!snapshot.sims.is_empty());
     assert!(!snapshot.active_trips.is_empty());
     assert!(!snapshot.metrics.trip_outcomes.is_empty());
     engine
+}
+
+#[test]
+fn every_reachable_production_state_is_savable() {
+    let mut engine = production_fixture();
+
+    apply(&mut engine, GameIntent::SetSpeed { speed: 2 });
+    apply_tick(&mut engine, 15.0);
+    apply(
+        &mut engine,
+        GameIntent::DeleteRoute {
+            route_id: "route-001".to_string(),
+        },
+    );
+    apply(
+        &mut engine,
+        GameIntent::LayRoad {
+            point: Point { x: 12, y: 10 },
+        },
+    );
+    apply_tick(&mut engine, 20.0);
+    apply(&mut engine, GameIntent::SetPaused { paused: true });
 }
 
 #[test]
@@ -103,6 +155,8 @@ fn restored_engine_has_identical_future_results_and_topology() {
             original.road_topology_for_test(),
             restored.road_topology_for_test()
         );
+        assert_savable(&original, "original continuation state");
+        assert_savable(&restored, "restored continuation state");
     }
 }
 
@@ -247,24 +301,42 @@ fn large_validation_fixture() -> caelum_core::GameSnapshot {
     snapshot
 }
 
-#[test]
-#[ignore = "non-CI release performance evidence"]
-fn persistence_validation_benchmark() {
-    let snapshot = large_validation_fixture();
-    for _ in 0..5 {
-        validate_snapshot(&snapshot).unwrap();
+fn percentile(sorted: &[Duration], percentile: usize) -> Duration {
+    let rank = (sorted.len() * percentile + 99) / 100;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
+fn measure(label: &str, mut operation: impl FnMut()) {
+    let cold_started = Instant::now();
+    operation();
+    let cold = cold_started.elapsed();
+
+    for _ in 0..2 {
+        operation();
     }
 
     let mut samples = Vec::with_capacity(25);
     for _ in 0..25 {
         let started = Instant::now();
-        validate_snapshot(&snapshot).unwrap();
+        operation();
         samples.push(started.elapsed());
     }
     samples.sort();
+
     let median = samples[samples.len() / 2];
-    println!(
-        "persistence validation native median: {median:?} (25 samples, 100 routes, 100 vehicles, 1000 sims, 1000 active trips)"
-    );
+    let p95 = percentile(&samples, 95);
+    println!("{label}: cold={cold:?}, median={median:?}, p95={p95:?}, samples=25");
     assert!(median > Duration::ZERO);
+}
+
+#[test]
+#[ignore = "non-CI release performance evidence"]
+fn persistence_validation_benchmark() {
+    let snapshot = large_validation_fixture();
+    measure("native validate", || {
+        validate_snapshot(&snapshot).unwrap();
+    });
+    measure("native prepared restore", || {
+        drop(GameEngine::prepare_restore(snapshot.clone()).unwrap());
+    });
 }
