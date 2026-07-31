@@ -7,6 +7,7 @@ import {
   runPersistenceSnapshotOperation,
   runPersistenceValidationOperation,
 } from "../../src/runtime/backend/persistence";
+import type { RustGameSnapshot } from "../../src/runtime/backend/types";
 import type {
   PersistenceOperationError,
   PersistenceSnapshotRequest,
@@ -42,6 +43,9 @@ describe("persistence contract types", () => {
       code: string;
       context: object;
     }>();
+    expectTypeOf(runPersistenceSnapshotOperation).returns.toEqualTypeOf<
+      Promise<PersistenceSnapshotResultOf<RustGameSnapshot>>
+    >();
   });
 
   it("accepts every catalogued Rust persistence error", () => {
