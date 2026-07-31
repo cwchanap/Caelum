@@ -27,6 +27,7 @@
     "test:unit:coverage": "vitest run --project ui --project runtime --coverage --coverage.provider=v8 --coverage.reporter=lcov",
     "pretest:unit:coverage": "bun run ensure-wasm",
     "test:e2e": "playwright test",
+    "benchmark:persistence:wasm": "bun run ensure-wasm && bun run scripts/benchmark-persistence-wasm.ts",
     "wasm:build": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --dev",
     "wasm:build:release": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --release",
     "tauri": "tauri",
