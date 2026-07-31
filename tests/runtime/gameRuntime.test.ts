@@ -3,10 +3,8 @@ import {
   samePoint,
   type GameMap,
   type GameplayRejection,
-  type MetroLine,
   type Point,
   type RoadDirection,
-  type Route,
   type RouteLegPath,
   type Stop,
 } from "../../src/domain/types";

@@ -26,7 +26,24 @@ import type { RustGameSnapshot } from "./types";
 
 type PlainObject = Record<string, unknown>;
 
-const SNAPSHOT_FIELDS = new Set<PersistenceSnapshotField>([
+export const PERSISTENCE_VALIDATION_CODES = [
+  "unsupportedSchema",
+  "invalidNumericValue",
+  "invalidModeSettings",
+  "invalidScenario",
+  "invalidMapDimensions",
+  "invalidTile",
+  "invalidRoadStructure",
+  "duplicateEntityId",
+  "invalidEntity",
+  "danglingReference",
+  "invalidOwnership",
+  "invalidAssignment",
+  "invalidDerivedState",
+  "invalidRoadTopology",
+] as const satisfies readonly PersistenceValidationError["code"][];
+
+export const PERSISTENCE_SNAPSHOT_FIELDS = [
   "time",
   "day",
   "clockMinutes",
@@ -110,9 +127,9 @@ const SNAPSHOT_FIELDS = new Set<PersistenceSnapshotField>([
   "outcomeTimestamp",
   "metricsState",
   "metricsLossReason",
-]);
+] as const satisfies readonly PersistenceSnapshotField[];
 
-const ENTITY_KINDS = new Set<PersistenceEntityKind>([
+export const PERSISTENCE_ENTITY_KINDS = [
   "building",
   "sim",
   "activeTrip",
@@ -122,14 +139,147 @@ const ENTITY_KINDS = new Set<PersistenceEntityKind>([
   "busRoute",
   "metroLine",
   "vehicle",
-]);
+] as const satisfies readonly PersistenceEntityKind[];
+
+export const PERSISTENCE_HEADINGS = [
+  "north",
+  "east",
+  "south",
+  "west",
+] as const satisfies readonly Heading[];
+
+export const PERSISTENCE_REASON_KINDS = {
+  numeric: ["notFinite", "negative", "outOfRange", "overflow"],
+  mode: [
+    "persistenceRequiresPaused",
+    "unsupportedSpeed",
+    "invalidEconomyForMode",
+    "sandboxObjectivesPresent",
+    "sandboxGrowthWavesPresent",
+    "sandboxTerminalState",
+    "campaignTerminalWithoutObjectives",
+  ],
+  scenario: [
+    "duplicateGrowthWaveId",
+    "triggerTimesOutOfOrder",
+    "appliedAfterUnapplied",
+    "actionOutOfBounds",
+    "unknownBuildingType",
+    "invalidBuildingRotation",
+  ],
+  tile: [
+    "wrongRowMajorCoordinate",
+    "countMismatch",
+    "nonCanonicalId",
+    "unsupportedKind",
+    "unsupportedArea",
+    "nonRoadHasRoadState",
+    "duplicateRoadConnection",
+    "nonCanonicalRoadConnectionOrder",
+    "connectionOutOfBounds",
+    "connectionToNonRoad",
+    "nonReciprocalConnection",
+    "invalidOneWayAxis",
+    "invalidInfrastructureCoexistence",
+  ],
+  roadStructure: [
+    "nonCanonicalId",
+    "emptyFootprint",
+    "duplicateFootprintPoint",
+    "overlappingFootprint",
+    "nonRoadFootprintTile",
+    "tileOwnerMismatch",
+    "danglingTileOwner",
+    "duplicatePortId",
+    "duplicatePortPointEdge",
+    "invalidBoundaryPort",
+    "nonCanonicalFootprint",
+    "nonCanonicalLaneFacts",
+    "nonCanonicalMovementFacts",
+    "automaticJunctionMismatch",
+  ],
+  entity: ["emptyId", "nonCanonicalId", "invalidStaticShape"],
+  ownership: [
+    "missingOwner",
+    "multipleOwners",
+    "ownerTypeMismatch",
+    "footprintMismatch",
+    "anchorMismatch",
+    "reciprocalLinkMissing",
+    "spatialOverlap",
+  ],
+  assignment: [
+    "duplicateAssignment",
+    "modeMismatch",
+    "waypointMissing",
+    "platformMismatch",
+    "vehicleMissingFromLine",
+    "vehicleListedByMultipleLines",
+    "passengerNotRiding",
+    "passengerInMultipleVehicles",
+    "itineraryIndexOutOfBounds",
+    "pathStepIndexOutOfBounds",
+    "progressOutOfRange",
+  ],
+  derivedState: [
+    "clockMismatch",
+    "stopAccessMismatch",
+    "routeLegMismatch",
+    "routePathBrokenMismatch",
+    "routeOracleNotIdempotent",
+    "tripStateMismatch",
+    "tripPositionMismatch",
+    "tripCounterMismatch",
+    "metricsRelationshipMismatch",
+    "outcomeWindowMismatch",
+    "objectiveStateMismatch",
+    "lossReasonMismatch",
+  ],
+  roadTopology: ["unsafeRoundaboutPortMapping"],
+} as const satisfies {
+  numeric: readonly PersistenceNumericError["kind"][];
+  mode: readonly PersistenceModeError["kind"][];
+  scenario: readonly PersistenceScenarioError["kind"][];
+  tile: readonly PersistenceTileError["kind"][];
+  roadStructure: readonly PersistenceRoadStructureError["kind"][];
+  entity: readonly PersistenceEntityError["kind"][];
+  ownership: readonly PersistenceOwnershipError["kind"][];
+  assignment: readonly PersistenceAssignmentError["kind"][];
+  derivedState: readonly PersistenceDerivedStateError["kind"][];
+  roadTopology: readonly PersistenceRoadTopologyError["kind"][];
+};
+
+const VALIDATION_CODES = new Set<PersistenceValidationError["code"]>(
+  PERSISTENCE_VALIDATION_CODES,
+);
+const SNAPSHOT_FIELDS = new Set<PersistenceSnapshotField>(
+  PERSISTENCE_SNAPSHOT_FIELDS,
+);
+const ENTITY_KINDS = new Set<PersistenceEntityKind>(PERSISTENCE_ENTITY_KINDS);
+const HEADINGS = new Set<Heading>(PERSISTENCE_HEADINGS);
+const REASON_KINDS = {
+  numeric: new Set<string>(PERSISTENCE_REASON_KINDS.numeric),
+  mode: new Set<string>(PERSISTENCE_REASON_KINDS.mode),
+  scenario: new Set<string>(PERSISTENCE_REASON_KINDS.scenario),
+  tile: new Set<string>(PERSISTENCE_REASON_KINDS.tile),
+  roadStructure: new Set<string>(PERSISTENCE_REASON_KINDS.roadStructure),
+  entity: new Set<string>(PERSISTENCE_REASON_KINDS.entity),
+  ownership: new Set<string>(PERSISTENCE_REASON_KINDS.ownership),
+  assignment: new Set<string>(PERSISTENCE_REASON_KINDS.assignment),
+  derivedState: new Set<string>(PERSISTENCE_REASON_KINDS.derivedState),
+  roadTopology: new Set<string>(PERSISTENCE_REASON_KINDS.roadTopology),
+};
 
 function isPlainObject(value: unknown): value is PlainObject {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
     return false;
   }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
 
 function hasExactKeys(
@@ -137,11 +287,19 @@ function hasExactKeys(
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => key in value) &&
-    Object.keys(value).every((key) => allowed.has(key))
-  );
+  try {
+    const allowed = new Set([...required, ...optional]);
+    return (
+      required.every((key) =>
+        Object.prototype.hasOwnProperty.call(value, key),
+      ) &&
+      Reflect.ownKeys(value).every(
+        (key) => typeof key === "string" && allowed.has(key),
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -158,12 +316,7 @@ function isPoint(value: unknown): value is Point {
 }
 
 function isHeading(value: unknown): value is Heading {
-  return (
-    value === "north" ||
-    value === "east" ||
-    value === "south" ||
-    value === "west"
-  );
+  return typeof value === "string" && HEADINGS.has(value as Heading);
 }
 
 function isEntityKind(value: unknown): value is PersistenceEntityKind {
@@ -232,7 +385,12 @@ function isStructuredReason(
 function isPersistenceNumericError(
   value: unknown,
 ): value is PersistenceNumericError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.numeric.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "notFinite":
     case "negative":
@@ -250,7 +408,12 @@ function isPersistenceNumericError(
 }
 
 function isPersistenceModeError(value: unknown): value is PersistenceModeError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.mode.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "persistenceRequiresPaused":
     case "unsupportedSpeed":
@@ -268,7 +431,12 @@ function isPersistenceModeError(value: unknown): value is PersistenceModeError {
 function isPersistenceScenarioError(
   value: unknown,
 ): value is PersistenceScenarioError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.scenario.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "duplicateGrowthWaveId":
       return isStructuredReason(value, ["waveId"], { waveId: isString });
@@ -301,7 +469,12 @@ function isPersistenceScenarioError(
 }
 
 function isPersistenceTileError(value: unknown): value is PersistenceTileError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.tile.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "wrongRowMajorCoordinate":
       return isStructuredReason(value, ["expected", "actual"], {
@@ -336,7 +509,12 @@ function isPersistenceTileError(value: unknown): value is PersistenceTileError {
 function isPersistenceRoadStructureError(
   value: unknown,
 ): value is PersistenceRoadStructureError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.roadStructure.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "nonCanonicalId":
     case "emptyFootprint":
@@ -361,7 +539,12 @@ function isPersistenceRoadStructureError(
 function isPersistenceEntityError(
   value: unknown,
 ): value is PersistenceEntityError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.entity.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "emptyId":
     case "nonCanonicalId":
@@ -375,7 +558,12 @@ function isPersistenceEntityError(
 function isPersistenceOwnershipError(
   value: unknown,
 ): value is PersistenceOwnershipError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.ownership.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "missingOwner":
     case "multipleOwners":
@@ -393,7 +581,12 @@ function isPersistenceOwnershipError(
 function isPersistenceAssignmentError(
   value: unknown,
 ): value is PersistenceAssignmentError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.assignment.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "duplicateAssignment":
     case "modeMismatch":
@@ -415,7 +608,12 @@ function isPersistenceAssignmentError(
 function isPersistenceDerivedStateError(
   value: unknown,
 ): value is PersistenceDerivedStateError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
+  if (
+    !isPlainObject(value) ||
+    typeof value.kind !== "string" ||
+    !REASON_KINDS.derivedState.has(value.kind)
+  )
+    return false;
   switch (value.kind) {
     case "stopAccessMismatch":
       return isStructuredReason(value, ["node"], {
@@ -449,6 +647,8 @@ function isPersistenceRoadTopologyError(
 ): value is PersistenceRoadTopologyError {
   return (
     isPlainObject(value) &&
+    typeof value.kind === "string" &&
+    REASON_KINDS.roadTopology.has(value.kind) &&
     value.kind === "unsafeRoundaboutPortMapping" &&
     isStructuredReason(value, ["structureId", "footprint"], {
       structureId: isString,
@@ -461,12 +661,13 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-export function isPersistenceValidationError(
+function isPersistenceValidationErrorUnchecked(
   value: unknown,
 ): value is PersistenceValidationError {
   if (
     !isPlainObject(value) ||
     typeof value.code !== "string" ||
+    !VALIDATION_CODES.has(value.code as PersistenceValidationError["code"]) ||
     !isPlainObject(value.context) ||
     !hasExactKeys(value, ["code", "context"])
   )
@@ -566,7 +767,17 @@ export function isPersistenceValidationError(
   }
 }
 
-export function isPersistenceOperationError(
+export function isPersistenceValidationError(
+  value: unknown,
+): value is PersistenceValidationError {
+  try {
+    return isPersistenceValidationErrorUnchecked(value);
+  } catch {
+    return false;
+  }
+}
+
+function isPersistenceOperationErrorUnchecked(
   value: unknown,
 ): value is PersistenceOperationError {
   if (!isPlainObject(value) || typeof value.kind !== "string") return false;
@@ -595,6 +806,16 @@ export function isPersistenceOperationError(
       );
     default:
       return false;
+  }
+}
+
+export function isPersistenceOperationError(
+  value: unknown,
+): value is PersistenceOperationError {
+  try {
+    return isPersistenceOperationErrorUnchecked(value);
+  } catch {
+    return false;
   }
 }
 
@@ -651,11 +872,15 @@ function normalizePersistenceFailure(
 }
 
 function isSnapshotSuccess(value: unknown): value is RustGameSnapshot {
-  return (
-    isPlainObject(value) &&
-    Object.hasOwn(value, "schemaVersion") &&
-    value.schemaVersion === SNAPSHOT_SCHEMA_VERSION
-  );
+  try {
+    return (
+      isPlainObject(value) &&
+      Object.hasOwn(value, "schemaVersion") &&
+      value.schemaVersion === SNAPSHOT_SCHEMA_VERSION
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function runPersistenceSnapshotOperation(

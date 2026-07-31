@@ -355,6 +355,27 @@ describe("createTauriBackend", () => {
     ).resolves.toEqual({ ok: false, error });
   });
 
+  it("normalizes an opaque Tauri invoke rejection to host/invokeFailed", async () => {
+    invokeMock.mockRejectedValueOnce(
+      "persistence bridge error encoding failed: synthetic failure",
+    );
+    const backend = await createTauriBackend();
+
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "invokeFailed",
+        diagnostic: expect.stringContaining(
+          "persistence bridge error encoding failed",
+        ),
+      },
+    });
+  });
+
   it("maps malformed Tauri successes and errors through the shared contract", async () => {
     invokeMock
       .mockResolvedValueOnce({ schemaVersion: "4" })

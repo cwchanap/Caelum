@@ -86,6 +86,13 @@ enum PersistenceBridgeError {
     },
 }
 
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum EncodedPersistenceBridgeError {
+    Structured(serde_json::Value),
+    Opaque(String),
+}
+
 impl PersistenceBridgeError {
     fn validation(
         operation: PersistenceOperation,
@@ -122,6 +129,27 @@ impl PersistenceBridgeError {
             diagnostic: diagnostic.to_string(),
         }
     }
+}
+
+fn encode_persistence_result_with<T, E>(
+    result: Result<T, PersistenceBridgeError>,
+    encode_error: impl FnOnce(&PersistenceBridgeError) -> Result<serde_json::Value, E>,
+) -> Result<T, EncodedPersistenceBridgeError>
+where
+    E: std::fmt::Display,
+{
+    result.map_err(|error| match encode_error(&error) {
+        Ok(encoded) => EncodedPersistenceBridgeError::Structured(encoded),
+        Err(encoding_error) => EncodedPersistenceBridgeError::Opaque(format!(
+            "persistence bridge error encoding failed: {encoding_error}"
+        )),
+    })
+}
+
+fn encode_persistence_result<T>(
+    result: Result<T, PersistenceBridgeError>,
+) -> Result<T, EncodedPersistenceBridgeError> {
+    encode_persistence_result_with(result, |error| serde_json::to_value(error))
 }
 
 fn state_unavailable(
@@ -237,11 +265,10 @@ fn game_reset(
     engine.reset().map_err(TauriCommandError::Domain)
 }
 
-#[tauri::command]
-fn game_snapshot_for_save(
-    state: State<'_, EngineState>,
+fn snapshot_for_save_body(
+    state: &EngineState,
 ) -> Result<serde_json::Value, PersistenceBridgeError> {
-    let capture = capture_save(&state)?;
+    let capture = capture_save(state)?;
     let snapshot = capture.prepare().map_err(|error| {
         PersistenceBridgeError::validation(
             PersistenceOperation::SnapshotForSave,
@@ -257,7 +284,13 @@ fn game_snapshot_for_save(
 }
 
 #[tauri::command]
-fn game_validate_snapshot(snapshot: serde_json::Value) -> Result<(), PersistenceBridgeError> {
+fn game_snapshot_for_save(
+    state: State<'_, EngineState>,
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError> {
+    encode_persistence_result(snapshot_for_save_body(&state))
+}
+
+fn validate_snapshot_body(snapshot: serde_json::Value) -> Result<(), PersistenceBridgeError> {
     let operation = PersistenceOperation::ValidateSnapshot;
     let snapshot = decode_snapshot(snapshot, operation)?;
     validate_snapshot(&snapshot).map_err(|error| {
@@ -266,11 +299,20 @@ fn game_validate_snapshot(snapshot: serde_json::Value) -> Result<(), Persistence
 }
 
 #[tauri::command]
+fn game_validate_snapshot(
+    snapshot: serde_json::Value,
+) -> Result<(), EncodedPersistenceBridgeError> {
+    encode_persistence_result(validate_snapshot_body(snapshot))
+}
+
+#[tauri::command]
 fn game_restore_snapshot(
     state: State<'_, EngineState>,
     snapshot: serde_json::Value,
-) -> Result<serde_json::Value, PersistenceBridgeError> {
-    restore_snapshot_with(&state, snapshot, |snapshot| serde_json::to_value(snapshot))
+) -> Result<serde_json::Value, EncodedPersistenceBridgeError> {
+    encode_persistence_result(restore_snapshot_with(&state, snapshot, |snapshot| {
+        serde_json::to_value(snapshot)
+    }))
 }
 
 #[tauri::command]
@@ -889,9 +931,9 @@ mod tests {
 
     #[test]
     fn validation_is_stateless_and_classifies_fixture_failures() {
-        game_validate_snapshot(fixture(VALID_SNAPSHOT)).expect("valid fixture should validate");
+        validate_snapshot_body(fixture(VALID_SNAPSHOT)).expect("valid fixture should validate");
 
-        let unsupported = game_validate_snapshot(fixture(UNSUPPORTED_SNAPSHOT))
+        let unsupported = validate_snapshot_body(fixture(UNSUPPORTED_SNAPSHOT))
             .expect_err("legacy fixture must fail schema validation");
         assert_eq!(
             bridge_error_json(unsupported),
@@ -906,7 +948,7 @@ mod tests {
             })
         );
 
-        let malformed = game_validate_snapshot(fixture(MALFORMED_SNAPSHOT))
+        let malformed = validate_snapshot_body(fixture(MALFORMED_SNAPSHOT))
             .expect_err("malformed current-schema fixture must fail decode");
         let malformed = bridge_error_json(malformed);
         assert_eq!(malformed["kind"], "serialization");
@@ -920,7 +962,7 @@ mod tests {
             malformed["diagnostic"]
         );
 
-        let unpaused = game_validate_snapshot(fixture(UNPAUSED_SNAPSHOT))
+        let unpaused = validate_snapshot_body(fixture(UNPAUSED_SNAPSHOT))
             .expect_err("unpaused fixture must fail semantic validation");
         assert_eq!(
             bridge_error_json(unpaused),
@@ -1023,6 +1065,28 @@ mod tests {
                 "phase": "snapshotEncode",
                 "diagnostic": "synthetic encode failure"
             })
+        );
+        assert_eq!(state.lock().unwrap().snapshot(), before);
+    }
+
+    #[test]
+    fn structured_error_encoding_failure_falls_back_before_managed_state_swap() {
+        let state = Mutex::new(GameEngine::new());
+        let before = state.lock().unwrap().snapshot();
+        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), |_snapshot| {
+            Err::<Value, _>("synthetic response encode failure")
+        });
+
+        let error = encode_persistence_result_with(result, |_error| {
+            Err::<Value, _>("synthetic structured error encode failure")
+        })
+        .expect_err("structured error encoding must use the opaque fallback");
+
+        assert_eq!(
+            serde_json::to_value(error).expect("opaque fallback must serialize"),
+            json!(
+                "persistence bridge error encoding failed: synthetic structured error encode failure"
+            )
         );
         assert_eq!(state.lock().unwrap().snapshot(), before);
     }

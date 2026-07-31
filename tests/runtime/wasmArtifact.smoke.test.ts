@@ -469,12 +469,11 @@ describe("real WASM artifact smoke", () => {
     });
   });
 
-  it("rejects a malformed schema-v4 payload with a raw string, not a typed object", async () => {
+  it("returns a typed serialization error for a malformed schema-v4 payload", async () => {
     // A payload whose `schemaVersion` is v4 but whose body cannot deserialize
     // into `GameSnapshot` (e.g. a required field has the wrong type) must
-    // reject with a raw JavaScript string, not a `PersistenceError` object.
-    // This matches the Tauri bridge's raw Serde string and the host contract
-    // (design §12.7: raw deserialization failures are strings on both hosts).
+    // resolve with the typed snapshotDecode category. Its string diagnostic is
+    // intentionally opaque and must not be parsed for control flow.
     const backend = await createWasmBackend();
     const raw = await backend.snapshot();
     const malformed = {
