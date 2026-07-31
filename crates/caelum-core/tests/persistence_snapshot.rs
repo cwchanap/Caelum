@@ -14,6 +14,17 @@ fn canonical_schema_v4_snapshot_is_persistence_valid() {
 }
 
 #[test]
+fn snapshot_for_save_matches_the_engine_minted_capture() {
+    let mut engine = GameEngine::new();
+    apply(&mut engine, GameIntent::SetPaused { paused: false });
+
+    assert_eq!(
+        engine.snapshot_for_save().unwrap(),
+        engine.capture_snapshot_for_save().prepare().unwrap()
+    );
+}
+
+#[test]
 fn persistence_requires_paused_state_before_any_dependent_validation() {
     let mut snapshot = GameEngine::new().snapshot();
     snapshot.paused = false;
