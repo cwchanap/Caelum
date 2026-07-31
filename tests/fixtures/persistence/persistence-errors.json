@@ -1,0 +1,504 @@
+{
+  "topLevelCodes": [
+    "unsupportedSchema",
+    "invalidNumericValue",
+    "invalidModeSettings",
+    "invalidScenario",
+    "invalidMapDimensions",
+    "invalidTile",
+    "invalidRoadStructure",
+    "duplicateEntityId",
+    "invalidEntity",
+    "danglingReference",
+    "invalidOwnership",
+    "invalidAssignment",
+    "invalidDerivedState",
+    "invalidRoadTopology"
+  ],
+  "snapshotFields": [
+    "time",
+    "day",
+    "clockMinutes",
+    "speed",
+    "paused",
+    "budget",
+    "gameMode",
+    "economyPreset",
+    "sandboxTemplateId",
+    "startingCapital",
+    "demandMultiplier",
+    "scenarioObjectives",
+    "scenarioGrowthWaves",
+    "objectiveThresholds",
+    "growthWaveId",
+    "growthWaveTriggerTime",
+    "growthWaveActions",
+    "mapWidth",
+    "mapHeight",
+    "tileCount",
+    "tileCoordinates",
+    "tileId",
+    "tileKind",
+    "tileArea",
+    "tileRoadConnections",
+    "tileOneWay",
+    "tileRoadStructureId",
+    "entityId",
+    "buildingOrigin",
+    "buildingRotation",
+    "buildingOccupiedTiles",
+    "buildingTransitNodeId",
+    "nodeKind",
+    "nodeStatus",
+    "nodeAnchor",
+    "nodeRoadAccess",
+    "platformLabel",
+    "platformCapacity",
+    "platformCount",
+    "platformOrder",
+    "platformRouteIds",
+    "routePattern",
+    "routeWaypointIds",
+    "routeLegs",
+    "routeEstimatedSeconds",
+    "routePathBroken",
+    "routeRevision",
+    "routeVehicleIds",
+    "vehicleMode",
+    "vehicleLineId",
+    "vehicleCapacity",
+    "vehiclePassengerIds",
+    "vehicleItineraryIndex",
+    "vehiclePathStepIndex",
+    "vehicleStepProgress",
+    "vehicleParkedPosition",
+    "simHome",
+    "simPosition",
+    "simWorkerProfile",
+    "simShiftTemplate",
+    "simWorkplace",
+    "simCommuteDay",
+    "simDailyFlags",
+    "tripServiceDay",
+    "tripPurpose",
+    "tripStatus",
+    "tripOrigin",
+    "tripDestination",
+    "tripPosition",
+    "tripDeadline",
+    "tripPatience",
+    "tripRoutePlan",
+    "tripEstimatedSeconds",
+    "tripCurrentLegIndex",
+    "tripSequenceDay",
+    "nextTripSequence",
+    "metricsCounters",
+    "metricsWaits",
+    "metricsTripOutcomes",
+    "outcomeWaitSeconds",
+    "outcomeTimestamp",
+    "metricsState",
+    "metricsLossReason"
+  ],
+  "entityKinds": [
+    "building",
+    "sim",
+    "activeTrip",
+    "stop",
+    "station",
+    "platform",
+    "busRoute",
+    "metroLine",
+    "vehicle"
+  ],
+  "headings": ["north", "east", "south", "west"],
+  "reasonKinds": {
+    "numeric": ["notFinite", "negative", "outOfRange", "overflow"],
+    "mode": [
+      "persistenceRequiresPaused",
+      "unsupportedSpeed",
+      "invalidEconomyForMode",
+      "sandboxObjectivesPresent",
+      "sandboxGrowthWavesPresent",
+      "sandboxTerminalState",
+      "campaignTerminalWithoutObjectives"
+    ],
+    "scenario": [
+      "duplicateGrowthWaveId",
+      "triggerTimesOutOfOrder",
+      "appliedAfterUnapplied",
+      "actionOutOfBounds",
+      "unknownBuildingType",
+      "invalidBuildingRotation"
+    ],
+    "tile": [
+      "wrongRowMajorCoordinate",
+      "countMismatch",
+      "nonCanonicalId",
+      "unsupportedKind",
+      "unsupportedArea",
+      "nonRoadHasRoadState",
+      "duplicateRoadConnection",
+      "nonCanonicalRoadConnectionOrder",
+      "connectionOutOfBounds",
+      "connectionToNonRoad",
+      "nonReciprocalConnection",
+      "invalidOneWayAxis",
+      "invalidInfrastructureCoexistence"
+    ],
+    "roadStructure": [
+      "nonCanonicalId",
+      "emptyFootprint",
+      "duplicateFootprintPoint",
+      "overlappingFootprint",
+      "nonRoadFootprintTile",
+      "tileOwnerMismatch",
+      "danglingTileOwner",
+      "duplicatePortId",
+      "duplicatePortPointEdge",
+      "invalidBoundaryPort",
+      "nonCanonicalFootprint",
+      "nonCanonicalLaneFacts",
+      "nonCanonicalMovementFacts",
+      "automaticJunctionMismatch"
+    ],
+    "entity": ["emptyId", "nonCanonicalId", "invalidStaticShape"],
+    "ownership": [
+      "missingOwner",
+      "multipleOwners",
+      "ownerTypeMismatch",
+      "footprintMismatch",
+      "anchorMismatch",
+      "reciprocalLinkMissing",
+      "spatialOverlap"
+    ],
+    "assignment": [
+      "duplicateAssignment",
+      "modeMismatch",
+      "waypointMissing",
+      "platformMismatch",
+      "vehicleMissingFromLine",
+      "vehicleListedByMultipleLines",
+      "passengerNotRiding",
+      "passengerInMultipleVehicles",
+      "itineraryIndexOutOfBounds",
+      "pathStepIndexOutOfBounds",
+      "progressOutOfRange"
+    ],
+    "derivedState": [
+      "clockMismatch",
+      "stopAccessMismatch",
+      "routeLegMismatch",
+      "routePathBrokenMismatch",
+      "routeOracleNotIdempotent",
+      "tripStateMismatch",
+      "tripPositionMismatch",
+      "tripCounterMismatch",
+      "metricsRelationshipMismatch",
+      "outcomeWindowMismatch",
+      "objectiveStateMismatch",
+      "lossReasonMismatch"
+    ],
+    "roadTopology": ["unsafeRoundaboutPortMapping"]
+  },
+  "embeddedShapes": {
+    "point": { "x": 1, "y": 2 },
+    "heading": "east",
+    "entityRef": { "kind": "busRoute", "id": "route-001" },
+    "mapSize": { "width": 28, "height": 18 }
+  },
+  "errors": [
+    { "code": "unsupportedSchema", "context": { "expected": 4, "actual": 3 } },
+    {
+      "code": "invalidNumericValue",
+      "context": { "field": "time", "reason": { "kind": "notFinite" } }
+    },
+    {
+      "code": "invalidNumericValue",
+      "context": {
+        "entity": { "kind": "vehicle", "id": "vehicle-001" },
+        "field": "vehicleCapacity",
+        "reason": {
+          "kind": "outOfRange",
+          "details": { "minimum": 1.0, "maximum": 80.0, "actual": 81.0 }
+        }
+      }
+    },
+    {
+      "code": "invalidModeSettings",
+      "context": {
+        "field": "paused",
+        "reason": { "kind": "persistenceRequiresPaused" }
+      }
+    },
+    {
+      "code": "invalidScenario",
+      "context": {
+        "field": "scenarioGrowthWaves",
+        "reason": {
+          "kind": "actionOutOfBounds",
+          "details": {
+            "waveId": "wave-001",
+            "actionIndex": 0,
+            "point": { "x": 1, "y": 2 }
+          }
+        }
+      }
+    },
+    {
+      "code": "invalidMapDimensions",
+      "context": {
+        "expected": { "width": 28, "height": 18 },
+        "actual": { "width": 27, "height": 18 }
+      }
+    },
+    {
+      "code": "invalidTile",
+      "context": {
+        "tileId": "tile-1-2",
+        "reason": {
+          "kind": "connectionOutOfBounds",
+          "details": { "heading": "east" }
+        }
+      }
+    },
+    {
+      "code": "invalidRoadStructure",
+      "context": {
+        "structureId": "roundabout:compact2x2:4,2",
+        "reason": { "kind": "duplicatePortPointEdge" }
+      }
+    },
+    {
+      "code": "duplicateEntityId",
+      "context": {
+        "id": "stop-001",
+        "firstKind": "stop",
+        "secondKind": "station"
+      }
+    },
+    {
+      "code": "invalidEntity",
+      "context": {
+        "entity": { "kind": "building", "id": "building-001" },
+        "field": "buildingOrigin",
+        "reason": { "kind": "invalidStaticShape" }
+      }
+    },
+    {
+      "code": "danglingReference",
+      "context": {
+        "source": { "kind": "sim", "id": "sim-001" },
+        "field": "simWorkplace",
+        "target": { "kind": "building", "id": "building-404" }
+      }
+    },
+    {
+      "code": "invalidOwnership",
+      "context": {
+        "owner": { "kind": "building", "id": "building-001" },
+        "owned": { "kind": "stop", "id": "stop-001" },
+        "reason": { "kind": "reciprocalLinkMissing" }
+      }
+    },
+    {
+      "code": "invalidAssignment",
+      "context": {
+        "entity": { "kind": "vehicle", "id": "vehicle-001" },
+        "reason": { "kind": "progressOutOfRange" }
+      }
+    },
+    {
+      "code": "invalidDerivedState",
+      "context": {
+        "field": "routeLegs",
+        "reason": {
+          "kind": "routeLegMismatch",
+          "details": { "route": { "kind": "busRoute", "id": "route-001" } }
+        }
+      }
+    },
+    {
+      "code": "invalidRoadTopology",
+      "context": {
+        "reason": {
+          "kind": "unsafeRoundaboutPortMapping",
+          "details": {
+            "structureId": "roundabout:compact2x2:4,2",
+            "footprint": [
+              { "x": 4, "y": 2 },
+              { "x": 5, "y": 2 }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "reasons": {
+    "numeric": [
+      { "kind": "notFinite" },
+      { "kind": "negative" },
+      {
+        "kind": "outOfRange",
+        "details": { "minimum": 0.0, "maximum": 1.0, "actual": 2.0 }
+      },
+      { "kind": "overflow" }
+    ],
+    "mode": [
+      { "kind": "persistenceRequiresPaused" },
+      { "kind": "unsupportedSpeed" },
+      { "kind": "invalidEconomyForMode" },
+      { "kind": "sandboxObjectivesPresent" },
+      { "kind": "sandboxGrowthWavesPresent" },
+      { "kind": "sandboxTerminalState" },
+      { "kind": "campaignTerminalWithoutObjectives" }
+    ],
+    "scenario": [
+      { "kind": "duplicateGrowthWaveId", "details": { "waveId": "wave-001" } },
+      {
+        "kind": "triggerTimesOutOfOrder",
+        "details": { "previousWaveId": "wave-001", "waveId": "wave-002" }
+      },
+      {
+        "kind": "appliedAfterUnapplied",
+        "details": {
+          "firstUnappliedWaveId": "wave-001",
+          "laterAppliedWaveId": "wave-002"
+        }
+      },
+      {
+        "kind": "actionOutOfBounds",
+        "details": {
+          "waveId": "wave-001",
+          "actionIndex": 0,
+          "point": { "x": 1, "y": 2 }
+        }
+      },
+      {
+        "kind": "unknownBuildingType",
+        "details": { "waveId": "wave-001", "actionIndex": 0 }
+      },
+      {
+        "kind": "invalidBuildingRotation",
+        "details": { "waveId": "wave-001", "actionIndex": 0 }
+      }
+    ],
+    "tile": [
+      {
+        "kind": "wrongRowMajorCoordinate",
+        "details": {
+          "expected": { "x": 1, "y": 2 },
+          "actual": { "x": 2, "y": 1 }
+        }
+      },
+      {
+        "kind": "countMismatch",
+        "details": { "expected": 504, "actual": 503 }
+      },
+      { "kind": "nonCanonicalId", "details": { "expected": "tile-1-2" } },
+      { "kind": "unsupportedKind" },
+      { "kind": "unsupportedArea" },
+      { "kind": "nonRoadHasRoadState" },
+      { "kind": "duplicateRoadConnection" },
+      { "kind": "nonCanonicalRoadConnectionOrder" },
+      { "kind": "connectionOutOfBounds", "details": { "heading": "east" } },
+      {
+        "kind": "connectionToNonRoad",
+        "details": { "neighbor": { "x": 1, "y": 2 } }
+      },
+      {
+        "kind": "nonReciprocalConnection",
+        "details": { "neighbor": { "x": 1, "y": 2 } }
+      },
+      { "kind": "invalidOneWayAxis" },
+      { "kind": "invalidInfrastructureCoexistence" }
+    ],
+    "roadStructure": [
+      { "kind": "nonCanonicalId" },
+      { "kind": "emptyFootprint" },
+      { "kind": "duplicateFootprintPoint" },
+      { "kind": "overlappingFootprint" },
+      { "kind": "nonRoadFootprintTile" },
+      { "kind": "tileOwnerMismatch" },
+      { "kind": "danglingTileOwner" },
+      { "kind": "duplicatePortId" },
+      { "kind": "duplicatePortPointEdge" },
+      { "kind": "invalidBoundaryPort" },
+      { "kind": "nonCanonicalFootprint" },
+      { "kind": "nonCanonicalLaneFacts" },
+      { "kind": "nonCanonicalMovementFacts" },
+      { "kind": "automaticJunctionMismatch" }
+    ],
+    "entity": [
+      { "kind": "emptyId" },
+      { "kind": "nonCanonicalId" },
+      { "kind": "invalidStaticShape" }
+    ],
+    "ownership": [
+      { "kind": "missingOwner" },
+      { "kind": "multipleOwners" },
+      { "kind": "ownerTypeMismatch" },
+      { "kind": "footprintMismatch" },
+      { "kind": "anchorMismatch" },
+      { "kind": "reciprocalLinkMissing" },
+      { "kind": "spatialOverlap" }
+    ],
+    "assignment": [
+      { "kind": "duplicateAssignment" },
+      { "kind": "modeMismatch" },
+      { "kind": "waypointMissing" },
+      { "kind": "platformMismatch" },
+      { "kind": "vehicleMissingFromLine" },
+      { "kind": "vehicleListedByMultipleLines" },
+      { "kind": "passengerNotRiding" },
+      { "kind": "passengerInMultipleVehicles" },
+      { "kind": "itineraryIndexOutOfBounds" },
+      { "kind": "pathStepIndexOutOfBounds" },
+      { "kind": "progressOutOfRange" }
+    ],
+    "derivedState": [
+      { "kind": "clockMismatch" },
+      {
+        "kind": "stopAccessMismatch",
+        "details": { "node": { "kind": "stop", "id": "stop-001" } }
+      },
+      {
+        "kind": "routeLegMismatch",
+        "details": { "route": { "kind": "busRoute", "id": "route-001" } }
+      },
+      {
+        "kind": "routePathBrokenMismatch",
+        "details": { "route": { "kind": "busRoute", "id": "route-001" } }
+      },
+      {
+        "kind": "routeOracleNotIdempotent",
+        "details": { "route": { "kind": "busRoute", "id": "route-001" } }
+      },
+      {
+        "kind": "tripStateMismatch",
+        "details": { "trip": { "kind": "activeTrip", "id": "trip-001" } }
+      },
+      {
+        "kind": "tripPositionMismatch",
+        "details": { "trip": { "kind": "activeTrip", "id": "trip-001" } }
+      },
+      { "kind": "tripCounterMismatch" },
+      { "kind": "metricsRelationshipMismatch" },
+      { "kind": "outcomeWindowMismatch" },
+      { "kind": "objectiveStateMismatch" },
+      { "kind": "lossReasonMismatch" }
+    ],
+    "roadTopology": [
+      {
+        "kind": "unsafeRoundaboutPortMapping",
+        "details": {
+          "structureId": "roundabout:compact2x2:4,2",
+          "footprint": [
+            { "x": 4, "y": 2 },
+            { "x": 5, "y": 2 }
+          ]
+        }
+      }
+    ]
+  }
+}
