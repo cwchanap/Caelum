@@ -1,0 +1,5612 @@
+{
+  "activeTrips": [
+    {
+      "currentLegIndex": 0,
+      "deadline": 1250.8333333333335,
+      "destination": {
+        "x": 10,
+        "y": 2
+      },
+      "id": "trip-day-0-trip-001",
+      "origin": {
+        "x": 2,
+        "y": 2
+      },
+      "patienceRemaining": 240.0,
+      "position": {
+        "x": 4.503333333333325,
+        "y": 2.0
+      },
+      "purpose": "commuteOutbound",
+      "routePlan": {
+        "estimatedSeconds": 160.0,
+        "legs": [
+          {
+            "alightItineraryIndex": null,
+            "boardItineraryIndex": null,
+            "from": {
+              "x": 2,
+              "y": 2
+            },
+            "mode": "walk",
+            "serviceDirection": null,
+            "to": {
+              "x": 10,
+              "y": 2
+            }
+          }
+        ]
+      },
+      "simId": "sim-001",
+      "status": "walking"
+    },
+    {
+      "currentLegIndex": 0,
+      "deadline": 1251.6666666666667,
+      "destination": {
+        "x": 11,
+        "y": 2
+      },
+      "id": "trip-day-0-trip-002",
+      "origin": {
+        "x": 3,
+        "y": 2
+      },
+      "patienceRemaining": 240.0,
+      "position": {
+        "x": 5.461666666666658,
+        "y": 2.0
+      },
+      "purpose": "commuteOutbound",
+      "routePlan": {
+        "estimatedSeconds": 160.0,
+        "legs": [
+          {
+            "alightItineraryIndex": null,
+            "boardItineraryIndex": null,
+            "from": {
+              "x": 3,
+              "y": 2
+            },
+            "mode": "walk",
+            "serviceDirection": null,
+            "to": {
+              "x": 11,
+              "y": 2
+            }
+          }
+        ]
+      },
+      "simId": "sim-002",
+      "status": "walking"
+    },
+    {
+      "currentLegIndex": 1,
+      "deadline": 1252.5,
+      "destination": {
+        "x": 10,
+        "y": 3
+      },
+      "id": "trip-day-0-trip-003",
+      "origin": {
+        "x": 2,
+        "y": 2
+      },
+      "patienceRemaining": 232.60000000000008,
+      "position": {
+        "x": 2.0,
+        "y": 3.999999999999999
+      },
+      "purpose": "commuteOutbound",
+      "routePlan": {
+        "estimatedSeconds": 160.0,
+        "legs": [
+          {
+            "alightItineraryIndex": null,
+            "boardItineraryIndex": null,
+            "from": {
+              "x": 2,
+              "y": 2
+            },
+            "mode": "walk",
+            "serviceDirection": null,
+            "to": {
+              "x": 2,
+              "y": 4
+            }
+          },
+          {
+            "alightItineraryIndex": 0,
+            "boardItineraryIndex": 0,
+            "from": {
+              "x": 2,
+              "y": 4
+            },
+            "lineId": "route-001",
+            "mode": "bus",
+            "serviceDirection": "loop",
+            "to": {
+              "x": 10,
+              "y": 4
+            }
+          },
+          {
+            "alightItineraryIndex": null,
+            "boardItineraryIndex": null,
+            "from": {
+              "x": 10,
+              "y": 4
+            },
+            "mode": "walk",
+            "serviceDirection": null,
+            "to": {
+              "x": 10,
+              "y": 3
+            }
+          }
+        ]
+      },
+      "simId": "sim-003",
+      "status": "riding"
+    },
+    {
+      "currentLegIndex": 0,
+      "deadline": 1253.3333333333335,
+      "destination": {
+        "x": 11,
+        "y": 3
+      },
+      "id": "trip-day-0-trip-004",
+      "origin": {
+        "x": 3,
+        "y": 2
+      },
+      "patienceRemaining": 240.0,
+      "position": {
+        "x": 5.378333333333324,
+        "y": 2.0
+      },
+      "purpose": "commuteOutbound",
+      "routePlan": {
+        "estimatedSeconds": 180.0,
+        "legs": [
+          {
+            "alightItineraryIndex": null,
+            "boardItineraryIndex": null,
+            "from": {
+              "x": 3,
+              "y": 2
+            },
+            "mode": "walk",
+            "serviceDirection": null,
+            "to": {
+              "x": 11,
+              "y": 3
+            }
+          }
+        ]
+      },
+      "simId": "sim-004",
+      "status": "walking"
+    }
+  ],
+  "budget": 88000,
+  "buildings": [
+    {
+      "id": "building-001",
+      "occupiedTiles": [
+        {
+          "x": 2,
+          "y": 2
+        },
+        {
+          "x": 3,
+          "y": 2
+        }
+      ],
+      "origin": {
+        "x": 2,
+        "y": 2
+      },
+      "rotation": 0,
+      "type": "smallHouse"
+    },
+    {
+      "id": "building-002",
+      "occupiedTiles": [
+        {
+          "x": 10,
+          "y": 2
+        },
+        {
+          "x": 11,
+          "y": 2
+        },
+        {
+          "x": 10,
+          "y": 3
+        },
+        {
+          "x": 11,
+          "y": 3
+        }
+      ],
+      "origin": {
+        "x": 10,
+        "y": 2
+      },
+      "rotation": 0,
+      "type": "supermarket"
+    }
+  ],
+  "clockMinutes": 481,
+  "day": 0,
+  "map": {
+    "height": 18,
+    "roadStructures": [
+      {
+        "footprint": [
+          {
+            "x": 14,
+            "y": 8
+          },
+          {
+            "x": 15,
+            "y": 8
+          },
+          {
+            "x": 14,
+            "y": 9
+          },
+          {
+            "x": 15,
+            "y": 9
+          }
+        ],
+        "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south",
+        "kind": "automaticJunction",
+        "ports": [
+          {
+            "edge": "north",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-14-8-north",
+            "point": {
+              "x": 14,
+              "y": 8
+            }
+          },
+          {
+            "edge": "west",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-14-8-west",
+            "point": {
+              "x": 14,
+              "y": 8
+            }
+          },
+          {
+            "edge": "south",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-14-9-south",
+            "point": {
+              "x": 14,
+              "y": 9
+            }
+          },
+          {
+            "edge": "west",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-14-9-west",
+            "point": {
+              "x": 14,
+              "y": 9
+            }
+          },
+          {
+            "edge": "north",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-15-8-north",
+            "point": {
+              "x": 15,
+              "y": 8
+            }
+          },
+          {
+            "edge": "east",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-15-8-east",
+            "point": {
+              "x": 15,
+              "y": 8
+            }
+          },
+          {
+            "edge": "east",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-15-9-east",
+            "point": {
+              "x": 15,
+              "y": 9
+            }
+          },
+          {
+            "edge": "south",
+            "id": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south-port-15-9-south",
+            "point": {
+              "x": 15,
+              "y": 9
+            }
+          }
+        ]
+      }
+    ],
+    "tiles": [
+      {
+        "id": "tile-0-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "tile-1-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 0
+      },
+      {
+        "id": "tile-2-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 0
+      },
+      {
+        "id": "tile-3-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 0
+      },
+      {
+        "id": "tile-4-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 0
+      },
+      {
+        "id": "tile-5-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 0
+      },
+      {
+        "id": "tile-6-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 0
+      },
+      {
+        "id": "tile-7-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 0
+      },
+      {
+        "id": "tile-8-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 0
+      },
+      {
+        "id": "tile-9-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 0
+      },
+      {
+        "id": "tile-10-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 0
+      },
+      {
+        "id": "tile-11-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 0
+      },
+      {
+        "id": "tile-12-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 0
+      },
+      {
+        "id": "tile-13-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 0
+      },
+      {
+        "id": "tile-14-0",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "south"
+        ],
+        "x": 14,
+        "y": 0
+      },
+      {
+        "id": "tile-15-0",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "south"
+        ],
+        "x": 15,
+        "y": 0
+      },
+      {
+        "id": "tile-16-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 0
+      },
+      {
+        "id": "tile-17-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 0
+      },
+      {
+        "id": "tile-18-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 0
+      },
+      {
+        "id": "tile-19-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 0
+      },
+      {
+        "id": "tile-20-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 0
+      },
+      {
+        "id": "tile-21-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 0
+      },
+      {
+        "id": "tile-22-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 0
+      },
+      {
+        "id": "tile-23-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 0
+      },
+      {
+        "id": "tile-24-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 0
+      },
+      {
+        "id": "tile-25-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 0
+      },
+      {
+        "id": "tile-26-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 0
+      },
+      {
+        "id": "tile-27-0",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 0
+      },
+      {
+        "id": "tile-0-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 1
+      },
+      {
+        "id": "tile-1-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 1
+      },
+      {
+        "id": "tile-2-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 1
+      },
+      {
+        "id": "tile-3-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 1
+      },
+      {
+        "id": "tile-4-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 1
+      },
+      {
+        "id": "tile-5-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 1
+      },
+      {
+        "id": "tile-6-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 1
+      },
+      {
+        "id": "tile-7-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 1
+      },
+      {
+        "id": "tile-8-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 1
+      },
+      {
+        "id": "tile-9-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 1
+      },
+      {
+        "id": "tile-10-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 1
+      },
+      {
+        "id": "tile-11-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 1
+      },
+      {
+        "id": "tile-12-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 1
+      },
+      {
+        "id": "tile-13-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 1
+      },
+      {
+        "id": "tile-14-1",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 1
+      },
+      {
+        "id": "tile-15-1",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 1
+      },
+      {
+        "id": "tile-16-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 1
+      },
+      {
+        "id": "tile-17-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 1
+      },
+      {
+        "id": "tile-18-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 1
+      },
+      {
+        "id": "tile-19-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 1
+      },
+      {
+        "id": "tile-20-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 1
+      },
+      {
+        "id": "tile-21-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 1
+      },
+      {
+        "id": "tile-22-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 1
+      },
+      {
+        "id": "tile-23-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 1
+      },
+      {
+        "id": "tile-24-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 1
+      },
+      {
+        "id": "tile-25-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 1
+      },
+      {
+        "id": "tile-26-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 1
+      },
+      {
+        "id": "tile-27-1",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 1
+      },
+      {
+        "id": "tile-0-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 2
+      },
+      {
+        "id": "tile-1-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 2
+      },
+      {
+        "area": "residential",
+        "id": "tile-2-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 2
+      },
+      {
+        "area": "residential",
+        "id": "tile-3-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 2
+      },
+      {
+        "id": "tile-4-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 2
+      },
+      {
+        "id": "tile-5-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 2
+      },
+      {
+        "id": "tile-6-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 2
+      },
+      {
+        "id": "tile-7-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 2
+      },
+      {
+        "id": "tile-8-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 2
+      },
+      {
+        "id": "tile-9-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 2
+      },
+      {
+        "area": "commercial",
+        "id": "tile-10-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 2
+      },
+      {
+        "area": "commercial",
+        "id": "tile-11-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 2
+      },
+      {
+        "id": "tile-12-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 2
+      },
+      {
+        "id": "tile-13-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 2
+      },
+      {
+        "id": "tile-14-2",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 2
+      },
+      {
+        "id": "tile-15-2",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 2
+      },
+      {
+        "id": "tile-16-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 2
+      },
+      {
+        "id": "tile-17-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 2
+      },
+      {
+        "id": "tile-18-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 2
+      },
+      {
+        "id": "tile-19-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 2
+      },
+      {
+        "id": "tile-20-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 2
+      },
+      {
+        "id": "tile-21-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 2
+      },
+      {
+        "id": "tile-22-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 2
+      },
+      {
+        "id": "tile-23-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 2
+      },
+      {
+        "id": "tile-24-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 2
+      },
+      {
+        "id": "tile-25-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 2
+      },
+      {
+        "id": "tile-26-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 2
+      },
+      {
+        "id": "tile-27-2",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 2
+      },
+      {
+        "id": "tile-0-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 3
+      },
+      {
+        "id": "tile-1-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 3
+      },
+      {
+        "id": "tile-2-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 3
+      },
+      {
+        "id": "tile-3-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 3
+      },
+      {
+        "id": "tile-4-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 3
+      },
+      {
+        "id": "tile-5-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 3
+      },
+      {
+        "id": "tile-6-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 3
+      },
+      {
+        "id": "tile-7-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 3
+      },
+      {
+        "id": "tile-8-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 3
+      },
+      {
+        "id": "tile-9-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 3
+      },
+      {
+        "area": "commercial",
+        "id": "tile-10-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 3
+      },
+      {
+        "area": "commercial",
+        "id": "tile-11-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 3
+      },
+      {
+        "id": "tile-12-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 3
+      },
+      {
+        "id": "tile-13-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 3
+      },
+      {
+        "id": "tile-14-3",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 3
+      },
+      {
+        "id": "tile-15-3",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 3
+      },
+      {
+        "id": "tile-16-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 3
+      },
+      {
+        "id": "tile-17-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 3
+      },
+      {
+        "id": "tile-18-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 3
+      },
+      {
+        "id": "tile-19-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 3
+      },
+      {
+        "id": "tile-20-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 3
+      },
+      {
+        "id": "tile-21-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 3
+      },
+      {
+        "id": "tile-22-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 3
+      },
+      {
+        "id": "tile-23-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 3
+      },
+      {
+        "id": "tile-24-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 3
+      },
+      {
+        "id": "tile-25-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 3
+      },
+      {
+        "id": "tile-26-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 3
+      },
+      {
+        "id": "tile-27-3",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 3
+      },
+      {
+        "id": "tile-0-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 4
+      },
+      {
+        "id": "tile-1-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 4
+      },
+      {
+        "id": "tile-2-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 4
+      },
+      {
+        "id": "tile-3-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 4
+      },
+      {
+        "id": "tile-4-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 4
+      },
+      {
+        "id": "tile-5-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 4
+      },
+      {
+        "id": "tile-6-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 4
+      },
+      {
+        "id": "tile-7-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 4
+      },
+      {
+        "id": "tile-8-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 4
+      },
+      {
+        "id": "tile-9-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 4
+      },
+      {
+        "id": "tile-10-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 4
+      },
+      {
+        "id": "tile-11-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 4
+      },
+      {
+        "id": "tile-12-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 4
+      },
+      {
+        "id": "tile-13-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 4
+      },
+      {
+        "id": "tile-14-4",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 4
+      },
+      {
+        "id": "tile-15-4",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 4
+      },
+      {
+        "id": "tile-16-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 4
+      },
+      {
+        "id": "tile-17-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 4
+      },
+      {
+        "id": "tile-18-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 4
+      },
+      {
+        "id": "tile-19-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 4
+      },
+      {
+        "id": "tile-20-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 4
+      },
+      {
+        "id": "tile-21-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 4
+      },
+      {
+        "id": "tile-22-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 4
+      },
+      {
+        "id": "tile-23-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 4
+      },
+      {
+        "id": "tile-24-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 4
+      },
+      {
+        "id": "tile-25-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 4
+      },
+      {
+        "id": "tile-26-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 4
+      },
+      {
+        "id": "tile-27-4",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 4
+      },
+      {
+        "id": "tile-0-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 5
+      },
+      {
+        "id": "tile-1-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 5
+      },
+      {
+        "id": "tile-2-5",
+        "kind": "road",
+        "roadConnections": [
+          "east"
+        ],
+        "x": 2,
+        "y": 5
+      },
+      {
+        "id": "tile-3-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 3,
+        "y": 5
+      },
+      {
+        "id": "tile-4-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 4,
+        "y": 5
+      },
+      {
+        "id": "tile-5-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 5,
+        "y": 5
+      },
+      {
+        "id": "tile-6-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 6,
+        "y": 5
+      },
+      {
+        "id": "tile-7-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 7,
+        "y": 5
+      },
+      {
+        "id": "tile-8-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 8,
+        "y": 5
+      },
+      {
+        "id": "tile-9-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 9,
+        "y": 5
+      },
+      {
+        "id": "tile-10-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 10,
+        "y": 5
+      },
+      {
+        "id": "tile-11-5",
+        "kind": "road",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 11,
+        "y": 5
+      },
+      {
+        "id": "tile-12-5",
+        "kind": "road",
+        "roadConnections": [
+          "west"
+        ],
+        "x": 12,
+        "y": 5
+      },
+      {
+        "id": "tile-13-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 5
+      },
+      {
+        "id": "tile-14-5",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 5
+      },
+      {
+        "id": "tile-15-5",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 5
+      },
+      {
+        "id": "tile-16-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 5
+      },
+      {
+        "id": "tile-17-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 5
+      },
+      {
+        "id": "tile-18-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 5
+      },
+      {
+        "id": "tile-19-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 5
+      },
+      {
+        "id": "tile-20-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 5
+      },
+      {
+        "id": "tile-21-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 5
+      },
+      {
+        "id": "tile-22-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 5
+      },
+      {
+        "id": "tile-23-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 5
+      },
+      {
+        "id": "tile-24-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 5
+      },
+      {
+        "id": "tile-25-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 5
+      },
+      {
+        "id": "tile-26-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 5
+      },
+      {
+        "id": "tile-27-5",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 5
+      },
+      {
+        "id": "tile-0-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 6
+      },
+      {
+        "id": "tile-1-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 6
+      },
+      {
+        "id": "tile-2-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 6
+      },
+      {
+        "id": "tile-3-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 6
+      },
+      {
+        "id": "tile-4-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 6
+      },
+      {
+        "id": "tile-5-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 6
+      },
+      {
+        "id": "tile-6-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 6
+      },
+      {
+        "id": "tile-7-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 6
+      },
+      {
+        "id": "tile-8-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 6
+      },
+      {
+        "id": "tile-9-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 6
+      },
+      {
+        "id": "tile-10-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 6
+      },
+      {
+        "id": "tile-11-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 6
+      },
+      {
+        "id": "tile-12-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 6
+      },
+      {
+        "id": "tile-13-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 6
+      },
+      {
+        "id": "tile-14-6",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 6
+      },
+      {
+        "id": "tile-15-6",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 6
+      },
+      {
+        "id": "tile-16-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 6
+      },
+      {
+        "id": "tile-17-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 6
+      },
+      {
+        "id": "tile-18-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 6
+      },
+      {
+        "id": "tile-19-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 6
+      },
+      {
+        "id": "tile-20-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 6
+      },
+      {
+        "id": "tile-21-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 6
+      },
+      {
+        "id": "tile-22-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 6
+      },
+      {
+        "id": "tile-23-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 6
+      },
+      {
+        "id": "tile-24-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 6
+      },
+      {
+        "id": "tile-25-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 6
+      },
+      {
+        "id": "tile-26-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 6
+      },
+      {
+        "id": "tile-27-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 6
+      },
+      {
+        "id": "tile-0-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 7
+      },
+      {
+        "id": "tile-1-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 7
+      },
+      {
+        "id": "tile-2-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 7
+      },
+      {
+        "id": "tile-3-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 7
+      },
+      {
+        "id": "tile-4-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 7
+      },
+      {
+        "id": "tile-5-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 7
+      },
+      {
+        "id": "tile-6-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 7
+      },
+      {
+        "id": "tile-7-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 7
+      },
+      {
+        "id": "tile-8-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 7
+      },
+      {
+        "id": "tile-9-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 7
+      },
+      {
+        "id": "tile-10-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 7
+      },
+      {
+        "id": "tile-11-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 7
+      },
+      {
+        "id": "tile-12-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 7
+      },
+      {
+        "id": "tile-13-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 7
+      },
+      {
+        "id": "tile-14-7",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 7
+      },
+      {
+        "id": "tile-15-7",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 7
+      },
+      {
+        "id": "tile-16-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 7
+      },
+      {
+        "id": "tile-17-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 7
+      },
+      {
+        "id": "tile-18-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 7
+      },
+      {
+        "id": "tile-19-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 7
+      },
+      {
+        "id": "tile-20-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 7
+      },
+      {
+        "id": "tile-21-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 7
+      },
+      {
+        "id": "tile-22-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 7
+      },
+      {
+        "id": "tile-23-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 7
+      },
+      {
+        "id": "tile-24-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 7
+      },
+      {
+        "id": "tile-25-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 7
+      },
+      {
+        "id": "tile-26-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 7
+      },
+      {
+        "id": "tile-27-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 7
+      },
+      {
+        "id": "tile-0-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east"
+        ],
+        "x": 0,
+        "y": 8
+      },
+      {
+        "id": "tile-1-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 1,
+        "y": 8
+      },
+      {
+        "id": "tile-2-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 2,
+        "y": 8
+      },
+      {
+        "id": "tile-3-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 3,
+        "y": 8
+      },
+      {
+        "id": "tile-4-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 4,
+        "y": 8
+      },
+      {
+        "id": "tile-5-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 5,
+        "y": 8
+      },
+      {
+        "id": "tile-6-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 6,
+        "y": 8
+      },
+      {
+        "id": "tile-7-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 7,
+        "y": 8
+      },
+      {
+        "id": "tile-8-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 8,
+        "y": 8
+      },
+      {
+        "id": "tile-9-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 9,
+        "y": 8
+      },
+      {
+        "id": "tile-10-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 10,
+        "y": 8
+      },
+      {
+        "id": "tile-11-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 11,
+        "y": 8
+      },
+      {
+        "id": "tile-12-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 12,
+        "y": 8
+      },
+      {
+        "id": "tile-13-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 13,
+        "y": 8
+      },
+      {
+        "id": "tile-14-8",
+        "kind": "road",
+        "roadConnections": [
+          "north",
+          "east",
+          "south",
+          "west"
+        ],
+        "roadStructureId": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south",
+        "x": 14,
+        "y": 8
+      },
+      {
+        "id": "tile-15-8",
+        "kind": "road",
+        "roadConnections": [
+          "north",
+          "east",
+          "south",
+          "west"
+        ],
+        "roadStructureId": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south",
+        "x": 15,
+        "y": 8
+      },
+      {
+        "id": "tile-16-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 16,
+        "y": 8
+      },
+      {
+        "id": "tile-17-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 17,
+        "y": 8
+      },
+      {
+        "id": "tile-18-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 18,
+        "y": 8
+      },
+      {
+        "id": "tile-19-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 19,
+        "y": 8
+      },
+      {
+        "id": "tile-20-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 20,
+        "y": 8
+      },
+      {
+        "id": "tile-21-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 21,
+        "y": 8
+      },
+      {
+        "id": "tile-22-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 22,
+        "y": 8
+      },
+      {
+        "id": "tile-23-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 23,
+        "y": 8
+      },
+      {
+        "id": "tile-24-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 24,
+        "y": 8
+      },
+      {
+        "id": "tile-25-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 25,
+        "y": 8
+      },
+      {
+        "id": "tile-26-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 26,
+        "y": 8
+      },
+      {
+        "id": "tile-27-8",
+        "kind": "road",
+        "oneWay": "west",
+        "roadConnections": [
+          "west"
+        ],
+        "x": 27,
+        "y": 8
+      },
+      {
+        "id": "tile-0-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east"
+        ],
+        "x": 0,
+        "y": 9
+      },
+      {
+        "id": "tile-1-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 1,
+        "y": 9
+      },
+      {
+        "id": "tile-2-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 2,
+        "y": 9
+      },
+      {
+        "id": "tile-3-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 3,
+        "y": 9
+      },
+      {
+        "id": "tile-4-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 4,
+        "y": 9
+      },
+      {
+        "id": "tile-5-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 5,
+        "y": 9
+      },
+      {
+        "id": "tile-6-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 6,
+        "y": 9
+      },
+      {
+        "id": "tile-7-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 7,
+        "y": 9
+      },
+      {
+        "id": "tile-8-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 8,
+        "y": 9
+      },
+      {
+        "id": "tile-9-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 9,
+        "y": 9
+      },
+      {
+        "id": "tile-10-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 10,
+        "y": 9
+      },
+      {
+        "id": "tile-11-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 11,
+        "y": 9
+      },
+      {
+        "id": "tile-12-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 12,
+        "y": 9
+      },
+      {
+        "id": "tile-13-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 13,
+        "y": 9
+      },
+      {
+        "id": "tile-14-9",
+        "kind": "road",
+        "roadConnections": [
+          "north",
+          "east",
+          "south",
+          "west"
+        ],
+        "roadStructureId": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south",
+        "x": 14,
+        "y": 9
+      },
+      {
+        "id": "tile-15-9",
+        "kind": "road",
+        "roadConnections": [
+          "north",
+          "east",
+          "south",
+          "west"
+        ],
+        "roadStructureId": "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south",
+        "x": 15,
+        "y": 9
+      },
+      {
+        "id": "tile-16-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 16,
+        "y": 9
+      },
+      {
+        "id": "tile-17-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 17,
+        "y": 9
+      },
+      {
+        "id": "tile-18-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 18,
+        "y": 9
+      },
+      {
+        "id": "tile-19-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 19,
+        "y": 9
+      },
+      {
+        "id": "tile-20-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 20,
+        "y": 9
+      },
+      {
+        "id": "tile-21-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 21,
+        "y": 9
+      },
+      {
+        "id": "tile-22-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 22,
+        "y": 9
+      },
+      {
+        "id": "tile-23-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 23,
+        "y": 9
+      },
+      {
+        "id": "tile-24-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 24,
+        "y": 9
+      },
+      {
+        "id": "tile-25-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 25,
+        "y": 9
+      },
+      {
+        "id": "tile-26-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "east",
+          "west"
+        ],
+        "x": 26,
+        "y": 9
+      },
+      {
+        "id": "tile-27-9",
+        "kind": "road",
+        "oneWay": "east",
+        "roadConnections": [
+          "west"
+        ],
+        "x": 27,
+        "y": 9
+      },
+      {
+        "id": "tile-0-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 10
+      },
+      {
+        "id": "tile-1-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 10
+      },
+      {
+        "id": "tile-2-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 10
+      },
+      {
+        "id": "tile-3-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 10
+      },
+      {
+        "id": "tile-4-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 10
+      },
+      {
+        "id": "tile-5-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 10
+      },
+      {
+        "id": "tile-6-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 10
+      },
+      {
+        "id": "tile-7-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 10
+      },
+      {
+        "id": "tile-8-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 10
+      },
+      {
+        "id": "tile-9-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 10
+      },
+      {
+        "id": "tile-10-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 10
+      },
+      {
+        "id": "tile-11-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 10
+      },
+      {
+        "id": "tile-12-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 10
+      },
+      {
+        "id": "tile-13-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 10
+      },
+      {
+        "id": "tile-14-10",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 10
+      },
+      {
+        "id": "tile-15-10",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 10
+      },
+      {
+        "id": "tile-16-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 10
+      },
+      {
+        "id": "tile-17-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 10
+      },
+      {
+        "id": "tile-18-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 10
+      },
+      {
+        "id": "tile-19-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 10
+      },
+      {
+        "id": "tile-20-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 10
+      },
+      {
+        "id": "tile-21-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 10
+      },
+      {
+        "id": "tile-22-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 10
+      },
+      {
+        "id": "tile-23-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 10
+      },
+      {
+        "id": "tile-24-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 10
+      },
+      {
+        "id": "tile-25-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 10
+      },
+      {
+        "id": "tile-26-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 10
+      },
+      {
+        "id": "tile-27-10",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 10
+      },
+      {
+        "id": "tile-0-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 11
+      },
+      {
+        "id": "tile-1-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 11
+      },
+      {
+        "id": "tile-2-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 11
+      },
+      {
+        "id": "tile-3-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 11
+      },
+      {
+        "id": "tile-4-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 11
+      },
+      {
+        "id": "tile-5-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 11
+      },
+      {
+        "id": "tile-6-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 11
+      },
+      {
+        "id": "tile-7-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 11
+      },
+      {
+        "id": "tile-8-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 11
+      },
+      {
+        "id": "tile-9-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 11
+      },
+      {
+        "id": "tile-10-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 11
+      },
+      {
+        "id": "tile-11-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 11
+      },
+      {
+        "id": "tile-12-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 11
+      },
+      {
+        "id": "tile-13-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 11
+      },
+      {
+        "id": "tile-14-11",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 11
+      },
+      {
+        "id": "tile-15-11",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 11
+      },
+      {
+        "id": "tile-16-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 11
+      },
+      {
+        "id": "tile-17-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 11
+      },
+      {
+        "id": "tile-18-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 11
+      },
+      {
+        "id": "tile-19-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 11
+      },
+      {
+        "id": "tile-20-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 11
+      },
+      {
+        "id": "tile-21-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 11
+      },
+      {
+        "id": "tile-22-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 11
+      },
+      {
+        "id": "tile-23-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 11
+      },
+      {
+        "id": "tile-24-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 11
+      },
+      {
+        "id": "tile-25-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 11
+      },
+      {
+        "id": "tile-26-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 11
+      },
+      {
+        "id": "tile-27-11",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 11
+      },
+      {
+        "id": "tile-0-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 12
+      },
+      {
+        "id": "tile-1-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-2-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-3-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-4-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-5-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 12
+      },
+      {
+        "id": "tile-6-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-7-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-8-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-9-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-10-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-11-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 12
+      },
+      {
+        "hasTrack": true,
+        "id": "tile-12-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 12
+      },
+      {
+        "id": "tile-13-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 12
+      },
+      {
+        "id": "tile-14-12",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 12
+      },
+      {
+        "id": "tile-15-12",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 12
+      },
+      {
+        "id": "tile-16-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 12
+      },
+      {
+        "id": "tile-17-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 12
+      },
+      {
+        "id": "tile-18-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 12
+      },
+      {
+        "id": "tile-19-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 12
+      },
+      {
+        "id": "tile-20-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 12
+      },
+      {
+        "id": "tile-21-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 12
+      },
+      {
+        "id": "tile-22-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 12
+      },
+      {
+        "id": "tile-23-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 12
+      },
+      {
+        "id": "tile-24-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 12
+      },
+      {
+        "id": "tile-25-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 12
+      },
+      {
+        "id": "tile-26-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 12
+      },
+      {
+        "id": "tile-27-12",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 12
+      },
+      {
+        "id": "tile-0-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 13
+      },
+      {
+        "id": "tile-1-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 13
+      },
+      {
+        "id": "tile-2-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 13
+      },
+      {
+        "id": "tile-3-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 13
+      },
+      {
+        "id": "tile-4-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 13
+      },
+      {
+        "id": "tile-5-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 13
+      },
+      {
+        "id": "tile-6-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 13
+      },
+      {
+        "id": "tile-7-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 13
+      },
+      {
+        "id": "tile-8-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 13
+      },
+      {
+        "id": "tile-9-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 13
+      },
+      {
+        "id": "tile-10-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 13
+      },
+      {
+        "id": "tile-11-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 13
+      },
+      {
+        "id": "tile-12-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 13
+      },
+      {
+        "id": "tile-13-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 13
+      },
+      {
+        "id": "tile-14-13",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 13
+      },
+      {
+        "id": "tile-15-13",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 13
+      },
+      {
+        "id": "tile-16-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 13
+      },
+      {
+        "id": "tile-17-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 13
+      },
+      {
+        "id": "tile-18-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 13
+      },
+      {
+        "id": "tile-19-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 13
+      },
+      {
+        "id": "tile-20-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 13
+      },
+      {
+        "id": "tile-21-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 13
+      },
+      {
+        "id": "tile-22-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 13
+      },
+      {
+        "id": "tile-23-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 13
+      },
+      {
+        "id": "tile-24-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 13
+      },
+      {
+        "id": "tile-25-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 13
+      },
+      {
+        "id": "tile-26-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 13
+      },
+      {
+        "id": "tile-27-13",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 13
+      },
+      {
+        "id": "tile-0-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 14
+      },
+      {
+        "id": "tile-1-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 14
+      },
+      {
+        "id": "tile-2-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 14
+      },
+      {
+        "id": "tile-3-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 14
+      },
+      {
+        "id": "tile-4-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 14
+      },
+      {
+        "id": "tile-5-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 14
+      },
+      {
+        "id": "tile-6-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 14
+      },
+      {
+        "id": "tile-7-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 14
+      },
+      {
+        "id": "tile-8-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 14
+      },
+      {
+        "id": "tile-9-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 14
+      },
+      {
+        "id": "tile-10-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 14
+      },
+      {
+        "id": "tile-11-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 14
+      },
+      {
+        "id": "tile-12-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 14
+      },
+      {
+        "id": "tile-13-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 14
+      },
+      {
+        "id": "tile-14-14",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 14
+      },
+      {
+        "id": "tile-15-14",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 14
+      },
+      {
+        "id": "tile-16-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 14
+      },
+      {
+        "id": "tile-17-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 14
+      },
+      {
+        "id": "tile-18-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 14
+      },
+      {
+        "id": "tile-19-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 14
+      },
+      {
+        "id": "tile-20-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 14
+      },
+      {
+        "id": "tile-21-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 14
+      },
+      {
+        "id": "tile-22-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 14
+      },
+      {
+        "id": "tile-23-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 14
+      },
+      {
+        "id": "tile-24-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 14
+      },
+      {
+        "id": "tile-25-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 14
+      },
+      {
+        "id": "tile-26-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 14
+      },
+      {
+        "id": "tile-27-14",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 14
+      },
+      {
+        "id": "tile-0-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 15
+      },
+      {
+        "id": "tile-1-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 15
+      },
+      {
+        "id": "tile-2-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 15
+      },
+      {
+        "id": "tile-3-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 15
+      },
+      {
+        "id": "tile-4-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 15
+      },
+      {
+        "id": "tile-5-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 15
+      },
+      {
+        "id": "tile-6-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 15
+      },
+      {
+        "id": "tile-7-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 15
+      },
+      {
+        "id": "tile-8-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 15
+      },
+      {
+        "id": "tile-9-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 15
+      },
+      {
+        "id": "tile-10-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 15
+      },
+      {
+        "id": "tile-11-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 15
+      },
+      {
+        "id": "tile-12-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 15
+      },
+      {
+        "id": "tile-13-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 15
+      },
+      {
+        "id": "tile-14-15",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 15
+      },
+      {
+        "id": "tile-15-15",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 15
+      },
+      {
+        "id": "tile-16-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 15
+      },
+      {
+        "id": "tile-17-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 15
+      },
+      {
+        "id": "tile-18-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 15
+      },
+      {
+        "id": "tile-19-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 15
+      },
+      {
+        "id": "tile-20-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 15
+      },
+      {
+        "id": "tile-21-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 15
+      },
+      {
+        "id": "tile-22-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 15
+      },
+      {
+        "id": "tile-23-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 15
+      },
+      {
+        "id": "tile-24-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 15
+      },
+      {
+        "id": "tile-25-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 15
+      },
+      {
+        "id": "tile-26-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 15
+      },
+      {
+        "id": "tile-27-15",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 15
+      },
+      {
+        "id": "tile-0-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 16
+      },
+      {
+        "id": "tile-1-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 16
+      },
+      {
+        "id": "tile-2-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 16
+      },
+      {
+        "id": "tile-3-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 16
+      },
+      {
+        "id": "tile-4-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 16
+      },
+      {
+        "id": "tile-5-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 16
+      },
+      {
+        "id": "tile-6-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 16
+      },
+      {
+        "id": "tile-7-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 16
+      },
+      {
+        "id": "tile-8-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 16
+      },
+      {
+        "id": "tile-9-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 16
+      },
+      {
+        "id": "tile-10-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 16
+      },
+      {
+        "id": "tile-11-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 16
+      },
+      {
+        "id": "tile-12-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 16
+      },
+      {
+        "id": "tile-13-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 16
+      },
+      {
+        "id": "tile-14-16",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 14,
+        "y": 16
+      },
+      {
+        "id": "tile-15-16",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north",
+          "south"
+        ],
+        "x": 15,
+        "y": 16
+      },
+      {
+        "id": "tile-16-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 16
+      },
+      {
+        "id": "tile-17-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 16
+      },
+      {
+        "id": "tile-18-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 16
+      },
+      {
+        "id": "tile-19-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 16
+      },
+      {
+        "id": "tile-20-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 16
+      },
+      {
+        "id": "tile-21-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 16
+      },
+      {
+        "id": "tile-22-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 16
+      },
+      {
+        "id": "tile-23-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 16
+      },
+      {
+        "id": "tile-24-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 16
+      },
+      {
+        "id": "tile-25-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 16
+      },
+      {
+        "id": "tile-26-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 16
+      },
+      {
+        "id": "tile-27-16",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 16
+      },
+      {
+        "id": "tile-0-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 0,
+        "y": 17
+      },
+      {
+        "id": "tile-1-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 1,
+        "y": 17
+      },
+      {
+        "id": "tile-2-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 2,
+        "y": 17
+      },
+      {
+        "id": "tile-3-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 3,
+        "y": 17
+      },
+      {
+        "id": "tile-4-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 4,
+        "y": 17
+      },
+      {
+        "id": "tile-5-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 5,
+        "y": 17
+      },
+      {
+        "id": "tile-6-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 6,
+        "y": 17
+      },
+      {
+        "id": "tile-7-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 7,
+        "y": 17
+      },
+      {
+        "id": "tile-8-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 8,
+        "y": 17
+      },
+      {
+        "id": "tile-9-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 9,
+        "y": 17
+      },
+      {
+        "id": "tile-10-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 10,
+        "y": 17
+      },
+      {
+        "id": "tile-11-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 11,
+        "y": 17
+      },
+      {
+        "id": "tile-12-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 12,
+        "y": 17
+      },
+      {
+        "id": "tile-13-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 13,
+        "y": 17
+      },
+      {
+        "id": "tile-14-17",
+        "kind": "road",
+        "oneWay": "south",
+        "roadConnections": [
+          "north"
+        ],
+        "x": 14,
+        "y": 17
+      },
+      {
+        "id": "tile-15-17",
+        "kind": "road",
+        "oneWay": "north",
+        "roadConnections": [
+          "north"
+        ],
+        "x": 15,
+        "y": 17
+      },
+      {
+        "id": "tile-16-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 16,
+        "y": 17
+      },
+      {
+        "id": "tile-17-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 17,
+        "y": 17
+      },
+      {
+        "id": "tile-18-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 18,
+        "y": 17
+      },
+      {
+        "id": "tile-19-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 19,
+        "y": 17
+      },
+      {
+        "id": "tile-20-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 20,
+        "y": 17
+      },
+      {
+        "id": "tile-21-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 17
+      },
+      {
+        "id": "tile-22-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 17
+      },
+      {
+        "id": "tile-23-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 23,
+        "y": 17
+      },
+      {
+        "id": "tile-24-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 24,
+        "y": 17
+      },
+      {
+        "id": "tile-25-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 25,
+        "y": 17
+      },
+      {
+        "id": "tile-26-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 26,
+        "y": 17
+      },
+      {
+        "id": "tile-27-17",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 27,
+        "y": 17
+      }
+    ],
+    "width": 28
+  },
+  "metrics": {
+    "averageWaitSeconds": 0.0,
+    "completedTrips": 0,
+    "lateTrips": 0,
+    "lossReason": null,
+    "state": "running",
+    "totalWaitSeconds": 7.39999999999992,
+    "tripOutcomes": [],
+    "unservedTrips": 0,
+    "waitingTripCount": 0
+  },
+  "nextTripSequence": 5,
+  "paused": true,
+  "rules": {
+    "economyPreset": "standard",
+    "gameMode": "sandbox",
+    "sandbox": {
+      "demandMultiplier": 1.0,
+      "moveInRate": "paused",
+      "startingCapital": 120000,
+      "templateId": "crossroads"
+    }
+  },
+  "scenario": {
+    "growthWaves": [],
+    "name": "Crossroads",
+    "objectives": null
+  },
+  "schemaVersion": 4,
+  "sims": [
+    {
+      "commuteDay": 0,
+      "home": {
+        "x": 2,
+        "y": 2
+      },
+      "id": "sim-001",
+      "outboundArrivedToday": false,
+      "outboundResolvedToday": false,
+      "position": {
+        "x": 2,
+        "y": 2
+      },
+      "returnResolvedToday": false,
+      "returnedHomeToday": false,
+      "shiftTemplate": "standard",
+      "workerProfile": "worker",
+      "workplace": {
+        "x": 10,
+        "y": 2
+      }
+    },
+    {
+      "commuteDay": 0,
+      "home": {
+        "x": 3,
+        "y": 2
+      },
+      "id": "sim-002",
+      "outboundArrivedToday": false,
+      "outboundResolvedToday": false,
+      "position": {
+        "x": 3,
+        "y": 2
+      },
+      "returnResolvedToday": false,
+      "returnedHomeToday": false,
+      "shiftTemplate": "standard",
+      "workerProfile": "worker",
+      "workplace": {
+        "x": 11,
+        "y": 2
+      }
+    },
+    {
+      "commuteDay": 0,
+      "home": {
+        "x": 2,
+        "y": 2
+      },
+      "id": "sim-003",
+      "outboundArrivedToday": false,
+      "outboundResolvedToday": false,
+      "position": {
+        "x": 2,
+        "y": 2
+      },
+      "returnResolvedToday": false,
+      "returnedHomeToday": false,
+      "shiftTemplate": "standard",
+      "workerProfile": "worker",
+      "workplace": {
+        "x": 10,
+        "y": 3
+      }
+    },
+    {
+      "commuteDay": 0,
+      "home": {
+        "x": 3,
+        "y": 2
+      },
+      "id": "sim-004",
+      "outboundArrivedToday": false,
+      "outboundResolvedToday": false,
+      "position": {
+        "x": 3,
+        "y": 2
+      },
+      "returnResolvedToday": false,
+      "returnedHomeToday": false,
+      "shiftTemplate": "standard",
+      "workerProfile": "worker",
+      "workplace": {
+        "x": 11,
+        "y": 3
+      }
+    }
+  ],
+  "speed": 1,
+  "time": 400.9,
+  "transit": {
+    "metroLines": [
+      {
+        "active": true,
+        "color": "#2867b2",
+        "id": "metro-001",
+        "legs": [
+          {
+            "currentPath": null,
+            "direction": "loop",
+            "estimatedSeconds": null,
+            "failureReason": "networkDisconnected",
+            "fromWaypointId": "station-001",
+            "kind": "service",
+            "lastValidPath": {
+              "kind": "track",
+              "steps": [
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 2.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 2,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 3,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 4,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 5,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 6,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 7,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 8,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 10.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "east",
+                  "position": {
+                    "x": 9,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                }
+              ],
+              "totalTravelSeconds": 5.0
+            },
+            "status": "networkDisconnected",
+            "toWaypointId": "station-002"
+          },
+          {
+            "currentPath": null,
+            "direction": "loop",
+            "estimatedSeconds": null,
+            "failureReason": "networkDisconnected",
+            "fromWaypointId": "station-002",
+            "kind": "service",
+            "lastValidPath": {
+              "kind": "track",
+              "steps": [
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 10.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 10,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 9,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 8,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 7,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 6,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 5,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 4,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                },
+                {
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 12.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 2.0,
+                      "y": 12.0
+                    }
+                  },
+                  "heading": "west",
+                  "position": {
+                    "x": 3,
+                    "y": 12
+                  },
+                  "travelSeconds": 0.625
+                }
+              ],
+              "totalTravelSeconds": 5.0
+            },
+            "status": "networkDisconnected",
+            "toWaypointId": "station-001"
+          }
+        ],
+        "name": "Metro 1",
+        "pathBroken": true,
+        "pattern": "loop",
+        "revision": 1,
+        "stationIds": [
+          "station-001",
+          "station-002"
+        ],
+        "vehicleIds": [
+          "vehicle-002"
+        ]
+      }
+    ],
+    "routes": [
+      {
+        "active": true,
+        "color": "#e04f39",
+        "id": "route-001",
+        "legs": [
+          {
+            "currentPath": {
+              "kind": "road",
+              "steps": [
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 2.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 2,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 3,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 4,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 5,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 6,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 7,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 8,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 10.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 9,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                }
+              ],
+              "totalTravelSeconds": 10.0
+            },
+            "direction": "loop",
+            "estimatedSeconds": 10.0,
+            "fromWaypointId": "stop-001",
+            "kind": "service",
+            "lastValidPath": {
+              "kind": "road",
+              "steps": [
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 2.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 2,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 3,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 4,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 5,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 6,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 7,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 8,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "east",
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 10.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "east",
+                  "movement": "straight",
+                  "position": {
+                    "x": 9,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                }
+              ],
+              "totalTravelSeconds": 10.0
+            },
+            "status": "connected",
+            "toWaypointId": "stop-002"
+          },
+          {
+            "currentPath": {
+              "kind": "road",
+              "steps": [
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 10.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 10,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 9,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 8,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 7,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 6,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 5,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 4,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 2.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 3,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                }
+              ],
+              "totalTravelSeconds": 10.0
+            },
+            "direction": "loop",
+            "estimatedSeconds": 10.0,
+            "fromWaypointId": "stop-002",
+            "kind": "service",
+            "lastValidPath": {
+              "kind": "road",
+              "steps": [
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 10.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 9.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 10,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 9.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 8.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 9,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 8.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 7.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 8,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 7.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 6.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 7,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 6.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 5.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 6,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 5.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 4.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 5,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 4.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 3.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 4,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                },
+                {
+                  "enteringHeading": "west",
+                  "geometry": {
+                    "from": {
+                      "x": 3.0,
+                      "y": 5.0
+                    },
+                    "kind": "line",
+                    "to": {
+                      "x": 2.0,
+                      "y": 5.0
+                    }
+                  },
+                  "leavingHeading": "west",
+                  "movement": "straight",
+                  "position": {
+                    "x": 3,
+                    "y": 5
+                  },
+                  "travelSeconds": 1.25
+                }
+              ],
+              "totalTravelSeconds": 10.0
+            },
+            "status": "connected",
+            "toWaypointId": "stop-001"
+          }
+        ],
+        "name": "Bus 1",
+        "pathBroken": false,
+        "pattern": "loop",
+        "revision": 0,
+        "stopIds": [
+          "stop-001",
+          "stop-002"
+        ],
+        "vehicleIds": [
+          "vehicle-001"
+        ]
+      }
+    ],
+    "stations": [
+      {
+        "id": "station-001",
+        "platforms": [
+          {
+            "capacity": 300,
+            "id": "station-001-p0",
+            "label": "A",
+            "routeIds": [
+              "metro-001"
+            ]
+          },
+          {
+            "capacity": 300,
+            "id": "station-001-p1",
+            "label": "B",
+            "routeIds": []
+          }
+        ],
+        "position": {
+          "x": 2,
+          "y": 12
+        },
+        "status": "present"
+      },
+      {
+        "id": "station-002",
+        "platforms": [
+          {
+            "capacity": 300,
+            "id": "station-002-p0",
+            "label": "A",
+            "routeIds": [
+              "metro-001"
+            ]
+          },
+          {
+            "capacity": 300,
+            "id": "station-002-p1",
+            "label": "B",
+            "routeIds": []
+          }
+        ],
+        "position": {
+          "x": 10,
+          "y": 12
+        },
+        "status": "present"
+      }
+    ],
+    "stops": [
+      {
+        "id": "stop-001",
+        "kind": "busStop",
+        "platforms": [
+          {
+            "capacity": 50,
+            "id": "stop-001-p0",
+            "label": "A",
+            "routeIds": [
+              "route-001"
+            ]
+          }
+        ],
+        "position": {
+          "x": 2,
+          "y": 4
+        },
+        "roadAccess": {
+          "preferredHeading": "east",
+          "roadPoint": {
+            "x": 2,
+            "y": 5
+          }
+        },
+        "status": "present"
+      },
+      {
+        "id": "stop-002",
+        "kind": "busStop",
+        "platforms": [
+          {
+            "capacity": 50,
+            "id": "stop-002-p0",
+            "label": "A",
+            "routeIds": [
+              "route-001"
+            ]
+          }
+        ],
+        "position": {
+          "x": 10,
+          "y": 4
+        },
+        "roadAccess": {
+          "preferredHeading": "east",
+          "roadPoint": {
+            "x": 10,
+            "y": 5
+          }
+        },
+        "status": "present"
+      }
+    ],
+    "vehicles": [
+      {
+        "capacity": 18,
+        "id": "vehicle-001",
+        "itineraryIndex": 0,
+        "lineId": "route-001",
+        "mode": "bus",
+        "parkedPosition": null,
+        "passengerIds": [
+          "trip-day-0-trip-003"
+        ],
+        "pathStepIndex": 0,
+        "stepProgress": 0.7199999999999818
+      },
+      {
+        "capacity": 90,
+        "id": "vehicle-002",
+        "itineraryIndex": 0,
+        "lineId": "metro-001",
+        "mode": "metro",
+        "parkedPosition": {
+          "x": 2.0,
+          "y": 12.0
+        },
+        "passengerIds": [],
+        "pathStepIndex": 0,
+        "stepProgress": 0.0
+      }
+    ]
+  },
+  "tripSequenceDay": 0
+}

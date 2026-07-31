@@ -147,6 +147,88 @@ pub fn rich_fixture() -> GameSnapshot {
     snapshot
 }
 
+/// A paused, persistence-valid snapshot used by every host-parity fixture.
+///
+/// The state is built entirely through public engine operations. After the
+/// rich transit/trip state exists, removing one metro track tile produces a
+/// valid broken metro line whose `currentPath` serializes as `null` while the
+/// active bus trip retains its route plan.
+pub fn host_parity_fixture() -> GameSnapshot {
+    let mut engine = GameEngine::from_snapshot(rich_fixture())
+        .expect("rich fixture must restore into an engine");
+    apply(
+        &mut engine,
+        GameIntent::RemoveAtTile {
+            point: Point { x: 6, y: 12 },
+        },
+    );
+
+    let snapshot = engine
+        .snapshot_for_save()
+        .expect("host-parity fixture must save");
+    assert!(snapshot.paused, "host-parity fixture must be paused");
+    caelum_core::validate_snapshot(&snapshot).expect("host-parity fixture must validate");
+    assert!(
+        snapshot.scenario.objectives.is_none(),
+        "sandbox fixture must omit objectives"
+    );
+    assert!(
+        snapshot.metrics.loss_reason.is_none(),
+        "sandbox fixture must omit a loss reason"
+    );
+    assert!(
+        snapshot
+            .active_trips
+            .iter()
+            .any(|trip| trip.route_plan.is_some()),
+        "fixture must contain an active trip with a route plan"
+    );
+    assert!(
+        snapshot.active_trips.iter().any(|trip| {
+            trip.route_plan.as_ref().is_some_and(|plan| {
+                plan.legs.iter().any(|leg| {
+                    leg.service_direction.is_none()
+                        && leg.board_itinerary_index.is_none()
+                        && leg.alight_itinerary_index.is_none()
+                })
+            })
+        }),
+        "fixture must contain a route-plan leg with required null option fields"
+    );
+    assert!(
+        snapshot
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.parked_position.is_none()),
+        "fixture must contain a vehicle without a parked position"
+    );
+
+    let serialized = serde_json::to_value(&snapshot).expect("fixture must serialize");
+    assert!(
+        ["routes", "metroLines"].iter().any(|collection| {
+            serialized["transit"][collection]
+                .as_array()
+                .is_some_and(|lines| {
+                    lines.iter().any(|line| {
+                        line["legs"].as_array().is_some_and(|legs| {
+                            legs.iter().any(|leg| {
+                                leg.get("currentPath")
+                                    .is_some_and(serde_json::Value::is_null)
+                                    || leg
+                                        .get("lastValidPath")
+                                        .is_some_and(serde_json::Value::is_null)
+                            })
+                        })
+                    })
+                })
+        }),
+        "fixture must serialize a non-skipped route-path option as null"
+    );
+
+    snapshot
+}
+
 /// A minimal paused snapshot (no transit) for tests that only need the shell.
 pub fn paused_snapshot() -> GameSnapshot {
     let mut snapshot = GameEngine::new().snapshot();
