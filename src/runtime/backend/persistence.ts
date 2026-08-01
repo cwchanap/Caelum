@@ -869,12 +869,24 @@ function snapshotPersistenceFailure(
 //     object to forge a valid closed shape),
 //   - materializes accessors/Proxy get-traps exactly once via property access.
 // Non-plain objects (Error, Date, class instances, proxies with a non-Object
-// prototype), functions, and symbols-as-values are kept by reference rather
-// than recursed into: they can never satisfy a closed-shape validator (which
-// requires plain objects/primitives), so the detached copy is discarded as
-// "unrecognized" and the reference never escapes the backend boundary.
+// prototype) are replaced with a DetachedNonPlainMarker sentinel rather than
+// retained by reference: a stateful getPrototypeOf proxy can appear plain on
+// the initial isPlainObject check but non-plain during detachment, then plain
+// again during validation, which would let the original proxy escape as a
+// recognized error. The sentinel's prototype is neither Object.prototype nor
+// null, so isPlainObject always returns false and the enclosing candidate is
+// permanently invalid. Functions and symbols-as-values are returned as-is;
+// they can never satisfy a closed-shape validator, so the candidate is
+// discarded and the reference is not retained in any returned error.
 function detachPersistenceFailure(value: PlainObject): unknown {
   return detachValue(value, new WeakMap<object, unknown>());
+}
+
+class DetachedNonPlainMarker {
+  // Replaces non-plain object references during detachment so a stateful
+  // getPrototypeOf proxy cannot reappear as plain during validation and
+  // escape as a recognized error. Instances carry a non-Object, non-null
+  // prototype so isPlainObject always returns false.
 }
 
 function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
@@ -892,15 +904,26 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     seen.set(value, clone);
     for (const key of Reflect.ownKeys(value)) {
       if (key === "length") continue;
-      clone[key as never] = detachValue(value[key as never], seen);
+      // Use defineProperty instead of assignment so an own "__proto__" key
+      // is preserved as a data property rather than invoking the inherited
+      // prototype setter (which would silently drop the key and could let a
+      // malformed shape pass the closed-shape guard).
+      Object.defineProperty(clone, key, {
+        value: detachValue(value[key as never], seen),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
     return clone;
   }
   if (!isPlainObject(value)) {
     // Non-plain objects (Error, Date, Map, class instances, proxies with a
-    // non-Object prototype) — keep the reference; validators reject them and
-    // the candidate is discarded as "unrecognized".
-    return value;
+    // non-Object prototype) — replace with a sentinel so a stateful
+    // getPrototypeOf proxy cannot toggle back to plain during validation
+    // and escape as a recognized error. The sentinel always fails
+    // isPlainObject, so the enclosing candidate is permanently invalid.
+    return new DetachedNonPlainMarker();
   }
   const clone: Record<PropertyKey, unknown> = {};
   seen.set(value, clone);
@@ -908,7 +931,16 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     // Access via value[key] to materialize accessors and Proxy get-traps
     // exactly once. This does NOT invoke toJSON (toJSON is only called by
     // JSON.stringify, not by direct property access).
-    clone[key] = detachValue(value[key as keyof PlainObject], seen);
+    // Use defineProperty instead of assignment so an own "__proto__" key
+    // is preserved as a data property rather than invoking the inherited
+    // prototype setter (which would silently drop the key and could let a
+    // malformed shape pass the closed-shape guard).
+    Object.defineProperty(clone, key, {
+      value: detachValue(value[key as keyof PlainObject], seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return clone;
 }
