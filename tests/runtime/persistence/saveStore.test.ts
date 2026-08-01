@@ -89,3 +89,79 @@ it("does not mutate caller-owned summary arrays", () => {
     "newer",
   ]);
 });
+
+it("sorts equal-timestamp cities with ascending input IDs into ascending order", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({
+        cityId: "city-a",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+      makeCitySummary({
+        cityId: "city-b",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+      makeCitySummary({
+        cityId: "city-c",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-a", "city-b", "city-c"]);
+});
+
+it("treats equal city IDs as a stable tie", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({
+        cityId: "city-same",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+      makeCitySummary({
+        cityId: "city-same",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-same", "city-same"]);
+});
+
+it("ranks two cities with invalid timestamps by ID", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({ cityId: "city-b", savedAt: "not-a-timestamp" }),
+      makeCitySummary({ cityId: "city-a", savedAt: "also-invalid" }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-a", "city-b"]);
+});
+
+it("ranks a valid timestamp before an invalid timestamp regardless of input order", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({ cityId: "city-invalid", savedAt: "not-a-timestamp" }),
+      makeCitySummary({
+        cityId: "city-valid",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-valid", "city-invalid"]);
+});
+
+it("ranks a valid timestamp before a null timestamp", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({ cityId: "city-null", savedAt: null }),
+      makeCitySummary({
+        cityId: "city-valid",
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-valid", "city-null"]);
+});
+
+it("ranks two null-timestamp cities by ID", () => {
+  expect(
+    sortCitySummaries([
+      makeCitySummary({ cityId: "city-b", savedAt: null }),
+      makeCitySummary({ cityId: "city-a", savedAt: null }),
+    ]).map((value) => value.cityId),
+  ).toEqual(["city-a", "city-b"]);
+});
