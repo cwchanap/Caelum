@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Issue:** HPA-498  
+**Depends on:** merged HPA-342 design PR #21  
+**Blocks:** HPA-343, HPA-344, HPA-499
+
 **Goal:** Implement HPA-498’s versioned save envelope, strict compatibility inspection, host-neutral `SaveStore`, deterministic in-memory adapter, and reusable adapter contract suite.
 
 **Architecture:** `src/persistence/` owns host metadata and storage contracts while treating Rust gameplay snapshots as opaque values. Header inspection validates only the closed envelope vocabulary. The in-memory adapter is the executable reference for atomic replacement, create-only generation records, corruption visibility, deterministic ordering, and persistent autosave high-water state.
