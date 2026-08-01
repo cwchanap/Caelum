@@ -500,7 +500,7 @@ it("keeps high-water after pruning and rejects reuse", async () => {
 
 Add tests for create-only IDs, city mismatch, derived timestamps, checkpoint rename preservation, failed write high-water atomicity, city-delete cleanup, and duplicate null high-water.
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [ ] **Step 2: Run and confirm failure**
 
 Run: `bunx vitest run --project runtime tests/runtime/persistence/memorySaveStore.test.ts`
 
