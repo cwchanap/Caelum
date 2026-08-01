@@ -73,6 +73,28 @@ it("accepts an exact compatible header without interpreting its gameplay body", 
   expect(inspectSaveEnvelope(envelope)).toEqual({ ok: true, envelope });
 });
 
+it("materializes a stable header from stateful getters", () => {
+  const envelope = makeEnvelope();
+  let savedAtReads = 0;
+  const statefulEnvelope = Object.defineProperty({ ...envelope }, "savedAt", {
+    enumerable: true,
+    get() {
+      savedAtReads += 1;
+      return savedAtReads === 1 ? "2026-08-01T10:05:00.000Z" : 42;
+    },
+  });
+
+  const result = inspectSaveEnvelope(statefulEnvelope);
+  const readsDuringInspection = savedAtReads;
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(readsDuringInspection).toBe(1);
+  expect(result.envelope).not.toBe(statefulEnvelope);
+  expect(result.envelope.savedAt).toBe("2026-08-01T10:05:00.000Z");
+  expect(result.envelope.snapshot).toBe(envelope.snapshot);
+});
+
 it.each([
   [{}, { status: "corruptHeader" }],
   [
