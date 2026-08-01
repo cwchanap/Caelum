@@ -352,7 +352,25 @@ function isPersistenceMapSize(value: unknown): value is PersistenceMapSize {
 }
 
 function isPointArray(value: unknown): value is Point[] {
-  return Array.isArray(value) && value.every(isPoint);
+  // Array.prototype.every skips holes and ignores non-index own properties,
+  // so it would accept sparse arrays (new Array(3)) and arrays carrying
+  // extra string/symbol keys — shapes Rust/JSON can never emit. Require every
+  // index 0..length-1 to be an own property (no holes), reject any extra own
+  // key (symbol or non-index string) by checking the own-key count, then
+  // verify every element is a Point.
+  if (!Array.isArray(value)) return false;
+  const len = value.length;
+  for (let i = 0; i < len; i++) {
+    if (!Object.prototype.hasOwnProperty.call(value, i)) return false;
+  }
+  // After verifying all indices are own properties, the own-key count must be
+  // exactly len + 1 (indices + "length"). Any extra key (symbol or non-index
+  // string) makes the count exceed len + 1.
+  if (Reflect.ownKeys(value).length !== len + 1) return false;
+  for (let i = 0; i < len; i++) {
+    if (!isPoint(value[i])) return false;
+  }
+  return true;
 }
 
 function isExactDetails(
@@ -900,7 +918,12 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   }
   if (seen.has(value)) return seen.get(value);
   if (Array.isArray(value)) {
-    const clone: unknown[] = [];
+    // Initialize with new Array(value.length) instead of [] so the clone
+    // preserves the original length. Starting from [] and skipping the
+    // "length" key would drop trailing holes: a sparse new Array(3) would
+    // become [], a different value than the input. Preserving length keeps
+    // the detached copy faithful so isPointArray can reject sparse arrays.
+    const clone: unknown[] = new Array(value.length);
     seen.set(value, clone);
     for (const key of Reflect.ownKeys(value)) {
       if (key === "length") continue;
