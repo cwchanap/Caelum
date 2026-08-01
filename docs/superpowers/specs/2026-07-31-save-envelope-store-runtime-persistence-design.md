@@ -732,7 +732,7 @@ whenDead: () => ({
 })
 ```
 
-Unexpected thrown failures map to the appropriate typed backend/store result. They never silently resolve a `RuntimeSnapshot` where a persistence result was promised. HPA-499 does not revive an already-dead runtime.
+Unexpected thrown backend invocation failures map to the existing typed HPA-341 host failure for the relevant persistence operation; unexpected store failures map to `SaveStoreError`. They never silently resolve a `RuntimeSnapshot` where a persistence result was promised. HPA-499 does not revive an already-dead runtime.
 
 ## 12. Per-city persistence queue and gameplay-bearing writes
 
