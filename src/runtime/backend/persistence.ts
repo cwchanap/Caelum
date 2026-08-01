@@ -814,23 +814,27 @@ type PersistenceFailureSnapshot =
 function snapshotPersistenceFailure(
   value: unknown,
 ): PersistenceFailureSnapshot {
-  // Materialize a detached JSON-compatible snapshot first so hostile nested
-  // getters, proxies, or post-validation mutations on the original rejection
-  // can never escape the backend boundary. Validation and the returned error
-  // both reference this detached copy, never the untrusted input.
+  // A non-plain top-level value (Error, Date, class instance, revoked proxy,
+  // function, primitive) cannot be a recognized operation error. Classify it
+  // directly without detaching so §9.3 maps it to invokeFailed and the
+  // diagnostic describes the original value.
+  if (!isPlainObject(value)) {
+    return {
+      kind: "unrecognized",
+      plain: false,
+      diagnostic: safeDiagnostic(value),
+    };
+  }
+  // Materialize a detached copy that preserves the original own-key shape —
+  // including undefined-valued and symbol-keyed properties — and does NOT
+  // honor toJSON, so the closed-shape guard (hasExactKeys) sees the real key
+  // set rather than a JSON-sanitized one. Accessors and Proxy get-traps are
+  // invoked exactly once during materialization; the returned error
+  // references this detached plain-data copy, never the untrusted input, so
+  // hostile getters/proxies and post-validation mutations cannot escape.
   let detached: unknown;
   try {
-    const serialized = JSON.stringify(value);
-    if (serialized === undefined) {
-      // Non-serializable top-level (function, symbol, undefined) — cannot be
-      // a recognized operation error or a classifiable plain object.
-      return {
-        kind: "unrecognized",
-        plain: isPlainObject(value),
-        diagnostic: safeDiagnostic(value),
-      };
-    }
-    detached = JSON.parse(serialized);
+    detached = detachPersistenceFailure(value);
   } catch {
     return {
       kind: "unreadable",
@@ -844,11 +848,9 @@ function snapshotPersistenceFailure(
     }
     return {
       kind: "unrecognized",
-      // Classify plain-ness from the original value: an Error or hostile
-      // Proxy is not a plain object, so §9.3 maps it to invokeFailed rather
-      // than malformedError. The detached copy is used only for validation
-      // and as the returned error; the diagnostic describes the original.
-      plain: isPlainObject(value),
+      // value is a plain object (checked above), so §9.3 maps a non-recognized
+      // shape to malformedError. The diagnostic describes the original.
+      plain: true,
       diagnostic: safeDiagnostic(value),
     };
   } catch {
@@ -857,6 +859,58 @@ function snapshotPersistenceFailure(
       diagnostic: "[unreadable persistence failure]",
     };
   }
+}
+
+// Deep-clones a plain-object rejection into a detached plain-data copy for
+// validation and return. Unlike JSON.parse(JSON.stringify(...)), this:
+//   - preserves undefined-valued own properties (JSON.stringify drops them),
+//   - preserves symbol-keyed own properties (JSON.stringify drops them),
+//   - does NOT honor toJSON() (JSON.stringify invokes it, allowing a hostile
+//     object to forge a valid closed shape),
+//   - materializes accessors/Proxy get-traps exactly once via property access.
+// Non-plain objects (Error, Date, class instances, proxies with a non-Object
+// prototype), functions, and symbols-as-values are kept by reference rather
+// than recursed into: they can never satisfy a closed-shape validator (which
+// requires plain objects/primitives), so the detached copy is discarded as
+// "unrecognized" and the reference never escapes the backend boundary.
+function detachPersistenceFailure(value: PlainObject): unknown {
+  return detachValue(value, new WeakMap<object, unknown>());
+}
+
+function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (value === null) return null;
+  if (typeof value !== "object") {
+    // Primitives (string, number, boolean, bigint, undefined, symbol) and
+    // functions are returned as-is. Functions/symbols-as-values can never
+    // satisfy a closed-shape validator, so the enclosing candidate is
+    // discarded; the reference is not retained in any returned error.
+    return value;
+  }
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    for (const key of Reflect.ownKeys(value)) {
+      if (key === "length") continue;
+      clone[key as never] = detachValue(value[key as never], seen);
+    }
+    return clone;
+  }
+  if (!isPlainObject(value)) {
+    // Non-plain objects (Error, Date, Map, class instances, proxies with a
+    // non-Object prototype) — keep the reference; validators reject them and
+    // the candidate is discarded as "unrecognized".
+    return value;
+  }
+  const clone: Record<PropertyKey, unknown> = {};
+  seen.set(value, clone);
+  for (const key of Reflect.ownKeys(value)) {
+    // Access via value[key] to materialize accessors and Proxy get-traps
+    // exactly once. This does NOT invoke toJSON (toJSON is only called by
+    // JSON.stringify, not by direct property access).
+    clone[key] = detachValue(value[key as keyof PlainObject], seen);
+  }
+  return clone;
 }
 
 function normalizePersistenceFailure(
