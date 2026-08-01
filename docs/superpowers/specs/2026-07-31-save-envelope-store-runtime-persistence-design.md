@@ -608,6 +608,8 @@ Expected read, compatibility, validation, precondition, and write errors are non
 
 A superseded operation is an internal result outcome, not a `PersistenceCoordinatorError`. The original caller can branch on `status` without polluting the current runtime error view.
 
+The typed operation surface is normative; concrete method names may be split by source or workflow, but every async coordinator caller receives exactly this result shape.
+
 ## 10. Runtime persistence view and internal state
 
 ### 10.1 Public view
