@@ -324,9 +324,6 @@ export function createMemorySaveStore(options?: {
       );
     }
     const cityId = inspected.envelope.city.id;
-    if (cityId.length === 0) {
-      return errorResult("writeWorkingSave", "corruptRecord", { cityId });
-    }
     const failure = injectedFailure<CitySummary>("writeWorkingSave", {
       cityId,
     });
@@ -361,11 +358,12 @@ export function createMemorySaveStore(options?: {
       workingRecords.get(input.value.cityId),
     );
     if (!source.ok) return source;
-    const detachedSource = cloneResult(source.value, "renameCity", context);
-    if (!detachedSource.ok) return detachedSource;
+    const detachedSource = structuredClone(
+      source.value,
+    ) as InspectedSaveEnvelope;
     const renamed: InspectedSaveEnvelope = {
-      ...detachedSource.value,
-      city: { ...detachedSource.value.city, name: input.value.name },
+      ...detachedSource,
+      city: { ...detachedSource.city, name: input.value.name },
     };
 
     workingRecords.set(input.value.cityId, renamed);
@@ -413,14 +411,11 @@ export function createMemorySaveStore(options?: {
         cityId: targetCityId,
       });
     }
-    const detachedSource = cloneResult(
+    const detachedSource = structuredClone(
       source.value,
-      "duplicateCity",
-      sourceContext,
-    );
-    if (!detachedSource.ok) return detachedSource;
+    ) as InspectedSaveEnvelope;
     const duplicate: InspectedSaveEnvelope = {
-      ...detachedSource.value,
+      ...detachedSource,
       city: {
         id: targetCityId,
         name: input.value.identity.name,
@@ -527,7 +522,6 @@ export function createMemorySaveStore(options?: {
       "writeCheckpoint",
       context,
     );
-    if (!result.ok) return result;
 
     const committedRecords = cityRecords ?? new Map<string, StoredCheckpoint>();
     committedRecords.set(record.checkpointId, record);
@@ -566,24 +560,21 @@ export function createMemorySaveStore(options?: {
     if (!cityRecords || !existing) {
       return errorResult("renameCheckpoint", "notFound", context);
     }
-    const candidate = cloneResult(
-      { ...existing, name: input.value.name },
-      "renameCheckpoint",
-      context,
-    );
-    if (!candidate.ok) return candidate;
+    const candidate = structuredClone({
+      ...existing,
+      name: input.value.name,
+    }) as StoredCheckpoint;
     const result = cloneResult(
       checkpointSummary(
-        candidate.value,
+        candidate,
         input.value.cityId,
         input.value.checkpointId,
       ),
       "renameCheckpoint",
       context,
     );
-    if (!result.ok) return result;
 
-    cityRecords.set(input.value.checkpointId, candidate.value);
+    cityRecords.set(input.value.checkpointId, candidate);
     return result;
   };
 
@@ -692,7 +683,6 @@ export function createMemorySaveStore(options?: {
       "writeAutosave",
       context,
     );
-    if (!result.ok) return result;
 
     const committedRecords = cityRecords ?? new Map<string, StoredAutosave>();
     committedRecords.set(record.autosaveId, record);

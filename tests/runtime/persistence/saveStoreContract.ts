@@ -470,6 +470,43 @@ export function defineSaveStoreContract(
           emptyIdentity,
         );
       });
+
+      it("classifies a working record whose envelope city id disagrees with its storage key as corrupt", async () => {
+        const { store, seedRawWorking } = createHarness();
+        const mismatched = envelopeFor("city-other", "Other");
+        seedRawWorking("city-1", mismatched);
+
+        expect(await expectOk(store.listCities())).toEqual([
+          {
+            cityId: "city-1",
+            name: null,
+            cityCreatedAt: null,
+            savedAt: null,
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          },
+        ]);
+
+        await expectError(
+          store.renameCity("city-1", "Renamed"),
+          "corruptRecord",
+        );
+        await expectError(
+          store.duplicateCity("city-1", {
+            cityId: "city-copy",
+            name: "Copy",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "corruptRecord",
+        );
+        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+          mismatched,
+        );
+      });
     });
 
     describe("create-only conflicts", () => {
@@ -1337,6 +1374,41 @@ export function defineSaveStoreContract(
       );
 
       rawGenerationIt(
+        "lists a persisted autosave with an unsupported envelope as incompatible",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const unsupported = { ...makeEnvelope(), envelopeVersion: 99 };
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-unsupported",
+            autosaveId: "autosave-unsupported",
+            cityId: "city-1",
+            generation: 1,
+            createdAt: makeEnvelope().savedAt,
+            envelope: unsupported,
+            generationHighWaterMark: 1,
+          });
+
+          const listing = await expectOk(store.listAutosaves("city-1"));
+
+          expect(listing.generationHighWaterMark).toBe(1);
+          expect(listing.items).toHaveLength(1);
+          expect(listing.items[0]).toMatchObject({
+            autosaveId: "autosave-unsupported",
+            cityId: "city-1",
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "unsupportedEnvelope", version: 99 },
+          });
+        },
+      );
+
+      rawGenerationIt(
         "deletes a corrupt generation-only city by storage identity",
         async () => {
           const { store, seedRawCheckpoint, seedRawAutosave } = createHarness();
@@ -1774,6 +1846,324 @@ export function defineSaveStoreContract(
           retained,
         );
       });
+    });
+
+    describe("missing record notFound", () => {
+      it.each([
+        {
+          label: "renameCity",
+          run: (store: SaveStore) =>
+            store.renameCity("city-missing", "Renamed"),
+        },
+        {
+          label: "duplicateCity",
+          run: (store: SaveStore) =>
+            store.duplicateCity("city-missing", {
+              cityId: "city-copy",
+              name: "Copy",
+              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              savedAt: "2026-08-01T12:05:00.000Z",
+              appVersion: "0.2.0",
+            }),
+        },
+        {
+          label: "deleteCity",
+          run: (store: SaveStore) => store.deleteCity("city-missing"),
+        },
+        {
+          label: "renameCheckpoint",
+          run: (store: SaveStore) =>
+            store.renameCheckpoint("city-1", "checkpoint-missing", "Renamed"),
+        },
+        {
+          label: "deleteCheckpoint",
+          run: (store: SaveStore) =>
+            store.deleteCheckpoint("city-1", "checkpoint-missing"),
+        },
+        {
+          label: "deleteAutosave",
+          run: (store: SaveStore) =>
+            store.deleteAutosave("city-1", "autosave-missing"),
+        },
+      ])("returns notFound for a missing $label", async ({ run }) => {
+        const { store } = createHarness();
+        await expectError(run(store), "notFound");
+      });
+    });
+
+    describe("incompatible envelope writes", () => {
+      it.each([
+        {
+          label: "working save",
+          run: (store: SaveStore) =>
+            store.writeWorkingSave({
+              ...makeEnvelope(),
+              envelopeVersion: 99,
+            } as never),
+          list: (store: SaveStore) => store.listCities(),
+          empty: [],
+        },
+        {
+          label: "checkpoint",
+          run: (store: SaveStore) =>
+            store.writeCheckpoint({
+              checkpointId: "checkpoint-unsupported",
+              cityId: "city-1",
+              name: "Unsupported",
+              note: null,
+              envelope: { ...makeEnvelope(), envelopeVersion: 99 } as never,
+            }),
+          list: (store: SaveStore) => store.listCheckpoints("city-1"),
+          empty: [],
+        },
+        {
+          label: "autosave",
+          run: (store: SaveStore) =>
+            store.writeAutosave({
+              autosaveId: "autosave-unsupported",
+              cityId: "city-1",
+              generation: 1,
+              envelope: { ...makeEnvelope(), envelopeVersion: 99 } as never,
+            }),
+          list: (store: SaveStore) => store.listAutosaves("city-1"),
+          empty: { items: [], generationHighWaterMark: null },
+        },
+      ])(
+        "rejects an unsupported $label envelope as incompatible without creating a record",
+        async ({ run, list, empty }) => {
+          const { store } = createHarness();
+
+          await expectError(run(store), "incompatibleRecord");
+          expect(await expectOk<unknown>(list(store))).toEqual(empty);
+        },
+      );
+    });
+
+    describe("injected failure surfaces", () => {
+      injectedFailureIt.each([
+        {
+          op: "listCities" as const,
+          setup: async (_store: SaveStore) => {},
+          call: (store: SaveStore) => store.listCities(),
+          verify: async (_store: SaveStore) => {},
+        },
+        {
+          op: "readWorkingSave" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(store.writeWorkingSave(makeEnvelope()));
+          },
+          call: (store: SaveStore) => store.readWorkingSave("city-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readWorkingSave("city-1"));
+          },
+        },
+        {
+          op: "renameCity" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(store.writeWorkingSave(makeEnvelope()));
+          },
+          call: (store: SaveStore) => store.renameCity("city-1", "Renamed"),
+          verify: async (store: SaveStore) => {
+            expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+              makeEnvelope(),
+            );
+          },
+        },
+        {
+          op: "duplicateCity" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeWorkingSave(envelopeFor("city-source", "Source")),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.duplicateCity("city-source", {
+              cityId: "city-target",
+              name: "Copy",
+              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              savedAt: "2026-08-01T12:05:00.000Z",
+              appVersion: "0.2.0",
+            }),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readWorkingSave("city-source"));
+            await expectError(store.readWorkingSave("city-target"), "notFound");
+          },
+        },
+        {
+          op: "deleteCity" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(store.writeWorkingSave(makeEnvelope()));
+          },
+          call: (store: SaveStore) => store.deleteCity("city-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readWorkingSave("city-1"));
+          },
+        },
+        {
+          op: "listCheckpoints" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeCheckpoint({
+                checkpointId: "checkpoint-1",
+                cityId: "city-1",
+                name: "Checkpoint",
+                note: null,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) => store.listCheckpoints("city-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readCheckpoint("city-1", "checkpoint-1"));
+          },
+        },
+        {
+          op: "readCheckpoint" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeCheckpoint({
+                checkpointId: "checkpoint-1",
+                cityId: "city-1",
+                name: "Checkpoint",
+                note: null,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.readCheckpoint("city-1", "checkpoint-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readCheckpoint("city-1", "checkpoint-1"));
+          },
+        },
+        {
+          op: "writeCheckpoint" as const,
+          setup: async (_store: SaveStore) => {},
+          call: (store: SaveStore) =>
+            store.writeCheckpoint({
+              checkpointId: "checkpoint-1",
+              cityId: "city-1",
+              name: "Checkpoint",
+              note: null,
+              envelope: makeEnvelope(),
+            }),
+          verify: async (store: SaveStore) => {
+            expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+          },
+        },
+        {
+          op: "renameCheckpoint" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeCheckpoint({
+                checkpointId: "checkpoint-1",
+                cityId: "city-1",
+                name: "Original",
+                note: null,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.renameCheckpoint("city-1", "checkpoint-1", "Renamed"),
+          verify: async (store: SaveStore) => {
+            expect(
+              await expectOk(store.listCheckpoints("city-1")),
+            ).toMatchObject([
+              { checkpointId: "checkpoint-1", name: "Original" },
+            ]);
+          },
+        },
+        {
+          op: "deleteCheckpoint" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeCheckpoint({
+                checkpointId: "checkpoint-1",
+                cityId: "city-1",
+                name: "Checkpoint",
+                note: null,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.deleteCheckpoint("city-1", "checkpoint-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readCheckpoint("city-1", "checkpoint-1"));
+          },
+        },
+        {
+          op: "listAutosaves" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeAutosave({
+                autosaveId: "autosave-1",
+                cityId: "city-1",
+                generation: 1,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) => store.listAutosaves("city-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readAutosave("city-1", "autosave-1"));
+          },
+        },
+        {
+          op: "readAutosave" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeAutosave({
+                autosaveId: "autosave-1",
+                cityId: "city-1",
+                generation: 1,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.readAutosave("city-1", "autosave-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readAutosave("city-1", "autosave-1"));
+          },
+        },
+        {
+          op: "deleteAutosave" as const,
+          setup: async (store: SaveStore) => {
+            await expectOk(
+              store.writeAutosave({
+                autosaveId: "autosave-1",
+                cityId: "city-1",
+                generation: 1,
+                envelope: makeEnvelope(),
+              }),
+            );
+          },
+          call: (store: SaveStore) =>
+            store.deleteAutosave("city-1", "autosave-1"),
+          verify: async (store: SaveStore) => {
+            await expectOk(store.readAutosave("city-1", "autosave-1"));
+          },
+        },
+      ])(
+        "surfaces an injected $op failure and preserves committed state",
+        async ({ op, setup, call, verify }) => {
+          const { store, failNext } = createHarness();
+          const injectFailure = requireCapability(
+            failNext,
+            "injectedStorageFailures",
+          );
+          await setup(store);
+          injectFailure(op, "unavailable");
+
+          const error = await expectError(call(store), "unavailable");
+
+          expect(error.operation).toBe(op);
+          expect(error.retryable).toBe(true);
+          await verify(store);
+        },
+      );
     });
 
     describe("duplicate isolation", () => {

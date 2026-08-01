@@ -338,3 +338,20 @@ it.each([
 it("keeps the checked-in Rust fixture schema equal to the TypeScript constant", () => {
   expect(validPaused.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
 });
+
+it.each([
+  ["array", []],
+  ["null", null],
+  ["number", 42],
+  ["string", "caelum-save"],
+])("rejects a non-plain-object %s envelope as corrupt", (_label, value) => {
+  expect(inspectSaveEnvelope(value)).toEqual({
+    ok: false,
+    compatibility: { status: "corruptHeader" },
+  });
+});
+
+it("accepts a null-prototype envelope with a compatible header", () => {
+  const envelope = Object.assign(Object.create(null), makeEnvelope());
+  expect(inspectSaveEnvelope(envelope)).toEqual({ ok: true, envelope });
+});
