@@ -5,7 +5,8 @@
 **Issue:** HPA-499  
 **Depends on:** HPA-498  
 **Design source:** HPA-342 draft design PR #21  
-**Consumed by:** HPA-345, HPA-346, HPA-351, HPA-352
+**Consumed by:** HPA-345, HPA-346, HPA-351, HPA-352  
+**Execution order:** Implement after HPA-498.
 
 **Goal:** Implement HPA-499’s typed persistence coordinator, dirty/session tracking, one per-city persistence FIFO, source-aware loading, and transactional New City activation without changing existing gameplay semantics.
 
