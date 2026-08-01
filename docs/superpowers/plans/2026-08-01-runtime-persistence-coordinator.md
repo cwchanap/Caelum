@@ -38,16 +38,52 @@
 - `src/runtime/types.ts`
 - `src/runtime/createGameRuntime.ts`
 - `tests/runtime/gameRuntime.test.ts`
+- `tests/fixtures/rustSnapshot.ts` — extend existing `previewBackendStubs`/snapshot helpers with deterministic persistence counters and delayed outcomes used by new tests.
 
 **Read/Reuse**
 
 - `src/persistence/envelope.ts`
 - `src/persistence/envelopeInspection.ts`
 - `src/persistence/saveStore.ts`
+- `src/persistence/memorySaveStore.ts`
 - `src/runtime/backend/types.ts`
 - `src/runtime/backend/persistenceContract.ts`
 - `src/runtime/snapshotView.ts`
 - `src/ui/uiState.ts`
+- Existing `backendSpy`, `deferredDispatchBackend`, `fullRustSnapshot`, and route helpers in `tests/runtime/gameRuntime.test.ts`.
+
+## Test Harness Contract
+
+`tests/runtime/persistenceCoordinator.test.ts` defines these local helpers before its first `describe` block; later tasks extend their behavior without changing their names:
+
+```ts
+interface CoordinatorHarness {
+  runtime: RuntimeController;
+  backend: GameBackend & {
+    snapshotForSaveCalls: number;
+    restoreSnapshotCalls: number;
+    tickCalls: number;
+  };
+  store: MemorySaveStore;
+  failures: MemorySaveStoreFailureControls;
+}
+
+async function createCoordinatorHarness(options: {
+  activeCity?: ActiveCityIdentity | null;
+  clean?: boolean;
+} = {}): Promise<CoordinatorHarness>;
+
+function cityIdentity(id = "city-1"): ActiveCityIdentity;
+function sandboxRequest(): SandboxCreationRequest;
+function newCityIdentity(): NewCityIdentity;
+function checkpointRequest(): GameplayWriteRequest<CheckpointSummary>;
+function autosaveRequest(): GameplayWriteRequest<AutosaveSummary>;
+function generationRequest(
+  kind: "checkpoint" | "autosave",
+): GameplayWriteRequest<CheckpointSummary | AutosaveSummary>;
+```
+
+`tests/runtime/gameRuntime.test.ts` continues using its existing local backend helpers. Do not move unrelated route/road simulation helpers into the new coordinator test file.
 
 ---
 
@@ -56,9 +92,10 @@
 **Files:**
 - Create: `src/runtime/persistenceCoordinator.ts`
 - Create: `tests/runtime/persistenceCoordinator.test.ts`
+- Modify: `tests/fixtures/rustSnapshot.ts`
 
 **Interfaces:**
-- Produces: operation/result/error types, `RuntimePersistenceView`, `RuntimePersistenceController`, `RuntimeGameplayWriteCoordinator`, pure helper constructors.
+- Produces: operation/result/error types, `RuntimePersistenceView`, `RuntimePersistenceController`, `RuntimeGameplayWriteCoordinator`, pure helper constructors, and the base `createCoordinatorHarness`.
 
 - [ ] **Step 1: Write the failing result-catalogue test**
 
@@ -139,7 +176,11 @@ export interface RuntimePersistenceController {
 
 This task defines types only; it does not yet add them to `RuntimeController` or `RuntimeSnapshot`.
 
-- [ ] **Step 5: Run tests and typecheck**
+- [ ] **Step 5: Add the base deterministic harness**
+
+Extend `previewBackendStubs()` with counters that still return its existing successful persistence results. Instantiate `createMemorySaveStore` with deterministic failure controls. `createCoordinatorHarness` may construct the current runtime without a persistence controller until Task 3; Task 1 tests use only type helpers and the store/backend fixtures.
+
+- [ ] **Step 6: Run tests and typecheck**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistenceCoordinator.test.ts
@@ -148,10 +189,10 @@ bun run check
 
 Expected: both commands exit 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/runtime/persistenceCoordinator.ts tests/runtime/persistenceCoordinator.test.ts
+git add src/runtime/persistenceCoordinator.ts tests/runtime/persistenceCoordinator.test.ts tests/fixtures/rustSnapshot.ts
 git commit -m "feat: define runtime persistence contracts"
 ```
 
@@ -170,37 +211,23 @@ git commit -m "feat: define runtime persistence contracts"
 
 ```ts
 it("keeps existing gameplay calls resolving the last snapshot after death", async () => {
-  const { runtime, backend } = await createRuntimeHarness();
+  const backend = deferredDispatchBackend();
+  const runtime = await createGameRuntime({ backend });
   backend.failNextDispatch(new Error("fatal"));
-  const failed = await runtime.togglePause();
+  const fatal = runtime.togglePause();
+  await backend.resolveNext();
+  const failed = await fatal;
   expect(await runtime.tick(1)).toBe(failed);
-  expect(backend.tickCalls).toBe(0);
-});
-
-it("does not execute a typed queued operation after an earlier fatal failure", async () => {
-  const harness = await createRuntimeHarness();
-  let typedOperationCalls = 0;
-  harness.backend.failNextDispatch(new Error("fatal"));
-  const fatal = harness.runtime.togglePause();
-  const typed = harness.enqueueTestOperation({
-    operation: async () => {
-      typedOperationCalls += 1;
-      return "executed" as const;
-    },
-    whenDead: () => "dead" as const,
-    onThrown: () => "thrown" as const,
-  });
-  await fatal;
-  expect(await typed).toBe("dead");
-  expect(typedOperationCalls).toBe(0);
 });
 ```
+
+Add a test-only hook around the internal serializer under `import.meta.env.DEV` or factor it into a small local function that can be unit-tested without exporting a production API. The typed test queues an operation behind the fatal dispatch and asserts `whenDead` is returned without invoking the operation.
 
 - [ ] **Step 2: Run tests and confirm the new case fails**
 
 Run: `bunx vitest run --project runtime tests/runtime/gameRuntime.test.ts`
 
-Expected: existing death test passes; typed serializer test fails because no harness/export exists.
+Expected: existing death test passes; typed serializer case fails.
 
 - [ ] **Step 3: Implement the typed serializer**
 
@@ -227,7 +254,7 @@ const enqueueSerialized = <T>(options: {
 };
 ```
 
-Rewrite `queueBackend` as a wrapper supplying `getSnapshot` for `whenDead` and `failBackend` for `onThrown`. Do not modify any gameplay caller signature.
+Rewrite `queueBackend` as a wrapper supplying `getSnapshot` for `whenDead` and `failBackend` for `onThrown`. Do not modify gameplay caller signatures.
 
 - [ ] **Step 4: Run runtime tests**
 
@@ -253,6 +280,7 @@ git commit -m "refactor: extract typed runtime serialization"
 - Modify: `src/runtime/types.ts`
 - Modify: `src/runtime/createGameRuntime.ts`
 - Modify: `tests/runtime/gameRuntime.test.ts`
+- Modify: `tests/runtime/persistenceCoordinator.test.ts`
 
 **Interfaces:**
 - Adds `RuntimeSnapshot.persistence` and `RuntimeController.persistence`.
@@ -262,21 +290,23 @@ git commit -m "refactor: extract typed runtime serialization"
 
 ```ts
 it("marks applied gameplay dirty but not UI-only changes", async () => {
-  const { runtime } = await createRuntimeHarness({ activeCity: cityIdentity() });
+  const backend = backendSpy();
+  const store = createMemorySaveStore();
+  const runtime = await createGameRuntime({
+    backend,
+    saveStore: store,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
   runtime.setTool("busStop");
   expect(runtime.getSnapshot().persistence.dirty).toBe(false);
   await runtime.debugSetBudget(100_000);
   expect(runtime.getSnapshot().persistence.dirty).toBe(true);
 });
-
-it("marks the bespoke route-draft save path dirty", async () => {
-  const { runtime } = await createRuntimeHarness({ activeCity: cityIdentity() });
-  await completeValidRouteDraft(runtime);
-  expect(runtime.getSnapshot().persistence.dirty).toBe(true);
-});
 ```
 
-Add explicit no-dirty tests for previews, rejected/no-op dispatches, and UI changes; add applied tick and reset tests.
+Add explicit tests for applied tick, route-draft save, reset, previews, rejected/no-op dispatches, and UI-only changes.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -308,29 +338,33 @@ const getPersistenceView = (): RuntimePersistenceView => ({
 });
 ```
 
-Add `persistence: getPersistenceView()` to every `RuntimeSnapshot` produced by `getSnapshot`/`commit`.
+Add `persistence: getPersistenceView()` to every runtime snapshot.
 
 - [ ] **Step 4: Factor mutation accounting**
 
-Create `commitDispatchResult(result, nextUi?)` and route ordinary dispatch, tick, route-draft save, and debug dispatch through it. Increment `currentRevision` exactly once when `result.applied` is true. Reset/load/New City use separate authoritative-replacement helpers.
+Create one commit helper for `DispatchResult` and route ordinary dispatch, tick, route-draft save, and debug dispatch through it. Increment `currentRevision` exactly once when `result.applied` is true. Reset/load/New City use separate authoritative-replacement helpers.
 
-- [ ] **Step 5: Compose a disabled persistence controller when no store exists**
+- [ ] **Step 5: Compose available and unavailable persistence controllers**
 
-When `options.saveStore` is absent, return typed store failures with `SaveStoreError.code = "unavailable"`; the runtime and build continue normally until HPA-343/HPA-344 inject a host adapter.
+When `options.saveStore` is absent, every storage-backed method returns a typed store `unavailable` result. When a store exists, create the real coordinator with injected clock/version dependencies.
 
-- [ ] **Step 6: Run tests and typecheck**
+- [ ] **Step 6: Complete `createCoordinatorHarness`**
+
+Now construct `createGameRuntime` with the memory store, deterministic clock/version, initial identity, and instrumented backend. Expose the concrete runtime/store/backend/failure controls described in the Test Harness Contract.
+
+- [ ] **Step 7: Run tests and typecheck**
 
 ```bash
-bunx vitest run --project runtime tests/runtime/gameRuntime.test.ts
+bunx vitest run --project runtime tests/runtime/gameRuntime.test.ts tests/runtime/persistenceCoordinator.test.ts
 bun run check
 ```
 
 Expected: both commands exit 0.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/runtime/types.ts src/runtime/createGameRuntime.ts tests/runtime/gameRuntime.test.ts
+git add src/runtime/types.ts src/runtime/createGameRuntime.ts tests/runtime tests/fixtures/rustSnapshot.ts
 git commit -m "feat: track runtime persistence state"
 ```
 
@@ -367,13 +401,15 @@ it("advances persistence only through the captured revision", async () => {
   await harness.runtime.debugSetBudget(100_000);
   harness.store.deferWorkingWrites();
   const save = harness.runtime.persistence.saveWorking();
-  await harness.captureReachedStore();
+  await harness.store.waitForActiveMutation();
   await harness.runtime.debugSetBudget(90_000);
   harness.store.releaseNextMutation();
   expect((await save).status).toBe("completed");
   expect(harness.runtime.getSnapshot().persistence.dirty).toBe(true);
 });
 ```
+
+Extend the concrete memory-store test controls with `deferWorkingWrites`, `waitForActiveMutation`, `releaseNextMutation`, `activeMutationCount`, and `mutationOrder`; keep these controls test-only and outside `SaveStore`.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -405,21 +441,16 @@ function enqueueCityPersistence<T>(
 
 - [ ] **Step 4: Implement working save at FIFO head**
 
-Recheck active city/session, set `saveStatus`, call `snapshotForSave` through `enqueueSerialized`, build an envelope using injected `now`/`appVersion`, release gameplay ordering, then call `writeWorkingSave`. Apply `lastSavedAt` and `persistedRevision = Math.max(...)` only when city/session still match. Stale completion returns `superseded` and does not change current status/error.
+Recheck active city/session, set status, call `snapshotForSave` through the typed serializer, build an envelope using injected `now`/`appVersion`, release gameplay ordering, then call `writeWorkingSave`. Apply `lastSavedAt` and `persistedRevision = Math.max(...)` only when city/session still match. Stale completion returns `superseded` and does not change current status/error.
 
-- [ ] **Step 5: Add clean explicit-save and dead-runtime tests**
+- [ ] **Step 5: Add clean-save and dead-runtime tests**
 
 A clean save still writes and refreshes `lastSavedAt`. A dead runtime returns `runtimeUnavailable` and never calls `snapshotForSave`.
 
-- [ ] **Step 6: Run tests**
-
-Run: `bunx vitest run --project runtime tests/runtime/persistenceCoordinator.test.ts`
-
-Expected: PASS for working-save cases.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Run tests and commit**
 
 ```bash
+bunx vitest run --project runtime tests/runtime/persistenceCoordinator.test.ts
 git add src/runtime/persistenceCoordinator.ts src/runtime/createGameRuntime.ts tests/runtime/persistenceCoordinator.test.ts
 git commit -m "feat: coordinate working saves"
 ```
@@ -448,7 +479,7 @@ it("serializes working, checkpoint, autosave, and rename", async () => {
     harness.runtime.persistence.runGameplayWrite(autosaveRequest()),
     harness.runtime.persistence.renameActiveCity("Renamed"),
   ];
-  await harness.releaseAllMutations();
+  await harness.store.releaseAllMutations();
   await Promise.all(results);
   expect(harness.store.mutationKinds()).toEqual([
     "working",
@@ -474,6 +505,8 @@ it.each(["checkpoint", "autosave"] as const)(
   },
 );
 ```
+
+Add the named request builders from the Test Harness Contract. Each request callback delegates to `writeCheckpoint` or `writeAutosave` with deterministic IDs/generation values.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -584,7 +617,14 @@ git commit -m "feat: restore cities through persistence coordinator"
 
 ```ts
 it("reset preserves identity but starts a dirty new lineage", async () => {
-  const { runtime } = await createRuntimeHarness({ activeCity: cityIdentity() });
+  const backend = backendSpy();
+  const runtime = await createGameRuntime({
+    backend,
+    saveStore: createMemorySaveStore(),
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
   const identity = runtime.getSnapshot().persistence.activeCity;
   await runtime.reset();
   expect(runtime.getSnapshot().persistence.activeCity).toEqual(identity);
@@ -640,7 +680,7 @@ git commit -m "feat: add persistence lifecycle transitions"
 it("restores a previously clean city exactly after initial write failure", async () => {
   const harness = await createCoordinatorHarness({ clean: true });
   const before = harness.runtime.getSnapshot();
-  harness.store.failNext("writeWorkingSave", "quotaExceeded");
+  harness.failures.failNext("writeWorkingSave", "quotaExceeded");
   const result = await harness.runtime.persistence.activateNewCity(
     sandboxRequest(),
     newCityIdentity(),
@@ -656,7 +696,7 @@ it("drops ticks while foreground creation owns admission", async () => {
     sandboxRequest(),
     newCityIdentity(),
   );
-  await harness.creationReachedStore();
+  await harness.store.waitForActiveMutation();
   const before = harness.runtime.getSnapshot();
   expect(await harness.runtime.tick(1)).toEqual(before);
   expect(harness.backend.tickCalls).toBe(0);
@@ -665,7 +705,7 @@ it("drops ticks while foreground creation owns admission", async () => {
 });
 ```
 
-Add tests for successful clean paused activation, dispatch no-op/no backlog, rollback restore failure, and pause-state restoration failure.
+Add tests for successful clean paused activation, backend-dispatch no-op/no backlog, rollback restore failure, and pause-state restoration failure.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -675,7 +715,7 @@ Expected: FAIL for New City lifecycle.
 
 - [ ] **Step 3: Suspend backend-mutating admission**
 
-Drain existing gameplay queue, then set lifecycle admission closed. While closed, `tick` and backend-dispatching controller methods return the current snapshot immediately and are not queued. Local lifecycle status may publish.
+Drain existing gameplay queue, then close backend-mutating admission. While closed, `tick` and backend-dispatching controller methods return the current snapshot immediately and are not queued. Local lifecycle status may publish.
 
 - [ ] **Step 4: Capture exact rollback state**
 
@@ -748,7 +788,7 @@ Expected: every command exits 0.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime tests/runtime
+git add src/runtime tests/runtime tests/fixtures/rustSnapshot.ts
 git commit -m "test: verify runtime persistence coordination"
 ```
 
