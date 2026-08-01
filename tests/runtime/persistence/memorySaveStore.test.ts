@@ -241,3 +241,409 @@ it("deletes a city by storage identity and leaves other cities intact", async ()
     retained,
   );
 });
+
+it("creates detached checkpoints with the envelope save time", async () => {
+  const store = createMemorySaveStore();
+  const envelope = makeEnvelope({ savedAt: "2026-08-01T12:34:56.000Z" });
+
+  const summary = await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-1",
+      cityId: "city-1",
+      name: "Before downtown",
+      note: "Keep this layout",
+      envelope,
+    }),
+  );
+  envelope.city.name = "Mutated input";
+  envelope.snapshot.budget = 1;
+  summary.summary!.gameMode = "campaign";
+
+  expect(await expectOk(store.listCheckpoints("city-1"))).toMatchObject([
+    {
+      checkpointId: "checkpoint-1",
+      cityId: "city-1",
+      name: "Before downtown",
+      note: "Keep this layout",
+      createdAt: "2026-08-01T12:34:56.000Z",
+      summary: { gameMode: "sandbox" },
+    },
+  ]);
+  expect(
+    await expectOk(store.readCheckpoint("city-1", "checkpoint-1")),
+  ).toMatchObject({
+    city: { id: "city-1", name: "Test City" },
+    savedAt: "2026-08-01T12:34:56.000Z",
+    snapshot: { budget: 120_000 },
+  });
+});
+
+it("keeps checkpoint writes create-only", async () => {
+  const store = createMemorySaveStore();
+  const original = makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" });
+  await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-fixed",
+      cityId: "city-1",
+      name: "Original",
+      note: null,
+      envelope: original,
+    }),
+  );
+
+  await expectError(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-fixed",
+      cityId: "city-1",
+      name: "Replacement",
+      note: "must not replace",
+      envelope: makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" }),
+    }),
+    "conflict",
+  );
+
+  expect(
+    await expectOk(store.readCheckpoint("city-1", "checkpoint-fixed")),
+  ).toEqual(original);
+  expect(await expectOk(store.listCheckpoints("city-1"))).toMatchObject([
+    { name: "Original", note: null, createdAt: "2026-08-01T10:00:00.000Z" },
+  ]);
+});
+
+it("renames only the checkpoint name and deletes only the selected checkpoint", async () => {
+  const store = createMemorySaveStore();
+  const firstEnvelope = makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" });
+  const secondEnvelope = makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" });
+  await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-first",
+      cityId: "city-1",
+      name: "First",
+      note: "preserve me",
+      envelope: firstEnvelope,
+    }),
+  );
+  await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-second",
+      cityId: "city-1",
+      name: "Second",
+      note: null,
+      envelope: secondEnvelope,
+    }),
+  );
+
+  const renamed = await expectOk(
+    store.renameCheckpoint("city-1", "checkpoint-first", "Renamed"),
+  );
+  await expectOk(store.deleteCheckpoint("city-1", "checkpoint-second"));
+
+  expect(renamed).toMatchObject({
+    checkpointId: "checkpoint-first",
+    cityId: "city-1",
+    name: "Renamed",
+    note: "preserve me",
+    createdAt: "2026-08-01T10:00:00.000Z",
+  });
+  expect(
+    await expectOk(store.readCheckpoint("city-1", "checkpoint-first")),
+  ).toEqual(firstEnvelope);
+  expect(await expectOk(store.listCheckpoints("city-1"))).toMatchObject([
+    {
+      checkpointId: "checkpoint-first",
+      name: "Renamed",
+      note: "preserve me",
+      createdAt: "2026-08-01T10:00:00.000Z",
+    },
+  ]);
+  await expectError(
+    store.readCheckpoint("city-1", "checkpoint-second"),
+    "notFound",
+  );
+});
+
+it.each([
+  {
+    label: "checkpoint",
+    run: (store: ReturnType<typeof createMemorySaveStore>) =>
+      store.writeCheckpoint({
+        checkpointId: "checkpoint-mismatch",
+        cityId: "city-other",
+        name: "Mismatch",
+        note: null,
+        envelope: makeEnvelope(),
+      }),
+    list: (store: ReturnType<typeof createMemorySaveStore>) =>
+      store.listCheckpoints("city-other"),
+    empty: [],
+  },
+  {
+    label: "autosave",
+    run: (store: ReturnType<typeof createMemorySaveStore>) =>
+      store.writeAutosave({
+        autosaveId: "autosave-mismatch",
+        cityId: "city-other",
+        generation: 1,
+        envelope: makeEnvelope(),
+      }),
+    list: (store: ReturnType<typeof createMemorySaveStore>) =>
+      store.listAutosaves("city-other"),
+    empty: { items: [], generationHighWaterMark: null },
+  },
+])(
+  "rejects a $label whose city key disagrees with its envelope",
+  async ({ run, list, empty }) => {
+    const store = createMemorySaveStore();
+
+    await expectError(run(store), "corruptRecord");
+
+    expect(await expectOk<unknown>(list(store))).toEqual(empty);
+  },
+);
+
+it.each([
+  { label: "negative", generation: -1 },
+  { label: "fractional", generation: 1.5 },
+  { label: "unsafe", generation: Number.MAX_SAFE_INTEGER + 1 },
+  { label: "NaN", generation: Number.NaN },
+  { label: "infinite", generation: Number.POSITIVE_INFINITY },
+])(
+  "rejects a $label autosave generation without advancing high-water",
+  async ({ generation }) => {
+    const store = createMemorySaveStore();
+
+    await expectError(
+      store.writeAutosave({
+        autosaveId: "autosave-invalid",
+        cityId: "city-1",
+        generation,
+        envelope: makeEnvelope(),
+      }),
+      "corruptRecord",
+    );
+
+    expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+      items: [],
+      generationHighWaterMark: null,
+    });
+  },
+);
+
+it("creates detached autosaves with the envelope save time", async () => {
+  const store = createMemorySaveStore();
+  const envelope = makeEnvelope({ savedAt: "2026-08-01T12:34:56.000Z" });
+
+  const summary = await expectOk(
+    store.writeAutosave({
+      autosaveId: "autosave-1",
+      cityId: "city-1",
+      generation: 7,
+      envelope,
+    }),
+  );
+  envelope.city.name = "Mutated input";
+  envelope.snapshot.budget = 1;
+  summary.summary!.gameMode = "campaign";
+
+  expect(await expectOk(store.listAutosaves("city-1"))).toMatchObject({
+    items: [
+      {
+        autosaveId: "autosave-1",
+        cityId: "city-1",
+        generation: 7,
+        createdAt: "2026-08-01T12:34:56.000Z",
+        summary: { gameMode: "sandbox" },
+      },
+    ],
+    generationHighWaterMark: 7,
+  });
+  expect(
+    await expectOk(store.readAutosave("city-1", "autosave-1")),
+  ).toMatchObject({
+    city: { id: "city-1", name: "Test City" },
+    savedAt: "2026-08-01T12:34:56.000Z",
+    snapshot: { budget: 120_000 },
+  });
+});
+
+it("keeps autosave IDs create-only without advancing high-water", async () => {
+  const store = createMemorySaveStore();
+  const original = makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" });
+  await expectOk(
+    store.writeAutosave({
+      autosaveId: "autosave-fixed",
+      cityId: "city-1",
+      generation: 1,
+      envelope: original,
+    }),
+  );
+
+  await expectError(
+    store.writeAutosave({
+      autosaveId: "autosave-fixed",
+      cityId: "city-1",
+      generation: 2,
+      envelope: makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" }),
+    }),
+    "conflict",
+  );
+
+  expect(
+    await expectOk(store.readAutosave("city-1", "autosave-fixed")),
+  ).toEqual(original);
+  expect(await expectOk(store.listAutosaves("city-1"))).toMatchObject({
+    items: [{ autosaveId: "autosave-fixed", generation: 1 }],
+    generationHighWaterMark: 1,
+  });
+});
+
+it("keeps high-water after pruning and rejects reuse", async () => {
+  const store = createMemorySaveStore();
+  await expectOk(store.writeWorkingSave(makeEnvelope()));
+  await expectOk(
+    store.writeAutosave({
+      autosaveId: "auto-10",
+      cityId: "city-1",
+      generation: 10,
+      envelope: makeEnvelope(),
+    }),
+  );
+  await expectOk(store.deleteAutosave("city-1", "auto-10"));
+  expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+    items: [],
+    generationHighWaterMark: 10,
+  });
+  await expectError(
+    store.writeAutosave({
+      autosaveId: "auto-reused",
+      cityId: "city-1",
+      generation: 10,
+      envelope: makeEnvelope(),
+    }),
+    "conflict",
+  );
+});
+
+it("does not advance autosave high-water when an injected write fails", async () => {
+  const failures = createMemorySaveStoreFailureControls();
+  const store = createMemorySaveStore({ failures });
+  failures.failNext("writeAutosave", "transactionAborted");
+
+  await expectError(
+    store.writeAutosave({
+      autosaveId: "autosave-aborted",
+      cityId: "city-1",
+      generation: 8,
+      envelope: makeEnvelope(),
+    }),
+    "transactionAborted",
+  );
+
+  expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+    items: [],
+    generationHighWaterMark: null,
+  });
+  await expectOk(
+    store.writeAutosave({
+      autosaveId: "autosave-retry",
+      cityId: "city-1",
+      generation: 8,
+      envelope: makeEnvelope(),
+    }),
+  );
+});
+
+it("does not advance autosave high-water when cloning fails", async () => {
+  const store = createMemorySaveStore();
+  const uncloneable = makeEnvelope({
+    snapshot: {
+      ...makeRustSnapshot(),
+      uncloneable: () => undefined,
+    } as never,
+  });
+
+  await expectError(
+    store.writeAutosave({
+      autosaveId: "autosave-uncloneable",
+      cityId: "city-1",
+      generation: 8,
+      envelope: uncloneable,
+    }),
+    "serializationFailed",
+  );
+
+  expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+    items: [],
+    generationHighWaterMark: null,
+  });
+});
+
+it("deletes checkpoint, autosave, and high-water state with the city", async () => {
+  const store = createMemorySaveStore();
+  await expectOk(store.writeWorkingSave(makeEnvelope()));
+  await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-1",
+      cityId: "city-1",
+      name: "Checkpoint",
+      note: null,
+      envelope: makeEnvelope(),
+    }),
+  );
+  await expectOk(
+    store.writeAutosave({
+      autosaveId: "autosave-1",
+      cityId: "city-1",
+      generation: 3,
+      envelope: makeEnvelope(),
+    }),
+  );
+
+  await expectOk(store.deleteCity("city-1"));
+
+  await expectError(store.readCheckpoint("city-1", "checkpoint-1"), "notFound");
+  await expectError(store.readAutosave("city-1", "autosave-1"), "notFound");
+  expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+  expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+    items: [],
+    generationHighWaterMark: null,
+  });
+});
+
+it("duplicates a city without copying checkpoints, autosaves, or high-water", async () => {
+  const store = createMemorySaveStore();
+  await expectOk(store.writeWorkingSave(makeEnvelope()));
+  await expectOk(
+    store.writeCheckpoint({
+      checkpointId: "checkpoint-1",
+      cityId: "city-1",
+      name: "Checkpoint",
+      note: null,
+      envelope: makeEnvelope(),
+    }),
+  );
+  await expectOk(
+    store.writeAutosave({
+      autosaveId: "autosave-1",
+      cityId: "city-1",
+      generation: 3,
+      envelope: makeEnvelope(),
+    }),
+  );
+
+  await expectOk(
+    store.duplicateCity("city-1", {
+      cityId: "city-copy",
+      name: "Copy",
+      cityCreatedAt: "2026-08-01T12:00:00.000Z",
+      savedAt: "2026-08-01T12:05:00.000Z",
+      appVersion: "0.2.0",
+    }),
+  );
+
+  expect(await expectOk(store.listCheckpoints("city-copy"))).toEqual([]);
+  expect(await expectOk(store.listAutosaves("city-copy"))).toEqual({
+    items: [],
+    generationHighWaterMark: null,
+  });
+});

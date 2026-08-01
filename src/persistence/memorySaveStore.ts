@@ -404,6 +404,104 @@ export function createMemorySaveStore(options?: {
     return cloneResult(record.envelope, "readCheckpoint", context);
   };
 
+  const writeCheckpoint: SaveStore["writeCheckpoint"] = async (input) => {
+    const context = { cityId: input.cityId, recordId: input.checkpointId };
+    const failure = injectedFailure<CheckpointSummary>(
+      "writeCheckpoint",
+      context,
+    );
+    if (failure) return failure;
+    if (input.cityId.length === 0 || input.checkpointId.length === 0) {
+      return errorResult("writeCheckpoint", "corruptRecord", context);
+    }
+    const candidate = cloneResult(input, "writeCheckpoint", context);
+    if (!candidate.ok) return candidate;
+    const inspected = inspectSaveEnvelope(candidate.value.envelope);
+    if (!inspected.ok) {
+      return errorResult(
+        "writeCheckpoint",
+        incompatibleCode(inspected.compatibility),
+        context,
+      );
+    }
+    if (inspected.envelope.city.id !== candidate.value.cityId) {
+      return errorResult("writeCheckpoint", "corruptRecord", context);
+    }
+    const cityRecords = checkpointRecords.get(candidate.value.cityId);
+    if (cityRecords?.has(candidate.value.checkpointId)) {
+      return errorResult("writeCheckpoint", "conflict", context);
+    }
+    const record: StoredCheckpoint = {
+      checkpointId: candidate.value.checkpointId,
+      cityId: candidate.value.cityId,
+      name: candidate.value.name,
+      note: candidate.value.note,
+      createdAt: inspected.envelope.savedAt,
+      envelope: candidate.value.envelope,
+    };
+    const result = cloneResult(
+      checkpointSummary(record),
+      "writeCheckpoint",
+      context,
+    );
+    if (!result.ok) return result;
+
+    const committedRecords = cityRecords ?? new Map<string, StoredCheckpoint>();
+    committedRecords.set(record.checkpointId, record);
+    if (!cityRecords) checkpointRecords.set(record.cityId, committedRecords);
+    return result;
+  };
+
+  const renameCheckpoint: SaveStore["renameCheckpoint"] = async (
+    cityId,
+    checkpointId,
+    name,
+  ) => {
+    const context = { cityId, recordId: checkpointId };
+    const failure = injectedFailure<CheckpointSummary>(
+      "renameCheckpoint",
+      context,
+    );
+    if (failure) return failure;
+    const cityRecords = checkpointRecords.get(cityId);
+    const existing = cityRecords?.get(checkpointId);
+    if (!cityRecords || !existing) {
+      return errorResult("renameCheckpoint", "notFound", context);
+    }
+    const candidate = cloneResult(
+      { ...existing, name },
+      "renameCheckpoint",
+      context,
+    );
+    if (!candidate.ok) return candidate;
+    const result = cloneResult(
+      checkpointSummary(candidate.value),
+      "renameCheckpoint",
+      context,
+    );
+    if (!result.ok) return result;
+
+    cityRecords.set(checkpointId, candidate.value);
+    return result;
+  };
+
+  const deleteCheckpoint: SaveStore["deleteCheckpoint"] = async (
+    cityId,
+    checkpointId,
+  ) => {
+    const context = { cityId, recordId: checkpointId };
+    const failure = injectedFailure<void>("deleteCheckpoint", context);
+    if (failure) return failure;
+    const cityRecords = checkpointRecords.get(cityId);
+    if (!cityRecords?.has(checkpointId)) {
+      return errorResult("deleteCheckpoint", "notFound", context);
+    }
+
+    cityRecords.delete(checkpointId);
+    if (cityRecords.size === 0) checkpointRecords.delete(cityId);
+    return { ok: true, value: undefined };
+  };
+
   const listAutosaves: SaveStore["listAutosaves"] = async (cityId) => {
     const failure = injectedFailure<AutosaveListing>("listAutosaves", {
       cityId,
@@ -433,12 +531,76 @@ export function createMemorySaveStore(options?: {
     return cloneResult(record.envelope, "readAutosave", context);
   };
 
-  const unavailable = <T>(
-    operation: SaveStoreOperation,
-    context: { cityId?: string; recordId?: string },
-  ): SaveStoreResult<T> =>
-    injectedFailure<T>(operation, context) ??
-    errorResult(operation, "unavailable", context);
+  const writeAutosave: SaveStore["writeAutosave"] = async (input) => {
+    const context = { cityId: input.cityId, recordId: input.autosaveId };
+    const failure = injectedFailure<AutosaveSummary>("writeAutosave", context);
+    if (failure) return failure;
+    if (
+      input.cityId.length === 0 ||
+      input.autosaveId.length === 0 ||
+      !Number.isSafeInteger(input.generation) ||
+      input.generation < 0
+    ) {
+      return errorResult("writeAutosave", "corruptRecord", context);
+    }
+    const candidate = cloneResult(input, "writeAutosave", context);
+    if (!candidate.ok) return candidate;
+    const inspected = inspectSaveEnvelope(candidate.value.envelope);
+    if (!inspected.ok) {
+      return errorResult(
+        "writeAutosave",
+        incompatibleCode(inspected.compatibility),
+        context,
+      );
+    }
+    if (inspected.envelope.city.id !== candidate.value.cityId) {
+      return errorResult("writeAutosave", "corruptRecord", context);
+    }
+    const cityRecords = autosaveRecords.get(candidate.value.cityId);
+    if (cityRecords?.has(candidate.value.autosaveId)) {
+      return errorResult("writeAutosave", "conflict", context);
+    }
+    const highWater = generationHighWaterMarks.get(candidate.value.cityId);
+    if (highWater !== undefined && candidate.value.generation <= highWater) {
+      return errorResult("writeAutosave", "conflict", context);
+    }
+    const record: StoredAutosave = {
+      autosaveId: candidate.value.autosaveId,
+      cityId: candidate.value.cityId,
+      generation: candidate.value.generation,
+      createdAt: inspected.envelope.savedAt,
+      envelope: candidate.value.envelope,
+    };
+    const result = cloneResult(
+      autosaveSummary(record),
+      "writeAutosave",
+      context,
+    );
+    if (!result.ok) return result;
+
+    const committedRecords = cityRecords ?? new Map<string, StoredAutosave>();
+    committedRecords.set(record.autosaveId, record);
+    if (!cityRecords) autosaveRecords.set(record.cityId, committedRecords);
+    generationHighWaterMarks.set(record.cityId, record.generation);
+    return result;
+  };
+
+  const deleteAutosave: SaveStore["deleteAutosave"] = async (
+    cityId,
+    autosaveId,
+  ) => {
+    const context = { cityId, recordId: autosaveId };
+    const failure = injectedFailure<void>("deleteAutosave", context);
+    if (failure) return failure;
+    const cityRecords = autosaveRecords.get(cityId);
+    if (!cityRecords?.has(autosaveId)) {
+      return errorResult("deleteAutosave", "notFound", context);
+    }
+
+    cityRecords.delete(autosaveId);
+    if (cityRecords.size === 0) autosaveRecords.delete(cityId);
+    return { ok: true, value: undefined };
+  };
 
   return {
     seedRawWorking: (cityId, value) => {
@@ -452,23 +614,12 @@ export function createMemorySaveStore(options?: {
     deleteCity,
     listCheckpoints,
     readCheckpoint,
-    writeCheckpoint: async (input) =>
-      unavailable("writeCheckpoint", {
-        cityId: input.cityId,
-        recordId: input.checkpointId,
-      }),
-    renameCheckpoint: async (cityId, checkpointId) =>
-      unavailable("renameCheckpoint", { cityId, recordId: checkpointId }),
-    deleteCheckpoint: async (cityId, checkpointId) =>
-      unavailable("deleteCheckpoint", { cityId, recordId: checkpointId }),
+    writeCheckpoint,
+    renameCheckpoint,
+    deleteCheckpoint,
     listAutosaves,
     readAutosave,
-    writeAutosave: async (input) =>
-      unavailable("writeAutosave", {
-        cityId: input.cityId,
-        recordId: input.autosaveId,
-      }),
-    deleteAutosave: async (cityId, autosaveId) =>
-      unavailable("deleteAutosave", { cityId, recordId: autosaveId }),
+    writeAutosave,
+    deleteAutosave,
   };
 }
