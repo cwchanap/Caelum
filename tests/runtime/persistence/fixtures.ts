@@ -3,6 +3,11 @@ import {
   buildSaveEnvelope,
   type WritableSaveEnvelope,
 } from "../../../src/persistence/envelope";
+import type {
+  AutosaveSummary,
+  CheckpointSummary,
+  CitySummary,
+} from "../../../src/persistence/saveStore";
 import type { RustGameSnapshot } from "../../../src/runtime/backend/types";
 
 export function makeRustSnapshot(
@@ -25,5 +30,57 @@ export function makeEnvelope(
     }),
     ...overrides,
     snapshot,
+  };
+}
+
+export function makeCitySummary(
+  overrides: Partial<CitySummary> = {},
+): CitySummary {
+  const envelope = makeEnvelope();
+  return {
+    cityId: envelope.city.id,
+    name: envelope.city.name,
+    cityCreatedAt: envelope.cityCreatedAt,
+    savedAt: envelope.savedAt,
+    appVersion: envelope.appVersion,
+    snapshotSchemaVersion: envelope.snapshotSchemaVersion,
+    summary: envelope.summary,
+    compatibility: { status: "candidate" },
+    ...overrides,
+  };
+}
+
+export function makeCheckpointSummary(
+  overrides: Partial<CheckpointSummary> = {},
+): CheckpointSummary {
+  const envelope = makeEnvelope();
+  return {
+    checkpointId: "checkpoint-1",
+    cityId: envelope.city.id,
+    name: "Checkpoint 1",
+    note: null,
+    createdAt: envelope.savedAt,
+    appVersion: envelope.appVersion,
+    snapshotSchemaVersion: envelope.snapshotSchemaVersion,
+    summary: envelope.summary,
+    compatibility: { status: "candidate" },
+    ...overrides,
+  };
+}
+
+export function makeAutosaveSummary(
+  overrides: Partial<AutosaveSummary> = {},
+): AutosaveSummary {
+  const envelope = makeEnvelope();
+  return {
+    autosaveId: "autosave-1",
+    cityId: envelope.city.id,
+    generation: 1,
+    createdAt: envelope.savedAt,
+    appVersion: envelope.appVersion,
+    snapshotSchemaVersion: envelope.snapshotSchemaVersion,
+    summary: envelope.summary,
+    compatibility: { status: "candidate" },
+    ...overrides,
   };
 }
