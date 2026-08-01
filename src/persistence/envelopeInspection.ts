@@ -51,12 +51,18 @@ const ENVELOPE_KEYS = [
   "snapshot",
 ] as const;
 
-const GAME_MODES = new Set<GameMode>(["sandbox", "campaign"]);
-const ECONOMY_PRESETS = new Set<EconomyPreset>(["standard", "creative"]);
-const SANDBOX_TEMPLATE_IDS = new Set<SandboxTemplateId>([
-  "blankGrid",
-  "crossroads",
-]);
+const GAME_MODES = {
+  sandbox: true,
+  campaign: true,
+} as const satisfies Record<GameMode, true>;
+const ECONOMY_PRESETS = {
+  standard: true,
+  creative: true,
+} as const satisfies Record<EconomyPreset, true>;
+const SANDBOX_TEMPLATE_IDS = {
+  blankGrid: true,
+  crossroads: true,
+} as const satisfies Record<SandboxTemplateId, true>;
 
 function isPlainObject(value: unknown): value is PlainObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -87,21 +93,26 @@ function isVersion(value: unknown): value is number {
   );
 }
 
+function isCatalogueMember<TValue extends string>(
+  catalogue: Record<TValue, true>,
+  value: unknown,
+): value is TValue {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(catalogue, value)
+  );
+}
+
 function isGameMode(value: unknown): value is GameMode {
-  return typeof value === "string" && GAME_MODES.has(value as GameMode);
+  return isCatalogueMember(GAME_MODES, value);
 }
 
 function isEconomyPreset(value: unknown): value is EconomyPreset {
-  return (
-    typeof value === "string" && ECONOMY_PRESETS.has(value as EconomyPreset)
-  );
+  return isCatalogueMember(ECONOMY_PRESETS, value);
 }
 
 function isSandboxTemplateId(value: unknown): value is SandboxTemplateId {
-  return (
-    typeof value === "string" &&
-    SANDBOX_TEMPLATE_IDS.has(value as SandboxTemplateId)
-  );
+  return isCatalogueMember(SANDBOX_TEMPLATE_IDS, value);
 }
 
 function inspectionFailure(
@@ -173,6 +184,7 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
     const sandboxTemplateId = summary.sandboxTemplateId;
     if (
       typeof cityId !== "string" ||
+      cityId.length === 0 ||
       typeof cityName !== "string" ||
       !isGameMode(gameMode) ||
       !isEconomyPreset(economyPreset) ||
