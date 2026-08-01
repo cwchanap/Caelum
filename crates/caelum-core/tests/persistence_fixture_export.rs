@@ -7,7 +7,7 @@ use std::process::Command;
 use caelum_core::model::TripStatus;
 use caelum_core::{
     check_snapshot_schema, validate_snapshot, DerivedStateError, GameSnapshot, ModeError,
-    PersistenceError, SnapshotField,
+    PersistenceError, SnapshotField, SNAPSHOT_SCHEMA_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -126,6 +126,11 @@ fn export_snapshot_fixtures_from_authoritative_rust_state() {
 #[test]
 fn checked_in_snapshot_fixtures_preserve_the_persistence_contract() {
     let valid = read_json("valid-paused.json");
+    assert_eq!(
+        valid["schemaVersion"].as_u64(),
+        Some(u64::from(SNAPSHOT_SCHEMA_VERSION)),
+        "checked-in fixture schema must match Rust",
+    );
     check_snapshot_schema(&valid).unwrap();
     let valid: GameSnapshot = serde_json::from_value(valid).unwrap();
     validate_snapshot(&valid).unwrap();
