@@ -157,20 +157,26 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
     if (
       !isPlainObject(city) ||
       !hasExactKeys(city, ["id", "name"]) ||
-      typeof city.id !== "string" ||
-      typeof city.name !== "string" ||
       typeof cityCreatedAt !== "string" ||
       typeof savedAt !== "string" ||
       typeof appVersion !== "string" ||
       !isPlainObject(summary) ||
-      !hasExactKeys(summary, [
-        "gameMode",
-        "economyPreset",
-        "sandboxTemplateId",
-      ]) ||
-      !isGameMode(summary.gameMode) ||
-      !isEconomyPreset(summary.economyPreset) ||
-      !isSandboxTemplateId(summary.sandboxTemplateId)
+      !hasExactKeys(summary, ["gameMode", "economyPreset", "sandboxTemplateId"])
+    ) {
+      return inspectionFailure({ status: "corruptHeader" });
+    }
+
+    const cityId = city.id;
+    const cityName = city.name;
+    const gameMode = summary.gameMode;
+    const economyPreset = summary.economyPreset;
+    const sandboxTemplateId = summary.sandboxTemplateId;
+    if (
+      typeof cityId !== "string" ||
+      typeof cityName !== "string" ||
+      !isGameMode(gameMode) ||
+      !isEconomyPreset(economyPreset) ||
+      !isSandboxTemplateId(sandboxTemplateId)
     ) {
       return inspectionFailure({ status: "corruptHeader" });
     }
@@ -194,7 +200,18 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
       });
     }
 
-    return { ok: true, envelope: value as unknown as InspectedSaveEnvelope };
+    const envelope: InspectedSaveEnvelope = {
+      format,
+      envelopeVersion,
+      city: { id: cityId, name: cityName },
+      cityCreatedAt,
+      savedAt,
+      appVersion,
+      snapshotSchemaVersion,
+      summary: { gameMode, economyPreset, sandboxTemplateId },
+      snapshot,
+    };
+    return { ok: true, envelope };
   } catch {
     return inspectionFailure({ status: "corruptHeader" });
   }
