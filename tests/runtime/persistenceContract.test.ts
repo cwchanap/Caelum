@@ -815,6 +815,61 @@ describe("persistence contract types", () => {
     });
   });
 
+  it("rejects an unsafeRoundaboutPortMapping footprint whose Proxy under-reports length", async () => {
+    // A Proxy get-trap can report a shorter length than the indices its
+    // ownKeys exposes: here length === 1 but ownKeys yields "0" and "1".
+    // Object.defineProperty on a canonical index >= the clone's current
+    // length silently grows the clone, which would launder the inconsistent
+    // shape into a valid dense two-element array that isPointArray accepts.
+    // The post-detach length guard replaces the clone with the non-plain
+    // sentinel so the enclosing candidate is discarded as malformedError.
+    const footprint = new Proxy(
+      [
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+      ],
+      {
+        get(target, key, receiver) {
+          if (key === "length") return 1;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    // Sanity: the proxy lies about its length while exposing two indices.
+    expect(footprint.length).toBe(1);
+    expect(Reflect.ownKeys(footprint)).toEqual(["0", "1", "length"]);
+
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidRoadTopology",
+        context: {
+          reason: {
+            kind: "unsafeRoundaboutPortMapping",
+            details: {
+              structureId: "roundabout:compact2x2:4,2",
+              footprint,
+            },
+          },
+        },
+      },
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
   it("requires the host-specific validation success marker", async () => {
     await expect(
       runPersistenceValidationOperation(undefined, () => undefined),
