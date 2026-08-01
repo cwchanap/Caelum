@@ -417,7 +417,7 @@ describe("persistence contract types", () => {
     });
   });
 
-  it("normalizes a stateful operation getter to host/invokeFailed", async () => {
+  it("detaches a stateful operation getter into a safe recognized error", async () => {
     let operationReads = 0;
     const stateful = new Proxy(
       {
@@ -436,18 +436,113 @@ describe("persistence contract types", () => {
       },
     );
 
-    await expect(
-      runPersistenceSnapshotOperation("restoreSnapshot", () =>
-        Promise.reject(stateful),
-      ),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: {
-        kind: "host",
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(stateful),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // The detached error is recognized: materialization read the getter
+      // once (succeeding), and the returned plain object never re-invokes it.
+      expect(result.error).toMatchObject({
+        kind: "serialization",
         operation: "restoreSnapshot",
-        code: "invokeFailed",
+        phase: "snapshotDecode",
+      });
+      expect(() => result.error.operation).not.toThrow();
+      expect(operationReads).toBe(1);
+    }
+  });
+
+  it("detaches nested context so post-normalization mutation cannot affect the returned error", async () => {
+    const context = {
+      tileId: "tile-0-0",
+      reason: {
+        kind: "connectionToNonRoad",
+        details: { neighbor: { x: 1, y: 0 } },
+      },
+    };
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: { code: "invalidTile", context },
+    };
+    const expectedContext = JSON.parse(JSON.stringify(context));
+
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result.ok).toBe(false);
+    if (
+      !result.ok &&
+      result.error.kind === "validation" &&
+      result.error.error.code === "invalidTile"
+    ) {
+      // Mutate the original nested context after normalization.
+      context.tileId = "tampered";
+      context.reason.details.neighbor.x = 999;
+      // The returned error is detached — unaffected by the mutation.
+      expect(result.error.error.context).toEqual(expectedContext);
+    }
+  });
+
+  it("detaches a hostile nested getter so later field access on the returned error is safe", async () => {
+    let reasonReads = 0;
+    const context = Object.defineProperty({ tileId: "tile-0-0" }, "reason", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (reasonReads++ > 0) {
+          throw new Error("hostile second reason read");
+        }
+        return {
+          kind: "connectionToNonRoad",
+          details: { neighbor: { x: 1, y: 0 } },
+        };
       },
     });
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: { code: "invalidTile", context },
+    };
+
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result.ok).toBe(false);
+    if (
+      !result.ok &&
+      result.error.kind === "validation" &&
+      result.error.error.code === "invalidTile"
+    ) {
+      const returnedContext = result.error.error.context;
+      // The detached context is a plain object — reading reason never throws.
+      expect(() => returnedContext.reason).not.toThrow();
+      expect(returnedContext.reason).toEqual({
+        kind: "connectionToNonRoad",
+        details: { neighbor: { x: 1, y: 0 } },
+      });
+      // Only materialization read the original getter.
+      expect(reasonReads).toBe(1);
+    }
+  });
+
+  it("preserves name and message for an ordinary Error rejection diagnostic", async () => {
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(new Error("restore failed")),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === "host") {
+      expect(result.error.code).toBe("invokeFailed");
+      expect(result.error.diagnostic).toContain("restore failed");
+      expect(result.error.diagnostic).not.toBe("{}");
+    }
   });
 
   it("requires the host-specific validation success marker", async () => {

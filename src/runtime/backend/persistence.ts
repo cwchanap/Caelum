@@ -774,6 +774,11 @@ function isPersistenceHostErrorCode(
 
 function safeDiagnostic(value: unknown): string {
   try {
+    if (value instanceof Error) {
+      const name = value.name || "Error";
+      const message = value.message;
+      return message ? `${name}: ${message}` : name;
+    }
     const serialized = JSON.stringify(value);
     return serialized === undefined ? String(value) : serialized;
   } catch {
@@ -809,13 +814,40 @@ type PersistenceFailureSnapshot =
 function snapshotPersistenceFailure(
   value: unknown,
 ): PersistenceFailureSnapshot {
+  // Materialize a detached JSON-compatible snapshot first so hostile nested
+  // getters, proxies, or post-validation mutations on the original rejection
+  // can never escape the backend boundary. Validation and the returned error
+  // both reference this detached copy, never the untrusted input.
+  let detached: unknown;
   try {
-    if (isPersistenceOperationErrorUnchecked(value)) {
-      const error = { ...value } as PersistenceOperationError;
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      // Non-serializable top-level (function, symbol, undefined) — cannot be
+      // a recognized operation error or a classifiable plain object.
+      return {
+        kind: "unrecognized",
+        plain: isPlainObject(value),
+        diagnostic: safeDiagnostic(value),
+      };
+    }
+    detached = JSON.parse(serialized);
+  } catch {
+    return {
+      kind: "unreadable",
+      diagnostic: "[unreadable persistence failure]",
+    };
+  }
+  try {
+    if (isPersistenceOperationErrorUnchecked(detached)) {
+      const error = detached as PersistenceOperationError;
       return { kind: "recognized", error, diagnostic: safeDiagnostic(error) };
     }
     return {
       kind: "unrecognized",
+      // Classify plain-ness from the original value: an Error or hostile
+      // Proxy is not a plain object, so §9.3 maps it to invokeFailed rather
+      // than malformedError. The detached copy is used only for validation
+      // and as the returned error; the diagnostic describes the original.
       plain: isPlainObject(value),
       diagnostic: safeDiagnostic(value),
     };
