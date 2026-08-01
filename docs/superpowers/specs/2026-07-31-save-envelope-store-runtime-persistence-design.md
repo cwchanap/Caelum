@@ -552,10 +552,11 @@ export interface RuntimePersistenceController {
 HPA-351 and HPA-352 use a narrower internal gameplay-write capability rather than receiving raw session/revision tokens:
 
 ```ts
-export type GameplayWriteKind = "working" | "checkpoint" | "autosave";
+export type GenerationWriteKind = "checkpoint" | "autosave";
+export type GameplayWriteKind = "working" | GenerationWriteKind;
 
 interface GameplayWriteRequest<TSummary> {
-  kind: GameplayWriteKind;
+  kind: GenerationWriteKind;
   write(
     capture: {
       city: ActiveCityIdentity;
