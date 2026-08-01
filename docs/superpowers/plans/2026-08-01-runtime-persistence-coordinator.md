@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Issue:** HPA-499  
+**Depends on:** HPA-498 and merged HPA-342 design PR #21  
+**Consumed by:** HPA-345, HPA-346, HPA-351, HPA-352
+
 **Goal:** Implement HPA-499’s typed persistence coordinator, dirty/session tracking, one per-city persistence FIFO, source-aware loading, and transactional New City activation without changing existing gameplay semantics.
 
 **Architecture:** `createGameRuntime` remains the only owner of frontend runtime state. A focused `SerializedQueue` module preserves the existing gameplay ordering while allowing typed dead/error outcomes. The persistence coordinator uses HPA-498’s `SaveStore`; all active-city persistence mutations enter one city FIFO, and gameplay-bearing writes briefly enter `SerializedQueue` for canonical Rust capture before storage I/O. Foreground New City is the sole admission-reserving storage transaction.
