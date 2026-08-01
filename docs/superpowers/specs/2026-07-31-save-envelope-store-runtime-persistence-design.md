@@ -6,22 +6,22 @@
 
 ## 1. Purpose
 
-Caelum needs one frontend persistence model that works identically in browser and Tauri builds while preserving Rust as the only authority over gameplay restoration.
+Caelum needs one frontend persistence model that behaves identically in browser and Tauri builds while preserving Rust as the only authority over gameplay restoration.
 
 This design defines two implementation boundaries:
 
-1. **HPA-498** defines the versioned save envelope, compatibility inspection, the host-neutral `SaveStore` contract, typed storage failures, an in-memory adapter, and a reusable adapter contract suite.
-2. **HPA-499** integrates save and load operations with `createGameRuntime`, tracks active-city lifecycle and revision-based dirty state, and guarantees that persistence operations share the existing gameplay ordering boundary.
+1. **HPA-498** defines the versioned save envelope, compatibility inspection, host-neutral `SaveStore` contract, typed storage failures, in-memory adapter, and reusable adapter contract suite.
+2. **HPA-499** integrates capture and restoration with `createGameRuntime`, tracks active-city lifecycle and revision-based dirty state, and guarantees that persistence operations share the existing gameplay ordering boundary.
 
 HPA-342 is a coordination parent. It is complete only when both children are complete and their contracts remain consistent.
 
 ## 2. Existing foundation
 
-HPA-340 and HPA-341 already implement the authoritative backend behavior in `caelum-core`, the WASM wrapper, the Tauri host, and `GameBackend`:
+HPA-340 and HPA-341 already implement the authoritative persistence behavior in `caelum-core`, the WASM wrapper, the Tauri host, and `GameBackend`:
 
-- `snapshotForSave()` captures committed Rust state, normalizes only `paused = true`, validates it, and returns a JSON-compatible raw Rust snapshot.
-- `validateSnapshot({ snapshot })` performs pure candidate validation without replacing host state.
-- `restoreSnapshot({ snapshot })` validates and prepares a complete engine before host state is replaced.
+- `snapshotForSave()` captures committed Rust state, normalizes only `paused = true`, validates it, and returns a JSON-compatible raw Rust snapshot;
+- `validateSnapshot({ snapshot })` performs pure candidate validation without replacing host state;
+- `restoreSnapshot({ snapshot })` validates and prepares a complete engine before host state is replaced;
 - failed restoration leaves backend state unchanged;
 - successful restoration returns the canonical raw Rust snapshot after topology recompilation; and
 - browser and Tauri expose the same typed persistence result contract.
@@ -32,19 +32,20 @@ HPA-342 consumes those implemented operations rather than introducing TypeScript
 
 ## 3. Invariants
 
-The implementation must preserve these invariants:
+The implementation preserves these invariants:
 
 1. Rust gameplay state is authoritative. Host metadata never participates in simulation equality or deterministic continuation.
 2. Every gameplay-bearing write produced from the active runtime—working save, checkpoint, or autosave—obtains its payload from `backend.snapshotForSave()`.
 3. A load never publishes candidate gameplay state before `backend.restoreSnapshot()` succeeds.
 4. Failed read, envelope inspection, or restoration leaves the current runtime state and active-city identity unchanged.
 5. Browser and Tauri consumers use one `SaveStore` interface and never branch by host.
-6. Gameplay dispatch, tick, save capture, and restoration have one total order.
-7. Normal working-save, checkpoint, and autosave storage I/O does not hold the gameplay queue after an authoritative snapshot has been captured.
+6. Gameplay dispatch, tick, sandbox creation, reset, save capture, and restoration have one total order.
+7. Normal working-save, checkpoint, and autosave storage I/O leaves the gameplay queue after canonical capture. **Foreground initial-city creation is the sole exception:** it may reserve gameplay admission across the initial write and rollback so an uncommitted candidate city can never become playable.
 8. Late asynchronous completions cannot update a newer runtime session.
 9. Loading a working save is clean. Loading a checkpoint or autosave is dirty because the working save was not replaced.
 10. List compatibility is not semantic gameplay validation. Only Rust validation/restoration establishes that a candidate gameplay snapshot is valid.
 11. Raw `RustGameSnapshot` values are normalized only while committing a runtime view; normalized `GameState` is never reused as a persistence payload.
+12. Storage adapters do not mint IDs, timestamps, or generation numbers and do not silently repair malformed records.
 
 ## 4. Save envelope
 
@@ -78,13 +79,13 @@ export type InspectedSaveEnvelope = SaveEnvelope<unknown>;
 export type UntrustedSaveValue = unknown;
 ```
 
-`UntrustedSaveValue` is the raw value returned by a storage adapter. It is not assumed to have envelope shape. `InspectedSaveEnvelope` is returned only after exception-safe envelope inspection succeeds. Its `snapshot` remains untrusted gameplay until Rust validation/restoration succeeds.
+`UntrustedSaveValue` is the raw value returned by a storage adapter and is not assumed to have envelope shape. `InspectedSaveEnvelope` is returned only after exception-safe envelope inspection succeeds. Its `snapshot` remains untrusted gameplay until Rust validation/restoration succeeds.
 
 The fixed `format` discriminator prevents arbitrary JSON objects from being confused with Caelum saves. `envelopeVersion` versions host metadata and record structure independently from the Rust snapshot schema.
 
-`appVersion` is informational in version 1. An application-version difference alone does not reject a save. Snapshot compatibility is controlled by the envelope and Rust snapshot schema versions.
+`appVersion` is informational in envelope version 1. An application-version difference alone does not reject a save. Snapshot compatibility is controlled by the envelope and Rust snapshot schema versions.
 
-The application version and wall clock are injected into envelope-building workflow services. Persistence modules and adapters do not import package metadata, call `Date.now()`, or mint random IDs internally.
+Application version and wall clock are injected into envelope-building workflow services. Persistence modules and adapters do not import package metadata, call `Date.now()`, or mint random IDs internally.
 
 ### 4.2 Metadata authority
 
@@ -101,7 +102,7 @@ The summary is derived from the canonical Rust snapshot when a new gameplay-bear
 
 Rename changes only `city.name`; it preserves `cityCreatedAt`, `savedAt`, `appVersion`, `snapshotSchemaVersion`, summary, and snapshot.
 
-Duplicate assigns a new city ID, display name, city creation time, save time, and current application version while preserving the gameplay snapshot and the envelope-version-1 summary. `SaveStore` does not reinterpret untrusted gameplay to regenerate summary metadata during duplicate. If the summary shape or derivation contract changes incompatibly, the envelope version changes or a higher-level validated migration owns the change.
+Duplicate assigns a new city ID, display name, city creation time, save time, and current application version while preserving the gameplay snapshot and the envelope-version-1 summary. `SaveStore` does not reinterpret untrusted gameplay to regenerate summary metadata during duplicate. If summary derivation changes incompatibly, the envelope version changes or a higher-level validated migration owns the change.
 
 ### 4.3 Record roles remain outside the envelope
 
@@ -111,7 +112,19 @@ This separation allows the same envelope shape to be used by working saves, gene
 
 ## 5. Compatibility inspection and envelope errors
 
-### 5.1 Inspection order
+### 5.1 Supported-version source
+
+The inspector imports `SNAPSHOT_SCHEMA_VERSION` from the shared domain contract. Envelope version 1 initially supports exactly:
+
+```ts
+export const SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = new Set<number>([
+  SNAPSHOT_SCHEMA_VERSION,
+]);
+```
+
+With the current repository contract, this set is `{4}`. Implementations must not copy a private numeric literal into adapters. Future support for additional snapshot schemas changes the shared set and its tests deliberately.
+
+### 5.2 Inspection order
 
 A read candidate is untrusted. The inspector performs these checks before runtime restoration:
 
@@ -119,14 +132,26 @@ A read candidate is untrusted. The inspector performs these checks before runtim
 2. verify the fixed format discriminator;
 3. verify a supported envelope version;
 4. read the declared snapshot schema version;
-5. reject a declared snapshot schema version not supported by this build;
+5. reject a declared snapshot schema version not in `SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS`;
 6. safely probe `snapshot.schemaVersion` without deeply interpreting the snapshot;
 7. reject a declared/embedded schema mismatch; and
 8. return the inspected envelope so the runtime can pass the original snapshot candidate to `backend.restoreSnapshot()`.
 
-Envelope inspection is exception-safe for hostile values, including throwing getters and proxies. It is not an alternate gameplay validator.
+If `snapshot` is not an inspectable object or does not contain a finite integer `schemaVersion`, the inspector reports:
 
-### 5.2 Closed load-error taxonomy
+```ts
+{
+  code: "snapshotVersionMismatch",
+  declaredVersion,
+  embeddedVersion: null,
+}
+```
+
+It does **not** pass that candidate to `restoreSnapshot`. A throwing proxy/getter encountered while inspecting the header is `corruptHeader`.
+
+Envelope inspection is exception-safe and is not an alternate gameplay validator.
+
+### 5.3 Closed load-error taxonomy
 
 ```ts
 export type SaveEnvelopeError =
@@ -155,19 +180,19 @@ export type SaveCompatibility =
     };
 ```
 
-The inspector provides one explicit mapping from every non-candidate `SaveCompatibility` variant to the corresponding `SaveEnvelopeError`. HPA-498 tests the catalogue exhaustively so HPA-499 cannot invent a second mapping.
+The inspector provides one exhaustive mapping from every non-candidate `SaveCompatibility` variant to the corresponding `SaveEnvelopeError`. HPA-498 tests the catalogue so HPA-499 cannot invent a second mapping.
 
-`candidate` means only that the safely readable header is compatible with the current frontend contract. It does not mean semantic validation or restoration has succeeded.
+`candidate` means only that the safely readable header is compatible with the current frontend contract. It does not mean semantic validation or restoration succeeded.
 
 Unsupported or corrupt records remain listable when the adapter has a stable storage identity or enough safe metadata to form a summary. Delete operates by storage identity and remains available without loading gameplay.
 
-### 5.3 `validateSnapshot` handoff
+### 5.4 `validateSnapshot` handoff
 
-HPA-498 and HPA-499 do not require a separate `validateSnapshot` call before ordinary load; `restoreSnapshot` already validates atomically and returns the canonical runtime payload. The pure validation operation remains available to future portable-import or preflight workflows that need validation without changing the active engine. It never becomes a second authority or a prerequisite for every load.
+HPA-498 and HPA-499 do not require a separate `validateSnapshot` call before ordinary load; `restoreSnapshot` already validates atomically and returns the canonical runtime payload. Pure validation remains available to future portable-import or preflight workflows that need validation without changing the active engine. It never becomes a second authority or a prerequisite for every load.
 
-## 6. Save summaries and generation metadata
+## 6. Save summaries and generation timestamps
 
-All list summaries expose the compatible header fields required by city-library and generation UI without loading gameplay:
+All list summaries expose compatible header fields required by city-library and generation UI without loading gameplay:
 
 ```ts
 export interface SaveHeaderSummary {
@@ -199,6 +224,15 @@ export interface AutosaveSummary extends SaveHeaderSummary {
   createdAt: string;
 }
 ```
+
+For checkpoints and autosaves, `createdAt` is not an independent caller-provided timestamp. The store derives and persists it from `envelope.savedAt` in the same atomic write. Therefore:
+
+```ts
+checkpointSummary.createdAt === checkpointEnvelope.savedAt;
+autosaveSummary.createdAt === autosaveEnvelope.savedAt;
+```
+
+A persisted disagreement is a corrupt record and must not be silently normalized. Rename preserves both values.
 
 Ordering is contractual:
 
@@ -293,7 +327,6 @@ export interface SaveStore {
     cityId: string;
     name: string;
     note: string | null;
-    createdAt: string;
     envelope: WritableSaveEnvelope;
   }): Promise<SaveStoreResult<CheckpointSummary>>;
   renameCheckpoint(
@@ -315,7 +348,6 @@ export interface SaveStore {
     autosaveId: string;
     cityId: string;
     generation: number;
-    createdAt: string;
     envelope: WritableSaveEnvelope;
   }): Promise<SaveStoreResult<AutosaveSummary>>;
   deleteAutosave(
@@ -327,14 +359,14 @@ export interface SaveStore {
 
 Read methods return `UntrustedSaveValue` because adapters provide storage transport, not trust. The envelope inspector establishes the header contract, and Rust validation/restoration establishes gameplay validity.
 
-### 7.3 ID, key, and conflict semantics
+### 7.3 ID, key, timestamp, and conflict semantics
 
 IDs are opaque non-empty strings. Workflow services mint them through injected dependencies; `SaveStore` and its adapters never call `crypto.randomUUID()`, read wall-clock time, or auto-allocate gameplay-facing IDs or generations.
 
 Ownership is explicit:
 
-- HPA-345/HPA-346 own city identity generation for new and duplicated cities.
-- HPA-351 owns checkpoint identity generation.
+- HPA-345/HPA-346 own city identity generation for new and duplicated cities;
+- HPA-351 owns checkpoint identity generation; and
 - HPA-352 owns autosave identity and monotonic per-city generation allocation.
 
 Write behavior is fixed:
@@ -349,13 +381,31 @@ Write behavior is fixed:
 
 Working saves are keyed solely by `envelope.city.id`. An adapter must not maintain a second caller-supplied city key that can diverge from the envelope.
 
-For checkpoint and autosave writes, `input.cityId` must exactly equal `input.envelope.city.id`. A mismatch fails with `corruptRecord` before any write. On read/list, a persisted storage key that disagrees with the envelope city ID is classified as a listable corrupt record; it is never silently re-keyed.
+For checkpoint and autosave writes:
 
-### 7.4 Operation semantics
+- `input.cityId` must exactly equal `input.envelope.city.id`, otherwise the operation fails with `corruptRecord` before any write;
+- record `createdAt` is atomically derived from `input.envelope.savedAt`; and
+- a storage key or persisted record timestamp that disagrees with its envelope is classified as listable corruption and is never silently repaired.
+
+### 7.4 Duplicate inspection ownership
+
+`duplicateCity(sourceCityId, identity)` reads the source internally, so the `SaveStore` implementation owns header inspection for this operation. It must:
+
+1. read the source working record;
+2. run the HPA-498 envelope-header contract;
+3. return `incompatibleRecord` for unsupported envelope/snapshot versions;
+4. return `corruptRecord` for corrupt headers or declared/embedded schema mismatch;
+5. fail with `conflict` if the target city ID already exists; and
+6. create the independent target record without modifying the source.
+
+This is header compatibility only; `SaveStore` does not invoke Rust semantic validation.
+
+In-memory and IndexedDB implementations call the shared TypeScript `inspectSaveEnvelope`. The Tauri managed command enforces the same closed taxonomy and fixture corpus at its Rust boundary; it must not use a divergent permissive parser merely because it cannot import the TypeScript module. The reusable adapter suite verifies equivalent behavior across hosts.
+
+### 7.5 Operation semantics
 
 - Working-save replacement is atomic from the consumer's perspective. A failed write preserves the previous committed value.
-- Duplicate copies only the working save. It does not copy checkpoints or autosaves.
-- Duplicate requires a safely compatible envelope because it replaces host metadata without modifying gameplay.
+- Duplicate copies only the working save. It does not copy checkpoints, autosaves, or generation high-water metadata.
 - Delete city removes the working save and all checkpoints/autosaves atomically from the consumer's perspective.
 - Rename changes only display-name metadata and preserves save time and snapshot data.
 - Checkpoint creation never replaces the working save.
@@ -364,7 +414,7 @@ For checkpoint and autosave writes, `input.cityId` must exactly equal `input.env
 
 The runtime persistence coordinator owns active-city working writes and active-city rename so both use one per-city storage queue. City-library operations on inactive cities may call `SaveStore` directly because inactive cities have no gameplay save producer.
 
-`SaveStore.deleteCity` remains host-neutral and does not know runtime activity. The runtime/city-library layer rejects deleting the currently active city until an explicit lifecycle transition has loaded another city, activated a new city, or detached the current city and advanced the session token.
+`SaveStore.deleteCity` remains host-neutral and does not know runtime activity. The runtime/city-library layer rejects deleting the currently active city until an explicit lifecycle transition loads another city, activates a new city, or detaches the current city and advances the session token.
 
 ## 8. In-memory adapter and reusable adapter contract
 
@@ -376,13 +426,13 @@ The reusable adapter contract covers:
 - working-save replacement and previous-value preservation after injected failure;
 - reopen/persistence behavior where applicable;
 - rename without snapshot, summary, or save-time change;
-- duplicate identity, timestamp, application-version, and generation isolation;
+- duplicate header inspection, target conflict, identity, timestamp, application-version, and generation isolation;
 - city deletion cascading to generations;
 - checkpoint independence from the working save;
-- generation summaries exposing the common nullable header fields;
+- generation summaries exposing common nullable header fields;
 - checkpoint/autosave create-only conflicts;
 - autosave ID and monotonic-generation conflicts;
-- envelope/storage-key consistency failures;
+- envelope/storage-key and createdAt/savedAt consistency failures;
 - autosave generation ordering;
 - unsupported/corrupt listing and deletion;
 - typed not-found, conflict, quota/permission/unavailable, transaction, serialization, and I/O failures; and
@@ -392,9 +442,9 @@ IndexedDB and Tauri adapters run the same suite, with host-specific tests added 
 
 ## 9. Runtime persistence state and lifecycle
 
-### 9.1 State shape
+### 9.1 Published view and internal tokens
 
-The session token belongs to the runtime lineage, including detached sessions, rather than being nested only inside an active city:
+The public runtime snapshot exposes only values needed by presentation and policy consumers:
 
 ```ts
 export interface ActiveCityIdentity {
@@ -405,25 +455,15 @@ export interface ActiveCityIdentity {
 
 export type RuntimeSaveStatus =
   | { state: "idle" }
-  | {
-      state: "capturing" | "writing";
-      cityId: string;
-      sessionToken: number;
-    };
+  | { state: "capturing" | "writing"; cityId: string };
 
 export type RuntimeLoadStatus =
   | { state: "idle" }
-  | {
-      state: "reading" | "restoring";
-      requestToken: number;
-      source: LoadSource;
-    };
+  | { state: "reading" | "restoring"; source: LoadSource };
 
-export interface RuntimePersistenceState {
+export interface RuntimePersistenceView {
   activeCity: ActiveCityIdentity | null;
-  sessionToken: number;
-  currentRevision: number;
-  persistedRevision: number;
+  dirty: boolean;
   saveStatus: RuntimeSaveStatus;
   loadStatus: RuntimeLoadStatus;
   lastSavedAt: string | null;
@@ -431,13 +471,13 @@ export interface RuntimePersistenceState {
 }
 ```
 
-Statuses are scoped to the current runtime session. When load, reset, new-city activation, or detach advances the session token, public status for the new session resets to idle. An old write may still settle internally, but it cannot keep the new city's public status busy or update new-session metadata. Its original operation promise resolves as superseded.
+The coordinator keeps `sessionToken`, load-request tokens, save-request tokens, `currentRevision`, and `persistedRevision` internal. HPA-352 consumes narrow dirty/capture capabilities rather than coupling UI to those counters.
 
-Future autosave policy may expose separate background detail if needed. HPA-499 does not add a global cross-city write indicator.
+Statuses are scoped to the current runtime session. When load, reset, new-city activation, or detach advances the session token, the new session publishes idle status. An old write may still settle internally, but it cannot keep the new city busy or update new-session metadata. Its original operation promise resolves as superseded.
 
 ### 9.2 Dirty derivation and monotonic revisions
 
-Dirty state is derived:
+Internally:
 
 ```ts
 const dirty = currentRevision !== persistedRevision;
@@ -451,16 +491,9 @@ Increment `currentRevision` only after:
 - a tick returns `applied: true`; or
 - reset successfully replaces authoritative engine state.
 
-Do not increment it for:
+Do not increment it for UI changes, previews, gestures, rejected/no-op dispatches, metadata rename, save capture, successful persistence of an unchanged revision, or persistence status/error changes.
 
-- UI changes;
-- previews or gestures;
-- rejected or no-op dispatches;
-- metadata rename;
-- save capture or successful persistence of an unchanged revision; or
-- persistence status/error changes.
-
-Backend snapshot installation is factored through shared helpers used by ordinary dispatch, tick, route-draft save, reset, successful load, and future `createSandbox` activation. A successful load/new-city activation resets revision baselines as described below rather than incrementing the previous lineage.
+Backend snapshot installation is factored through shared helpers used by ordinary dispatch, tick, route-draft save, reset, successful load, and future `createSandbox` activation. A successful load/new-city activation resets revision baselines rather than incrementing the previous lineage.
 
 A same-session save completion may only move `persistedRevision` forward:
 
@@ -477,50 +510,47 @@ It never decreases `persistedRevision`. New sessions reset both revision values 
 The existing application currently initializes a playable backend snapshot before a city library exists. HPA-499 preserves that startup path:
 
 - runtime may start with `activeCity === null`;
-- `sessionToken = 0`, `currentRevision = 0`, and `persistedRevision = 0`;
+- internal session/revision counters begin at zero;
 - applied dispatches/ticks still increment `currentRevision`, so an edited detached session becomes dirty;
-- working-save and active-rename requests fail with a typed `noActiveCity` precondition error; and
+- working-save and active-rename requests fail with typed `noActiveCity`; and
 - no implicit city ID or save target is invented.
 
-HPA-345 later replaces this compatibility startup with the New City/library flow where appropriate; HPA-499 does not forbid a detached runtime from being exercised in existing tests or development builds.
+HPA-345 later replaces this compatibility startup with the New City/library flow where appropriate. HPA-499 does not forbid a detached runtime from being exercised in existing tests or development builds.
 
-### 9.4 New-city activation
+### 9.4 New-city activation and the foreground exception
 
-A newly created city becomes active only after its initial working envelope has been committed successfully. On success the runtime advances `sessionToken`, publishes the created canonical snapshot and clean UI once, binds the new identity, and sets `currentRevision = persistedRevision = 0` with `lastSavedAt` from the initial envelope.
+A newly created city becomes active only after its initial working envelope commits successfully. On success the runtime advances its session token, publishes the created canonical snapshot and clean UI once, binds the new identity, and resets the revision baseline cleanly.
 
 The current `GameBackend.createSandbox` operation replaces backend engine state before returning. HPA-345 therefore performs creation through a coordinator-managed foreground transaction:
 
-1. capture the prior canonical persistence snapshot and runtime identity;
-2. invoke `createSandbox` inside the gameplay queue;
-3. obtain the new canonical persistence payload through `snapshotForSave`;
-4. write the initial working envelope;
-5. on write success, publish/bind the new clean city once; and
-6. on write failure, restore the prior snapshot before releasing the transaction and leave the prior runtime/identity visible.
+1. enter a modal foreground transition that suspends new gameplay dispatch/tick admission and drains already queued work;
+2. capture the prior canonical persistence snapshot plus the prior raw pause/running flag and runtime identity;
+3. invoke `createSandbox` inside the gameplay ordering boundary;
+4. obtain the new canonical persistence payload through `snapshotForSave`;
+5. write the initial working envelope;
+6. on write success, publish and bind the new clean city once; and
+7. on write failure, restore the prior canonical snapshot, restore its prior pause/running flag, and leave the prior runtime/identity visible before gameplay admission resumes.
 
-Unlike ordinary saves, this foreground creation transaction may reserve the gameplay queue across the initial write/rollback because no gameplay may observe a city that has not been committed to storage. HPA-345 owns form/UI behavior; HPA-499 supplies the serialized lifecycle capability.
+This foreground transaction is the sole case where storage I/O may reserve gameplay admission. The player is already in a modal creation flow, and no tick/dispatch backlog is allowed to accumulate while admission is suspended.
+
+The contract intentionally does **not** use a generic `Promise.race` timeout. `SaveStore` writes are not currently cancellable; rolling back after a frontend-only timeout while the original write later succeeds could create an orphan city. Adapters must settle known quota, permission, transaction-abort, serialization, and I/O failures as typed results. If profiling or field evidence reveals genuinely hung host writes, the follow-up must add cancellable/abortable storage semantics and late-success cleanup as one reviewed protocol rather than layering an unsafe timeout over an uncancellable write.
 
 ### 9.5 Reset and active-city deletion
 
 A successful `reset()` keeps the same active city identity but starts a new runtime lineage:
 
-- advance `sessionToken`;
-- reset transient UI through the normal authoritative-replacement helper;
-- set `currentRevision = 1` and `persistedRevision = 0`; and
-- remain dirty because the working save still contains the pre-reset state.
+- advance the internal session token;
+- reset transient UI through the authoritative-replacement helper;
+- set a dirty revision baseline; and
+- leave the working save unchanged.
 
-The same revision behavior applies when reset occurs in a detached runtime.
+The same revision behavior applies in a detached runtime.
 
-Deleting the active city's storage is rejected until the caller first performs one of these explicit transitions:
-
-- successfully load another city;
-- successfully create and activate another city; or
-- call `detachActiveCity()`, which advances `sessionToken`, clears active identity and current-session persistence status, and leaves no working-save target.
-
-After detachment, HPA-346 owns navigation away from the active board before deleting the former city record. A stale write from the prior token is inert.
+Deleting the active city's storage is rejected until the caller first successfully loads another city, creates/activates another city, or calls `detachActiveCity()`. Detachment advances the session token, clears active identity and current-session persistence status, and leaves no working-save target. HPA-346 navigates away from the board before deleting the former city record. A stale write from the prior token is inert.
 
 ## 10. Queue, normalization, and coordinator boundaries
 
-The persistence coordinator is a focused module, but it does not own an independent backend queue. `createGameRuntime` gives it a narrow capability to schedule authoritative backend operations through the existing gameplay queue.
+The persistence coordinator is a focused module but does not own an independent backend queue. `createGameRuntime` gives it a narrow capability to schedule authoritative backend operations through the existing gameplay queue.
 
 Conceptually:
 
@@ -538,34 +568,34 @@ interface RuntimePersistenceHost {
 }
 ```
 
-The concrete API may differ, but the ownership rules are fixed:
+The concrete API may differ, but ownership rules are fixed:
 
 - backend dispatch, tick, save capture, sandbox creation, reset, and restoration have one total order;
 - normal storage reads/writes happen outside that queue after capture;
 - only `createGameRuntime` commits authoritative runtime state;
 - `commitRestoredSnapshot` calls `normalizeRustSnapshot(snapshot)` internally before assigning `state`;
-- the coordinator never publishes or stores the raw snapshot as `GameState`; and
+- the coordinator never publishes or stores a raw snapshot as `GameState`; and
 - any later save starts again at `backend.snapshotForSave()` rather than serializing the normalized runtime view.
 
 ## 11. Working-save, capture, and rename flows
 
 ### 11.1 Explicit manual save
 
-An explicit **Save Now** request writes even when `currentRevision === persistedRevision`. This refreshes `savedAt` and provides deterministic user feedback. Autosave policy may skip clean sessions before calling the coordinator.
+An explicit **Save Now** request writes even when the current and persisted revisions match. This refreshes `savedAt` and provides deterministic user feedback. Autosave policy may skip clean sessions before calling the coordinator.
 
-Each save request follows this sequence:
+Each save request:
 
-1. verify an active city exists;
-2. enter the gameplay queue;
-3. call `backend.snapshotForSave()`;
-4. capture the canonical snapshot together with city ID, session token, current revision, and a monotonic save-request token;
-5. leave the gameplay queue;
-6. derive summary metadata and build the envelope using injected clock/application-version dependencies and active-city identity;
-7. enqueue the write by capture order in the city's FIFO storage queue;
-8. call `SaveStore.writeWorkingSave()` when that request reaches the head; and
-9. on success, update current-session `lastSavedAt` and advance `persistedRevision` with `Math.max` only when city ID and session token still match.
+1. verifies an active city exists;
+2. enters the gameplay queue;
+3. calls `backend.snapshotForSave()`;
+4. captures the canonical snapshot with city ID, internal session token, current revision, and a monotonic save-request token;
+5. leaves the gameplay queue;
+6. derives summary metadata and builds the envelope using injected clock/application-version dependencies and active-city identity;
+7. enqueues the write by capture order in the city's FIFO storage queue;
+8. calls `SaveStore.writeWorkingSave()` when that request reaches the head; and
+9. on success, updates current-session `lastSavedAt` and advances `persistedRevision` with `Math.max` only when city ID and session token still match.
 
-Captures are ordered by the gameplay queue. Writes are ordered by their capture token. Exactly one `SaveStore.writeWorkingSave` call is active per city; additional manual requests wait rather than conflict or overwrite out of order. HPA-352 may coalesce autosave triggers before invoking the coordinator, but it does not weaken this queue.
+Captures are ordered by the gameplay queue. Writes are ordered by capture token. Exactly one `SaveStore.writeWorkingSave` call is active per city; additional manual requests wait rather than conflict or overwrite out of order. HPA-352 may coalesce autosave triggers before invoking the coordinator, but it does not weaken this queue.
 
 Storage I/O does not freeze ordinary simulation progression. A capture at revision N is coherent even when gameplay advances to N+1 during the write. Completion advances persistence only through N, so the runtime remains dirty.
 
@@ -573,17 +603,17 @@ A write completion from an earlier city/session cannot update the new active cit
 
 ### 11.2 Shared gameplay-bearing capture
 
-HPA-499 exposes the same canonical capture primitive for HPA-351 checkpoints and HPA-352 autosaves. Those workflows add their own record metadata and IDs, but they never serialize `RuntimeSnapshot.state` or call `normalizeRustSnapshot` as a persistence source.
+HPA-499 exposes the same canonical capture primitive for HPA-351 checkpoints and HPA-352 autosaves. Those workflows add their own record metadata and IDs, but never serialize `RuntimeSnapshot.state` or call `normalizeRustSnapshot` as a persistence source.
 
 ### 11.3 Active-city rename
 
-Active-city rename enters the same per-city storage queue as working writes. On successful store rename, it updates the active display name only if city ID and session token still match. Rename does not change gameplay revisions, `lastSavedAt`, or summary metadata.
+Active-city rename enters the same per-city storage queue as working writes. On successful store rename, it updates the active display name only if city ID and the internal session token still match.
+
+The metadata commit must apply to the **live** runtime state and UI present when the rename completes. It must not replay a `RuntimeSnapshot`, `state`, or `ui` reference captured when rename started, because a concurrent tick or gameplay dispatch may have committed newer gameplay while storage I/O was in flight. Rename changes only the persistence identity slice, does not alter gameplay revisions or `lastSavedAt`, and publishes a coherent snapshot using the current state/UI.
 
 ## 12. Load flow
 
 ### 12.1 Common source-aware request
-
-The coordinator uses one load pipeline with a source discriminator:
 
 ```ts
 export type LoadSource =
@@ -594,7 +624,7 @@ export type LoadSource =
 
 ### 12.2 Steps
 
-1. create a monotonic load-request token;
+1. create an internal monotonic load-request token;
 2. read the selected `UntrustedSaveValue` outside the gameplay queue;
 3. inspect the envelope and reject incompatible headers;
 4. enter the gameplay queue;
@@ -609,18 +639,20 @@ export type LoadSource =
    - replace UI state with `createUiState()`;
    - clear drafts, draft history, selections, notices, previews, gameplay rejections, sandbox reset errors, transient backend persistence errors, and persistence errors;
    - update active-city identity;
-   - advance `sessionToken`;
+   - advance the internal session token;
    - reset current-session save/load status; and
    - publish once.
 
-No intermediate publication may pair the old city state with the new identity or vice versa.
+No intermediate publication may pair old city state with new identity or vice versa.
+
+Every persisted gameplay envelope produced by this contract comes from `snapshotForSave`, which stores `paused = true`. Therefore successful working-save, checkpoint, and autosave loads all enter the board paused. Resuming simulation is an explicit later player action.
 
 ### 12.3 Dirty state after load
 
-- Working save: set `currentRevision = 0` and `persistedRevision = 0`.
-- Checkpoint or autosave: set `currentRevision = 1` and `persistedRevision = 0`.
+- Working save: reset the internal revision baseline cleanly.
+- Checkpoint or autosave: initialize a dirty baseline because the working save remains unchanged.
 
-The exact initial numbers are internal. The externally required property is clean working load versus dirty generation load.
+The exact counter values are internal. The externally required property is clean working load versus dirty generation load.
 
 ## 13. Error and operation-result ownership
 
@@ -644,7 +676,7 @@ export type PersistenceCoordinatorError =
 
 Expected read, compatibility, validation, precondition, and write errors are non-fatal runtime persistence errors. They do not stop the canvas/runtime loop.
 
-A superseded operation is an internal operation outcome, not a persistent runtime error. The original caller can observe that its request became stale, but the current session's `error` remains unchanged.
+A superseded operation is an internal operation outcome, not a persistent runtime error. The original caller may observe that its request became stale, but the current session's `error` remains unchanged.
 
 HPA-341 already maps backend bridge failures into typed persistence results. HPA-499 does not revive a runtime previously marked dead by an unrelated fatal backend failure.
 
@@ -659,15 +691,15 @@ HPA-341's measured persistence benchmarks are evidence for scheduling, not a 100
 
 ## 15. Required concurrency and state-machine tests
 
-Tests explicitly cover:
+Tests cover:
 
 1. **Mutation during save:** capture revision 4, apply revision 5 while writing, complete save, remain dirty.
-2. **Monotonic persisted revision:** complete a lower captured revision after a higher one and never move `persistedRevision` backward.
+2. **Defensive monotonic helper:** directly exercise stale completion handling so an older captured revision can never move `persistedRevision` backward. Correct FIFO writes prevent this ordering in normal operation; the test is a regression tripwire for future alternate producers or refactors.
 3. **Multiple manual saves:** captures and writes retain FIFO capture order with one active store write per city.
 4. **Clean manual save:** a clean explicit save still writes and refreshes `savedAt`.
 5. **City switch during save:** capture city A, successfully load city B, complete A write, leave B metadata, status, error, and dirty state untouched.
 6. **Generation load during save:** capture working state, load an older checkpoint of the same city, complete old save, do not mark the checkpoint-derived session clean.
-7. **Rename during save:** rename and working write serialize so neither completion reverts the other's metadata.
+7. **Rename during save:** rename and working write serialize so neither completion reverts the other's metadata or clobbers newer live gameplay state.
 8. **Overlapping load requests:** request A, request B, A read finishes last; only B may restore.
 9. **Queued mutation before load:** mutation drains before restore and is replaced by the selected save only after the requested load reaches the queue.
 10. **Mutation requested after load entered queue:** restore commits before the later mutation executes against the restored engine.
@@ -676,9 +708,14 @@ Tests explicitly cover:
 13. **Detached bootstrap:** runtime is playable with no active city, becomes dirty after applied gameplay, and rejects working save without inventing an ID.
 14. **Reset lineage:** reset preserves city identity, advances session token, invalidates old writes, and becomes dirty.
 15. **Active delete gate:** delete is rejected until load/new activation/detach advances the session.
-16. **New-city storage failure:** restore the prior backend/runtime state and create no partial city record.
-17. **Raw restore normalization:** the runtime commits `normalizeRustSnapshot` output and later save recaptures from the backend.
-18. **Session-scoped status:** old-session writes can settle after load without keeping the new session busy.
+16. **New-city storage failure:** restore the prior backend/runtime state and create no partial visible city.
+17. **Foreground transition admission:** no tick/dispatch backlog accumulates while initial storage/rollback owns the modal transition.
+18. **Raw restore normalization:** runtime commits `normalizeRustSnapshot` output and later save recaptures from the backend.
+19. **Session-scoped status:** old-session writes can settle after load without keeping the new session busy.
+20. **Generation timestamp derivation:** checkpoint/autosave `createdAt` equals envelope `savedAt`, and persisted disagreement is listable corruption.
+21. **Missing embedded schema:** non-object or missing `snapshot.schemaVersion` fails fast with `embeddedVersion: null` and never calls Rust restore.
+22. **Duplicate inspection parity:** memory, IndexedDB, and Tauri return equivalent incompatible/corrupt outcomes from the same fixtures.
+23. **Paused load:** every working/checkpoint/autosave restore publishes a paused runtime snapshot.
 
 ## 16. File boundaries
 
@@ -692,7 +729,7 @@ Tests explicitly cover:
 - `tests/runtime/persistence/envelope.test.ts`
 - `tests/runtime/persistence/memorySaveStore.test.ts`
 
-`vite.config.ts` already collects `tests/runtime/**/*.test.ts`; this placement ensures the HPA-498 tests run in the existing Node runtime project. `saveStoreContract.ts` is a reusable helper imported by concrete `*.test.ts` adapter suites.
+`vite.config.ts` already collects `tests/runtime/**/*.test.ts`; this placement ensures HPA-498 tests run in the existing Node runtime project. `saveStoreContract.ts` is a reusable helper imported by concrete `*.test.ts` adapter suites.
 
 Names may be adjusted to existing repository conventions, but envelope/store code must not be placed inside browser or Tauri adapters.
 
@@ -708,7 +745,7 @@ The coordinator must not become a storage adapter, city-library UI state store, 
 
 ## 17. Injected dependencies
 
-Deterministic workflow services receive dependencies explicitly:
+Deterministic envelope construction receives:
 
 ```ts
 export interface SaveEnvelopeDependencies {
@@ -717,13 +754,13 @@ export interface SaveEnvelopeDependencies {
 }
 ```
 
-The owning feature injects additional factories:
+Owning features inject additional factories:
 
 - HPA-345/HPA-346: `nextCityId()`;
 - HPA-351: `nextCheckpointId()`; and
 - HPA-352: `nextAutosaveId()` plus a serialized per-city generation allocator.
 
-Adapters consume already-resolved IDs/timestamps and never generate them. Tests supply deterministic sequences. Production composition may use platform clocks and UUIDs at the application boundary.
+Adapters consume already-resolved IDs and envelope timestamps and never generate them. Tests supply deterministic sequences. Production composition may use platform clocks and UUIDs at the application boundary.
 
 ## 18. Non-goals
 
@@ -732,6 +769,7 @@ This design does not implement:
 - IndexedDB or Tauri filesystem adapters;
 - city-library, New City, checkpoint, autosave, recovery, or import/export presentation UI;
 - autosave debounce, periodic timing, day-boundary triggers, close handling, coalescing, retry scheduling, rotation, or pruning;
+- generic timeout/cancellation for uncancellable SaveStore operations;
 - recovery selection;
 - schema migration or TypeScript gameplay repair;
 - cloud synchronization;
@@ -764,16 +802,18 @@ bun run test
 bun run build
 ```
 
-HPA-499 is TypeScript-focused, but `cargo test --workspace` remains a cross-boundary regression gate because the runtime consumes the Rust persistence contract and its fixtures. It is not evidence that HPA-499 may change Rust authority semantics.
+HPA-499 is TypeScript-focused, but `cargo test --workspace` remains a cross-boundary regression gate because the runtime consumes the Rust persistence contract and fixtures. It is not evidence that HPA-499 may change Rust authority semantics.
 
-The final implementation reviews search for:
+Final implementation reviews search for:
 
 - direct serialization of normalized `GameState`;
 - direct gameplay-state replacement outside runtime/backend boundaries;
 - missing dirty bumps on ordinary dispatch, tick, route-draft save, reset, or sandbox activation;
 - raw `RustGameSnapshot` assignment into runtime `GameState`;
 - host branching in `SaveStore` consumers;
-- adapter-side ID/time generation; and
+- adapter-side ID/time generation;
+- duplicate implementations that skip the shared compatibility taxonomy;
+- independent generation timestamps that can diverge from envelope `savedAt`; and
 - save calls originating in animation-frame-critical code.
 
 ## 20. Dependency handoff
