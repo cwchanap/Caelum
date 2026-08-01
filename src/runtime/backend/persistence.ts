@@ -918,12 +918,17 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   }
   if (seen.has(value)) return seen.get(value);
   if (Array.isArray(value)) {
-    // Initialize with new Array(value.length) instead of [] so the clone
+    // Capture the source length once. A Proxy get-trap can report a shorter
+    // length than the indices its ownKeys exposes (e.g. length === 1 while
+    // ownKeys yields "0" and "1"); calling value.length repeatedly could also
+    // return inconsistent values across reads. Capture once and reuse.
+    const sourceLength = value.length;
+    // Initialize with new Array(sourceLength) instead of [] so the clone
     // preserves the original length. Starting from [] and skipping the
     // "length" key would drop trailing holes: a sparse new Array(3) would
     // become [], a different value than the input. Preserving length keeps
     // the detached copy faithful so isPointArray can reject sparse arrays.
-    const clone: unknown[] = new Array(value.length);
+    const clone: unknown[] = new Array(sourceLength);
     seen.set(value, clone);
     for (const key of Reflect.ownKeys(value)) {
       if (key === "length") continue;
@@ -937,6 +942,19 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
         enumerable: true,
         configurable: true,
       });
+    }
+    // A Proxy can report length === 1 while exposing index "1" via ownKeys;
+    // Object.defineProperty on a canonical index >= the clone's current
+    // length silently grows the clone, laundering the inconsistent shape
+    // into a valid dense array that isPointArray would accept. If defining
+    // the exposed indices changed the clone's length, the input was lying
+    // about its shape — replace the clone with the non-plain sentinel so the
+    // enclosing candidate fails isPlainObject and is discarded as
+    // malformedError rather than escaping as a recognized error.
+    if (clone.length !== sourceLength) {
+      const sentinel = new DetachedNonPlainMarker();
+      seen.set(value, sentinel);
+      return sentinel;
     }
     return clone;
   }
