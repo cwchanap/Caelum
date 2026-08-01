@@ -619,6 +619,86 @@ describe("persistence contract types", () => {
     });
   });
 
+  it("rejects a stateful getPrototypeOf proxy that alternates between plain and non-plain", async () => {
+    // A stateful getPrototypeOf proxy can appear plain on the initial
+    // isPlainObject check (top-level), non-plain during detachment (so
+    // detachValue returns the original proxy by reference), then plain
+    // again during validation — letting the hostile proxy escape as a
+    // recognized error. The sentinel replacement makes the detached copy
+    // permanently non-plain so the proxy cannot escape.
+    let protoCalls = 0;
+    const alternating = new Proxy(
+      {
+        kind: "serialization",
+        operation: "restoreSnapshot",
+        phase: "snapshotDecode",
+        diagnostic: "hostile alternating proxy",
+      },
+      {
+        getPrototypeOf() {
+          protoCalls++;
+          // Odd calls: plain. Even calls: non-plain.
+          return protoCalls % 2 === 1
+            ? Object.prototype
+            : { constructor: "non-plain" };
+        },
+      },
+    );
+
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(alternating),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+    // The proxy must not be the returned error — the sentinel replaces it.
+    if (!result.ok) {
+      expect(result.error).not.toBe(alternating);
+    }
+  });
+
+  it("rejects a forged error with an own __proto__ data property", async () => {
+    // Property assignment (clone[key] = value) for key "__proto__" invokes
+    // the inherited prototype setter rather than creating an own data
+    // property, silently dropping the key from the detached copy. This
+    // would let a malformed shape (valid keys plus an own __proto__) pass
+    // the closed-shape guard after detachment. Using defineProperty
+    // preserves __proto__ as an own key so hasExactKeys rejects it.
+    //
+    // The input is built on Object.create(null) so that assigning
+    // "__proto__" creates a real own data property (no inherited setter
+    // on a null-prototype object). isPlainObject still accepts it
+    // (null prototype is plain), so the top-level gate is passed.
+    const rejection = Object.create(null);
+    rejection.kind = "serialization";
+    rejection.operation = "restoreSnapshot";
+    rejection.phase = "snapshotDecode";
+    rejection.diagnostic = "forged with __proto__";
+    rejection.__proto__ = null;
+    // Sanity: the input has an own __proto__ data property and is plain.
+    expect(Reflect.ownKeys(rejection)).toContain("__proto__");
+    expect(Object.getPrototypeOf(rejection)).toBeNull();
+
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
   it("requires the host-specific validation success marker", async () => {
     await expect(
       runPersistenceValidationOperation(undefined, () => undefined),
