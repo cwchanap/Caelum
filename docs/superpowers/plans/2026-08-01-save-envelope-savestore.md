@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Implement `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md` without adding migration or repair behavior.
+- Implement `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md` without migration or repair behavior.
 - Reuse `GameMode`, `EconomyPreset`, `SandboxTemplateId`, and TypeScript `SNAPSHOT_SCHEMA_VERSION` from `src/domain/types.ts`.
 - Rust and TypeScript schema constants are mirrored and must move together; parity is fixture-backed.
 - Envelope inspection never invokes `normalizeRustSnapshot`, `validateSnapshot`, or gameplay repair.
@@ -32,6 +32,7 @@
 - `src/persistence/saveStore.ts`
 - `src/persistence/memorySaveStore.ts`
 - `tests/runtime/persistence/fixtures.ts`
+- `tests/runtime/persistence/storeTestUtils.ts`
 - `tests/runtime/persistence/envelope.test.ts`
 - `tests/runtime/persistence/saveStore.test.ts`
 - `tests/runtime/persistence/saveStoreContract.ts`
@@ -48,9 +49,46 @@
 - `tests/fixtures/persistence/valid-paused.json`
 - `vite.config.ts`
 
+## Test Utility Contract
+
+`tests/runtime/persistence/fixtures.ts` exports:
+
+```ts
+export function makeRustSnapshot(
+  overrides?: Partial<RustGameSnapshot>,
+): RustGameSnapshot;
+export function makeEnvelope(
+  overrides?: Partial<WritableSaveEnvelope>,
+): WritableSaveEnvelope;
+export function makeCitySummary(
+  overrides?: Partial<CitySummary>,
+): CitySummary;
+export function makeCheckpointSummary(
+  overrides?: Partial<CheckpointSummary>,
+): CheckpointSummary;
+export function makeAutosaveSummary(
+  overrides?: Partial<AutosaveSummary>,
+): AutosaveSummary;
+```
+
+`tests/runtime/persistence/storeTestUtils.ts` exports:
+
+```ts
+export async function expectOk<T>(
+  result: Promise<SaveStoreResult<T>> | SaveStoreResult<T>,
+): Promise<T>;
+
+export async function expectError(
+  result: Promise<SaveStoreResult<unknown>> | SaveStoreResult<unknown>,
+  code: SaveStoreErrorCode,
+): Promise<SaveStoreError>;
+```
+
+`expectOk` throws the returned diagnostic when `ok === false`; `expectError` asserts `ok === false` and exact code. All later test snippets use these helpers.
+
 ---
 
-### Task 1: Define envelope types, builder, and deterministic fixtures
+### Task 1: Define envelope types, builder, and deterministic snapshot fixtures
 
 **Files:**
 - Create: `src/persistence/envelope.ts`
@@ -58,12 +96,12 @@
 - Create: `tests/runtime/persistence/envelope.test.ts`
 
 **Interfaces:**
-- Produces: `SaveEnvelopeSummary`, `SaveEnvelope<T>`, `WritableSaveEnvelope`, `InspectedSaveEnvelope`, `UntrustedSaveValue`, `SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS`, `buildSaveEnvelope`.
+- Produces: `SaveEnvelopeSummary`, `SaveEnvelope<T>`, `WritableSaveEnvelope`, `InspectedSaveEnvelope`, `UntrustedSaveValue`, `SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS`, `buildSaveEnvelope`, `makeRustSnapshot`, `makeEnvelope`.
 
 - [ ] **Step 1: Write the failing builder test**
 
 ```ts
-it("builds schema-v1 host metadata from a canonical Rust snapshot", () => {
+it("builds schema-v1 metadata from a canonical Rust snapshot", () => {
   const snapshot = makeRustSnapshot({
     rules: {
       gameMode: "sandbox",
@@ -77,7 +115,7 @@ it("builds schema-v1 host metadata from a canonical Rust snapshot", () => {
     },
   });
 
-  const result = buildSaveEnvelope({
+  const envelope = buildSaveEnvelope({
     city: { id: "city-1", name: "North Loop" },
     cityCreatedAt: "2026-08-01T10:00:00.000Z",
     savedAt: "2026-08-01T10:05:00.000Z",
@@ -85,7 +123,7 @@ it("builds schema-v1 host metadata from a canonical Rust snapshot", () => {
     snapshot,
   });
 
-  expect(result).toMatchObject({
+  expect(envelope).toMatchObject({
     format: "caelum-save",
     envelopeVersion: 1,
     snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -95,7 +133,7 @@ it("builds schema-v1 host metadata from a canonical Rust snapshot", () => {
       sandboxTemplateId: "crossroads",
     },
   });
-  expect(result.snapshot).toBe(snapshot);
+  expect(envelope.snapshot).toBe(snapshot);
 });
 ```
 
@@ -103,7 +141,7 @@ it("builds schema-v1 host metadata from a canonical Rust snapshot", () => {
 
 Run: `bunx vitest run --project runtime tests/runtime/persistence/envelope.test.ts`
 
-Expected: FAIL because `src/persistence/envelope.ts` does not exist.
+Expected: FAIL because `envelope.ts` does not exist.
 
 - [ ] **Step 3: Implement the envelope contract**
 
@@ -145,19 +183,17 @@ export type InspectedSaveEnvelope = SaveEnvelope<unknown>;
 export type UntrustedSaveValue = unknown;
 ```
 
-Implement `buildSaveEnvelope` exactly from the test inputs, deriving summary fields from `snapshot.rules` and using `SNAPSHOT_SCHEMA_VERSION` for `snapshotSchemaVersion`.
+Implement `buildSaveEnvelope` by deriving all summary values from `snapshot.rules` and using the shared schema constant.
 
-- [ ] **Step 4: Implement deterministic fixture helpers**
+- [ ] **Step 4: Implement `makeRustSnapshot` and `makeEnvelope`**
+
+Use `tests/fixtures/rustSnapshot.ts::createRustSnapshot` rather than importing JSON directly:
 
 ```ts
-import validPaused from "../../fixtures/persistence/valid-paused.json";
-import type { RustGameSnapshot } from "../../../src/runtime/backend/types";
-
 export function makeRustSnapshot(
   overrides: Partial<RustGameSnapshot> = {},
 ): RustGameSnapshot {
-  const base = structuredClone(validPaused) as RustGameSnapshot;
-  return { ...base, ...overrides };
+  return createRustSnapshot({ paused: true, ...overrides });
 }
 
 export function makeEnvelope(
@@ -196,7 +232,7 @@ git commit -m "feat: define save envelope contract"
 
 ---
 
-### Task 2: Implement strict header inspection and mirrored schema parity
+### Task 2: Implement strict header inspection and schema parity
 
 **Files:**
 - Create: `src/persistence/envelopeInspection.ts`
@@ -227,26 +263,12 @@ it.each([
       embeddedVersion: null,
     },
   ],
-])("classifies an invalid header", (value, compatibility) => {
+])("classifies invalid headers", (value, compatibility) => {
   expect(inspectSaveEnvelope(value)).toEqual({ ok: false, compatibility });
-});
-
-it("converts every list compatibility failure into one load error", () => {
-  expect(
-    compatibilityToEnvelopeError({
-      status: "snapshotVersionMismatch",
-      declaredVersion: 4,
-      embeddedVersion: null,
-    }),
-  ).toEqual({
-    code: "snapshotVersionMismatch",
-    declaredVersion: 4,
-    embeddedVersion: null,
-  });
 });
 ```
 
-Add explicit tests for throwing getters, symbol keys, extra keys, missing keys, invalid domain summary strings, and mismatched embedded versions.
+Add explicit tests for throwing getters, extra/symbol keys, missing fields, invalid summary strings, embedded mismatch, and exhaustive compatibility-to-error mapping.
 
 - [ ] **Step 2: Run the test and confirm failure**
 
@@ -254,48 +276,26 @@ Run: `bunx vitest run --project runtime tests/runtime/persistence/envelope.test.
 
 Expected: FAIL because inspection exports do not exist.
 
-- [ ] **Step 3: Implement exception-safe closed inspection**
+- [ ] **Step 3: Implement exception-safe exact inspection**
 
-Use plain-object and exact-key helpers modeled after `src/runtime/backend/persistence.ts`. Catch every property/prototype/key access. Validate only envelope/header fields and embedded `snapshot.schemaVersion`; leave the snapshot body opaque.
-
-```ts
-export type InspectSaveEnvelopeResult =
-  | {
-      ok: true;
-      envelope: InspectedSaveEnvelope;
-      compatibility: { status: "candidate" };
-    }
-  | {
-      ok: false;
-      compatibility: Exclude<SaveCompatibility, { status: "candidate" }>;
-    };
-```
+Use plain-object and exact-key helpers modeled after `src/runtime/backend/persistence.ts`. Catch every prototype/key/property access. Validate envelope/header fields plus `snapshot.schemaVersion` only; retain the body as `unknown`.
 
 - [ ] **Step 4: Add exact Rust fixture parity**
 
-Modify `crates/caelum-core/tests/persistence_fixture_export.rs` imports:
-
-```rust
-use caelum_core::{
-    check_snapshot_schema, validate_snapshot, DerivedStateError, GameSnapshot, ModeError,
-    PersistenceError, SnapshotField, SNAPSHOT_SCHEMA_VERSION,
-};
-```
-
-Add this assertion at the start of `checked_in_snapshot_fixtures_preserve_the_persistence_contract`:
+Import `SNAPSHOT_SCHEMA_VERSION` in `crates/caelum-core/tests/persistence_fixture_export.rs` and add:
 
 ```rust
 let valid = read_json("valid-paused.json");
 assert_eq!(
     valid["schemaVersion"].as_u64(),
     Some(u64::from(SNAPSHOT_SCHEMA_VERSION)),
-    "checked-in fixture schema must match the authoritative Rust constant",
+    "checked-in fixture schema must match Rust",
 );
 ```
 
-In TypeScript, import `valid-paused.json` and assert its `schemaVersion` equals the TypeScript constant. Do not inspect Rust source text.
+The TypeScript test loads the same fixture and compares it to the TypeScript constant. It must not parse Rust source.
 
-- [ ] **Step 5: Run parity and inspection tests**
+- [ ] **Step 5: Run tests**
 
 ```bash
 cargo test -p caelum-core --test persistence_fixture_export
@@ -313,44 +313,67 @@ git commit -m "feat: inspect save envelope headers strictly"
 
 ---
 
-### Task 3: Define SaveStore types and deterministic ordering
+### Task 3: Define SaveStore, ordering helpers, and shared test utilities
 
 **Files:**
 - Create: `src/persistence/saveStore.ts`
 - Create: `tests/runtime/persistence/saveStore.test.ts`
+- Create: `tests/runtime/persistence/storeTestUtils.ts`
+- Modify: `tests/runtime/persistence/fixtures.ts`
 
 **Interfaces:**
-- Produces: `SaveStore`, `SaveStoreResult<T>`, `SaveStoreError`, all summaries, `AutosaveListing`, `sortCitySummaries`, `sortCheckpointSummaries`, `sortAutosaveSummaries`.
+- Produces all `SaveStore` contracts, sorting functions, summary builders, `expectOk`, and `expectError`.
 
-- [ ] **Step 1: Write failing ordering tests**
+- [ ] **Step 1: Add failing ordering tests**
 
 ```ts
-it("sorts cities by save time then stable ID and places unreadable times last", () => {
+it("sorts cities by save time then ID and places invalid times last", () => {
   expect(
     sortCitySummaries([
-      citySummary({ cityId: "b", savedAt: "2026-08-01T10:00:00.000Z" }),
-      citySummary({ cityId: "a", savedAt: "2026-08-01T10:00:00.000Z" }),
-      citySummary({ cityId: "z", savedAt: null }),
+      makeCitySummary({ cityId: "b", savedAt: "2026-08-01T10:00:00.000Z" }),
+      makeCitySummary({ cityId: "a", savedAt: "2026-08-01T10:00:00.000Z" }),
+      makeCitySummary({ cityId: "z", savedAt: null }),
     ]).map((value) => value.cityId),
   ).toEqual(["a", "b", "z"]);
 });
 ```
 
-Add equivalent checkpoint and autosave tests using the design’s ordering keys.
+Add equivalent checkpoint and autosave ordering tests.
 
 - [ ] **Step 2: Run the test and confirm failure**
 
 Run: `bunx vitest run --project runtime tests/runtime/persistence/saveStore.test.ts`
 
-Expected: FAIL because `saveStore.ts` does not exist.
+Expected: FAIL because the contract module does not exist.
 
-- [ ] **Step 3: Implement the exact contract**
+- [ ] **Step 3: Implement the exact SaveStore contract**
 
-Define every operation and error code from the approved spec. `listAutosaves` returns `SaveStoreResult<AutosaveListing>` with `generationHighWaterMark: number | null`. Read operations return `UntrustedSaveValue`.
+Define every operation/error from the spec. `listAutosaves` returns `SaveStoreResult<AutosaveListing>`. Read methods return `UntrustedSaveValue`.
 
-- [ ] **Step 4: Implement pure ordering helpers**
+- [ ] **Step 4: Implement test utilities exactly**
 
-Use `Date.parse`; non-finite results sort after valid timestamps. Never rewrite summary values while sorting. Autosaves sort by descending generation and ascending ID.
+```ts
+export async function expectOk<T>(
+  result: Promise<SaveStoreResult<T>> | SaveStoreResult<T>,
+): Promise<T> {
+  const resolved = await result;
+  if (!resolved.ok) throw new Error(resolved.error.diagnostic);
+  return resolved.value;
+}
+
+export async function expectError(
+  result: Promise<SaveStoreResult<unknown>> | SaveStoreResult<unknown>,
+  code: SaveStoreErrorCode,
+): Promise<SaveStoreError> {
+  const resolved = await result;
+  expect(resolved.ok).toBe(false);
+  if (resolved.ok) throw new Error(`Expected ${code}`);
+  expect(resolved.error.code).toBe(code);
+  return resolved.error;
+}
+```
+
+Implement deterministic summary builders in `fixtures.ts` using candidate compatibility defaults.
 
 - [ ] **Step 5: Run tests and typecheck**
 
@@ -364,51 +387,55 @@ Expected: both commands exit 0.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/persistence/saveStore.ts tests/runtime/persistence/saveStore.test.ts
+git add src/persistence/saveStore.ts tests/runtime/persistence
 git commit -m "feat: define SaveStore contract"
 ```
 
 ---
 
-### Task 4: Implement in-memory working saves, rename, duplicate, and city deletion
+### Task 4: Implement in-memory working saves and metadata operations
 
 **Files:**
 - Create: `src/persistence/memorySaveStore.ts`
 - Create: `tests/runtime/persistence/memorySaveStore.test.ts`
 
 **Interfaces:**
-- Produces: `createMemorySaveStore`, `createMemorySaveStoreFailureControls`.
+- Produces:
+
+```ts
+export interface MemorySaveStore extends SaveStore {
+  seedRawWorking(cityId: string, value: unknown): void;
+}
+
+export interface MemorySaveStoreFailureControls {
+  failNext(operation: SaveStoreOperation, code: SaveStoreErrorCode): void;
+}
+
+export function createMemorySaveStore(options?: {
+  failures?: MemorySaveStoreFailureControls;
+}): MemorySaveStore;
+export function createMemorySaveStoreFailureControls(): MemorySaveStoreFailureControls;
+```
 
 - [ ] **Step 1: Add failing working-record tests**
 
 ```ts
-it("preserves the previous working save when replacement aborts", async () => {
+it("preserves the previous working save after an aborted replacement", async () => {
   const failures = createMemorySaveStoreFailureControls();
   const store = createMemorySaveStore({ failures });
   await expectOk(store.writeWorkingSave(makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" })));
   failures.failNext("writeWorkingSave", "transactionAborted");
-
   await expectError(
     store.writeWorkingSave(makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" })),
     "transactionAborted",
   );
-
   expect(await expectOk(store.readWorkingSave("city-1"))).toMatchObject({
     savedAt: "2026-08-01T10:00:00.000Z",
   });
 });
-
-it("rejects rename of an unsupported source without changing it", async () => {
-  const store = createMemorySaveStore();
-  store.seedRawWorking("city-1", { format: "caelum-save", envelopeVersion: 99 });
-  await expectError(store.renameCity("city-1", "New Name"), "incompatibleRecord");
-  expect(await expectOk(store.readWorkingSave("city-1"))).toMatchObject({
-    envelopeVersion: 99,
-  });
-});
 ```
 
-Add tests for detached read/write values, duplicate target conflict, corrupt duplicate source, rename preserving every non-name field, duplicate copying no generations/high-water, and city cascade delete.
+Add tests for detached values, rename/duplicate source inspection, target conflict, rename preserving non-name fields, duplicate isolation, and city cascade deletion.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -416,23 +443,18 @@ Run: `bunx vitest run --project runtime tests/runtime/persistence/memorySaveStor
 
 Expected: FAIL because the adapter does not exist.
 
-- [ ] **Step 3: Implement detached committed storage**
+- [ ] **Step 3: Implement detached committed maps**
 
-Clone all candidate values before mutating maps. Use `structuredClone`; convert clone failures into `serializationFailed`. Clone again on read/list. Keep working records, checkpoints, autosaves, and high-water in private maps.
+Clone all candidates before mutation and every returned value. Convert clone failures into `serializationFailed`. Keep working records, checkpoints, autosaves, and high-water in private maps.
 
-- [ ] **Step 4: Implement source inspection and failure controls**
+- [ ] **Step 4: Implement rename/duplicate inspection and failure injection**
 
-Rename and duplicate call `inspectSaveEnvelope` internally. Map unsupported variants to `incompatibleRecord`, other non-candidate variants to `corruptRecord`, and duplicate target collision to `conflict`. Failure controls fail one named operation before commit with a complete `SaveStoreError`.
+Use `inspectSaveEnvelope`. Unsupported variants become `incompatibleRecord`; corrupt/mismatch variants become `corruptRecord`; duplicate target collision becomes `conflict`. Failure controls fail before commit and are implemented with arrow functions so test harness references remain bound.
 
-- [ ] **Step 5: Run tests**
-
-Run: `bunx vitest run --project runtime tests/runtime/persistence/memorySaveStore.test.ts`
-
-Expected: PASS for working-record cases.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Run tests and commit**
 
 ```bash
+bunx vitest run --project runtime tests/runtime/persistence/memorySaveStore.test.ts
 git add src/persistence/memorySaveStore.ts tests/runtime/persistence/memorySaveStore.test.ts
 git commit -m "feat: implement in-memory working saves"
 ```
@@ -445,38 +467,33 @@ git commit -m "feat: implement in-memory working saves"
 - Modify: `src/persistence/memorySaveStore.ts`
 - Modify: `tests/runtime/persistence/memorySaveStore.test.ts`
 
-**Interfaces:**
-- Completes all generation methods in `SaveStore`.
-
 - [ ] **Step 1: Add failing generation tests**
 
 ```ts
-it("keeps autosave high-water after pruning", async () => {
+it("keeps high-water after pruning and rejects reuse", async () => {
   const store = createMemorySaveStore();
   await expectOk(store.writeWorkingSave(makeEnvelope()));
   await expectOk(store.writeAutosave({
     autosaveId: "auto-10",
     cityId: "city-1",
     generation: 10,
-    envelope: makeEnvelope({ savedAt: "2026-08-01T10:10:00.000Z" }),
+    envelope: makeEnvelope(),
   }));
   await expectOk(store.deleteAutosave("city-1", "auto-10"));
-
   expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
     items: [],
     generationHighWaterMark: 10,
   });
-
   await expectError(store.writeAutosave({
     autosaveId: "auto-reused",
     cityId: "city-1",
     generation: 10,
-    envelope: makeEnvelope({ savedAt: "2026-08-01T10:11:00.000Z" }),
+    envelope: makeEnvelope(),
   }), "conflict");
 });
 ```
 
-Add tests for create-only checkpoint/autosave IDs, city mismatch, `createdAt === savedAt`, checkpoint rename timestamp preservation, failed write not advancing high-water, atomic record/high-water commit, city delete removing high-water, and duplicate starting with null high-water.
+Add tests for create-only IDs, city mismatch, derived timestamps, checkpoint rename preservation, failed write high-water atomicity, city-delete cleanup, and duplicate null high-water.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -486,39 +503,32 @@ Expected: FAIL for generation methods.
 
 - [ ] **Step 3: Implement checkpoint behavior**
 
-Validate city match and ID uniqueness, clone envelope and metadata, derive `createdAt`, then commit. Rename changes checkpoint name only. Delete affects only the named checkpoint.
+Validate city/ID, clone inputs, derive `createdAt`, then commit. Rename changes checkpoint name only; delete affects only the named record.
 
 - [ ] **Step 4: Implement autosave atomicity**
 
-Validate safe-integer generation, city match, ID uniqueness, and `generation > highWater`. Clone all candidate values first. Commit the record and new high-water only after validation/cloning succeeds. `deleteAutosave` removes only the record.
+Validate safe-integer generation, city match, ID uniqueness, and `generation > highWater`. Clone all values first; then commit record and high-water together. `deleteAutosave` never lowers high-water.
 
-- [ ] **Step 5: Run tests**
-
-Run: `bunx vitest run --project runtime tests/runtime/persistence/memorySaveStore.test.ts`
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Run tests and commit**
 
 ```bash
+bunx vitest run --project runtime tests/runtime/persistence/memorySaveStore.test.ts
 git add src/persistence/memorySaveStore.ts tests/runtime/persistence/memorySaveStore.test.ts
 git commit -m "feat: add in-memory save generations"
 ```
 
 ---
 
-### Task 6: Extract the reusable adapter contract and run final verification
+### Task 6: Extract the reusable adapter contract and verify
 
 **Files:**
 - Create: `tests/runtime/persistence/saveStoreContract.ts`
 - Modify: `tests/runtime/persistence/memorySaveStore.test.ts`
-- Modify: `tests/runtime/persistence/envelope.test.ts`
-- Modify: `tests/runtime/persistence/saveStore.test.ts`
 
 **Interfaces:**
-- Produces: `defineSaveStoreContract(name, createHarness)` for HPA-343/HPA-344.
+- Produces `defineSaveStoreContract(name, createHarness)`.
 
-- [ ] **Step 1: Define the harness without placeholder cases**
+- [ ] **Step 1: Define the concrete harness**
 
 ```ts
 export interface SaveStoreContractHarness {
@@ -528,45 +538,13 @@ export interface SaveStoreContractHarness {
     operation: SaveStoreOperation,
     code: SaveStoreErrorCode,
   ) => void;
-  seedRawWorking: (cityId: string, value: unknown) => void;
-}
-
-export function defineSaveStoreContract(
-  name: string,
-  createHarness: () => SaveStoreContractHarness | Promise<SaveStoreContractHarness>,
-): void {
-  describe(name, () => {
-    it("atomically replaces working saves", async () => {
-      const { store } = await createHarness();
-      await expectOk(store.writeWorkingSave(makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" })));
-      await expectOk(store.writeWorkingSave(makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" })));
-      expect(await expectOk(store.readWorkingSave("city-1"))).toMatchObject({
-        savedAt: "2026-08-01T11:00:00.000Z",
-      });
-    });
-
-    it("persists autosave high-water independently of retained records", async () => {
-      const { store } = await createHarness();
-      await expectOk(store.writeWorkingSave(makeEnvelope()));
-      await expectOk(store.writeAutosave({
-        autosaveId: "auto-1",
-        cityId: "city-1",
-        generation: 1,
-        envelope: makeEnvelope(),
-      }));
-      await expectOk(store.deleteAutosave("city-1", "auto-1"));
-      expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
-        items: [],
-        generationHighWaterMark: 1,
-      });
-    });
-  });
+  seedRawWorking(cityId: string, value: unknown): void;
 }
 ```
 
-Add named shared cases for all remaining normative behaviors already tested in memory-specific form: ordering, detachment, source inspection, create-only conflicts, timestamp/key corruption, failure atomicity, cascade delete, and duplicate isolation. Move each normative case into this suite; keep only failure-control internals in `memorySaveStore.test.ts`.
+Implement named shared cases for ordering, detachment, replacement atomicity, source inspection, create-only conflicts, key/timestamp corruption, high-water behavior, cascade deletion, and duplicate isolation. Each case uses the Test Utility Contract helpers.
 
-- [ ] **Step 2: Instantiate the contract for memory storage**
+- [ ] **Step 2: Instantiate the memory harness**
 
 ```ts
 defineSaveStoreContract("MemorySaveStore", () => {
@@ -574,8 +552,8 @@ defineSaveStoreContract("MemorySaveStore", () => {
   const store = createMemorySaveStore({ failures });
   return {
     store,
-    failNext: failures.failNext,
-    seedRawWorking: store.seedRawWorking,
+    failNext: (operation, code) => failures.failNext(operation, code),
+    seedRawWorking: (cityId, value) => store.seedRawWorking(cityId, value),
   };
 });
 ```
@@ -609,7 +587,7 @@ Expected: every command exits 0.
 rg 'Date\.now|crypto\.randomUUID|localStorage|normalizeRustSnapshot' src/persistence tests/runtime/persistence
 ```
 
-Expected: no production clock/ID generation, Local Storage usage, or snapshot normalization in `src/persistence`.
+Expected: no production clock/ID generation, Local Storage use, or snapshot normalization.
 
 - [ ] **Step 6: Commit**
 
@@ -622,12 +600,11 @@ git commit -m "test: define SaveStore adapter contract"
 
 ## HPA-498 Completion Gate
 
-- [ ] Envelope summary uses shared domain types and non-null `SandboxTemplateId`.
-- [ ] Rust/TypeScript schema parity is fixture-backed.
+- [ ] Envelope uses shared domain types and fixture-backed schema parity.
 - [ ] Header inspection is exception-safe, exact, and gameplay-opaque.
 - [ ] Rename/duplicate inspect sources internally with closed outcomes.
 - [ ] Memory reads/writes are detached and failure-atomic.
-- [ ] Checkpoint/autosave timestamps derive from envelope `savedAt`.
+- [ ] Generation timestamps derive from envelope `savedAt`.
 - [ ] Autosave high-water persists independently of retained records.
 - [ ] Reusable adapter suite is ready for IndexedDB and Tauri.
-- [ ] Every verification command exits 0 before HPA-498 is completed.
+- [ ] Every verification command exits 0 before completion.
