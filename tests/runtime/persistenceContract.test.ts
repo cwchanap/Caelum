@@ -475,17 +475,21 @@ describe("persistence contract types", () => {
       () => Promise.reject(rejection),
     );
     expect(result.ok).toBe(false);
-    if (
-      !result.ok &&
-      result.error.kind === "validation" &&
-      result.error.error.code === "invalidTile"
-    ) {
-      // Mutate the original nested context after normalization.
-      context.tileId = "tampered";
-      context.reason.details.neighbor.x = 999;
-      // The returned error is detached — unaffected by the mutation.
-      expect(result.error.error.context).toEqual(expectedContext);
-    }
+    if (result.ok) throw new Error("expected failure");
+    // Assert the full expected shape unconditionally so a regression to
+    // host/invokeFailed or host/malformedError fails the test rather than
+    // skipping the assertions.
+    expect(result.error.kind).toBe("validation");
+    expect(result.error).toMatchObject({ error: { code: "invalidTile" } });
+    const error = result.error as Extract<
+      PersistenceOperationError,
+      { kind: "validation" }
+    >;
+    // Mutate the original nested context after normalization.
+    context.tileId = "tampered";
+    context.reason.details.neighbor.x = 999;
+    // The returned error is detached — unaffected by the mutation.
+    expect(error.error.context).toEqual(expectedContext);
   });
 
   it("detaches a hostile nested getter so later field access on the returned error is safe", async () => {
@@ -515,21 +519,29 @@ describe("persistence contract types", () => {
       () => Promise.reject(rejection),
     );
     expect(result.ok).toBe(false);
-    if (
-      !result.ok &&
-      result.error.kind === "validation" &&
-      result.error.error.code === "invalidTile"
-    ) {
-      const returnedContext = result.error.error.context;
-      // The detached context is a plain object — reading reason never throws.
-      expect(() => returnedContext.reason).not.toThrow();
-      expect(returnedContext.reason).toEqual({
-        kind: "connectionToNonRoad",
-        details: { neighbor: { x: 1, y: 0 } },
-      });
-      // Only materialization read the original getter.
-      expect(reasonReads).toBe(1);
-    }
+    if (result.ok) throw new Error("expected failure");
+    // Assert the full expected shape unconditionally so a regression to
+    // host/invokeFailed or host/malformedError fails the test rather than
+    // skipping the assertions.
+    expect(result.error.kind).toBe("validation");
+    expect(result.error).toMatchObject({ error: { code: "invalidTile" } });
+    const error = result.error as Extract<
+      PersistenceOperationError,
+      { kind: "validation" }
+    >;
+    const validationError = error.error as Extract<
+      PersistenceValidationError,
+      { code: "invalidTile" }
+    >;
+    const returnedContext = validationError.context;
+    // The detached context is a plain object — reading reason never throws.
+    expect(() => returnedContext.reason).not.toThrow();
+    expect(returnedContext.reason).toEqual({
+      kind: "connectionToNonRoad",
+      details: { neighbor: { x: 1, y: 0 } },
+    });
+    // Only materialization read the original getter.
+    expect(reasonReads).toBe(1);
   });
 
   it("preserves name and message for an ordinary Error rejection diagnostic", async () => {
@@ -538,11 +550,73 @@ describe("persistence contract types", () => {
       () => Promise.reject(new Error("restore failed")),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok && result.error.kind === "host") {
-      expect(result.error.code).toBe("invokeFailed");
-      expect(result.error.diagnostic).toContain("restore failed");
-      expect(result.error.diagnostic).not.toBe("{}");
-    }
+    if (result.ok) throw new Error("expected failure");
+    // Assert the full expected shape unconditionally so a regression to a
+    // non-host discriminant fails the test rather than skipping the assertions.
+    expect(result.error.kind).toBe("host");
+    const error = result.error as Extract<
+      PersistenceOperationError,
+      { kind: "host" }
+    >;
+    expect(error.code).toBe("invokeFailed");
+    expect(error.diagnostic).toContain("restore failed");
+    expect(error.diagnostic).not.toBe("{}");
+  });
+
+  it("rejects a closed-shape error with an extra undefined-valued property", async () => {
+    // JSON.stringify drops undefined-valued own properties, which would turn
+    // this malformed shape (extra `extra` key) into a valid serialization
+    // error. Detachment must preserve the real own-key shape so the
+    // closed-shape guard (hasExactKeys) rejects it.
+    const rejection = {
+      kind: "serialization",
+      operation: "restoreSnapshot",
+      phase: "snapshotDecode",
+      diagnostic: "failed",
+      extra: undefined,
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
+  it("rejects a forged toJSON() result that would otherwise satisfy the closed shape", async () => {
+    // JSON.stringify invokes toJSON(), which could replace a hostile object
+    // with a valid serialization error. Detachment must not honor toJSON so
+    // the original shape (with `unexpected` and `toJSON` keys) is rejected by
+    // the closed-shape guard rather than laundered into a recognized error.
+    const rejection = {
+      unexpected: true,
+      toJSON() {
+        return {
+          kind: "serialization",
+          operation: "restoreSnapshot",
+          phase: "snapshotDecode",
+          diagnostic: "forged",
+        };
+      },
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
   });
 
   it("requires the host-specific validation success marker", async () => {
