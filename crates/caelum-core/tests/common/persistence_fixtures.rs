@@ -223,9 +223,6 @@ pub fn host_parity_fixture() -> GameSnapshot {
                             legs.iter().any(|leg| {
                                 leg.get("currentPath")
                                     .is_some_and(serde_json::Value::is_null)
-                                    || leg
-                                        .get("lastValidPath")
-                                        .is_some_and(serde_json::Value::is_null)
                             })
                         })
                     })

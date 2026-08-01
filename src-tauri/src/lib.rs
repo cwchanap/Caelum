@@ -4,9 +4,10 @@ use serde::Serialize;
 
 use caelum_core::{
     check_snapshot_schema, validate_snapshot, DispatchResult, GameEngine, GameIntent, GameSnapshot,
-    PersistenceError, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
-    RoutePreviewResponse, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
-    SaveSnapshotCapture,
+    PersistenceBridgeError, PersistenceHostErrorCode, PersistenceOperation,
+    PersistenceSerializationPhase, PersistenceValidationSource, RoadMutationPreviewRequest,
+    RoadMutationPreviewResponse, RoutePreviewRequest, RoutePreviewResponse, SandboxCreationError,
+    SandboxCreationRequest, SandboxResetError, SaveSnapshotCapture,
 };
 use tauri::State;
 
@@ -30,105 +31,11 @@ enum TauriCommandError<E> {
     Host(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceOperation {
-    SnapshotForSave,
-    ValidateSnapshot,
-    RestoreSnapshot,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceValidationSource {
-    ActiveEngine,
-    Candidate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceSerializationPhase {
-    SnapshotDecode,
-    SnapshotEncode,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceHostErrorCode {
-    StateUnavailable,
-    InvokeFailed,
-    MalformedSuccess,
-    MalformedError,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-enum PersistenceBridgeError {
-    Validation {
-        operation: PersistenceOperation,
-        source: PersistenceValidationSource,
-        error: PersistenceError,
-    },
-    Serialization {
-        operation: PersistenceOperation,
-        phase: PersistenceSerializationPhase,
-        diagnostic: String,
-    },
-    Host {
-        operation: PersistenceOperation,
-        code: PersistenceHostErrorCode,
-        diagnostic: String,
-    },
-}
-
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum EncodedPersistenceBridgeError {
     Structured(serde_json::Value),
     Opaque(String),
-}
-
-impl PersistenceBridgeError {
-    fn validation(
-        operation: PersistenceOperation,
-        source: PersistenceValidationSource,
-        error: PersistenceError,
-    ) -> Self {
-        Self::Validation {
-            operation,
-            source,
-            error,
-        }
-    }
-
-    fn serialization(
-        operation: PersistenceOperation,
-        phase: PersistenceSerializationPhase,
-        diagnostic: impl ToString,
-    ) -> Self {
-        Self::Serialization {
-            operation,
-            phase,
-            diagnostic: diagnostic.to_string(),
-        }
-    }
-
-    fn host(
-        operation: PersistenceOperation,
-        code: PersistenceHostErrorCode,
-        diagnostic: impl ToString,
-    ) -> Self {
-        Self::Host {
-            operation,
-            code,
-            diagnostic: diagnostic.to_string(),
-        }
-    }
 }
 
 fn encode_persistence_result_with<T, E>(
@@ -199,6 +106,17 @@ fn capture_save(state: &EngineState) -> Result<SaveSnapshotCapture, PersistenceB
     Ok(engine.capture_snapshot_for_save())
 }
 
+/// Restore a snapshot into the managed engine, encoding the prepared result.
+///
+/// Concurrency: decoding, `prepare_restore`, and encoding all happen BEFORE the
+/// engine mutex is acquired. A concurrent `game_dispatch`/`game_tick` that
+/// commits between preparation and the engine swap will have its progress
+/// replaced by the restored snapshot when `*engine = prepared.into_engine()`
+/// runs. This is intentional: holding the mutex through the (potentially slow)
+/// decode/prepare/encode phase would block every gameplay command for the
+/// duration of a restore. The frontend persistence contract treats restore as a
+/// full-state replacement, so dropping in-flight concurrent commits is the
+/// expected outcome.
 fn restore_snapshot_with<T, E>(
     state: &EngineState,
     snapshot: serde_json::Value,
@@ -1089,6 +1007,54 @@ mod tests {
             )
         );
         assert_eq!(state.lock().unwrap().snapshot(), before);
+    }
+
+    #[test]
+    fn concurrent_dispatch_during_restore_prepare_is_replaced_by_restored_snapshot() {
+        // The encode closure runs after `prepare_restore` but before
+        // `restore_snapshot_with` acquires the engine mutex to swap. A gameplay
+        // dispatch committing inside that window must be replaced by the
+        // restored snapshot, matching the documented concurrency contract.
+        let state: Mutex<GameEngine> = Mutex::new(GameEngine::new());
+
+        let mut prepared_snapshot: Option<GameSnapshot> = None;
+        let mut dispatched_snapshot: Option<GameSnapshot> = None;
+        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), |prepared| {
+            prepared_snapshot = Some(prepared.clone());
+            {
+                let mut engine = state.lock().expect("engine mutex must be lockable");
+                let dispatch = engine.dispatch(GameIntent::LayRoad {
+                    point: Point { x: 2, y: 2 },
+                });
+                assert!(
+                    dispatch.applied,
+                    "concurrent dispatch must apply before the restore swap"
+                );
+                dispatched_snapshot = Some(engine.snapshot());
+            }
+            Ok::<Value, std::convert::Infallible>(
+                serde_json::to_value(prepared).expect("prepared snapshot must encode"),
+            )
+        });
+        result.expect("restore must succeed after a concurrent dispatch");
+
+        let prepared =
+            prepared_snapshot.expect("encode closure must capture the prepared snapshot");
+        let dispatched =
+            dispatched_snapshot.expect("encode closure must capture the dispatched snapshot");
+        let after = state
+            .lock()
+            .expect("engine mutex must be lockable")
+            .snapshot();
+
+        assert_eq!(
+            after, prepared,
+            "restored snapshot must replace concurrent dispatch progress"
+        );
+        assert_ne!(
+            after, dispatched,
+            "post-restore state must not retain the concurrent dispatch"
+        );
     }
 
     #[test]

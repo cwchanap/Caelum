@@ -98,8 +98,15 @@ where
     T: for<'de> Deserialize<'de> + serde::Serialize,
 {
     for value in values {
-        let parsed: T = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(parsed).unwrap(), *value);
+        let parsed: T = serde_json::from_value(value.clone()).unwrap_or_else(|error| {
+            panic!("failed to deserialize catalogue entry {value}: {error}")
+        });
+        let encoded = serde_json::to_value(parsed)
+            .unwrap_or_else(|error| panic!("failed to re-encode catalogue entry {value}: {error}"));
+        assert_eq!(
+            encoded, *value,
+            "round-trip mismatch for catalogue entry {value}"
+        );
     }
 }
 
