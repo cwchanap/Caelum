@@ -699,6 +699,122 @@ describe("persistence contract types", () => {
     });
   });
 
+  it("rejects an unsafeRoundaboutPortMapping with a sparse footprint array", async () => {
+    // Array.prototype.every skips holes, so new Array(3).every(isPoint)
+    // returns true (vacuous truth). Without the own-property-per-index check,
+    // a hostile sparse footprint would be accepted as a recognized
+    // invalidRoadTopology error even though Rust/JSON can never emit one.
+    // The detacher must also preserve length so the sparse array is not
+    // laundered into [] (which would pass the empty-array check).
+    const footprint = new Array(3);
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidRoadTopology",
+        context: {
+          reason: {
+            kind: "unsafeRoundaboutPortMapping",
+            details: {
+              structureId: "roundabout:compact2x2:4,2",
+              footprint,
+            },
+          },
+        },
+      },
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
+  it("rejects an unsafeRoundaboutPortMapping footprint carrying an extra string key", async () => {
+    // Array.prototype.every ignores non-index own properties, so a footprint
+    // with an extra string key would pass isPointArray. The own-key count
+    // check rejects it because the count exceeds len + 1.
+    const footprint = [
+      { x: 4, y: 2 },
+      { x: 5, y: 2 },
+    ];
+    (footprint as unknown as Record<string, unknown>).extra = "hostile";
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidRoadTopology",
+        context: {
+          reason: {
+            kind: "unsafeRoundaboutPortMapping",
+            details: {
+              structureId: "roundabout:compact2x2:4,2",
+              footprint,
+            },
+          },
+        },
+      },
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
+  it("rejects an unsafeRoundaboutPortMapping footprint carrying an extra symbol key", async () => {
+    // Same as the string-key case but with a symbol-keyed property, which
+    // Reflect.ownKeys includes in the count.
+    const footprint = [{ x: 4, y: 2 }];
+    (footprint as unknown as Record<symbol, unknown>)[Symbol("extra")] =
+      "hostile";
+    const rejection = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidRoadTopology",
+        context: {
+          reason: {
+            kind: "unsafeRoundaboutPortMapping",
+            details: {
+              structureId: "roundabout:compact2x2:4,2",
+              footprint,
+            },
+          },
+        },
+      },
+    };
+    const result = await runPersistenceSnapshotOperation(
+      "restoreSnapshot",
+      () => Promise.reject(rejection),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "restoreSnapshot",
+        code: "malformedError",
+      },
+    });
+  });
+
   it("requires the host-specific validation success marker", async () => {
     await expect(
       runPersistenceValidationOperation(undefined, () => undefined),
