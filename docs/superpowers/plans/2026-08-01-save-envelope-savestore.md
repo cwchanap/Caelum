@@ -4,7 +4,8 @@
 
 **Issue:** HPA-498  
 **Design source:** HPA-342 draft design PR #21  
-**Blocks:** HPA-343, HPA-344, HPA-499
+**Blocks:** HPA-343, HPA-344, HPA-499  
+**Execution order:** Implement before HPA-499.
 
 **Goal:** Implement HPA-498’s versioned save envelope, strict compatibility inspection, host-neutral `SaveStore`, deterministic in-memory adapter, and reusable adapter contract suite.
 
