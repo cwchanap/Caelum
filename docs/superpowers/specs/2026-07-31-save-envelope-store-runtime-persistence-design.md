@@ -94,7 +94,7 @@ The following are host metadata and are excluded from authoritative gameplay equ
 
 The summary is derived from the canonical Rust snapshot at write time. It supports city-library listing without requiring every list operation to restore gameplay. It is advisory and must not override values inside `snapshot`.
 
-Rename changes host metadata only. Duplicate assigns a new city ID, name, and city creation timestamp while preserving the gameplay snapshot exactly.
+Rename changes only `city.name`; it preserves `cityCreatedAt`, `savedAt`, `appVersion`, `snapshotSchemaVersion`, summary, and snapshot. Duplicate assigns a new city ID, display name, city creation time, save time, and current application version while preserving the gameplay snapshot exactly and retaining equivalent summary metadata.
 
 ### 4.3 Record roles remain outside the envelope
 
@@ -112,9 +112,10 @@ A read candidate is untrusted. The runtime performs these checks before calling 
 2. verify the fixed format discriminator;
 3. verify a supported envelope version;
 4. read the declared snapshot schema version;
-5. safely probe `snapshot.schemaVersion` without deeply interpreting the snapshot;
-6. reject a declared/embedded schema mismatch; and
-7. pass the original snapshot candidate to `backend.restoreSnapshot()`.
+5. reject a declared snapshot schema version not supported by this build;
+6. safely probe `snapshot.schemaVersion` without deeply interpreting the snapshot;
+7. reject a declared/embedded schema mismatch; and
+8. pass the original snapshot candidate to `backend.restoreSnapshot()`.
 
 Envelope inspection is exception-safe for hostile values, including throwing getters and proxies. It is not an alternate gameplay validator.
 
@@ -144,7 +145,7 @@ export interface CitySummary {
   cityId: string;
   name: string | null;
   cityCreatedAt: string | null;
-  updatedAt: string | null;
+  savedAt: string | null;
   appVersion: string | null;
   snapshotSchemaVersion: number | null;
   summary: SaveEnvelope["summary"] | null;
@@ -171,7 +172,7 @@ export interface AutosaveSummary {
 
 Ordering is contractual:
 
-- cities: `updatedAt` descending, then `cityId` ascending;
+- cities: `savedAt` descending, then `cityId` ascending;
 - checkpoints: `createdAt` descending, then `checkpointId` ascending;
 - autosaves: `generation` descending, then `autosaveId` ascending.
 
@@ -242,7 +243,13 @@ export interface SaveStore {
   renameCity(cityId: string, name: string): Promise<SaveStoreResult<CitySummary>>;
   duplicateCity(
     sourceCityId: string,
-    identity: { cityId: string; name: string; cityCreatedAt: string },
+    identity: {
+      cityId: string;
+      name: string;
+      cityCreatedAt: string;
+      savedAt: string;
+      appVersion: string;
+    },
   ): Promise<SaveStoreResult<CitySummary>>;
   deleteCity(cityId: string): Promise<SaveStoreResult<void>>;
 
@@ -296,12 +303,12 @@ Read methods return `unknown` because adapters provide storage transport, not tr
 - Duplicate copies only the working save. It does not copy checkpoints or autosaves.
 - Duplicate requires a safely compatible record because it must replace envelope city metadata without modifying gameplay.
 - Delete city removes the working save and all checkpoints/autosaves atomically from the consumer's perspective.
-- Rename changes envelope metadata only and preserves the snapshot value.
+- Rename changes only display-name metadata and preserves save time and snapshot data.
 - Checkpoint creation never replaces the working save.
 - Loading a checkpoint or autosave does not mutate any stored record.
 - Autosave rotation and retention policy are not encoded in `SaveStore`; HPA-352 composes `writeAutosave` and `deleteAutosave` using its serialized policy.
 
-All active-city storage mutations are routed through the persistence service's per-city storage queue. Inactive cities have no concurrent gameplay save producer. This avoids adding a persisted compare-and-swap revision to envelope version 1 while still preventing stale metadata or snapshot writes.
+The runtime persistence coordinator owns active-city working writes and active-city rename so both use one per-city storage queue. City-library operations on inactive cities may call `SaveStore` directly because inactive cities have no gameplay save producer. Active-city delete requires an explicit runtime transition before the store deletion is allowed. This prevents stale save completion from reverting metadata without adding a persisted compare-and-swap revision to envelope version 1.
 
 ## 8. In-memory adapter and adapter contract suite
 
@@ -312,8 +319,8 @@ The reusable adapter contract covers:
 - deterministic listing and stable tie-breakers;
 - working-save replacement and previous-value preservation after injected failure;
 - reopen/persistence behavior where applicable;
-- rename without snapshot change;
-- duplicate identity and generation isolation;
+- rename without snapshot, summary, or save-time change;
+- duplicate identity, timestamp, application-version, and generation isolation;
 - city deletion cascading to generations;
 - checkpoint independence from the working save;
 - autosave generation ordering;
@@ -339,11 +346,14 @@ export interface RuntimePersistenceState {
   activeCity: ActiveCityIdentity | null;
   currentRevision: number;
   persistedRevision: number;
-  operation: "idle" | "capturing" | "saving" | "loading";
+  saveStatus: "idle" | "capturing" | "writing";
+  loadStatus: "idle" | "reading" | "restoring";
   lastSavedAt: string | null;
   error: PersistenceCoordinatorError | null;
 }
 ```
+
+Separate save and load statuses remain truthful when a load supersedes a still-finishing write. Future autosave policy may add background detail without changing the clean/dirty contract.
 
 Dirty state is derived:
 
@@ -400,7 +410,9 @@ The concrete API may differ, but the ownership rule is fixed:
 - storage reads and writes happen outside that queue; and
 - runtime state is committed only by `createGameRuntime`.
 
-## 11. Working-save flow
+## 11. Working-save and rename flows
+
+### 11.1 Working save
 
 1. Verify an active city exists.
 2. Enter the gameplay queue.
@@ -416,6 +428,10 @@ The concrete API may differ, but the ownership rule is fixed:
 Storage I/O must not freeze simulation progression. A capture at revision N is a coherent save even when gameplay advances to N+1 during the write.
 
 A write completion from an earlier city/session cannot update the new active city, dirty state, saved timestamp, or error state.
+
+### 11.2 Active-city rename
+
+Active-city rename enters the same per-city storage queue as working writes. On successful store rename, it updates the active display name only if the city ID and session token still match. Rename does not change gameplay revisions or `lastSavedAt`.
 
 ## 12. Load flow
 
@@ -481,11 +497,12 @@ Tests must explicitly cover:
 1. **Mutation during save:** capture revision 4, apply revision 5 while writing, complete save, remain dirty.
 2. **City switch during save:** capture city A, successfully load city B, complete A write, leave B metadata and dirty state untouched.
 3. **Generation load during save:** capture working state, load an older checkpoint of the same city, complete old save, do not mark the checkpoint-derived session clean.
-4. **Overlapping load requests:** request A, request B, A read finishes last; only B may restore.
-5. **Queued mutation before load:** mutation drains before restore and is replaced by the selected save only after the user-requested load reaches the queue.
-6. **Mutation requested after load entered queue:** restore commits before the later mutation executes against the restored engine.
-7. **Write failure:** preserve dirty state, previous working record, active city, and retryable error.
-8. **Restore failure:** preserve runtime snapshot, active identity, UI state, and dirty revision.
+4. **Rename during save:** rename and working write serialize so neither completion can revert the other's metadata.
+5. **Overlapping load requests:** request A, request B, A read finishes last; only B may restore.
+6. **Queued mutation before load:** mutation drains before restore and is replaced by the selected save only after the user-requested load reaches the queue.
+7. **Mutation requested after load entered queue:** restore commits before the later mutation executes against the restored engine.
+8. **Write failure:** preserve dirty state, previous working record, active city, and retryable error.
+9. **Restore failure:** preserve runtime snapshot, active identity, UI state, and dirty revision.
 
 ## 15. File boundaries
 
@@ -533,7 +550,7 @@ HPA-498 runs:
 ```bash
 bun run check
 bun run format:check
-bunx vitest run --project runtime tests/persistence
+bunx vitest run --project runtime
 bun run test
 bun run build
 ```
