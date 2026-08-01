@@ -35,6 +35,7 @@ pub mod model;
 pub mod network;
 pub mod objectives;
 pub(crate) mod persistence;
+pub mod persistence_bridge;
 pub mod platforms;
 pub mod preview;
 pub mod rejection;
@@ -64,6 +65,10 @@ pub use persistence::{
     DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError, NumericError,
     OwnershipError, PersistenceError, PersistenceResult, RoadStructureError, RoadTopologyError,
     ScenarioError, SnapshotField, TileError,
+};
+pub use persistence_bridge::{
+    PersistenceBridgeError, PersistenceHostErrorCode, PersistenceOperation,
+    PersistenceSerializationPhase, PersistenceValidationSource,
 };
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,

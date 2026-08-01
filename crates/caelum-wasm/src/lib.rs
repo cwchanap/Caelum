@@ -1,103 +1,11 @@
 use caelum_core::{
     check_schema_version, validate_snapshot, GameEngine, GameIntent, GameSnapshot,
-    PersistenceError, PreparedEngineRestore, RoadMutationPreviewRequest, RoutePreviewRequest,
-    SandboxCreationRequest, SnapshotSchemaProbe,
+    PersistenceBridgeError, PersistenceError, PersistenceOperation, PersistenceSerializationPhase,
+    PersistenceValidationSource, PreparedEngineRestore, RoadMutationPreviewRequest,
+    RoutePreviewRequest, SandboxCreationRequest, SnapshotSchemaProbe,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceOperation {
-    SnapshotForSave,
-    ValidateSnapshot,
-    RestoreSnapshot,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceValidationSource {
-    ActiveEngine,
-    Candidate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceSerializationPhase {
-    SnapshotDecode,
-    SnapshotEncode,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum PersistenceHostErrorCode {
-    StateUnavailable,
-    InvokeFailed,
-    MalformedSuccess,
-    MalformedError,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-enum PersistenceBridgeError {
-    Validation {
-        operation: PersistenceOperation,
-        source: PersistenceValidationSource,
-        error: PersistenceError,
-    },
-    Serialization {
-        operation: PersistenceOperation,
-        phase: PersistenceSerializationPhase,
-        diagnostic: String,
-    },
-    Host {
-        operation: PersistenceOperation,
-        code: PersistenceHostErrorCode,
-        diagnostic: String,
-    },
-}
-
-fn validation_error(
-    operation: PersistenceOperation,
-    source: PersistenceValidationSource,
-    error: PersistenceError,
-) -> PersistenceBridgeError {
-    PersistenceBridgeError::Validation {
-        operation,
-        source,
-        error,
-    }
-}
-
-fn serialization_error(
-    operation: PersistenceOperation,
-    phase: PersistenceSerializationPhase,
-    error: impl std::fmt::Display,
-) -> PersistenceBridgeError {
-    PersistenceBridgeError::Serialization {
-        operation,
-        phase,
-        diagnostic: error.to_string(),
-    }
-}
-
-#[allow(dead_code)]
-fn host_error(
-    operation: PersistenceOperation,
-    code: PersistenceHostErrorCode,
-    diagnostic: impl Into<String>,
-) -> PersistenceBridgeError {
-    PersistenceBridgeError::Host {
-        operation,
-        code,
-        diagnostic: diagnostic.into(),
-    }
-}
 
 fn persistence_serializer() -> serde_wasm_bindgen::Serializer {
     serde_wasm_bindgen::Serializer::json_compatible().serialize_large_number_types_as_bigints(false)
@@ -128,7 +36,7 @@ fn validation_js_error(
     source: PersistenceValidationSource,
     error: PersistenceError,
 ) -> JsValue {
-    persistence_js_error(validation_error(operation, source, error))
+    persistence_js_error(PersistenceBridgeError::validation(operation, source, error))
 }
 
 fn decode_snapshot_with<T, ProbeError, DecodeError>(
@@ -142,10 +50,10 @@ where
 {
     let actual = probe(&value).map(|probe| probe.schema_version).unwrap_or(0);
     check_schema_version(actual).map_err(|error| {
-        validation_error(operation, PersistenceValidationSource::Candidate, error)
+        PersistenceBridgeError::validation(operation, PersistenceValidationSource::Candidate, error)
     })?;
     decode(value).map_err(|error| {
-        serialization_error(
+        PersistenceBridgeError::serialization(
             operation,
             PersistenceSerializationPhase::SnapshotDecode,
             error,
@@ -170,13 +78,14 @@ fn validate_candidate(
     snapshot: &GameSnapshot,
     operation: PersistenceOperation,
 ) -> Result<(), PersistenceBridgeError> {
-    validate_snapshot(snapshot)
-        .map_err(|error| validation_error(operation, PersistenceValidationSource::Candidate, error))
+    validate_snapshot(snapshot).map_err(|error| {
+        PersistenceBridgeError::validation(operation, PersistenceValidationSource::Candidate, error)
+    })
 }
 
 fn prepare_snapshot_for_save(engine: &GameEngine) -> Result<GameSnapshot, PersistenceBridgeError> {
     engine.snapshot_for_save().map_err(|error| {
-        validation_error(
+        PersistenceBridgeError::validation(
             PersistenceOperation::SnapshotForSave,
             PersistenceValidationSource::ActiveEngine,
             error,
@@ -193,7 +102,7 @@ where
     E: std::fmt::Display,
 {
     encode(snapshot).map_err(|error| {
-        serialization_error(
+        PersistenceBridgeError::serialization(
             operation,
             PersistenceSerializationPhase::SnapshotEncode,
             error,
@@ -309,7 +218,7 @@ fn to_js_error(error: impl std::fmt::Display) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use caelum_core::{PersistenceError, SnapshotField};
+    use caelum_core::{PersistenceError, PersistenceHostErrorCode, SnapshotField};
     use serde_json::{json, Value};
 
     const VALID_SNAPSHOT: &str =
@@ -337,7 +246,7 @@ mod tests {
 
     #[test]
     fn bridge_validation_error_has_the_exact_public_json_shape() {
-        let error = validation_error(
+        let error = PersistenceBridgeError::validation(
             PersistenceOperation::RestoreSnapshot,
             PersistenceValidationSource::Candidate,
             PersistenceError::UnsupportedSchema {
@@ -490,7 +399,7 @@ mod tests {
     #[test]
     fn every_bridge_error_variant_carries_its_operation() {
         let errors = [
-            validation_error(
+            PersistenceBridgeError::validation(
                 PersistenceOperation::ValidateSnapshot,
                 PersistenceValidationSource::Candidate,
                 PersistenceError::InvalidModeSettings {
@@ -498,12 +407,12 @@ mod tests {
                     reason: caelum_core::ModeError::PersistenceRequiresPaused,
                 },
             ),
-            serialization_error(
+            PersistenceBridgeError::serialization(
                 PersistenceOperation::RestoreSnapshot,
                 PersistenceSerializationPhase::SnapshotDecode,
                 "decode failed",
             ),
-            host_error(
+            PersistenceBridgeError::host(
                 PersistenceOperation::SnapshotForSave,
                 PersistenceHostErrorCode::StateUnavailable,
                 "state unavailable",
@@ -527,7 +436,7 @@ mod tests {
 
     #[test]
     fn failed_bridge_error_encoding_returns_only_the_opaque_fallback() {
-        let error = serialization_error(
+        let error = PersistenceBridgeError::serialization(
             PersistenceOperation::RestoreSnapshot,
             PersistenceSerializationPhase::SnapshotEncode,
             "snapshot encode failed",
