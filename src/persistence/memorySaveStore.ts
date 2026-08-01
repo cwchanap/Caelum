@@ -20,6 +20,30 @@ import {
 
 export interface MemorySaveStore extends SaveStore {
   seedRawWorking(cityId: string, value: unknown): void;
+  seedRawCheckpoint(seed: MemoryRawCheckpointSeed): void;
+  seedRawAutosave(seed: MemoryRawAutosaveSeed): void;
+}
+
+export interface MemoryRawCheckpointSeed {
+  storageCityId: string;
+  storageCheckpointId: string;
+  checkpointId: string;
+  cityId: string;
+  name: string;
+  note: string | null;
+  createdAt: string;
+  envelope: unknown;
+}
+
+export interface MemoryRawAutosaveSeed {
+  storageCityId: string;
+  storageAutosaveId: string;
+  autosaveId: string;
+  cityId: string;
+  generation: number;
+  createdAt: string;
+  envelope: unknown;
+  generationHighWaterMark?: number;
 }
 
 export interface MemorySaveStoreFailureControls {
@@ -81,6 +105,18 @@ function cloneResult<T>(
   } catch {
     return errorResult(operation, "serializationFailed", context);
   }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isValidGeneration(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function incompatibleCode(
@@ -150,15 +186,21 @@ function citySummary(cityId: string, value: unknown): CitySummary {
   };
 }
 
-function checkpointSummary(record: StoredCheckpoint): CheckpointSummary {
+function checkpointSummary(
+  record: StoredCheckpoint,
+  storageCityId = record.cityId,
+  storageCheckpointId = record.checkpointId,
+): CheckpointSummary {
   const inspected = inspectSaveEnvelope(record.envelope);
   const valid =
     inspected.ok &&
-    inspected.envelope.city.id === record.cityId &&
+    record.cityId === storageCityId &&
+    record.checkpointId === storageCheckpointId &&
+    inspected.envelope.city.id === storageCityId &&
     inspected.envelope.savedAt === record.createdAt;
   return {
-    checkpointId: record.checkpointId,
-    cityId: record.cityId,
+    checkpointId: storageCheckpointId,
+    cityId: storageCityId,
     name: record.name,
     note: record.note,
     createdAt: record.createdAt,
@@ -175,15 +217,22 @@ function checkpointSummary(record: StoredCheckpoint): CheckpointSummary {
   };
 }
 
-function autosaveSummary(record: StoredAutosave): AutosaveSummary {
+function autosaveSummary(
+  record: StoredAutosave,
+  storageCityId = record.cityId,
+  storageAutosaveId = record.autosaveId,
+): AutosaveSummary {
   const inspected = inspectSaveEnvelope(record.envelope);
   const valid =
     inspected.ok &&
-    inspected.envelope.city.id === record.cityId &&
-    inspected.envelope.savedAt === record.createdAt;
+    record.cityId === storageCityId &&
+    record.autosaveId === storageAutosaveId &&
+    inspected.envelope.city.id === storageCityId &&
+    inspected.envelope.savedAt === record.createdAt &&
+    isValidGeneration(record.generation);
   return {
-    autosaveId: record.autosaveId,
-    cityId: record.cityId,
+    autosaveId: storageAutosaveId,
+    cityId: storageCityId,
     generation: record.generation,
     createdAt: record.createdAt,
     appVersion: valid ? inspected.envelope.appVersion : null,
@@ -233,6 +282,15 @@ export function createMemorySaveStore(options?: {
     return code === undefined ? null : errorResult(operation, code, context);
   }
 
+  function cityStorageExists(cityId: string): boolean {
+    return (
+      workingRecords.has(cityId) ||
+      checkpointRecords.has(cityId) ||
+      autosaveRecords.has(cityId) ||
+      generationHighWaterMarks.has(cityId)
+    );
+  }
+
   const listCities: SaveStore["listCities"] = async () => {
     const failure = injectedFailure<CitySummary[]>("listCities");
     if (failure) return failure;
@@ -256,8 +314,6 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeWorkingSave: SaveStore["writeWorkingSave"] = async (envelope) => {
-    const failure = injectedFailure<CitySummary>("writeWorkingSave");
-    if (failure) return failure;
     const candidate = cloneResult(envelope, "writeWorkingSave");
     if (!candidate.ok) return candidate;
     const inspected = inspectSaveEnvelope(candidate.value);
@@ -271,6 +327,10 @@ export function createMemorySaveStore(options?: {
     if (cityId.length === 0) {
       return errorResult("writeWorkingSave", "corruptRecord", { cityId });
     }
+    const failure = injectedFailure<CitySummary>("writeWorkingSave", {
+      cityId,
+    });
+    if (failure) return failure;
 
     workingRecords.set(cityId, candidate.value);
     return cloneResult(
@@ -281,93 +341,107 @@ export function createMemorySaveStore(options?: {
   };
 
   const renameCity: SaveStore["renameCity"] = async (cityId, name) => {
-    const failure = injectedFailure<CitySummary>("renameCity", { cityId });
+    const input = cloneResult({ cityId, name }, "renameCity");
+    if (!input.ok) return input;
+    if (
+      !isNonEmptyString(input.value.cityId) ||
+      typeof input.value.name !== "string"
+    ) {
+      return errorResult("renameCity", "corruptRecord");
+    }
+    const context = { cityId: input.value.cityId };
+    const failure = injectedFailure<CitySummary>("renameCity", context);
     if (failure) return failure;
-    if (!workingRecords.has(cityId)) {
-      return errorResult("renameCity", "notFound", { cityId });
+    if (!workingRecords.has(input.value.cityId)) {
+      return errorResult("renameCity", "notFound", context);
     }
     const source = inspectStoredEnvelope(
       "renameCity",
-      cityId,
-      workingRecords.get(cityId),
+      input.value.cityId,
+      workingRecords.get(input.value.cityId),
     );
     if (!source.ok) return source;
-    const detachedSource = cloneResult(source.value, "renameCity", { cityId });
+    const detachedSource = cloneResult(source.value, "renameCity", context);
     if (!detachedSource.ok) return detachedSource;
     const renamed: InspectedSaveEnvelope = {
       ...detachedSource.value,
-      city: { ...detachedSource.value.city, name },
+      city: { ...detachedSource.value.city, name: input.value.name },
     };
 
-    workingRecords.set(cityId, renamed);
-    return cloneResult(citySummary(cityId, renamed), "renameCity", { cityId });
+    workingRecords.set(input.value.cityId, renamed);
+    return cloneResult(
+      citySummary(input.value.cityId, renamed),
+      "renameCity",
+      context,
+    );
   };
 
   const duplicateCity: SaveStore["duplicateCity"] = async (
     sourceCityId,
     identity,
   ) => {
-    const failure = injectedFailure<CitySummary>("duplicateCity", {
-      cityId: sourceCityId,
-    });
+    const input = cloneResult({ sourceCityId, identity }, "duplicateCity");
+    if (!input.ok) return input;
+    if (
+      !isNonEmptyString(input.value.sourceCityId) ||
+      !isNonEmptyString(input.value.identity.cityId) ||
+      typeof input.value.identity.name !== "string" ||
+      typeof input.value.identity.cityCreatedAt !== "string" ||
+      typeof input.value.identity.savedAt !== "string" ||
+      typeof input.value.identity.appVersion !== "string"
+    ) {
+      return errorResult("duplicateCity", "corruptRecord");
+    }
+    const sourceContext = { cityId: input.value.sourceCityId };
+    const failure = injectedFailure<CitySummary>(
+      "duplicateCity",
+      sourceContext,
+    );
     if (failure) return failure;
-    if (!workingRecords.has(sourceCityId)) {
-      return errorResult("duplicateCity", "notFound", {
-        cityId: sourceCityId,
-      });
+    if (!workingRecords.has(input.value.sourceCityId)) {
+      return errorResult("duplicateCity", "notFound", sourceContext);
     }
     const source = inspectStoredEnvelope(
       "duplicateCity",
-      sourceCityId,
-      workingRecords.get(sourceCityId),
+      input.value.sourceCityId,
+      workingRecords.get(input.value.sourceCityId),
     );
     if (!source.ok) return source;
-    if (workingRecords.has(identity.cityId)) {
+    const targetCityId = input.value.identity.cityId;
+    if (cityStorageExists(targetCityId)) {
       return errorResult("duplicateCity", "conflict", {
-        cityId: identity.cityId,
+        cityId: targetCityId,
       });
     }
-    const detachedSource = cloneResult(source.value, "duplicateCity", {
-      cityId: sourceCityId,
-    });
+    const detachedSource = cloneResult(
+      source.value,
+      "duplicateCity",
+      sourceContext,
+    );
     if (!detachedSource.ok) return detachedSource;
-    const detachedIdentity = cloneResult(identity, "duplicateCity", {
-      cityId: sourceCityId,
-    });
-    if (!detachedIdentity.ok) return detachedIdentity;
-    if (detachedIdentity.value.cityId.length === 0) {
-      return errorResult("duplicateCity", "corruptRecord", {
-        cityId: detachedIdentity.value.cityId,
-      });
-    }
     const duplicate: InspectedSaveEnvelope = {
       ...detachedSource.value,
       city: {
-        id: detachedIdentity.value.cityId,
-        name: detachedIdentity.value.name,
+        id: targetCityId,
+        name: input.value.identity.name,
       },
-      cityCreatedAt: detachedIdentity.value.cityCreatedAt,
-      savedAt: detachedIdentity.value.savedAt,
-      appVersion: detachedIdentity.value.appVersion,
+      cityCreatedAt: input.value.identity.cityCreatedAt,
+      savedAt: input.value.identity.savedAt,
+      appVersion: input.value.identity.appVersion,
     };
 
-    workingRecords.set(detachedIdentity.value.cityId, duplicate);
-    return cloneResult(
-      citySummary(detachedIdentity.value.cityId, duplicate),
-      "duplicateCity",
-      { cityId: detachedIdentity.value.cityId },
-    );
+    workingRecords.set(targetCityId, duplicate);
+    return cloneResult(citySummary(targetCityId, duplicate), "duplicateCity", {
+      cityId: targetCityId,
+    });
   };
 
   const deleteCity: SaveStore["deleteCity"] = async (cityId) => {
     const failure = injectedFailure<void>("deleteCity", { cityId });
     if (failure) return failure;
-    const exists =
-      workingRecords.has(cityId) ||
-      checkpointRecords.has(cityId) ||
-      autosaveRecords.has(cityId) ||
-      generationHighWaterMarks.has(cityId);
-    if (!exists) return errorResult("deleteCity", "notFound", { cityId });
+    if (!cityStorageExists(cityId)) {
+      return errorResult("deleteCity", "notFound", { cityId });
+    }
 
     workingRecords.delete(cityId);
     checkpointRecords.delete(cityId);
@@ -382,8 +456,9 @@ export function createMemorySaveStore(options?: {
     });
     if (failure) return failure;
     const summaries = sortCheckpointSummaries(
-      [...(checkpointRecords.get(cityId)?.values() ?? [])].map(
-        checkpointSummary,
+      [...(checkpointRecords.get(cityId)?.entries() ?? [])].map(
+        ([checkpointId, record]) =>
+          checkpointSummary(record, cityId, checkpointId),
       ),
     );
     return cloneResult(summaries, "listCheckpoints", { cityId });
@@ -405,17 +480,25 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeCheckpoint: SaveStore["writeCheckpoint"] = async (input) => {
-    const context = { cityId: input.cityId, recordId: input.checkpointId };
+    const candidate = cloneResult(input, "writeCheckpoint");
+    if (!candidate.ok) return candidate;
+    if (
+      !isNonEmptyString(candidate.value.cityId) ||
+      !isNonEmptyString(candidate.value.checkpointId) ||
+      typeof candidate.value.name !== "string" ||
+      !isNullableString(candidate.value.note)
+    ) {
+      return errorResult("writeCheckpoint", "corruptRecord");
+    }
+    const context = {
+      cityId: candidate.value.cityId,
+      recordId: candidate.value.checkpointId,
+    };
     const failure = injectedFailure<CheckpointSummary>(
       "writeCheckpoint",
       context,
     );
     if (failure) return failure;
-    if (input.cityId.length === 0 || input.checkpointId.length === 0) {
-      return errorResult("writeCheckpoint", "corruptRecord", context);
-    }
-    const candidate = cloneResult(input, "writeCheckpoint", context);
-    if (!candidate.ok) return candidate;
     const inspected = inspectSaveEnvelope(candidate.value.envelope);
     if (!inspected.ok) {
       return errorResult(
@@ -457,31 +540,50 @@ export function createMemorySaveStore(options?: {
     checkpointId,
     name,
   ) => {
-    const context = { cityId, recordId: checkpointId };
+    const input = cloneResult(
+      { cityId, checkpointId, name },
+      "renameCheckpoint",
+    );
+    if (!input.ok) return input;
+    if (
+      !isNonEmptyString(input.value.cityId) ||
+      !isNonEmptyString(input.value.checkpointId) ||
+      typeof input.value.name !== "string"
+    ) {
+      return errorResult("renameCheckpoint", "corruptRecord");
+    }
+    const context = {
+      cityId: input.value.cityId,
+      recordId: input.value.checkpointId,
+    };
     const failure = injectedFailure<CheckpointSummary>(
       "renameCheckpoint",
       context,
     );
     if (failure) return failure;
-    const cityRecords = checkpointRecords.get(cityId);
-    const existing = cityRecords?.get(checkpointId);
+    const cityRecords = checkpointRecords.get(input.value.cityId);
+    const existing = cityRecords?.get(input.value.checkpointId);
     if (!cityRecords || !existing) {
       return errorResult("renameCheckpoint", "notFound", context);
     }
     const candidate = cloneResult(
-      { ...existing, name },
+      { ...existing, name: input.value.name },
       "renameCheckpoint",
       context,
     );
     if (!candidate.ok) return candidate;
     const result = cloneResult(
-      checkpointSummary(candidate.value),
+      checkpointSummary(
+        candidate.value,
+        input.value.cityId,
+        input.value.checkpointId,
+      ),
       "renameCheckpoint",
       context,
     );
     if (!result.ok) return result;
 
-    cityRecords.set(checkpointId, candidate.value);
+    cityRecords.set(input.value.checkpointId, candidate.value);
     return result;
   };
 
@@ -507,11 +609,20 @@ export function createMemorySaveStore(options?: {
       cityId,
     });
     if (failure) return failure;
+    const generationHighWaterMark = generationHighWaterMarks.get(cityId);
+    if (
+      generationHighWaterMark !== undefined &&
+      !isValidGeneration(generationHighWaterMark)
+    ) {
+      return errorResult("listAutosaves", "corruptRecord", { cityId });
+    }
     const listing: AutosaveListing = {
       items: sortAutosaveSummaries(
-        [...(autosaveRecords.get(cityId)?.values() ?? [])].map(autosaveSummary),
+        [...(autosaveRecords.get(cityId)?.entries() ?? [])].map(
+          ([autosaveId, record]) => autosaveSummary(record, cityId, autosaveId),
+        ),
       ),
-      generationHighWaterMark: generationHighWaterMarks.get(cityId) ?? null,
+      generationHighWaterMark: generationHighWaterMark ?? null,
     };
     return cloneResult(listing, "listAutosaves", { cityId });
   };
@@ -532,19 +643,21 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeAutosave: SaveStore["writeAutosave"] = async (input) => {
-    const context = { cityId: input.cityId, recordId: input.autosaveId };
+    const candidate = cloneResult(input, "writeAutosave");
+    if (!candidate.ok) return candidate;
+    if (
+      !isNonEmptyString(candidate.value.cityId) ||
+      !isNonEmptyString(candidate.value.autosaveId) ||
+      !isValidGeneration(candidate.value.generation)
+    ) {
+      return errorResult("writeAutosave", "corruptRecord");
+    }
+    const context = {
+      cityId: candidate.value.cityId,
+      recordId: candidate.value.autosaveId,
+    };
     const failure = injectedFailure<AutosaveSummary>("writeAutosave", context);
     if (failure) return failure;
-    if (
-      input.cityId.length === 0 ||
-      input.autosaveId.length === 0 ||
-      !Number.isSafeInteger(input.generation) ||
-      input.generation < 0
-    ) {
-      return errorResult("writeAutosave", "corruptRecord", context);
-    }
-    const candidate = cloneResult(input, "writeAutosave", context);
-    if (!candidate.ok) return candidate;
     const inspected = inspectSaveEnvelope(candidate.value.envelope);
     if (!inspected.ok) {
       return errorResult(
@@ -556,11 +669,14 @@ export function createMemorySaveStore(options?: {
     if (inspected.envelope.city.id !== candidate.value.cityId) {
       return errorResult("writeAutosave", "corruptRecord", context);
     }
+    const highWater = generationHighWaterMarks.get(candidate.value.cityId);
+    if (highWater !== undefined && !isValidGeneration(highWater)) {
+      return errorResult("writeAutosave", "corruptRecord", context);
+    }
     const cityRecords = autosaveRecords.get(candidate.value.cityId);
     if (cityRecords?.has(candidate.value.autosaveId)) {
       return errorResult("writeAutosave", "conflict", context);
     }
-    const highWater = generationHighWaterMarks.get(candidate.value.cityId);
     if (highWater !== undefined && candidate.value.generation <= highWater) {
       return errorResult("writeAutosave", "conflict", context);
     }
@@ -605,6 +721,41 @@ export function createMemorySaveStore(options?: {
   return {
     seedRawWorking: (cityId, value) => {
       workingRecords.set(cityId, structuredClone(value));
+    },
+    seedRawCheckpoint: (seed) => {
+      const detached = structuredClone(seed);
+      const cityRecords =
+        checkpointRecords.get(detached.storageCityId) ??
+        new Map<string, StoredCheckpoint>();
+      cityRecords.set(detached.storageCheckpointId, {
+        checkpointId: detached.checkpointId,
+        cityId: detached.cityId,
+        name: detached.name,
+        note: detached.note,
+        createdAt: detached.createdAt,
+        envelope: detached.envelope,
+      });
+      checkpointRecords.set(detached.storageCityId, cityRecords);
+    },
+    seedRawAutosave: (seed) => {
+      const detached = structuredClone(seed);
+      const cityRecords =
+        autosaveRecords.get(detached.storageCityId) ??
+        new Map<string, StoredAutosave>();
+      cityRecords.set(detached.storageAutosaveId, {
+        autosaveId: detached.autosaveId,
+        cityId: detached.cityId,
+        generation: detached.generation,
+        createdAt: detached.createdAt,
+        envelope: detached.envelope,
+      });
+      autosaveRecords.set(detached.storageCityId, cityRecords);
+      if (detached.generationHighWaterMark !== undefined) {
+        generationHighWaterMarks.set(
+          detached.storageCityId,
+          detached.generationHighWaterMark,
+        );
+      }
     },
     listCities,
     readWorkingSave,

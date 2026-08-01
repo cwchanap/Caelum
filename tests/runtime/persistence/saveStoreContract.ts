@@ -13,6 +13,36 @@ export interface SaveStoreContractHarness {
   reopen?: () => Promise<SaveStore>;
   failNext?: (operation: SaveStoreOperation, code: SaveStoreErrorCode) => void;
   seedRawWorking(cityId: string, value: unknown): void;
+  seedRawCheckpoint?: (seed: RawCheckpointSeed) => void;
+  seedRawAutosave?: (seed: RawAutosaveSeed) => void;
+}
+
+export interface RawCheckpointSeed {
+  storageCityId: string;
+  storageCheckpointId: string;
+  checkpointId: string;
+  cityId: string;
+  name: string;
+  note: string | null;
+  createdAt: string;
+  envelope: unknown;
+}
+
+export interface RawAutosaveSeed {
+  storageCityId: string;
+  storageAutosaveId: string;
+  autosaveId: string;
+  cityId: string;
+  generation: number;
+  createdAt: string;
+  envelope: unknown;
+  generationHighWaterMark?: number;
+}
+
+export interface SaveStoreContractCapabilities {
+  injectedStorageFailures: boolean;
+  rawGenerationRecords: boolean;
+  reopenPersistence: boolean;
 }
 
 function envelopeFor(
@@ -26,10 +56,34 @@ function envelopeFor(
   });
 }
 
+function valueThatThrowsWhileCloning(): object {
+  return Object.defineProperty({}, "value", {
+    enumerable: true,
+    get() {
+      throw new Error("hostile clone getter");
+    },
+  });
+}
+
 export function defineSaveStoreContract(
   name: string,
   createHarness: () => SaveStoreContractHarness,
+  capabilities: Readonly<SaveStoreContractCapabilities>,
 ): void {
+  const injectedFailureIt = capabilities.injectedStorageFailures ? it : it.skip;
+  const rawGenerationIt = capabilities.rawGenerationRecords ? it : it.skip;
+  const reopenIt = capabilities.reopenPersistence ? it : it.skip;
+
+  function requireCapability<TValue>(
+    value: TValue | undefined,
+    capability: string,
+  ): TValue {
+    if (value === undefined) {
+      throw new Error(`${name} declares ${capability} but does not provide it`);
+    }
+    return value;
+  }
+
   describe(`${name} SaveStore contract`, () => {
     describe("ordering", () => {
       it("lists cities by save time then ID and places corrupt records last", async () => {
@@ -225,26 +279,34 @@ export function defineSaveStoreContract(
     });
 
     describe("replacement atomicity", () => {
-      it("preserves the previous working save after an aborted replacement", async () => {
-        const { store, failNext } = createHarness();
-        if (failNext === undefined) return;
-        await expectOk(
-          store.writeWorkingSave(
-            makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" }),
-          ),
-        );
-        failNext("writeWorkingSave", "transactionAborted");
+      injectedFailureIt(
+        "preserves the previous working save after an aborted replacement",
+        async () => {
+          const { store, failNext } = createHarness();
+          const injectFailure = requireCapability(
+            failNext,
+            "injectedStorageFailures",
+          );
+          await expectOk(
+            store.writeWorkingSave(
+              makeEnvelope({ savedAt: "2026-08-01T10:00:00.000Z" }),
+            ),
+          );
+          injectFailure("writeWorkingSave", "transactionAborted");
 
-        await expectError(
-          store.writeWorkingSave(
-            makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" }),
-          ),
-          "transactionAborted",
-        );
-        expect(await expectOk(store.readWorkingSave("city-1"))).toMatchObject({
-          savedAt: "2026-08-01T10:00:00.000Z",
-        });
-      });
+          await expectError(
+            store.writeWorkingSave(
+              makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" }),
+            ),
+            "transactionAborted",
+          );
+          expect(await expectOk(store.readWorkingSave("city-1"))).toMatchObject(
+            {
+              savedAt: "2026-08-01T10:00:00.000Z",
+            },
+          );
+        },
+      );
 
       it("maps clone failure to serializationFailed without replacing the working save", async () => {
         const { store } = createHarness();
@@ -373,6 +435,41 @@ export function defineSaveStoreContract(
         );
         await expectError(store.readWorkingSave("city-corrupt"), "notFound");
       });
+
+      it("lists an empty-key city as corrupt and refuses to rewrite it", async () => {
+        const { store, seedRawWorking } = createHarness();
+        const emptyIdentity = makeEnvelope({
+          city: { id: "", name: "Missing identity" },
+        });
+        seedRawWorking("", emptyIdentity);
+
+        expect(await expectOk(store.listCities())).toEqual([
+          {
+            cityId: "",
+            name: null,
+            cityCreatedAt: null,
+            savedAt: null,
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          },
+        ]);
+        await expectError(store.renameCity("", "Renamed"), "corruptRecord");
+        await expectError(
+          store.duplicateCity("", {
+            cityId: "city-copy",
+            name: "Copy",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "corruptRecord",
+        );
+        expect(await expectOk(store.readWorkingSave(""))).toEqual(
+          emptyIdentity,
+        );
+      });
     });
 
     describe("create-only conflicts", () => {
@@ -474,6 +571,519 @@ export function defineSaveStoreContract(
           generationHighWaterMark: 1,
         });
       });
+
+      it("rejects a checkpoint-only duplicate target without changing it", async () => {
+        const { store } = createHarness();
+        const source = envelopeFor("city-source", "Source");
+        const targetCheckpoint = envelopeFor("city-target", "Target", {
+          savedAt: "2026-08-01T11:00:00.000Z",
+        });
+        await expectOk(store.writeWorkingSave(source));
+        await expectOk(
+          store.writeCheckpoint({
+            checkpointId: "checkpoint-target",
+            cityId: "city-target",
+            name: "Target checkpoint",
+            note: "preserve",
+            envelope: targetCheckpoint,
+          }),
+        );
+
+        await expectError(
+          store.duplicateCity("city-source", {
+            cityId: "city-target",
+            name: "Replacement",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "conflict",
+        );
+
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(
+          await expectOk(
+            store.readCheckpoint("city-target", "checkpoint-target"),
+          ),
+        ).toEqual(targetCheckpoint);
+        expect(
+          await expectOk(store.listCheckpoints("city-target")),
+        ).toMatchObject([
+          {
+            checkpointId: "checkpoint-target",
+            name: "Target checkpoint",
+            note: "preserve",
+          },
+        ]);
+      });
+
+      it("rejects an autosave-only duplicate target without changing it", async () => {
+        const { store } = createHarness();
+        const source = envelopeFor("city-source", "Source");
+        const targetAutosave = envelopeFor("city-target", "Target", {
+          savedAt: "2026-08-01T11:00:00.000Z",
+        });
+        await expectOk(store.writeWorkingSave(source));
+        await expectOk(
+          store.writeAutosave({
+            autosaveId: "autosave-target",
+            cityId: "city-target",
+            generation: 9,
+            envelope: targetAutosave,
+          }),
+        );
+
+        await expectError(
+          store.duplicateCity("city-source", {
+            cityId: "city-target",
+            name: "Replacement",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "conflict",
+        );
+
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(
+          await expectOk(store.readAutosave("city-target", "autosave-target")),
+        ).toEqual(targetAutosave);
+        expect(
+          await expectOk(store.listAutosaves("city-target")),
+        ).toMatchObject({
+          items: [{ autosaveId: "autosave-target", generation: 9 }],
+          generationHighWaterMark: 9,
+        });
+      });
+
+      it("rejects a high-water-only duplicate target without changing it", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeWorkingSave(envelopeFor("city-source", "Source")),
+        );
+        await expectOk(
+          store.writeAutosave({
+            autosaveId: "autosave-pruned",
+            cityId: "city-target",
+            generation: 9,
+            envelope: envelopeFor("city-target", "Target"),
+          }),
+        );
+        await expectOk(store.deleteAutosave("city-target", "autosave-pruned"));
+
+        await expectError(
+          store.duplicateCity("city-source", {
+            cityId: "city-target",
+            name: "Replacement",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "conflict",
+        );
+
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(await expectOk(store.listAutosaves("city-target"))).toEqual({
+          items: [],
+          generationHighWaterMark: 9,
+        });
+      });
+    });
+
+    describe("detached mutation inputs", () => {
+      it("uses one detached working-envelope identity through commit", async () => {
+        const { store } = createHarness();
+        let cityIdReads = 0;
+        const city = Object.defineProperty({ name: "Detached" }, "id", {
+          enumerable: true,
+          get() {
+            cityIdReads += 1;
+            return cityIdReads === 1 ? "city-detached" : "city-mutated";
+          },
+        });
+
+        await expectOk(
+          store.writeWorkingSave(makeEnvelope({ city: city as never })),
+        );
+
+        expect(
+          await expectOk(store.readWorkingSave("city-detached")),
+        ).toMatchObject({ city: { id: "city-detached", name: "Detached" } });
+        await expectError(store.readWorkingSave("city-mutated"), "notFound");
+      });
+
+      it("uses the detached duplicate target ID through conflict checks and commit", async () => {
+        const { store } = createHarness();
+        const source = envelopeFor("city-source", "Source");
+        const existing = envelopeFor("city-existing", "Existing");
+        await expectOk(store.writeWorkingSave(source));
+        await expectOk(store.writeWorkingSave(existing));
+        let cityIdReads = 0;
+        const identity = Object.defineProperty(
+          {
+            name: "Duplicate",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          },
+          "cityId",
+          {
+            enumerable: true,
+            get() {
+              cityIdReads += 1;
+              return cityIdReads === 1 ? "city-detached" : "city-existing";
+            },
+          },
+        );
+
+        await expectOk(store.duplicateCity("city-source", identity as never));
+
+        expect(await expectOk(store.readWorkingSave("city-existing"))).toEqual(
+          existing,
+        );
+        expect(await expectOk(store.readWorkingSave("city-detached"))).toEqual({
+          ...source,
+          city: { id: "city-detached", name: "Duplicate" },
+          cityCreatedAt: "2026-08-01T12:00:00.000Z",
+          savedAt: "2026-08-01T12:05:00.000Z",
+          appVersion: "0.2.0",
+        });
+      });
+
+      it.each(["name", "cityCreatedAt", "savedAt", "appVersion"] as const)(
+        "rejects a detached non-string duplicate %s",
+        async (field) => {
+          const { store } = createHarness();
+          const source = envelopeFor("city-source", "Source");
+          await expectOk(store.writeWorkingSave(source));
+          const hostileValue = Object.defineProperty({}, "value", {
+            enumerable: true,
+            get() {
+              return "not a string field";
+            },
+          });
+          const identity = {
+            cityId: "city-target",
+            name: "Duplicate",
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+            [field]: hostileValue,
+          };
+
+          await expectError(
+            store.duplicateCity("city-source", identity as never),
+            "corruptRecord",
+          );
+          await expectError(store.readWorkingSave("city-target"), "notFound");
+          expect(await expectOk(store.readWorkingSave("city-source"))).toEqual(
+            source,
+          );
+        },
+      );
+
+      it("rejects a detached non-string city rename without changing storage", async () => {
+        const { store } = createHarness();
+        const original = makeEnvelope();
+        await expectOk(store.writeWorkingSave(original));
+        const hostileName = Object.defineProperty({}, "value", {
+          enumerable: true,
+          get() {
+            return "not a string name";
+          },
+        });
+
+        await expectError(
+          store.renameCity("city-1", hostileName as never),
+          "corruptRecord",
+        );
+        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+          original,
+        );
+      });
+
+      it("uses detached checkpoint IDs and validates detached metadata", async () => {
+        const { store } = createHarness();
+        let checkpointIdReads = 0;
+        const input = Object.defineProperties(
+          {
+            cityId: "city-1",
+            name: "Checkpoint",
+            note: null,
+            envelope: makeEnvelope(),
+          },
+          {
+            checkpointId: {
+              enumerable: true,
+              get() {
+                checkpointIdReads += 1;
+                return checkpointIdReads <= 2
+                  ? "checkpoint-detached"
+                  : "checkpoint-mutated";
+              },
+            },
+          },
+        );
+
+        await expectOk(store.writeCheckpoint(input as never));
+
+        expect(
+          await expectOk(store.readCheckpoint("city-1", "checkpoint-detached")),
+        ).toEqual(makeEnvelope());
+        await expectError(
+          store.readCheckpoint("city-1", "checkpoint-mutated"),
+          "notFound",
+        );
+
+        const hostileName = Object.defineProperty({}, "value", {
+          enumerable: true,
+          get() {
+            return "not a string name";
+          },
+        });
+        await expectError(
+          store.writeCheckpoint({
+            checkpointId: "checkpoint-invalid",
+            cityId: "city-1",
+            name: hostileName as never,
+            note: null,
+            envelope: makeEnvelope(),
+          }),
+          "corruptRecord",
+        );
+      });
+
+      it("uses detached autosave IDs and generations through commit", async () => {
+        const { store } = createHarness();
+        let autosaveIdReads = 0;
+        let generationReads = 0;
+        const input = Object.defineProperties(
+          {
+            cityId: "city-1",
+            envelope: makeEnvelope(),
+          },
+          {
+            autosaveId: {
+              enumerable: true,
+              get() {
+                autosaveIdReads += 1;
+                return autosaveIdReads <= 2
+                  ? "autosave-detached"
+                  : "autosave-mutated";
+              },
+            },
+            generation: {
+              enumerable: true,
+              get() {
+                generationReads += 1;
+                return generationReads <= 2 ? 7 : Number.NaN;
+              },
+            },
+          },
+        );
+
+        await expectOk(store.writeAutosave(input as never));
+
+        expect(await expectOk(store.listAutosaves("city-1"))).toMatchObject({
+          items: [{ autosaveId: "autosave-detached", generation: 7 }],
+          generationHighWaterMark: 7,
+        });
+        await expectError(
+          store.readAutosave("city-1", "autosave-mutated"),
+          "notFound",
+        );
+      });
+
+      it("validates a detached checkpoint rename without inspecting gameplay", async () => {
+        const { store } = createHarness();
+        const envelope = makeEnvelope();
+        await expectOk(
+          store.writeCheckpoint({
+            checkpointId: "checkpoint-1",
+            cityId: "city-1",
+            name: "Original",
+            note: "preserve",
+            envelope,
+          }),
+        );
+        const hostileName = Object.defineProperty({}, "value", {
+          enumerable: true,
+          get() {
+            return "not a string name";
+          },
+        });
+
+        await expectError(
+          store.renameCheckpoint(
+            "city-1",
+            "checkpoint-1",
+            hostileName as never,
+          ),
+          "corruptRecord",
+        );
+        expect(await expectOk(store.listCheckpoints("city-1"))).toMatchObject([
+          {
+            checkpointId: "checkpoint-1",
+            name: "Original",
+            note: "preserve",
+          },
+        ]);
+        expect(
+          await expectOk(store.readCheckpoint("city-1", "checkpoint-1")),
+        ).toEqual(envelope);
+      });
+
+      it("maps duplicate identity clone failure without changing the source", async () => {
+        const { store } = createHarness();
+        const source = envelopeFor("city-source", "Source");
+        await expectOk(store.writeWorkingSave(source));
+
+        await expectError(
+          store.duplicateCity("city-source", {
+            cityId: "city-target",
+            name: valueThatThrowsWhileCloning() as never,
+            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            savedAt: "2026-08-01T12:05:00.000Z",
+            appVersion: "0.2.0",
+          }),
+          "serializationFailed",
+        );
+        expect(await expectOk(store.readWorkingSave("city-source"))).toEqual(
+          source,
+        );
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+      });
+
+      it("maps rename clone failure without changing the working save", async () => {
+        const { store } = createHarness();
+        const original = makeEnvelope();
+        await expectOk(store.writeWorkingSave(original));
+
+        await expectError(
+          store.renameCity("city-1", valueThatThrowsWhileCloning() as never),
+          "serializationFailed",
+        );
+        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+          original,
+        );
+      });
+
+      it("maps checkpoint input clone failure without creating a record", async () => {
+        const { store } = createHarness();
+        const input = Object.defineProperty(
+          {
+            cityId: "city-1",
+            name: "Checkpoint",
+            note: null,
+            envelope: makeEnvelope(),
+          },
+          "checkpointId",
+          {
+            enumerable: true,
+            get() {
+              throw new Error("hostile checkpoint ID getter");
+            },
+          },
+        );
+
+        await expectError(
+          store.writeCheckpoint(input as never),
+          "serializationFailed",
+        );
+        expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+      });
+
+      it("maps checkpoint rename clone failure without changing metadata", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeCheckpoint({
+            checkpointId: "checkpoint-1",
+            cityId: "city-1",
+            name: "Original",
+            note: null,
+            envelope: makeEnvelope(),
+          }),
+        );
+
+        await expectError(
+          store.renameCheckpoint(
+            "city-1",
+            "checkpoint-1",
+            valueThatThrowsWhileCloning() as never,
+          ),
+          "serializationFailed",
+        );
+        expect(await expectOk(store.listCheckpoints("city-1"))).toMatchObject([
+          { checkpointId: "checkpoint-1", name: "Original" },
+        ]);
+      });
+
+      it("maps autosave input clone failure without advancing high-water", async () => {
+        const { store } = createHarness();
+        const input = Object.defineProperty(
+          {
+            autosaveId: "autosave-1",
+            cityId: "city-1",
+            envelope: makeEnvelope(),
+          },
+          "generation",
+          {
+            enumerable: true,
+            get() {
+              throw new Error("hostile generation getter");
+            },
+          },
+        );
+
+        await expectError(
+          store.writeAutosave(input as never),
+          "serializationFailed",
+        );
+        expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+          items: [],
+          generationHighWaterMark: null,
+        });
+      });
+    });
+
+    describe("injected storage error taxonomy", () => {
+      injectedFailureIt.each([
+        ["quotaExceeded", false],
+        ["permissionDenied", false],
+        ["unavailable", true],
+        ["transactionAborted", true],
+        ["ioFailure", true],
+      ] as const)(
+        "surfaces %s with its retryability and preserves the committed record",
+        async (code, retryable) => {
+          const { store, failNext } = createHarness();
+          const injectFailure = requireCapability(
+            failNext,
+            "injectedStorageFailures",
+          );
+          const original = makeEnvelope({
+            savedAt: "2026-08-01T10:00:00.000Z",
+          });
+          await expectOk(store.writeWorkingSave(original));
+          injectFailure("writeWorkingSave", code);
+
+          const error = await expectError(
+            store.writeWorkingSave(
+              makeEnvelope({ savedAt: "2026-08-01T11:00:00.000Z" }),
+            ),
+            code,
+          );
+
+          expect(error).toMatchObject({
+            operation: "writeWorkingSave",
+            code,
+            retryable,
+          });
+          expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+            original,
+          );
+        },
+      );
     });
 
     describe("key and timestamp corruption", () => {
@@ -543,6 +1153,233 @@ export function defineSaveStoreContract(
         expect(checkpoint.createdAt).toBe(checkpointEnvelope.savedAt);
         expect(autosave.createdAt).toBe(autosaveEnvelope.savedAt);
       });
+
+      rawGenerationIt(
+        "lists persisted checkpoint key and timestamp corruption and deletes by storage identity",
+        async () => {
+          const { store, seedRawCheckpoint } = createHarness();
+          const seedCheckpoint = requireCapability(
+            seedRawCheckpoint,
+            "rawGenerationRecords",
+          );
+          const keyEnvelope = makeEnvelope({
+            savedAt: "2026-08-01T12:00:00.000Z",
+          });
+          const timestampEnvelope = makeEnvelope({
+            savedAt: "2026-08-01T13:00:00.000Z",
+          });
+          seedCheckpoint({
+            storageCityId: "city-1",
+            storageCheckpointId: "checkpoint-storage-key",
+            checkpointId: "checkpoint-record-key",
+            cityId: "city-1",
+            name: "Key mismatch",
+            note: null,
+            createdAt: keyEnvelope.savedAt,
+            envelope: keyEnvelope,
+          });
+          seedCheckpoint({
+            storageCityId: "city-1",
+            storageCheckpointId: "checkpoint-time",
+            checkpointId: "checkpoint-time",
+            cityId: "city-1",
+            name: "Timestamp mismatch",
+            note: "preserve",
+            createdAt: "2026-08-01T13:00:01.000Z",
+            envelope: timestampEnvelope,
+          });
+          seedCheckpoint({
+            storageCityId: "city-1",
+            storageCheckpointId: "checkpoint-city-key",
+            checkpointId: "checkpoint-city-key",
+            cityId: "city-other",
+            name: "City key mismatch",
+            note: null,
+            createdAt: keyEnvelope.savedAt,
+            envelope: envelopeFor("city-other", "Other"),
+          });
+
+          const listed = await expectOk(store.listCheckpoints("city-1"));
+          const byId = new Map(listed.map((item) => [item.checkpointId, item]));
+          expect(byId.get("checkpoint-storage-key")).toEqual({
+            checkpointId: "checkpoint-storage-key",
+            cityId: "city-1",
+            name: "Key mismatch",
+            note: null,
+            createdAt: keyEnvelope.savedAt,
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(byId.get("checkpoint-time")).toEqual({
+            checkpointId: "checkpoint-time",
+            cityId: "city-1",
+            name: "Timestamp mismatch",
+            note: "preserve",
+            createdAt: "2026-08-01T13:00:01.000Z",
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(byId.get("checkpoint-city-key")).toMatchObject({
+            checkpointId: "checkpoint-city-key",
+            cityId: "city-1",
+            name: "City key mismatch",
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+
+          await expectOk(
+            store.deleteCheckpoint("city-1", "checkpoint-storage-key"),
+          );
+          await expectOk(store.deleteCheckpoint("city-1", "checkpoint-time"));
+          await expectOk(
+            store.deleteCheckpoint("city-1", "checkpoint-city-key"),
+          );
+          expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+        },
+      );
+
+      rawGenerationIt(
+        "lists persisted autosave key and timestamp corruption and deletes by storage identity",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const keyEnvelope = makeEnvelope({
+            savedAt: "2026-08-01T12:00:00.000Z",
+          });
+          const timestampEnvelope = makeEnvelope({
+            savedAt: "2026-08-01T13:00:00.000Z",
+          });
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-storage-key",
+            autosaveId: "autosave-record-key",
+            cityId: "city-1",
+            generation: 7,
+            createdAt: keyEnvelope.savedAt,
+            envelope: keyEnvelope,
+            generationHighWaterMark: 8,
+          });
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-city-key",
+            autosaveId: "autosave-city-key",
+            cityId: "city-other",
+            generation: 6,
+            createdAt: keyEnvelope.savedAt,
+            envelope: envelopeFor("city-other", "Other"),
+            generationHighWaterMark: 8,
+          });
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-time",
+            autosaveId: "autosave-time",
+            cityId: "city-1",
+            generation: 8,
+            createdAt: "2026-08-01T13:00:01.000Z",
+            envelope: timestampEnvelope,
+            generationHighWaterMark: 8,
+          });
+
+          const listing = await expectOk(store.listAutosaves("city-1"));
+          const byId = new Map(
+            listing.items.map((item) => [item.autosaveId, item]),
+          );
+          expect(listing.generationHighWaterMark).toBe(8);
+          expect(byId.get("autosave-storage-key")).toEqual({
+            autosaveId: "autosave-storage-key",
+            cityId: "city-1",
+            generation: 7,
+            createdAt: keyEnvelope.savedAt,
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(byId.get("autosave-time")).toEqual({
+            autosaveId: "autosave-time",
+            cityId: "city-1",
+            generation: 8,
+            createdAt: "2026-08-01T13:00:01.000Z",
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(byId.get("autosave-city-key")).toMatchObject({
+            autosaveId: "autosave-city-key",
+            cityId: "city-1",
+            generation: 6,
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+
+          await expectOk(
+            store.deleteAutosave("city-1", "autosave-storage-key"),
+          );
+          await expectOk(store.deleteAutosave("city-1", "autosave-time"));
+          await expectOk(store.deleteAutosave("city-1", "autosave-city-key"));
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: 8,
+          });
+        },
+      );
+
+      rawGenerationIt(
+        "deletes a corrupt generation-only city by storage identity",
+        async () => {
+          const { store, seedRawCheckpoint, seedRawAutosave } = createHarness();
+          const seedCheckpoint = requireCapability(
+            seedRawCheckpoint,
+            "rawGenerationRecords",
+          );
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const corruptEnvelope = { format: "broken" };
+          seedCheckpoint({
+            storageCityId: "city-generation-only",
+            storageCheckpointId: "checkpoint-corrupt",
+            checkpointId: "checkpoint-corrupt",
+            cityId: "city-generation-only",
+            name: "Corrupt",
+            note: null,
+            createdAt: "2026-08-01T12:00:00.000Z",
+            envelope: corruptEnvelope,
+          });
+          seedAutosave({
+            storageCityId: "city-generation-only",
+            storageAutosaveId: "autosave-corrupt",
+            autosaveId: "autosave-corrupt",
+            cityId: "city-generation-only",
+            generation: 3,
+            createdAt: "2026-08-01T12:00:00.000Z",
+            envelope: corruptEnvelope,
+            generationHighWaterMark: 3,
+          });
+
+          await expectOk(store.deleteCity("city-generation-only"));
+
+          expect(
+            await expectOk(store.listCheckpoints("city-generation-only")),
+          ).toEqual([]);
+          expect(
+            await expectOk(store.listAutosaves("city-generation-only")),
+          ).toEqual({ items: [], generationHighWaterMark: null });
+        },
+      );
     });
 
     describe("checkpoint lifecycle", () => {
@@ -601,6 +1438,45 @@ export function defineSaveStoreContract(
           "notFound",
         );
       });
+
+      rawGenerationIt(
+        "keeps checkpoint rename metadata-only for a corrupt envelope",
+        async () => {
+          const { store, seedRawCheckpoint } = createHarness();
+          const seedCheckpoint = requireCapability(
+            seedRawCheckpoint,
+            "rawGenerationRecords",
+          );
+          const corruptEnvelope = { format: "broken" };
+          seedCheckpoint({
+            storageCityId: "city-1",
+            storageCheckpointId: "checkpoint-corrupt",
+            checkpointId: "checkpoint-corrupt",
+            cityId: "city-1",
+            name: "Original",
+            note: "preserve",
+            createdAt: "2026-08-01T12:00:00.000Z",
+            envelope: corruptEnvelope,
+          });
+
+          const renamed = await expectOk(
+            store.renameCheckpoint("city-1", "checkpoint-corrupt", "Renamed"),
+          );
+
+          expect(renamed).toMatchObject({
+            checkpointId: "checkpoint-corrupt",
+            cityId: "city-1",
+            name: "Renamed",
+            note: "preserve",
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(
+            await expectOk(
+              store.readCheckpoint("city-1", "checkpoint-corrupt"),
+            ),
+          ).toEqual(corruptEnvelope);
+        },
+      );
     });
 
     describe("high-water behavior", () => {
@@ -632,17 +1508,16 @@ export function defineSaveStoreContract(
       );
 
       it("keeps high-water after pruning and rejects generation reuse", async () => {
-        const harness = createHarness();
+        const { store } = createHarness();
         await expectOk(
-          harness.store.writeAutosave({
+          store.writeAutosave({
             autosaveId: "autosave-10",
             cityId: "city-1",
             generation: 10,
             envelope: makeEnvelope(),
           }),
         );
-        await expectOk(harness.store.deleteAutosave("city-1", "autosave-10"));
-        const store = harness.reopen ? await harness.reopen() : harness.store;
+        await expectOk(store.deleteAutosave("city-1", "autosave-10"));
 
         expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
           items: [],
@@ -659,33 +1534,168 @@ export function defineSaveStoreContract(
         );
       });
 
-      it("does not advance high-water when an injected write fails", async () => {
-        const { store, failNext } = createHarness();
-        if (failNext === undefined) return;
-        failNext("writeAutosave", "transactionAborted");
+      reopenIt(
+        "persists working, checkpoint, and high-water state across reopen",
+        async () => {
+          const harness = createHarness();
+          const reopen = requireCapability(harness.reopen, "reopenPersistence");
+          const envelope = makeEnvelope();
+          await expectOk(harness.store.writeWorkingSave(envelope));
+          await expectOk(
+            harness.store.writeCheckpoint({
+              checkpointId: "checkpoint-reopen",
+              cityId: "city-1",
+              name: "Reopen",
+              note: null,
+              envelope,
+            }),
+          );
+          await expectOk(
+            harness.store.writeAutosave({
+              autosaveId: "autosave-reopen",
+              cityId: "city-1",
+              generation: 10,
+              envelope,
+            }),
+          );
+          await expectOk(
+            harness.store.deleteAutosave("city-1", "autosave-reopen"),
+          );
 
-        await expectError(
-          store.writeAutosave({
-            autosaveId: "autosave-aborted",
+          const reopened = await reopen();
+
+          expect(await expectOk(reopened.readWorkingSave("city-1"))).toEqual(
+            envelope,
+          );
+          expect(
+            await expectOk(
+              reopened.readCheckpoint("city-1", "checkpoint-reopen"),
+            ),
+          ).toEqual(envelope);
+          expect(await expectOk(reopened.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: 10,
+          });
+        },
+      );
+
+      rawGenerationIt(
+        "lists an invalid persisted autosave generation as corrupt",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const envelope = makeEnvelope();
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-invalid-generation",
+            autosaveId: "autosave-invalid-generation",
             cityId: "city-1",
-            generation: 8,
-            envelope: makeEnvelope(),
-          }),
-          "transactionAborted",
-        );
-        expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
-          items: [],
-          generationHighWaterMark: null,
-        });
-        await expectOk(
-          store.writeAutosave({
-            autosaveId: "autosave-retry",
+            generation: Number.NaN,
+            createdAt: envelope.savedAt,
+            envelope,
+            generationHighWaterMark: 5,
+          });
+
+          const listing = await expectOk(store.listAutosaves("city-1"));
+
+          expect(listing.generationHighWaterMark).toBe(5);
+          expect(listing.items).toHaveLength(1);
+          expect(listing.items[0]).toMatchObject({
+            autosaveId: "autosave-invalid-generation",
             cityId: "city-1",
-            generation: 8,
-            envelope: makeEnvelope(),
-          }),
-        );
-      });
+            appVersion: null,
+            snapshotSchemaVersion: null,
+            summary: null,
+            compatibility: { status: "corruptHeader" },
+          });
+          expect(listing.items[0]!.generation).toBeNaN();
+          await expectOk(
+            store.deleteAutosave("city-1", "autosave-invalid-generation"),
+          );
+        },
+      );
+
+      rawGenerationIt(
+        "rejects corrupt persisted high-water without mutating or repairing it",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const original = makeEnvelope();
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-existing",
+            autosaveId: "autosave-existing",
+            cityId: "city-1",
+            generation: 5,
+            createdAt: original.savedAt,
+            envelope: original,
+            generationHighWaterMark: Number.NaN,
+          });
+
+          await expectError(store.listAutosaves("city-1"), "corruptRecord");
+          await expectError(
+            store.writeAutosave({
+              autosaveId: "autosave-new",
+              cityId: "city-1",
+              generation: 6,
+              envelope: makeEnvelope(),
+            }),
+            "corruptRecord",
+          );
+          expect(
+            await expectOk(store.readAutosave("city-1", "autosave-existing")),
+          ).toEqual(original);
+          await expectError(
+            store.readAutosave("city-1", "autosave-new"),
+            "notFound",
+          );
+          await expectOk(store.deleteCity("city-1"));
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: null,
+          });
+        },
+      );
+
+      injectedFailureIt(
+        "does not advance high-water when an injected write fails",
+        async () => {
+          const { store, failNext } = createHarness();
+          const injectFailure = requireCapability(
+            failNext,
+            "injectedStorageFailures",
+          );
+          injectFailure("writeAutosave", "transactionAborted");
+
+          await expectError(
+            store.writeAutosave({
+              autosaveId: "autosave-aborted",
+              cityId: "city-1",
+              generation: 8,
+              envelope: makeEnvelope(),
+            }),
+            "transactionAborted",
+          );
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: null,
+          });
+          await expectOk(
+            store.writeAutosave({
+              autosaveId: "autosave-retry",
+              cityId: "city-1",
+              generation: 8,
+              envelope: makeEnvelope(),
+            }),
+          );
+        },
+      );
 
       it("does not advance high-water when cloning fails", async () => {
         const { store } = createHarness();

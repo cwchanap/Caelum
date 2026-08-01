@@ -273,6 +273,17 @@ it.each([
   });
 });
 
+it("rejects an empty city ID", () => {
+  expect(
+    inspectSaveEnvelope(
+      makeEnvelope({ city: { id: "", name: "Missing identity" } }),
+    ),
+  ).toEqual({
+    ok: false,
+    compatibility: { status: "corruptHeader" },
+  });
+});
+
 it.each([
   [3, 3],
   ["4", null],
