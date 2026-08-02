@@ -155,7 +155,7 @@ export interface RuntimePersistenceController {
     name: string,
   ): Promise<PersistenceOperationResult<RenameActiveCityValue>>;
   load(source: LoadSource): Promise<PersistenceOperationResult<LoadCityValue>>;
-  detachActiveCity(): PersistenceOperationResult<RuntimeSnapshot>;
+  detachActiveCity(): Promise<PersistenceOperationResult<RuntimeSnapshot>>;
   activateNewCity(
     request: SandboxCreationRequest,
     identity: NewCityIdentity,

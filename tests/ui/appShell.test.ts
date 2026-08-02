@@ -61,7 +61,7 @@ const persistenceController: RuntimePersistenceController = {
           ? "loadCheckpoint"
           : "loadAutosave",
     ),
-  detachActiveCity: () => runtimeUnavailable("detachActiveCity"),
+  detachActiveCity: async () => runtimeUnavailable("detachActiveCity"),
   activateNewCity: async () => runtimeUnavailable("activateNewCity"),
   runGameplayWrite: async (request) =>
     runtimeUnavailable(

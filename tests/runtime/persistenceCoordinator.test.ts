@@ -1163,7 +1163,7 @@ describe("runtime persistence coordinator contracts", () => {
     const listener = vi.fn();
     const unsubscribe = harness.runtime.subscribe(listener);
 
-    const result = harness.runtime.persistence.detachActiveCity();
+    const result = await harness.runtime.persistence.detachActiveCity();
 
     expect(result).toMatchObject({
       status: "completed",
@@ -1188,6 +1188,20 @@ describe("runtime persistence coordinator contracts", () => {
     unsubscribe();
   });
 
+  it("resolves detach as runtime unavailable after fatal backend failure", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(50_000);
+    const afterDeath = harness.runtime.getSnapshot();
+
+    await expect(
+      harness.runtime.persistence.detachActiveCity(),
+    ).resolves.toEqual(runtimeUnavailable("detachActiveCity"));
+    expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
+  });
+
   it("supersedes a delayed failed load after detach advances lineage", async () => {
     const harness = await createCoordinatorHarness();
     harness.failures.failNext("readWorkingSave", "ioFailure");
@@ -1198,12 +1212,80 @@ describe("runtime persistence coordinator contracts", () => {
     });
     await harness.store.waitForActive("readWorkingSave");
 
-    harness.runtime.persistence.detachActiveCity();
+    await harness.runtime.persistence.detachActiveCity();
     const afterDetach = harness.runtime.getSnapshot();
     harness.store.releaseNext("readWorkingSave");
 
     await expect(load).resolves.toEqual({ status: "superseded" });
     expect(harness.runtime.getSnapshot()).toEqual(afterDetach);
+  });
+
+  it("orders detach after an in-flight restore and keeps backend state coherent", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(
+      harness.store,
+      source,
+      loadEnvelope({
+        city: cityIdentity(source.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 77_000 }),
+      }),
+    );
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalRestoreStarted: (() => void) | undefined;
+    const restoreStarted = new Promise<void>((resolve) => {
+      signalRestoreStarted = resolve;
+    });
+    let releaseRestore: (() => void) | undefined;
+    const restoreGate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    harness.backend.restoreSnapshot = async (request) => {
+      signalRestoreStarted?.();
+      await restoreGate;
+      return restoreSnapshot(request);
+    };
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    const load = harness.runtime.persistence.load(source);
+    await restoreStarted;
+    const detach = harness.runtime.persistence.detachActiveCity();
+    const publishesBeforeRestoreSettles = listener.mock.calls.length;
+    releaseRestore?.();
+    const [loadResult, detachResult] = await Promise.all([load, detach]);
+
+    expect(publishesBeforeRestoreSettles).toBe(0);
+    expect(loadResult).toMatchObject({
+      status: "completed",
+      value: {
+        snapshot: {
+          state: { budget: 77_000 },
+          persistence: { activeCity: { id: source.cityId } },
+        },
+      },
+    });
+    expect(detachResult).toMatchObject({
+      status: "completed",
+      value: {
+        state: { budget: 77_000 },
+        persistence: { activeCity: null, dirty: false },
+      },
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener.mock.calls[0]?.[0].persistence.activeCity).toMatchObject({
+      id: source.cityId,
+    });
+    expect(listener.mock.calls[1]?.[0].persistence.activeCity).toBeNull();
+    expect(harness.runtime.getSnapshot()).toEqual(
+      detachResult.status === "completed" ? detachResult.value : undefined,
+    );
+    await expect(harness.backend.snapshot()).resolves.toMatchObject({
+      budget: harness.runtime.getSnapshot().state.budget,
+    });
+    unsubscribe();
   });
 
   it("keeps a delayed load inert when the runtime dies before restore", async () => {
