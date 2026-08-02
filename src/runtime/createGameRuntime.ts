@@ -44,6 +44,7 @@ import type {
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
+import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import type {
   RuntimeController,
@@ -194,7 +195,6 @@ export async function createGameRuntime({
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
   let sandboxResetError: SandboxResetError | null = null;
-  let gameplayQueue: Promise<void> = Promise.resolve();
   const previewCoordinator = createPreviewCoordinator(backend);
   let nextRouteDraftInstanceId = 1;
   const activeRouteSaveTokens = new Set<string>();
@@ -204,6 +204,7 @@ export async function createGameRuntime({
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
   let dead = false;
+  const gameplayQueue = createSerializedQueue(() => dead);
   const listeners = new Set<RuntimeListener>();
 
   const getSnapshot = (): RuntimeSnapshot => ({
@@ -319,27 +320,17 @@ export async function createGameRuntime({
     operation: () => Promise<RuntimeSnapshot>,
     onError: (error: unknown) => RuntimeSnapshot = failBackend,
   ): Promise<RuntimeSnapshot> => {
-    if (dead) {
+    const run = gameplayQueue.enqueue({
+      operation,
       // The backend is fatally failed; do not attempt further operations.
       // Return the last published snapshot so callers still resolve.
-      return Promise.resolve(getSnapshot());
-    }
-    const run = gameplayQueue.then(() => {
-      // Re-check `dead` at execution time: a prior queued operation may have
-      // failed fatally between enqueue and run, setting `dead` after this call
-      // passed its enqueue-time guard. Without this, the later operation would
-      // still hit the backend and, on success, clear `backendError` even though
-      // the runtime was stopped as fatal.
-      if (dead) {
-        return getSnapshot();
-      }
-      return operation();
+      whenDead: getSnapshot,
+      onThrown: onError,
     });
-    gameplayQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run.catch(onError);
+    // Preserve the prior `run.catch(onError)` caller-continuation timing: the
+    // queue's tail continuation was registered first, so a following gameplay
+    // operation can begin before callers resume from the completed one.
+    return run.then((snapshot) => snapshot);
   };
 
   const enqueueDispatch = (
