@@ -18,7 +18,10 @@ export function createSerializedQueue(isDead: () => boolean) {
           return options.onThrown(error);
         }
       });
-      tail = run.then(() => undefined, () => undefined);
+      tail = run.then(
+        () => undefined,
+        () => undefined,
+      );
       return run;
     },
     drain(): Promise<void> {

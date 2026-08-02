@@ -3,7 +3,7 @@ import { createSerializedQueue } from "../../src/runtime/serializedQueue";
 
 describe("createSerializedQueue", () => {
   it("runs operations in enqueue order", async () => {
-    let dead = false;
+    const dead = false;
     const queue = createSerializedQueue(() => dead);
     const order: number[] = [];
     const first = queue.enqueue({
