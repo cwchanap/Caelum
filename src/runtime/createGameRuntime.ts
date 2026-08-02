@@ -1140,7 +1140,28 @@ export async function createGameRuntime(
       publish();
       return Promise.resolve(result);
     }
+    if (options.now === undefined || options.appVersion === undefined) {
+      const result: PersistenceOperationResult<SaveWorkingValue> = {
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "serializationFailed",
+            cityId: activeCity.id,
+            retryable: false,
+            diagnostic: "Working-save dependencies are not configured",
+          },
+        },
+      };
+      persistenceError = result.error;
+      saveStatus = { state: "idle" };
+      publish();
+      return Promise.resolve(result);
+    }
 
+    const now = options.now;
+    const appVersion = options.appVersion;
     const city = activeCity;
     const capturedSessionToken = sessionToken;
     saveStatus = { state: "queued", kind: "working", cityId: city.id };
@@ -1204,12 +1225,12 @@ export async function createGameRuntime(
         return capture;
       }
 
-      const savedAt = options.now!();
+      const savedAt = now();
       const envelope = buildSaveEnvelope({
         city: { id: city.id, name: city.name },
         cityCreatedAt: city.cityCreatedAt,
         savedAt,
-        appVersion: options.appVersion!,
+        appVersion,
         snapshot: capture.snapshot,
       });
       if (isCurrentPersistenceSession(city.id, capturedSessionToken)) {
@@ -1232,6 +1253,8 @@ export async function createGameRuntime(
           },
         };
       }
+
+      if (dead) return runtimeUnavailable("saveWorking");
 
       const completion = resolveWorkingSaveCompletion({
         currentCityId: activeCity?.id ?? null,

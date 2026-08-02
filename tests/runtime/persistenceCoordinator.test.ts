@@ -107,6 +107,7 @@ function autosaveRequest(
 async function createCoordinatorHarness(options?: {
   activeCity?: ActiveCityIdentity | null;
   clean?: boolean;
+  omitPersistenceDependencies?: boolean;
 }): Promise<CoordinatorHarness> {
   let snapshot = createRustSnapshot();
   const preview = previewBackendStubs();
@@ -184,8 +185,12 @@ async function createCoordinatorHarness(options?: {
     saveStore: store,
     initialCity,
     lastSavedAt: initialCity === null ? null : "2026-08-01T09:30:00.000Z",
-    now: () => "2026-08-01T10:00:00.000Z",
-    appVersion: "0.1.0",
+    ...(options?.omitPersistenceDependencies === true
+      ? {}
+      : {
+          now: () => "2026-08-01T10:00:00.000Z",
+          appVersion: "0.1.0",
+        }),
   });
   if (options?.clean !== true) {
     await runtime.debugSetBudget(100_000);
@@ -381,6 +386,67 @@ describe("runtime persistence coordinator contracts", () => {
     );
     expect(harness.backend.snapshotForSaveCalls).toBe(0);
     expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("does not complete a working save when the runtime dies during its store write", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    expect(harness.runtime.getSnapshot().persistence.saveStatus).toEqual({
+      state: "writing",
+      kind: "working",
+      cityId: "city-001",
+    });
+
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(90_000);
+    const persistenceAfterDeath = harness.runtime.getSnapshot().persistence;
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    harness.store.releaseNext("writeWorkingSave");
+
+    await expect(save).resolves.toEqual(runtimeUnavailable("saveWorking"));
+    expect(harness.runtime.getSnapshot().persistence).toEqual(
+      persistenceAfterDeath,
+    );
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("returns a typed failure when working-save dependencies are omitted", async () => {
+    const harness = await createCoordinatorHarness({
+      clean: true,
+      omitPersistenceDependencies: true,
+    });
+
+    const expected = {
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeWorkingSave",
+          code: "serializationFailed",
+          cityId: "city-001",
+          retryable: false,
+          diagnostic: "Working-save dependencies are not configured",
+        },
+      },
+    } as const;
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual(
+      expected,
+    );
+    expect(harness.backend.snapshotForSaveCalls).toBe(0);
+    expect(harness.store.mutationOrder()).toEqual([]);
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      dirty: false,
+      saveStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: expected.error,
+    });
   });
 
   it("rejects a working save without an active city", async () => {
