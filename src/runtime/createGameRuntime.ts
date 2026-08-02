@@ -274,6 +274,10 @@ export async function createGameRuntime(
   // are dropped/superseded instead of joining the serialized queue and
   // observing or mutating that uncommitted candidate.
   let backendAdmissionReserved = false;
+  // Detach sets this flag alongside backendAdmissionReserved to indicate the
+  // reservation is for city detach (not New City). Loads for other cities are
+  // not superseded during detach — only saves and loads for the active city.
+  let detachReserving = false;
   // Component teardown is a one-shot lifecycle request, so unlike transient UI
   // intents it cannot be dropped while New City owns admission. The canvas is
   // halted immediately; full preview cleanup is completed once the transaction
@@ -418,6 +422,17 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
+    // Centralize fatal persistence cleanup: invalidate load/session ownership
+    // and reset all activity statuses to idle so the terminal snapshot does
+    // not report operations that are no longer running. A delayed read or
+    // write that later settles sees the bumped tokens and resolves as
+    // runtimeUnavailable without publishing a stale status.
+    sessionToken += 1;
+    loadRequestToken += 1;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    persistenceError = null;
     // Fatal shutdown performs the complete cleanup immediately; transaction
     // finalization must not repeat an earlier latched public stop.
     stopRequestedDuringReservation = false;
@@ -1735,16 +1750,12 @@ export async function createGameRuntime(
   };
 
   const failRollbackCoherence = (error: unknown): RuntimeSnapshot => {
-    sessionToken += 1;
-    loadRequestToken += 1;
+    // Clear active-city identity and revision baselines before the centralized
+    // fatal cleanup in failBackend invalidates tokens and resets statuses.
     activeCity = null;
     currentRevision = 0;
     persistedRevision = 0;
-    saveStatus = { state: "idle" };
-    loadStatus = { state: "idle" };
-    lifecycleStatus = { state: "idle" };
     lastSavedAt = null;
-    persistenceError = null;
     return failBackend(fatalRollbackError(error));
   };
 
@@ -1776,6 +1787,14 @@ export async function createGameRuntime(
     return { ok: true };
   };
 
+  // New City admission supersedes all loads. Detach only supersedes loads
+  // for the active city — loads for other cities are unaffected.
+  const loadSupersededByAdmission = (cityId: string): boolean => {
+    if (!backendAdmissionReserved) return false;
+    if (!detachReserving) return true;
+    return cityId === activeCity?.id;
+  };
+
   const loadCity = async (
     requestedSource: LoadSource,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
@@ -1784,7 +1803,9 @@ export async function createGameRuntime(
         readForLoadSource(requestedSource).coordinatorOperation,
       );
     }
-    if (backendAdmissionReserved) return { status: "superseded" };
+    if (loadSupersededByAdmission(requestedSource.cityId)) {
+      return { status: "superseded" };
+    }
     if (saveStore === undefined) {
       return unavailableStoreResult(
         readForLoadSource(requestedSource).storeOperation,
@@ -1795,177 +1816,194 @@ export async function createGameRuntime(
     const requestToken = ++loadRequestToken;
     const read = readForLoadSource(source);
     publishLoadTransition(requestToken, { state: "reading", source }, null);
-    let stored: Awaited<ReturnType<typeof read.read>>;
-    try {
-      stored = await read.read(saveStore);
-    } catch (error: unknown) {
-      stored = {
-        ok: false,
-        error: {
-          operation: read.storeOperation,
-          code: "ioFailure",
-          cityId: source.cityId,
-          ...(source.kind === "checkpoint"
-            ? { recordId: source.checkpointId }
-            : source.kind === "autosave"
-              ? { recordId: source.autosaveId }
-              : {}),
-          retryable: true,
-          diagnostic: error instanceof Error ? error.message : String(error),
-        },
-      };
-    }
 
-    if (dead) return runtimeUnavailable(read.coordinatorOperation);
-    if (backendAdmissionReserved) {
-      // A New City reservation started while this load was reading. The load
-      // owns the active load status (it published "reading" above and no newer
-      // load has bumped the token), so clear it back to idle before yielding
-      // admission. The token is left untouched so a concurrent newer load is
-      // still detected by its own requestToken mismatch below.
-      publishLoadTransition(requestToken, { state: "idle" }, null);
-      return { status: "superseded" };
-    }
-    if (requestToken !== loadRequestToken) {
-      return { status: "superseded" };
-    }
+    // Serialize the read and restore with the target city's persistence FIFO
+    // so a same-city load cannot overtake a delayed save. The save captures
+    // revision B and enters the FIFO first; the load's read waits behind it
+    // and reads revision B (not the older revision A). Without this ordering,
+    // the load could read revision A, commit it clean, and the delayed save
+    // would then write revision B and return superseded — leaving runtime at
+    // revision A with dirty === false while storage holds revision B.
+    return enqueueCityPersistence(source.cityId, async () => {
+      if (dead) return runtimeUnavailable(read.coordinatorOperation);
+      if (loadSupersededByAdmission(source.cityId)) {
+        return { status: "superseded" };
+      }
 
-    if (!stored.ok) {
-      return publishLoadFailure(requestToken, {
-        kind: "store",
-        error: stored.error,
-      });
-    }
-
-    const inspected = inspectSaveEnvelope(stored.value);
-    if (!inspected.ok) {
-      return publishLoadFailure(requestToken, {
-        kind: "envelope",
-        error: compatibilityToEnvelopeError(inspected.compatibility),
-      });
-    }
-
-    if (inspected.envelope.city.id !== source.cityId) {
-      const recordId =
-        source.kind === "checkpoint"
-          ? source.checkpointId
-          : source.kind === "autosave"
-            ? source.autosaveId
-            : undefined;
-      return publishLoadFailure(requestToken, {
-        kind: "store",
-        error: {
-          operation: read.storeOperation,
-          code: "corruptRecord",
-          cityId: source.cityId,
-          ...(recordId === undefined ? {} : { recordId }),
-          retryable: false,
-          diagnostic: `Requested city ${source.cityId} does not match envelope city ${inspected.envelope.city.id}`,
-        },
-      });
-    }
-
-    publishLoadTransition(requestToken, { state: "restoring", source }, null);
-
-    return gameplayQueue.enqueue<PersistenceOperationResult<LoadCityValue>>({
-      operation: async () => {
-        if (requestToken !== loadRequestToken) {
-          return { status: "superseded" };
-        }
-
-        // A load read may be superseded while its backend restore is in
-        // flight. Capture the authoritative pre-load backend state inside the
-        // same serialized boundary so a stale successful restore can be
-        // undone before the next queued load begins.
-        const priorPaused = state.paused;
-        let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
-        try {
-          priorCapture = await backend.snapshotForSave();
-        } catch (error: unknown) {
-          if (requestToken !== loadRequestToken) {
-            return { status: "superseded" };
-          }
-          return publishLoadFailure(
-            requestToken,
-            persistenceHostFailure("snapshotForSave", error),
-          );
-        }
-        if (!priorCapture.ok) {
-          if (requestToken !== loadRequestToken) {
-            return { status: "superseded" };
-          }
-          return publishLoadFailure(requestToken, {
-            kind: "backend",
-            error: priorCapture.error,
-          });
-        }
-        if (requestToken !== loadRequestToken) {
-          return { status: "superseded" };
-        }
-
-        let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
-        try {
-          restored = await backend.restoreSnapshot({
-            snapshot: inspected.envelope.snapshot,
-          });
-        } catch (error: unknown) {
-          // A host exception cannot prove whether restoration mutated the
-          // backend, so restore the captured canonical state before reporting
-          // either failure or supersession.
-          const rollback = await restoreCanonicalBackendState(
-            priorCapture.snapshot,
-            priorPaused,
-          );
-          if (!rollback.ok) {
-            failRollbackCoherence(rollback.error);
-            return runtimeUnavailable(read.coordinatorOperation);
-          }
-          if (requestToken !== loadRequestToken) {
-            return { status: "superseded" };
-          }
-          return publishLoadFailure(
-            requestToken,
-            persistenceHostFailure("restoreSnapshot", error),
-          );
-        }
-        if (!restored.ok) {
-          if (requestToken !== loadRequestToken) {
-            return { status: "superseded" };
-          }
-          return publishLoadFailure(requestToken, {
-            kind: "backend",
-            error: restored.error,
-          });
-        }
-        if (requestToken !== loadRequestToken) {
-          const rollback = await restoreCanonicalBackendState(
-            priorCapture.snapshot,
-            priorPaused,
-          );
-          if (!rollback.ok) {
-            failRollbackCoherence(rollback.error);
-            return runtimeUnavailable(read.coordinatorOperation);
-          }
-          return { status: "superseded" };
-        }
-        const snapshot = commitLoadedSnapshot(
-          restored.snapshot,
-          inspected.envelope,
-          source,
-        );
-        return { status: "completed", value: { snapshot, source } };
-      },
-      whenDead: () => runtimeUnavailable(read.coordinatorOperation),
-      onThrown: (error: unknown) =>
-        publishLoadFailure(requestToken, {
-          kind: "backend",
+      let stored: Awaited<ReturnType<typeof read.read>>;
+      try {
+        stored = await read.read(saveStore);
+      } catch (error: unknown) {
+        stored = {
+          ok: false,
           error: {
-            kind: "host",
-            operation: "restoreSnapshot",
-            code: "invokeFailed",
+            operation: read.storeOperation,
+            code: "ioFailure",
+            cityId: source.cityId,
+            ...(source.kind === "checkpoint"
+              ? { recordId: source.checkpointId }
+              : source.kind === "autosave"
+                ? { recordId: source.autosaveId }
+                : {}),
+            retryable: true,
             diagnostic: error instanceof Error ? error.message : String(error),
           },
-        }),
+        };
+      }
+
+      if (dead) return runtimeUnavailable(read.coordinatorOperation);
+      if (loadSupersededByAdmission(source.cityId)) {
+        // A New City reservation or detach of the active city started while
+        // this load was reading. The load owns the active load status (it
+        // published "reading" above and no newer load has bumped the token),
+        // so clear it back to idle before yielding admission. The token is
+        // left untouched so a concurrent newer load is still detected by its
+        // own requestToken mismatch below.
+        publishLoadTransition(requestToken, { state: "idle" }, null);
+        return { status: "superseded" };
+      }
+      if (requestToken !== loadRequestToken) {
+        return { status: "superseded" };
+      }
+
+      if (!stored.ok) {
+        return publishLoadFailure(requestToken, {
+          kind: "store",
+          error: stored.error,
+        });
+      }
+
+      const inspected = inspectSaveEnvelope(stored.value);
+      if (!inspected.ok) {
+        return publishLoadFailure(requestToken, {
+          kind: "envelope",
+          error: compatibilityToEnvelopeError(inspected.compatibility),
+        });
+      }
+
+      if (inspected.envelope.city.id !== source.cityId) {
+        const recordId =
+          source.kind === "checkpoint"
+            ? source.checkpointId
+            : source.kind === "autosave"
+              ? source.autosaveId
+              : undefined;
+        return publishLoadFailure(requestToken, {
+          kind: "store",
+          error: {
+            operation: read.storeOperation,
+            code: "corruptRecord",
+            cityId: source.cityId,
+            ...(recordId === undefined ? {} : { recordId }),
+            retryable: false,
+            diagnostic: `Requested city ${source.cityId} does not match envelope city ${inspected.envelope.city.id}`,
+          },
+        });
+      }
+
+      publishLoadTransition(requestToken, { state: "restoring", source }, null);
+
+      return gameplayQueue.enqueue<PersistenceOperationResult<LoadCityValue>>({
+        operation: async () => {
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
+
+          // A load read may be superseded while its backend restore is in
+          // flight. Capture the authoritative pre-load backend state inside
+          // the same serialized boundary so a stale successful restore can be
+          // undone before the next queued load begins.
+          const priorPaused = state.paused;
+          let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+          try {
+            priorCapture = await backend.snapshotForSave();
+          } catch (error: unknown) {
+            if (requestToken !== loadRequestToken) {
+              return { status: "superseded" };
+            }
+            return publishLoadFailure(
+              requestToken,
+              persistenceHostFailure("snapshotForSave", error),
+            );
+          }
+          if (!priorCapture.ok) {
+            if (requestToken !== loadRequestToken) {
+              return { status: "superseded" };
+            }
+            return publishLoadFailure(requestToken, {
+              kind: "backend",
+              error: priorCapture.error,
+            });
+          }
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
+
+          let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+          try {
+            restored = await backend.restoreSnapshot({
+              snapshot: inspected.envelope.snapshot,
+            });
+          } catch (error: unknown) {
+            // A host exception cannot prove whether restoration mutated the
+            // backend, so restore the captured canonical state before
+            // reporting either failure or supersession.
+            const rollback = await restoreCanonicalBackendState(
+              priorCapture.snapshot,
+              priorPaused,
+            );
+            if (!rollback.ok) {
+              failRollbackCoherence(rollback.error);
+              return runtimeUnavailable(read.coordinatorOperation);
+            }
+            if (requestToken !== loadRequestToken) {
+              return { status: "superseded" };
+            }
+            return publishLoadFailure(
+              requestToken,
+              persistenceHostFailure("restoreSnapshot", error),
+            );
+          }
+          if (!restored.ok) {
+            if (requestToken !== loadRequestToken) {
+              return { status: "superseded" };
+            }
+            return publishLoadFailure(requestToken, {
+              kind: "backend",
+              error: restored.error,
+            });
+          }
+          if (requestToken !== loadRequestToken) {
+            const rollback = await restoreCanonicalBackendState(
+              priorCapture.snapshot,
+              priorPaused,
+            );
+            if (!rollback.ok) {
+              failRollbackCoherence(rollback.error);
+              return runtimeUnavailable(read.coordinatorOperation);
+            }
+            return { status: "superseded" };
+          }
+          const snapshot = commitLoadedSnapshot(
+            restored.snapshot,
+            inspected.envelope,
+            source,
+          );
+          return { status: "completed", value: { snapshot, source } };
+        },
+        whenDead: () => runtimeUnavailable(read.coordinatorOperation),
+        onThrown: (error: unknown) =>
+          publishLoadFailure(requestToken, {
+            kind: "backend",
+            error: {
+              kind: "host",
+              operation: "restoreSnapshot",
+              code: "invokeFailed",
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            },
+          }),
+      });
     });
   };
 
@@ -2166,6 +2204,13 @@ export async function createGameRuntime(
     const appVersion = options.appVersion;
     const priorLifecycleStatus = lifecycleStatus;
     backendAdmissionReserved = true;
+    // Invalidate any in-flight load lineage immediately so a pending read
+    // that settles during or after this transaction cannot continue
+    // restoring. The bumped token is captured in `prior` below, so rollback
+    // restores the bumped value (not the pre-admission value) and a late
+    // settling load still sees a token mismatch.
+    loadRequestToken += 1;
+    loadStatus = { state: "idle" };
     lifecycleStatus = { state: "creatingCity" };
     publish();
 
@@ -2328,31 +2373,56 @@ export async function createGameRuntime(
     }
   };
 
-  const detachActiveCity = (): Promise<
+  const detachActiveCity = async (): Promise<
     PersistenceOperationResult<RuntimeSnapshot>
   > => {
-    if (dead) return Promise.resolve(runtimeUnavailable("detachActiveCity"));
+    if (dead) return runtimeUnavailable("detachActiveCity");
     if (backendAdmissionReserved) {
-      return Promise.resolve({ status: "superseded" });
+      return { status: "superseded" };
     }
-    return gameplayQueue.enqueue<PersistenceOperationResult<RuntimeSnapshot>>({
-      operation: async () => {
-        sessionToken += 1;
-        loadRequestToken += 1;
-        activeCity = null;
-        currentRevision = 0;
-        persistedRevision = 0;
-        saveStatus = { state: "idle" };
-        loadStatus = { state: "idle" };
-        lifecycleStatus = { state: "idle" };
-        lastSavedAt = null;
-        persistenceError = null;
-        const snapshot = publish();
-        return { status: "completed", value: snapshot };
-      },
-      whenDead: () => runtimeUnavailable("detachActiveCity"),
-      onThrown: () => runtimeUnavailable("detachActiveCity"),
-    });
+    const priorCityId = activeCity?.id;
+    // Reserve admission to prevent new saves from entering the city FIFO
+    // while we drain the former city's persistence tail. The drain happens
+    // OUTSIDE the gameplay queue so a queued save that needs the gameplay
+    // queue for canonical capture is not deadlocked by detach holding it.
+    // Without this drain, a delayed save write can complete after the
+    // caller deletes the city record, recreating it in storage.
+    backendAdmissionReserved = true;
+    detachReserving = true;
+    try {
+      if (priorCityId !== undefined) {
+        await drainCityPersistence(priorCityId);
+      }
+      if (dead) return runtimeUnavailable("detachActiveCity");
+      const result = await gameplayQueue.enqueue<
+        PersistenceOperationResult<RuntimeSnapshot>
+      >({
+        operation: async () => {
+          sessionToken += 1;
+          loadRequestToken += 1;
+          activeCity = null;
+          currentRevision = 0;
+          persistedRevision = 0;
+          saveStatus = { state: "idle" };
+          loadStatus = { state: "idle" };
+          lifecycleStatus = { state: "idle" };
+          lastSavedAt = null;
+          persistenceError = null;
+          const snapshot = publish();
+          return { status: "completed", value: snapshot };
+        },
+        whenDead: () => runtimeUnavailable("detachActiveCity"),
+        onThrown: () => runtimeUnavailable("detachActiveCity"),
+      });
+      return result;
+    } finally {
+      backendAdmissionReserved = false;
+      detachReserving = false;
+      if (stopRequestedDuringReservation) {
+        stopRequestedDuringReservation = false;
+        stopRuntime();
+      }
+    }
   };
 
   const persistence: RuntimePersistenceController = {
@@ -2488,6 +2558,7 @@ export async function createGameRuntime(
       });
     },
     startDrag(point) {
+      if (backendAdmissionReserved) return getSnapshot();
       // Only drag tools open a gesture; capture the tool so the gesture stays
       // self-describing even if activeTool later changes (a tool switch clears
       // `drag` via nextToolUiState, so the two never drift in practice).
@@ -2589,6 +2660,7 @@ export async function createGameRuntime(
       });
     },
     rotateBuilding() {
+      if (backendAdmissionReserved) return getSnapshot();
       const currentIndex = rotations.indexOf(ui.buildingRotation);
 
       return commit(state, {
