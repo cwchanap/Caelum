@@ -597,10 +597,20 @@ export type PersistenceCoordinatorPreconditionError =
       operation: PersistenceCoordinatorOperation;
     };
 
+export type PersistenceCoordinatorBackendError =
+  | PersistenceOperationError
+  | {
+      kind: "host";
+      operation: "createSandbox";
+      code: "invokeFailed";
+      diagnostic: string;
+    };
+
 export type PersistenceCoordinatorError =
   | { kind: "store"; error: SaveStoreError }
   | { kind: "envelope"; error: SaveEnvelopeError }
-  | { kind: "backend"; error: PersistenceOperationError }
+  | { kind: "backend"; error: PersistenceCoordinatorBackendError }
+  | { kind: "sandbox"; error: SandboxCreationError }
   | { kind: "precondition"; error: PersistenceCoordinatorPreconditionError };
 ```
 
@@ -865,7 +875,19 @@ While admission is suspended:
 - local modal/navigation UI may update through the lifecycle status, but board-editing UI is disabled; and
 - no tick/dispatch backlog accumulates.
 
-### 15.2 Rollback bookkeeping
+### 15.2 New-city failure taxonomy
+
+New City uses the same exported exhaustive coordinator error contract as every other persistence operation:
+
+- a typed `createSandbox` rejection returns `{ kind: "sandbox", error: SandboxCreationError }` because the host rejected the sandbox request without installing a candidate;
+- an unexpected thrown `createSandbox` invocation returns `{ kind: "backend", error: { kind: "host", operation: "createSandbox", code: "invokeFailed", ... } }`;
+- typed or thrown `snapshotForSave` failures return `kind: "backend"` through the persistence-operation/host variants;
+- clock or envelope construction failures return `kind: "store"` with `writeWorkingSave/serializationFailed`; and
+- initial working-save failures return `kind: "store"` with the adapter's typed `SaveStoreError`.
+
+Failures after sandbox replacement use the rollback protocol below before their typed result is returned. A typed sandbox rejection does not require backend restoration because `createSandbox` did not install a candidate, but the captured runtime lifecycle view is still restored exactly.
+
+### 15.3 Rollback bookkeeping
 
 Rollback is transaction-internal and does not use ordinary dirty-accounting helpers:
 
@@ -876,7 +898,7 @@ Rollback is transaction-internal and does not use ordinary dirty-accounting help
 
 A failed New City attempt therefore leaves a previously clean city clean and a previously dirty city with the same dirty state and save time it had before the attempt.
 
-### 15.3 Rollback failure
+### 15.4 Rollback failure
 
 The prior canonical snapshot is expected to restore. If backend restoration or pause-state restoration nevertheless fails, the runtime can no longer prove that backend engine state matches the visible city identity.
 
@@ -891,7 +913,7 @@ This is a fatal backend failure, not a retryable persistence error. The runtime 
 
 HPA-499 does not attempt to revive this state. Tests inject rollback restore and pause-state failures and assert that no old or candidate city remains saveable through the dead runtime.
 
-### 15.4 Timeout decision
+### 15.5 Timeout decision
 
 This foreground transaction is the sole case where storage I/O may reserve gameplay admission. The player is already in a modal creation flow.
 
