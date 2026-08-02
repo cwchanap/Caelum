@@ -1310,6 +1310,312 @@ describe("runtime persistence coordinator contracts", () => {
     );
   });
 
+  it("rolls back a stale successful restore before the newer load commits", async () => {
+    const harness = await createCoordinatorHarness();
+    const olderSource = { kind: "working", cityId: "city-old" } as const;
+    const newerSource = { kind: "working", cityId: "city-new" } as const;
+    seedLoadSource(
+      harness.store,
+      olderSource,
+      loadEnvelope({
+        city: cityIdentity(olderSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 71_000 }),
+      }),
+    );
+    seedLoadSource(
+      harness.store,
+      newerSource,
+      loadEnvelope({
+        city: cityIdentity(newerSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 82_000 }),
+      }),
+    );
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let restoreInvocation = 0;
+    let signalOlderRestoreStarted: (() => void) | undefined;
+    const olderRestoreStarted = new Promise<void>((resolve) => {
+      signalOlderRestoreStarted = resolve;
+    });
+    let releaseOlderRestore: (() => void) | undefined;
+    const olderRestoreGate = new Promise<void>((resolve) => {
+      releaseOlderRestore = resolve;
+    });
+    harness.backend.restoreSnapshot = async (request) => {
+      restoreInvocation += 1;
+      if (restoreInvocation === 1) {
+        signalOlderRestoreStarted?.();
+        await olderRestoreGate;
+      }
+      return restoreSnapshot(request);
+    };
+    const publishedCityIds: Array<string | null> = [];
+    const unsubscribe = harness.runtime.subscribe((snapshot) => {
+      publishedCityIds.push(snapshot.persistence.activeCity?.id ?? null);
+    });
+
+    const older = harness.runtime.persistence.load(olderSource);
+    await olderRestoreStarted;
+    const newer = harness.runtime.persistence.load(newerSource);
+    releaseOlderRestore?.();
+    const [olderResult, newerResult] = await Promise.all([older, newer]);
+
+    expect(olderResult).toEqual({ status: "superseded" });
+    expect(newerResult).toMatchObject({
+      status: "completed",
+      value: {
+        source: newerSource,
+        snapshot: {
+          state: { budget: 82_000, paused: true },
+          persistence: { activeCity: { id: newerSource.cityId } },
+        },
+      },
+    });
+    expect(publishedCityIds).not.toContain(olderSource.cityId);
+    expect(harness.backend.restoreSnapshotCalls).toBe(3);
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: 82_000, paused: true },
+      persistence: { activeCity: { id: newerSource.cityId } },
+    });
+    await expect(harness.backend.snapshot()).resolves.toMatchObject({
+      budget: 82_000,
+      paused: true,
+    });
+    unsubscribe();
+  });
+
+  it("rolls back a stale successful restore when the newer load fails before restore", async () => {
+    const harness = await createCoordinatorHarness();
+    await harness.runtime.togglePause();
+    const before = harness.runtime.getSnapshot();
+    const beforeBackend = await harness.backend.snapshot();
+    const olderSource = { kind: "working", cityId: "city-old" } as const;
+    const newerSource = { kind: "working", cityId: "city-broken" } as const;
+    seedLoadSource(
+      harness.store,
+      olderSource,
+      loadEnvelope({
+        city: cityIdentity(olderSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 71_000 }),
+      }),
+    );
+    harness.store.seedRawWorking(newerSource.cityId, { format: "broken" });
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalOlderRestoreStarted: (() => void) | undefined;
+    const olderRestoreStarted = new Promise<void>((resolve) => {
+      signalOlderRestoreStarted = resolve;
+    });
+    let releaseOlderRestore: (() => void) | undefined;
+    const olderRestoreGate = new Promise<void>((resolve) => {
+      releaseOlderRestore = resolve;
+    });
+    let restoreInvocation = 0;
+    harness.backend.restoreSnapshot = async (request) => {
+      restoreInvocation += 1;
+      if (restoreInvocation === 1) {
+        signalOlderRestoreStarted?.();
+        await olderRestoreGate;
+      }
+      return restoreSnapshot(request);
+    };
+
+    const older = harness.runtime.persistence.load(olderSource);
+    await olderRestoreStarted;
+    const newerResult = await harness.runtime.persistence.load(newerSource);
+    releaseOlderRestore?.();
+    const olderResult = await older;
+
+    expect(olderResult).toEqual({ status: "superseded" });
+    expect(newerResult).toMatchObject({
+      status: "failed",
+      error: { kind: "envelope" },
+    });
+    const after = harness.runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.persistence).toMatchObject({
+      activeCity: { id: before.persistence.activeCity?.id },
+      loadStatus: { state: "idle" },
+      error: newerResult.status === "failed" ? newerResult.error : undefined,
+    });
+    await expect(harness.backend.snapshot()).resolves.toMatchObject({
+      budget: beforeBackend.budget,
+      paused: beforeBackend.paused,
+    });
+  });
+
+  it("keeps the prior runtime coherent when the newer load is rejected during restore", async () => {
+    const harness = await createCoordinatorHarness();
+    const before = harness.runtime.getSnapshot();
+    const beforeBackend = await harness.backend.snapshot();
+    const olderSource = { kind: "working", cityId: "city-old" } as const;
+    const newerSource = { kind: "working", cityId: "city-rejected" } as const;
+    seedLoadSource(
+      harness.store,
+      olderSource,
+      loadEnvelope({
+        city: cityIdentity(olderSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 71_000 }),
+      }),
+    );
+    seedLoadSource(
+      harness.store,
+      newerSource,
+      loadEnvelope({
+        city: cityIdentity(newerSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 82_000 }),
+      }),
+    );
+    const newerRestoreError: PersistenceOperationError = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidNumericValue",
+        context: {
+          field: "budget",
+          reason: { kind: "negative" },
+        },
+      },
+    };
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalOlderRestoreStarted: (() => void) | undefined;
+    const olderRestoreStarted = new Promise<void>((resolve) => {
+      signalOlderRestoreStarted = resolve;
+    });
+    let releaseOlderRestore: (() => void) | undefined;
+    const olderRestoreGate = new Promise<void>((resolve) => {
+      releaseOlderRestore = resolve;
+    });
+    let blockedOlderCandidate = false;
+    harness.backend.restoreSnapshot = async (request) => {
+      const requested = request.snapshot as RustGameSnapshot;
+      if (requested.budget === 71_000 && !blockedOlderCandidate) {
+        blockedOlderCandidate = true;
+        signalOlderRestoreStarted?.();
+        await olderRestoreGate;
+      }
+      if (requested.budget === 82_000) {
+        harness.backend.restoreSnapshotCalls += 1;
+        return { ok: false, error: newerRestoreError };
+      }
+      return restoreSnapshot(request);
+    };
+
+    const older = harness.runtime.persistence.load(olderSource);
+    await olderRestoreStarted;
+    const newer = harness.runtime.persistence.load(newerSource);
+    releaseOlderRestore?.();
+    const [olderResult, newerResult] = await Promise.all([older, newer]);
+
+    expect(olderResult).toEqual({ status: "superseded" });
+    expect(newerResult).toEqual({
+      status: "failed",
+      error: { kind: "backend", error: newerRestoreError },
+    });
+    const after = harness.runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.persistence).toMatchObject({
+      activeCity: { id: before.persistence.activeCity?.id },
+      loadStatus: { state: "idle" },
+      error: { kind: "backend", error: newerRestoreError },
+    });
+    await expect(harness.backend.snapshot()).resolves.toMatchObject({
+      budget: beforeBackend.budget,
+      paused: beforeBackend.paused,
+    });
+  });
+
+  it("fails fatally and resolves queued load and detach with typed results when stale rollback fails", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.runtime.start();
+    const beforeBackend = await harness.backend.snapshot();
+    const olderSource = { kind: "working", cityId: "city-old" } as const;
+    const newerSource = { kind: "working", cityId: "city-new" } as const;
+    seedLoadSource(
+      harness.store,
+      olderSource,
+      loadEnvelope({
+        city: cityIdentity(olderSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 71_000 }),
+      }),
+    );
+    seedLoadSource(
+      harness.store,
+      newerSource,
+      loadEnvelope({
+        city: cityIdentity(newerSource.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 82_000 }),
+      }),
+    );
+    const rollbackError: PersistenceOperationError = {
+      kind: "host",
+      operation: "restoreSnapshot",
+      code: "invokeFailed",
+      diagnostic: "stale load rollback failed",
+    };
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalOlderRestoreStarted: (() => void) | undefined;
+    const olderRestoreStarted = new Promise<void>((resolve) => {
+      signalOlderRestoreStarted = resolve;
+    });
+    let releaseOlderRestore: (() => void) | undefined;
+    const olderRestoreGate = new Promise<void>((resolve) => {
+      releaseOlderRestore = resolve;
+    });
+    let blockedOlderCandidate = false;
+    harness.backend.restoreSnapshot = async (request) => {
+      const requested = request.snapshot as RustGameSnapshot;
+      if (requested.budget === 71_000 && !blockedOlderCandidate) {
+        blockedOlderCandidate = true;
+        signalOlderRestoreStarted?.();
+        await olderRestoreGate;
+      }
+      if (requested.budget === beforeBackend.budget) {
+        harness.backend.restoreSnapshotCalls += 1;
+        return { ok: false, error: rollbackError };
+      }
+      return restoreSnapshot(request);
+    };
+
+    const older = harness.runtime.persistence.load(olderSource);
+    await olderRestoreStarted;
+    const newer = harness.runtime.persistence.load(newerSource);
+    const detach = harness.runtime.persistence.detachActiveCity();
+    releaseOlderRestore?.();
+    const [olderResult, newerResult, detachResult] = await Promise.all([
+      older,
+      newer,
+      detach,
+    ]);
+
+    expect(olderResult).toEqual(runtimeUnavailable("loadWorking"));
+    expect(newerResult).toEqual(runtimeUnavailable("loadWorking"));
+    expect(detachResult).toEqual(runtimeUnavailable("detachActiveCity"));
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      backendError: "stale load rollback failed",
+      persistence: {
+        activeCity: null,
+        dirty: false,
+        saveStatus: { state: "idle" },
+        loadStatus: { state: "idle" },
+        lifecycleStatus: { state: "idle" },
+        lastSavedAt: null,
+        error: null,
+      },
+    });
+    expect(harness.runtime.isRunning()).toBe(false);
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual(
+      runtimeUnavailable("saveWorking"),
+    );
+  });
+
   it("preserves runtime when Rust rejects restoration", async () => {
     const harness = await createCoordinatorHarness();
     const source = { kind: "working", cityId: "other" } as const;

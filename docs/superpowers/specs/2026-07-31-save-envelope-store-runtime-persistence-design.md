@@ -823,9 +823,13 @@ export type LoadSource =
 3. inspect the envelope and reject incompatible headers;
 4. enter the typed serialized gameplay queue path;
 5. recheck the load token; a later request supersedes this request;
-6. call `backend.restoreSnapshot({ snapshot: envelope.snapshot })`;
-7. if restoration fails, return `status: "failed"` and leave runtime state/identity unchanged; and
-8. on success, atomically perform one runtime commit:
+6. capture the canonical pre-load backend snapshot with `snapshotForSave()` plus the runtime's raw paused/running flag, then recheck the load token before mutating the backend;
+7. call `backend.restoreSnapshot({ snapshot: envelope.snapshot })`;
+8. if typed restoration fails, return `status: "failed"` and leave runtime state/identity unchanged;
+9. if restoration throws, restore the captured canonical snapshot and raw paused/running flag before returning failed or superseded;
+10. after successful restoration, recheck the request token before any runtime commit. If a newer request won while restoration was in flight, restore the captured canonical snapshot and raw paused/running flag inside the same serialized boundary, publish no stale gameplay/identity state, and return `status: "superseded"`;
+11. if either canonical rollback cannot restore coherence, enter fatal/dead runtime state, clear active identity and persistence statuses, and return typed `runtimeUnavailable` to this and all queued operations; and
+12. for the still-current successful request, atomically perform one runtime commit:
    - clear hover timers;
    - invalidate route and road preview coordinators;
    - clear active road mutations and pending gesture state;
@@ -837,7 +841,7 @@ export type LoadSource =
    - reset current-session save/load/lifecycle status; and
    - publish once.
 
-The returned promise resolves with `status: "completed"` and the same coherent `RuntimeSnapshot`, or `status: "superseded"` if a later load won before restoration.
+The returned promise resolves with `status: "completed"` and the same coherent `RuntimeSnapshot`, or `status: "superseded"` if a later load won before or during restoration. A later request that fails during read, inspection, or atomic Rust restoration still supersedes an older in-flight restore; the rollback keeps both runtime and backend on the pre-load city rather than reviving the older candidate.
 
 No intermediate publication may pair old city state with new identity or vice versa.
 
@@ -957,7 +961,7 @@ Tests cover:
 8. **City switch during write:** old-city completion leaves new identity, status, error, save time, and dirty state untouched and resolves superseded.
 9. **Generation load during write:** old working write cannot mark a checkpoint-derived session clean.
 10. **Rename live-state composition:** rename cannot clobber gameplay committed during storage I/O.
-11. **Overlapping load requests:** only the latest request restores; earlier request resolves superseded.
+11. **Overlapping load requests:** block the first backend restore, admit a newer request, then release the first; a stale successful restore rolls back before the newer request runs, publishes no stale city, and resolves superseded. Cover newer success, newer failure before restore, newer typed failure during atomic restore, queued detach, and fatal typed unavailability when canonical rollback itself fails.
 12. **Queued mutation before load:** the mutation drains before restore and is replaced only when the requested load reaches the queue.
 13. **Mutation requested after load enters queue:** restore commits before the later mutation executes against the restored engine.
 14. **Write failure:** preserve dirty state, previous working record, active city, and retryable error.
