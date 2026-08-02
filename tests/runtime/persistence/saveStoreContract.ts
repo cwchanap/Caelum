@@ -2249,29 +2249,24 @@ export function defineSaveStoreContract(
         },
       ];
 
-      it.each(shapeViolations)(
-        "writeWorkingSave rejects a $label envelope without committing",
-        async ({ corrupt }) => {
-          const { store } = createHarness();
-          const envelope = makeEnvelope();
-          corrupt(envelope);
-
-          await expectError(
-            store.writeWorkingSave(envelope as never),
-            "corruptRecord",
-          );
-          await expectError(store.readWorkingSave("city-1"), "notFound");
+      const writeOps: ReadonlyArray<{
+        label: string;
+        run: (
+          store: SaveStore,
+          envelope: WritableSaveEnvelope,
+        ) => Promise<SaveStoreResult<unknown>>;
+        verifyEmpty: (store: SaveStore) => Promise<void>;
+      }> = [
+        {
+          label: "writeWorkingSave",
+          run: (store, envelope) => store.writeWorkingSave(envelope as never),
+          verifyEmpty: async (store) => {
+            await expectError(store.readWorkingSave("city-1"), "notFound");
+          },
         },
-      );
-
-      it.each(shapeViolations)(
-        "writeCheckpoint rejects a $label envelope without committing",
-        async ({ corrupt }) => {
-          const { store } = createHarness();
-          const envelope = makeEnvelope();
-          corrupt(envelope);
-
-          await expectError(
+        {
+          label: "writeCheckpoint",
+          run: (store, envelope) =>
             store.writeCheckpoint({
               checkpointId: "checkpoint-1",
               cityId: "city-1",
@@ -2279,32 +2274,46 @@ export function defineSaveStoreContract(
               note: null,
               envelope: envelope as never,
             }),
-            "corruptRecord",
-          );
-          expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+          verifyEmpty: async (store) => {
+            expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+          },
         },
-      );
-
-      it.each(shapeViolations)(
-        "writeAutosave rejects a $label envelope without committing",
-        async ({ corrupt }) => {
-          const { store } = createHarness();
-          const envelope = makeEnvelope();
-          corrupt(envelope);
-
-          await expectError(
+        {
+          label: "writeAutosave",
+          run: (store, envelope) =>
             store.writeAutosave({
               autosaveId: "autosave-1",
               cityId: "city-1",
               generation: 1,
               envelope: envelope as never,
             }),
-            "corruptRecord",
-          );
-          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
-            items: [],
-            generationHighWaterMark: null,
-          });
+          verifyEmpty: async (store) => {
+            expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+              items: [],
+              generationHighWaterMark: null,
+            });
+          },
+        },
+      ];
+
+      const writeShapeCases = writeOps.flatMap((op) =>
+        shapeViolations.map((violation) => ({
+          label: `${op.label} / ${violation.label}`,
+          run: op.run,
+          corrupt: violation.corrupt,
+          verifyEmpty: op.verifyEmpty,
+        })),
+      );
+
+      it.each(writeShapeCases)(
+        "rejects a $label envelope without committing",
+        async ({ run, corrupt, verifyEmpty }) => {
+          const { store } = createHarness();
+          const envelope = makeEnvelope();
+          corrupt(envelope);
+
+          await expectError(run(store, envelope), "corruptRecord");
+          await verifyEmpty(store);
         },
       );
     });
