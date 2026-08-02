@@ -183,3 +183,54 @@ export function previewBackendStubs(): Pick<
     },
   };
 }
+
+export interface PersistenceBackendCounters {
+  snapshotForSaveCalls: number;
+  restoreSnapshotCalls: number;
+  tickCalls: number;
+}
+
+export function persistenceBackendStubs(): {
+  backend: Pick<
+    GameBackend,
+    | "createSandbox"
+    | "snapshotForSave"
+    | "validateSnapshot"
+    | "restoreSnapshot"
+    | "previewRoute"
+    | "previewRoadMutation"
+    | "tick"
+  >;
+  counters: PersistenceBackendCounters;
+} {
+  const counters: PersistenceBackendCounters = {
+    snapshotForSaveCalls: 0,
+    restoreSnapshotCalls: 0,
+    tickCalls: 0,
+  };
+  const backend = previewBackendStubs();
+
+  return {
+    backend: {
+      ...backend,
+      async snapshotForSave() {
+        counters.snapshotForSaveCalls += 1;
+        return backend.snapshotForSave();
+      },
+      async restoreSnapshot(request) {
+        counters.restoreSnapshotCalls += 1;
+        return backend.restoreSnapshot(request);
+      },
+      async tick() {
+        counters.tickCalls += 1;
+        return {
+          snapshot: createRustSnapshot(),
+          applied: false,
+          rejection: null,
+          context: { changedTiles: [], skippedTiles: [], cost: 0 },
+        };
+      },
+    },
+    counters,
+  };
+}
