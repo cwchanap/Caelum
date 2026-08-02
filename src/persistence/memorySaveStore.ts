@@ -119,6 +119,29 @@ function isValidGeneration(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+function highWaterIsConsistent(
+  records: Map<string, StoredAutosave> | undefined,
+  highWater: number | undefined,
+): boolean {
+  const hasRecords = records !== undefined && records.size > 0;
+  if (!hasRecords) {
+    return highWater === undefined || isValidGeneration(highWater);
+  }
+  if (!isValidGeneration(highWater)) {
+    return false;
+  }
+  let maxGeneration = Number.NEGATIVE_INFINITY;
+  for (const record of records.values()) {
+    if (
+      isValidGeneration(record.generation) &&
+      record.generation > maxGeneration
+    ) {
+      maxGeneration = record.generation;
+    }
+  }
+  return maxGeneration <= (highWater as number);
+}
+
 function incompatibleCode(
   compatibility: Exclude<SaveCompatibility, { status: "candidate" }>,
 ): "incompatibleRecord" | "corruptRecord" {
@@ -314,9 +337,7 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeWorkingSave: SaveStore["writeWorkingSave"] = async (envelope) => {
-    const candidate = cloneResult(envelope, "writeWorkingSave");
-    if (!candidate.ok) return candidate;
-    const inspected = inspectSaveEnvelope(candidate.value);
+    const inspected = inspectSaveEnvelope(envelope);
     if (!inspected.ok) {
       return errorResult(
         "writeWorkingSave",
@@ -324,17 +345,19 @@ export function createMemorySaveStore(options?: {
       );
     }
     const cityId = inspected.envelope.city.id;
+    const stored = cloneResult(inspected.envelope, "writeWorkingSave", {
+      cityId,
+    });
+    if (!stored.ok) return stored;
     const failure = injectedFailure<CitySummary>("writeWorkingSave", {
       cityId,
     });
     if (failure) return failure;
 
-    workingRecords.set(cityId, inspected.envelope);
-    return cloneResult(
-      citySummary(cityId, inspected.envelope),
-      "writeWorkingSave",
-      { cityId },
-    );
+    workingRecords.set(cityId, stored.value);
+    return cloneResult(citySummary(cityId, stored.value), "writeWorkingSave", {
+      cityId,
+    });
   };
 
   const renameCity: SaveStore["renameCity"] = async (cityId, name) => {
@@ -494,7 +517,7 @@ export function createMemorySaveStore(options?: {
       context,
     );
     if (failure) return failure;
-    const inspected = inspectSaveEnvelope(candidate.value.envelope);
+    const inspected = inspectSaveEnvelope(input.envelope);
     if (!inspected.ok) {
       return errorResult(
         "writeCheckpoint",
@@ -509,13 +532,19 @@ export function createMemorySaveStore(options?: {
     if (cityRecords?.has(candidate.value.checkpointId)) {
       return errorResult("writeCheckpoint", "conflict", context);
     }
+    const storedEnvelope = cloneResult(
+      inspected.envelope,
+      "writeCheckpoint",
+      context,
+    );
+    if (!storedEnvelope.ok) return storedEnvelope;
     const record: StoredCheckpoint = {
       checkpointId: candidate.value.checkpointId,
       cityId: candidate.value.cityId,
       name: candidate.value.name,
       note: candidate.value.note,
       createdAt: inspected.envelope.savedAt,
-      envelope: candidate.value.envelope,
+      envelope: storedEnvelope.value,
     };
     const result = cloneResult(
       checkpointSummary(record),
@@ -603,16 +632,14 @@ export function createMemorySaveStore(options?: {
     });
     if (failure) return failure;
     const generationHighWaterMark = generationHighWaterMarks.get(cityId);
-    if (
-      generationHighWaterMark !== undefined &&
-      !isValidGeneration(generationHighWaterMark)
-    ) {
+    const cityRecords = autosaveRecords.get(cityId);
+    if (!highWaterIsConsistent(cityRecords, generationHighWaterMark)) {
       return errorResult("listAutosaves", "corruptRecord", { cityId });
     }
     const listing: AutosaveListing = {
       items: sortAutosaveSummaries(
-        [...(autosaveRecords.get(cityId)?.entries() ?? [])].map(
-          ([autosaveId, record]) => autosaveSummary(record, cityId, autosaveId),
+        [...(cityRecords?.entries() ?? [])].map(([autosaveId, record]) =>
+          autosaveSummary(record, cityId, autosaveId),
         ),
       ),
       generationHighWaterMark: generationHighWaterMark ?? null,
@@ -651,7 +678,7 @@ export function createMemorySaveStore(options?: {
     };
     const failure = injectedFailure<AutosaveSummary>("writeAutosave", context);
     if (failure) return failure;
-    const inspected = inspectSaveEnvelope(candidate.value.envelope);
+    const inspected = inspectSaveEnvelope(input.envelope);
     if (!inspected.ok) {
       return errorResult(
         "writeAutosave",
@@ -662,23 +689,29 @@ export function createMemorySaveStore(options?: {
     if (inspected.envelope.city.id !== candidate.value.cityId) {
       return errorResult("writeAutosave", "corruptRecord", context);
     }
+    const cityRecords = autosaveRecords.get(candidate.value.cityId);
     const highWater = generationHighWaterMarks.get(candidate.value.cityId);
-    if (highWater !== undefined && !isValidGeneration(highWater)) {
+    if (!highWaterIsConsistent(cityRecords, highWater)) {
       return errorResult("writeAutosave", "corruptRecord", context);
     }
-    const cityRecords = autosaveRecords.get(candidate.value.cityId);
     if (cityRecords?.has(candidate.value.autosaveId)) {
       return errorResult("writeAutosave", "conflict", context);
     }
     if (highWater !== undefined && candidate.value.generation <= highWater) {
       return errorResult("writeAutosave", "conflict", context);
     }
+    const storedEnvelope = cloneResult(
+      inspected.envelope,
+      "writeAutosave",
+      context,
+    );
+    if (!storedEnvelope.ok) return storedEnvelope;
     const record: StoredAutosave = {
       autosaveId: candidate.value.autosaveId,
       cityId: candidate.value.cityId,
       generation: candidate.value.generation,
       createdAt: inspected.envelope.savedAt,
-      envelope: candidate.value.envelope,
+      envelope: storedEnvelope.value,
     };
     const result = cloneResult(
       autosaveSummary(record),

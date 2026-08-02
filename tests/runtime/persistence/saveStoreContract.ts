@@ -1773,6 +1773,97 @@ export function defineSaveStoreContract(
         },
       );
 
+      rawGenerationIt(
+        "rejects a missing high-water mark when retained records exist",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const envelope = makeEnvelope();
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-existing",
+            autosaveId: "autosave-existing",
+            cityId: "city-1",
+            generation: 5,
+            createdAt: envelope.savedAt,
+            envelope,
+          });
+
+          await expectError(store.listAutosaves("city-1"), "corruptRecord");
+          await expectError(
+            store.writeAutosave({
+              autosaveId: "autosave-new",
+              cityId: "city-1",
+              generation: 6,
+              envelope: makeEnvelope(),
+            }),
+            "corruptRecord",
+          );
+
+          expect(
+            await expectOk(store.readAutosave("city-1", "autosave-existing")),
+          ).toEqual(envelope);
+          await expectError(
+            store.readAutosave("city-1", "autosave-new"),
+            "notFound",
+          );
+          await expectOk(store.deleteCity("city-1"));
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: null,
+          });
+        },
+      );
+
+      rawGenerationIt(
+        "rejects a trailing high-water mark below a retained generation",
+        async () => {
+          const { store, seedRawAutosave } = createHarness();
+          const seedAutosave = requireCapability(
+            seedRawAutosave,
+            "rawGenerationRecords",
+          );
+          const envelope = makeEnvelope();
+          seedAutosave({
+            storageCityId: "city-1",
+            storageAutosaveId: "autosave-existing",
+            autosaveId: "autosave-existing",
+            cityId: "city-1",
+            generation: 10,
+            createdAt: envelope.savedAt,
+            envelope,
+            generationHighWaterMark: 5,
+          });
+
+          await expectError(store.listAutosaves("city-1"), "corruptRecord");
+          await expectError(
+            store.writeAutosave({
+              autosaveId: "autosave-new",
+              cityId: "city-1",
+              generation: 6,
+              envelope: makeEnvelope(),
+            }),
+            "corruptRecord",
+          );
+
+          expect(
+            await expectOk(store.readAutosave("city-1", "autosave-existing")),
+          ).toEqual(envelope);
+          await expectError(
+            store.readAutosave("city-1", "autosave-new"),
+            "notFound",
+          );
+          await expectOk(store.deleteCity("city-1"));
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: null,
+          });
+        },
+      );
+
       injectedFailureIt(
         "does not advance high-water when an injected write fails",
         async () => {
@@ -1980,6 +2071,91 @@ export function defineSaveStoreContract(
 
           await expectError(run(store), "incompatibleRecord");
           expect(await expectOk<unknown>(list(store))).toEqual(empty);
+        },
+      );
+    });
+
+    describe("write-path envelope shape", () => {
+      const shapeViolations: ReadonlyArray<{
+        label: string;
+        corrupt: (envelope: WritableSaveEnvelope) => void;
+      }> = [
+        {
+          label: "symbol key",
+          corrupt: (envelope) => {
+            Object.assign(envelope, { [Symbol("extra")]: true });
+          },
+        },
+        {
+          label: "non-enumerable own property",
+          corrupt: (envelope) => {
+            Object.defineProperty(envelope, "extra", { value: true });
+          },
+        },
+        {
+          label: "custom prototype",
+          corrupt: (envelope) => {
+            Object.setPrototypeOf(envelope, { custom: true });
+          },
+        },
+      ];
+
+      it.each(shapeViolations)(
+        "writeWorkingSave rejects a $label envelope without committing",
+        async ({ corrupt }) => {
+          const { store } = createHarness();
+          const envelope = makeEnvelope();
+          corrupt(envelope);
+
+          await expectError(
+            store.writeWorkingSave(envelope as never),
+            "corruptRecord",
+          );
+          await expectError(store.readWorkingSave("city-1"), "notFound");
+        },
+      );
+
+      it.each(shapeViolations)(
+        "writeCheckpoint rejects a $label envelope without committing",
+        async ({ corrupt }) => {
+          const { store } = createHarness();
+          const envelope = makeEnvelope();
+          corrupt(envelope);
+
+          await expectError(
+            store.writeCheckpoint({
+              checkpointId: "checkpoint-1",
+              cityId: "city-1",
+              name: "Checkpoint",
+              note: null,
+              envelope: envelope as never,
+            }),
+            "corruptRecord",
+          );
+          expect(await expectOk(store.listCheckpoints("city-1"))).toEqual([]);
+        },
+      );
+
+      it.each(shapeViolations)(
+        "writeAutosave rejects a $label envelope without committing",
+        async ({ corrupt }) => {
+          const { store } = createHarness();
+          const envelope = makeEnvelope();
+          corrupt(envelope);
+
+          await expectError(
+            store.writeAutosave({
+              autosaveId: "autosave-1",
+              cityId: "city-1",
+              generation: 1,
+              envelope: envelope as never,
+            }),
+            "corruptRecord",
+          );
+          expect(await expectOk(store.listAutosaves("city-1"))).toEqual({
+            items: [],
+            generationHighWaterMark: null,
+          });
         },
       );
     });
