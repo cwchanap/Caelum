@@ -4,6 +4,7 @@ import {
   createMemorySaveStoreFailureControls,
   type MemorySaveStoreFailureControls,
 } from "../../src/persistence/memorySaveStore";
+import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import type {
   AutosaveSummary,
   CheckpointSummary,
@@ -40,6 +41,8 @@ interface CoordinatorHarness {
   };
   store: DelayedSaveStore;
   failures: MemorySaveStoreFailureControls;
+  checkpointRequest(): GameplayWriteRequest<CheckpointSummary>;
+  autosaveRequest(): GameplayWriteRequest<AutosaveSummary>;
 }
 
 function cityIdentity(id = "city-001"): ActiveCityIdentity {
@@ -68,40 +71,34 @@ function newCityIdentity(): NewCityIdentity {
   };
 }
 
-let currentHarnessStore: DelayedSaveStore | null = null;
-
-function checkpointRequest(): GameplayWriteRequest<CheckpointSummary> {
+function checkpointRequest(
+  store: DelayedSaveStore,
+): GameplayWriteRequest<CheckpointSummary> {
   return {
     kind: "checkpoint",
-    write: ({ city, envelope }) => {
-      if (currentHarnessStore === null) {
-        throw new Error("No coordinator harness store is active");
-      }
-      return currentHarnessStore.writeCheckpoint({
+    write: ({ city, envelope }) =>
+      store.writeCheckpoint({
         checkpointId: "checkpoint-001",
         cityId: city.id,
         name: "Checkpoint",
         note: null,
         envelope,
-      });
-    },
+      }),
   };
 }
 
-function autosaveRequest(): GameplayWriteRequest<AutosaveSummary> {
+function autosaveRequest(
+  store: DelayedSaveStore,
+): GameplayWriteRequest<AutosaveSummary> {
   return {
     kind: "autosave",
-    write: ({ city, envelope }) => {
-      if (currentHarnessStore === null) {
-        throw new Error("No coordinator harness store is active");
-      }
-      return currentHarnessStore.writeAutosave({
+    write: ({ city, envelope }) =>
+      store.writeAutosave({
         autosaveId: "autosave-001",
         cityId: city.id,
         generation: 1,
         envelope,
-      });
-    },
+      }),
   };
 }
 
@@ -178,7 +175,6 @@ async function createCoordinatorHarness(options?: {
   };
   const failures = createMemorySaveStoreFailureControls();
   const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
-  currentHarnessStore = store;
   const initialCity =
     options?.activeCity === undefined ? cityIdentity() : options.activeCity;
   const runtime = await createGameRuntime({
@@ -192,7 +188,14 @@ async function createCoordinatorHarness(options?: {
   if (options?.clean !== true) {
     await runtime.debugSetBudget(100_000);
   }
-  return { runtime, backend, store, failures };
+  return {
+    runtime,
+    backend,
+    store,
+    failures,
+    checkpointRequest: () => checkpointRequest(store),
+    autosaveRequest: () => autosaveRequest(store),
+  };
 }
 
 function coordinatorBackend(): GameBackend {
@@ -319,6 +322,24 @@ describe("runtime persistence coordinator contracts", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("returns runtime unavailable after a fatal backend failure without a SaveStore", async () => {
+    const base = coordinatorBackend();
+    const runtime = await createGameRuntime({
+      backend: {
+        ...base,
+        async dispatch() {
+          throw new Error("fatal backend failure");
+        },
+      },
+    });
+
+    await runtime.debugSetBudget(100_000);
+
+    await expect(runtime.persistence.saveWorking()).resolves.toEqual(
+      runtimeUnavailable("saveWorking"),
+    );
+  });
+
   it("delays selected store operations and records mutation order", async () => {
     const store = createDelayedSaveStore(createMemorySaveStore());
     store.defer("renameCity");
@@ -331,6 +352,38 @@ describe("runtime persistence coordinator contracts", () => {
     store.releaseNext("renameCity");
     await rename;
     expect(store.activeCount()).toBe(0);
+  });
+
+  it("delegates an undeferred store operation without a microtask boundary", async () => {
+    const delegate = createMemorySaveStore();
+    const listCities = vi.spyOn(delegate, "listCities");
+    const store = createDelayedSaveStore(delegate);
+
+    const listing = store.listCities();
+
+    expect(listCities).toHaveBeenCalledTimes(1);
+    await listing;
+  });
+
+  it("keeps gameplay-write request factories bound to their harness", async () => {
+    const first = await createCoordinatorHarness({ clean: true });
+    const second = await createCoordinatorHarness({ clean: true });
+    const snapshot = createRustSnapshot();
+    const envelope = buildSaveEnvelope({
+      city: { id: cityIdentity().id, name: cityIdentity().name },
+      cityCreatedAt: cityIdentity().cityCreatedAt,
+      savedAt: "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+      snapshot,
+    });
+
+    await first.checkpointRequest().write({
+      city: cityIdentity(),
+      envelope,
+    });
+
+    expect(first.store.mutationOrder()).toEqual(["writeCheckpoint"]);
+    expect(second.store.mutationOrder()).toEqual([]);
   });
 
   it("composes the deterministic coordinator harness", async () => {
@@ -347,7 +400,7 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.store.activeCount()).toBe(0);
     expect(sandboxRequest()).toMatchObject({ templateId: "blankGrid" });
     expect(newCityIdentity()).toMatchObject({ id: "city-002" });
-    expect(checkpointRequest().kind).toBe("checkpoint");
-    expect(autosaveRequest().kind).toBe("autosave");
+    expect(harness.checkpointRequest().kind).toBe("checkpoint");
+    expect(harness.autosaveRequest().kind).toBe("autosave");
   });
 });

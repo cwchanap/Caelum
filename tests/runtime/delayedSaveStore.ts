@@ -34,9 +34,11 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
   const activeWaiters = new Map<SaveStoreOperation, Array<() => void>>();
   const mutations: SaveStoreOperation[] = [];
 
-  const beforeDelegate = (operation: SaveStoreOperation): Promise<void> => {
+  const beforeDelegate = (
+    operation: SaveStoreOperation,
+  ): Promise<void> | undefined => {
     if (MUTATION_OPERATIONS.has(operation)) mutations.push(operation);
-    if (!deferredOperations.has(operation)) return Promise.resolve();
+    if (!deferredOperations.has(operation)) return undefined;
 
     return new Promise<void>((resolve) => {
       const gates = activeGates.get(operation) ?? [];
@@ -47,6 +49,14 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
       activeWaiters.delete(operation);
       for (const notify of waiters) notify();
     });
+  };
+
+  const delegateAfterGate = <T>(
+    operation: SaveStoreOperation,
+    callDelegate: () => Promise<T>,
+  ): Promise<T> => {
+    const gate = beforeDelegate(operation);
+    return gate === undefined ? callDelegate() : gate.then(callDelegate);
   };
 
   const store: DelayedSaveStore = {
@@ -87,65 +97,76 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
     mutationOrder() {
       return [...mutations];
     },
-    async listCities() {
-      await beforeDelegate("listCities");
-      return delegate.listCities();
+    listCities() {
+      return delegateAfterGate("listCities", () => delegate.listCities());
     },
-    async readWorkingSave(cityId) {
-      await beforeDelegate("readWorkingSave");
-      return delegate.readWorkingSave(cityId);
+    readWorkingSave(cityId) {
+      return delegateAfterGate("readWorkingSave", () =>
+        delegate.readWorkingSave(cityId),
+      );
     },
-    async writeWorkingSave(envelope) {
-      await beforeDelegate("writeWorkingSave");
-      return delegate.writeWorkingSave(envelope);
+    writeWorkingSave(envelope) {
+      return delegateAfterGate("writeWorkingSave", () =>
+        delegate.writeWorkingSave(envelope),
+      );
     },
-    async renameCity(cityId, name) {
-      await beforeDelegate("renameCity");
-      return delegate.renameCity(cityId, name);
+    renameCity(cityId, name) {
+      return delegateAfterGate("renameCity", () =>
+        delegate.renameCity(cityId, name),
+      );
     },
-    async duplicateCity(sourceCityId, identity) {
-      await beforeDelegate("duplicateCity");
-      return delegate.duplicateCity(sourceCityId, identity);
+    duplicateCity(sourceCityId, identity) {
+      return delegateAfterGate("duplicateCity", () =>
+        delegate.duplicateCity(sourceCityId, identity),
+      );
     },
-    async deleteCity(cityId) {
-      await beforeDelegate("deleteCity");
-      return delegate.deleteCity(cityId);
+    deleteCity(cityId) {
+      return delegateAfterGate("deleteCity", () => delegate.deleteCity(cityId));
     },
-    async listCheckpoints(cityId) {
-      await beforeDelegate("listCheckpoints");
-      return delegate.listCheckpoints(cityId);
+    listCheckpoints(cityId) {
+      return delegateAfterGate("listCheckpoints", () =>
+        delegate.listCheckpoints(cityId),
+      );
     },
-    async readCheckpoint(cityId, checkpointId) {
-      await beforeDelegate("readCheckpoint");
-      return delegate.readCheckpoint(cityId, checkpointId);
+    readCheckpoint(cityId, checkpointId) {
+      return delegateAfterGate("readCheckpoint", () =>
+        delegate.readCheckpoint(cityId, checkpointId),
+      );
     },
-    async writeCheckpoint(input) {
-      await beforeDelegate("writeCheckpoint");
-      return delegate.writeCheckpoint(input);
+    writeCheckpoint(input) {
+      return delegateAfterGate("writeCheckpoint", () =>
+        delegate.writeCheckpoint(input),
+      );
     },
-    async renameCheckpoint(cityId, checkpointId, name) {
-      await beforeDelegate("renameCheckpoint");
-      return delegate.renameCheckpoint(cityId, checkpointId, name);
+    renameCheckpoint(cityId, checkpointId, name) {
+      return delegateAfterGate("renameCheckpoint", () =>
+        delegate.renameCheckpoint(cityId, checkpointId, name),
+      );
     },
-    async deleteCheckpoint(cityId, checkpointId) {
-      await beforeDelegate("deleteCheckpoint");
-      return delegate.deleteCheckpoint(cityId, checkpointId);
+    deleteCheckpoint(cityId, checkpointId) {
+      return delegateAfterGate("deleteCheckpoint", () =>
+        delegate.deleteCheckpoint(cityId, checkpointId),
+      );
     },
-    async listAutosaves(cityId) {
-      await beforeDelegate("listAutosaves");
-      return delegate.listAutosaves(cityId);
+    listAutosaves(cityId) {
+      return delegateAfterGate("listAutosaves", () =>
+        delegate.listAutosaves(cityId),
+      );
     },
-    async readAutosave(cityId, autosaveId) {
-      await beforeDelegate("readAutosave");
-      return delegate.readAutosave(cityId, autosaveId);
+    readAutosave(cityId, autosaveId) {
+      return delegateAfterGate("readAutosave", () =>
+        delegate.readAutosave(cityId, autosaveId),
+      );
     },
-    async writeAutosave(input) {
-      await beforeDelegate("writeAutosave");
-      return delegate.writeAutosave(input);
+    writeAutosave(input) {
+      return delegateAfterGate("writeAutosave", () =>
+        delegate.writeAutosave(input),
+      );
     },
-    async deleteAutosave(cityId, autosaveId) {
-      await beforeDelegate("deleteAutosave");
-      return delegate.deleteAutosave(cityId, autosaveId);
+    deleteAutosave(cityId, autosaveId) {
+      return delegateAfterGate("deleteAutosave", () =>
+        delegate.deleteAutosave(cityId, autosaveId),
+      );
     },
   };
 
