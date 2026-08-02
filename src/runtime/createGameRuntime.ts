@@ -1643,6 +1643,8 @@ export async function createGameRuntime(
       };
     }
 
+    if (dead) return runtimeUnavailable(read.coordinatorOperation);
+
     if (!stored.ok) {
       return {
         status: "failed",

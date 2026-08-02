@@ -1140,6 +1140,58 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
   });
 
+  it("returns runtime unavailable when a delayed failed read settles after death", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.failures.failNext("readWorkingSave", "ioFailure");
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "city-loaded",
+    });
+    await harness.store.waitForActive("readWorkingSave");
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(50_000);
+    const afterDeath = harness.runtime.getSnapshot();
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    harness.store.releaseNext("readWorkingSave");
+
+    await expect(load).resolves.toEqual(runtimeUnavailable("loadWorking"));
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+    expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
+    unsubscribe();
+  });
+
+  it("returns runtime unavailable when a delayed malformed envelope settles after death", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.seedRawWorking("city-loaded", { format: "broken" });
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "city-loaded",
+    });
+    await harness.store.waitForActive("readWorkingSave");
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(50_000);
+    const afterDeath = harness.runtime.getSnapshot();
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    harness.store.releaseNext("readWorkingSave");
+
+    await expect(load).resolves.toEqual(runtimeUnavailable("loadWorking"));
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+    expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
+    unsubscribe();
+  });
+
   it("delays selected store operations and records mutation order", async () => {
     const store = createDelayedSaveStore(createMemorySaveStore());
     store.defer("renameCity");
