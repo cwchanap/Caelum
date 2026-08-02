@@ -17,6 +17,7 @@ import type {
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   noActiveCity,
+  resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
   runtimeUnavailable,
   type ActiveCityIdentity,
@@ -258,6 +259,17 @@ describe("runtime persistence coordinator contracts", () => {
         capturedCityId: "city-001",
         capturedSessionToken: 4,
         capturedRevision: 3,
+      }),
+    ).toEqual({ status: "superseded" });
+  });
+
+  it("supersedes a rename completion from a stale session", () => {
+    expect(
+      resolvePersistenceSessionCompletion({
+        currentCityId: "city-001",
+        currentSessionToken: 5,
+        capturedCityId: "city-001",
+        capturedSessionToken: 4,
       }),
     ).toEqual({ status: "superseded" });
   });
@@ -532,6 +544,154 @@ describe("runtime persistence coordinator contracts", () => {
       lastSavedAt: "2026-08-01T10:00:00.000Z",
       saveStatus: { state: "idle" },
       error: null,
+    });
+  });
+
+  it("serializes every active-city persistence mutation", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    harness.store.defer("writeCheckpoint");
+    harness.store.defer("writeAutosave");
+    harness.store.defer("renameCity");
+    const results = [
+      harness.runtime.persistence.saveWorking(),
+      harness.runtime.persistence.runGameplayWrite(harness.checkpointRequest()),
+      harness.runtime.persistence.runGameplayWrite(harness.autosaveRequest()),
+      harness.runtime.persistence.renameActiveCity("Renamed"),
+    ];
+
+    for (const operation of [
+      "writeWorkingSave",
+      "writeCheckpoint",
+      "writeAutosave",
+      "renameCity",
+    ] as const) {
+      await harness.store.waitForActive(operation);
+      expect(harness.store.activeCount()).toBe(1);
+      harness.store.releaseNext(operation);
+    }
+
+    await expect(Promise.all(results)).resolves.toEqual([
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({ status: "completed" }),
+      expect.objectContaining({ status: "completed" }),
+    ]);
+    expect(harness.store.mutationOrder()).toEqual([
+      "writeWorkingSave",
+      "writeCheckpoint",
+      "writeAutosave",
+      "renameCity",
+    ]);
+  });
+
+  it.each([
+    ["checkpoint", "writeCheckpoint"],
+    ["autosave", "writeAutosave"],
+  ] as const)(
+    "keeps the working-save baseline dirty after a successful %s write",
+    async (kind, operation) => {
+      const harness = await createCoordinatorHarness();
+      harness.store.defer(operation);
+
+      const write =
+        kind === "checkpoint"
+          ? harness.runtime.persistence.runGameplayWrite(
+              harness.checkpointRequest(),
+            )
+          : harness.runtime.persistence.runGameplayWrite(
+              harness.autosaveRequest(),
+            );
+      await harness.store.waitForActive(operation);
+      expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+        dirty: true,
+        lastSavedAt: "2026-08-01T09:30:00.000Z",
+        saveStatus: { state: "writing", kind, cityId: "city-001" },
+      });
+      harness.store.releaseNext(operation);
+
+      await expect(write).resolves.toMatchObject({ status: "completed" });
+      expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+        dirty: true,
+        lastSavedAt: "2026-08-01T09:30:00.000Z",
+        saveStatus: { state: "idle" },
+        error: null,
+      });
+    },
+  );
+
+  it("applies rename completion to the live gameplay state", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    await harness.runtime.persistence.saveWorking();
+    harness.store.defer("renameCity");
+
+    const rename = harness.runtime.persistence.renameActiveCity("Renamed");
+    await harness.store.waitForActive("renameCity");
+    await harness.runtime.debugSetBudget(90_000);
+    const liveUi = harness.runtime.getSnapshot().ui;
+    harness.store.releaseNext("renameCity");
+
+    await expect(rename).resolves.toMatchObject({
+      status: "completed",
+      value: { summary: { cityId: "city-001", name: "Renamed" } },
+    });
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: 90_000 },
+      persistence: {
+        activeCity: { id: "city-001", name: "Renamed" },
+        dirty: true,
+        lastSavedAt: "2026-08-01T10:00:00.000Z",
+      },
+    });
+    expect(harness.runtime.getSnapshot().ui).toBe(liveUi);
+  });
+
+  it("uses a completed rename for a later queued working save", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    await harness.runtime.persistence.saveWorking();
+    harness.store.defer("renameCity");
+    harness.store.defer("writeWorkingSave");
+
+    const rename = harness.runtime.persistence.renameActiveCity("Renamed");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("renameCity");
+    harness.store.releaseNext("renameCity");
+    await rename;
+    await harness.store.waitForActive("writeWorkingSave");
+    harness.store.releaseNext("writeWorkingSave");
+
+    await expect(save).resolves.toMatchObject({
+      status: "completed",
+      value: { summary: { cityId: "city-001", name: "Renamed" } },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toMatchObject({
+      id: "city-001",
+      name: "Renamed",
+    });
+  });
+
+  it("uses a completed rename for a later queued generation capture", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    await harness.runtime.persistence.saveWorking();
+    harness.store.defer("renameCity");
+    harness.store.defer("writeCheckpoint");
+
+    const rename = harness.runtime.persistence.renameActiveCity("Renamed");
+    const checkpoint = harness.runtime.persistence.runGameplayWrite(
+      harness.checkpointRequest(),
+    );
+    await harness.store.waitForActive("renameCity");
+    harness.store.releaseNext("renameCity");
+    await rename;
+    await harness.store.waitForActive("writeCheckpoint");
+    harness.store.releaseNext("writeCheckpoint");
+    await checkpoint;
+
+    await expect(
+      harness.store.readCheckpoint("city-001", "checkpoint-001"),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { city: { id: "city-001", name: "Renamed" } },
     });
   });
 
