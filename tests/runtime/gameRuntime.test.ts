@@ -30,7 +30,10 @@ import {
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
-import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
+import {
+  createMemorySaveStore,
+  createMemorySaveStoreFailureControls,
+} from "../../src/persistence/memorySaveStore";
 import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import { createTestGameState } from "../helpers/gameState";
 import { createDelayedSaveStore } from "./delayedSaveStore";
@@ -901,6 +904,25 @@ function backendSpy(
   };
 }
 
+function transactionalBackend(backend: BackendSpy): BackendSpy {
+  const createSandbox = backend.createSandbox.bind(backend);
+  backend.createSandbox = async (request) => {
+    const result = await createSandbox(request);
+    if (result.ok) backend.setSnapshot(result.snapshot);
+    return result;
+  };
+  backend.snapshotForSave = async () => ({
+    ok: true,
+    snapshot: { ...(await backend.snapshot()), paused: true },
+  });
+  backend.restoreSnapshot = async (request) => {
+    const snapshot = request.snapshot as RustGameSnapshot;
+    backend.setSnapshot(snapshot);
+    return { ok: true, snapshot };
+  };
+  return backend;
+}
+
 function deferredPreviewBackend(initial: RustGameSnapshot) {
   const base = backendSpy(initial);
   const routeResolvers = new Map<
@@ -912,10 +934,10 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
   >();
   const roadResolvers = new Map<
     number,
-    {
+    Array<{
       resolve: (response: RoadMutationPreviewResponse) => void;
       reject: (error: Error) => void;
-    }
+    }>
   >();
   const roadRequestGenerations: number[] = [];
   const backend: BackendSpy = {
@@ -932,7 +954,11 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
     previewRoadMutation(request) {
       roadRequestGenerations.push(request.generation);
       return new Promise((resolve, reject) => {
-        roadResolvers.set(request.generation, { resolve, reject });
+        const entry = { resolve, reject };
+        roadResolvers.set(request.generation, [
+          ...(roadResolvers.get(request.generation) ?? []),
+          entry,
+        ]);
       });
     },
   };
@@ -955,14 +981,18 @@ function deferredPreviewBackend(initial: RustGameSnapshot) {
         throw new Error(`No route generation ${generation}`);
       entry.reject(error);
     },
-    resolveRoad(generation: number, response: RoadMutationPreviewResponse) {
-      const deferred = roadResolvers.get(generation);
+    resolveRoad(
+      generation: number,
+      response: RoadMutationPreviewResponse,
+      requestIndex = 0,
+    ) {
+      const deferred = roadResolvers.get(generation)?.[requestIndex];
       if (deferred === undefined)
         throw new Error(`No road generation ${generation}`);
       deferred.resolve(response);
     },
-    rejectRoad(generation: number, error: Error) {
-      const deferred = roadResolvers.get(generation);
+    rejectRoad(generation: number, error: Error, requestIndex = 0) {
+      const deferred = roadResolvers.get(generation)?.[requestIndex];
       if (deferred === undefined)
         throw new Error(`No road generation ${generation}`);
       deferred.reject(error);
@@ -1210,6 +1240,183 @@ describe("Game Runtime", () => {
         },
       });
       expect(backend.intents).toEqual([{ type: "setBudget", budget: 90_000 }]);
+    });
+
+    it("fences pending previews from the candidate and resumes hover after rollback", async () => {
+      vi.useFakeTimers();
+      const backend = transactionalBackend(backendSpy());
+      const previewBudgets: number[] = [];
+      backend.previewRoadMutation = vi.fn(async (request) => {
+        previewBudgets.push((await backend.snapshot()).budget);
+        return roadPreview(request.generation, request.mutation.point);
+      });
+      const failures = createMemorySaveStoreFailureControls();
+      const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend,
+        saveStore: store,
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        hoverPreviewDebounceMs: 50,
+      });
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      const priorBudget = runtime.getSnapshot().state.budget;
+      failures.failNext("writeWorkingSave", "ioFailure");
+
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+
+      try {
+        await store.waitForActive("writeWorkingSave");
+        vi.advanceTimersByTime(50);
+        runtime.previewRoadMutation({
+          type: "layRoad",
+          point: { x: 6, y: 5 },
+        });
+        await flushPromises();
+        expect(previewBudgets).toEqual([]);
+
+        store.releaseNext("writeWorkingSave");
+        await expect(activation).resolves.toMatchObject({
+          status: "failed",
+        });
+        await flushPromises();
+        expect(previewBudgets).toEqual([priorBudget]);
+        expect(runtime.getSnapshot().ui.roadMutationPreview).toMatchObject({
+          changedTiles: [{ x: 5, y: 5 }],
+        });
+      } finally {
+        store.releaseAll();
+        await Promise.allSettled([activation]);
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps an invalidated route response from changing restored rollback UI", async () => {
+      const previews = deferredPreviewBackend(dirtyRouteSnapshot());
+      transactionalBackend(previews.backend);
+      const failures = createMemorySaveStoreFailureControls();
+      const runtime = await createGameRuntime({
+        backend: previews.backend,
+        saveStore: createMemorySaveStore({ failures }),
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        hoverPreviewDebounceMs: 0,
+      });
+      runtime.startRouteEdit("route-dirty");
+      const before = runtime.getSnapshot();
+      const draft = before.ui.routeDraft;
+      expect(draft?.previewPending).toBe(true);
+      failures.failNext("writeWorkingSave", "ioFailure");
+
+      await expect(
+        runtime.persistence.activateNewCity(
+          {
+            templateId: "blankGrid",
+            economyPreset: "standard",
+            startingCapital: 120_000,
+            demandMultiplier: 1,
+            moveInRate: "paused",
+          },
+          {
+            id: "city-002",
+            name: "New City",
+            cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          },
+        ),
+      ).resolves.toMatchObject({ status: "failed" });
+      expect(runtime.getSnapshot()).toEqual(before);
+
+      previews.resolveRoute(
+        draft?.generation ?? -1,
+        routePreview(draft?.generation ?? -1, draft?.waypointIds ?? []),
+        0,
+      );
+      await flushPromises();
+      expect(runtime.getSnapshot()).toEqual(before);
+
+      previews.resolveRoute(
+        draft?.generation ?? -1,
+        routePreview(draft?.generation ?? -1, draft?.waypointIds ?? []),
+        1,
+      );
+      await flushPromises();
+      expect(runtime.getSnapshot().ui.routeDraft).toMatchObject({
+        previewPending: false,
+        preview: { generation: draft?.generation },
+      });
+    });
+
+    it("keeps an invalidated road response from changing restored rollback UI", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      transactionalBackend(previews.backend);
+      const failures = createMemorySaveStoreFailureControls();
+      const runtime = await createGameRuntime({
+        backend: previews.backend,
+        saveStore: createMemorySaveStore({ failures }),
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        hoverPreviewDebounceMs: 0,
+      });
+      const mutation = { type: "layRoad", point: { x: 5, y: 5 } } as const;
+      runtime.previewRoadMutation(mutation);
+      const before = runtime.getSnapshot();
+      const generation = before.ui.roadPreviewGeneration;
+      failures.failNext("writeWorkingSave", "ioFailure");
+
+      await expect(
+        runtime.persistence.activateNewCity(
+          {
+            templateId: "blankGrid",
+            economyPreset: "standard",
+            startingCapital: 120_000,
+            demandMultiplier: 1,
+            moveInRate: "paused",
+          },
+          {
+            id: "city-002",
+            name: "New City",
+            cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          },
+        ),
+      ).resolves.toMatchObject({ status: "failed" });
+      expect(runtime.getSnapshot()).toEqual(before);
+
+      previews.resolveRoad(
+        generation,
+        roadPreview(generation, mutation.point),
+        0,
+      );
+      await flushPromises();
+      expect(runtime.getSnapshot()).toEqual(before);
+
+      previews.resolveRoad(
+        generation,
+        roadPreview(generation, mutation.point),
+        1,
+      );
+      await flushPromises();
+      expect(runtime.getSnapshot().ui.roadMutationPreview).toMatchObject({
+        generation,
+        changedTiles: [mutation.point],
+      });
     });
   });
 
