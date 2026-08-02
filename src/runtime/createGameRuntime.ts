@@ -1177,9 +1177,6 @@ export async function createGameRuntime(
     const appVersion = options.appVersion;
     const cityId = activeCity.id;
     const capturedSessionToken = sessionToken;
-    saveStatus = { state: "queued", kind: "working", cityId };
-    persistenceError = null;
-    publish();
 
     return enqueueCityPersistence(cityId, async () => {
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
@@ -1188,6 +1185,9 @@ export async function createGameRuntime(
       const liveCity = activeCity;
       if (liveCity === null) return { status: "superseded" };
       const city = { ...liveCity };
+      saveStatus = { state: "queued", kind: "working", cityId };
+      persistenceError = null;
+      publish();
 
       const capture = await gameplayQueue.enqueue<WorkingSaveCaptureResult>({
         operation: async () => {
@@ -1346,9 +1346,6 @@ export async function createGameRuntime(
     const appVersion = options.appVersion;
     const cityId = activeCity.id;
     const capturedSessionToken = sessionToken;
-    saveStatus = { state: "queued", kind: request.kind, cityId };
-    persistenceError = null;
-    publish();
 
     return enqueueCityPersistence(cityId, async () => {
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
@@ -1357,6 +1354,9 @@ export async function createGameRuntime(
       const liveCity = activeCity;
       if (liveCity === null) return { status: "superseded" };
       const city = { ...liveCity };
+      saveStatus = { state: "queued", kind: request.kind, cityId };
+      persistenceError = null;
+      publish();
 
       const capture = await gameplayQueue.enqueue<GenerationWriteCaptureResult>(
         {
@@ -1416,13 +1416,39 @@ export async function createGameRuntime(
         return capture;
       }
 
-      const envelope = buildSaveEnvelope({
-        city: { id: city.id, name: city.name },
-        cityCreatedAt: city.cityCreatedAt,
-        savedAt: now(),
-        appVersion,
-        snapshot: capture.snapshot,
-      });
+      let envelope: ReturnType<typeof buildSaveEnvelope>;
+      try {
+        envelope = buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: now(),
+          appVersion,
+          snapshot: capture.snapshot,
+        });
+      } catch (error: unknown) {
+        const result: PersistenceOperationResult<
+          GenerationWriteValue<TSummary>
+        > = {
+          status: "failed",
+          error: {
+            kind: "store",
+            error: {
+              operation: storeOperation,
+              code: "serializationFailed",
+              cityId: city.id,
+              retryable: false,
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            },
+          },
+        };
+        if (isCurrentPersistenceSession(city.id, capturedSessionToken)) {
+          saveStatus = { state: "idle" };
+          persistenceError = result.error;
+          publish();
+        }
+        return result;
+      }
       if (isCurrentPersistenceSession(city.id, capturedSessionToken)) {
         saveStatus = { state: "writing", kind: request.kind, cityId: city.id };
         publish();

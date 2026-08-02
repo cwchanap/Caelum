@@ -109,6 +109,7 @@ async function createCoordinatorHarness(options?: {
   activeCity?: ActiveCityIdentity | null;
   clean?: boolean;
   omitPersistenceDependencies?: boolean;
+  now?: () => string;
 }): Promise<CoordinatorHarness> {
   let snapshot = createRustSnapshot();
   const preview = previewBackendStubs();
@@ -189,7 +190,7 @@ async function createCoordinatorHarness(options?: {
     ...(options?.omitPersistenceDependencies === true
       ? {}
       : {
-          now: () => "2026-08-01T10:00:00.000Z",
+          now: options?.now ?? (() => "2026-08-01T10:00:00.000Z"),
           appVersion: "0.1.0",
         }),
   });
@@ -583,6 +584,119 @@ describe("runtime persistence coordinator contracts", () => {
       "writeAutosave",
       "renameCity",
     ]);
+  });
+
+  it("keeps the FIFO-head save kind active when a later kind is queued", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    harness.store.defer("writeCheckpoint");
+
+    const working = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    expect(harness.runtime.getSnapshot().persistence.saveStatus).toEqual({
+      state: "writing",
+      kind: "working",
+      cityId: "city-001",
+    });
+
+    const checkpoint = harness.runtime.persistence.runGameplayWrite(
+      harness.checkpointRequest(),
+    );
+    const statusWhileCheckpointQueued =
+      harness.runtime.getSnapshot().persistence.saveStatus;
+
+    harness.store.releaseNext("writeWorkingSave");
+    await working;
+    await harness.store.waitForActive("writeCheckpoint");
+    const statusAtCheckpointHead =
+      harness.runtime.getSnapshot().persistence.saveStatus;
+    harness.store.releaseNext("writeCheckpoint");
+    await checkpoint;
+
+    expect(statusWhileCheckpointQueued).toEqual({
+      state: "writing",
+      kind: "working",
+      cityId: "city-001",
+    });
+    expect(statusAtCheckpointHead).toEqual({
+      state: "writing",
+      kind: "checkpoint",
+      cityId: "city-001",
+    });
+  });
+
+  it("resolves a generation clock exception as a typed failure", async () => {
+    const harness = await createCoordinatorHarness({
+      now: () => {
+        throw new Error("clock failed");
+      },
+    });
+
+    const write = harness.runtime.persistence.runGameplayWrite(
+      harness.checkpointRequest(),
+    );
+
+    await expect(write).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeCheckpoint",
+          code: "serializationFailed",
+          cityId: "city-001",
+          retryable: false,
+          diagnostic: "clock failed",
+        },
+      },
+    });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      saveStatus: { state: "idle" },
+      error: {
+        kind: "store",
+        error: { operation: "writeCheckpoint", code: "serializationFailed" },
+      },
+    });
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("resolves a generation envelope exception as a typed failure", async () => {
+    const harness = await createCoordinatorHarness();
+    const hostileSnapshot = { ...createRustSnapshot() };
+    Object.defineProperty(hostileSnapshot, "rules", {
+      get() {
+        throw new Error("envelope failed");
+      },
+    });
+    harness.backend.snapshotForSave = async () => ({
+      ok: true,
+      snapshot: hostileSnapshot,
+    });
+
+    const write = harness.runtime.persistence.runGameplayWrite(
+      harness.autosaveRequest(),
+    );
+
+    await expect(write).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeAutosave",
+          code: "serializationFailed",
+          cityId: "city-001",
+          retryable: false,
+          diagnostic: "envelope failed",
+        },
+      },
+    });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      saveStatus: { state: "idle" },
+      error: {
+        kind: "store",
+        error: { operation: "writeAutosave", code: "serializationFailed" },
+      },
+    });
+    expect(harness.store.mutationOrder()).toEqual([]);
   });
 
   it.each([
