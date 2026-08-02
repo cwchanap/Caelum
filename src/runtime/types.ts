@@ -22,6 +22,10 @@ import type {
   RoadMutation,
   SandboxResetError,
 } from "./backend/types";
+import type {
+  RuntimePersistenceController,
+  RuntimePersistenceView,
+} from "./persistenceCoordinator";
 
 export type {
   RouteDraft,
@@ -193,6 +197,7 @@ export interface RuntimeSnapshot {
   state: GameState;
   ui: UiState;
   shell: ShellState;
+  persistence: RuntimePersistenceView;
   backendError: string | null;
   // Recoverable gameplay rejection (e.g. unaffordable placement, rejected
   // vehicle assignment). Distinct from `backendError` (fatal host failure):
@@ -207,6 +212,7 @@ export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
 
 export interface RuntimeController {
+  persistence: RuntimePersistenceController;
   getSnapshot: () => RuntimeSnapshot;
   subscribe: (listener: RuntimeListener) => () => void;
   start: () => void;

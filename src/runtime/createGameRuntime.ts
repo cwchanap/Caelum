@@ -36,16 +36,30 @@ import {
   type UiState,
 } from "../ui/uiState";
 import type {
+  DispatchResult,
   GameBackend,
   GameIntent,
   RoadMutation,
   SandboxResetError,
 } from "./backend";
+import type { SaveStore, SaveStoreOperation } from "../persistence/saveStore";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
+import {
+  runtimeUnavailable,
+  type ActiveCityIdentity,
+  type PersistenceCoordinatorError,
+  type PersistenceCoordinatorOperation,
+  type PersistenceOperationResult,
+  type RuntimeLifecycleStatus,
+  type RuntimeLoadStatus,
+  type RuntimePersistenceController,
+  type RuntimePersistenceView,
+  type RuntimeSaveStatus,
+} from "./persistenceCoordinator";
 import type {
   RuntimeController,
   RuntimeListener,
@@ -92,8 +106,13 @@ function restoreRouteDraftCheckpoint(
   };
 }
 
-interface CreateGameRuntimeOptions {
+export interface CreateGameRuntimeOptions {
   backend: GameBackend;
+  saveStore?: SaveStore;
+  now?: () => string;
+  appVersion?: string;
+  initialCity?: ActiveCityIdentity | null;
+  lastSavedAt?: string | null;
   /** Trailing debounce delay for hover-triggered road mutation previews, in
    *  milliseconds. Defaults to 50ms to coalesce rapid pointermove events on
    *  Tauri (IPC round-trip per event). Set to 0 to disable debouncing. */
@@ -186,10 +205,10 @@ function nextBuildingUiState(
   };
 }
 
-export async function createGameRuntime({
-  backend,
-  hoverPreviewDebounceMs = 50,
-}: CreateGameRuntimeOptions): Promise<RuntimeController> {
+export async function createGameRuntime(
+  options: CreateGameRuntimeOptions,
+): Promise<RuntimeController> {
+  const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
   let state = normalizeRustSnapshot(await backend.snapshot());
   let ui = createUiState();
   let backendError: string | null = null;
@@ -200,6 +219,19 @@ export async function createGameRuntime({
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  /* eslint-disable prefer-const -- Later coordinator tasks replace runtime
+   * lineage and transition these fields; Task 3 only establishes their
+   * initial public view and revision accounting. */
+  let activeCity = options.initialCity ?? null;
+  let sessionToken = 0;
+  let currentRevision = 0;
+  let persistedRevision = 0;
+  let saveStatus: RuntimeSaveStatus = { state: "idle" };
+  let loadStatus: RuntimeLoadStatus = { state: "idle" };
+  let lifecycleStatus: RuntimeLifecycleStatus = { state: "idle" };
+  let lastSavedAt = options.lastSavedAt ?? null;
+  /* eslint-enable prefer-const */
+  let persistenceError: PersistenceCoordinatorError | null = null;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
@@ -207,10 +239,26 @@ export async function createGameRuntime({
   const gameplayQueue = createSerializedQueue(() => dead);
   const listeners = new Set<RuntimeListener>();
 
+  const getPersistenceView = (): RuntimePersistenceView => {
+    // Session ownership is introduced with the public view now; later
+    // persistence lifecycle tasks advance this token when replacing lineage.
+    void sessionToken;
+    return {
+      activeCity,
+      dirty: currentRevision !== persistedRevision,
+      saveStatus,
+      loadStatus,
+      lifecycleStatus,
+      lastSavedAt,
+      error: persistenceError,
+    };
+  };
+
   const getSnapshot = (): RuntimeSnapshot => ({
     state,
     ui,
     shell: selectShellState(state, ui, rejection),
+    persistence: getPersistenceView(),
     backendError,
     rejection,
     sandboxResetError,
@@ -278,6 +326,22 @@ export async function createGameRuntime({
     }
 
     return publish();
+  };
+
+  const commitDispatchResult = (
+    result: DispatchResult,
+    nextUi: UiState,
+    preserveStateOnNoop = false,
+  ): RuntimeSnapshot => {
+    if (result.applied) {
+      currentRevision += 1;
+    }
+    return commit(
+      preserveStateOnNoop && !result.applied
+        ? state
+        : normalizeRustSnapshot(result.snapshot),
+      nextUi,
+    );
   };
 
   const clearHoverPreviewTimer = (): void => {
@@ -351,7 +415,7 @@ export async function createGameRuntime({
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
           : (nextUi ?? ui);
-      return commit(normalizeRustSnapshot(result.snapshot), resolvedUi);
+      return commitDispatchResult(result, resolvedUi);
     });
 
   const enqueueComputedDispatch = (
@@ -372,7 +436,7 @@ export async function createGameRuntime({
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
           : (nextUi ?? ui);
-      return commit(normalizeRustSnapshot(result.snapshot), resolvedUi);
+      return commitDispatchResult(result, resolvedUi);
     });
 
   const enqueueTick = (deltaSeconds: number): Promise<RuntimeSnapshot> =>
@@ -391,7 +455,7 @@ export async function createGameRuntime({
         // to every subscriber on every animation frame even when nothing moved.
         return commit(state, ui);
       }
-      return commit(normalizeRustSnapshot(result.snapshot), ui);
+      return commitDispatchResult(result, ui, true);
     });
 
   const requestRoutePreview = (draft: RouteDraft): void => {
@@ -667,7 +731,7 @@ export async function createGameRuntime({
         }
         if (result.applied && tokenIsCurrent) {
           previewCoordinator.invalidateRoute();
-          return commit(normalizeRustSnapshot(result.snapshot), {
+          return commitDispatchResult(result, {
             ...ui,
             routeDraft: null,
             routeDraftHistory: emptyRouteDraftHistory(),
@@ -685,7 +749,7 @@ export async function createGameRuntime({
           result.rejection !== null &&
           current !== null
         ) {
-          return commit(normalizeRustSnapshot(result.snapshot), {
+          return commitDispatchResult(result, {
             ...ui,
             routePreviewError: result.rejection,
             routePreviewHostError: null,
@@ -699,23 +763,22 @@ export async function createGameRuntime({
         // enabled on a stale revision that the next save would reject.
         if (result.applied && !tokenIsCurrent) {
           previewCoordinator.invalidateRoute();
-          const supersededSnapshot = normalizeRustSnapshot(result.snapshot);
           if (current !== null) {
             const refreshedDraft: RouteDraft = {
               ...current,
               preview: null,
               previewPending: true,
             };
-            const supersededResult = commit(supersededSnapshot, {
+            const supersededResult = commitDispatchResult(result, {
               ...ui,
               routeDraft: refreshedDraft,
             });
             requestRoutePreview(refreshedDraft);
             return supersededResult;
           }
-          return commit(supersededSnapshot, ui);
+          return commitDispatchResult(result, ui);
         }
-        return commit(normalizeRustSnapshot(result.snapshot), ui);
+        return commitDispatchResult(result, ui);
       },
       // Superseded-save host errors must not kill the runtime: the user may
       // already be on a replacement draft. A truly dead backend is still
@@ -998,7 +1061,63 @@ export async function createGameRuntime({
     return draftHandleIndexAtExactPoint(draft, state, point);
   };
 
+  const unavailableStoreResult = <T>(
+    operation: SaveStoreOperation,
+  ): PersistenceOperationResult<T> => {
+    const result: PersistenceOperationResult<T> = {
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation,
+          code: "unavailable",
+          retryable: true,
+          diagnostic: "No SaveStore is configured",
+        },
+      },
+    };
+    persistenceError = result.error;
+    publish();
+    return result;
+  };
+
+  const pendingPersistenceResult = <T>(
+    coordinatorOperation: PersistenceCoordinatorOperation,
+    storeOperation: SaveStoreOperation,
+  ): Promise<PersistenceOperationResult<T>> => {
+    if (saveStore === undefined) {
+      return Promise.resolve(unavailableStoreResult<T>(storeOperation));
+    }
+    return Promise.resolve(runtimeUnavailable(coordinatorOperation));
+  };
+
+  const persistence: RuntimePersistenceController = {
+    saveWorking: () =>
+      pendingPersistenceResult("saveWorking", "writeWorkingSave"),
+    renameActiveCity: () =>
+      pendingPersistenceResult("renameActiveCity", "renameCity"),
+    load(source) {
+      switch (source.kind) {
+        case "working":
+          return pendingPersistenceResult("loadWorking", "readWorkingSave");
+        case "checkpoint":
+          return pendingPersistenceResult("loadCheckpoint", "readCheckpoint");
+        case "autosave":
+          return pendingPersistenceResult("loadAutosave", "readAutosave");
+      }
+    },
+    detachActiveCity: () => runtimeUnavailable("detachActiveCity"),
+    activateNewCity: () =>
+      pendingPersistenceResult("activateNewCity", "writeWorkingSave"),
+    runGameplayWrite(request) {
+      return request.kind === "checkpoint"
+        ? pendingPersistenceResult("createCheckpoint", "writeCheckpoint")
+        : pendingPersistenceResult("createAutosave", "writeAutosave");
+    },
+  };
+
   const api: RuntimeController = {
+    persistence,
     getSnapshot,
     subscribe(listener) {
       listeners.add(listener);
@@ -1027,6 +1146,7 @@ export async function createGameRuntime({
         sandboxResetError = null;
         backendError = null;
         rejection = null;
+        currentRevision += 1;
         state = normalizeRustSnapshot(snapshot);
         ui = createUiState();
         return publish();

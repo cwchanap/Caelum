@@ -21,6 +21,7 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import type { ActiveCityIdentity } from "../../src/runtime/persistenceCoordinator";
 import type {
   RuntimeController,
   RuntimeSnapshot,
@@ -29,12 +30,21 @@ import {
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
+import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
 import { createTestGameState } from "../helpers/gameState";
 
 const TEST_REJECTION: GameplayRejection = {
   code: "blockedTile",
   context: { affectedRouteIds: [] },
 };
+
+function cityIdentity(id = "city-001"): ActiveCityIdentity {
+  return {
+    id,
+    name: "Test City",
+    cityCreatedAt: "2026-08-01T09:00:00.000Z",
+  };
+}
 
 type BackendSpy = GameBackend & {
   intents: GameIntent[];
@@ -94,6 +104,34 @@ function createStop(id: string, position: Point): Stop {
       },
     ],
   };
+}
+
+function dirtyRouteSnapshot(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [
+        createStop("stop-dirty-1", { x: 1, y: 1 }),
+        createStop("stop-dirty-2", { x: 2, y: 1 }),
+      ],
+      stations: [],
+      routes: [
+        {
+          id: "route-dirty",
+          name: "Dirty Route",
+          color: "#2563eb",
+          stopIds: ["stop-dirty-1", "stop-dirty-2"],
+          vehicleIds: [],
+          active: true,
+          pattern: "loop",
+          revision: 0,
+          legs: [],
+          pathBroken: false,
+        },
+      ],
+      metroLines: [],
+      vehicles: [],
+    },
+  });
 }
 
 function previewLeg(
@@ -937,6 +975,122 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("Game Runtime", () => {
+  describe("persistence dirty revision accounting", () => {
+    const persistenceOptions = () => ({
+      saveStore: createMemorySaveStore(),
+      initialCity: cityIdentity(),
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+
+    it("marks applied gameplay dirty but not UI changes", async () => {
+      const runtime = await createGameRuntime({
+        backend: backendSpy(),
+        ...persistenceOptions(),
+      });
+
+      runtime.setTool("busStop");
+      expect(runtime.getSnapshot().persistence.dirty).toBe(false);
+
+      await runtime.debugSetBudget(100_000);
+      expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+
+    it("marks an applied tick dirty", async () => {
+      const runtime = await createGameRuntime({
+        backend: backendSpy(fullRustSnapshot({ paused: false })),
+        ...persistenceOptions(),
+      });
+
+      await runtime.tick(1);
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+
+    it("marks an applied route-draft save dirty exactly once", async () => {
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(dirtyRouteSnapshot()),
+        ...persistenceOptions(),
+      });
+
+      runtime.startRouteEdit("route-dirty");
+      await flushPromises();
+      await runtime.saveRouteDraft();
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+
+    it("marks a successful reset dirty", async () => {
+      const runtime = await createGameRuntime({
+        backend: backendSpy(),
+        ...persistenceOptions(),
+      });
+
+      await runtime.reset();
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+
+    it("does not mark route and road previews dirty", async () => {
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(dirtyRouteSnapshot()),
+        ...persistenceOptions(),
+      });
+
+      runtime.startRouteEdit("route-dirty");
+      runtime.previewRoadMutation({
+        type: "layRoad",
+        point: { x: 5, y: 5 },
+      });
+      await flushPromises();
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(false);
+    });
+
+    it("does not mark a rejected dispatch dirty", async () => {
+      const backend = backendSpy();
+      const runtime = await createGameRuntime({
+        backend,
+        ...persistenceOptions(),
+      });
+      backend.rejectNextDispatch();
+
+      await runtime.debugSetBudget(100_000);
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(false);
+    });
+
+    it("does not mark a no-op dispatch dirty", async () => {
+      const backend = backendSpy();
+      const runtime = await createGameRuntime({
+        backend,
+        ...persistenceOptions(),
+      });
+      backend.noopNextDispatch();
+
+      await runtime.debugSetBudget(100_000);
+
+      expect(runtime.getSnapshot().persistence.dirty).toBe(false);
+    });
+
+    it("starts detached and clean but marks applied gameplay dirty", async () => {
+      const runtime = await createGameRuntime({
+        backend: backendSpy(),
+        saveStore: createMemorySaveStore(),
+      });
+
+      expect(runtime.getSnapshot().persistence).toMatchObject({
+        activeCity: null,
+        dirty: false,
+      });
+
+      await runtime.debugSetBudget(100_000);
+      expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+  });
+
   it("ignores an older route preview that resolves after the current generation", async () => {
     const initial = fullRustSnapshot({
       transit: {
