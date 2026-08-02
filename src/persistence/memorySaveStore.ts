@@ -186,6 +186,14 @@ function citySummary(cityId: string, value: unknown): CitySummary {
   };
 }
 
+function resolveCompatibility(
+  inspected: ReturnType<typeof inspectSaveEnvelope>,
+  valid: boolean,
+): SaveCompatibility {
+  if (valid) return { status: "candidate" };
+  return inspected.ok ? { status: "corruptHeader" } : inspected.compatibility;
+}
+
 function checkpointSummary(
   record: StoredCheckpoint,
   storageCityId = record.cityId,
@@ -209,11 +217,7 @@ function checkpointSummary(
       ? inspected.envelope.snapshotSchemaVersion
       : null,
     summary: valid ? inspected.envelope.summary : null,
-    compatibility: valid
-      ? { status: "candidate" }
-      : inspected.ok
-        ? { status: "corruptHeader" }
-        : inspected.compatibility,
+    compatibility: resolveCompatibility(inspected, valid),
   };
 }
 
@@ -240,11 +244,7 @@ function autosaveSummary(
       ? inspected.envelope.snapshotSchemaVersion
       : null,
     summary: valid ? inspected.envelope.summary : null,
-    compatibility: valid
-      ? { status: "candidate" }
-      : inspected.ok
-        ? { status: "corruptHeader" }
-        : inspected.compatibility,
+    compatibility: resolveCompatibility(inspected, valid),
   };
 }
 
@@ -329,9 +329,9 @@ export function createMemorySaveStore(options?: {
     });
     if (failure) return failure;
 
-    workingRecords.set(cityId, candidate.value);
+    workingRecords.set(cityId, inspected.envelope);
     return cloneResult(
-      citySummary(cityId, candidate.value),
+      citySummary(cityId, inspected.envelope),
       "writeWorkingSave",
       { cityId },
     );
@@ -522,6 +522,7 @@ export function createMemorySaveStore(options?: {
       "writeCheckpoint",
       context,
     );
+    if (!result.ok) return result;
 
     const committedRecords = cityRecords ?? new Map<string, StoredCheckpoint>();
     committedRecords.set(record.checkpointId, record);
@@ -573,6 +574,7 @@ export function createMemorySaveStore(options?: {
       "renameCheckpoint",
       context,
     );
+    if (!result.ok) return result;
 
     cityRecords.set(input.value.checkpointId, candidate);
     return result;
@@ -683,6 +685,7 @@ export function createMemorySaveStore(options?: {
       "writeAutosave",
       context,
     );
+    if (!result.ok) return result;
 
     const committedRecords = cityRecords ?? new Map<string, StoredAutosave>();
     committedRecords.set(record.autosaveId, record);

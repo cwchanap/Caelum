@@ -23,6 +23,7 @@ defineSaveStoreContract(
   {
     injectedStorageFailures: true,
     rawGenerationRecords: true,
+    rawWorkingRecords: true,
     reopenPersistence: false,
   },
 );

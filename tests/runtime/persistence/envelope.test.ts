@@ -285,7 +285,7 @@ it("rejects an empty city ID", () => {
 });
 
 it.each([
-  [3, 3],
+  [SNAPSHOT_SCHEMA_VERSION - 1, SNAPSHOT_SCHEMA_VERSION - 1],
   ["4", null],
   [4.5, null],
   [Number.NaN, null],

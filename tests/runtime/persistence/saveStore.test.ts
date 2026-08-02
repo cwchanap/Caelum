@@ -55,6 +55,18 @@ it("sorts autosaves by generation then ID", () => {
   ).toEqual(["a", "b", "z"]);
 });
 
+it("sorts invalid-generation autosaves by ID only", () => {
+  // NaN generations make `right.generation - left.generation` evaluate to NaN
+  // (falsy), so the comparator falls through to compareIds for every pair.
+  expect(
+    sortAutosaveSummaries([
+      makeAutosaveSummary({ autosaveId: "c", generation: Number.NaN }),
+      makeAutosaveSummary({ autosaveId: "a", generation: Number.NaN }),
+      makeAutosaveSummary({ autosaveId: "b", generation: Number.NaN }),
+    ]).map((value) => value.autosaveId),
+  ).toEqual(["a", "b", "c"]);
+});
+
 it("does not mutate caller-owned summary arrays", () => {
   const cities = [
     makeCitySummary({ cityId: "older", savedAt: "2026-08-01T09:00:00.000Z" }),

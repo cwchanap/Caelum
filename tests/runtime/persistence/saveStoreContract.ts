@@ -12,7 +12,7 @@ export interface SaveStoreContractHarness {
   store: SaveStore;
   reopen?: () => Promise<SaveStore>;
   failNext?: (operation: SaveStoreOperation, code: SaveStoreErrorCode) => void;
-  seedRawWorking(cityId: string, value: unknown): void;
+  seedRawWorking?: (cityId: string, value: unknown) => void;
   seedRawCheckpoint?: (seed: RawCheckpointSeed) => void;
   seedRawAutosave?: (seed: RawAutosaveSeed) => void;
 }
@@ -42,6 +42,7 @@ export interface RawAutosaveSeed {
 export interface SaveStoreContractCapabilities {
   injectedStorageFailures: boolean;
   rawGenerationRecords: boolean;
+  rawWorkingRecords: boolean;
   reopenPersistence: boolean;
 }
 
@@ -72,6 +73,7 @@ export function defineSaveStoreContract(
 ): void {
   const injectedFailureIt = capabilities.injectedStorageFailures ? it : it.skip;
   const rawGenerationIt = capabilities.rawGenerationRecords ? it : it.skip;
+  const rawWorkingIt = capabilities.rawWorkingRecords ? it : it.skip;
   const reopenIt = capabilities.reopenPersistence ? it : it.skip;
 
   function requireCapability<TValue>(
@@ -86,35 +88,42 @@ export function defineSaveStoreContract(
 
   describe(`${name} SaveStore contract`, () => {
     describe("ordering", () => {
-      it("lists cities by save time then ID and places corrupt records last", async () => {
-        const { store, seedRawWorking } = createHarness();
-        await expectOk(
-          store.writeWorkingSave(
-            envelopeFor("city-b", "B", {
-              savedAt: "2026-08-01T10:00:00.000Z",
-            }),
-          ),
-        );
-        await expectOk(
-          store.writeWorkingSave(
-            envelopeFor("city-a", "A", {
-              savedAt: "2026-08-01T10:00:00.000Z",
-            }),
-          ),
-        );
-        await expectOk(
-          store.writeWorkingSave(
-            envelopeFor("city-newest", "Newest", {
-              savedAt: "2026-08-01T11:00:00.000Z",
-            }),
-          ),
-        );
-        seedRawWorking("city-corrupt", { format: "broken" });
+      rawWorkingIt(
+        "lists cities by save time then ID and places corrupt records last",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          await expectOk(
+            store.writeWorkingSave(
+              envelopeFor("city-b", "B", {
+                savedAt: "2026-08-01T10:00:00.000Z",
+              }),
+            ),
+          );
+          await expectOk(
+            store.writeWorkingSave(
+              envelopeFor("city-a", "A", {
+                savedAt: "2026-08-01T10:00:00.000Z",
+              }),
+            ),
+          );
+          await expectOk(
+            store.writeWorkingSave(
+              envelopeFor("city-newest", "Newest", {
+                savedAt: "2026-08-01T11:00:00.000Z",
+              }),
+            ),
+          );
+          seedWorking("city-corrupt", { format: "broken" });
 
-        expect(
-          (await expectOk(store.listCities())).map((item) => item.cityId),
-        ).toEqual(["city-newest", "city-a", "city-b", "city-corrupt"]);
-      });
+          expect(
+            (await expectOk(store.listCities())).map((item) => item.cityId),
+          ).toEqual(["city-newest", "city-a", "city-b", "city-corrupt"]);
+        },
+      );
 
       it("lists checkpoints by creation time then ID", async () => {
         const { store } = createHarness();
@@ -335,7 +344,7 @@ export function defineSaveStoreContract(
     });
 
     describe("source inspection", () => {
-      it.each([
+      rawWorkingIt.each([
         {
           label: "rename",
           run: (store: SaveStore) => store.renameCity("city-1", "Renamed"),
@@ -355,8 +364,12 @@ export function defineSaveStoreContract(
         "classifies unsupported $label sources as incompatible",
         async ({ run }) => {
           const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
           const unsupported = { ...makeEnvelope(), envelopeVersion: 99 };
-          seedRawWorking("city-1", unsupported);
+          seedWorking("city-1", unsupported);
 
           await expectError(run(store), "incompatibleRecord");
           expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
@@ -365,7 +378,7 @@ export function defineSaveStoreContract(
         },
       );
 
-      it.each([
+      rawWorkingIt.each([
         {
           label: "rename corrupt headers",
           raw: {},
@@ -387,7 +400,11 @@ export function defineSaveStoreContract(
         },
       ])("classifies $label as corrupt", async ({ raw, run }) => {
         const { store, seedRawWorking } = createHarness();
-        seedRawWorking("city-1", raw);
+        const seedWorking = requireCapability(
+          seedRawWorking,
+          "rawWorkingRecords",
+        );
+        seedWorking("city-1", raw);
 
         await expectError(run(store), "corruptRecord");
         expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(raw);
@@ -418,95 +435,116 @@ export function defineSaveStoreContract(
         });
       });
 
-      it("deletes unsupported and corrupt cities by storage identity", async () => {
-        const { store, seedRawWorking } = createHarness();
-        seedRawWorking("city-unsupported", {
-          ...makeEnvelope(),
-          envelopeVersion: 99,
-        });
-        seedRawWorking("city-corrupt", { format: "broken" });
+      rawWorkingIt(
+        "deletes unsupported and corrupt cities by storage identity",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          seedWorking("city-unsupported", {
+            ...makeEnvelope(),
+            envelopeVersion: 99,
+          });
+          seedWorking("city-corrupt", { format: "broken" });
 
-        await expectOk(store.deleteCity("city-unsupported"));
-        await expectOk(store.deleteCity("city-corrupt"));
+          await expectOk(store.deleteCity("city-unsupported"));
+          await expectOk(store.deleteCity("city-corrupt"));
 
-        await expectError(
-          store.readWorkingSave("city-unsupported"),
-          "notFound",
-        );
-        await expectError(store.readWorkingSave("city-corrupt"), "notFound");
-      });
+          await expectError(
+            store.readWorkingSave("city-unsupported"),
+            "notFound",
+          );
+          await expectError(store.readWorkingSave("city-corrupt"), "notFound");
+        },
+      );
 
-      it("lists an empty-key city as corrupt and refuses to rewrite it", async () => {
-        const { store, seedRawWorking } = createHarness();
-        const emptyIdentity = makeEnvelope({
-          city: { id: "", name: "Missing identity" },
-        });
-        seedRawWorking("", emptyIdentity);
+      rawWorkingIt(
+        "lists an empty-key city as corrupt and refuses to rewrite it",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          const emptyIdentity = makeEnvelope({
+            city: { id: "", name: "Missing identity" },
+          });
+          seedWorking("", emptyIdentity);
 
-        expect(await expectOk(store.listCities())).toEqual([
-          {
-            cityId: "",
-            name: null,
-            cityCreatedAt: null,
-            savedAt: null,
-            appVersion: null,
-            snapshotSchemaVersion: null,
-            summary: null,
-            compatibility: { status: "corruptHeader" },
-          },
-        ]);
-        await expectError(store.renameCity("", "Renamed"), "corruptRecord");
-        await expectError(
-          store.duplicateCity("", {
-            cityId: "city-copy",
-            name: "Copy",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
-            savedAt: "2026-08-01T12:05:00.000Z",
-            appVersion: "0.2.0",
-          }),
-          "corruptRecord",
-        );
-        expect(await expectOk(store.readWorkingSave(""))).toEqual(
-          emptyIdentity,
-        );
-      });
+          expect(await expectOk(store.listCities())).toEqual([
+            {
+              cityId: "",
+              name: null,
+              cityCreatedAt: null,
+              savedAt: null,
+              appVersion: null,
+              snapshotSchemaVersion: null,
+              summary: null,
+              compatibility: { status: "corruptHeader" },
+            },
+          ]);
+          await expectError(store.renameCity("", "Renamed"), "corruptRecord");
+          await expectError(
+            store.duplicateCity("", {
+              cityId: "city-copy",
+              name: "Copy",
+              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              savedAt: "2026-08-01T12:05:00.000Z",
+              appVersion: "0.2.0",
+            }),
+            "corruptRecord",
+          );
+          expect(await expectOk(store.readWorkingSave(""))).toEqual(
+            emptyIdentity,
+          );
+        },
+      );
 
-      it("classifies a working record whose envelope city id disagrees with its storage key as corrupt", async () => {
-        const { store, seedRawWorking } = createHarness();
-        const mismatched = envelopeFor("city-other", "Other");
-        seedRawWorking("city-1", mismatched);
+      rawWorkingIt(
+        "classifies a working record whose envelope city id disagrees with its storage key as corrupt",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          const mismatched = envelopeFor("city-other", "Other");
+          seedWorking("city-1", mismatched);
 
-        expect(await expectOk(store.listCities())).toEqual([
-          {
-            cityId: "city-1",
-            name: null,
-            cityCreatedAt: null,
-            savedAt: null,
-            appVersion: null,
-            snapshotSchemaVersion: null,
-            summary: null,
-            compatibility: { status: "corruptHeader" },
-          },
-        ]);
+          expect(await expectOk(store.listCities())).toEqual([
+            {
+              cityId: "city-1",
+              name: null,
+              cityCreatedAt: null,
+              savedAt: null,
+              appVersion: null,
+              snapshotSchemaVersion: null,
+              summary: null,
+              compatibility: { status: "corruptHeader" },
+            },
+          ]);
 
-        await expectError(
-          store.renameCity("city-1", "Renamed"),
-          "corruptRecord",
-        );
-        await expectError(
-          store.duplicateCity("city-1", {
-            cityId: "city-copy",
-            name: "Copy",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
-            savedAt: "2026-08-01T12:05:00.000Z",
-            appVersion: "0.2.0",
-          }),
-          "corruptRecord",
-        );
-        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
-          mismatched,
-        );
-      });
+          await expectError(
+            store.renameCity("city-1", "Renamed"),
+            "corruptRecord",
+          );
+          await expectError(
+            store.duplicateCity("city-1", {
+              cityId: "city-copy",
+              name: "Copy",
+              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              savedAt: "2026-08-01T12:05:00.000Z",
+              appVersion: "0.2.0",
+            }),
+            "corruptRecord",
+          );
+          expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+            mismatched,
+          );
+        },
+      );
     });
 
     describe("create-only conflicts", () => {
@@ -1834,18 +1872,25 @@ export function defineSaveStoreContract(
         });
       });
 
-      it("deletes one city by storage identity and leaves other cities intact", async () => {
-        const { store, seedRawWorking } = createHarness();
-        const retained = envelopeFor("city-retained", "Retained");
-        await expectOk(store.writeWorkingSave(retained));
-        seedRawWorking("city-deleted", { corrupt: true });
+      rawWorkingIt(
+        "deletes one city by storage identity and leaves other cities intact",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          const retained = envelopeFor("city-retained", "Retained");
+          await expectOk(store.writeWorkingSave(retained));
+          seedWorking("city-deleted", { corrupt: true });
 
-        await expectOk(store.deleteCity("city-deleted"));
+          await expectOk(store.deleteCity("city-deleted"));
 
-        expect(await expectOk(store.readWorkingSave("city-retained"))).toEqual(
-          retained,
-        );
-      });
+          expect(
+            await expectOk(store.readWorkingSave("city-retained")),
+          ).toEqual(retained);
+        },
+      );
     });
 
     describe("missing record notFound", () => {
