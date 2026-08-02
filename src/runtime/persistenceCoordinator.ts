@@ -12,6 +12,7 @@ import type {
 import type { RuntimeSnapshot } from "./types";
 import type {
   PersistenceOperationError,
+  SandboxCreationError,
   SandboxCreationRequest,
 } from "./backend";
 
@@ -37,10 +38,20 @@ export type PersistenceCoordinatorPreconditionError =
   | { code: "activeCityDeleteRequiresTransition"; cityId: string }
   | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation };
 
+export type PersistenceCoordinatorBackendError =
+  | PersistenceOperationError
+  | {
+      kind: "host";
+      operation: "createSandbox";
+      code: "invokeFailed";
+      diagnostic: string;
+    };
+
 export type PersistenceCoordinatorError =
   | { kind: "store"; error: SaveStoreError }
   | { kind: "envelope"; error: SaveEnvelopeError }
-  | { kind: "backend"; error: PersistenceOperationError }
+  | { kind: "backend"; error: PersistenceCoordinatorBackendError }
+  | { kind: "sandbox"; error: SandboxCreationError }
   | {
       kind: "precondition";
       error: PersistenceCoordinatorPreconditionError;
@@ -181,6 +192,10 @@ export function enqueueCityPersistence<T>(
   return run.finally(() => {
     if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
   });
+}
+
+export function drainCityPersistence(cityId: string): Promise<void> {
+  return cityTails.get(cityId) ?? Promise.resolve();
 }
 
 export function resolveWorkingSaveCompletion(input: {

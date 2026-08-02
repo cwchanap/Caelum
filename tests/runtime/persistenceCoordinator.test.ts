@@ -43,6 +43,8 @@ import {
 interface CoordinatorHarness {
   runtime: RuntimeController;
   backend: GameBackend & {
+    createSandboxCalls: number;
+    dispatchCalls: number;
     snapshotForSaveCalls: number;
     restoreSnapshotCalls: number;
     tickCalls: number;
@@ -124,6 +126,8 @@ async function createCoordinatorHarness(options?: {
   const preview = previewBackendStubs();
   const backend: CoordinatorHarness["backend"] = {
     ...preview,
+    createSandboxCalls: 0,
+    dispatchCalls: 0,
     snapshotForSaveCalls: 0,
     restoreSnapshotCalls: 0,
     tickCalls: 0,
@@ -131,6 +135,7 @@ async function createCoordinatorHarness(options?: {
       return snapshot;
     },
     async dispatch(intent) {
+      backend.dispatchCalls += 1;
       const before = snapshot;
       switch (intent.type) {
         case "setBudget":
@@ -173,6 +178,7 @@ async function createCoordinatorHarness(options?: {
       return { ok: true, snapshot };
     },
     async createSandbox(request) {
+      backend.createSandboxCalls += 1;
       const result = await preview.createSandbox(request);
       if (result.ok) snapshot = result.snapshot;
       return result;
@@ -1288,6 +1294,378 @@ describe("runtime persistence coordinator contracts", () => {
     unsubscribe();
   });
 
+  it("activates a new city only after its initial working save commits", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.store.defer("writeWorkingSave");
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
+
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: createRustSnapshot().budget },
+      persistence: {
+        activeCity: cityIdentity(),
+        lifecycleStatus: { state: "creatingCity" },
+      },
+    });
+    expect(
+      listener.mock.calls.some(
+        ([published]) =>
+          published.persistence.activeCity?.id === newCityIdentity().id,
+      ),
+    ).toBe(false);
+
+    harness.store.releaseNext("writeWorkingSave");
+
+    await expect(activation).resolves.toMatchObject({
+      status: "completed",
+      value: {
+        source: { kind: "working", cityId: "city-002" },
+        snapshot: {
+          state: { paused: true, budget: 120_000 },
+          ui: createUiState(),
+          persistence: {
+            activeCity: newCityIdentity(),
+            dirty: false,
+            saveStatus: { state: "idle" },
+            loadStatus: { state: "idle" },
+            lifecycleStatus: { state: "idle" },
+            lastSavedAt: "2026-08-01T10:00:00.000Z",
+            error: null,
+          },
+        },
+      },
+    });
+    expect(harness.backend.createSandboxCalls).toBe(1);
+    expect(harness.backend.snapshotForSaveCalls).toBe(2);
+    await expect(
+      harness.store.readWorkingSave("city-002"),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        city: { id: "city-002", name: "New City" },
+        snapshot: { paused: true, budget: 120_000 },
+      },
+    });
+    unsubscribe();
+  });
+
+  it("restores a clean prior city exactly after write failure", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const before = harness.runtime.getSnapshot();
+    const priorBackendSnapshot = await harness.backend.snapshot();
+    harness.failures.failNext("writeWorkingSave", "quotaExceeded");
+
+    const result = await harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: { operation: "writeWorkingSave", code: "quotaExceeded" },
+      },
+    });
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+    await expect(harness.backend.snapshot()).resolves.toEqual(
+      priorBackendSnapshot,
+    );
+    expect(harness.backend.restoreSnapshotCalls).toBe(1);
+  });
+
+  it("restores the exact dirty running city and raw pause state after write failure", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.runtime.setTool("busStop");
+    await harness.runtime.togglePause();
+    harness.runtime.start();
+    harness.failures.failNext("renameCity", "permissionDenied");
+    await harness.runtime.persistence.renameActiveCity("Blocked Rename");
+    const before = harness.runtime.getSnapshot();
+    expect(before.state.paused).toBe(false);
+    expect(before.persistence.dirty).toBe(true);
+    expect(harness.runtime.isRunning()).toBe(true);
+    harness.failures.failNext("writeWorkingSave", "ioFailure");
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toMatchObject({ status: "failed" });
+
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+    expect(harness.runtime.isRunning()).toBe(true);
+    expect(harness.backend.createSandboxCalls).toBe(1);
+    expect(harness.backend.snapshotForSaveCalls).toBe(2);
+    expect(harness.backend.restoreSnapshotCalls).toBe(1);
+    expect(harness.store.mutationOrder()).toEqual([
+      "renameCity",
+      "writeWorkingSave",
+    ]);
+    await expect(harness.backend.snapshot()).resolves.toMatchObject({
+      paused: false,
+      budget: before.state.budget,
+    });
+  });
+
+  it("preserves the prior city when sandbox creation is rejected", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const before = harness.runtime.getSnapshot();
+    harness.backend.createSandbox = async () => {
+      harness.backend.createSandboxCalls += 1;
+      return {
+        ok: false,
+        error: {
+          code: "unknownTemplateId",
+          context: { field: "templateId", attemptedValue: "missing" },
+        },
+      };
+    };
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "sandbox",
+        error: {
+          code: "unknownTemplateId",
+          context: { field: "templateId", attemptedValue: "missing" },
+        },
+      },
+    });
+
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+    expect(harness.backend.snapshotForSaveCalls).toBe(1);
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("rolls back an unexpected sandbox creation host failure", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const before = harness.runtime.getSnapshot();
+    harness.backend.createSandbox = async () => {
+      harness.backend.createSandboxCalls += 1;
+      throw new Error("sandbox host failed");
+    };
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "backend",
+        error: {
+          kind: "host",
+          operation: "createSandbox",
+          code: "invokeFailed",
+          diagnostic: "sandbox host failed",
+        },
+      },
+    });
+
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+    expect(harness.backend.restoreSnapshotCalls).toBe(1);
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("rolls back when canonical candidate capture fails", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const before = harness.runtime.getSnapshot();
+    const snapshotForSave = harness.backend.snapshotForSave.bind(
+      harness.backend,
+    );
+    let capture = 0;
+    harness.backend.snapshotForSave = async () => {
+      capture += 1;
+      if (capture === 2) {
+        harness.backend.snapshotForSaveCalls += 1;
+        return {
+          ok: false,
+          error: {
+            kind: "host",
+            operation: "snapshotForSave",
+            code: "invokeFailed",
+            diagnostic: "candidate capture failed",
+          },
+        };
+      }
+      return snapshotForSave();
+    };
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: {
+        kind: "backend",
+        error: { operation: "snapshotForSave" },
+      },
+    });
+
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+    expect(harness.backend.snapshotForSaveCalls).toBe(2);
+    expect(harness.backend.restoreSnapshotCalls).toBe(1);
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("drops ticks and supersedes detach while New City owns admission", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.store.defer("writeWorkingSave");
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
+    const duringWrite = harness.runtime.getSnapshot();
+    const tickCalls = harness.backend.tickCalls;
+
+    await expect(harness.runtime.tick(1)).resolves.toEqual(duringWrite);
+    await expect(
+      harness.runtime.persistence.detachActiveCity(),
+    ).resolves.toEqual({ status: "superseded" });
+    expect(harness.backend.tickCalls).toBe(tickCalls);
+    expect(harness.runtime.getSnapshot()).toEqual(duringWrite);
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(activation).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("drains the active-city persistence FIFO before capturing the rollback baseline", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const priorSave = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.backend.createSandboxCalls).toBe(0);
+    expect(harness.store.activeCount()).toBe(1);
+
+    harness.store.releaseNext("writeWorkingSave");
+    await priorSave;
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+      expect(harness.backend.createSandboxCalls).toBe(1);
+    });
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(activation).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("enters fatal unavailable state when rollback restoration fails", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.runtime.start();
+    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    harness.backend.restoreSnapshot = async () => {
+      harness.backend.restoreSnapshotCalls += 1;
+      return {
+        ok: false,
+        error: {
+          kind: "host",
+          operation: "restoreSnapshot",
+          code: "invokeFailed",
+          diagnostic: "rollback restore failed",
+        },
+      };
+    };
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toEqual(runtimeUnavailable("activateNewCity"));
+
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      backendError: "rollback restore failed",
+      persistence: {
+        activeCity: null,
+        dirty: false,
+        saveStatus: { state: "idle" },
+        loadStatus: { state: "idle" },
+        lifecycleStatus: { state: "idle" },
+        lastSavedAt: null,
+        error: null,
+      },
+    });
+    expect(harness.runtime.isRunning()).toBe(false);
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual(
+      runtimeUnavailable("saveWorking"),
+    );
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toEqual(runtimeUnavailable("activateNewCity"));
+    await expect(
+      harness.runtime.persistence.detachActiveCity(),
+    ).resolves.toEqual(runtimeUnavailable("detachActiveCity"));
+  });
+
+  it("enters fatal unavailable state when raw pause restoration fails", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    await harness.runtime.togglePause();
+    harness.runtime.start();
+    const dispatch = harness.backend.dispatch.bind(harness.backend);
+    harness.backend.dispatch = async (intent) => {
+      if (
+        harness.backend.restoreSnapshotCalls > 0 &&
+        intent.type === "setPaused" &&
+        intent.paused === false
+      ) {
+        throw new Error("rollback pause failed");
+      }
+      return dispatch(intent);
+    };
+    harness.failures.failNext("writeWorkingSave", "ioFailure");
+
+    await expect(
+      harness.runtime.persistence.activateNewCity(
+        sandboxRequest(),
+        newCityIdentity(),
+      ),
+    ).resolves.toEqual(runtimeUnavailable("activateNewCity"));
+
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      backendError: "rollback pause failed",
+      persistence: {
+        activeCity: null,
+        dirty: false,
+        lifecycleStatus: { state: "idle" },
+      },
+    });
+    expect(harness.runtime.isRunning()).toBe(false);
+    const dispatchCalls = harness.backend.dispatchCalls;
+    await harness.runtime.debugSetBudget(90_000);
+    expect(harness.backend.dispatchCalls).toBe(dispatchCalls);
+  });
+
   it("keeps a delayed load inert when the runtime dies before restore", async () => {
     const harness = await createCoordinatorHarness();
     const source = { kind: "working", cityId: "city-loaded" } as const;
@@ -1417,6 +1795,8 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.backend.snapshotForSaveCalls).toBe(0);
     expect(harness.backend.restoreSnapshotCalls).toBe(0);
     expect(harness.backend.tickCalls).toBe(0);
+    expect(harness.backend.createSandboxCalls).toBe(0);
+    expect(harness.backend.dispatchCalls).toBe(0);
     expect(harness.store.activeCount()).toBe(0);
     expect(sandboxRequest()).toMatchObject({ templateId: "blankGrid" });
     expect(newCityIdentity()).toMatchObject({ id: "city-002" });

@@ -41,6 +41,7 @@ import type {
   GameIntent,
   RoadMutation,
   RustGameSnapshot,
+  SandboxCreationRequest,
   SandboxResetError,
 } from "./backend";
 import type {
@@ -62,6 +63,7 @@ import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import {
+  drainCityPersistence,
   enqueueCityPersistence,
   noActiveCity,
   readForLoadSource,
@@ -73,8 +75,8 @@ import {
   type GenerationWriteValue,
   type LoadCityValue,
   type LoadSource,
+  type NewCityIdentity,
   type PersistenceCoordinatorError,
-  type PersistenceCoordinatorOperation,
   type PersistenceOperationResult,
   type RuntimeLifecycleStatus,
   type RuntimeLoadStatus,
@@ -257,6 +259,11 @@ export async function createGameRuntime(
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
   let dead = false;
+  // Foreground New City creation temporarily owns backend admission while its
+  // candidate exists only inside the backend. Calls made after the reservation
+  // are dropped/superseded instead of joining the serialized queue and
+  // observing or mutating that uncommitted candidate.
+  let backendAdmissionReserved = false;
   const gameplayQueue = createSerializedQueue(() => dead);
   const listeners = new Set<RuntimeListener>();
 
@@ -405,6 +412,7 @@ export async function createGameRuntime(
     operation: () => Promise<RuntimeSnapshot>,
     onError: (error: unknown) => RuntimeSnapshot = failBackend,
   ): Promise<RuntimeSnapshot> => {
+    if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
     const run = gameplayQueue.enqueue({
       operation,
       // The backend is fatally failed; do not attempt further operations.
@@ -690,6 +698,7 @@ export async function createGameRuntime(
   };
 
   const saveRouteDraft = async (): Promise<RuntimeSnapshot> => {
+    if (backendAdmissionReserved) return getSnapshot();
     const draft = ui.routeDraft;
     if (!draft || !canSaveRouteDraft(draft)) {
       return getSnapshot();
@@ -1135,19 +1144,6 @@ export async function createGameRuntime(
     return result;
   };
 
-  const pendingPersistenceResult = <T>(
-    coordinatorOperation: PersistenceCoordinatorOperation,
-    storeOperation: SaveStoreOperation,
-  ): Promise<PersistenceOperationResult<T>> => {
-    if (dead) {
-      return Promise.resolve(runtimeUnavailable(coordinatorOperation));
-    }
-    if (saveStore === undefined) {
-      return Promise.resolve(unavailableStoreResult<T>(storeOperation));
-    }
-    return Promise.resolve(runtimeUnavailable(coordinatorOperation));
-  };
-
   const isCurrentPersistenceSession = (
     cityId: string,
     capturedSessionToken: number,
@@ -1183,6 +1179,9 @@ export async function createGameRuntime(
     PersistenceOperationResult<SaveWorkingValue>
   > => {
     if (dead) return Promise.resolve(runtimeUnavailable("saveWorking"));
+    if (backendAdmissionReserved) {
+      return Promise.resolve({ status: "superseded" });
+    }
     if (saveStore === undefined) {
       return Promise.resolve(unavailableStoreResult("writeWorkingSave"));
     }
@@ -1219,6 +1218,7 @@ export async function createGameRuntime(
     const capturedSessionToken = sessionToken;
 
     return enqueueCityPersistence(cityId, async () => {
+      if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
         return { status: "superseded" };
       }
@@ -1351,6 +1351,9 @@ export async function createGameRuntime(
     const storeOperation =
       request.kind === "checkpoint" ? "writeCheckpoint" : "writeAutosave";
     if (dead) return Promise.resolve(runtimeUnavailable(coordinatorOperation));
+    if (backendAdmissionReserved) {
+      return Promise.resolve({ status: "superseded" });
+    }
     if (saveStore === undefined) {
       return Promise.resolve(unavailableStoreResult(storeOperation));
     }
@@ -1388,6 +1391,7 @@ export async function createGameRuntime(
     const capturedSessionToken = sessionToken;
 
     return enqueueCityPersistence(cityId, async () => {
+      if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
         return { status: "superseded" };
       }
@@ -1543,6 +1547,9 @@ export async function createGameRuntime(
     name: string,
   ): Promise<PersistenceOperationResult<RenameActiveCityValue>> => {
     if (dead) return Promise.resolve(runtimeUnavailable("renameActiveCity"));
+    if (backendAdmissionReserved) {
+      return Promise.resolve({ status: "superseded" });
+    }
     if (saveStore === undefined) {
       return Promise.resolve(unavailableStoreResult("renameCity"));
     }
@@ -1557,6 +1564,7 @@ export async function createGameRuntime(
     const city = { ...activeCity };
     const capturedSessionToken = sessionToken;
     return enqueueCityPersistence(city.id, async () => {
+      if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(city.id, capturedSessionToken)) {
         return { status: "superseded" };
       }
@@ -1613,6 +1621,7 @@ export async function createGameRuntime(
         readForLoadSource(requestedSource).coordinatorOperation,
       );
     }
+    if (backendAdmissionReserved) return { status: "superseded" };
     if (saveStore === undefined) {
       return unavailableStoreResult(
         readForLoadSource(requestedSource).storeOperation,
@@ -1644,6 +1653,7 @@ export async function createGameRuntime(
     }
 
     if (dead) return runtimeUnavailable(read.coordinatorOperation);
+    if (backendAdmissionReserved) return { status: "superseded" };
     if (requestToken !== loadRequestToken) {
       return { status: "superseded" };
     }
@@ -1703,10 +1713,348 @@ export async function createGameRuntime(
     });
   };
 
+  type NewCityPriorRuntime = {
+    state: typeof state;
+    ui: typeof ui;
+    backendError: string | null;
+    rejection: GameplayRejection | null;
+    sandboxResetError: SandboxResetError | null;
+    activeCity: ActiveCityIdentity | null;
+    sessionToken: number;
+    currentRevision: number;
+    persistedRevision: number;
+    saveStatus: RuntimeSaveStatus;
+    loadStatus: RuntimeLoadStatus;
+    lifecycleStatus: RuntimeLifecycleStatus;
+    lastSavedAt: string | null;
+    loadRequestToken: number;
+    persistenceError: PersistenceCoordinatorError | null;
+    nextRouteDraftInstanceId: number;
+    activeRouteSaveTokens: Set<string>;
+    activeRoadMutation: RoadMutation | null;
+    running: boolean;
+    paused: boolean;
+  };
+
+  const captureNewCityPriorRuntime = (): NewCityPriorRuntime => ({
+    state,
+    ui,
+    backendError,
+    rejection,
+    sandboxResetError,
+    activeCity,
+    sessionToken,
+    currentRevision,
+    persistedRevision,
+    saveStatus,
+    loadStatus,
+    lifecycleStatus,
+    lastSavedAt,
+    loadRequestToken,
+    persistenceError,
+    nextRouteDraftInstanceId,
+    activeRouteSaveTokens: new Set(activeRouteSaveTokens),
+    activeRoadMutation,
+    running: canvasHost.isRunning(),
+    paused: state.paused,
+  });
+
+  const restoreNewCityPriorRuntime = (prior: NewCityPriorRuntime): void => {
+    state = prior.state;
+    ui = prior.ui;
+    backendError = prior.backendError;
+    rejection = prior.rejection;
+    sandboxResetError = prior.sandboxResetError;
+    activeCity = prior.activeCity;
+    sessionToken = prior.sessionToken;
+    currentRevision = prior.currentRevision;
+    persistedRevision = prior.persistedRevision;
+    saveStatus = prior.saveStatus;
+    loadStatus = prior.loadStatus;
+    lifecycleStatus = prior.lifecycleStatus;
+    lastSavedAt = prior.lastSavedAt;
+    loadRequestToken = prior.loadRequestToken;
+    persistenceError = prior.persistenceError;
+    nextRouteDraftInstanceId = prior.nextRouteDraftInstanceId;
+    activeRouteSaveTokens.clear();
+    for (const token of prior.activeRouteSaveTokens) {
+      activeRouteSaveTokens.add(token);
+    }
+    activeRoadMutation = prior.activeRoadMutation;
+    if (prior.running && !canvasHost.isRunning()) canvasHost.start();
+    if (!prior.running && canvasHost.isRunning()) canvasHost.stop();
+  };
+
+  const persistenceHostFailure = (
+    operation: "snapshotForSave" | "restoreSnapshot",
+    error: unknown,
+  ): PersistenceCoordinatorError => ({
+    kind: "backend",
+    error: {
+      kind: "host",
+      operation,
+      code: "invokeFailed",
+      diagnostic: error instanceof Error ? error.message : String(error),
+    },
+  });
+
+  const fatalRollbackError = (error: unknown): Error => {
+    if (error instanceof Error) return error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "diagnostic" in error &&
+      typeof error.diagnostic === "string"
+    ) {
+      return new Error(error.diagnostic);
+    }
+    return new Error(String(error));
+  };
+
+  const failNewCityRollback = (error: unknown): RuntimeSnapshot => {
+    sessionToken += 1;
+    loadRequestToken += 1;
+    activeCity = null;
+    currentRevision = 0;
+    persistedRevision = 0;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    lastSavedAt = null;
+    persistenceError = null;
+    return failBackend(fatalRollbackError(error));
+  };
+
+  const rollbackNewCity = async (
+    prior: NewCityPriorRuntime,
+    priorCanonicalSnapshot: RustGameSnapshot,
+    failure: PersistenceCoordinatorError,
+  ): Promise<PersistenceOperationResult<LoadCityValue>> => {
+    lifecycleStatus = { state: "rollingBack" };
+    publish();
+
+    let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+    try {
+      restored = await backend.restoreSnapshot({
+        snapshot: priorCanonicalSnapshot,
+      });
+    } catch (error: unknown) {
+      failNewCityRollback(error);
+      return runtimeUnavailable("activateNewCity");
+    }
+    if (!restored.ok) {
+      failNewCityRollback(restored.error);
+      return runtimeUnavailable("activateNewCity");
+    }
+
+    try {
+      const pause = await backend.dispatch({
+        type: "setPaused",
+        paused: prior.paused,
+      });
+      if (pause.snapshot.paused !== prior.paused) {
+        throw new Error("Rollback pause restoration did not take effect");
+      }
+    } catch (error: unknown) {
+      failNewCityRollback(error);
+      return runtimeUnavailable("activateNewCity");
+    }
+
+    previewCoordinator.invalidateRoute();
+    invalidateRoadPreview();
+    restoreNewCityPriorRuntime(prior);
+    publish();
+    return { status: "failed", error: failure };
+  };
+
+  const activateNewCity = async (
+    requestedSandbox: SandboxCreationRequest,
+    requestedIdentity: NewCityIdentity,
+  ): Promise<PersistenceOperationResult<LoadCityValue>> => {
+    if (dead) return runtimeUnavailable("activateNewCity");
+    if (backendAdmissionReserved) return { status: "superseded" };
+    if (saveStore === undefined) {
+      return unavailableStoreResult("writeWorkingSave");
+    }
+    if (options.now === undefined || options.appVersion === undefined) {
+      const result: PersistenceOperationResult<LoadCityValue> = {
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "serializationFailed",
+            cityId: requestedIdentity.id,
+            retryable: false,
+            diagnostic: "New-city dependencies are not configured",
+          },
+        },
+      };
+      persistenceError = result.error;
+      publish();
+      return result;
+    }
+
+    const request = { ...requestedSandbox };
+    const identity = { ...requestedIdentity };
+    const now = options.now;
+    const appVersion = options.appVersion;
+    backendAdmissionReserved = true;
+
+    try {
+      await gameplayQueue.drain();
+      if (dead) return runtimeUnavailable("activateNewCity");
+      const priorCityId = activeCity?.id;
+      if (priorCityId !== undefined) {
+        await drainCityPersistence(priorCityId);
+      }
+      if (dead) return runtimeUnavailable("activateNewCity");
+
+      const prior = captureNewCityPriorRuntime();
+      lifecycleStatus = { state: "creatingCity" };
+      publish();
+
+      let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+      try {
+        priorCapture = await backend.snapshotForSave();
+      } catch (error: unknown) {
+        const failure = persistenceHostFailure("snapshotForSave", error);
+        restoreNewCityPriorRuntime(prior);
+        publish();
+        return { status: "failed", error: failure };
+      }
+      if (!priorCapture.ok) {
+        const failure: PersistenceCoordinatorError = {
+          kind: "backend",
+          error: priorCapture.error,
+        };
+        restoreNewCityPriorRuntime(prior);
+        publish();
+        return { status: "failed", error: failure };
+      }
+
+      let created: Awaited<ReturnType<GameBackend["createSandbox"]>>;
+      try {
+        created = await backend.createSandbox(request);
+      } catch (error: unknown) {
+        return rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "createSandbox",
+            code: "invokeFailed",
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      if (!created.ok) {
+        restoreNewCityPriorRuntime(prior);
+        publish();
+        return {
+          status: "failed",
+          error: { kind: "sandbox", error: created.error },
+        };
+      }
+
+      let candidateCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+      try {
+        candidateCapture = await backend.snapshotForSave();
+      } catch (error: unknown) {
+        return rollbackNewCity(
+          prior,
+          priorCapture.snapshot,
+          persistenceHostFailure("snapshotForSave", error),
+        );
+      }
+      if (!candidateCapture.ok) {
+        return rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "backend",
+          error: candidateCapture.error,
+        });
+      }
+
+      let savedAt: string;
+      let envelope: ReturnType<typeof buildSaveEnvelope>;
+      try {
+        savedAt = now();
+        envelope = buildSaveEnvelope({
+          city: { id: identity.id, name: identity.name },
+          cityCreatedAt: identity.cityCreatedAt,
+          savedAt,
+          appVersion,
+          snapshot: candidateCapture.snapshot,
+        });
+      } catch (error: unknown) {
+        return rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "serializationFailed",
+            cityId: identity.id,
+            retryable: false,
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+
+      let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
+      try {
+        stored = await saveStore.writeWorkingSave(envelope);
+      } catch (error: unknown) {
+        stored = {
+          ok: false,
+          error: {
+            operation: "writeWorkingSave",
+            code: "ioFailure",
+            cityId: identity.id,
+            retryable: true,
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+      if (!stored.ok) {
+        return rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "store",
+          error: stored.error,
+        });
+      }
+
+      clearHoverPreviewTimer();
+      previewCoordinator.invalidateRoute();
+      invalidateRoadPreview();
+      activeRouteSaveTokens.clear();
+      nextRouteDraftInstanceId = 1;
+      state = normalizeRustSnapshot(candidateCapture.snapshot);
+      ui = createUiState();
+      backendError = null;
+      rejection = null;
+      sandboxResetError = null;
+      activeCity = identity;
+      sessionToken = prior.sessionToken + 1;
+      loadRequestToken = prior.loadRequestToken + 1;
+      currentRevision = 0;
+      persistedRevision = 0;
+      saveStatus = { state: "idle" };
+      loadStatus = { state: "idle" };
+      lifecycleStatus = { state: "idle" };
+      lastSavedAt = savedAt;
+      persistenceError = null;
+      const snapshot = publish();
+      const source: LoadSource = { kind: "working", cityId: identity.id };
+      return { status: "completed", value: { snapshot, source } };
+    } finally {
+      backendAdmissionReserved = false;
+    }
+  };
+
   const detachActiveCity = (): Promise<
     PersistenceOperationResult<RuntimeSnapshot>
-  > =>
-    gameplayQueue.enqueue<PersistenceOperationResult<RuntimeSnapshot>>({
+  > => {
+    if (dead) return Promise.resolve(runtimeUnavailable("detachActiveCity"));
+    if (backendAdmissionReserved) {
+      return Promise.resolve({ status: "superseded" });
+    }
+    return gameplayQueue.enqueue<PersistenceOperationResult<RuntimeSnapshot>>({
       operation: async () => {
         sessionToken += 1;
         loadRequestToken += 1;
@@ -1724,14 +2072,14 @@ export async function createGameRuntime(
       whenDead: () => runtimeUnavailable("detachActiveCity"),
       onThrown: () => runtimeUnavailable("detachActiveCity"),
     });
+  };
 
   const persistence: RuntimePersistenceController = {
     saveWorking,
     renameActiveCity,
     load: loadCity,
     detachActiveCity,
-    activateNewCity: () =>
-      pendingPersistenceResult("activateNewCity", "writeWorkingSave"),
+    activateNewCity,
     runGameplayWrite,
   };
 
@@ -1752,6 +2100,7 @@ export async function createGameRuntime(
       return enqueueTick(deltaSeconds);
     },
     reset() {
+      if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -1902,6 +2251,7 @@ export async function createGameRuntime(
       );
     },
     commitDrag() {
+      if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       const gesture = ui.drag;
       if (gesture === null) {
         return commit(state, ui);
@@ -1987,6 +2337,7 @@ export async function createGameRuntime(
       return commit(state, nextUi);
     },
     handleTileClick(point) {
+      if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       if (ui.routeDraft?.source.kind === "edit") {
         const handleIndex = routeHandleIndexAtPoint(ui.routeDraft, point);
         if (handleIndex !== null) {
