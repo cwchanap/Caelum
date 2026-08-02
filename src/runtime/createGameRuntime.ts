@@ -1644,6 +1644,9 @@ export async function createGameRuntime(
     }
 
     if (dead) return runtimeUnavailable(read.coordinatorOperation);
+    if (requestToken !== loadRequestToken) {
+      return { status: "superseded" };
+    }
 
     if (!stored.ok) {
       return {
@@ -1661,10 +1664,6 @@ export async function createGameRuntime(
           error: compatibilityToEnvelopeError(inspected.compatibility),
         },
       };
-    }
-
-    if (requestToken !== loadRequestToken) {
-      return { status: "superseded" };
     }
 
     return gameplayQueue.enqueue<PersistenceOperationResult<LoadCityValue>>({
@@ -1704,11 +1703,28 @@ export async function createGameRuntime(
     });
   };
 
+  const detachActiveCity = (): PersistenceOperationResult<RuntimeSnapshot> => {
+    if (dead) return runtimeUnavailable("detachActiveCity");
+
+    sessionToken += 1;
+    loadRequestToken += 1;
+    activeCity = null;
+    currentRevision = 0;
+    persistedRevision = 0;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    lastSavedAt = null;
+    persistenceError = null;
+    const snapshot = publish();
+    return { status: "completed", value: snapshot };
+  };
+
   const persistence: RuntimePersistenceController = {
     saveWorking,
     renameActiveCity,
     load: loadCity,
-    detachActiveCity: () => runtimeUnavailable("detachActiveCity"),
+    detachActiveCity,
     activateNewCity: () =>
       pendingPersistenceResult("activateNewCity", "writeWorkingSave"),
     runGameplayWrite,
@@ -1744,7 +1760,14 @@ export async function createGameRuntime(
         sandboxResetError = null;
         backendError = null;
         rejection = null;
-        currentRevision += 1;
+        sessionToken += 1;
+        loadRequestToken += 1;
+        currentRevision = 1;
+        persistedRevision = 0;
+        saveStatus = { state: "idle" };
+        loadStatus = { state: "idle" };
+        lifecycleStatus = { state: "idle" };
+        persistenceError = null;
         state = normalizeRustSnapshot(snapshot);
         ui = createUiState();
         return publish();

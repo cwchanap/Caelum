@@ -18,6 +18,8 @@ import type {
 import type { PersistenceOperationError } from "../../src/runtime/backend/persistenceContract";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
+  activeCityDeleteRequiresTransition,
+  guardActiveCityDelete,
   noActiveCity,
   resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
@@ -305,6 +307,14 @@ function coordinatorBackend(): GameBackend {
 }
 
 describe("runtime persistence coordinator contracts", () => {
+  it("guards only deletion of the active city", () => {
+    expect(guardActiveCityDelete(cityIdentity(), "city-001")).toEqual(
+      activeCityDeleteRequiresTransition("city-001"),
+    );
+    expect(guardActiveCityDelete(cityIdentity(), "city-002")).toBeNull();
+    expect(guardActiveCityDelete(null, "city-001")).toBeNull();
+  });
+
   it("keeps an older working-save completion from moving revision backward", () => {
     expect(
       resolveWorkingSaveCompletion({
@@ -1118,6 +1128,82 @@ describe("runtime persistence coordinator contracts", () => {
 
     await expect(save).resolves.toEqual({ status: "superseded" });
     expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
+  });
+
+  it("supersedes an old working-save completion after reset advances lineage", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const identity = harness.runtime.getSnapshot().persistence.activeCity;
+    const afterReset = await harness.runtime.reset();
+
+    harness.store.releaseNext("writeWorkingSave");
+    const saveResult = await save;
+
+    expect(afterReset.persistence).toEqual({
+      activeCity: identity,
+      dirty: true,
+      saveStatus: { state: "idle" },
+      loadStatus: { state: "idle" },
+      lifecycleStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: null,
+    });
+    expect(saveResult).toEqual({ status: "superseded" });
+    expect(harness.runtime.getSnapshot()).toEqual(afterReset);
+  });
+
+  it("detaches once and leaves stale persistence completions inert", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    const result = harness.runtime.persistence.detachActiveCity();
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        persistence: {
+          activeCity: null,
+          dirty: false,
+          saveStatus: { state: "idle" },
+          loadStatus: { state: "idle" },
+          lifecycleStatus: { state: "idle" },
+          lastSavedAt: null,
+          error: null,
+        },
+      },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    const afterDetach = harness.runtime.getSnapshot();
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toEqual({ status: "superseded" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(harness.runtime.getSnapshot()).toEqual(afterDetach);
+    unsubscribe();
+  });
+
+  it("supersedes a delayed failed load after detach advances lineage", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.failures.failNext("readWorkingSave", "ioFailure");
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "city-loaded",
+    });
+    await harness.store.waitForActive("readWorkingSave");
+
+    harness.runtime.persistence.detachActiveCity();
+    const afterDetach = harness.runtime.getSnapshot();
+    harness.store.releaseNext("readWorkingSave");
+
+    await expect(load).resolves.toEqual({ status: "superseded" });
+    expect(harness.runtime.getSnapshot()).toEqual(afterDetach);
   });
 
   it("keeps a delayed load inert when the runtime dies before restore", async () => {
