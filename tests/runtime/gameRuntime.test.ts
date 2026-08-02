@@ -1408,6 +1408,157 @@ describe("Game Runtime", () => {
       }
     });
 
+    it("honors a stop requested during a successful blocked New City transaction", async () => {
+      const frameCallbacks: Array<(timestamp: number) => void> = [];
+      const requestAnimationFrame = vi.fn(
+        (callback: (timestamp: number) => void) => {
+          frameCallbacks.push(callback);
+          return frameCallbacks.length;
+        },
+      );
+      const cancelAnimationFrame = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+      const backend = transactionalBackend(
+        backendSpy(fullRustSnapshot({ paused: false })),
+      );
+      let tickCalls = 0;
+      const tick = backend.tick.bind(backend);
+      backend.tick = vi.fn(async (deltaSeconds) => {
+        tickCalls += 1;
+        return tick(deltaSeconds);
+      });
+      const store = createDelayedSaveStore(createMemorySaveStore());
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend,
+        saveStore: store,
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      });
+      runtime.start();
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+
+      try {
+        await store.waitForActive("writeWorkingSave");
+        runtime.stop();
+        runtime.stop();
+        expect(runtime.isRunning()).toBe(false);
+        frameCallbacks.shift()?.(1_000);
+        frameCallbacks.shift()?.(1_016);
+        await flushPromises();
+
+        store.releaseNext("writeWorkingSave");
+        await expect(activation).resolves.toMatchObject({
+          status: "completed",
+        });
+
+        expect(runtime.isRunning()).toBe(false);
+        expect(tickCalls).toBe(0);
+        expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+        runtime.stop();
+        runtime.stop();
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+      } finally {
+        store.releaseAll();
+        await Promise.allSettled([activation]);
+        runtime.stop();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("keeps a rolled-back city stopped after stop is requested during its blocked write", async () => {
+      const frameCallbacks: Array<(timestamp: number) => void> = [];
+      const requestAnimationFrame = vi.fn(
+        (callback: (timestamp: number) => void) => {
+          frameCallbacks.push(callback);
+          return frameCallbacks.length;
+        },
+      );
+      const cancelAnimationFrame = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+      const backend = transactionalBackend(
+        backendSpy(fullRustSnapshot({ paused: false })),
+      );
+      let tickCalls = 0;
+      const tick = backend.tick.bind(backend);
+      backend.tick = vi.fn(async (deltaSeconds) => {
+        tickCalls += 1;
+        return tick(deltaSeconds);
+      });
+      const failures = createMemorySaveStoreFailureControls();
+      failures.failNext("writeWorkingSave", "ioFailure");
+      const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend,
+        saveStore: store,
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      });
+      runtime.start();
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+
+      try {
+        await store.waitForActive("writeWorkingSave");
+        runtime.stop();
+        runtime.stop();
+        expect(runtime.isRunning()).toBe(false);
+        frameCallbacks.shift()?.(1_000);
+        frameCallbacks.shift()?.(1_016);
+        await flushPromises();
+
+        store.releaseNext("writeWorkingSave");
+        await expect(activation).resolves.toMatchObject({ status: "failed" });
+        expect(runtime.isRunning()).toBe(false);
+        frameCallbacks.shift()?.(1_032);
+        await flushPromises();
+
+        expect(runtime.isRunning()).toBe(false);
+        expect(tickCalls).toBe(0);
+        expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+        runtime.stop();
+        runtime.stop();
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+      } finally {
+        store.releaseAll();
+        await Promise.allSettled([activation]);
+        runtime.stop();
+        vi.unstubAllGlobals();
+      }
+    });
+
     it("keeps an invalidated route response from changing restored rollback UI", async () => {
       const previews = deferredPreviewBackend(dirtyRouteSnapshot());
       transactionalBackend(previews.backend);
