@@ -9,7 +9,11 @@ export async function expectOk<T>(
   result: Promise<SaveStoreResult<T>> | SaveStoreResult<T>,
 ): Promise<T> {
   const resolved = await result;
-  if (!resolved.ok) throw new Error(resolved.error.diagnostic);
+  if (!resolved.ok) {
+    throw new Error(
+      `${resolved.error.operation} failed with ${resolved.error.code}: ${resolved.error.diagnostic}`,
+    );
+  }
   return resolved.value;
 }
 

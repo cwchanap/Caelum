@@ -8,9 +8,8 @@ import type { RustGameSnapshot } from "../runtime/backend/types";
 
 export const CAELUM_SAVE_FORMAT = "caelum-save" as const;
 export const SAVE_ENVELOPE_VERSION = 1 as const;
-export const SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS = new Set<number>([
-  SNAPSHOT_SCHEMA_VERSION,
-]);
+export const SUPPORTED_SNAPSHOT_SCHEMA_VERSIONS: ReadonlySet<number> =
+  new Set<number>([SNAPSHOT_SCHEMA_VERSION]);
 
 export interface SaveEnvelopeSummary {
   gameMode: GameMode;

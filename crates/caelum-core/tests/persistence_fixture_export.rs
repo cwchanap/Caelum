@@ -144,7 +144,7 @@ fn checked_in_snapshot_fixtures_preserve_the_persistence_contract() {
     assert_eq!(
         check_snapshot_schema(&unsupported).unwrap_err(),
         PersistenceError::UnsupportedSchema {
-            expected: 4,
+            expected: SNAPSHOT_SCHEMA_VERSION,
             actual: 3,
         }
     );
