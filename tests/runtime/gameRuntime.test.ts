@@ -33,6 +33,7 @@ import {
 import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
 import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import { createTestGameState } from "../helpers/gameState";
+import { createDelayedSaveStore } from "./delayedSaveStore";
 
 const TEST_REJECTION: GameplayRejection = {
   code: "blockedTile",
@@ -1131,6 +1132,84 @@ describe("Game Runtime", () => {
         | undefined;
       expect(restoreInput?.scenario.objectives).toBeUndefined();
       expect(runtime.getSnapshot().state.scenario.objectives).toBeNull();
+    });
+
+    it("drains admitted gameplay and never backlogs dispatches behind New City", async () => {
+      const backend = deferredDispatchBackend();
+      const createSandbox = backend.createSandbox.bind(backend);
+      backend.createSandbox = async (request) => {
+        const result = await createSandbox(request);
+        if (result.ok) backend.setSnapshot(result.snapshot);
+        return result;
+      };
+      backend.snapshotForSave = async () => ({
+        ok: true,
+        snapshot: { ...(await backend.snapshot()), paused: true },
+      });
+      backend.restoreSnapshot = async (request) => {
+        const snapshot = request.snapshot as RustGameSnapshot;
+        backend.setSnapshot(snapshot);
+        return { ok: true, snapshot };
+      };
+      const store = createDelayedSaveStore(createMemorySaveStore());
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend,
+        saveStore: store,
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      });
+
+      const admitted = runtime.debugSetBudget(90_000);
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+      const dropped = runtime.debugSetBudget(80_000);
+
+      await expect(dropped).resolves.toEqual(runtime.getSnapshot());
+      expect(backend.intents).toEqual([{ type: "setBudget", budget: 90_000 }]);
+
+      await backend.resolveNext();
+      await admitted;
+      await vi.waitFor(() => {
+        expect(store.activeCount()).toBe(1);
+      });
+      expect(runtime.getSnapshot()).toMatchObject({
+        state: { budget: 90_000 },
+        persistence: { lifecycleStatus: { state: "creatingCity" } },
+      });
+      runtime.setTool("road");
+      runtime.startDrag({ x: 1, y: 1 });
+      runtime.setDragCurrent({ x: 3, y: 1 });
+      await flushPromises();
+      const beforeDroppedDrag = runtime.getSnapshot();
+
+      await expect(runtime.commitDrag()).resolves.toEqual(beforeDroppedDrag);
+      expect(runtime.getSnapshot()).toEqual(beforeDroppedDrag);
+
+      store.releaseNext("writeWorkingSave");
+      await expect(activation).resolves.toMatchObject({
+        status: "completed",
+        value: {
+          snapshot: {
+            state: { budget: 120_000, paused: true },
+            persistence: { activeCity: { id: "city-002" }, dirty: false },
+          },
+        },
+      });
+      expect(backend.intents).toEqual([{ type: "setBudget", budget: 90_000 }]);
     });
   });
 
