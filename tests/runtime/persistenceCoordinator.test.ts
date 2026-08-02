@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMemorySaveStore,
   createMemorySaveStoreFailureControls,
+  type MemorySaveStore,
   type MemorySaveStoreFailureControls,
 } from "../../src/persistence/memorySaveStore";
 import { buildSaveEnvelope } from "../../src/persistence/envelope";
@@ -14,6 +15,7 @@ import type {
   RustGameSnapshot,
   SandboxCreationRequest,
 } from "../../src/runtime/backend/types";
+import type { PersistenceOperationError } from "../../src/runtime/backend/persistenceContract";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   noActiveCity,
@@ -26,6 +28,7 @@ import {
   type PersistenceOperationResult,
 } from "../../src/runtime/persistenceCoordinator";
 import type { RuntimeController } from "../../src/runtime/types";
+import { createUiState } from "../../src/ui/uiState";
 import {
   createRustSnapshot,
   previewBackendStubs,
@@ -42,7 +45,11 @@ interface CoordinatorHarness {
     restoreSnapshotCalls: number;
     tickCalls: number;
   };
-  store: DelayedSaveStore;
+  store: DelayedSaveStore &
+    Pick<
+      MemorySaveStore,
+      "seedRawWorking" | "seedRawCheckpoint" | "seedRawAutosave"
+    >;
   failures: MemorySaveStoreFailureControls;
   checkpointRequest(): GameplayWriteRequest<CheckpointSummary>;
   autosaveRequest(): GameplayWriteRequest<AutosaveSummary>;
@@ -179,7 +186,12 @@ async function createCoordinatorHarness(options?: {
     },
   };
   const failures = createMemorySaveStoreFailureControls();
-  const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
+  const memoryStore = createMemorySaveStore({ failures });
+  const store = Object.assign(createDelayedSaveStore(memoryStore), {
+    seedRawWorking: memoryStore.seedRawWorking,
+    seedRawCheckpoint: memoryStore.seedRawCheckpoint,
+    seedRawAutosave: memoryStore.seedRawAutosave,
+  });
   const initialCity =
     options?.activeCity === undefined ? cityIdentity() : options.activeCity;
   const runtime = await createGameRuntime({
@@ -205,6 +217,61 @@ async function createCoordinatorHarness(options?: {
     checkpointRequest: () => checkpointRequest(store),
     autosaveRequest: () => autosaveRequest(store),
   };
+}
+
+function loadEnvelope(input: {
+  city?: ActiveCityIdentity;
+  savedAt?: string;
+  snapshot?: RustGameSnapshot;
+}) {
+  const city = input.city ?? cityIdentity("city-load");
+  return buildSaveEnvelope({
+    city: { id: city.id, name: city.name },
+    cityCreatedAt: city.cityCreatedAt,
+    savedAt: input.savedAt ?? "2026-08-01T11:00:00.000Z",
+    appVersion: "0.1.0",
+    snapshot:
+      input.snapshot ?? createRustSnapshot({ paused: true, budget: 77_000 }),
+  });
+}
+
+function seedLoadSource(
+  store: CoordinatorHarness["store"],
+  source:
+    | { kind: "working"; cityId: string }
+    | { kind: "checkpoint"; cityId: string; checkpointId: string }
+    | { kind: "autosave"; cityId: string; autosaveId: string },
+  envelope = loadEnvelope({ city: cityIdentity(source.cityId) }),
+): void {
+  switch (source.kind) {
+    case "working":
+      store.seedRawWorking(source.cityId, envelope);
+      break;
+    case "checkpoint":
+      store.seedRawCheckpoint({
+        storageCityId: source.cityId,
+        storageCheckpointId: source.checkpointId,
+        checkpointId: source.checkpointId,
+        cityId: source.cityId,
+        name: "Checkpoint",
+        note: null,
+        createdAt: envelope.savedAt,
+        envelope,
+      });
+      break;
+    case "autosave":
+      store.seedRawAutosave({
+        storageCityId: source.cityId,
+        storageAutosaveId: source.autosaveId,
+        autosaveId: source.autosaveId,
+        cityId: source.cityId,
+        generation: 1,
+        createdAt: envelope.savedAt,
+        envelope,
+        generationHighWaterMark: 1,
+      });
+      break;
+  }
 }
 
 function coordinatorBackend(): GameBackend {
@@ -807,6 +874,270 @@ describe("runtime persistence coordinator contracts", () => {
       ok: true,
       value: { city: { id: "city-001", name: "Renamed" } },
     });
+  });
+
+  it("preserves runtime on inspection failure", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.seedRawWorking("other", { format: "broken" });
+    const before = harness.runtime.getSnapshot();
+
+    const result = await harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "other",
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      error: { kind: "envelope", error: { code: "corruptHeader" } },
+    });
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+  });
+
+  it("preserves runtime and dirty bookkeeping on a store read failure", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.failures.failNext("readWorkingSave", "ioFailure");
+    const before = harness.runtime.getSnapshot();
+
+    const result = await harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "other",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: { operation: "readWorkingSave", code: "ioFailure" },
+      },
+    });
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+  });
+
+  it("supersedes an older load before it can restore", async () => {
+    const harness = await createCoordinatorHarness();
+    seedLoadSource(harness.store, { kind: "working", cityId: "city-old" });
+    seedLoadSource(harness.store, { kind: "working", cityId: "city-new" });
+    harness.store.defer("readWorkingSave");
+
+    const older = harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "city-old",
+    });
+    const newer = harness.runtime.persistence.load({
+      kind: "working",
+      cityId: "city-new",
+    });
+    expect(harness.store.activeCount()).toBe(2);
+
+    harness.store.releaseNext("readWorkingSave");
+    await expect(older).resolves.toEqual({ status: "superseded" });
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+
+    harness.store.releaseNext("readWorkingSave");
+    await expect(newer).resolves.toMatchObject({ status: "completed" });
+    expect(harness.backend.restoreSnapshotCalls).toBe(1);
+    expect(harness.runtime.getSnapshot().persistence.activeCity?.id).toBe(
+      "city-new",
+    );
+  });
+
+  it("preserves runtime when Rust rejects restoration", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "other" } as const;
+    seedLoadSource(harness.store, source);
+    const restoreError: PersistenceOperationError = {
+      kind: "validation",
+      operation: "restoreSnapshot",
+      source: "candidate",
+      error: {
+        code: "invalidNumericValue",
+        context: {
+          field: "budget",
+          reason: { kind: "negative" },
+        },
+      },
+    };
+    harness.backend.restoreSnapshot = async () => {
+      harness.backend.restoreSnapshotCalls += 1;
+      return { ok: false, error: restoreError };
+    };
+    const before = harness.runtime.getSnapshot();
+
+    const result = await harness.runtime.persistence.load(source);
+
+    expect(result).toEqual({
+      status: "failed",
+      error: { kind: "backend", error: restoreError },
+    });
+    expect(harness.runtime.getSnapshot()).toEqual(before);
+  });
+
+  it("commits a successful working load once, paused and clean", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    const savedAt = "2026-08-01T11:45:00.000Z";
+    seedLoadSource(
+      harness.store,
+      source,
+      loadEnvelope({
+        city: { ...cityIdentity(source.cityId), name: "Loaded City" },
+        savedAt,
+        snapshot: createRustSnapshot({
+          paused: true,
+          speed: 4,
+          budget: 77_000,
+        }),
+      }),
+    );
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+
+    const result = await harness.runtime.persistence.load(source);
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { source, snapshot: { state: { budget: 77_000, paused: true } } },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      result.status === "completed" ? result.value.snapshot : undefined,
+    );
+    expect(harness.runtime.getSnapshot().persistence).toEqual({
+      activeCity: {
+        id: source.cityId,
+        name: "Loaded City",
+        cityCreatedAt: "2026-08-01T09:00:00.000Z",
+      },
+      dirty: false,
+      saveStatus: { state: "idle" },
+      loadStatus: { state: "idle" },
+      lifecycleStatus: { state: "idle" },
+      lastSavedAt: savedAt,
+      error: null,
+    });
+    unsubscribe();
+  });
+
+  it.each([
+    {
+      source: {
+        kind: "checkpoint",
+        cityId: "city-checkpoint",
+        checkpointId: "checkpoint-loaded",
+      } as const,
+    },
+    {
+      source: {
+        kind: "autosave",
+        cityId: "city-autosave",
+        autosaveId: "autosave-loaded",
+      } as const,
+    },
+  ])("loads a $source.kind paused and dirty", async ({ source }) => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    seedLoadSource(
+      harness.store,
+      source,
+      loadEnvelope({
+        city: cityIdentity(source.cityId),
+        snapshot: createRustSnapshot({ paused: true, budget: 66_000 }),
+      }),
+    );
+
+    const result = await harness.runtime.persistence.load(source);
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { snapshot: { state: { budget: 66_000, paused: true } } },
+    });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      activeCity: { id: source.cityId },
+      dirty: true,
+      lastSavedAt: null,
+    });
+  });
+
+  it("clears transient UI and runtime errors only after a successful load", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.runtime.setTool("road");
+    harness.runtime.setHoverTile({ x: 2, y: 2 });
+    harness.runtime.startDrag({ x: 2, y: 2 });
+    const beforeReset = await harness.backend.snapshot();
+    harness.backend.dispatch = async () => ({
+      snapshot: beforeReset,
+      applied: false,
+      rejection: { code: "blockedTile", context: { affectedRouteIds: [] } },
+      context: { changedTiles: [], skippedTiles: [], cost: 0 },
+    });
+    await harness.runtime.debugSetBudget(50_000);
+    harness.backend.reset = async () => ({
+      ok: false,
+      error: {
+        code: "unsupportedGameMode",
+        context: { gameMode: "campaign" },
+      },
+    });
+    await harness.runtime.reset();
+    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    await harness.runtime.persistence.saveWorking();
+
+    const result = await harness.runtime.persistence.load(source);
+
+    expect(result.status).toBe("completed");
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      ui: createUiState(),
+      rejection: null,
+      sandboxResetError: null,
+      backendError: null,
+      persistence: {
+        saveStatus: { state: "idle" },
+        loadStatus: { state: "idle" },
+        lifecycleStatus: { state: "idle" },
+        error: null,
+      },
+    });
+  });
+
+  it("supersedes an old working-save completion after load advances lineage", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    await expect(
+      harness.runtime.persistence.load(source),
+    ).resolves.toMatchObject({ status: "completed" });
+    const afterLoad = harness.runtime.getSnapshot();
+    harness.store.releaseNext("writeWorkingSave");
+
+    await expect(save).resolves.toEqual({ status: "superseded" });
+    expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
+  });
+
+  it("keeps a delayed load inert when the runtime dies before restore", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load(source);
+    await harness.store.waitForActive("readWorkingSave");
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(50_000);
+    const afterDeath = harness.runtime.getSnapshot();
+
+    harness.store.releaseNext("readWorkingSave");
+
+    await expect(load).resolves.toEqual(runtimeUnavailable("loadWorking"));
+    expect(harness.backend.restoreSnapshotCalls).toBe(0);
+    expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
   });
 
   it("delays selected store operations and records mutation order", async () => {

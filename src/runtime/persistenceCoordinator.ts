@@ -1,7 +1,11 @@
-import type { WritableSaveEnvelope } from "../persistence/envelope";
+import type {
+  UntrustedSaveValue,
+  WritableSaveEnvelope,
+} from "../persistence/envelope";
 import type { SaveEnvelopeError } from "../persistence/envelopeInspection";
 import type {
   CitySummary,
+  SaveStore,
   SaveStoreError,
   SaveStoreResult,
 } from "../persistence/saveStore";
@@ -60,6 +64,36 @@ export type LoadSource =
   | { kind: "working"; cityId: string }
   | { kind: "checkpoint"; cityId: string; checkpointId: string }
   | { kind: "autosave"; cityId: string; autosaveId: string };
+
+export interface LoadSourceRead {
+  coordinatorOperation: "loadWorking" | "loadCheckpoint" | "loadAutosave";
+  storeOperation: "readWorkingSave" | "readCheckpoint" | "readAutosave";
+  read(store: SaveStore): Promise<SaveStoreResult<UntrustedSaveValue>>;
+}
+
+export function readForLoadSource(source: LoadSource): LoadSourceRead {
+  switch (source.kind) {
+    case "working":
+      return {
+        coordinatorOperation: "loadWorking",
+        storeOperation: "readWorkingSave",
+        read: (store) => store.readWorkingSave(source.cityId),
+      };
+    case "checkpoint":
+      return {
+        coordinatorOperation: "loadCheckpoint",
+        storeOperation: "readCheckpoint",
+        read: (store) =>
+          store.readCheckpoint(source.cityId, source.checkpointId),
+      };
+    case "autosave":
+      return {
+        coordinatorOperation: "loadAutosave",
+        storeOperation: "readAutosave",
+        read: (store) => store.readAutosave(source.cityId, source.autosaveId),
+      };
+  }
+}
 
 export interface LoadCityValue {
   snapshot: RuntimeSnapshot;

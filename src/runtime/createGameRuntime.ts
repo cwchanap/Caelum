@@ -48,7 +48,14 @@ import type {
   SaveStoreOperation,
   SaveStoreResult,
 } from "../persistence/saveStore";
-import { buildSaveEnvelope } from "../persistence/envelope";
+import {
+  buildSaveEnvelope,
+  type InspectedSaveEnvelope,
+} from "../persistence/envelope";
+import {
+  compatibilityToEnvelopeError,
+  inspectSaveEnvelope,
+} from "../persistence/envelopeInspection";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
@@ -57,12 +64,15 @@ import { normalizeRustSnapshot } from "./snapshotView";
 import {
   enqueueCityPersistence,
   noActiveCity,
+  readForLoadSource,
   resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
   runtimeUnavailable,
   type ActiveCityIdentity,
   type GameplayWriteRequest,
   type GenerationWriteValue,
+  type LoadCityValue,
+  type LoadSource,
   type PersistenceCoordinatorError,
   type PersistenceCoordinatorOperation,
   type PersistenceOperationResult,
@@ -233,9 +243,6 @@ export async function createGameRuntime(
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
-  /* eslint-disable prefer-const -- Later coordinator tasks replace runtime
-   * lineage and transition these fields; Task 3 only establishes their
-   * initial public view and revision accounting. */
   let activeCity = options.initialCity ?? null;
   let sessionToken = 0;
   let currentRevision = 0;
@@ -244,7 +251,7 @@ export async function createGameRuntime(
   let loadStatus: RuntimeLoadStatus = { state: "idle" };
   let lifecycleStatus: RuntimeLifecycleStatus = { state: "idle" };
   let lastSavedAt = options.lastSavedAt ?? null;
-  /* eslint-enable prefer-const */
+  let loadRequestToken = 0;
   let persistenceError: PersistenceCoordinatorError | null = null;
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
@@ -976,6 +983,39 @@ export async function createGameRuntime(
     activeRoadMutation = null;
   };
 
+  const commitLoadedSnapshot = (
+    rawSnapshot: RustGameSnapshot,
+    envelope: InspectedSaveEnvelope,
+    source: LoadSource,
+  ): RuntimeSnapshot => {
+    clearHoverPreviewTimer();
+    previewCoordinator.invalidateRoute();
+    invalidateRoadPreview();
+
+    // This is the sole load installation boundary. The raw canonical backend
+    // result remains opaque until the runtime view is committed, so a
+    // normalized GameState can never flow back into persistence restoration.
+    state = normalizeRustSnapshot(rawSnapshot);
+    ui = createUiState();
+    backendError = null;
+    rejection = null;
+    sandboxResetError = null;
+    activeCity = {
+      id: envelope.city.id,
+      name: envelope.city.name,
+      cityCreatedAt: envelope.cityCreatedAt,
+    };
+    sessionToken += 1;
+    currentRevision = source.kind === "working" ? 0 : 1;
+    persistedRevision = 0;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    lastSavedAt = source.kind === "working" ? envelope.savedAt : null;
+    persistenceError = null;
+    return publish();
+  };
+
   // Road clicks defer the lay-vs-cycle decision to execution time. An earlier
   // queued dispatch (e.g. a road drag still draining, or a prior click) may
   // have turned the clicked tile into a road by the time this closure runs, so
@@ -1565,19 +1605,107 @@ export async function createGameRuntime(
     });
   };
 
+  const loadCity = async (
+    requestedSource: LoadSource,
+  ): Promise<PersistenceOperationResult<LoadCityValue>> => {
+    if (dead) {
+      return runtimeUnavailable(
+        readForLoadSource(requestedSource).coordinatorOperation,
+      );
+    }
+    if (saveStore === undefined) {
+      return unavailableStoreResult(
+        readForLoadSource(requestedSource).storeOperation,
+      );
+    }
+
+    const source: LoadSource = { ...requestedSource };
+    const requestToken = ++loadRequestToken;
+    const read = readForLoadSource(source);
+    let stored: Awaited<ReturnType<typeof read.read>>;
+    try {
+      stored = await read.read(saveStore);
+    } catch (error: unknown) {
+      stored = {
+        ok: false,
+        error: {
+          operation: read.storeOperation,
+          code: "ioFailure",
+          cityId: source.cityId,
+          ...(source.kind === "checkpoint"
+            ? { recordId: source.checkpointId }
+            : source.kind === "autosave"
+              ? { recordId: source.autosaveId }
+              : {}),
+          retryable: true,
+          diagnostic: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+
+    if (!stored.ok) {
+      return {
+        status: "failed",
+        error: { kind: "store", error: stored.error },
+      };
+    }
+
+    const inspected = inspectSaveEnvelope(stored.value);
+    if (!inspected.ok) {
+      return {
+        status: "failed",
+        error: {
+          kind: "envelope",
+          error: compatibilityToEnvelopeError(inspected.compatibility),
+        },
+      };
+    }
+
+    if (requestToken !== loadRequestToken) {
+      return { status: "superseded" };
+    }
+
+    return gameplayQueue.enqueue<PersistenceOperationResult<LoadCityValue>>({
+      operation: async () => {
+        if (requestToken !== loadRequestToken) {
+          return { status: "superseded" };
+        }
+        const restored = await backend.restoreSnapshot({
+          snapshot: inspected.envelope.snapshot,
+        });
+        if (!restored.ok) {
+          return {
+            status: "failed",
+            error: { kind: "backend", error: restored.error },
+          };
+        }
+        const snapshot = commitLoadedSnapshot(
+          restored.snapshot,
+          inspected.envelope,
+          source,
+        );
+        return { status: "completed", value: { snapshot, source } };
+      },
+      whenDead: () => runtimeUnavailable(read.coordinatorOperation),
+      onThrown: (error: unknown) => ({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "restoreSnapshot",
+            code: "invokeFailed",
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        },
+      }),
+    });
+  };
+
   const persistence: RuntimePersistenceController = {
     saveWorking,
     renameActiveCity,
-    load(source) {
-      switch (source.kind) {
-        case "working":
-          return pendingPersistenceResult("loadWorking", "readWorkingSave");
-        case "checkpoint":
-          return pendingPersistenceResult("loadCheckpoint", "readCheckpoint");
-        case "autosave":
-          return pendingPersistenceResult("loadAutosave", "readAutosave");
-      }
-    },
+    load: loadCity,
     detachActiveCity: () => runtimeUnavailable("detachActiveCity"),
     activateNewCity: () =>
       pendingPersistenceResult("activateNewCity", "writeWorkingSave"),

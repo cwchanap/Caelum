@@ -31,6 +31,7 @@ import {
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
+import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import { createTestGameState } from "../helpers/gameState";
 
 const TEST_REJECTION: GameplayRejection = {
@@ -1088,6 +1089,48 @@ describe("Game Runtime", () => {
 
       await runtime.debugSetBudget(100_000);
       expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    });
+
+    it("restores the opaque raw snapshot before normalizing the published view", async () => {
+      const raw = fullRustSnapshot({
+        paused: true,
+        scenario: {
+          name: "Crossroads",
+          objectives: undefined,
+          growthWaves: [],
+        },
+      });
+      const city = cityIdentity("city-load");
+      const store = createMemorySaveStore();
+      store.seedRawWorking(
+        city.id,
+        buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: "2026-08-01T11:00:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: raw,
+        }),
+      );
+      const base = backendSpy();
+      const restoreSnapshot = vi.fn(base.restoreSnapshot.bind(base));
+      const runtime = await createGameRuntime({
+        backend: { ...base, restoreSnapshot },
+        saveStore: store,
+        initialCity: cityIdentity(),
+      });
+
+      const result = await runtime.persistence.load({
+        kind: "working",
+        cityId: city.id,
+      });
+
+      expect(result.status).toBe("completed");
+      const restoreInput = restoreSnapshot.mock.calls[0]?.[0].snapshot as
+        | RustGameSnapshot
+        | undefined;
+      expect(restoreInput?.scenario.objectives).toBeUndefined();
+      expect(runtime.getSnapshot().state.scenario.objectives).toBeNull();
     });
   });
 
