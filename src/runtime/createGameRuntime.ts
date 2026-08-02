@@ -274,6 +274,11 @@ export async function createGameRuntime(
   // are dropped/superseded instead of joining the serialized queue and
   // observing or mutating that uncommitted candidate.
   let backendAdmissionReserved = false;
+  // Component teardown is a one-shot lifecycle request, so unlike transient UI
+  // intents it cannot be dropped while New City owns admission. The canvas is
+  // halted immediately; full preview cleanup is completed once the transaction
+  // leaves its protected backend window.
+  let stopRequestedDuringReservation = false;
   const gameplayQueue = createSerializedQueue(() => dead);
   const listeners = new Set<RuntimeListener>();
 
@@ -394,11 +399,19 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
-    canvasHost.stop();
+    if (canvasHost.isRunning()) canvasHost.stop();
   };
 
   const stop = (): void => {
-    if (backendAdmissionReserved) return;
+    if (backendAdmissionReserved) {
+      if (!stopRequestedDuringReservation) {
+        stopRequestedDuringReservation = true;
+        // Prevent a queued RAF callback or transaction publication from
+        // producing more ticks before full preview cleanup is safe.
+        canvasHost.stop();
+      }
+      return;
+    }
     stopRuntime();
   };
 
@@ -408,6 +421,9 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
+    // Fatal shutdown performs the complete cleanup immediately; transaction
+    // finalization must not repeat an earlier latched public stop.
+    stopRequestedDuringReservation = false;
     stopRuntime();
     // Clear stale preview UI so a fatal error doesn't leave the road preview
     // overlay visible or the route draft stuck at previewPending forever.
@@ -1822,7 +1838,12 @@ export async function createGameRuntime(
       activeRouteSaveTokens.add(token);
     }
     activeRoadMutation = prior.activeRoadMutation;
-    if (prior.running && !canvasHost.isRunning()) canvasHost.start();
+    if (
+      prior.running &&
+      !stopRequestedDuringReservation &&
+      !canvasHost.isRunning()
+    )
+      canvasHost.start();
     if (!prior.running && canvasHost.isRunning()) canvasHost.stop();
   };
 
@@ -2020,7 +2041,7 @@ export async function createGameRuntime(
       try {
         created = await backend.createSandbox(request);
       } catch (error: unknown) {
-        return rollbackNewCity(prior, priorCapture.snapshot, {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "backend",
           error: {
             kind: "host",
@@ -2044,14 +2065,14 @@ export async function createGameRuntime(
       try {
         candidateCapture = await backend.snapshotForSave();
       } catch (error: unknown) {
-        return rollbackNewCity(
+        return await rollbackNewCity(
           prior,
           priorCapture.snapshot,
           persistenceHostFailure("snapshotForSave", error),
         );
       }
       if (!candidateCapture.ok) {
-        return rollbackNewCity(prior, priorCapture.snapshot, {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "backend",
           error: candidateCapture.error,
         });
@@ -2069,7 +2090,7 @@ export async function createGameRuntime(
           snapshot: candidateCapture.snapshot,
         });
       } catch (error: unknown) {
-        return rollbackNewCity(prior, priorCapture.snapshot, {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "store",
           error: {
             operation: "writeWorkingSave",
@@ -2099,7 +2120,7 @@ export async function createGameRuntime(
         };
       }
       if (!stored.ok) {
-        return rollbackNewCity(prior, priorCapture.snapshot, {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "store",
           error: stored.error,
         });
@@ -2132,6 +2153,10 @@ export async function createGameRuntime(
     } finally {
       previewAdmissionSuspended = false;
       backendAdmissionReserved = false;
+      if (stopRequestedDuringReservation) {
+        stopRequestedDuringReservation = false;
+        stopRuntime();
+      }
     }
   };
 
