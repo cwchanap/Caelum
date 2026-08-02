@@ -57,4 +57,25 @@ describe("createSerializedQueue", () => {
     expect(await second).toBe(-1);
     expect(secondCalls).toBe(0);
   });
+
+  it("recovers from a rejected operation and keeps serving subsequent ones", async () => {
+    const queue = createSerializedQueue(() => false);
+    const first = queue.enqueue({
+      operation: async () => {
+        throw new Error("boom");
+      },
+      whenDead: () => -1,
+      onThrown: (error: unknown) =>
+        error instanceof Error && error.message === "boom" ? -77 : -88,
+    });
+    const second = queue.enqueue({
+      operation: async () => 2,
+      whenDead: () => -1,
+      onThrown: () => -2,
+    });
+
+    expect(await first).toBe(-77);
+    expect(await second).toBe(2);
+    await queue.drain();
+  });
 });

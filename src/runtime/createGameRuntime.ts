@@ -283,9 +283,6 @@ export async function createGameRuntime(
   const listeners = new Set<RuntimeListener>();
 
   const getPersistenceView = (): RuntimePersistenceView => {
-    // Session ownership is introduced with the public view now; later
-    // persistence lifecycle tasks advance this token when replacing lineage.
-    void sessionToken;
     return {
       activeCity,
       dirty: currentRevision !== persistedRevision,
@@ -1820,7 +1817,15 @@ export async function createGameRuntime(
     }
 
     if (dead) return runtimeUnavailable(read.coordinatorOperation);
-    if (backendAdmissionReserved) return { status: "superseded" };
+    if (backendAdmissionReserved) {
+      // A New City reservation started while this load was reading. The load
+      // owns the active load status (it published "reading" above and no newer
+      // load has bumped the token), so clear it back to idle before yielding
+      // admission. The token is left untouched so a concurrent newer load is
+      // still detected by its own requestToken mismatch below.
+      publishLoadTransition(requestToken, { state: "idle" }, null);
+      return { status: "superseded" };
+    }
     if (requestToken !== loadRequestToken) {
       return { status: "superseded" };
     }
