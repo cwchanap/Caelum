@@ -16,6 +16,8 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
+  noActiveCity,
+  resolveWorkingSaveCompletion,
   runtimeUnavailable,
   type ActiveCityIdentity,
   type GameplayWriteRequest,
@@ -229,6 +231,32 @@ function coordinatorBackend(): GameBackend {
 }
 
 describe("runtime persistence coordinator contracts", () => {
+  it("keeps an older working-save completion from moving revision backward", () => {
+    expect(
+      resolveWorkingSaveCompletion({
+        currentCityId: "city-001",
+        currentSessionToken: 4,
+        persistedRevision: 7,
+        capturedCityId: "city-001",
+        capturedSessionToken: 4,
+        capturedRevision: 5,
+      }),
+    ).toEqual({ status: "current", persistedRevision: 7 });
+  });
+
+  it("supersedes a working-save completion from a stale session", () => {
+    expect(
+      resolveWorkingSaveCompletion({
+        currentCityId: "city-001",
+        currentSessionToken: 5,
+        persistedRevision: 0,
+        capturedCityId: "city-001",
+        capturedSessionToken: 4,
+        capturedRevision: 3,
+      }),
+    ).toEqual({ status: "superseded" });
+  });
+
   it("represents supersession without a runtime error", () => {
     const result: PersistenceOperationResult<{ savedAt: string }> = {
       status: "superseded",
@@ -338,6 +366,107 @@ describe("runtime persistence coordinator contracts", () => {
     await expect(runtime.persistence.saveWorking()).resolves.toEqual(
       runtimeUnavailable("saveWorking"),
     );
+  });
+
+  it("does not capture a working save after the configured runtime is dead", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+
+    await harness.runtime.debugSetBudget(90_000);
+
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual(
+      runtimeUnavailable("saveWorking"),
+    );
+    expect(harness.backend.snapshotForSaveCalls).toBe(0);
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("rejects a working save without an active city", async () => {
+    const harness = await createCoordinatorHarness({ activeCity: null });
+
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual(
+      noActiveCity("saveWorking"),
+    );
+    expect(harness.backend.snapshotForSaveCalls).toBe(0);
+    expect(harness.store.mutationOrder()).toEqual([]);
+    expect(harness.runtime.getSnapshot().persistence.error).toEqual({
+      kind: "precondition",
+      error: { code: "noActiveCity", operation: "saveWorking" },
+    });
+  });
+
+  it("serializes two working saves", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const first = harness.runtime.persistence.saveWorking();
+    const second = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    expect(harness.store.activeCount()).toBe(1);
+    expect(harness.backend.snapshotForSaveCalls).toBe(1);
+    harness.store.releaseNext("writeWorkingSave");
+    await first;
+    await harness.store.waitForActive("writeWorkingSave");
+    expect(harness.backend.snapshotForSaveCalls).toBe(2);
+    harness.store.releaseNext("writeWorkingSave");
+    await second;
+    expect(harness.store.mutationOrder()).toEqual([
+      "writeWorkingSave",
+      "writeWorkingSave",
+    ]);
+  });
+
+  it("remains dirty when gameplay mutates during a working save", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    await harness.runtime.debugSetBudget(90_000);
+    harness.store.releaseNext("writeWorkingSave");
+
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      dirty: true,
+      lastSavedAt: "2026-08-01T10:00:00.000Z",
+      saveStatus: { state: "idle" },
+    });
+  });
+
+  it("marks the captured working revision clean after a successful save", async () => {
+    const harness = await createCoordinatorHarness();
+
+    expect(harness.runtime.getSnapshot().persistence.dirty).toBe(true);
+    await expect(
+      harness.runtime.persistence.saveWorking(),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(harness.runtime.getSnapshot().persistence.dirty).toBe(false);
+  });
+
+  it("writes a clean explicit working save and refreshes its timestamp", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+
+    await expect(
+      harness.runtime.persistence.saveWorking(),
+    ).resolves.toMatchObject({
+      status: "completed",
+      value: {
+        savedAt: "2026-08-01T10:00:00.000Z",
+        summary: {
+          cityId: "city-001",
+          savedAt: "2026-08-01T10:00:00.000Z",
+        },
+      },
+    });
+    expect(harness.backend.snapshotForSaveCalls).toBe(1);
+    expect(harness.store.mutationOrder()).toEqual(["writeWorkingSave"]);
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      dirty: false,
+      lastSavedAt: "2026-08-01T10:00:00.000Z",
+      saveStatus: { state: "idle" },
+      error: null,
+    });
   });
 
   it("delays selected store operations and records mutation order", async () => {
