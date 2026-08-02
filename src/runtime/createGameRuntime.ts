@@ -250,6 +250,11 @@ export async function createGameRuntime(
   // backend snapshot. Responses from an older epoch cannot publish into a
   // restored or newly activated runtime.
   let previewRuntimeEpoch = 0;
+  // New City reserves public preview-UI admission synchronously, but existing
+  // preview work may still settle while already-admitted gameplay and
+  // persistence work drain. This flag starts only when that drain is complete
+  // and the rollback baseline is captured, keeping both boundaries identical.
+  let previewAdmissionSuspended = false;
   let activeCity = options.initialCity ?? null;
   let sessionToken = 0;
   let currentRevision = 0;
@@ -384,12 +389,17 @@ export async function createGameRuntime(
     }
   };
 
-  const stop = (): void => {
+  const stopRuntime = (): void => {
     clearHoverPreviewTimer();
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
     canvasHost.stop();
+  };
+
+  const stop = (): void => {
+    if (backendAdmissionReserved) return;
+    stopRuntime();
   };
 
   const failBackend = (error: unknown): RuntimeSnapshot => {
@@ -398,7 +408,7 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
-    stop();
+    stopRuntime();
     // Clear stale preview UI so a fatal error doesn't leave the road preview
     // overlay visible or the route draft stuck at previewPending forever.
     const clearedUi: UiState = {
@@ -494,9 +504,9 @@ export async function createGameRuntime(
 
   const requestRoutePreview = (
     draft: RouteDraft,
-    allowDuringReservation = false,
+    allowWhileSuspended = false,
   ): void => {
-    if (dead || (backendAdmissionReserved && !allowDuringReservation)) return;
+    if (dead || (previewAdmissionSuspended && !allowWhileSuspended)) return;
     const { instanceId, generation } = draft;
     const requestRuntimeEpoch = previewRuntimeEpoch;
     const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
@@ -593,6 +603,7 @@ export async function createGameRuntime(
     (previous === null || next.generation !== previous.generation);
 
   const commitRouteDraft = (routeDraft: RouteDraft): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     if (routeDraft === ui.routeDraft) {
       return commit(state, ui);
     }
@@ -637,14 +648,17 @@ export async function createGameRuntime(
 
   const rejectRouteDraftInteraction = (
     error: RouteDraftInteractionError,
-  ): RuntimeSnapshot =>
-    commit(state, {
+  ): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
+    return commit(state, {
       ...ui,
       routePreviewError: error,
       routePreviewHostError: null,
     });
+  };
 
   const startRouteEdit = (routeId: string): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     const route = state.transit.routes.find(
       (candidate) => candidate.id === routeId,
     );
@@ -836,6 +850,7 @@ export async function createGameRuntime(
   };
 
   const cancelRouteDraft = (): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     previewCoordinator.invalidateRoute();
     const cancelledUi = cancelDraftRoute(ui);
     if (
@@ -854,6 +869,7 @@ export async function createGameRuntime(
   };
 
   const undoRouteDraft = (): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     const draft = ui.routeDraft;
     const checkpoint = ui.routeDraftHistory.past.at(-1);
     if (draft === null || checkpoint === undefined) {
@@ -877,6 +893,7 @@ export async function createGameRuntime(
   };
 
   const redoRouteDraft = (): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     const draft = ui.routeDraft;
     const checkpoint = ui.routeDraftHistory.future.at(-1);
     if (draft === null || checkpoint === undefined) {
@@ -902,6 +919,7 @@ export async function createGameRuntime(
   };
 
   const reloadRouteDraft = (): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
     const draft = ui.routeDraft;
     if (draft?.source.kind !== "edit") {
       return commit(state, ui);
@@ -921,15 +939,17 @@ export async function createGameRuntime(
     return startRouteEdit(routeId);
   };
 
-  const handleEscape = (): RuntimeSnapshot =>
-    ui.routeDraft === null ? api.resetUi() : cancelRouteDraft();
+  const handleEscape = (): RuntimeSnapshot => {
+    if (backendAdmissionReserved) return getSnapshot();
+    return ui.routeDraft === null ? api.resetUi() : cancelRouteDraft();
+  };
 
   const sendRoadMutationPreviewRequest = (
     mutation: RoadMutation,
     generation: number,
-    allowDuringReservation = false,
+    allowWhileSuspended = false,
   ): void => {
-    if (dead || (backendAdmissionReserved && !allowDuringReservation)) return;
+    if (dead || (previewAdmissionSuspended && !allowWhileSuspended)) return;
     const requestRuntimeEpoch = previewRuntimeEpoch;
     activeRoadMutation = mutation;
     void previewCoordinator
@@ -988,8 +1008,8 @@ export async function createGameRuntime(
    *  then calling `requestRoadMutationPreview` (which committed a second time).
    *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
   const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
-    const mutation =
-      dead || backendAdmissionReserved ? null : roadMutationForUi(nextUi);
+    if (backendAdmissionReserved) return getSnapshot();
+    const mutation = dead ? null : roadMutationForUi(nextUi);
     if (mutation === null) {
       return commit(state, nextUi);
     }
@@ -1808,6 +1828,7 @@ export async function createGameRuntime(
 
   const suspendNewCityPreviews = (): boolean => {
     const hadHoverPreviewTimer = hoverPreviewTimer !== null;
+    previewAdmissionSuspended = true;
     previewRuntimeEpoch += 1;
     clearHoverPreviewTimer();
     previewCoordinator.invalidateRoute();
@@ -1959,7 +1980,6 @@ export async function createGameRuntime(
     const now = options.now;
     const appVersion = options.appVersion;
     backendAdmissionReserved = true;
-    const hadHoverPreviewTimer = suspendNewCityPreviews();
 
     try {
       await gameplayQueue.drain();
@@ -1970,6 +1990,7 @@ export async function createGameRuntime(
       }
       if (dead) return runtimeUnavailable("activateNewCity");
 
+      const hadHoverPreviewTimer = suspendNewCityPreviews();
       const prior = captureNewCityPriorRuntime(hadHoverPreviewTimer);
       lifecycleStatus = { state: "creatingCity" };
       publish();
@@ -2109,6 +2130,7 @@ export async function createGameRuntime(
       const source: LoadSource = { kind: "working", cityId: identity.id };
       return { status: "completed", value: { snapshot, source } };
     } finally {
+      previewAdmissionSuspended = false;
       backendAdmissionReserved = false;
     }
   };
@@ -2194,12 +2216,14 @@ export async function createGameRuntime(
       });
     },
     resetUi() {
+      if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, createUiState());
     },
     setTool(tool) {
+      if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -2216,12 +2240,14 @@ export async function createGameRuntime(
       return commitWithRoadPreview(next);
     },
     setBuilding(building) {
+      if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, nextBuildingUiState(building, ui));
     },
     setArea(area) {
+      if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -2242,6 +2268,7 @@ export async function createGameRuntime(
       );
     },
     armRoad(preset) {
+      if (backendAdmissionReserved) return getSnapshot();
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
@@ -2254,6 +2281,7 @@ export async function createGameRuntime(
       });
     },
     armRoundabout(size: RoundaboutSize) {
+      if (backendAdmissionReserved) return getSnapshot();
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
       // and invalidates any in-flight road preview so an older footprint can
       // never populate the newly armed stamp.
@@ -2303,6 +2331,7 @@ export async function createGameRuntime(
       });
     },
     cancelDrag() {
+      if (backendAdmissionReserved) return getSnapshot();
       invalidateRoadPreview();
       return commit(
         state,
@@ -2599,6 +2628,7 @@ export async function createGameRuntime(
       });
     },
     setHoverTile(point) {
+      if (backendAdmissionReserved) return getSnapshot();
       if (samePoint(point, ui.hoverTile)) {
         return commit(state, ui);
       }
@@ -2637,7 +2667,7 @@ export async function createGameRuntime(
         hoverPreviewTimer = null;
         if (
           dead ||
-          backendAdmissionReserved ||
+          previewAdmissionSuspended ||
           ui.roadPreviewGeneration !== generation
         )
           return;

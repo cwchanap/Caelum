@@ -904,7 +904,7 @@ function backendSpy(
   };
 }
 
-function transactionalBackend(backend: BackendSpy): BackendSpy {
+function transactionalBackend<T extends BackendSpy>(backend: T): T {
   const createSandbox = backend.createSandbox.bind(backend);
   backend.createSandbox = async (request) => {
     const result = await createSandbox(request);
@@ -1302,6 +1302,107 @@ describe("Game Runtime", () => {
         });
       } finally {
         store.releaseAll();
+        await Promise.allSettled([activation]);
+        vi.useRealTimers();
+      }
+    });
+
+    it("freezes preview UI throughout New City drains and resumes the original hover after rollback", async () => {
+      vi.useFakeTimers();
+      const backend = transactionalBackend(
+        deferredDispatchBackend(dirtyRouteSnapshot()),
+      );
+      const previewPoints: Point[] = [];
+      backend.previewRoadMutation = vi.fn(async (request) => {
+        const point =
+          request.mutation.type === "layRoad"
+            ? request.mutation.point
+            : { x: -1, y: -1 };
+        previewPoints.push(point);
+        return roadPreview(request.generation, point);
+      });
+      const failures = createMemorySaveStoreFailureControls();
+      failures.failNext("writeWorkingSave", "ioFailure");
+      const runtime = await createGameRuntime({
+        backend,
+        saveStore: createMemorySaveStore({ failures }),
+        initialCity: cityIdentity(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        hoverPreviewDebounceMs: 50,
+      });
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      const frozenUi = runtime.getSnapshot().ui;
+
+      const admitted = runtime.debugSetBudget(90_000);
+      await flushPromises();
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+      let releasedDrain = false;
+      let releasedRollback = false;
+      const releaseTransactionBackend = async (): Promise<void> => {
+        if (!releasedDrain) {
+          await backend.resolveNext();
+          releasedDrain = true;
+        }
+        await admitted;
+        for (
+          let attempt = 0;
+          attempt < 10 && backend.intents.length < 2;
+          attempt += 1
+        ) {
+          await flushPromises();
+        }
+        if (!releasedRollback && backend.intents.length >= 2) {
+          await backend.resolveNext();
+          releasedRollback = true;
+        }
+      };
+
+      try {
+        runtime.setHoverTile({ x: 6, y: 5 });
+        runtime.previewRoadMutation({
+          type: "layRoad",
+          point: { x: 7, y: 5 },
+        });
+        runtime.startRouteEdit("route-dirty");
+        runtime.reverseRouteDraft();
+
+        expect(runtime.getSnapshot().ui).toEqual(frozenUi);
+        expect(previewPoints).toEqual([]);
+
+        await releaseTransactionBackend();
+        await expect(activation).resolves.toMatchObject({ status: "failed" });
+        await flushPromises();
+
+        expect(runtime.getSnapshot()).toMatchObject({
+          state: { budget: 90_000 },
+          ui: {
+            activeTool: "road",
+            hoverTile: { x: 5, y: 5 },
+            roadPreviewGeneration: frozenUi.roadPreviewGeneration,
+            routeDraft: null,
+            roadMutationPreview: {
+              changedTiles: [{ x: 5, y: 5 }],
+            },
+          },
+        });
+        expect(previewPoints).toEqual([{ x: 5, y: 5 }]);
+      } finally {
+        await releaseTransactionBackend();
         await Promise.allSettled([activation]);
         vi.useRealTimers();
       }
