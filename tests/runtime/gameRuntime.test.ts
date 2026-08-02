@@ -1765,9 +1765,16 @@ describe("Game Runtime", () => {
 
   it("resets through the backend and resets UI state", async () => {
     const backend = backendSpy();
+    const identity = {
+      id: "city-reset",
+      name: "Reset City",
+      cityCreatedAt: "2026-08-01T09:00:00.000Z",
+    };
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend,
+      initialCity: identity,
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
     });
 
     runtime.setTool("busRoute");
@@ -1781,6 +1788,15 @@ describe("Game Runtime", () => {
     expect(snapshot.state.paused).toBe(true);
     expect(snapshot.state.speed).toBe(1);
     expect(snapshot.sandboxResetError).toBeNull();
+    expect(snapshot.persistence).toMatchObject({
+      activeCity: identity,
+      dirty: true,
+      saveStatus: { state: "idle" },
+      loadStatus: { state: "idle" },
+      lifecycleStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: null,
+    });
   });
 
   it("surfaces a typed sandbox reset failure without changing runtime lifecycle state", async () => {
@@ -1810,6 +1826,7 @@ describe("Game Runtime", () => {
     expect(resetSnapshot.rejection).toEqual(TEST_REJECTION);
     expect(resetSnapshot.sandboxResetError).toEqual(resetError);
     expect(resetSnapshot.backendError).toBeNull();
+    expect(resetSnapshot.persistence).toEqual(beforeReset.persistence);
     expect(runtime.isRunning()).toBe(true);
 
     await runtime.setSpeed(2);

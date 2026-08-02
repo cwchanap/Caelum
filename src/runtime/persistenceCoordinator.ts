@@ -239,6 +239,15 @@ export function activeCityDeleteRequiresTransition(
   });
 }
 
+export function guardActiveCityDelete(
+  activeCity: ActiveCityIdentity | null,
+  cityId: string,
+): PersistenceOperationResult<never> | null {
+  return activeCity?.id === cityId
+    ? activeCityDeleteRequiresTransition(cityId)
+    : null;
+}
+
 export function runtimeUnavailable(
   operation: PersistenceCoordinatorOperation,
 ): PersistenceOperationResult<never> {
