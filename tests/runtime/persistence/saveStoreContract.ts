@@ -4,6 +4,7 @@ import type {
   SaveStore,
   SaveStoreErrorCode,
   SaveStoreOperation,
+  SaveStoreResult,
 } from "../../../src/persistence/saveStore";
 import { makeEnvelope, makeRustSnapshot } from "./fixtures";
 import { expectError, expectOk } from "./storeTestUtils";
@@ -1130,7 +1131,7 @@ export function defineSaveStoreContract(
         },
         {
           label: "writeCheckpoint",
-          passes: 2,
+          passes: 1,
           run: (store: SaveStore, envelope: WritableSaveEnvelope) =>
             store.writeCheckpoint({
               checkpointId: "checkpoint-1",
@@ -1144,7 +1145,7 @@ export function defineSaveStoreContract(
         },
         {
           label: "writeAutosave",
-          passes: 2,
+          passes: 1,
           run: (store: SaveStore, envelope: WritableSaveEnvelope) =>
             store.writeAutosave({
               autosaveId: "autosave-1",
@@ -1178,6 +1179,93 @@ export function defineSaveStoreContract(
 
           await expectError(run(store, envelope as never), "corruptRecord");
           await expectError(verify(store), "notFound");
+        },
+      );
+
+      const envelopeCaptureCases = [
+        {
+          label: "checkpoint",
+          run: (store: SaveStore, input: never) => store.writeCheckpoint(input),
+          verify: (store: SaveStore) =>
+            store.readCheckpoint("city-1", "checkpoint-1"),
+          makeInput: (envelopeGetter: () => unknown) =>
+            Object.defineProperty(
+              {
+                cityId: "city-1",
+                checkpointId: "checkpoint-1",
+                name: "Checkpoint",
+                note: null,
+              },
+              "envelope",
+              { enumerable: true, get: envelopeGetter },
+            ),
+        },
+        {
+          label: "autosave",
+          run: (store: SaveStore, input: never) => store.writeAutosave(input),
+          verify: (store: SaveStore) =>
+            store.readAutosave("city-1", "autosave-1"),
+          makeInput: (envelopeGetter: () => unknown) =>
+            Object.defineProperty(
+              {
+                cityId: "city-1",
+                autosaveId: "autosave-1",
+                generation: 1,
+              },
+              "envelope",
+              { enumerable: true, get: envelopeGetter },
+            ),
+        },
+      ] as const;
+
+      it.each(envelopeCaptureCases)(
+        "captures the $label envelope on the first read and ignores a later divergent envelope",
+        async ({ run, verify, makeInput }) => {
+          const { store } = createHarness();
+          const envelopeA = makeEnvelope({
+            savedAt: "2026-08-01T10:00:00.000Z",
+          });
+          const envelopeB = makeEnvelope({
+            savedAt: "2026-08-01T11:00:00.000Z",
+            city: { id: "city-1", name: "Changed" },
+          });
+          let envelopeReads = 0;
+          const input = makeInput(() => {
+            envelopeReads += 1;
+            return envelopeReads === 1 ? envelopeA : envelopeB;
+          });
+
+          await expectOk(
+            run(store, input as never) as Promise<SaveStoreResult<unknown>>,
+          );
+
+          expect(
+            await expectOk(verify(store) as Promise<SaveStoreResult<unknown>>),
+          ).toEqual(envelopeA);
+        },
+      );
+
+      it.each(envelopeCaptureCases)(
+        "captures the $label envelope once and tolerates a throwing second read",
+        async ({ run, verify, makeInput }) => {
+          const { store } = createHarness();
+          const envelope = makeEnvelope({
+            savedAt: "2026-08-01T10:00:00.000Z",
+          });
+          let envelopeReads = 0;
+          const input = makeInput(() => {
+            envelopeReads += 1;
+            if (envelopeReads === 1) return envelope;
+            throw new Error("hostile envelope getter");
+          });
+
+          await expectOk(
+            run(store, input as never) as Promise<SaveStoreResult<unknown>>,
+          );
+
+          expect(
+            await expectOk(verify(store) as Promise<SaveStoreResult<unknown>>),
+          ).toEqual(envelope);
         },
       );
     });

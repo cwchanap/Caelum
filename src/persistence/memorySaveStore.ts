@@ -107,6 +107,28 @@ function cloneResult<T>(
   }
 }
 
+function captureValue<T>(
+  access: () => T,
+  operation: SaveStoreOperation,
+  context: { cityId?: string; recordId?: string } = {},
+): SaveStoreResult<T> {
+  try {
+    return { ok: true, value: access() };
+  } catch {
+    return errorResult(operation, "serializationFailed", context);
+  }
+}
+
+function captureClone<T>(
+  access: () => T,
+  operation: SaveStoreOperation,
+  context: { cityId?: string; recordId?: string } = {},
+): SaveStoreResult<T> {
+  const captured = captureValue(access, operation, context);
+  if (!captured.ok) return captured;
+  return cloneResult(captured.value, operation, context);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -506,7 +528,20 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeCheckpoint: SaveStore["writeCheckpoint"] = async (input) => {
-    const candidate = cloneResult(input, "writeCheckpoint");
+    const capturedEnvelope = captureValue(
+      () => input.envelope,
+      "writeCheckpoint",
+    );
+    if (!capturedEnvelope.ok) return capturedEnvelope;
+    const candidate = captureClone(
+      () => ({
+        cityId: input.cityId,
+        checkpointId: input.checkpointId,
+        name: input.name,
+        note: input.note,
+      }),
+      "writeCheckpoint",
+    );
     if (!candidate.ok) return candidate;
     if (
       !isNonEmptyString(candidate.value.cityId) ||
@@ -525,7 +560,7 @@ export function createMemorySaveStore(options?: {
       context,
     );
     if (failure) return failure;
-    const inspected = inspectSaveEnvelope(input.envelope);
+    const inspected = inspectSaveEnvelope(capturedEnvelope.value);
     if (!inspected.ok) {
       return errorResult(
         "writeCheckpoint",
@@ -679,7 +714,19 @@ export function createMemorySaveStore(options?: {
   };
 
   const writeAutosave: SaveStore["writeAutosave"] = async (input) => {
-    const candidate = cloneResult(input, "writeAutosave");
+    const capturedEnvelope = captureValue(
+      () => input.envelope,
+      "writeAutosave",
+    );
+    if (!capturedEnvelope.ok) return capturedEnvelope;
+    const candidate = captureClone(
+      () => ({
+        cityId: input.cityId,
+        autosaveId: input.autosaveId,
+        generation: input.generation,
+      }),
+      "writeAutosave",
+    );
     if (!candidate.ok) return candidate;
     if (
       !isNonEmptyString(candidate.value.cityId) ||
@@ -694,7 +741,7 @@ export function createMemorySaveStore(options?: {
     };
     const failure = injectedFailure<AutosaveSummary>("writeAutosave", context);
     if (failure) return failure;
-    const inspected = inspectSaveEnvelope(input.envelope);
+    const inspected = inspectSaveEnvelope(capturedEnvelope.value);
     if (!inspected.ok) {
       return errorResult(
         "writeAutosave",
