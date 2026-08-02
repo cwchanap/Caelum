@@ -19,6 +19,7 @@ import type { PersistenceOperationError } from "../../src/runtime/backend/persis
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   activeCityDeleteRequiresTransition,
+  enqueueCityPersistence,
   guardActiveCityDelete,
   noActiveCity,
   resolvePersistenceSessionCompletion,
@@ -1575,6 +1576,60 @@ describe("runtime persistence coordinator contracts", () => {
     });
     harness.store.releaseNext("writeWorkingSave");
     await expect(activation).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("serializes the candidate working save behind an older write for the same city", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const identity = newCityIdentity();
+    const olderEnvelope = buildSaveEnvelope({
+      city: { id: identity.id, name: identity.name },
+      cityCreatedAt: identity.cityCreatedAt,
+      savedAt: "2026-08-01T09:45:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
+    });
+    harness.store.defer("writeWorkingSave");
+    const olderWrite = enqueueCityPersistence(identity.id, () =>
+      harness.store.writeWorkingSave(olderEnvelope),
+    );
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      identity,
+    );
+
+    try {
+      await vi.waitFor(() => {
+        expect(harness.backend.createSandboxCalls).toBe(1);
+      });
+      expect(harness.store.activeCount()).toBe(1);
+      expect(harness.store.mutationOrder()).toEqual(["writeWorkingSave"]);
+
+      harness.store.releaseNext("writeWorkingSave");
+      await olderWrite;
+      await harness.store.waitForActive("writeWorkingSave");
+      expect(harness.store.activeCount()).toBe(1);
+      expect(harness.store.mutationOrder()).toEqual([
+        "writeWorkingSave",
+        "writeWorkingSave",
+      ]);
+
+      harness.store.releaseNext("writeWorkingSave");
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+      await expect(
+        harness.store.readWorkingSave(identity.id),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          savedAt: "2026-08-01T10:00:00.000Z",
+          snapshot: { budget: 120_000 },
+        },
+      });
+    } finally {
+      harness.store.releaseAll();
+      await Promise.allSettled([olderWrite, activation]);
+    }
   });
 
   it("enters fatal unavailable state when rollback restoration fails", async () => {

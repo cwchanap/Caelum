@@ -245,6 +245,11 @@ export async function createGameRuntime(
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  // Preview requests run outside the gameplay queue, so they need their own
+  // runtime epoch when a foreground transaction temporarily replaces the
+  // backend snapshot. Responses from an older epoch cannot publish into a
+  // restored or newly activated runtime.
+  let previewRuntimeEpoch = 0;
   let activeCity = options.initialCity ?? null;
   let sessionToken = 0;
   let currentRevision = 0;
@@ -487,9 +492,13 @@ export async function createGameRuntime(
       return commitDispatchResult(result, ui, true);
     });
 
-  const requestRoutePreview = (draft: RouteDraft): void => {
-    if (dead) return;
+  const requestRoutePreview = (
+    draft: RouteDraft,
+    allowDuringReservation = false,
+  ): void => {
+    if (dead || (backendAdmissionReserved && !allowDuringReservation)) return;
     const { instanceId, generation } = draft;
+    const requestRuntimeEpoch = previewRuntimeEpoch;
     const routeId = draft.source.kind === "edit" ? draft.source.routeId : null;
     const expectedRevision =
       draft.source.kind === "edit" ? draft.source.expectedRevision : null;
@@ -503,6 +512,7 @@ export async function createGameRuntime(
         generation,
       })
       .then((response) => {
+        if (requestRuntimeEpoch !== previewRuntimeEpoch) return;
         const current = ui.routeDraft;
         if (
           current === null ||
@@ -547,6 +557,7 @@ export async function createGameRuntime(
         });
       })
       .catch((error: unknown) => {
+        if (requestRuntimeEpoch !== previewRuntimeEpoch) return;
         const current = ui.routeDraft;
         if (
           dead ||
@@ -916,12 +927,16 @@ export async function createGameRuntime(
   const sendRoadMutationPreviewRequest = (
     mutation: RoadMutation,
     generation: number,
+    allowDuringReservation = false,
   ): void => {
+    if (dead || (backendAdmissionReserved && !allowDuringReservation)) return;
+    const requestRuntimeEpoch = previewRuntimeEpoch;
     activeRoadMutation = mutation;
     void previewCoordinator
       .requestRoadMutation({ mutation, generation })
       .then((response) => {
         if (
+          requestRuntimeEpoch !== previewRuntimeEpoch ||
           response === null ||
           activeRoadMutation === null ||
           ui.roadPreviewGeneration !== generation
@@ -937,6 +952,7 @@ export async function createGameRuntime(
       .catch((error: unknown) => {
         if (
           dead ||
+          requestRuntimeEpoch !== previewRuntimeEpoch ||
           activeRoadMutation === null ||
           ui.roadPreviewGeneration !== generation
         ) {
@@ -954,7 +970,7 @@ export async function createGameRuntime(
   const requestRoadMutationPreview = (
     mutation: RoadMutation,
   ): RuntimeSnapshot => {
-    if (dead) return getSnapshot();
+    if (dead || backendAdmissionReserved) return getSnapshot();
     const generation = ui.roadPreviewGeneration + 1;
     const pending = commit(state, {
       ...ui,
@@ -972,7 +988,8 @@ export async function createGameRuntime(
    *  then calling `requestRoadMutationPreview` (which committed a second time).
    *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
   const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
-    const mutation = dead ? null : roadMutationForUi(nextUi);
+    const mutation =
+      dead || backendAdmissionReserved ? null : roadMutationForUi(nextUi);
     if (mutation === null) {
       return commit(state, nextUi);
     }
@@ -1732,11 +1749,14 @@ export async function createGameRuntime(
     nextRouteDraftInstanceId: number;
     activeRouteSaveTokens: Set<string>;
     activeRoadMutation: RoadMutation | null;
+    hadHoverPreviewTimer: boolean;
     running: boolean;
     paused: boolean;
   };
 
-  const captureNewCityPriorRuntime = (): NewCityPriorRuntime => ({
+  const captureNewCityPriorRuntime = (
+    hadHoverPreviewTimer: boolean,
+  ): NewCityPriorRuntime => ({
     state,
     ui,
     backendError,
@@ -1755,6 +1775,7 @@ export async function createGameRuntime(
     nextRouteDraftInstanceId,
     activeRouteSaveTokens: new Set(activeRouteSaveTokens),
     activeRoadMutation,
+    hadHoverPreviewTimer,
     running: canvasHost.isRunning(),
     paused: state.paused,
   });
@@ -1783,6 +1804,42 @@ export async function createGameRuntime(
     activeRoadMutation = prior.activeRoadMutation;
     if (prior.running && !canvasHost.isRunning()) canvasHost.start();
     if (!prior.running && canvasHost.isRunning()) canvasHost.stop();
+  };
+
+  const suspendNewCityPreviews = (): boolean => {
+    const hadHoverPreviewTimer = hoverPreviewTimer !== null;
+    previewRuntimeEpoch += 1;
+    clearHoverPreviewTimer();
+    previewCoordinator.invalidateRoute();
+    // Keep activeRoadMutation intact for the rollback baseline. The request is
+    // invalidated here and, if still pending, is reissued only after the prior
+    // canonical backend snapshot has been restored.
+    previewCoordinator.invalidateRoadMutation();
+    return hadHoverPreviewTimer;
+  };
+
+  const resumeNewCityPriorPreviews = (prior: NewCityPriorRuntime): void => {
+    const routeDraft = prior.ui.routeDraft;
+    if (routeDraft?.previewPending === true) {
+      requestRoutePreview(routeDraft, true);
+    }
+
+    if (
+      prior.ui.roadMutationPreview !== null ||
+      prior.ui.roadMutationPreviewError !== null
+    ) {
+      return;
+    }
+    const mutation =
+      prior.activeRoadMutation ??
+      (prior.hadHoverPreviewTimer ? roadMutationForUi(prior.ui) : null);
+    if (mutation !== null) {
+      sendRoadMutationPreviewRequest(
+        mutation,
+        prior.ui.roadPreviewGeneration,
+        true,
+      );
+    }
   };
 
   const persistenceHostFailure = (
@@ -1860,10 +1917,12 @@ export async function createGameRuntime(
       return runtimeUnavailable("activateNewCity");
     }
 
+    previewRuntimeEpoch += 1;
     previewCoordinator.invalidateRoute();
-    invalidateRoadPreview();
+    previewCoordinator.invalidateRoadMutation();
     restoreNewCityPriorRuntime(prior);
     publish();
+    resumeNewCityPriorPreviews(prior);
     return { status: "failed", error: failure };
   };
 
@@ -1900,6 +1959,7 @@ export async function createGameRuntime(
     const now = options.now;
     const appVersion = options.appVersion;
     backendAdmissionReserved = true;
+    const hadHoverPreviewTimer = suspendNewCityPreviews();
 
     try {
       await gameplayQueue.drain();
@@ -1910,7 +1970,7 @@ export async function createGameRuntime(
       }
       if (dead) return runtimeUnavailable("activateNewCity");
 
-      const prior = captureNewCityPriorRuntime();
+      const prior = captureNewCityPriorRuntime(hadHoverPreviewTimer);
       lifecycleStatus = { state: "creatingCity" };
       publish();
 
@@ -1921,6 +1981,7 @@ export async function createGameRuntime(
         const failure = persistenceHostFailure("snapshotForSave", error);
         restoreNewCityPriorRuntime(prior);
         publish();
+        resumeNewCityPriorPreviews(prior);
         return { status: "failed", error: failure };
       }
       if (!priorCapture.ok) {
@@ -1930,6 +1991,7 @@ export async function createGameRuntime(
         };
         restoreNewCityPriorRuntime(prior);
         publish();
+        resumeNewCityPriorPreviews(prior);
         return { status: "failed", error: failure };
       }
 
@@ -1950,6 +2012,7 @@ export async function createGameRuntime(
       if (!created.ok) {
         restoreNewCityPriorRuntime(prior);
         publish();
+        resumeNewCityPriorPreviews(prior);
         return {
           status: "failed",
           error: { kind: "sandbox", error: created.error },
@@ -1999,7 +2062,9 @@ export async function createGameRuntime(
 
       let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
       try {
-        stored = await saveStore.writeWorkingSave(envelope);
+        stored = await enqueueCityPersistence(identity.id, () =>
+          saveStore.writeWorkingSave(envelope),
+        );
       } catch (error: unknown) {
         stored = {
           ok: false,
@@ -2020,6 +2085,7 @@ export async function createGameRuntime(
       }
 
       clearHoverPreviewTimer();
+      previewRuntimeEpoch += 1;
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       activeRouteSaveTokens.clear();
@@ -2569,7 +2635,12 @@ export async function createGameRuntime(
       const snapshot = commit(state, nextUi);
       hoverPreviewTimer = setTimeout(() => {
         hoverPreviewTimer = null;
-        if (dead || ui.roadPreviewGeneration !== generation) return;
+        if (
+          dead ||
+          backendAdmissionReserved ||
+          ui.roadPreviewGeneration !== generation
+        )
+          return;
         const currentMutation = roadMutationForUi(ui);
         if (currentMutation === null) return;
         sendRoadMutationPreviewRequest(currentMutation, generation);
