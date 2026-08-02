@@ -34,6 +34,40 @@ import type {
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
+import {
+  runtimeUnavailable,
+  type RuntimePersistenceController,
+  type RuntimePersistenceView,
+} from "../../src/runtime/persistenceCoordinator";
+
+const persistenceView: RuntimePersistenceView = {
+  activeCity: null,
+  dirty: false,
+  saveStatus: { state: "idle" },
+  loadStatus: { state: "idle" },
+  lifecycleStatus: { state: "idle" },
+  lastSavedAt: null,
+  error: null,
+};
+
+const persistenceController: RuntimePersistenceController = {
+  saveWorking: async () => runtimeUnavailable("saveWorking"),
+  renameActiveCity: async () => runtimeUnavailable("renameActiveCity"),
+  load: async (source) =>
+    runtimeUnavailable(
+      source.kind === "working"
+        ? "loadWorking"
+        : source.kind === "checkpoint"
+          ? "loadCheckpoint"
+          : "loadAutosave",
+    ),
+  detachActiveCity: () => runtimeUnavailable("detachActiveCity"),
+  activateNewCity: async () => runtimeUnavailable("activateNewCity"),
+  runGameplayWrite: async (request) =>
+    runtimeUnavailable(
+      request.kind === "checkpoint" ? "createCheckpoint" : "createAutosave",
+    ),
+};
 
 async function openCategory(name: string): Promise<void> {
   await fireEvent.click(screen.getByTestId(`hud-cat-${name}`));
@@ -96,6 +130,7 @@ function createRuntimeHarness(
     state,
     ui,
     shell: selectShellState(state, ui, rejection),
+    persistence: persistenceView,
     backendError,
     rejection,
     sandboxResetError: null,
@@ -114,6 +149,7 @@ function createRuntimeHarness(
   const rotations = [0, 90, 180, 270] as const;
 
   const runtime: RuntimeController & { resetUi: typeof resetUi } = {
+    persistence: persistenceController,
     getSnapshot,
     subscribe: vi.fn((listener: RuntimeListener) => {
       listeners.add(listener);
@@ -464,6 +500,7 @@ describe("App shell bootstrap", () => {
       state: nextState,
       ui: nextUi,
       shell: selectShellState(nextState, nextUi),
+      persistence: persistenceView,
       backendError: null,
       rejection: null,
       sandboxResetError: null,
