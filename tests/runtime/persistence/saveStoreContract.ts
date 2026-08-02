@@ -1119,6 +1119,67 @@ export function defineSaveStoreContract(
           generationHighWaterMark: null,
         });
       });
+
+      it.each([
+        {
+          label: "writeWorkingSave",
+          passes: 1,
+          run: (store: SaveStore, envelope: WritableSaveEnvelope) =>
+            store.writeWorkingSave(envelope),
+          verify: (store: SaveStore) => store.readWorkingSave("city-1"),
+        },
+        {
+          label: "writeCheckpoint",
+          passes: 2,
+          run: (store: SaveStore, envelope: WritableSaveEnvelope) =>
+            store.writeCheckpoint({
+              checkpointId: "checkpoint-1",
+              cityId: "city-1",
+              name: "Checkpoint",
+              note: null,
+              envelope,
+            }),
+          verify: (store: SaveStore) =>
+            store.readCheckpoint("city-1", "checkpoint-1"),
+        },
+        {
+          label: "writeAutosave",
+          passes: 2,
+          run: (store: SaveStore, envelope: WritableSaveEnvelope) =>
+            store.writeAutosave({
+              autosaveId: "autosave-1",
+              cityId: "city-1",
+              generation: 1,
+              envelope,
+            }),
+          verify: (store: SaveStore) =>
+            store.readAutosave("city-1", "autosave-1"),
+        },
+      ] as const)(
+        "rejects a stateful snapshot.schemaVersion accessor for $label",
+        async ({ passes, run, verify }) => {
+          const { store } = createHarness();
+          const base = makeEnvelope();
+          let reads = 0;
+          const snapshot = Object.defineProperty(
+            { ...base.snapshot },
+            "schemaVersion",
+            {
+              enumerable: true,
+              get() {
+                reads += 1;
+                return reads <= passes
+                  ? base.snapshotSchemaVersion
+                  : base.snapshotSchemaVersion - 1;
+              },
+            },
+          );
+          const envelope = { ...base, snapshot };
+
+          await expectError(run(store, envelope as never), "corruptRecord");
+          await expectError(verify(store), "notFound");
+        },
+      );
     });
 
     describe("injected storage error taxonomy", () => {

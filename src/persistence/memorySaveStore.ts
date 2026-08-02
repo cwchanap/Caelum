@@ -349,6 +349,14 @@ export function createMemorySaveStore(options?: {
       cityId,
     });
     if (!stored.ok) return stored;
+    const reinspection = inspectSaveEnvelope(stored.value);
+    if (!reinspection.ok) {
+      return errorResult(
+        "writeWorkingSave",
+        incompatibleCode(reinspection.compatibility),
+        { cityId },
+      );
+    }
     const failure = injectedFailure<CitySummary>("writeWorkingSave", {
       cityId,
     });
@@ -538,6 +546,14 @@ export function createMemorySaveStore(options?: {
       context,
     );
     if (!storedEnvelope.ok) return storedEnvelope;
+    const reinspection = inspectSaveEnvelope(storedEnvelope.value);
+    if (!reinspection.ok) {
+      return errorResult(
+        "writeCheckpoint",
+        incompatibleCode(reinspection.compatibility),
+        context,
+      );
+    }
     const record: StoredCheckpoint = {
       checkpointId: candidate.value.checkpointId,
       cityId: candidate.value.cityId,
@@ -706,6 +722,14 @@ export function createMemorySaveStore(options?: {
       context,
     );
     if (!storedEnvelope.ok) return storedEnvelope;
+    const reinspection = inspectSaveEnvelope(storedEnvelope.value);
+    if (!reinspection.ok) {
+      return errorResult(
+        "writeAutosave",
+        incompatibleCode(reinspection.compatibility),
+        context,
+      );
+    }
     const record: StoredAutosave = {
       autosaveId: candidate.value.autosaveId,
       cityId: candidate.value.cityId,
