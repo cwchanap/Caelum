@@ -159,10 +159,8 @@ export function resolveWorkingSaveCompletion(input: {
 }):
   | { status: "current"; persistedRevision: number }
   | { status: "superseded" } {
-  if (
-    input.currentCityId !== input.capturedCityId ||
-    input.currentSessionToken !== input.capturedSessionToken
-  ) {
+  const session = resolvePersistenceSessionCompletion(input);
+  if (session.status === "superseded") {
     return { status: "superseded" };
   }
   return {
@@ -172,6 +170,18 @@ export function resolveWorkingSaveCompletion(input: {
       input.capturedRevision,
     ),
   };
+}
+
+export function resolvePersistenceSessionCompletion(input: {
+  currentCityId: string | null;
+  currentSessionToken: number;
+  capturedCityId: string;
+  capturedSessionToken: number;
+}): { status: "current" } | { status: "superseded" } {
+  return input.currentCityId === input.capturedCityId &&
+    input.currentSessionToken === input.capturedSessionToken
+    ? { status: "current" }
+    : { status: "superseded" };
 }
 
 function preconditionFailure(
