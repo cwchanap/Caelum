@@ -1048,9 +1048,17 @@ describe("Game Runtime", () => {
 
       runtime.startRouteEdit("route-dirty");
       await flushPromises();
+      const listener = vi.fn();
+      const unsubscribe = runtime.subscribe(listener);
       await runtime.saveRouteDraft();
 
       expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(runtime.getSnapshot().persistence.dirty).toBe(false);
     });
 
     it("marks a successful reset dirty", async () => {

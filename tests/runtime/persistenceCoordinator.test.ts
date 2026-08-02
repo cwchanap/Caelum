@@ -313,6 +313,30 @@ function coordinatorBackend(): GameBackend {
   };
 }
 
+const delayedActiveCityMutationCases = [
+  {
+    kind: "checkpoint",
+    storeOperation: "writeCheckpoint",
+    coordinatorOperation: "createCheckpoint",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.runGameplayWrite(harness.checkpointRequest()),
+  },
+  {
+    kind: "autosave",
+    storeOperation: "writeAutosave",
+    coordinatorOperation: "createAutosave",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.runGameplayWrite(harness.autosaveRequest()),
+  },
+  {
+    kind: "rename",
+    storeOperation: "renameCity",
+    coordinatorOperation: "renameActiveCity",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.renameActiveCity("Renamed"),
+  },
+] as const;
+
 describe("runtime persistence coordinator contracts", () => {
   it("guards only deletion of the active city", () => {
     expect(guardActiveCityDelete(cityIdentity(), "city-001")).toEqual(
@@ -513,6 +537,44 @@ describe("runtime persistence coordinator contracts", () => {
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
   });
+
+  it.each(delayedActiveCityMutationCases)(
+    "returns runtime unavailable when a delayed $kind completion settles after death",
+    async ({ storeOperation, coordinatorOperation, start }) => {
+      const harness = await createCoordinatorHarness();
+      harness.store.defer(storeOperation);
+      const operation = start(harness);
+      await harness.store.waitForActive(storeOperation);
+
+      harness.backend.dispatch = async () => {
+        throw new Error("fatal backend failure");
+      };
+      await harness.runtime.debugSetBudget(90_000);
+      const afterDeath = harness.runtime.getSnapshot();
+      harness.store.releaseNext(storeOperation);
+
+      await expect(operation).resolves.toEqual(
+        runtimeUnavailable(coordinatorOperation),
+      );
+      expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
+    },
+  );
+
+  it.each(delayedActiveCityMutationCases)(
+    "supersedes a delayed $kind completion after reset advances lineage",
+    async ({ storeOperation, start }) => {
+      const harness = await createCoordinatorHarness();
+      harness.store.defer(storeOperation);
+      const operation = start(harness);
+      await harness.store.waitForActive(storeOperation);
+
+      const afterReset = await harness.runtime.reset();
+      harness.store.releaseNext(storeOperation);
+
+      await expect(operation).resolves.toEqual({ status: "superseded" });
+      expect(harness.runtime.getSnapshot()).toEqual(afterReset);
+    },
+  );
 
   it("returns a typed failure when working-save dependencies are omitted", async () => {
     const harness = await createCoordinatorHarness({
@@ -1073,6 +1135,85 @@ describe("runtime persistence coordinator contracts", () => {
       activeCity: { id: source.cityId },
       dirty: true,
       lastSavedAt: null,
+    });
+  });
+
+  it("runs gameplay queued before load restoration admission before the restore", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("readWorkingSave");
+    const order: string[] = [];
+    const dispatch = harness.backend.dispatch.bind(harness.backend);
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    harness.backend.dispatch = async (intent) => {
+      order.push("dispatch");
+      return dispatch(intent);
+    };
+    harness.backend.restoreSnapshot = async (request) => {
+      order.push("restore");
+      return restoreSnapshot(request);
+    };
+
+    const load = harness.runtime.persistence.load(source);
+    await harness.store.waitForActive("readWorkingSave");
+    const gameplay = harness.runtime.debugSetBudget(88_000);
+    await gameplay;
+    harness.store.releaseNext("readWorkingSave");
+    await load;
+
+    expect(order).toEqual(["dispatch", "restore"]);
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: 77_000 },
+      persistence: { activeCity: { id: source.cityId }, dirty: false },
+    });
+  });
+
+  it("runs gameplay queued after load restoration admission after the restore", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    const order: string[] = [];
+    const dispatch = harness.backend.dispatch.bind(harness.backend);
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalRestoreStarted: (() => void) | undefined;
+    const restoreStarted = new Promise<void>((resolve) => {
+      signalRestoreStarted = resolve;
+    });
+    let releaseRestore: (() => void) | undefined;
+    const restoreGate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    harness.backend.dispatch = async (intent) => {
+      order.push("dispatch");
+      return dispatch(intent);
+    };
+    harness.backend.restoreSnapshot = async (request) => {
+      order.push("restore:start");
+      signalRestoreStarted?.();
+      await restoreGate;
+      const result = await restoreSnapshot(request);
+      order.push("restore:end");
+      return result;
+    };
+
+    const load = harness.runtime.persistence.load(source);
+    await restoreStarted;
+    const gameplay = harness.runtime.debugSetBudget(88_000);
+    await Promise.resolve();
+    const orderBeforeRestoreRelease = [...order];
+    releaseRestore?.();
+    await Promise.all([load, gameplay]);
+
+    expect(orderBeforeRestoreRelease).toEqual(["restore:start"]);
+    expect(order).toEqual(["restore:start", "restore:end", "dispatch"]);
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: 88_000 },
+      persistence: { activeCity: { id: source.cityId }, dirty: true },
     });
   });
 
