@@ -1271,6 +1271,7 @@ export async function createGameRuntime(
     const capturedSessionToken = sessionToken;
 
     return enqueueCityPersistence(cityId, async () => {
+      if (dead) return runtimeUnavailable("saveWorking");
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
         return { status: "superseded" };
@@ -1328,20 +1329,42 @@ export async function createGameRuntime(
         }),
       });
 
+      if (dead) return runtimeUnavailable("saveWorking");
       if (capture.status === "superseded") return capture;
       if (capture.status === "failed") {
         publishWorkingSaveFailure(city.id, capturedSessionToken, capture.error);
         return capture;
       }
 
-      const savedAt = now();
-      const envelope = buildSaveEnvelope({
-        city: { id: city.id, name: city.name },
-        cityCreatedAt: city.cityCreatedAt,
-        savedAt,
-        appVersion,
-        snapshot: capture.snapshot,
-      });
+      let savedAt: string;
+      let envelope: ReturnType<typeof buildSaveEnvelope>;
+      try {
+        savedAt = now();
+        envelope = buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt,
+          appVersion,
+          snapshot: capture.snapshot,
+        });
+      } catch (error: unknown) {
+        const result: PersistenceOperationResult<SaveWorkingValue> = {
+          status: "failed",
+          error: {
+            kind: "store",
+            error: {
+              operation: "writeWorkingSave",
+              code: "serializationFailed",
+              cityId: city.id,
+              retryable: false,
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            },
+          },
+        };
+        publishWorkingSaveFailure(city.id, capturedSessionToken, result.error);
+        return result;
+      }
       if (isCurrentPersistenceSession(city.id, capturedSessionToken)) {
         saveStatus = { state: "writing", kind: "working", cityId: city.id };
         publish();
@@ -1444,6 +1467,7 @@ export async function createGameRuntime(
     const capturedSessionToken = sessionToken;
 
     return enqueueCityPersistence(cityId, async () => {
+      if (dead) return runtimeUnavailable(coordinatorOperation);
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
         return { status: "superseded" };
@@ -1617,6 +1641,7 @@ export async function createGameRuntime(
     const city = { ...activeCity };
     const capturedSessionToken = sessionToken;
     return enqueueCityPersistence(city.id, async () => {
+      if (dead) return runtimeUnavailable("renameActiveCity");
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(city.id, capturedSessionToken)) {
         return { status: "superseded" };
@@ -1666,6 +1691,26 @@ export async function createGameRuntime(
     });
   };
 
+  const publishLoadTransition = (
+    requestToken: number,
+    status: RuntimeLoadStatus,
+    error: PersistenceCoordinatorError | null,
+  ): boolean => {
+    if (dead || requestToken !== loadRequestToken) return false;
+    loadStatus = status;
+    persistenceError = error;
+    publish();
+    return true;
+  };
+
+  const publishLoadFailure = (
+    requestToken: number,
+    error: PersistenceCoordinatorError,
+  ): PersistenceOperationResult<LoadCityValue> => {
+    publishLoadTransition(requestToken, { state: "idle" }, error);
+    return { status: "failed", error };
+  };
+
   const loadCity = async (
     requestedSource: LoadSource,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
@@ -1684,6 +1729,7 @@ export async function createGameRuntime(
     const source: LoadSource = { ...requestedSource };
     const requestToken = ++loadRequestToken;
     const read = readForLoadSource(source);
+    publishLoadTransition(requestToken, { state: "reading", source }, null);
     let stored: Awaited<ReturnType<typeof read.read>>;
     try {
       stored = await read.read(saveStore);
@@ -1712,22 +1758,41 @@ export async function createGameRuntime(
     }
 
     if (!stored.ok) {
-      return {
-        status: "failed",
-        error: { kind: "store", error: stored.error },
-      };
+      return publishLoadFailure(requestToken, {
+        kind: "store",
+        error: stored.error,
+      });
     }
 
     const inspected = inspectSaveEnvelope(stored.value);
     if (!inspected.ok) {
-      return {
-        status: "failed",
-        error: {
-          kind: "envelope",
-          error: compatibilityToEnvelopeError(inspected.compatibility),
-        },
-      };
+      return publishLoadFailure(requestToken, {
+        kind: "envelope",
+        error: compatibilityToEnvelopeError(inspected.compatibility),
+      });
     }
+
+    if (inspected.envelope.city.id !== source.cityId) {
+      const recordId =
+        source.kind === "checkpoint"
+          ? source.checkpointId
+          : source.kind === "autosave"
+            ? source.autosaveId
+            : undefined;
+      return publishLoadFailure(requestToken, {
+        kind: "store",
+        error: {
+          operation: read.storeOperation,
+          code: "corruptRecord",
+          cityId: source.cityId,
+          ...(recordId === undefined ? {} : { recordId }),
+          retryable: false,
+          diagnostic: `Requested city ${source.cityId} does not match envelope city ${inspected.envelope.city.id}`,
+        },
+      });
+    }
+
+    publishLoadTransition(requestToken, { state: "restoring", source }, null);
 
     return gameplayQueue.enqueue<PersistenceOperationResult<LoadCityValue>>({
       operation: async () => {
@@ -1738,10 +1803,10 @@ export async function createGameRuntime(
           snapshot: inspected.envelope.snapshot,
         });
         if (!restored.ok) {
-          return {
-            status: "failed",
-            error: { kind: "backend", error: restored.error },
-          };
+          return publishLoadFailure(requestToken, {
+            kind: "backend",
+            error: restored.error,
+          });
         }
         const snapshot = commitLoadedSnapshot(
           restored.snapshot,
@@ -1751,9 +1816,8 @@ export async function createGameRuntime(
         return { status: "completed", value: { snapshot, source } };
       },
       whenDead: () => runtimeUnavailable(read.coordinatorOperation),
-      onThrown: (error: unknown) => ({
-        status: "failed",
-        error: {
+      onThrown: (error: unknown) =>
+        publishLoadFailure(requestToken, {
           kind: "backend",
           error: {
             kind: "host",
@@ -1761,8 +1825,7 @@ export async function createGameRuntime(
             code: "invokeFailed",
             diagnostic: error instanceof Error ? error.message : String(error),
           },
-        },
-      }),
+        }),
     });
   };
 
@@ -1792,6 +1855,7 @@ export async function createGameRuntime(
 
   const captureNewCityPriorRuntime = (
     hadHoverPreviewTimer: boolean,
+    priorLifecycleStatus: RuntimeLifecycleStatus,
   ): NewCityPriorRuntime => ({
     state,
     ui,
@@ -1804,7 +1868,7 @@ export async function createGameRuntime(
     persistedRevision,
     saveStatus,
     loadStatus,
-    lifecycleStatus,
+    lifecycleStatus: priorLifecycleStatus,
     lastSavedAt,
     loadRequestToken,
     persistenceError,
@@ -2000,7 +2064,10 @@ export async function createGameRuntime(
     const identity = { ...requestedIdentity };
     const now = options.now;
     const appVersion = options.appVersion;
+    const priorLifecycleStatus = lifecycleStatus;
     backendAdmissionReserved = true;
+    lifecycleStatus = { state: "creatingCity" };
+    publish();
 
     try {
       await gameplayQueue.drain();
@@ -2012,9 +2079,10 @@ export async function createGameRuntime(
       if (dead) return runtimeUnavailable("activateNewCity");
 
       const hadHoverPreviewTimer = suspendNewCityPreviews();
-      const prior = captureNewCityPriorRuntime(hadHoverPreviewTimer);
-      lifecycleStatus = { state: "creatingCity" };
-      publish();
+      const prior = captureNewCityPriorRuntime(
+        hadHoverPreviewTimer,
+        priorLifecycleStatus,
+      );
 
       let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
       try {

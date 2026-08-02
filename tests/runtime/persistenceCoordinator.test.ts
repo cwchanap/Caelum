@@ -337,6 +337,33 @@ const delayedActiveCityMutationCases = [
   },
 ] as const;
 
+const fifoHeadDeathCases = [
+  {
+    kind: "working save",
+    coordinatorOperation: "saveWorking",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.saveWorking(),
+  },
+  {
+    kind: "checkpoint",
+    coordinatorOperation: "createCheckpoint",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.runGameplayWrite(harness.checkpointRequest()),
+  },
+  {
+    kind: "autosave",
+    coordinatorOperation: "createAutosave",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.runGameplayWrite(harness.autosaveRequest()),
+  },
+  {
+    kind: "rename",
+    coordinatorOperation: "renameActiveCity",
+    start: (harness: CoordinatorHarness) =>
+      harness.runtime.persistence.renameActiveCity("Renamed After Death"),
+  },
+] as const;
+
 describe("runtime persistence coordinator contracts", () => {
   it("guards only deletion of the active city", () => {
     expect(guardActiveCityDelete(cityIdentity(), "city-001")).toEqual(
@@ -560,6 +587,42 @@ describe("runtime persistence coordinator contracts", () => {
     },
   );
 
+  it.each(fifoHeadDeathCases)(
+    "does not start a queued $kind when it reaches the city FIFO head after runtime death",
+    async ({ coordinatorOperation, start }) => {
+      const harness = await createCoordinatorHarness({ clean: true });
+      harness.store.defer("writeWorkingSave");
+      const head = harness.runtime.persistence.saveWorking();
+      await harness.store.waitForActive("writeWorkingSave");
+      const queued = start(harness);
+
+      harness.backend.dispatch = async () => {
+        throw new Error("fatal backend failure");
+      };
+      await harness.runtime.debugSetBudget(90_000);
+      const afterDeath = harness.runtime.getSnapshot();
+      const listener = vi.fn();
+      const unsubscribe = harness.runtime.subscribe(listener);
+
+      harness.store.releaseNext("writeWorkingSave");
+
+      await expect(head).resolves.toEqual(runtimeUnavailable("saveWorking"));
+      await expect(queued).resolves.toEqual(
+        runtimeUnavailable(coordinatorOperation),
+      );
+      expect(harness.store.mutationOrder()).toEqual(["writeWorkingSave"]);
+      await expect(
+        harness.store.readWorkingSave("city-001"),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { city: { id: "city-001", name: "Test City" } },
+      });
+      expect(harness.runtime.getSnapshot()).toEqual(afterDeath);
+      expect(listener).not.toHaveBeenCalled();
+      unsubscribe();
+    },
+  );
+
   it.each(delayedActiveCityMutationCases)(
     "supersedes a delayed $kind completion after reset advances lineage",
     async ({ storeOperation, start }) => {
@@ -606,6 +669,83 @@ describe("runtime persistence coordinator contracts", () => {
       lastSavedAt: "2026-08-01T09:30:00.000Z",
       error: expected.error,
     });
+  });
+
+  it("resolves a working-save clock exception as a typed failure", async () => {
+    const harness = await createCoordinatorHarness({
+      clean: true,
+      now: () => {
+        throw new Error("working clock failed");
+      },
+    });
+
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeWorkingSave",
+          code: "serializationFailed",
+          cityId: "city-001",
+          retryable: false,
+          diagnostic: "working clock failed",
+        },
+      },
+    });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      dirty: false,
+      saveStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeWorkingSave",
+          code: "serializationFailed",
+        },
+      },
+    });
+    expect(harness.store.mutationOrder()).toEqual([]);
+  });
+
+  it("resolves a working-save envelope exception as a typed failure", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const hostileSnapshot = { ...createRustSnapshot() };
+    Object.defineProperty(hostileSnapshot, "rules", {
+      get() {
+        throw new Error("working envelope failed");
+      },
+    });
+    harness.backend.snapshotForSave = async () => ({
+      ok: true,
+      snapshot: hostileSnapshot,
+    });
+
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeWorkingSave",
+          code: "serializationFailed",
+          cityId: "city-001",
+          retryable: false,
+          diagnostic: "working envelope failed",
+        },
+      },
+    });
+    expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+      dirty: false,
+      saveStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: {
+        kind: "store",
+        error: {
+          operation: "writeWorkingSave",
+          code: "serializationFailed",
+        },
+      },
+    });
+    expect(harness.store.mutationOrder()).toEqual([]);
   });
 
   it("rejects a working save without an active city", async () => {
@@ -959,6 +1099,10 @@ describe("runtime persistence coordinator contracts", () => {
     const harness = await createCoordinatorHarness();
     harness.store.seedRawWorking("other", { format: "broken" });
     const before = harness.runtime.getSnapshot();
+    const expectedError = {
+      kind: "envelope",
+      error: { code: "corruptHeader" },
+    } as const;
 
     const result = await harness.runtime.persistence.load({
       kind: "working",
@@ -967,32 +1111,176 @@ describe("runtime persistence coordinator contracts", () => {
 
     expect(result).toEqual({
       status: "failed",
-      error: { kind: "envelope", error: { code: "corruptHeader" } },
+      error: expectedError,
     });
     expect(harness.backend.restoreSnapshotCalls).toBe(0);
-    expect(harness.runtime.getSnapshot()).toEqual(before);
+    const after = harness.runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+    expect(after.persistence).toEqual({
+      ...before.persistence,
+      loadStatus: { state: "idle" },
+      error: expectedError,
+    });
   });
 
   it("preserves runtime and dirty bookkeeping on a store read failure", async () => {
     const harness = await createCoordinatorHarness();
     harness.failures.failNext("readWorkingSave", "ioFailure");
     const before = harness.runtime.getSnapshot();
+    const expectedError = {
+      kind: "store",
+      error: {
+        operation: "readWorkingSave",
+        code: "ioFailure",
+        cityId: "other",
+        retryable: true,
+        diagnostic: "readWorkingSave failed with ioFailure",
+      },
+    } as const;
 
     const result = await harness.runtime.persistence.load({
       kind: "working",
       cityId: "other",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       status: "failed",
-      error: {
-        kind: "store",
-        error: { operation: "readWorkingSave", code: "ioFailure" },
-      },
+      error: expectedError,
     });
     expect(harness.backend.restoreSnapshotCalls).toBe(0);
-    expect(harness.runtime.getSnapshot()).toEqual(before);
+    const after = harness.runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+    expect(after.persistence).toEqual({
+      ...before.persistence,
+      loadStatus: { state: "idle" },
+      error: expectedError,
+    });
   });
+
+  it("publishes token-owned reading and restoring load transitions", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    await harness.runtime.persistence.saveWorking();
+    expect(harness.runtime.getSnapshot().persistence.error).not.toBeNull();
+    harness.store.defer("readWorkingSave");
+
+    const restoreSnapshot = harness.backend.restoreSnapshot.bind(
+      harness.backend,
+    );
+    let signalRestoreStarted: (() => void) | undefined;
+    const restoreStarted = new Promise<void>((resolve) => {
+      signalRestoreStarted = resolve;
+    });
+    let releaseRestore: (() => void) | undefined;
+    const restoreGate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    harness.backend.restoreSnapshot = async (request) => {
+      signalRestoreStarted?.();
+      await restoreGate;
+      return restoreSnapshot(request);
+    };
+    const listener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(listener);
+    const load = harness.runtime.persistence.load(source);
+
+    try {
+      await harness.store.waitForActive("readWorkingSave");
+      expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+        loadStatus: { state: "reading", source },
+        error: null,
+      });
+
+      harness.store.releaseNext("readWorkingSave");
+      await restoreStarted;
+      expect(harness.runtime.getSnapshot().persistence).toMatchObject({
+        loadStatus: { state: "restoring", source },
+        error: null,
+      });
+
+      releaseRestore?.();
+      await expect(load).resolves.toMatchObject({ status: "completed" });
+      expect(
+        listener.mock.calls.map(
+          ([snapshot]) => snapshot.persistence.loadStatus.state,
+        ),
+      ).toEqual(["reading", "restoring", "idle"]);
+    } finally {
+      harness.store.releaseAll();
+      releaseRestore?.();
+      await Promise.allSettled([load]);
+      unsubscribe();
+    }
+  });
+
+  it.each([
+    {
+      source: { kind: "working", cityId: "city-working" } as const,
+      storeOperation: "readWorkingSave",
+      recordId: undefined,
+    },
+    {
+      source: {
+        kind: "checkpoint",
+        cityId: "city-checkpoint",
+        checkpointId: "checkpoint-001",
+      } as const,
+      storeOperation: "readCheckpoint",
+      recordId: "checkpoint-001",
+    },
+    {
+      source: {
+        kind: "autosave",
+        cityId: "city-autosave",
+        autosaveId: "autosave-001",
+      } as const,
+      storeOperation: "readAutosave",
+      recordId: "autosave-001",
+    },
+  ])(
+    "rejects a $source.kind whose envelope is bound to another city",
+    async ({ source, storeOperation, recordId }) => {
+      const harness = await createCoordinatorHarness({ clean: true });
+      seedLoadSource(
+        harness.store,
+        source,
+        loadEnvelope({ city: cityIdentity("envelope-city") }),
+      );
+      const before = harness.runtime.getSnapshot();
+
+      const result = await harness.runtime.persistence.load(source);
+
+      expect(result).toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: storeOperation,
+            code: "corruptRecord",
+            cityId: source.cityId,
+            ...(recordId === undefined ? {} : { recordId }),
+            retryable: false,
+          },
+        },
+      });
+      if (result.status !== "failed") {
+        throw new Error("Expected city binding failure");
+      }
+      expect(harness.backend.restoreSnapshotCalls).toBe(0);
+      const after = harness.runtime.getSnapshot();
+      expect(after.state).toBe(before.state);
+      expect(after.ui).toBe(before.ui);
+      expect(after.persistence).toEqual({
+        ...before.persistence,
+        loadStatus: { state: "idle" },
+        error: result.error,
+      });
+    },
+  );
 
   it("supersedes an older load before it can restore", async () => {
     const harness = await createCoordinatorHarness();
@@ -1050,10 +1338,17 @@ describe("runtime persistence coordinator contracts", () => {
       status: "failed",
       error: { kind: "backend", error: restoreError },
     });
-    expect(harness.runtime.getSnapshot()).toEqual(before);
+    const after = harness.runtime.getSnapshot();
+    expect(after.state).toBe(before.state);
+    expect(after.ui).toBe(before.ui);
+    expect(after.persistence).toEqual({
+      ...before.persistence,
+      loadStatus: { state: "idle" },
+      error: { kind: "backend", error: restoreError },
+    });
   });
 
-  it("commits a successful working load once, paused and clean", async () => {
+  it("commits a successful working load atomically after status publications", async () => {
     const harness = await createCoordinatorHarness();
     const source = { kind: "working", cityId: "city-loaded" } as const;
     const savedAt = "2026-08-01T11:45:00.000Z";
@@ -1079,8 +1374,16 @@ describe("runtime persistence coordinator contracts", () => {
       status: "completed",
       value: { source, snapshot: { state: { budget: 77_000, paused: true } } },
     });
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith(
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener.mock.calls[0]?.[0].persistence.loadStatus).toEqual({
+      state: "reading",
+      source,
+    });
+    expect(listener.mock.calls[1]?.[0].persistence.loadStatus).toEqual({
+      state: "restoring",
+      source,
+    });
+    expect(listener.mock.calls[2]?.[0]).toBe(
       result.status === "completed" ? result.value.snapshot : undefined,
     );
     expect(harness.runtime.getSnapshot().persistence).toEqual({
@@ -1405,7 +1708,7 @@ describe("runtime persistence coordinator contracts", () => {
     releaseRestore?.();
     const [loadResult, detachResult] = await Promise.all([load, detach]);
 
-    expect(publishesBeforeRestoreSettles).toBe(0);
+    expect(publishesBeforeRestoreSettles).toBe(2);
     expect(loadResult).toMatchObject({
       status: "completed",
       value: {
@@ -1422,11 +1725,19 @@ describe("runtime persistence coordinator contracts", () => {
         persistence: { activeCity: null, dirty: false },
       },
     });
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener.mock.calls[0]?.[0].persistence.activeCity).toMatchObject({
+    expect(listener).toHaveBeenCalledTimes(4);
+    expect(listener.mock.calls[0]?.[0].persistence.loadStatus).toEqual({
+      state: "reading",
+      source,
+    });
+    expect(listener.mock.calls[1]?.[0].persistence.loadStatus).toEqual({
+      state: "restoring",
+      source,
+    });
+    expect(listener.mock.calls[2]?.[0].persistence.activeCity).toMatchObject({
       id: source.cityId,
     });
-    expect(listener.mock.calls[1]?.[0].persistence.activeCity).toBeNull();
+    expect(listener.mock.calls[3]?.[0].persistence.activeCity).toBeNull();
     expect(harness.runtime.getSnapshot()).toEqual(
       detachResult.status === "completed" ? detachResult.value : undefined,
     );
@@ -1693,6 +2004,49 @@ describe("runtime persistence coordinator contracts", () => {
     await expect(activation).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("publishes creatingCity while previously admitted gameplay drains", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.store.defer("writeWorkingSave");
+    const dispatch = harness.backend.dispatch.bind(harness.backend);
+    let signalDispatchStarted: (() => void) | undefined;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      signalDispatchStarted = resolve;
+    });
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    harness.backend.dispatch = async (intent) => {
+      signalDispatchStarted?.();
+      await dispatchGate;
+      return dispatch(intent);
+    };
+
+    const gameplay = harness.runtime.debugSetBudget(90_000);
+    await dispatchStarted;
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    try {
+      expect(harness.runtime.getSnapshot().persistence.lifecycleStatus).toEqual(
+        { state: "creatingCity" },
+      );
+      expect(harness.backend.createSandboxCalls).toBe(0);
+
+      releaseDispatch?.();
+      await gameplay;
+      await harness.store.waitForActive("writeWorkingSave");
+      harness.store.releaseNext("writeWorkingSave");
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      releaseDispatch?.();
+      harness.store.releaseAll();
+      await Promise.allSettled([gameplay, activation]);
+    }
+  });
+
   it("drains the active-city persistence FIFO before capturing the rollback baseline", async () => {
     const harness = await createCoordinatorHarness();
     harness.store.defer("writeWorkingSave");
@@ -1703,20 +2057,29 @@ describe("runtime persistence coordinator contracts", () => {
       sandboxRequest(),
       newCityIdentity(),
     );
-    await Promise.resolve();
-    await Promise.resolve();
 
-    expect(harness.backend.createSandboxCalls).toBe(0);
-    expect(harness.store.activeCount()).toBe(1);
+    try {
+      expect(harness.runtime.getSnapshot().persistence.lifecycleStatus).toEqual(
+        { state: "creatingCity" },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
 
-    harness.store.releaseNext("writeWorkingSave");
-    await priorSave;
-    await vi.waitFor(() => {
+      expect(harness.backend.createSandboxCalls).toBe(0);
       expect(harness.store.activeCount()).toBe(1);
-      expect(harness.backend.createSandboxCalls).toBe(1);
-    });
-    harness.store.releaseNext("writeWorkingSave");
-    await expect(activation).resolves.toMatchObject({ status: "completed" });
+
+      harness.store.releaseNext("writeWorkingSave");
+      await priorSave;
+      await vi.waitFor(() => {
+        expect(harness.store.activeCount()).toBe(1);
+        expect(harness.backend.createSandboxCalls).toBe(1);
+      });
+      harness.store.releaseNext("writeWorkingSave");
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      harness.store.releaseAll();
+      await Promise.allSettled([priorSave, activation]);
+    }
   });
 
   it("serializes the candidate working save behind an older write for the same city", async () => {
