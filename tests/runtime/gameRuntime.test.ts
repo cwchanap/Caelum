@@ -2014,12 +2014,13 @@ describe("Game Runtime", () => {
 
     // Resolve dispatch A — it throws, failBackend sets dead = true.
     await backend.resolveNext();
-    await dispatchA;
+    const postFatalSnapshot = await dispatchA;
     expect(runtime.getSnapshot().backendError).toBe("backend unavailable");
 
     // Dispatch B's closure runs but bails at the execution-time dead check.
-    await dispatchB;
+    const queuedSnapshot = await dispatchB;
     expect(dispatchCalls).toBe(1); // only dispatch A reached the backend
+    expect(queuedSnapshot).toEqual(postFatalSnapshot);
     expect(runtime.getSnapshot().backendError).toBe("backend unavailable");
   });
 
