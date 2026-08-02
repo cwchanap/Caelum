@@ -1173,22 +1173,7 @@ describe("Game Runtime", () => {
     });
 
     it("drains admitted gameplay and never backlogs dispatches behind New City", async () => {
-      const backend = deferredDispatchBackend();
-      const createSandbox = backend.createSandbox.bind(backend);
-      backend.createSandbox = async (request) => {
-        const result = await createSandbox(request);
-        if (result.ok) backend.setSnapshot(result.snapshot);
-        return result;
-      };
-      backend.snapshotForSave = async () => ({
-        ok: true,
-        snapshot: { ...(await backend.snapshot()), paused: true },
-      });
-      backend.restoreSnapshot = async (request) => {
-        const snapshot = request.snapshot as RustGameSnapshot;
-        backend.setSnapshot(snapshot);
-        return { ok: true, snapshot };
-      };
+      const backend = transactionalBackend(deferredDispatchBackend());
       const store = createDelayedSaveStore(createMemorySaveStore());
       store.defer("writeWorkingSave");
       const runtime = await createGameRuntime({
@@ -1374,6 +1359,7 @@ describe("Game Runtime", () => {
         ) {
           await flushPromises();
         }
+        expect(backend.intents.length).toBeGreaterThanOrEqual(2);
         if (!releasedRollback && backend.intents.length >= 2) {
           await backend.resolveNext();
           releasedRollback = true;
@@ -1416,7 +1402,11 @@ describe("Game Runtime", () => {
       }
     });
 
-    it("honors a stop requested during a successful blocked New City transaction", async () => {
+    const setupStopDuringNewCityTransaction = async (
+      options: {
+        failWriteWorkingSave?: boolean;
+      } = {},
+    ) => {
       const frameCallbacks: Array<(timestamp: number) => void> = [];
       const requestAnimationFrame = vi.fn(
         (callback: (timestamp: number) => void) => {
@@ -1430,88 +1420,12 @@ describe("Game Runtime", () => {
       const backend = transactionalBackend(
         backendSpy(fullRustSnapshot({ paused: false })),
       );
-      let tickCalls = 0;
       const tick = backend.tick.bind(backend);
-      backend.tick = vi.fn(async (deltaSeconds) => {
-        tickCalls += 1;
-        return tick(deltaSeconds);
-      });
-      const store = createDelayedSaveStore(createMemorySaveStore());
-      store.defer("writeWorkingSave");
-      const runtime = await createGameRuntime({
-        backend,
-        saveStore: store,
-        initialCity: cityIdentity(),
-        now: () => "2026-08-01T10:00:00.000Z",
-        appVersion: "0.1.0",
-      });
-      runtime.start();
-      const activation = runtime.persistence.activateNewCity(
-        {
-          templateId: "blankGrid",
-          economyPreset: "standard",
-          startingCapital: 120_000,
-          demandMultiplier: 1,
-          moveInRate: "paused",
-        },
-        {
-          id: "city-002",
-          name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
-        },
-      );
-
-      try {
-        await store.waitForActive("writeWorkingSave");
-        runtime.stop();
-        runtime.stop();
-        expect(runtime.isRunning()).toBe(false);
-        frameCallbacks.shift()?.(1_000);
-        frameCallbacks.shift()?.(1_016);
-        await flushPromises();
-
-        store.releaseNext("writeWorkingSave");
-        await expect(activation).resolves.toMatchObject({
-          status: "completed",
-        });
-
-        expect(runtime.isRunning()).toBe(false);
-        expect(tickCalls).toBe(0);
-        expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
-        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
-        runtime.stop();
-        runtime.stop();
-        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
-      } finally {
-        store.releaseAll();
-        await Promise.allSettled([activation]);
-        runtime.stop();
-        vi.unstubAllGlobals();
-      }
-    });
-
-    it("keeps a rolled-back city stopped after stop is requested during its blocked write", async () => {
-      const frameCallbacks: Array<(timestamp: number) => void> = [];
-      const requestAnimationFrame = vi.fn(
-        (callback: (timestamp: number) => void) => {
-          frameCallbacks.push(callback);
-          return frameCallbacks.length;
-        },
-      );
-      const cancelAnimationFrame = vi.fn();
-      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
-      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-      const backend = transactionalBackend(
-        backendSpy(fullRustSnapshot({ paused: false })),
-      );
-      let tickCalls = 0;
-      const tick = backend.tick.bind(backend);
-      backend.tick = vi.fn(async (deltaSeconds) => {
-        tickCalls += 1;
-        return tick(deltaSeconds);
-      });
+      backend.tick = vi.fn(async (deltaSeconds: number) => tick(deltaSeconds));
       const failures = createMemorySaveStoreFailureControls();
-      failures.failNext("writeWorkingSave", "ioFailure");
+      if (options.failWriteWorkingSave) {
+        failures.failNext("writeWorkingSave", "ioFailure");
+      }
       const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
       store.defer("writeWorkingSave");
       const runtime = await createGameRuntime({
@@ -1536,6 +1450,69 @@ describe("Game Runtime", () => {
           cityCreatedAt: "2026-08-01T10:00:00.000Z",
         },
       );
+      return {
+        frameCallbacks,
+        requestAnimationFrame,
+        cancelAnimationFrame,
+        backend,
+        store,
+        runtime,
+        activation,
+      };
+    };
+
+    it("honors a stop requested during a successful blocked New City transaction", async () => {
+      const {
+        frameCallbacks,
+        requestAnimationFrame,
+        cancelAnimationFrame,
+        backend,
+        store,
+        runtime,
+        activation,
+      } = await setupStopDuringNewCityTransaction();
+
+      try {
+        await store.waitForActive("writeWorkingSave");
+        runtime.stop();
+        runtime.stop();
+        expect(runtime.isRunning()).toBe(false);
+        frameCallbacks.shift()?.(1_000);
+        frameCallbacks.shift()?.(1_016);
+        await flushPromises();
+
+        store.releaseNext("writeWorkingSave");
+        await expect(activation).resolves.toMatchObject({
+          status: "completed",
+        });
+
+        expect(runtime.isRunning()).toBe(false);
+        expect(backend.tick).toHaveBeenCalledTimes(0);
+        expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+        runtime.stop();
+        runtime.stop();
+        expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+      } finally {
+        store.releaseAll();
+        await Promise.allSettled([activation]);
+        runtime.stop();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("keeps a rolled-back city stopped after stop is requested during its blocked write", async () => {
+      const {
+        frameCallbacks,
+        requestAnimationFrame,
+        cancelAnimationFrame,
+        backend,
+        store,
+        runtime,
+        activation,
+      } = await setupStopDuringNewCityTransaction({
+        failWriteWorkingSave: true,
+      });
 
       try {
         await store.waitForActive("writeWorkingSave");
@@ -1553,7 +1530,7 @@ describe("Game Runtime", () => {
         await flushPromises();
 
         expect(runtime.isRunning()).toBe(false);
-        expect(tickCalls).toBe(0);
+        expect(backend.tick).toHaveBeenCalledTimes(0);
         expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
         expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
         runtime.stop();
@@ -1569,10 +1546,10 @@ describe("Game Runtime", () => {
 
     it("keeps an invalidated route response from changing restored rollback UI", async () => {
       const previews = deferredPreviewBackend(dirtyRouteSnapshot());
-      transactionalBackend(previews.backend);
+      const backend = transactionalBackend(previews.backend);
       const failures = createMemorySaveStoreFailureControls();
       const runtime = await createGameRuntime({
-        backend: previews.backend,
+        backend,
         saveStore: createMemorySaveStore({ failures }),
         initialCity: cityIdentity(),
         now: () => "2026-08-01T10:00:00.000Z",
@@ -1625,10 +1602,10 @@ describe("Game Runtime", () => {
 
     it("keeps an invalidated road response from changing restored rollback UI", async () => {
       const previews = deferredPreviewBackend(fullRustSnapshot());
-      transactionalBackend(previews.backend);
+      const backend = transactionalBackend(previews.backend);
       const failures = createMemorySaveStoreFailureControls();
       const runtime = await createGameRuntime({
-        backend: previews.backend,
+        backend,
         saveStore: createMemorySaveStore({ failures }),
         initialCity: cityIdentity(),
         now: () => "2026-08-01T10:00:00.000Z",

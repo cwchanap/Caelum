@@ -710,6 +710,10 @@ describe("runtime persistence coordinator contracts", () => {
   it("resolves a working-save envelope exception as a typed failure", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
     const hostileSnapshot = { ...createRustSnapshot() };
+    // Redefine the existing enumerable `rules` data property as a throwing
+    // accessor. Object.defineProperty preserves the property's existing
+    // enumerability when the descriptor omits it, so the spread snapshot's
+    // `rules` stays enumerable and serialization still invokes the getter.
     Object.defineProperty(hostileSnapshot, "rules", {
       get() {
         throw new Error("working envelope failed");
@@ -1296,7 +1300,9 @@ describe("runtime persistence coordinator contracts", () => {
       kind: "working",
       cityId: "city-new",
     });
-    expect(harness.store.activeCount()).toBe(2);
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(2);
+    });
 
     harness.store.releaseNext("readWorkingSave");
     await expect(older).resolves.toEqual({ status: "superseded" });
