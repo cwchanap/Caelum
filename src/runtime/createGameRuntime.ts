@@ -1703,22 +1703,27 @@ export async function createGameRuntime(
     });
   };
 
-  const detachActiveCity = (): PersistenceOperationResult<RuntimeSnapshot> => {
-    if (dead) return runtimeUnavailable("detachActiveCity");
-
-    sessionToken += 1;
-    loadRequestToken += 1;
-    activeCity = null;
-    currentRevision = 0;
-    persistedRevision = 0;
-    saveStatus = { state: "idle" };
-    loadStatus = { state: "idle" };
-    lifecycleStatus = { state: "idle" };
-    lastSavedAt = null;
-    persistenceError = null;
-    const snapshot = publish();
-    return { status: "completed", value: snapshot };
-  };
+  const detachActiveCity = (): Promise<
+    PersistenceOperationResult<RuntimeSnapshot>
+  > =>
+    gameplayQueue.enqueue<PersistenceOperationResult<RuntimeSnapshot>>({
+      operation: async () => {
+        sessionToken += 1;
+        loadRequestToken += 1;
+        activeCity = null;
+        currentRevision = 0;
+        persistedRevision = 0;
+        saveStatus = { state: "idle" };
+        loadStatus = { state: "idle" };
+        lifecycleStatus = { state: "idle" };
+        lastSavedAt = null;
+        persistenceError = null;
+        const snapshot = publish();
+        return { status: "completed", value: snapshot };
+      },
+      whenDead: () => runtimeUnavailable("detachActiveCity"),
+      onThrown: () => runtimeUnavailable("detachActiveCity"),
+    });
 
   const persistence: RuntimePersistenceController = {
     saveWorking,

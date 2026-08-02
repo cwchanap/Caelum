@@ -545,7 +545,7 @@ export interface RuntimePersistenceController {
   load(
     source: LoadSource,
   ): Promise<PersistenceOperationResult<LoadCityValue>>;
-  detachActiveCity(): PersistenceOperationResult<RuntimeSnapshot>;
+  detachActiveCity(): Promise<PersistenceOperationResult<RuntimeSnapshot>>;
 }
 ```
 
@@ -910,7 +910,7 @@ A successful `reset()` keeps the same active city identity but starts a new runt
 
 The same revision behavior applies in a detached runtime.
 
-Deleting the active city's storage is rejected until the caller first successfully loads another city, creates/activates another city, or calls `detachActiveCity()`. Detachment advances the session token, clears active identity and current-session persistence status, and leaves no working-save target. HPA-346 navigates away from the board before deleting the former city record. A stale write from the prior token is inert.
+Deleting the active city's storage is rejected until the caller first successfully loads another city, creates/activates another city, or calls `detachActiveCity()`. Detachment is asynchronous and serialized through the gameplay queue: an already-running restore commits first, then detach advances the session token, clears active identity and current-session persistence status, and leaves no working-save target. HPA-346 navigates away from the board before deleting the former city record. A stale write already in storage from the prior token is inert when it later settles.
 
 ## 17. Performance and animation-frame handoff
 
