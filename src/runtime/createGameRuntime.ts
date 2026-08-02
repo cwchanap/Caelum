@@ -1711,6 +1711,74 @@ export async function createGameRuntime(
     return { status: "failed", error };
   };
 
+  const persistenceHostFailure = (
+    operation: "snapshotForSave" | "restoreSnapshot",
+    error: unknown,
+  ): PersistenceCoordinatorError => ({
+    kind: "backend",
+    error: {
+      kind: "host",
+      operation,
+      code: "invokeFailed",
+      diagnostic: error instanceof Error ? error.message : String(error),
+    },
+  });
+
+  const fatalRollbackError = (error: unknown): Error => {
+    if (error instanceof Error) return error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "diagnostic" in error &&
+      typeof error.diagnostic === "string"
+    ) {
+      return new Error(error.diagnostic);
+    }
+    return new Error(String(error));
+  };
+
+  const failRollbackCoherence = (error: unknown): RuntimeSnapshot => {
+    sessionToken += 1;
+    loadRequestToken += 1;
+    activeCity = null;
+    currentRevision = 0;
+    persistedRevision = 0;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    lastSavedAt = null;
+    persistenceError = null;
+    return failBackend(fatalRollbackError(error));
+  };
+
+  const restoreCanonicalBackendState = async (
+    canonicalSnapshot: RustGameSnapshot,
+    paused: boolean,
+  ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
+    let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+    try {
+      restored = await backend.restoreSnapshot({
+        snapshot: canonicalSnapshot,
+      });
+    } catch (error: unknown) {
+      return { ok: false, error };
+    }
+    if (!restored.ok) return { ok: false, error: restored.error };
+
+    try {
+      const pause = await backend.dispatch({
+        type: "setPaused",
+        paused,
+      });
+      if (pause.snapshot.paused !== paused) {
+        throw new Error("Rollback pause restoration did not take effect");
+      }
+    } catch (error: unknown) {
+      return { ok: false, error };
+    }
+    return { ok: true };
+  };
+
   const loadCity = async (
     requestedSource: LoadSource,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
@@ -1799,14 +1867,81 @@ export async function createGameRuntime(
         if (requestToken !== loadRequestToken) {
           return { status: "superseded" };
         }
-        const restored = await backend.restoreSnapshot({
-          snapshot: inspected.envelope.snapshot,
-        });
+
+        // A load read may be superseded while its backend restore is in
+        // flight. Capture the authoritative pre-load backend state inside the
+        // same serialized boundary so a stale successful restore can be
+        // undone before the next queued load begins.
+        const priorPaused = state.paused;
+        let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+        try {
+          priorCapture = await backend.snapshotForSave();
+        } catch (error: unknown) {
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
+          return publishLoadFailure(
+            requestToken,
+            persistenceHostFailure("snapshotForSave", error),
+          );
+        }
+        if (!priorCapture.ok) {
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
+          return publishLoadFailure(requestToken, {
+            kind: "backend",
+            error: priorCapture.error,
+          });
+        }
+        if (requestToken !== loadRequestToken) {
+          return { status: "superseded" };
+        }
+
+        let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+        try {
+          restored = await backend.restoreSnapshot({
+            snapshot: inspected.envelope.snapshot,
+          });
+        } catch (error: unknown) {
+          // A host exception cannot prove whether restoration mutated the
+          // backend, so restore the captured canonical state before reporting
+          // either failure or supersession.
+          const rollback = await restoreCanonicalBackendState(
+            priorCapture.snapshot,
+            priorPaused,
+          );
+          if (!rollback.ok) {
+            failRollbackCoherence(rollback.error);
+            return runtimeUnavailable(read.coordinatorOperation);
+          }
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
+          return publishLoadFailure(
+            requestToken,
+            persistenceHostFailure("restoreSnapshot", error),
+          );
+        }
         if (!restored.ok) {
+          if (requestToken !== loadRequestToken) {
+            return { status: "superseded" };
+          }
           return publishLoadFailure(requestToken, {
             kind: "backend",
             error: restored.error,
           });
+        }
+        if (requestToken !== loadRequestToken) {
+          const rollback = await restoreCanonicalBackendState(
+            priorCapture.snapshot,
+            priorPaused,
+          );
+          if (!rollback.ok) {
+            failRollbackCoherence(rollback.error);
+            return runtimeUnavailable(read.coordinatorOperation);
+          }
+          return { status: "superseded" };
         }
         const snapshot = commitLoadedSnapshot(
           restored.snapshot,
@@ -1948,46 +2083,6 @@ export async function createGameRuntime(
     }
   };
 
-  const persistenceHostFailure = (
-    operation: "snapshotForSave" | "restoreSnapshot",
-    error: unknown,
-  ): PersistenceCoordinatorError => ({
-    kind: "backend",
-    error: {
-      kind: "host",
-      operation,
-      code: "invokeFailed",
-      diagnostic: error instanceof Error ? error.message : String(error),
-    },
-  });
-
-  const fatalRollbackError = (error: unknown): Error => {
-    if (error instanceof Error) return error;
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "diagnostic" in error &&
-      typeof error.diagnostic === "string"
-    ) {
-      return new Error(error.diagnostic);
-    }
-    return new Error(String(error));
-  };
-
-  const failNewCityRollback = (error: unknown): RuntimeSnapshot => {
-    sessionToken += 1;
-    loadRequestToken += 1;
-    activeCity = null;
-    currentRevision = 0;
-    persistedRevision = 0;
-    saveStatus = { state: "idle" };
-    loadStatus = { state: "idle" };
-    lifecycleStatus = { state: "idle" };
-    lastSavedAt = null;
-    persistenceError = null;
-    return failBackend(fatalRollbackError(error));
-  };
-
   const rollbackNewCity = async (
     prior: NewCityPriorRuntime,
     priorCanonicalSnapshot: RustGameSnapshot,
@@ -2002,11 +2097,11 @@ export async function createGameRuntime(
         snapshot: priorCanonicalSnapshot,
       });
     } catch (error: unknown) {
-      failNewCityRollback(error);
+      failRollbackCoherence(error);
       return runtimeUnavailable("activateNewCity");
     }
     if (!restored.ok) {
-      failNewCityRollback(restored.error);
+      failRollbackCoherence(restored.error);
       return runtimeUnavailable("activateNewCity");
     }
 
@@ -2019,7 +2114,7 @@ export async function createGameRuntime(
         throw new Error("Rollback pause restoration did not take effect");
       }
     } catch (error: unknown) {
-      failNewCityRollback(error);
+      failRollbackCoherence(error);
       return runtimeUnavailable("activateNewCity");
     }
 
