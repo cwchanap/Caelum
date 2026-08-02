@@ -1085,6 +1085,9 @@ export async function createGameRuntime(
     coordinatorOperation: PersistenceCoordinatorOperation,
     storeOperation: SaveStoreOperation,
   ): Promise<PersistenceOperationResult<T>> => {
+    if (dead) {
+      return Promise.resolve(runtimeUnavailable(coordinatorOperation));
+    }
     if (saveStore === undefined) {
       return Promise.resolve(unavailableStoreResult<T>(storeOperation));
     }
