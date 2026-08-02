@@ -40,15 +40,20 @@ import type {
   GameBackend,
   GameIntent,
   RoadMutation,
+  RustGameSnapshot,
   SandboxResetError,
 } from "./backend";
 import type { SaveStore, SaveStoreOperation } from "../persistence/saveStore";
+import { buildSaveEnvelope } from "../persistence/envelope";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import {
+  enqueueCityPersistence,
+  noActiveCity,
+  resolveWorkingSaveCompletion,
   runtimeUnavailable,
   type ActiveCityIdentity,
   type PersistenceCoordinatorError,
@@ -59,6 +64,7 @@ import {
   type RuntimePersistenceController,
   type RuntimePersistenceView,
   type RuntimeSaveStatus,
+  type SaveWorkingValue,
 } from "./persistenceCoordinator";
 import type {
   RuntimeController,
@@ -1094,9 +1100,172 @@ export async function createGameRuntime(
     return Promise.resolve(runtimeUnavailable(coordinatorOperation));
   };
 
+  const isCurrentPersistenceSession = (
+    cityId: string,
+    capturedSessionToken: number,
+  ): boolean =>
+    activeCity?.id === cityId && sessionToken === capturedSessionToken;
+
+  const publishWorkingSaveFailure = (
+    cityId: string,
+    capturedSessionToken: number,
+    error: PersistenceCoordinatorError,
+  ): void => {
+    if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) return;
+    saveStatus = { state: "idle" };
+    persistenceError = error;
+    publish();
+  };
+
+  type WorkingSaveCaptureResult =
+    | { status: "failed"; error: PersistenceCoordinatorError }
+    | { status: "superseded" }
+    | {
+        status: "captured";
+        snapshot: RustGameSnapshot;
+        revision: number;
+      };
+
+  const saveWorking = (): Promise<
+    PersistenceOperationResult<SaveWorkingValue>
+  > => {
+    if (dead) return Promise.resolve(runtimeUnavailable("saveWorking"));
+    if (saveStore === undefined) {
+      return Promise.resolve(unavailableStoreResult("writeWorkingSave"));
+    }
+    if (activeCity === null) {
+      const result: PersistenceOperationResult<SaveWorkingValue> =
+        noActiveCity("saveWorking");
+      if (result.status === "failed") persistenceError = result.error;
+      publish();
+      return Promise.resolve(result);
+    }
+
+    const city = activeCity;
+    const capturedSessionToken = sessionToken;
+    saveStatus = { state: "queued", kind: "working", cityId: city.id };
+    persistenceError = null;
+    publish();
+
+    return enqueueCityPersistence(city.id, async () => {
+      if (!isCurrentPersistenceSession(city.id, capturedSessionToken)) {
+        return { status: "superseded" };
+      }
+
+      const capture = await gameplayQueue.enqueue<WorkingSaveCaptureResult>({
+        operation: async () => {
+          if (!isCurrentPersistenceSession(city.id, capturedSessionToken)) {
+            return { status: "superseded" };
+          }
+          saveStatus = {
+            state: "capturing",
+            kind: "working",
+            cityId: city.id,
+          };
+          publish();
+          const result = await backend.snapshotForSave();
+          if (!result.ok) {
+            return {
+              status: "failed",
+              error: { kind: "backend", error: result.error },
+            };
+          }
+          return {
+            status: "captured",
+            snapshot: result.snapshot,
+            revision: currentRevision,
+          };
+        },
+        whenDead: () => ({
+          status: "failed",
+          error: {
+            kind: "precondition",
+            error: { code: "runtimeUnavailable", operation: "saveWorking" },
+          },
+        }),
+        onThrown: (error: unknown) => ({
+          status: "failed",
+          error: {
+            kind: "backend",
+            error: {
+              kind: "host",
+              operation: "snapshotForSave",
+              code: "invokeFailed",
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            },
+          },
+        }),
+      });
+
+      if (capture.status === "superseded") return capture;
+      if (capture.status === "failed") {
+        publishWorkingSaveFailure(city.id, capturedSessionToken, capture.error);
+        return capture;
+      }
+
+      const savedAt = options.now!();
+      const envelope = buildSaveEnvelope({
+        city: { id: city.id, name: city.name },
+        cityCreatedAt: city.cityCreatedAt,
+        savedAt,
+        appVersion: options.appVersion!,
+        snapshot: capture.snapshot,
+      });
+      if (isCurrentPersistenceSession(city.id, capturedSessionToken)) {
+        saveStatus = { state: "writing", kind: "working", cityId: city.id };
+        publish();
+      }
+
+      let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
+      try {
+        stored = await saveStore.writeWorkingSave(envelope);
+      } catch (error: unknown) {
+        stored = {
+          ok: false,
+          error: {
+            operation: "writeWorkingSave",
+            code: "ioFailure",
+            cityId: city.id,
+            retryable: true,
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+
+      const completion = resolveWorkingSaveCompletion({
+        currentCityId: activeCity?.id ?? null,
+        currentSessionToken: sessionToken,
+        persistedRevision,
+        capturedCityId: city.id,
+        capturedSessionToken,
+        capturedRevision: capture.revision,
+      });
+      if (completion.status === "superseded") return completion;
+
+      if (!stored.ok) {
+        const result: PersistenceOperationResult<SaveWorkingValue> = {
+          status: "failed",
+          error: { kind: "store", error: stored.error },
+        };
+        publishWorkingSaveFailure(city.id, capturedSessionToken, result.error);
+        return result;
+      }
+
+      persistedRevision = completion.persistedRevision;
+      lastSavedAt = savedAt;
+      saveStatus = { state: "idle" };
+      persistenceError = null;
+      publish();
+      return {
+        status: "completed",
+        value: { summary: stored.value, savedAt },
+      };
+    });
+  };
+
   const persistence: RuntimePersistenceController = {
-    saveWorking: () =>
-      pendingPersistenceResult("saveWorking", "writeWorkingSave"),
+    saveWorking,
     renameActiveCity: () =>
       pendingPersistenceResult("renameActiveCity", "renameCity"),
     load(source) {

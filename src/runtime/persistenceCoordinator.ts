@@ -79,7 +79,7 @@ export interface ActiveCityIdentity {
   cityCreatedAt: string;
 }
 
-export interface NewCityIdentity extends ActiveCityIdentity {}
+export type NewCityIdentity = ActiveCityIdentity;
 
 export interface GameplayWriteRequest<TSummary> {
   kind: GenerationWriteKind;
@@ -129,6 +129,49 @@ export interface RuntimePersistenceController {
   runGameplayWrite<TSummary>(
     request: GameplayWriteRequest<TSummary>,
   ): Promise<PersistenceOperationResult<GenerationWriteValue<TSummary>>>;
+}
+
+const cityTails = new Map<string, Promise<void>>();
+
+export function enqueueCityPersistence<T>(
+  cityId: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const previous = cityTails.get(cityId) ?? Promise.resolve();
+  const run = previous.then(work, work);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  cityTails.set(cityId, tail);
+  return run.finally(() => {
+    if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
+  });
+}
+
+export function resolveWorkingSaveCompletion(input: {
+  currentCityId: string | null;
+  currentSessionToken: number;
+  persistedRevision: number;
+  capturedCityId: string;
+  capturedSessionToken: number;
+  capturedRevision: number;
+}):
+  | { status: "current"; persistedRevision: number }
+  | { status: "superseded" } {
+  if (
+    input.currentCityId !== input.capturedCityId ||
+    input.currentSessionToken !== input.capturedSessionToken
+  ) {
+    return { status: "superseded" };
+  }
+  return {
+    status: "current",
+    persistedRevision: Math.max(
+      input.persistedRevision,
+      input.capturedRevision,
+    ),
+  };
 }
 
 function preconditionFailure(
