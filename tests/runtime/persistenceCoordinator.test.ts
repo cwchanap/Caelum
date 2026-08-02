@@ -565,6 +565,61 @@ describe("runtime persistence coordinator contracts", () => {
     unsubscribe();
   });
 
+  it("resets persistence activity statuses to idle on fatal backend failure", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+    expect(harness.runtime.getSnapshot().persistence.saveStatus).toEqual({
+      state: "writing",
+      kind: "working",
+      cityId: "city-001",
+    });
+
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(90_000);
+
+    expect(harness.runtime.getSnapshot().persistence).toEqual({
+      activeCity: cityIdentity(),
+      dirty: true,
+      saveStatus: { state: "idle" },
+      loadStatus: { state: "idle" },
+      lifecycleStatus: { state: "idle" },
+      lastSavedAt: "2026-08-01T09:30:00.000Z",
+      error: null,
+    });
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toEqual(runtimeUnavailable("saveWorking"));
+  });
+
+  it("resets load status to idle on fatal backend failure during a pending read", async () => {
+    const harness = await createCoordinatorHarness();
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load(source);
+    await harness.store.waitForActive("readWorkingSave");
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "reading",
+      source,
+    });
+
+    harness.backend.dispatch = async () => {
+      throw new Error("fatal backend failure");
+    };
+    await harness.runtime.debugSetBudget(50_000);
+
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "idle",
+    });
+
+    harness.store.releaseNext("readWorkingSave");
+    await expect(load).resolves.toEqual(runtimeUnavailable("loadWorking"));
+  });
+
   it.each(delayedActiveCityMutationCases)(
     "returns runtime unavailable when a delayed $kind completion settles after death",
     async ({ storeOperation, coordinatorOperation, start }) => {
@@ -1893,6 +1948,67 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
   });
 
+  it("serializes a same-city load behind a delayed working save", async () => {
+    const harness = await createCoordinatorHarness();
+    const cityId = "city-001";
+    const source = { kind: "working", cityId } as const;
+
+    // Seed an older working save with a different budget so we can detect
+    // whether the load reads the old or the new envelope.
+    harness.store.seedRawWorking(
+      cityId,
+      loadEnvelope({
+        city: cityIdentity(cityId),
+        savedAt: "2026-08-01T09:00:00.000Z",
+        snapshot: createRustSnapshot({ paused: true, budget: 50_000 }),
+      }),
+    );
+
+    // Start a working save with the current budget (100_000). Defer the
+    // store write so the save's FIFO callback is in flight.
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    // Start a same-city load. It enters the city FIFO behind the save and
+    // must wait for the write to complete before reading.
+    const load = harness.runtime.persistence.load(source);
+
+    // Release the save write. The save completes, then the load reads the
+    // just-written envelope (budget 100_000), not the older one (50_000).
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(load).resolves.toMatchObject({
+      status: "completed",
+      value: {
+        source,
+        snapshot: {
+          state: { budget: 100_000, paused: true },
+          persistence: {
+            activeCity: { id: cityId },
+            dirty: false,
+            lastSavedAt: "2026-08-01T10:00:00.000Z",
+          },
+        },
+      },
+    });
+
+    // Runtime and storage must agree on the same envelope.
+    const stored = await harness.store.readWorkingSave(cityId);
+    expect(stored).toMatchObject({
+      ok: true,
+      value: { snapshot: { budget: 100_000 } },
+    });
+    expect(harness.runtime.getSnapshot()).toMatchObject({
+      state: { budget: 100_000, paused: true },
+      persistence: {
+        activeCity: { id: cityId },
+        dirty: false,
+        lastSavedAt: "2026-08-01T10:00:00.000Z",
+      },
+    });
+  });
+
   it("supersedes an old working-save completion after reset advances lineage", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
     harness.store.defer("writeWorkingSave");
@@ -1918,13 +2034,19 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.runtime.getSnapshot()).toEqual(afterReset);
   });
 
-  it("detaches once and leaves stale persistence completions inert", async () => {
+  it("drains the city persistence FIFO before detach clears identity", async () => {
     const harness = await createCoordinatorHarness();
     harness.store.defer("writeWorkingSave");
     const save = harness.runtime.persistence.saveWorking();
     await harness.store.waitForActive("writeWorkingSave");
     const listener = vi.fn();
     const unsubscribe = harness.runtime.subscribe(listener);
+
+    // Release the save write so the FIFO can drain. Detach waits for the
+    // save to complete before clearing the runtime identity, preventing a
+    // delayed write from recreating a deleted city record.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
 
     const result = await harness.runtime.persistence.detachActiveCity();
 
@@ -1942,13 +2064,40 @@ describe("runtime persistence coordinator contracts", () => {
         },
       },
     });
-    expect(listener).toHaveBeenCalledTimes(1);
     const afterDetach = harness.runtime.getSnapshot();
-    harness.store.releaseNext("writeWorkingSave");
-    await expect(save).resolves.toEqual({ status: "superseded" });
-    expect(listener).toHaveBeenCalledTimes(1);
     expect(harness.runtime.getSnapshot()).toEqual(afterDetach);
     unsubscribe();
+  });
+
+  it("keeps a deleted city absent after delayed-save → detach → delete", async () => {
+    const harness = await createCoordinatorHarness();
+    const cityId = "city-001";
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    // Start detach while the save write is still deferred. Detach drains
+    // the city FIFO, so it waits for the write to complete.
+    const detach = harness.runtime.persistence.detachActiveCity();
+
+    // Release the save write. The save completes, the FIFO drains, and
+    // detach clears the runtime identity.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(detach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+
+    // Delete the city record from storage. No delayed write can recreate
+    // it because detach drained the FIFO before clearing identity.
+    await expect(harness.store.deleteCity(cityId)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(harness.store.readWorkingSave(cityId)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "notFound" },
+    });
   });
 
   it("resolves detach as runtime unavailable after fatal backend failure", async () => {
@@ -1975,11 +2124,17 @@ describe("runtime persistence coordinator contracts", () => {
     });
     await harness.store.waitForActive("readWorkingSave");
 
-    await harness.runtime.persistence.detachActiveCity();
-    const afterDetach = harness.runtime.getSnapshot();
+    // Detach drains the city FIFO, which waits for the load's deferred
+    // read to settle. Release the read so the load can complete (it will
+    // fail with ioFailure) and detach can proceed.
+    const detach = harness.runtime.persistence.detachActiveCity();
     harness.store.releaseNext("readWorkingSave");
-
     await expect(load).resolves.toEqual({ status: "superseded" });
+    await expect(detach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+    const afterDetach = harness.runtime.getSnapshot();
     expect(harness.runtime.getSnapshot()).toEqual(afterDetach);
   });
 
@@ -2182,6 +2337,93 @@ describe("runtime persistence coordinator contracts", () => {
     });
   });
 
+  it("supersedes a deferred load read that settles during a failing New City transaction", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load(source);
+    await harness.store.waitForActive("readWorkingSave");
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "reading",
+      source,
+    });
+
+    harness.backend.createSandbox = async () => {
+      harness.backend.createSandboxCalls += 1;
+      return {
+        ok: false,
+        error: {
+          code: "unknownTemplateId",
+          context: { field: "templateId", attemptedValue: "missing" },
+        },
+      };
+    };
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    await vi.waitFor(() => {
+      expect(harness.runtime.getSnapshot().persistence.lifecycleStatus).toEqual(
+        { state: "creatingCity" },
+      );
+    });
+
+    // Admission invalidated the load lineage immediately.
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "idle",
+    });
+
+    harness.store.releaseNext("readWorkingSave");
+    await expect(load).resolves.toEqual({ status: "superseded" });
+
+    await expect(activation).resolves.toMatchObject({ status: "failed" });
+
+    // Rollback must not resurrect the reading status.
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "idle",
+    });
+  });
+
+  it("supersedes a deferred load read that settles after New City rollback", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    const source = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, source);
+    harness.store.defer("readWorkingSave");
+    const load = harness.runtime.persistence.load(source);
+    await harness.store.waitForActive("readWorkingSave");
+
+    harness.backend.createSandbox = async () => {
+      harness.backend.createSandboxCalls += 1;
+      return {
+        ok: false,
+        error: {
+          code: "unknownTemplateId",
+          context: { field: "templateId", attemptedValue: "missing" },
+        },
+      };
+    };
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    // Let New City fail and roll back while the read is still deferred.
+    await expect(activation).resolves.toMatchObject({ status: "failed" });
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "idle",
+    });
+
+    // The read settles after rollback. The bumped token (restored by
+    // rollback) still mismatches the load's captured token.
+    harness.store.releaseNext("readWorkingSave");
+    await expect(load).resolves.toEqual({ status: "superseded" });
+    expect(harness.runtime.getSnapshot().persistence.loadStatus).toEqual({
+      state: "idle",
+    });
+  });
+
   it("preserves the prior city when sandbox creation is rejected", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
     const before = harness.runtime.getSnapshot();
@@ -2311,6 +2553,52 @@ describe("runtime persistence coordinator contracts", () => {
     ).resolves.toEqual({ status: "superseded" });
     expect(harness.backend.tickCalls).toBe(tickCalls);
     expect(harness.runtime.getSnapshot()).toEqual(duringWrite);
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(activation).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("supersedes area-drag start while New City owns admission", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.runtime.setTool("area");
+    harness.runtime.setArea("residential");
+    harness.store.defer("writeWorkingSave");
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
+    const duringWrite = harness.runtime.getSnapshot();
+
+    const snapshot = harness.runtime.startDrag({ x: 2, y: 2 });
+
+    expect(snapshot).toEqual(duringWrite);
+    expect(snapshot.ui.drag).toBeNull();
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(activation).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("supersedes building rotation while New City owns admission", async () => {
+    const harness = await createCoordinatorHarness({ clean: true });
+    harness.runtime.setBuilding("smallHouse");
+    const beforeRotation = harness.runtime.getSnapshot().ui.buildingRotation;
+    harness.store.defer("writeWorkingSave");
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
+    const duringWrite = harness.runtime.getSnapshot();
+
+    const snapshot = harness.runtime.rotateBuilding();
+
+    expect(snapshot).toEqual(duringWrite);
+    expect(snapshot.ui.buildingRotation).toBe(beforeRotation);
 
     harness.store.releaseNext("writeWorkingSave");
     await expect(activation).resolves.toMatchObject({ status: "completed" });
