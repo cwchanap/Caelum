@@ -929,21 +929,35 @@ If profiling or field evidence reveals genuinely hung host writes, the follow-up
 
 `dispose()` may begin at any point while the New City foreground workflow is in flight. The workflow is registered as a foreground lifecycle operation on the persistence lease, so `drainAll` during disposal waits for the entire workflow — not only its eventual store enqueue — before the lease can be released. A replacement runtime's `createGameRuntime` awaits `acquireLease` and therefore cannot proceed until the workflow has settled. The disposal protocol defines the point-of-no-return for each phase:
 
-- **Before the initial write is admitted.** If disposal occurs before the workflow enqueues its `writeWorkingSave`, the workflow observes `dead` at the next check, rolls back any installed candidate backend for coherence, and returns `runtimeUnavailable("activateNewCity")`. No storage mutation is issued.
-- **While the initial write is in flight.** The write was enqueued before the lease closed and `drainAll` waits for it. If the write *fails*, the workflow rolls back the candidate backend and returns `runtimeUnavailable`. No orphan is created.
-- **Late write success (the orphan case).** If the write *succeeds* after disposal began, the candidate city record is committed in storage even though New City never completed or published success. This is the same late-success orphan condition §15.5 warns about for uncancellable writes, reached via disposal rather than a timeout. The workflow must undo the orphan storage mutation before the lease transfers:
+- **Before the initial write is admitted.** If disposal occurs before the workflow enqueues its `createWorkingSave`, the workflow observes `dead` at the next check, rolls back any installed candidate backend for coherence, and returns `runtimeUnavailable("activateNewCity")`. No storage mutation is issued.
+- **While the initial write is in flight.** The write was enqueued before the lease closed and `drainAll` waits for it. If the write *fails*, the workflow reconciles the ambiguous failure (see below) and returns `runtimeUnavailable`. No orphan is created if the write did not commit.
+- **Ambiguous write failure reconciliation.** If `createWorkingSave` throws or returns a non-`conflict` typed failure, the caller cannot know whether the pending record committed before the failure. `conflict` is safe — the atomic create-only contract guarantees no commit on conflict. For all other failures, the workflow reads the city to reconcile:
+  - `notFound`: the write did not commit — rollback normally with the original error.
+  - `pending`: the write committed a pending record — treat as late-success orphan (delete + rollback).
+  - `active` or `readFailed`: unexpected or unknowable — enter the fatal persistence-recovery state.
+- **Late write success (the orphan case).** If the write *succeeds* after disposal began, the candidate city record is committed in storage as a **pending** record even though New City never completed or published success. This is the same late-success orphan condition §15.5 warns about for uncancellable writes, reached via disposal rather than a timeout. The workflow must undo the orphan storage mutation before the lease transfers:
   - roll back the backend to the prior canonical snapshot (coherence);
-  - if no prior record existed for the New City id, `deleteCity` removes the orphan;
-  - if a prior record existed (a caller-supplied id collision — New City ids should be unique by construction, but this is defense-in-depth), restore the prior record via `SaveStore.restoreWorkingSaveRaw` rather than deleting, so cleanup never deletes a pre-existing city that the uncancellable write overwrote; and
+  - `deleteCity` removes the pending orphan (safe because `createWorkingSave` is atomic create-only — a successful create proves no prior storage existed, so there is no pre-existing record to restore); and
   - return `runtimeUnavailable("activateNewCity")` without publishing a successful result or installing the candidate as the active city.
 
   The cleanup store call is issued directly on the `SaveStore` (not through `lease.enqueue`, which rejects on the now-closing lease). This is safe because the lease is still exclusively held and the successful city FIFO write has already settled. Cleanup runs inside the admitted foreground operation, so `drainAll` waits for it and the lease is not released until cleanup settles.
 
-- **Cleanup failure (fatal persistence-recovery state).** If the backend rollback or the storage restore/delete fails, the orphan cannot be reconciled. The runtime enters a fatal persistence-recovery state: the lease is never released (`startDrainAndRelease` skips `lease.release()`). A replacement runtime against the same storage identity cannot acquire the lease, so its `createGameRuntime` never resolves — matching the defined behavior for uncancellable writes that never settle. `dispose()` itself resolves (the runtime is dead and drained), but safe rebootstrap cannot proceed until the orphan is reconciled out of band. Silently releasing the lease while an orphan or overwritten record remains is not acceptable.
+- **Finalization.** After `createWorkingSave` succeeds and the runtime is still alive, the workflow calls `finalizeWorkingSave` to flip the pending record to an active city. If finalization fails ambiguously, the workflow reconciles by reading the city:
+  - `notFound`: unexpected — rollback the backend.
+  - `pending`: finalize did not commit — delete the pending orphan and rollback.
+  - `active`: finalize committed despite the failure — if dead, return `runtimeUnavailable` without deleting (the city is durably active and can be loaded on restart); if alive, proceed to publish success.
+  - `readFailed`: enter the fatal persistence-recovery state.
+- **Cleanup failure (fatal persistence-recovery state).** If the backend rollback or the storage delete fails, the orphan cannot be reconciled. The runtime enters a fatal persistence-recovery state: the lease is never released (`startDrainAndRelease` skips `lease.release()`). A replacement runtime against the same storage identity cannot acquire the lease, so its `createGameRuntime` never resolves — matching the defined behavior for uncancellable writes that never settle. `dispose()` itself resolves (the runtime is dead and drained), but safe rebootstrap cannot proceed until the orphan is reconciled out of band. Silently releasing the lease while an orphan remains is not acceptable.
 
 - **Pre-candidate typed failures during disposal.** Branches that fail before a candidate is installed (a thrown or typed-failure prior `snapshotForSave`, or a typed `createSandbox` rejection) do not need a backend rollback, but they must not restore the prior public runtime, restart the canvas, publish, or resume previews once disposal has begun. These branches check `dead` before any public restoration and return `runtimeUnavailable("activateNewCity")` when disposed, mirroring `rollbackNewCity`'s terminal discipline. A thrown `createSandbox` already routes through `rollbackNewCity`, which performs the backend rollback and the same terminal check.
 
-`SaveStore.restoreWorkingSaveRaw` is the store operation that accepts a previously-read `UntrustedSaveValue` for writing, so late-success cleanup can restore a pre-existing record without an unsafe cast and without deleting a city whose id collided with the New City identity. It re-inspects and stores the value verbatim; it does not re-derive or normalize the snapshot.
+### Pending-then-finalize and bootstrap reconciliation
+
+`createWorkingSave` stores the candidate as a **pending** record — durably committed but not yet finalized as an active city. The runtime MUST call `finalizeWorkingSave` after the New City transaction succeeds (candidate installed, state ready to publish) to flip the record from pending to active. If the runtime crashes, is disposed, or fails before finalization, the pending record remains in storage as a durable marker.
+
+**Bootstrap reconciliation.** On every `createGameRuntime`, after acquiring the exclusive lease, the runtime lists all cities and deletes any leftover pending records. This makes restart recovery deterministic: a crashed New City's pending orphan is cleaned up before the replacement runtime can proceed. Deletion is safe because a pending record was never finalized — it is not a real city the user can load. If deletion fails for any pending record, or if `listCities` itself fails, the lease is pinned and the runtime is born terminal with `dispose()` reporting `recoveryRequired` / `bootstrapReconciliationFailed`.
+
+`CitySummary.pending` is a boolean flag indicating whether the city's working-save record is in the pending state. `listCities` includes pending records so the reconciliation pass can find them; production UI that lists loadable cities should filter them out.
 
 ## 16. Reset, detach, and active-city deletion
 
@@ -965,6 +979,19 @@ A persistence write that completes *after* the caller deletes the former city's 
 - **City-switch load.** A `load()` that targets a different city than the one currently active establishes a storage-safe handoff for the former city before the new city becomes active. It fences the former city's persistence admission (new working/checkpoint/autosave/rename writes for it resolve `superseded` at admission) and drains that city's persistence FIFO before the target city's restore commits. Already-admitted writes are allowed to settle to completion; they are not superseded mid-flight.
 - **Detach.** `detachActiveCity()` fences the departing city's persistence admission and drains its FIFO before clearing identity, so a delayed write cannot recreate a deleted record. Detach owns **city-scoped** persistence admission only: it does **not** reserve global gameplay admission, so ticks and backend dispatches keep running while detach waits on storage (New City remains the sole foreground transaction where storage I/O may reserve gameplay admission, per §15.5). Detach has deterministic precedence over cross-city loads: every load admitted *after* detach starts resolves `superseded`; loads already in flight are allowed to settle and detach orders after them through the gameplay queue, then invalidates them via the load-token bump in its clearing work. The final active city is therefore `null` regardless of read latency.
 - **Caller contract.** HPA-346 may delete a former city's record only after the active identity has moved to another city (via load/new activation) or after `detachActiveCity()` has resolved. The coordinator's fence-and-drain guarantees that, by that point, no write for the former city remains in flight, so deletion is final.
+
+### 16.2 Terminal-aware controller
+
+Once `dispose()` or `failBackend()` sets `dead = true`, the runtime is permanently terminal. All public `RuntimeController` methods check `dead` and short-circuit:
+
+- **`start()`** is a no-op after disposal — the canvas animation loop is not restarted.
+- **`isRunning()`** returns `false` after disposal.
+- **`tick()`** returns the last snapshot without dispatching to the dead backend.
+- **All UI methods** (`setTool`, `resetUi`, `setBuildCategory`, `setRoadPreset`, `setOverlay`, `setHudCategory`, `rotateBuilding`, `setDragCurrent`, `cancelDrag`, `setHoverTile`, route-draft methods, etc.) return the last snapshot without committing, publishing, or notifying subscribers.
+- **`commit()` and `publish()`** skip canvas rendering, animation sync, and subscriber notification when `dead` is true, so in-flight async operations that settle after disposal do not produce stale UI updates.
+- **Persistence operations** (`saveWorking`, `load`, `activateNewCity`, `detachActiveCity`) already check `dead` and return `runtimeUnavailable`.
+
+`App.svelte`'s `onMount` teardown calls `runtime.dispose()` (not just `runtime.stop()`) so the persistence lease is released and pending storage writes drain before a replacement runtime can acquire the lease. A mere `stop()` leaves the runtime alive — the canvas loop can be restarted and pending writes can race a replacement runtime.
 
 ## 17. Performance and animation-frame handoff
 

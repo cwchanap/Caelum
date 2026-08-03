@@ -5949,3 +5949,342 @@ describe("UI helper no-op coverage", () => {
     expect(runtime.getSnapshot()).toEqual(before);
   });
 });
+
+describe("terminal-aware controller (dispose makes runtime dead)", () => {
+  const baseOpts = () => ({
+    saveStore: createMemorySaveStore(),
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+
+  it("start() is a no-op after dispose", async () => {
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(),
+    });
+    runtime.start();
+    expect(runtime.isRunning()).toBe(true);
+    await runtime.dispose();
+    expect(runtime.isRunning()).toBe(false);
+    // start() after dispose must not restart the canvas loop.
+    runtime.start();
+    expect(runtime.isRunning()).toBe(false);
+  });
+
+  it("UI methods return last snapshot without publishing after dispose", async () => {
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(),
+    });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    const before = runtime.getSnapshot();
+    await runtime.dispose();
+    listener.mockClear();
+
+    // Every UI method should return the last snapshot and NOT notify.
+    runtime.setTool("road");
+    runtime.resetUi();
+    runtime.setBuildCategory("residential");
+    runtime.setRoadPreset("twoWay");
+    runtime.setOverlay("coverage");
+    runtime.setHudCategory("data");
+    runtime.rotateBuilding();
+    runtime.setDragCurrent({ x: 5, y: 5 });
+    runtime.cancelDrag();
+
+    expect(runtime.getSnapshot()).toEqual(before);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("tick() returns last snapshot without dispatching after dispose", async () => {
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(),
+    });
+    const before = runtime.getSnapshot();
+    await runtime.dispose();
+    const result = await runtime.tick(0.1);
+    expect(result).toEqual(before);
+  });
+
+  it("persistence operations return runtimeUnavailable after dispose", async () => {
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(),
+    });
+    await runtime.dispose();
+    await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+      status: "failed",
+      error: { kind: "precondition", error: { code: "runtimeUnavailable" } },
+    });
+    await expect(
+      runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-new",
+          name: "New",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: { kind: "precondition", error: { code: "runtimeUnavailable" } },
+    });
+  });
+
+  it("dispose is idempotent and returns released", async () => {
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(),
+    });
+    const result1 = await runtime.dispose();
+    expect(result1.status).toBe("released");
+    const result2 = await runtime.dispose();
+    expect(result2.status).toBe("released");
+  });
+});
+
+describe("pending-then-finalize and bootstrap reconciliation", () => {
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+
+  it("createWorkingSave stores a pending record; finalizeWorkingSave flips it to active", async () => {
+    const store = createMemorySaveStore();
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(
+      {
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+      {
+        id: "city-pending-1",
+        name: "Pending City",
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      },
+    );
+    expect(result.status).toBe("completed");
+
+    // After activation, the city must be active (not pending).
+    const cities = await store.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find((c) => c.cityId === "city-pending-1");
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(false);
+    }
+  });
+
+  it("bootstrap reconciliation deletes leftover pending records on restart", async () => {
+    const failures = createMemorySaveStoreFailureControls();
+    const memoryStore = createMemorySaveStore({ failures });
+    // Seed a pending orphan directly: use createWorkingSave to create a
+    // pending record, then never finalize it.
+    const envelope = buildSaveEnvelope({
+      city: { id: "city-orphan", name: "Orphan" },
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      savedAt: "2026-08-01T10:05:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot(),
+    });
+    const created = await memoryStore.createWorkingSave(envelope);
+    expect(created.ok).toBe(true);
+    if (created.ok) {
+      expect(created.value.pending).toBe(true);
+    }
+
+    // A new runtime against the same store should reconcile the orphan.
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      saveStore: memoryStore,
+      initialCity: null,
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+    await runtime.debugSetBudget(100_000);
+
+    // The pending orphan should have been deleted by bootstrap reconciliation.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find((c) => c.cityId === "city-orphan");
+      expect(found).toBeUndefined();
+    }
+
+    // Dispose the first runtime to release the lease before creating a
+    // second runtime against the same storage identity.
+    await runtime.dispose();
+
+    // And a new createWorkingSave for the same ID should succeed (no conflict).
+    const store2 = createDelayedSaveStore(memoryStore);
+    const runtime2 = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      saveStore: store2,
+      initialCity: null,
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+    await runtime2.debugSetBudget(100_000);
+    const result = await runtime2.persistence.activateNewCity(
+      {
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+      {
+        id: "city-orphan",
+        name: "Recreated",
+        cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      },
+    );
+    expect(result.status).toBe("completed");
+    await runtime2.dispose();
+  });
+
+  it("bootstrap reconciliation pins the lease when pending deletion fails", async () => {
+    const failures = createMemorySaveStoreFailureControls();
+    const memoryStore = createMemorySaveStore({ failures });
+    // Seed a pending orphan.
+    const envelope = buildSaveEnvelope({
+      city: { id: "city-stuck", name: "Stuck" },
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      savedAt: "2026-08-01T10:05:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot(),
+    });
+    await memoryStore.createWorkingSave(envelope);
+
+    // Make deleteCity fail for the next call.
+    failures.failNext("deleteCity", "ioFailure");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      saveStore: memoryStore,
+      initialCity: null,
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+
+    // The runtime should be born terminal (dead). dispose should report
+    // recoveryRequired with bootstrapReconciliationFailed.
+    const disposeResult = await runtime.dispose();
+    expect(disposeResult.status).toBe("recoveryRequired");
+    if (disposeResult.status === "recoveryRequired") {
+      expect(disposeResult.reason).toBe("bootstrapReconciliationFailed");
+    }
+  });
+});
+
+describe("ambiguous createWorkingSave failure reconciliation", () => {
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+
+  it("reconciles a thrown createWorkingSave that did not commit (notFound)", async () => {
+    // A throwing store that throws BEFORE committing — the read returns
+    // notFound, so the runtime rolls back normally with the original error.
+    const memoryStore = createMemorySaveStore();
+    const throwingStore: SaveStore = {
+      ...memoryStore,
+      async createWorkingSave(_envelope) {
+        throw new Error("createWorkingSave threw before commit");
+      },
+    };
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(throwingStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(
+      {
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+      {
+        id: "city-throw-1",
+        name: "Throw City",
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      },
+    );
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("store");
+    }
+    // No city should exist in storage.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-throw-1"),
+      ).toBeUndefined();
+    }
+    await runtime.dispose();
+  });
+
+  it("reconciles a typed createWorkingSave failure that did not commit", async () => {
+    const failures = createMemorySaveStoreFailureControls();
+    const memoryStore = createMemorySaveStore({ failures });
+    // failNext makes createWorkingSave return a typed ioFailure WITHOUT
+    // committing (MemorySaveStore checks for injected failure before the
+    // write).
+    failures.failNext("createWorkingSave", "ioFailure");
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(memoryStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(
+      {
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+      {
+        id: "city-typed-fail",
+        name: "Typed Fail",
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      },
+    );
+    expect(result.status).toBe("failed");
+    // No city should exist.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-typed-fail"),
+      ).toBeUndefined();
+    }
+    await runtime.dispose();
+  });
+});

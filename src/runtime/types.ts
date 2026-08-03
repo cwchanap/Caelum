@@ -231,6 +231,11 @@ export type RuntimeDisposeResult =
       status: "recoveryRequired";
       reason: "lateSuccessCleanupFailed";
       cityId: string;
+    }
+  | {
+      status: "recoveryRequired";
+      reason: "bootstrapReconciliationFailed";
+      cityId: string | null;
     };
 
 export interface RuntimeController {
@@ -265,6 +270,14 @@ export interface RuntimeController {
    *   of band (e.g. by reloading the page/process) before retrying
    *   `createGameRuntime`. Calling `createGameRuntime` against the same
    *   storage identity after this outcome hangs indefinitely.
+   *
+   * - `{ status: "recoveryRequired", reason: "bootstrapReconciliationFailed",
+   *   cityId }` — bootstrap reconciliation could not delete a leftover
+   *   pending city record (from a prior crashed New City transaction) or
+   *   could not list cities to find pending orphans. `cityId` is the pending
+   *   record's ID when known, or `null` when `listCities` itself failed. The
+   *   lease is permanently pinned; the application MUST reconcile the
+   *   durable storage out of band before retrying `createGameRuntime`.
    *
    * If an uncancellable store operation never settles, this promise never
    * resolves — safe rebootstrap cannot proceed until pending storage I/O

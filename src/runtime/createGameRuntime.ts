@@ -251,6 +251,59 @@ export async function createGameRuntime(
     ? resolvePersistenceCoordinator(saveStore)
     : createSharedPersistenceCoordinator();
   const lease: PersistenceLease = await coordinator.acquireLease();
+  // Durable bootstrap reconciliation (pending-then-finalize): after acquiring
+  // the exclusive lease, delete any leftover pending city records from New
+  // City transactions that committed their initial `createWorkingSave` write
+  // but crashed, were disposed, or failed before `finalizeWorkingSave`. A
+  // pending record is a durable marker that survives process restarts; the
+  // in-memory lease pin alone does not. Without this reconciliation, a
+  // crashed New City would leave an orphan pending record that blocks future
+  // creates for the same city ID (createWorkingSave returns `conflict`).
+  // Deletion here is safe because a pending record was never finalized — it
+  // is not a real city the user can load. If deletion fails for any pending
+  // record, the lease is pinned so a replacement runtime cannot proceed
+  // while inconsistent storage remains.
+  let leaseStuck = false;
+  let leaseStuckCityId: string | null = null;
+  // Distinguishes bootstrap-reconciliation failure from late-success cleanup
+  // failure. Both set `leaseStuck` and `leaseStuckCityId`, but the disposal
+  // outcome reports a different `reason` so the application can distinguish
+  // "a pending orphan from a prior crash could not be deleted" from "the
+  // current New City transaction's late-success cleanup failed."
+  let bootstrapStuck = false;
+  if (saveStore !== undefined) {
+    try {
+      const listed = await saveStore.listCities();
+      if (listed.ok) {
+        for (const city of listed.value) {
+          if (city.pending) {
+            try {
+              const deleted = await saveStore.deleteCity(city.cityId);
+              if (!deleted.ok && deleted.error.code !== "notFound") {
+                leaseStuck = true;
+                leaseStuckCityId = city.cityId;
+                bootstrapStuck = true;
+              }
+            } catch {
+              leaseStuck = true;
+              leaseStuckCityId = city.cityId;
+              bootstrapStuck = true;
+            }
+          }
+        }
+      } else if (listed.error.code !== "notFound") {
+        // listCities failed — cannot determine if pending orphans exist.
+        // Pin the lease so a replacement runtime cannot proceed while
+        // potentially inconsistent storage remains unreconciled.
+        leaseStuck = true;
+        bootstrapStuck = true;
+      }
+    } catch {
+      // listCities threw — cannot determine if pending orphans exist.
+      leaseStuck = true;
+      bootstrapStuck = true;
+    }
+  }
   // Track the drain-and-release promise so both `failBackend` (fire-and-
   // forget) and `dispose()` (awaited) share one release. Idempotent: the
   // second caller awaits the same promise the first caller started.
@@ -259,20 +312,16 @@ export async function createGameRuntime(
   // waits for already-admitted work to settle.
   let drainAndReleasePromise: Promise<void> | null = null;
   // Fatal persistence-recovery flag: when late-success cleanup of an orphan
-  // New City write cannot settle (backend rollback or storage restore/delete
-  // fails), the lease must NOT be released. A replacement runtime against the
-  // same storage identity would otherwise acquire the lease and observe or
-  // further mutate inconsistent storage. Setting this before `drainAll`
-  // resolves makes `startDrainAndRelease` skip `lease.release()`, so the
-  // replacement runtime's `createGameRuntime` (which awaits `acquireLease`)
-  // never resolves — matching the defined behavior for uncancellable writes
-  // that never settle. Safe rebootstrap cannot proceed until the orphan is
+  // New City write cannot settle (backend rollback or storage delete fails),
+  // OR when bootstrap reconciliation cannot delete a pending orphan, the
+  // lease must NOT be released. A replacement runtime against the same
+  // storage identity would otherwise acquire the lease and observe or further
+  // mutate inconsistent storage. Setting this before `drainAll` resolves
+  // makes `startDrainAndRelease` skip `lease.release()`, so the replacement
+  // runtime's `createGameRuntime` (which awaits `acquireLease`) never
+  // resolves — matching the defined behavior for uncancellable writes that
+  // never settle. Safe rebootstrap cannot proceed until the orphan is
   // reconciled out of band.
-  let leaseStuck = false;
-  // The city ID whose late-success cleanup failed, when `leaseStuck` is true.
-  // Used by `dispose()` to report which city requires out-of-band recovery
-  // via the typed `RuntimeDisposeResult`.
-  let leaseStuckCityId: string | null = null;
   const startDrainAndRelease = (): Promise<void> => {
     if (drainAndReleasePromise !== null) return drainAndReleasePromise;
     lease.beginClosing();
@@ -318,7 +367,10 @@ export async function createGameRuntime(
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
-  let dead = false;
+  // Also set when bootstrap reconciliation fails (leaseStuck from pending
+  // orphan deletion) — the runtime is immediately terminal and `dispose()`
+  // reports `recoveryRequired`.
+  let dead = leaseStuck;
   // Foreground New City creation temporarily owns backend admission while its
   // candidate exists only inside the backend. Calls made after the reservation
   // are dropped/superseded instead of joining the serialized queue and
@@ -445,11 +497,12 @@ export async function createGameRuntime(
 
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
-    canvasHost.render();
-    canvasHost.syncAnimationLoop();
-
-    for (const listener of listeners) {
-      listener(snapshot);
+    if (!dead) {
+      canvasHost.render();
+      canvasHost.syncAnimationLoop();
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     }
 
     return snapshot;
@@ -461,8 +514,10 @@ export async function createGameRuntime(
     ui = nextUi;
 
     if (!changed) {
-      canvasHost.render();
-      canvasHost.syncAnimationLoop();
+      if (!dead) {
+        canvasHost.render();
+        canvasHost.syncAnimationLoop();
+      }
       return getSnapshot();
     }
 
@@ -561,17 +616,26 @@ export async function createGameRuntime(
 
   const dispose = async (): Promise<RuntimeDisposeResult> => {
     if (dead) {
-      // Already fatal: `failBackend` started the drain-and-release. Await
-      // it so the caller knows the lease has been released before creating
-      // a replacement runtime.
+      // Already fatal: `failBackend` started the drain-and-release, OR
+      // bootstrap reconciliation failed and the runtime was born terminal.
+      // Await it so the caller knows the lease has been released before
+      // creating a replacement runtime.
       await startDrainAndRelease();
-      return leaseStuck
-        ? {
+      if (leaseStuck) {
+        if (bootstrapStuck) {
+          return {
             status: "recoveryRequired",
-            reason: "lateSuccessCleanupFailed",
-            cityId: leaseStuckCityId!,
-          }
-        : { status: "released" };
+            reason: "bootstrapReconciliationFailed",
+            cityId: leaseStuckCityId,
+          };
+        }
+        return {
+          status: "recoveryRequired",
+          reason: "lateSuccessCleanupFailed",
+          cityId: leaseStuckCityId!,
+        };
+      }
+      return { status: "released" };
     }
     dead = true;
     previewCoordinator.invalidateRoute();
@@ -592,13 +656,21 @@ export async function createGameRuntime(
     // can acquire it. Unlike `failBackend` (fire-and-forget), `dispose`
     // awaits the drain so the caller knows the lease has been released.
     await startDrainAndRelease();
-    return leaseStuck
-      ? {
+    if (leaseStuck) {
+      if (bootstrapStuck) {
+        return {
           status: "recoveryRequired",
-          reason: "lateSuccessCleanupFailed",
-          cityId: leaseStuckCityId!,
-        }
-      : { status: "released" };
+          reason: "bootstrapReconciliationFailed",
+          cityId: leaseStuckCityId,
+        };
+      }
+      return {
+        status: "recoveryRequired",
+        reason: "lateSuccessCleanupFailed",
+        cityId: leaseStuckCityId!,
+      };
+    }
+    return { status: "released" };
   };
 
   const queueBackend = (
@@ -2475,6 +2547,134 @@ export async function createGameRuntime(
     return runtimeUnavailable("activateNewCity");
   };
 
+  // Read a city's committed state to reconcile an ambiguous store operation.
+  // After a thrown or non-conflict typed failure from `createWorkingSave` or
+  // `finalizeWorkingSave`, the caller cannot know whether the operation
+  // committed before the failure. This reads the city and classifies its
+  // state so the caller can reconcile:
+  //
+  // - `notFound`: no record exists — the operation did not commit.
+  // - `pending`: a pending record exists (created by `createWorkingSave` but
+  //   not yet finalized) — the create committed but finalize did not.
+  // - `active`: a finalized record exists — finalize committed.
+  // - `readFailed`: the read itself failed or threw — committed state is
+  //   unknowable; the caller must enter the recovery-required state.
+  type CityPendingState =
+    | { status: "notFound" }
+    | { status: "pending" }
+    | { status: "active" }
+    | { status: "readFailed" };
+
+  const readCityPendingState = async (
+    cityId: string,
+  ): Promise<CityPendingState> => {
+    try {
+      const read = await cityQueues.enqueue(cityId, () =>
+        saveStore!.readWorkingSave(cityId),
+      );
+      if (!read.ok) {
+        if (read.error.code === "notFound") return { status: "notFound" };
+        return { status: "readFailed" };
+      }
+      // Inspect the envelope to determine if the record is valid. Use
+      // listCities to check the pending flag (readWorkingSave returns the
+      // raw value without the pending flag).
+      const listed = await cityQueues.enqueue(cityId, () =>
+        saveStore!.listCities(),
+      );
+      if (!listed.ok) return { status: "readFailed" };
+      const found = listed.value.find((c) => c.cityId === cityId);
+      if (found === undefined) return { status: "notFound" };
+      return found.pending ? { status: "pending" } : { status: "active" };
+    } catch {
+      return { status: "readFailed" };
+    }
+  };
+
+  // Reconcile an ambiguous `createWorkingSave` failure (a thrown exception or
+  // a non-conflict typed failure). The create may have committed a pending
+  // record before the failure. Read the city to determine committed state:
+  // - notFound: uncommitted — rollback normally with the original error.
+  // - pending: our orphan — cleanup (delete pending + rollback backend).
+  // - active: a pre-existing finalized city — unexpected with atomic
+  //   create-only; enter recovery-required.
+  // - readFailed: can't determine — enter recovery-required.
+  const reconcileAmbiguousCreateFailure = async (
+    prior: NewCityPriorRuntime,
+    priorCanonicalSnapshot: RustGameSnapshot,
+    identity: NewCityIdentity,
+    failure: PersistenceCoordinatorError,
+  ): Promise<PersistenceOperationResult<LoadCityValue>> => {
+    const state = await readCityPendingState(identity.id);
+    switch (state.status) {
+      case "notFound":
+        // Uncommitted failure — rollback normally.
+        return await rollbackNewCity(prior, priorCanonicalSnapshot, failure);
+      case "pending":
+        // The create committed a pending record — treat as late-success
+        // orphan. Delete it and roll back the backend.
+        return await cleanupLateSuccessNewCity(
+          prior,
+          priorCanonicalSnapshot,
+          identity,
+        );
+      case "active":
+      case "readFailed":
+        // An active record should not exist (createWorkingSave returns
+        // conflict if any storage exists), or we can't determine the state.
+        // Enter recovery-required.
+        enterLateSuccessCleanupFailure(identity.id);
+        return runtimeUnavailable("activateNewCity");
+    }
+  };
+
+  // Reconcile an ambiguous `finalizeWorkingSave` failure. The finalize may
+  // have committed (flipping pending → active) before the failure. Read the
+  // city to determine committed state:
+  // - notFound: the city doesn't exist — unexpected; rollback.
+  // - pending: finalize did not commit — cleanup (delete pending + rollback).
+  // - active: finalize committed — the city is durably active. If dead, do
+  //   NOT delete it (it's a real city); return runtimeUnavailable. If alive,
+  //   return null to signal the caller to proceed to the normal success path.
+  // - readFailed: can't determine — enter recovery-required.
+  // Returns null when the caller should proceed to publish success (the city
+  // is active and the runtime is alive).
+  const reconcileAmbiguousFinalizeFailure = async (
+    prior: NewCityPriorRuntime,
+    priorCanonicalSnapshot: RustGameSnapshot,
+    identity: NewCityIdentity,
+  ): Promise<PersistenceOperationResult<LoadCityValue> | null> => {
+    const state = await readCityPendingState(identity.id);
+    switch (state.status) {
+      case "notFound":
+        // The city doesn't exist — unexpected after a successful create.
+        // Rollback the backend.
+        return await rollbackNewCity(prior, priorCanonicalSnapshot, {
+          kind: "precondition",
+          error: {
+            code: "runtimeUnavailable",
+            operation: "activateNewCity",
+          },
+        });
+      case "pending":
+        // Finalize did not commit — delete the pending orphan and rollback.
+        return await cleanupLateSuccessNewCity(
+          prior,
+          priorCanonicalSnapshot,
+          identity,
+        );
+      case "active":
+        // Finalize committed — the city is durably active. If dead, do NOT
+        // delete it; just return runtimeUnavailable. The city can be loaded
+        // on restart. If alive, signal the caller to proceed to publish.
+        if (dead) return runtimeUnavailable("activateNewCity");
+        return null;
+      case "readFailed":
+        enterLateSuccessCleanupFailure(identity.id);
+        return runtimeUnavailable("activateNewCity");
+    }
+  };
+
   const activateNewCity = async (
     requestedSandbox: SandboxCreationRequest,
     requestedIdentity: NewCityIdentity,
@@ -2662,14 +2862,29 @@ export async function createGameRuntime(
         });
       }
 
-      // Atomic create-only write: `createWorkingSave` returns `conflict` when
-      // ANY storage already exists for the city ID (working record,
-      // checkpoints, autosaves, generation high-water). This proves a
-      // successful write created the city's storage rather than overwriting a
-      // pre-existing city. An ID collision rolls the candidate backend back
-      // and returns a typed store conflict — no overwrite occurs. Late-success
-      // cleanup can then safely `deleteCity` the newly created city because
-      // the create proved no prior storage existed.
+      // Atomic create-only write: `createWorkingSave` stores the candidate
+      // as a **pending** record — durably committed but not yet finalized as
+      // an active city. It returns `conflict` when ANY storage already exists
+      // for the city ID (working record, checkpoints, autosaves, generation
+      // high-water, or a pending record from a prior unfinalized create). This
+      // proves a successful write created the city's storage rather than
+      // overwriting a pre-existing city. An ID collision rolls the candidate
+      // backend back and returns a typed store conflict — no overwrite occurs.
+      //
+      // After a successful create, the runtime MUST call `finalizeWorkingSave`
+      // to flip the record from pending to active before publishing success.
+      // If the runtime crashes or is disposed before finalization, the pending
+      // record remains as a durable marker; bootstrap reconciliation deletes
+      // it on the next `createGameRuntime`.
+      //
+      // Ambiguous-failure reconciliation: if the create throws or returns a
+      // non-conflict typed failure, the caller cannot know whether the
+      // pending record committed before the failure. `conflict` is safe (the
+      // atomic create-only contract guarantees no commit on conflict). For
+      // all other failures, read the city to reconcile:
+      // - notFound: uncommitted — rollback normally.
+      // - pending: our orphan — cleanup (delete + rollback).
+      // - active/readFailed: unexpected or unknowable — recovery-required.
       let stored: Awaited<ReturnType<SaveStore["createWorkingSave"]>>;
       try {
         stored = await cityQueues.enqueue(identity.id, () =>
@@ -2688,27 +2903,79 @@ export async function createGameRuntime(
         };
       }
       if (!stored.ok) {
-        return await rollbackNewCity(prior, priorCapture.snapshot, {
-          kind: "store",
-          error: stored.error,
-        });
+        if (stored.error.code === "conflict") {
+          // Atomic create-only guarantees no commit on conflict.
+          return await rollbackNewCity(prior, priorCapture.snapshot, {
+            kind: "store",
+            error: stored.error,
+          });
+        }
+        // Ambiguous failure — reconcile by reading the city.
+        return await reconcileAmbiguousCreateFailure(
+          prior,
+          priorCapture.snapshot,
+          identity,
+          { kind: "store", error: stored.error },
+        );
       }
       // Late-success branch: the initial create SUCCEEDED after disposal
-      // began. The candidate city record is now committed in storage even
-      // though New City never completed or published success. This is the
-      // orphan scenario the persistence design warns about (§15.5) for
-      // uncancellable writes. Roll back the backend for coherence AND undo
-      // the orphan storage mutation via `deleteCity`. The runtime remains
-      // terminal — no success is published, no candidate is installed.
-      // Cleanup runs inside this admitted foreground operation, so
-      // `drainAll` waits for it and the lease is not released until cleanup
-      // settles (or never, if cleanup fails — see the fatal recovery state).
+      // began. The candidate city record is now committed in storage as a
+      // pending record, even though New City never completed or published
+      // success. This is the orphan scenario the persistence design warns
+      // about (§15.5) for uncancellable writes. Roll back the backend for
+      // coherence AND undo the orphan storage mutation via `deleteCity`. The
+      // runtime remains terminal — no success is published, no candidate is
+      // installed. Cleanup runs inside this admitted foreground operation,
+      // so `drainAll` waits for it and the lease is not released until
+      // cleanup settles (or never, if cleanup fails — see the fatal recovery
+      // state).
       if (dead) {
         return await cleanupLateSuccessNewCity(
           prior,
           priorCapture.snapshot,
           identity,
         );
+      }
+
+      // Finalize the pending record: flip it from pending to active. This
+      // makes the city a durable, loadable city that survives process
+      // restarts. If finalization fails ambiguously, reconcile by reading the
+      // city: if it's already active, finalization committed despite the
+      // failure and the runtime can proceed (or return runtimeUnavailable if
+      // dead); if still pending, finalization did not commit and the orphan
+      // must be cleaned up.
+      let finalized: Awaited<ReturnType<SaveStore["finalizeWorkingSave"]>>;
+      try {
+        finalized = await cityQueues.enqueue(identity.id, () =>
+          saveStore.finalizeWorkingSave(identity.id),
+        );
+      } catch (error: unknown) {
+        finalized = {
+          ok: false,
+          error: {
+            operation: "finalizeWorkingSave",
+            code: "ioFailure",
+            cityId: identity.id,
+            retryable: true,
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+      if (!finalized.ok) {
+        const reconciled = await reconcileAmbiguousFinalizeFailure(
+          prior,
+          priorCapture.snapshot,
+          identity,
+        );
+        if (reconciled !== null) return reconciled;
+        // Finalization committed despite the failure — fall through to the
+        // normal success path. The city is durably active.
+      }
+      // Dead check after finalization: if disposal began after the city was
+      // finalized, the city is durably active. Do NOT delete it — it can be
+      // loaded on restart. Just return runtimeUnavailable without publishing.
+      if (dead) {
+        return runtimeUnavailable("activateNewCity");
       }
 
       clearHoverPreviewTimer();
@@ -2847,14 +3114,19 @@ export async function createGameRuntime(
         listeners.delete(listener);
       };
     },
-    start: canvasHost.start,
+    start() {
+      if (dead) return;
+      canvasHost.start();
+    },
     stop,
     dispose,
-    isRunning: canvasHost.isRunning,
+    isRunning: () => (dead ? false : canvasHost.isRunning()),
     tick(deltaSeconds) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueTick(deltaSeconds);
     },
     reset() {
+      if (dead) return Promise.resolve(getSnapshot());
       if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
@@ -2883,6 +3155,7 @@ export async function createGameRuntime(
       });
     },
     resetUi() {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
@@ -2890,6 +3163,7 @@ export async function createGameRuntime(
       return commit(state, createUiState());
     },
     setTool(tool) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
@@ -2907,6 +3181,7 @@ export async function createGameRuntime(
       return commitWithRoadPreview(next);
     },
     setBuilding(building) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
@@ -2914,6 +3189,7 @@ export async function createGameRuntime(
       return commit(state, nextBuildingUiState(building, ui));
     },
     setArea(area) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
@@ -2921,6 +3197,7 @@ export async function createGameRuntime(
       return commit(state, nextAreaUiState(area, ui));
     },
     setRoadPreset(preset) {
+      if (dead) return getSnapshot();
       return commitWithRoadPreview(
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
@@ -2929,12 +3206,14 @@ export async function createGameRuntime(
     // the Build drawer is open. No guard here, so a direct controller call could
     // leave a non-null buildCategory with Build inactive — unreachable from UI.
     setBuildCategory(category: BuildCategoryId | null) {
+      if (dead) return getSnapshot();
       return commit(
         state,
         ui.buildCategory === category ? ui : { ...ui, buildCategory: category },
       );
     },
     armRoad(preset) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
@@ -2948,6 +3227,7 @@ export async function createGameRuntime(
       });
     },
     armRoundabout(size: RoundaboutSize) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
       // and invalidates any in-flight road preview so an older footprint can
@@ -2962,6 +3242,7 @@ export async function createGameRuntime(
       });
     },
     startDrag(point) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       // Only drag tools open a gesture; capture the tool so the gesture stays
       // self-describing even if activeTool later changes (a tool switch clears
@@ -2985,6 +3266,7 @@ export async function createGameRuntime(
       });
     },
     setDragCurrent(point) {
+      if (dead) return getSnapshot();
       // A null (off-map) move is ignored so the preview holds its last tile;
       // the gesture always carries a concrete `current`.
       if (point === null || ui.drag === null) {
@@ -2999,6 +3281,7 @@ export async function createGameRuntime(
       });
     },
     cancelDrag() {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       invalidateRoadPreview();
       return commit(
@@ -3014,6 +3297,7 @@ export async function createGameRuntime(
       );
     },
     commitDrag() {
+      if (dead) return Promise.resolve(getSnapshot());
       if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       const gesture = ui.drag;
       if (gesture === null) {
@@ -3064,6 +3348,7 @@ export async function createGameRuntime(
       });
     },
     rotateBuilding() {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       const currentIndex = rotations.indexOf(ui.buildingRotation);
 
@@ -3073,21 +3358,25 @@ export async function createGameRuntime(
       });
     },
     setOverlay(overlay) {
+      if (dead) return getSnapshot();
       return commit(
         state,
         overlay === ui.activeOverlay ? ui : { ...ui, activeOverlay: overlay },
       );
     },
     togglePause() {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueComputedDispatch(() => ({
         type: "setPaused",
         paused: !state.paused,
       }));
     },
     setSpeed(speed) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setSpeed", speed });
     },
     setHudCategory(category) {
+      if (dead) return getSnapshot();
       if (category === ui.activeHudCategory) {
         return commit(state, ui);
       }
@@ -3101,6 +3390,7 @@ export async function createGameRuntime(
       return commit(state, nextUi);
     },
     handleTileClick(point) {
+      if (dead) return Promise.resolve(getSnapshot());
       if (backendAdmissionReserved) return Promise.resolve(getSnapshot());
       if (ui.routeDraft?.source.kind === "edit") {
         const handleIndex = routeHandleIndexAtPoint(ui.routeDraft, point);
@@ -3169,6 +3459,7 @@ export async function createGameRuntime(
       return intent === null ? commit(state, ui) : enqueueDispatch(intent);
     },
     assignRouteToPlatform(nodeId, routeId, platformId) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({
         type: "assignRouteToPlatform",
         nodeId,
@@ -3176,8 +3467,12 @@ export async function createGameRuntime(
         platformId,
       });
     },
-    startRouteEdit,
+    startRouteEdit(routeId) {
+      if (dead) return getSnapshot();
+      return startRouteEdit(routeId);
+    },
     selectRouteWaypoint(index, interaction) {
+      if (dead) return getSnapshot();
       if (ui.routeDraft === null) return commit(state, ui);
       const routeDraft = selectWaypoint(ui.routeDraft, index, interaction);
       if (routeDraft !== ui.routeDraft) {
@@ -3194,6 +3489,7 @@ export async function createGameRuntime(
         : commit(state, ui);
     },
     removeRouteWaypoint() {
+      if (dead) return getSnapshot();
       if (ui.routeDraft === null) return commit(state, ui);
       const selectedIndex = ui.routeDraft.selectedIndex;
       const routeDraft = removeWaypoint(ui.routeDraft);
@@ -3208,6 +3504,7 @@ export async function createGameRuntime(
         : commitRouteDraft(routeDraft);
     },
     moveRouteWaypoint(delta) {
+      if (dead) return getSnapshot();
       if (ui.routeDraft === null) return commit(state, ui);
       const selectedIndex = ui.routeDraft.selectedIndex;
       const routeDraft = moveWaypoint(ui.routeDraft, delta);
@@ -3223,28 +3520,51 @@ export async function createGameRuntime(
         : commitRouteDraft(routeDraft);
     },
     reverseRouteDraft() {
+      if (dead) return getSnapshot();
       return ui.routeDraft === null
         ? commit(state, ui)
         : commitRouteDraft(reverseRoute(ui.routeDraft));
     },
     setRoutePattern(pattern) {
+      if (dead) return getSnapshot();
       return ui.routeDraft === null
         ? commit(state, ui)
         : commitRouteDraft(setPattern(ui.routeDraft, pattern));
     },
-    undoRouteDraft,
-    redoRouteDraft,
-    saveRouteDraft,
-    cancelRouteDraft,
-    reloadRouteDraft,
-    handleEscape,
+    undoRouteDraft() {
+      if (dead) return getSnapshot();
+      return undoRouteDraft();
+    },
+    redoRouteDraft() {
+      if (dead) return getSnapshot();
+      return redoRouteDraft();
+    },
+    saveRouteDraft() {
+      if (dead) return Promise.resolve(getSnapshot());
+      return saveRouteDraft();
+    },
+    cancelRouteDraft() {
+      if (dead) return getSnapshot();
+      return cancelRouteDraft();
+    },
+    reloadRouteDraft() {
+      if (dead) return getSnapshot();
+      return reloadRouteDraft();
+    },
+    handleEscape() {
+      if (dead) return getSnapshot();
+      return handleEscape();
+    },
     renameRoute(routeId, name) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "renameRoute", routeId, name });
     },
     recolorRoute(routeId, color) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "recolorRoute", routeId, color });
     },
     toggleRouteActive(routeId) {
+      if (dead) return Promise.resolve(getSnapshot());
       const route =
         state.transit.routes.find((r) => r.id === routeId) ??
         state.transit.metroLines.find((l) => l.id === routeId);
@@ -3265,6 +3585,7 @@ export async function createGameRuntime(
       });
     },
     deleteRoute(routeId) {
+      if (dead) return Promise.resolve(getSnapshot());
       // Only clear the selection when the backend actually applied the delete;
       // a rejected delete leaves the route in place, so its selection must
       // survive (parity with route Save's `applied` gate).
@@ -3281,6 +3602,7 @@ export async function createGameRuntime(
       );
     },
     selectRoute(routeId) {
+      if (dead) return getSnapshot();
       const nextId = ui.selectedRouteId === routeId ? null : routeId;
       return commit(
         state,
@@ -3290,6 +3612,7 @@ export async function createGameRuntime(
       );
     },
     focusRouteFailure(routeId, legIndex) {
+      if (dead) return getSnapshot();
       return commit(state, {
         ...ui,
         selectedRouteId: routeId,
@@ -3297,6 +3620,7 @@ export async function createGameRuntime(
       });
     },
     setHoverTile(point) {
+      if (dead) return getSnapshot();
       if (backendAdmissionReserved) return getSnapshot();
       if (samePoint(point, ui.hoverTile)) {
         return commit(state, ui);
@@ -3347,9 +3671,11 @@ export async function createGameRuntime(
       return snapshot;
     },
     previewRoadMutation(mutation) {
+      if (dead) return getSnapshot();
       return requestRoadMutationPreview(mutation);
     },
     dismissRejection() {
+      if (dead) return getSnapshot();
       if (rejection === null) {
         return commit(state, ui);
       }
@@ -3357,6 +3683,7 @@ export async function createGameRuntime(
       return publish();
     },
     debugSetBudget(budget) {
+      if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setBudget", budget });
     },
     // Test-only seam onto this runtime's per-city persistence FIFO. Lets a

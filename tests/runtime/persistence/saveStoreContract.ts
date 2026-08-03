@@ -484,6 +484,7 @@ export function defineSaveStoreContract(
               snapshotSchemaVersion: null,
               summary: null,
               compatibility: { status: "corruptHeader" },
+              pending: false,
             },
           ]);
           await expectError(store.renameCity("", "Renamed"), "corruptRecord");
@@ -524,6 +525,7 @@ export function defineSaveStoreContract(
               snapshotSchemaVersion: null,
               summary: null,
               compatibility: { status: "corruptHeader" },
+              pending: false,
             },
           ]);
 
@@ -2133,79 +2135,93 @@ export function defineSaveStoreContract(
       );
     });
 
-    describe("raw working-save restore", () => {
-      it("restores a previously-read raw value, reverting an overwrite", async () => {
+    describe("pending-then-finalize lifecycle", () => {
+      it("createWorkingSave stores a pending record", async () => {
         const { store } = createHarness();
-        const original = envelopeFor("city-1", "Original");
-        await expectOk(store.writeWorkingSave(original));
-        // Capture the prior raw value, then overwrite with a new envelope.
-        const priorRaw = await expectOk(store.readWorkingSave("city-1"));
-        const overwritten = envelopeFor("city-1", "Overwritten", {
-          savedAt: "2026-08-01T11:00:00.000Z",
-        });
-        await expectOk(store.writeWorkingSave(overwritten));
-        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
-          overwritten,
+        const created = await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
         );
-
-        // Restore the prior raw value — the overwrite is reverted.
-        await expectOk(store.restoreWorkingSaveRaw("city-1", priorRaw));
-        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
-          original,
-        );
+        expect(created.pending).toBe(true);
+        const cities = await expectOk(store.listCities());
+        const found = cities.find((c) => c.cityId === "city-pending");
+        expect(found?.pending).toBe(true);
       });
 
-      it("rejects a raw value whose city id does not match the storage cityId", async () => {
+      it("finalizeWorkingSave flips pending to active", async () => {
         const { store } = createHarness();
-        await expectOk(store.writeWorkingSave(envelopeFor("city-1", "City 1")));
-        const priorRaw = await expectOk(store.readWorkingSave("city-1"));
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        const finalized = await expectOk(
+          store.finalizeWorkingSave("city-pending"),
+        );
+        expect(finalized.pending).toBe(false);
+        const cities = await expectOk(store.listCities());
+        const found = cities.find((c) => c.cityId === "city-pending");
+        expect(found?.pending).toBe(false);
+      });
+
+      it("finalizeWorkingSave is idempotent on an already-active record", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        await expectOk(store.finalizeWorkingSave("city-pending"));
+        const second = await expectOk(
+          store.finalizeWorkingSave("city-pending"),
+        );
+        expect(second.pending).toBe(false);
+      });
+
+      it("finalizeWorkingSave returns notFound for a missing city", async () => {
+        const { store } = createHarness();
         await expectError(
-          store.restoreWorkingSaveRaw("city-other", priorRaw),
-          "corruptRecord",
+          store.finalizeWorkingSave("city-missing"),
+          "notFound",
         );
       });
 
-      rawWorkingIt(
-        "rejects an incompatible raw value without changing storage",
-        async () => {
-          const { store, seedRawWorking } = createHarness();
-          const seedWorking = requireCapability(
-            seedRawWorking,
-            "rawWorkingRecords",
-          );
-          const original = envelopeFor("city-1", "Original");
-          await expectOk(store.writeWorkingSave(original));
-          // An unsupported envelope version is classified as incompatible
-          // (not corrupt). readWorkingSave returns it without inspecting;
-          // restoreWorkingSaveRaw inspects and rejects.
-          seedWorking("city-1", { ...makeEnvelope(), envelopeVersion: 99 });
-          const incompatibleRaw = await expectOk(
-            store.readWorkingSave("city-1"),
-          );
-          await expectError(
-            store.restoreWorkingSaveRaw("city-1", incompatibleRaw),
-            "incompatibleRecord",
-          );
-          // Storage is unchanged — the original record was not replaced.
-          expect(await expectOk(store.readWorkingSave("city-1"))).toEqual({
-            ...makeEnvelope(),
-            envelopeVersion: 99,
-          });
-        },
-      );
+      it("createWorkingSave conflicts with a pending record from a prior unfinalized create", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        await expectError(
+          store.createWorkingSave(
+            envelopeFor("city-pending", "Second Create", {
+              savedAt: "2026-08-01T11:00:00.000Z",
+            }),
+          ),
+          "conflict",
+        );
+      });
+
+      it("deleteCity removes a pending record and allows re-creation", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        await expectOk(store.deleteCity("city-pending"));
+        await expectOk(
+          store.createWorkingSave(
+            envelopeFor("city-pending", "Recreated", {
+              savedAt: "2026-08-01T11:00:00.000Z",
+            }),
+          ),
+        );
+      });
 
       injectedFailureIt(
-        "surfaces injected restoreWorkingSaveRaw failures",
+        "surfaces injected finalizeWorkingSave failures",
         async () => {
           const { store, failNext } = createHarness();
           const fail = requireCapability(failNext, "injectedStorageFailures");
           await expectOk(
-            store.writeWorkingSave(envelopeFor("city-1", "City 1")),
+            store.createWorkingSave(envelopeFor("city-pending", "Pending")),
           );
-          const priorRaw = await expectOk(store.readWorkingSave("city-1"));
-          fail("restoreWorkingSaveRaw", "ioFailure");
+          fail("finalizeWorkingSave", "ioFailure");
           await expectError(
-            store.restoreWorkingSaveRaw("city-1", priorRaw),
+            store.finalizeWorkingSave("city-pending"),
             "ioFailure",
           );
         },

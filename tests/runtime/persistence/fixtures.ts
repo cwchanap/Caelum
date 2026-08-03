@@ -46,6 +46,7 @@ export function makeCitySummary(
     snapshotSchemaVersion: envelope.snapshotSchemaVersion,
     summary: envelope.summary,
     compatibility: { status: "candidate" },
+    pending: false,
     ...overrides,
   };
 }
