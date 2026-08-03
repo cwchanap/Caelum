@@ -5,6 +5,22 @@ import type {
 } from "./envelope";
 import type { SaveCompatibility } from "./envelopeInspection";
 
+/**
+ * Stable identifier for the underlying durable storage a `SaveStore` addresses.
+ *
+ * Two adapter objects that target the same durable database (e.g. two
+ * `DelayedSaveStore` wrappers around the same `MemorySaveStore`, or two
+ * IndexedDB handles to the same database name) MUST expose the same
+ * `storageIdentity` so the runtime persistence coordinator can serialize
+ * operations across runtime lifetimes against that storage.
+ *
+ * When a `SaveStore` does not expose `storageIdentity`, the coordinator
+ * falls back to object identity — each adapter instance gets its own
+ * coordinator. This is safe for single-adapter usage but does not protect
+ * against two adapter objects targeting the same durable database.
+ */
+export type StorageIdentity = string;
+
 export interface SaveHeaderSummary {
   appVersion: string | null;
   snapshotSchemaVersion: number | null;
@@ -82,6 +98,14 @@ export type SaveStoreResult<T> =
   | { ok: false; error: SaveStoreError };
 
 export interface SaveStore {
+  /**
+   * Stable identity for the durable storage this adapter addresses. When
+   * provided, the runtime persistence coordinator uses it to serialize
+   * operations across runtime lifetimes against the same storage. See
+   * {@link StorageIdentity} for the contract.
+   */
+  readonly storageIdentity?: StorageIdentity;
+
   listCities(): Promise<SaveStoreResult<CitySummary[]>>;
 
   readWorkingSave(cityId: string): Promise<SaveStoreResult<UntrustedSaveValue>>;

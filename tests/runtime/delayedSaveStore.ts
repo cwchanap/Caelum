@@ -1,6 +1,7 @@
 import type {
   SaveStore,
   SaveStoreOperation,
+  StorageIdentity,
 } from "../../src/persistence/saveStore";
 
 export interface DelayedSaveStore extends SaveStore {
@@ -33,6 +34,9 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
   const activeGates = new Map<SaveStoreOperation, DeferredGate[]>();
   const activeWaiters = new Map<SaveStoreOperation, Array<() => void>>();
   const mutations: SaveStoreOperation[] = [];
+  // Forward the delegate's storage identity so two DelayedSaveStore wrappers
+  // around the same underlying store share one persistence coordinator.
+  const storageIdentity: StorageIdentity | undefined = delegate.storageIdentity;
 
   const beforeDelegate = (
     operation: SaveStoreOperation,
@@ -60,6 +64,7 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
   };
 
   const store: DelayedSaveStore = {
+    ...(storageIdentity !== undefined ? { storageIdentity } : {}),
     defer(operation) {
       deferredOperations.add(operation);
     },

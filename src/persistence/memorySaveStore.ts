@@ -16,6 +16,7 @@ import {
   type SaveStoreErrorCode,
   type SaveStoreOperation,
   type SaveStoreResult,
+  type StorageIdentity,
 } from "./saveStore";
 
 export interface MemorySaveStore extends SaveStore {
@@ -306,9 +307,12 @@ export function createMemorySaveStoreFailureControls(): MemorySaveStoreFailureCo
   return controls;
 }
 
+let memoryStoreIdentityCounter = 0;
+
 export function createMemorySaveStore(options?: {
   failures?: MemorySaveStoreFailureControls;
 }): MemorySaveStore {
+  const storageIdentity: StorageIdentity = `memory-store-${memoryStoreIdentityCounter++}`;
   const workingRecords = new Map<string, unknown>();
   const checkpointRecords = new Map<string, Map<string, StoredCheckpoint>>();
   const autosaveRecords = new Map<string, Map<string, StoredAutosave>>();
@@ -816,6 +820,7 @@ export function createMemorySaveStore(options?: {
   };
 
   return {
+    storageIdentity,
     seedRawWorking: (cityId, value) => {
       workingRecords.set(cityId, structuredClone(value));
     },

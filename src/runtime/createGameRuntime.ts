@@ -63,9 +63,10 @@ import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import {
-  createCityPersistenceQueues,
+  createSharedPersistenceCoordinator,
   noActiveCity,
   readForLoadSource,
+  resolvePersistenceCoordinator,
   resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
   runtimeUnavailable,
@@ -84,6 +85,7 @@ import {
   type RuntimeSaveStatus,
   type RenameActiveCityValue,
   type SaveWorkingValue,
+  type SharedPersistenceCoordinator,
 } from "./persistenceCoordinator";
 import type {
   RuntimeController,
@@ -235,6 +237,34 @@ export async function createGameRuntime(
 ): Promise<RuntimeController> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
   let state = normalizeRustSnapshot(await backend.snapshot());
+  // Resolve the shared persistence coordinator for this store and acquire
+  // the exclusive ownership lease. If another runtime still holds the lease
+  // for the same storage identity, this waits for its pending writes to
+  // drain and the lease to be released. This prevents a replacement runtime
+  // from racing an old runtime's pending storage mutations. When no
+  // saveStore is configured, a local (unregistered) coordinator is used —
+  // persistence operations are all no-ops, so no cross-runtime coordination
+  // is needed, but the lease is still acquired for uniform lifecycle code.
+  const coordinator: SharedPersistenceCoordinator = saveStore
+    ? resolvePersistenceCoordinator(saveStore)
+    : createSharedPersistenceCoordinator();
+  await coordinator.acquireLease();
+  // Track the drain-and-release promise so both `failBackend` (fire-and-
+  // forget) and `dispose()` (awaited) share one release. Idempotent: the
+  // second caller awaits the same promise the first caller started.
+  let drainAndReleasePromise: Promise<void> | null = null;
+  const startDrainAndRelease = (): Promise<void> => {
+    if (drainAndReleasePromise !== null) return drainAndReleasePromise;
+    drainAndReleasePromise = coordinator
+      .drainAll()
+      .then(() => {
+        coordinator.releaseLease();
+      })
+      .catch(() => {
+        coordinator.releaseLease();
+      });
+    return drainAndReleasePromise;
+  };
   let ui = createUiState();
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
@@ -308,26 +338,29 @@ export async function createGameRuntime(
   // detach both fencing A) cannot remove each other's fence. Each transition
   // acquires exactly one lease for its prior city and releases exactly that one
   // lease in its finally; the fence persists until the last lease is released.
-  const fencedCities = new Map<string, number>();
+  //
+  // Fences are owned by the shared coordinator (keyed by storage identity) so
+  // they persist across runtime lifetimes. Because the lease is exclusive,
+  // only this runtime can modify fences during its lifetime.
   const acquireCityFence = (cityId: string): void => {
-    fencedCities.set(cityId, (fencedCities.get(cityId) ?? 0) + 1);
+    coordinator.acquireCityFence(cityId);
   };
   const releaseCityFence = (cityId: string): void => {
-    const next = (fencedCities.get(cityId) ?? 0) - 1;
-    if (next <= 0) fencedCities.delete(cityId);
-    else fencedCities.set(cityId, next);
+    coordinator.releaseCityFence(cityId);
   };
-  const isCityFenced = (cityId: string): boolean => fencedCities.has(cityId);
+  const isCityFenced = (cityId: string): boolean =>
+    coordinator.isCityFenced(cityId);
   // Component teardown is a one-shot lifecycle request, so unlike transient UI
   // intents it cannot be dropped while New City owns admission. The canvas is
   // halted immediately; full preview cleanup is completed once the transaction
   // leaves its protected backend window.
   let stopRequestedDuringReservation = false;
   const gameplayQueue = createSerializedQueue(() => dead);
-  // Per-city persistence FIFOs are owned by THIS runtime instance, not a
-  // module-global map. See `createCityPersistenceQueues` for the
-  // single-runtime-per-store invariant that keeps these instance-local.
-  const cityQueues = createCityPersistenceQueues();
+  // Per-city persistence FIFOs are owned by the shared coordinator (keyed by
+  // storage identity) so they persist across runtime lifetimes. Because the
+  // lease is exclusive, only this runtime can enqueue work during its
+  // lifetime. See `SharedPersistenceCoordinator` for the ownership model.
+  const cityQueues = coordinator;
   const listeners = new Set<RuntimeListener>();
 
   const getPersistenceView = (): RuntimePersistenceView => {
@@ -492,7 +525,44 @@ export async function createGameRuntime(
           ? ui.routeDraft
           : { ...ui.routeDraft, previewPending: false },
     };
+    // Fire-and-forget: drain all pending persistence writes, then release
+    // the coordinator lease so a replacement runtime against the same
+    // storage identity can acquire it. The lease is not released until
+    // every in-flight city FIFO operation has settled, preventing a late
+    // write from mutating storage after a replacement runtime takes over.
+    // If an uncancellable store operation never settles, the lease is never
+    // released and a replacement runtime's `createGameRuntime` never
+    // resolves — safe rebootstrap cannot proceed.
+    void startDrainAndRelease();
     return commit(state, clearedUi);
+  };
+
+  const dispose = async (): Promise<void> => {
+    if (dead) {
+      // Already fatal: `failBackend` started the drain-and-release. Await
+      // it so the caller knows the lease has been released before creating
+      // a replacement runtime.
+      await startDrainAndRelease();
+      return;
+    }
+    dead = true;
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
+    clearHoverPreviewTimer();
+    sessionToken += 1;
+    loadRequestToken += 1;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    persistenceError = null;
+    stopRequestedDuringReservation = false;
+    stopRuntime();
+    // Drain all pending persistence writes, then release the coordinator
+    // lease so a replacement runtime against the same storage identity can
+    // acquire it. Unlike `failBackend` (fire-and-forget), `dispose` awaits
+    // the drain so the caller knows the lease has been released.
+    await startDrainAndRelease();
   };
 
   const queueBackend = (
@@ -1908,9 +1978,9 @@ export async function createGameRuntime(
           // so any already-admitted write for it completes (or settles) before
           // the new city becomes active. The drain runs inside the target
           // city's FIFO so a same-target load serializes behind it. This cannot
-          // form a lock cycle: the persistence FIFOs are owned by THIS runtime
-          // instance (see `cityQueues` / `createCityPersistenceQueues`), so no
-          // other runtime can hold the former city's FIFO while we await it.
+          // form a lock cycle: the coordinator lease is exclusive, so no other
+          // runtime can hold the former city's FIFO while we await it (see
+          // `SharedPersistenceCoordinator` for the ownership model).
           await cityQueues.drain(priorCityId);
           if (dead) return runtimeUnavailable(read.coordinatorOperation);
           if (loadSupersededByAdmission(requestToken)) {
@@ -2566,6 +2636,7 @@ export async function createGameRuntime(
     },
     start: canvasHost.start,
     stop,
+    dispose,
     isRunning: canvasHost.isRunning,
     tick(deltaSeconds) {
       return enqueueTick(deltaSeconds);
