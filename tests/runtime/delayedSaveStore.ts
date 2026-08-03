@@ -19,6 +19,7 @@ interface DeferredGate {
 
 const MUTATION_OPERATIONS = new Set<SaveStoreOperation>([
   "writeWorkingSave",
+  "createWorkingSave",
   "renameCity",
   "duplicateCity",
   "deleteCity",
@@ -114,6 +115,11 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
     writeWorkingSave(envelope) {
       return delegateAfterGate("writeWorkingSave", () =>
         delegate.writeWorkingSave(envelope),
+      );
+    },
+    createWorkingSave(envelope) {
+      return delegateAfterGate("createWorkingSave", () =>
+        delegate.createWorkingSave(envelope),
       );
     },
     renameCity(cityId, name) {

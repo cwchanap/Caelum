@@ -59,6 +59,7 @@ export type SaveStoreOperation =
   | "listCities"
   | "readWorkingSave"
   | "writeWorkingSave"
+  | "createWorkingSave"
   | "renameCity"
   | "duplicateCity"
   | "deleteCity"
@@ -111,6 +112,28 @@ export interface SaveStore {
 
   readWorkingSave(cityId: string): Promise<SaveStoreResult<UntrustedSaveValue>>;
   writeWorkingSave(
+    envelope: WritableSaveEnvelope,
+  ): Promise<SaveStoreResult<CitySummary>>;
+  /**
+   * Atomically create a working-save record for a city only if NO storage
+   * already exists for the city ID — no working record, no checkpoints, no
+   * autosaves, and no generation high-water metadata. Used by the runtime's
+   * New City activation to prove the initial write created the city's storage
+   * rather than overwriting a pre-existing city.
+   *
+   * Returns `conflict` when ANY storage already exists for the city ID. This
+   * is an atomic create-only operation: the existence check and the write
+   * commit in the same transaction, so a concurrent create for the same ID
+   * cannot overwrite an existing record. Do NOT implement this as a
+   * `readWorkingSave` followed by `writeWorkingSave` — that remains
+   * vulnerable to time-of-check/time-of-use races from other storage
+   * consumers.
+   *
+   * `writeWorkingSave` remains the upsert operation for explicit Save Now
+   * (updating an existing city's working record). This method is for the
+   * initial New City write only.
+   */
+  createWorkingSave(
     envelope: WritableSaveEnvelope,
   ): Promise<SaveStoreResult<CitySummary>>;
   renameCity(

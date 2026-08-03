@@ -35,7 +35,10 @@ import {
   type NewCityIdentity,
   type PersistenceOperationResult,
 } from "../../src/runtime/persistenceCoordinator";
-import type { RuntimeController } from "../../src/runtime/types";
+import type {
+  RuntimeController,
+  RuntimeDisposeResult,
+} from "../../src/runtime/types";
 import { createUiState } from "../../src/ui/uiState";
 import {
   createRustSnapshot,
@@ -473,7 +476,7 @@ describe("runtime persistence coordinator contracts", () => {
             cityCreatedAt: "2026-08-01T10:00:00.000Z",
           },
         ),
-        "writeWorkingSave",
+        "createWorkingSave",
       ],
       [
         runtime.persistence.runGameplayWrite({
@@ -2365,7 +2368,7 @@ describe("runtime persistence coordinator contracts", () => {
 
   it("activates a new city only after its initial working save commits", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
-    harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const listener = vi.fn();
     const unsubscribe = harness.runtime.subscribe(listener);
 
@@ -2391,7 +2394,7 @@ describe("runtime persistence coordinator contracts", () => {
       ),
     ).toBe(false);
 
-    harness.store.releaseNext("writeWorkingSave");
+    harness.store.releaseNext("createWorkingSave");
 
     await expect(activation).resolves.toMatchObject({
       status: "completed",
@@ -2430,7 +2433,7 @@ describe("runtime persistence coordinator contracts", () => {
     const harness = await createCoordinatorHarness({ clean: true });
     const before = harness.runtime.getSnapshot();
     const priorBackendSnapshot = await harness.backend.snapshot();
-    harness.failures.failNext("writeWorkingSave", "quotaExceeded");
+    harness.failures.failNext("createWorkingSave", "quotaExceeded");
 
     const result = await harness.runtime.persistence.activateNewCity(
       sandboxRequest(),
@@ -2441,7 +2444,7 @@ describe("runtime persistence coordinator contracts", () => {
       status: "failed",
       error: {
         kind: "store",
-        error: { operation: "writeWorkingSave", code: "quotaExceeded" },
+        error: { operation: "createWorkingSave", code: "quotaExceeded" },
       },
     });
     expect(harness.runtime.getSnapshot()).toEqual(before);
@@ -2462,7 +2465,7 @@ describe("runtime persistence coordinator contracts", () => {
     expect(before.state.paused).toBe(false);
     expect(before.persistence.dirty).toBe(true);
     expect(harness.runtime.isRunning()).toBe(true);
-    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    harness.failures.failNext("createWorkingSave", "ioFailure");
 
     await expect(
       harness.runtime.persistence.activateNewCity(
@@ -2478,7 +2481,7 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.backend.restoreSnapshotCalls).toBe(1);
     expect(harness.store.mutationOrder()).toEqual([
       "renameCity",
-      "writeWorkingSave",
+      "createWorkingSave",
     ]);
     await expect(harness.backend.snapshot()).resolves.toMatchObject({
       paused: false,
@@ -2685,7 +2688,7 @@ describe("runtime persistence coordinator contracts", () => {
 
   it("drops ticks and supersedes detach while New City owns admission", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
-    harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const activation = harness.runtime.persistence.activateNewCity(
       sandboxRequest(),
       newCityIdentity(),
@@ -2703,7 +2706,7 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.backend.tickCalls).toBe(tickCalls);
     expect(harness.runtime.getSnapshot()).toEqual(duringWrite);
 
-    harness.store.releaseNext("writeWorkingSave");
+    harness.store.releaseNext("createWorkingSave");
     await expect(activation).resolves.toMatchObject({ status: "completed" });
   });
 
@@ -2711,7 +2714,7 @@ describe("runtime persistence coordinator contracts", () => {
     const harness = await createCoordinatorHarness({ clean: true });
     harness.runtime.setTool("area");
     harness.runtime.setArea("residential");
-    harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const activation = harness.runtime.persistence.activateNewCity(
       sandboxRequest(),
       newCityIdentity(),
@@ -2726,7 +2729,7 @@ describe("runtime persistence coordinator contracts", () => {
     expect(snapshot).toEqual(duringWrite);
     expect(snapshot.ui.drag).toBeNull();
 
-    harness.store.releaseNext("writeWorkingSave");
+    harness.store.releaseNext("createWorkingSave");
     await expect(activation).resolves.toMatchObject({ status: "completed" });
   });
 
@@ -2734,7 +2737,7 @@ describe("runtime persistence coordinator contracts", () => {
     const harness = await createCoordinatorHarness({ clean: true });
     harness.runtime.setBuilding("smallHouse");
     const beforeRotation = harness.runtime.getSnapshot().ui.buildingRotation;
-    harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const activation = harness.runtime.persistence.activateNewCity(
       sandboxRequest(),
       newCityIdentity(),
@@ -2749,13 +2752,13 @@ describe("runtime persistence coordinator contracts", () => {
     expect(snapshot).toEqual(duringWrite);
     expect(snapshot.ui.buildingRotation).toBe(beforeRotation);
 
-    harness.store.releaseNext("writeWorkingSave");
+    harness.store.releaseNext("createWorkingSave");
     await expect(activation).resolves.toMatchObject({ status: "completed" });
   });
 
   it("publishes creatingCity while previously admitted gameplay drains", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
-    harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const dispatch = harness.backend.dispatch.bind(harness.backend);
     let signalDispatchStarted: (() => void) | undefined;
     const dispatchStarted = new Promise<void>((resolve) => {
@@ -2786,8 +2789,8 @@ describe("runtime persistence coordinator contracts", () => {
 
       releaseDispatch?.();
       await gameplay;
-      await harness.store.waitForActive("writeWorkingSave");
-      harness.store.releaseNext("writeWorkingSave");
+      await harness.store.waitForActive("createWorkingSave");
+      harness.store.releaseNext("createWorkingSave");
       await expect(activation).resolves.toMatchObject({ status: "completed" });
     } finally {
       releaseDispatch?.();
@@ -2799,6 +2802,7 @@ describe("runtime persistence coordinator contracts", () => {
   it("drains the active-city persistence FIFO before capturing the rollback baseline", async () => {
     const harness = await createCoordinatorHarness();
     harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const priorSave = harness.runtime.persistence.saveWorking();
     await harness.store.waitForActive("writeWorkingSave");
 
@@ -2823,7 +2827,7 @@ describe("runtime persistence coordinator contracts", () => {
         expect(harness.store.activeCount()).toBe(1);
         expect(harness.backend.createSandboxCalls).toBe(1);
       });
-      harness.store.releaseNext("writeWorkingSave");
+      harness.store.releaseNext("createWorkingSave");
       await expect(activation).resolves.toMatchObject({ status: "completed" });
     } finally {
       harness.store.releaseAll();
@@ -2842,6 +2846,7 @@ describe("runtime persistence coordinator contracts", () => {
       snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
     });
     harness.store.defer("writeWorkingSave");
+    harness.store.defer("createWorkingSave");
     const olderWrite = harness.runtime.debugEnqueueCityPersistence(
       identity.id,
       () => harness.store.writeWorkingSave(olderEnvelope),
@@ -2862,22 +2867,39 @@ describe("runtime persistence coordinator contracts", () => {
 
       harness.store.releaseNext("writeWorkingSave");
       await olderWrite;
-      await harness.store.waitForActive("writeWorkingSave");
+      await harness.store.waitForActive("createWorkingSave");
       expect(harness.store.activeCount()).toBe(1);
       expect(harness.store.mutationOrder()).toEqual([
         "writeWorkingSave",
-        "writeWorkingSave",
+        "createWorkingSave",
       ]);
 
-      harness.store.releaseNext("writeWorkingSave");
-      await expect(activation).resolves.toMatchObject({ status: "completed" });
+      harness.store.releaseNext("createWorkingSave");
+      // The older write created a record for identity.id, so the candidate
+      // createWorkingSave returns conflict — the candidate write serialized
+      // behind the older write (FIFO order is preserved), but the
+      // create-only semantics reject the now-existing record. The
+      // activation rolls back the backend and returns a typed store
+      // conflict.
+      await expect(activation).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "createWorkingSave",
+            code: "conflict",
+            cityId: identity.id,
+          },
+        },
+      });
+      // The older write's record remains — the candidate did not overwrite.
       await expect(
         harness.store.readWorkingSave(identity.id),
       ).resolves.toMatchObject({
         ok: true,
         value: {
-          savedAt: "2026-08-01T10:00:00.000Z",
-          snapshot: { budget: 120_000 },
+          savedAt: "2026-08-01T09:45:00.000Z",
+          snapshot: { budget: 33_000 },
         },
       });
     } finally {
@@ -2889,7 +2911,7 @@ describe("runtime persistence coordinator contracts", () => {
   it("enters fatal unavailable state when rollback restoration fails", async () => {
     const harness = await createCoordinatorHarness({ clean: true });
     harness.runtime.start();
-    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    harness.failures.failNext("createWorkingSave", "ioFailure");
     harness.backend.restoreSnapshot = async () => {
       harness.backend.restoreSnapshotCalls += 1;
       return {
@@ -2952,7 +2974,7 @@ describe("runtime persistence coordinator contracts", () => {
       }
       return dispatch(intent);
     };
-    harness.failures.failNext("writeWorkingSave", "ioFailure");
+    harness.failures.failNext("createWorkingSave", "ioFailure");
 
     await expect(
       harness.runtime.persistence.activateNewCity(
@@ -4539,14 +4561,14 @@ describe("runtime persistence coordinator contracts", () => {
         // deleteCity is issued directly on the store (the lease is closing
         // and enqueue rejects) but still passes through the DelayedSaveStore
         // gate, so deferring it blocks cleanup.
-        harness1.store.defer("writeWorkingSave");
+        harness1.store.defer("createWorkingSave");
         harness1.store.defer("deleteCity");
 
         const activation = harness1.runtime.persistence.activateNewCity(
           sandboxRequest(),
           newCityIdentity(),
         );
-        await harness1.store.waitForActive("writeWorkingSave");
+        await harness1.store.waitForActive("createWorkingSave");
 
         // Dispose while the write is in flight. The foreground New City
         // workflow is admitted, so drainAll waits and the lease is not
@@ -4572,7 +4594,7 @@ describe("runtime persistence coordinator contracts", () => {
 
         // Release the write. It succeeds; New City sees dead=true and
         // enters late-success cleanup, which blocks at deleteCity.
-        harness1.store.releaseNext("writeWorkingSave");
+        harness1.store.releaseNext("createWorkingSave");
         await harness1.store.waitForActive("deleteCity");
 
         // The lease must NOT transfer until cleanup finishes — runtime 2
@@ -4631,7 +4653,7 @@ describe("runtime persistence coordinator contracts", () => {
       }
     });
 
-    it("late-success cleanup restores a pre-existing city overwritten by a New City ID collision", async () => {
+    it("New City ID collision with a pre-existing working-save record is rejected with conflict and leaves the prior record intact", async () => {
       const failures = createMemorySaveStoreFailureControls();
       const memoryStore = createMemorySaveStore({ failures });
       const cityA = cityIdentity("city-A");
@@ -4640,20 +4662,19 @@ describe("runtime persistence coordinator contracts", () => {
         loadEnvelope({ city: cityA, savedAt: "2026-08-01T09:00:00.000Z" }),
       );
       // Pre-existing record under the New City id (a caller-supplied ID
-      // collision). Cleanup must restore THIS record, not delete it.
+      // collision). `createWorkingSave` must reject with `conflict` — the
+      // prior record must NOT be overwritten.
       const collisionId = newCityIdentity().id;
       const priorCollisionCity: ActiveCityIdentity = {
         id: collisionId,
         name: "Old City",
         cityCreatedAt: "2026-07-01T00:00:00.000Z",
       };
-      memoryStore.seedRawWorking(
-        collisionId,
-        loadEnvelope({
-          city: priorCollisionCity,
-          savedAt: "2026-07-01T01:00:00.000Z",
-        }),
-      );
+      const priorCollisionEnvelope = loadEnvelope({
+        city: priorCollisionCity,
+        savedAt: "2026-07-01T01:00:00.000Z",
+      });
+      memoryStore.seedRawWorking(collisionId, priorCollisionEnvelope);
 
       const harness1 = await createSharedStoreHarness({
         memoryStore,
@@ -4663,67 +4684,65 @@ describe("runtime persistence coordinator contracts", () => {
       });
       let harness2: CoordinatorHarness | null = null;
       try {
-        harness1.store.defer("writeWorkingSave");
-        harness1.store.defer("restoreWorkingSaveRaw");
+        const listener = vi.fn();
+        harness1.runtime.subscribe(listener);
 
-        const activation = harness1.runtime.persistence.activateNewCity(
+        const result = await harness1.runtime.persistence.activateNewCity(
           sandboxRequest(),
           newCityIdentity(),
         );
-        await harness1.store.waitForActive("writeWorkingSave");
 
-        let disposeResolved = false;
-        const disposePromise = harness1.runtime.dispose().then(() => {
-          disposeResolved = true;
+        // The operation fails with a typed store conflict — not
+        // runtimeUnavailable, not an overwrite.
+        expect(result).toMatchObject({
+          status: "failed",
+          error: {
+            kind: "store",
+            error: {
+              operation: "createWorkingSave",
+              code: "conflict",
+              cityId: collisionId,
+            },
+          },
         });
-        let runtime2Resolved = false;
-        const harness2Promise = createSharedStoreHarness({
+
+        // The backend was rolled back to the prior canonical state.
+        expect(harness1.backend.restoreSnapshotCalls).toBe(1);
+
+        // The runtime returned to the prior city — no candidate published.
+        expect(harness1.runtime.getSnapshot()).toMatchObject({
+          persistence: {
+            activeCity: cityA,
+            lifecycleStatus: { state: "idle" },
+          },
+        });
+        expect(
+          listener.mock.calls.some(
+            ([published]) =>
+              published.persistence.activeCity?.id === collisionId,
+          ),
+        ).toBe(false);
+
+        // The prior record is byte-equivalent — unchanged.
+        const readResult = await memoryStore.readWorkingSave(collisionId);
+        expect(readResult).toMatchObject({
+          ok: true,
+          value: { city: { id: collisionId, name: "Old City" } },
+        });
+
+        // The lease was released normally — no orphan, no cleanup failure.
+        const disposeResult = await harness1.runtime.dispose();
+        expect(disposeResult).toEqual({ status: "released" });
+
+        // A replacement runtime can acquire the lease immediately.
+        harness2 = await createSharedStoreHarness({
           memoryStore,
           failures,
           activeCity: null,
           clean: true,
-        }).then((harness) => {
-          runtime2Resolved = true;
-          return harness;
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(disposeResolved).toBe(false);
-        expect(runtime2Resolved).toBe(false);
-
-        // Release the write — it overwrites the prior collision record.
-        // New City sees dead=true and enters late-success cleanup, which
-        // restores the prior record via restoreWorkingSaveRaw (blocked).
-        harness1.store.releaseNext("writeWorkingSave");
-        await harness1.store.waitForActive("restoreWorkingSaveRaw");
-
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(disposeResolved).toBe(false);
-        expect(runtime2Resolved).toBe(false);
-
-        harness1.store.releaseNext("restoreWorkingSaveRaw");
-
-        const activationResult = await activation;
-        expect(activationResult).toEqual(runtimeUnavailable("activateNewCity"));
-
-        // Cleanup restored the prior record exactly once — no deleteCity.
-        expect(
-          harness1.store.mutationOrder().filter((op) => op === "deleteCity")
-            .length,
-        ).toBe(0);
-        expect(
-          harness1.store
-            .mutationOrder()
-            .filter((op) => op === "restoreWorkingSaveRaw").length,
-        ).toBe(1);
-
-        await disposePromise;
-        expect(disposeResolved).toBe(true);
-        harness2 = await harness2Promise;
-        expect(runtime2Resolved).toBe(true);
-
-        // The pre-existing city is restored with its PRIOR name, not the
-        // New City data — cleanup did not delete it nor leave the orphan.
+        // The pre-existing city is still there with its PRIOR name.
         const listResult = await memoryStore.listCities();
         expect(listResult.ok).toBe(true);
         if (listResult.ok) {
@@ -4756,7 +4775,7 @@ describe("runtime persistence coordinator contracts", () => {
         clean: true,
       });
       try {
-        harness1.store.defer("writeWorkingSave");
+        harness1.store.defer("createWorkingSave");
         // Make the cleanup deleteCity fail. The orphan cannot be removed,
         // so cleanup must enter the fatal persistence-recovery state and
         // pin the lease — a replacement runtime must NOT acquire it.
@@ -4766,10 +4785,12 @@ describe("runtime persistence coordinator contracts", () => {
           sandboxRequest(),
           newCityIdentity(),
         );
-        await harness1.store.waitForActive("writeWorkingSave");
+        await harness1.store.waitForActive("createWorkingSave");
 
+        let disposeResult: RuntimeDisposeResult | null = null;
         let disposeResolved = false;
-        const disposePromise = harness1.runtime.dispose().then(() => {
+        const disposePromise = harness1.runtime.dispose().then((result) => {
+          disposeResult = result;
           disposeResolved = true;
         });
         let runtime2Resolved = false;
@@ -4789,15 +4810,22 @@ describe("runtime persistence coordinator contracts", () => {
 
         // Release the write — it succeeds; cleanup runs deleteCity which
         // fails (ioFailure); the lease is pinned (leaseStuck).
-        harness1.store.releaseNext("writeWorkingSave");
+        harness1.store.releaseNext("createWorkingSave");
 
         const activationResult = await activation;
         expect(activationResult).toEqual(runtimeUnavailable("activateNewCity"));
 
         // dispose() resolves (the runtime is dead and drained), but the
-        // lease is NOT released — the fatal recovery state pins it.
+        // lease is NOT released — the fatal recovery state pins it. The
+        // typed outcome reports recoveryRequired so the application can
+        // distinguish this from a normal release without a timeout.
         await disposePromise;
         expect(disposeResolved).toBe(true);
+        expect(disposeResult).toEqual({
+          status: "recoveryRequired",
+          reason: "lateSuccessCleanupFailed",
+          cityId: newCityIdentity().id,
+        });
 
         // A replacement runtime against the same storage identity must
         // never resolve while the lease is pinned. Race against a timeout.
@@ -4820,6 +4848,230 @@ describe("runtime persistence coordinator contracts", () => {
         harness1.store.releaseAll();
         await harness1.runtime.dispose();
       }
+    });
+
+    // ------------------------------------------------------------------
+    // Regression: Finding 1 — a thrown adapter exception from the cleanup
+    // deleteCity must be normalized into the pinned recovery state. The
+    // activation must resolve with a typed runtimeUnavailable (not reject
+    // with the untyped exception), and the lease must be permanently
+    // pinned so a replacement runtime cannot acquire it.
+    // ------------------------------------------------------------------
+
+    it("late-success cleanup normalizes a thrown deleteCity exception into the pinned recovery state", async () => {
+      const failures = createMemorySaveStoreFailureControls();
+      const memoryStore = createMemorySaveStore({ failures });
+      const cityA = cityIdentity("city-A");
+      memoryStore.seedRawWorking(
+        cityA.id,
+        loadEnvelope({ city: cityA, savedAt: "2026-08-01T09:00:00.000Z" }),
+      );
+
+      // Wrap the memory store so deleteCity THROWS (simulating an adapter
+      // that rejects with an untyped exception, e.g. IndexedDB transaction
+      // abort). The DelayedSaveStore wraps this throwing store.
+      const throwingMemoryStore: MemorySaveStore = {
+        ...memoryStore,
+        async deleteCity(_cityId: string) {
+          throw new Error("deleteCity threw for test");
+        },
+      };
+
+      const harness1 = await createSharedStoreHarness({
+        memoryStore: throwingMemoryStore,
+        failures,
+        activeCity: cityA,
+        clean: true,
+      });
+      try {
+        harness1.store.defer("createWorkingSave");
+
+        const activation = harness1.runtime.persistence.activateNewCity(
+          sandboxRequest(),
+          newCityIdentity(),
+        );
+        await harness1.store.waitForActive("createWorkingSave");
+
+        let disposeResult: RuntimeDisposeResult | null = null;
+        const disposePromise = harness1.runtime.dispose().then((result) => {
+          disposeResult = result;
+        });
+
+        // Release the write — it succeeds; cleanup runs deleteCity which
+        // THROWS. The exception must be caught and normalized into the
+        // pinned recovery state.
+        harness1.store.releaseNext("createWorkingSave");
+
+        const activationResult = await activation;
+        // The activation resolves with a typed runtimeUnavailable — it
+        // must NOT reject with the untyped adapter exception.
+        expect(activationResult).toEqual(runtimeUnavailable("activateNewCity"));
+
+        await disposePromise;
+        // The typed dispose outcome reports recoveryRequired — the
+        // application can distinguish this from a normal release without
+        // racing a timeout.
+        expect(disposeResult).toEqual({
+          status: "recoveryRequired",
+          reason: "lateSuccessCleanupFailed",
+          cityId: newCityIdentity().id,
+        });
+
+        // A replacement runtime against the same storage identity must
+        // never resolve while the lease is pinned.
+        let runtime2Resolved = false;
+        const harness2Promise = createSharedStoreHarness({
+          memoryStore: throwingMemoryStore,
+          failures,
+          activeCity: null,
+          clean: true,
+        }).then((harness) => {
+          runtime2Resolved = true;
+          return harness;
+        });
+        const outcome = await Promise.race([
+          harness2Promise.then(() => "resolved"),
+          new Promise<"timeout">((resolve) =>
+            setTimeout(() => resolve("timeout"), 50),
+          ),
+        ]);
+        expect(outcome).toBe("timeout");
+        expect(runtime2Resolved).toBe(false);
+
+        // The orphan remains in storage — cleanup could not remove it.
+        const listResult = await memoryStore.listCities();
+        expect(
+          listResult.ok &&
+            listResult.value.some((c) => c.cityId === newCityIdentity().id),
+        ).toBe(true);
+      } finally {
+        harness1.store.releaseAll();
+        await harness1.runtime.dispose();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // Regression: Finding 2 — createWorkingSave must reject with
+    // `conflict` when ANY storage already exists for the city ID, not
+    // just a working record. Checkpoints, autosaves, and generation
+    // high-water metadata must also trigger the conflict.
+    // ------------------------------------------------------------------
+
+    it("createWorkingSave rejects with conflict when a checkpoint exists for the city ID", async () => {
+      const memoryStore = createMemorySaveStore();
+      const cityId = newCityIdentity().id;
+      const city: ActiveCityIdentity = {
+        id: cityId,
+        name: "Old City",
+        cityCreatedAt: "2026-07-01T00:00:00.000Z",
+      };
+      const priorEnvelope = loadEnvelope({
+        city,
+        savedAt: "2026-07-01T01:00:00.000Z",
+      });
+      // Seed a checkpoint but NO working record.
+      memoryStore.seedRawCheckpoint({
+        storageCityId: cityId,
+        storageCheckpointId: "checkpoint-old",
+        checkpointId: "checkpoint-old",
+        cityId,
+        name: "Checkpoint",
+        note: null,
+        createdAt: priorEnvelope.savedAt,
+        envelope: priorEnvelope,
+      });
+
+      const envelope = buildSaveEnvelope({
+        city: { id: cityId, name: "New City" },
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        savedAt: "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),
+      });
+
+      const result = await memoryStore.createWorkingSave(envelope);
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          operation: "createWorkingSave",
+          code: "conflict",
+          cityId,
+        },
+      });
+
+      // The working record was NOT created.
+      const readResult = await memoryStore.readWorkingSave(cityId);
+      expect(readResult.ok).toBe(false);
+    });
+
+    it("createWorkingSave rejects with conflict when an autosave exists for the city ID", async () => {
+      const memoryStore = createMemorySaveStore();
+      const cityId = newCityIdentity().id;
+      const city: ActiveCityIdentity = {
+        id: cityId,
+        name: "Old City",
+        cityCreatedAt: "2026-07-01T00:00:00.000Z",
+      };
+      const priorEnvelope = loadEnvelope({
+        city,
+        savedAt: "2026-07-01T01:00:00.000Z",
+      });
+      // Seed an autosave but NO working record.
+      memoryStore.seedRawAutosave({
+        storageCityId: cityId,
+        storageAutosaveId: "autosave-old",
+        autosaveId: "autosave-old",
+        cityId,
+        generation: 1,
+        createdAt: priorEnvelope.savedAt,
+        envelope: priorEnvelope,
+        generationHighWaterMark: 1,
+      });
+
+      const envelope = buildSaveEnvelope({
+        city: { id: cityId, name: "New City" },
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        savedAt: "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),
+      });
+
+      const result = await memoryStore.createWorkingSave(envelope);
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          operation: "createWorkingSave",
+          code: "conflict",
+          cityId,
+        },
+      });
+    });
+
+    it("createWorkingSave is atomic — racing creates for the same city ID cannot both succeed", async () => {
+      const memoryStore = createMemorySaveStore();
+      const cityId = newCityIdentity().id;
+      const envelope = buildSaveEnvelope({
+        city: { id: cityId, name: "New City" },
+        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        savedAt: "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+        snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),
+      });
+
+      // Issue two creates concurrently. The MemorySaveStore create body is
+      // synchronous between the existence check and the commit, so exactly
+      // one must succeed and the other must get `conflict`.
+      const [result1, result2] = await Promise.all([
+        memoryStore.createWorkingSave(envelope),
+        memoryStore.createWorkingSave(envelope),
+      ]);
+
+      const successes = [result1, result2].filter((r) => r.ok);
+      const conflicts = [result1, result2].filter(
+        (r) => !r.ok && r.error.code === "conflict",
+      );
+      expect(successes).toHaveLength(1);
+      expect(conflicts).toHaveLength(1);
     });
 
     // ------------------------------------------------------------------

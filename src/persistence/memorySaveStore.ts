@@ -394,6 +394,49 @@ export function createMemorySaveStore(options?: {
     });
   };
 
+  const createWorkingSave: SaveStore["createWorkingSave"] = async (
+    envelope,
+  ) => {
+    const inspected = inspectSaveEnvelope(envelope);
+    if (!inspected.ok) {
+      return errorResult(
+        "createWorkingSave",
+        incompatibleCode(inspected.compatibility),
+      );
+    }
+    const cityId = inspected.envelope.city.id;
+    // Atomic create-only: reject if ANY storage already exists for the city
+    // ID — working record, checkpoints, autosaves, or generation high-water
+    // metadata. The existence check and the write commit happen in the same
+    // synchronous body (no `await` between them), so a concurrent create for
+    // the same ID cannot overwrite an existing record: the first create sets
+    // the record before the second create's existence check runs.
+    if (cityStorageExists(cityId)) {
+      return errorResult("createWorkingSave", "conflict", { cityId });
+    }
+    const stored = cloneResult(inspected.envelope, "createWorkingSave", {
+      cityId,
+    });
+    if (!stored.ok) return stored;
+    const reinspection = inspectSaveEnvelope(stored.value);
+    if (!reinspection.ok) {
+      return errorResult(
+        "createWorkingSave",
+        incompatibleCode(reinspection.compatibility),
+        { cityId },
+      );
+    }
+    const failure = injectedFailure<CitySummary>("createWorkingSave", {
+      cityId,
+    });
+    if (failure) return failure;
+
+    workingRecords.set(cityId, stored.value);
+    return cloneResult(citySummary(cityId, stored.value), "createWorkingSave", {
+      cityId,
+    });
+  };
+
   const renameCity: SaveStore["renameCity"] = async (cityId, name) => {
     const input = cloneResult({ cityId, name }, "renameCity");
     if (!input.ok) return input;
@@ -895,6 +938,7 @@ export function createMemorySaveStore(options?: {
     listCities,
     readWorkingSave,
     writeWorkingSave,
+    createWorkingSave,
     renameCity,
     duplicateCity,
     deleteCity,
