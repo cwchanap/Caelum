@@ -20,10 +20,10 @@ interface DeferredGate {
 const MUTATION_OPERATIONS = new Set<SaveStoreOperation>([
   "writeWorkingSave",
   "createWorkingSave",
+  "finalizeWorkingSave",
   "renameCity",
   "duplicateCity",
   "deleteCity",
-  "restoreWorkingSaveRaw",
   "writeCheckpoint",
   "renameCheckpoint",
   "deleteCheckpoint",
@@ -122,6 +122,11 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
         delegate.createWorkingSave(envelope),
       );
     },
+    finalizeWorkingSave(cityId) {
+      return delegateAfterGate("finalizeWorkingSave", () =>
+        delegate.finalizeWorkingSave(cityId),
+      );
+    },
     renameCity(cityId, name) {
       return delegateAfterGate("renameCity", () =>
         delegate.renameCity(cityId, name),
@@ -134,11 +139,6 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
     },
     deleteCity(cityId) {
       return delegateAfterGate("deleteCity", () => delegate.deleteCity(cityId));
-    },
-    restoreWorkingSaveRaw(cityId, value) {
-      return delegateAfterGate("restoreWorkingSaveRaw", () =>
-        delegate.restoreWorkingSaveRaw(cityId, value),
-      );
     },
     listCheckpoints(cityId) {
       return delegateAfterGate("listCheckpoints", () =>

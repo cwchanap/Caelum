@@ -33,6 +33,20 @@ export interface CitySummary extends SaveHeaderSummary {
   name: string | null;
   cityCreatedAt: string | null;
   savedAt: string | null;
+  /**
+   * Whether the city's working-save record is in the pending state created by
+   * `createWorkingSave` but not yet finalized by `finalizeWorkingSave`.
+   *
+   * A pending record is a durable marker from a New City creation transaction
+   * that committed its initial write but did not complete the runtime
+   * transaction (the candidate was installed but the runtime crashed, was
+   * disposed, or failed before finalization). Bootstrap reconciliation deletes
+   * leftover pending records so a crashed New City does not leave an orphan
+   * that blocks future creates for the same city ID. `listCities` includes
+   * pending records so the reconciliation pass can find them; production UI
+   * that lists loadable cities should filter them out.
+   */
+  pending: boolean;
 }
 
 export interface CheckpointSummary extends SaveHeaderSummary {
@@ -60,10 +74,10 @@ export type SaveStoreOperation =
   | "readWorkingSave"
   | "writeWorkingSave"
   | "createWorkingSave"
+  | "finalizeWorkingSave"
   | "renameCity"
   | "duplicateCity"
   | "deleteCity"
-  | "restoreWorkingSaveRaw"
   | "listCheckpoints"
   | "readCheckpoint"
   | "writeCheckpoint"
@@ -121,13 +135,23 @@ export interface SaveStore {
    * New City activation to prove the initial write created the city's storage
    * rather than overwriting a pre-existing city.
    *
-   * Returns `conflict` when ANY storage already exists for the city ID. This
-   * is an atomic create-only operation: the existence check and the write
-   * commit in the same transaction, so a concurrent create for the same ID
-   * cannot overwrite an existing record. Do NOT implement this as a
-   * `readWorkingSave` followed by `writeWorkingSave` — that remains
-   * vulnerable to time-of-check/time-of-use races from other storage
-   * consumers.
+   * The created record is in a **pending** state: it is durably committed but
+   * not yet finalized as an active city. The runtime MUST call
+   * {@link finalizeWorkingSave} after the New City transaction succeeds
+   * (candidate installed, state ready to publish) to flip the record from
+   * pending to active. If the runtime crashes, is disposed, or fails before
+   * finalization, the pending record remains in storage as a durable marker.
+   * Bootstrap reconciliation deletes leftover pending records so a crashed
+   * New City does not leave an orphan that blocks future creates for the same
+   * city ID.
+   *
+   * Returns `conflict` when ANY storage already exists for the city ID
+   * (including a pending record from a prior unfinalized create). This is an
+   * atomic create-only operation: the existence check and the write commit in
+   * the same transaction, so a concurrent create for the same ID cannot
+   * overwrite an existing record. Do NOT implement this as a `readWorkingSave`
+   * followed by `writeWorkingSave` — that remains vulnerable to
+   * time-of-check/time-of-use races from other storage consumers.
    *
    * `writeWorkingSave` remains the upsert operation for explicit Save Now
    * (updating an existing city's working record). This method is for the
@@ -136,6 +160,21 @@ export interface SaveStore {
   createWorkingSave(
     envelope: WritableSaveEnvelope,
   ): Promise<SaveStoreResult<CitySummary>>;
+  /**
+   * Atomically finalize a pending working-save record, flipping it from the
+   * pending state (created by {@link createWorkingSave}) to an active city.
+   * Called by the runtime's New City activation after the candidate is
+   * installed and the runtime transaction is ready to publish success.
+   *
+   * Returns `notFound` if no working-save record exists for the city ID.
+   * If the record is already finalized (not pending), the operation is
+   * idempotent: it returns the current summary without error.
+   *
+   * This operation is atomic: the pending-to-active transition commits in a
+   * single transaction. After finalization, the city is a durable, loadable
+   * city that survives process restarts.
+   */
+  finalizeWorkingSave(cityId: string): Promise<SaveStoreResult<CitySummary>>;
   renameCity(
     cityId: string,
     name: string,
@@ -151,26 +190,6 @@ export interface SaveStore {
     },
   ): Promise<SaveStoreResult<CitySummary>>;
   deleteCity(cityId: string): Promise<SaveStoreResult<void>>;
-  /**
-   * Restore a previously-read raw working-save value for a city. Used by the
-   * runtime's late-success cleanup to undo an orphan New City write that
-   * overwrote a pre-existing record: the caller captures the prior
-   * {@link UntrustedSaveValue} via {@link readWorkingSave} before the write,
-   * and writes it back through this method when the write succeeded after
-   * the transaction decided to roll back.
-   *
-   * The `value` MUST be a value previously returned by `readWorkingSave` for
-   * the same `cityId`. Implementations re-inspect it and store it verbatim;
-   * they do not re-derive or normalize the snapshot. This is the only store
-   * operation that accepts an `UntrustedSaveValue` for writing — it exists so
-   * late-success cleanup can restore a pre-existing record that an
-   * uncancellable `writeWorkingSave` overwrote, without an unsafe cast and
-   * without deleting a city whose ID collided with the New City identity.
-   */
-  restoreWorkingSaveRaw(
-    cityId: string,
-    value: UntrustedSaveValue,
-  ): Promise<SaveStoreResult<void>>;
 
   listCheckpoints(
     cityId: string,

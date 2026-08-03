@@ -392,7 +392,13 @@
 
       return () => {
         unsubscribe();
-        runtime.stop();
+        // Dispose (not just stop) so the persistence lease is released and
+        // pending storage writes drain. A mere `stop()` leaves the runtime
+        // alive — the canvas loop can be restarted and pending writes can
+        // race a replacement runtime. Dispose makes the runtime terminal:
+        // `start()` and all UI methods become no-ops, and the shared
+        // coordinator lease is released for a replacement runtime.
+        void runtime.dispose();
       };
     }
   });

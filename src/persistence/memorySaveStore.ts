@@ -208,10 +208,15 @@ function corruptSummary(
     snapshotSchemaVersion: null,
     summary: null,
     compatibility,
+    pending: false,
   };
 }
 
-function citySummary(cityId: string, value: unknown): CitySummary {
+function citySummary(
+  cityId: string,
+  value: unknown,
+  pending: boolean,
+): CitySummary {
   const inspected = inspectSaveEnvelope(value);
   if (!inspected.ok) {
     return corruptSummary(cityId, inspected.compatibility);
@@ -229,6 +234,7 @@ function citySummary(cityId: string, value: unknown): CitySummary {
     snapshotSchemaVersion: envelope.snapshotSchemaVersion,
     summary: envelope.summary,
     compatibility: { status: "candidate" },
+    pending,
   };
 }
 
@@ -314,6 +320,11 @@ export function createMemorySaveStore(options?: {
 }): MemorySaveStore {
   const storageIdentity: StorageIdentity = `memory-store-${memoryStoreIdentityCounter++}`;
   const workingRecords = new Map<string, unknown>();
+  // City IDs whose working-save record was created by `createWorkingSave` but
+  // not yet finalized by `finalizeWorkingSave`. A pending record is a durable
+  // marker from an incomplete New City transaction; bootstrap reconciliation
+  // deletes leftover pending records.
+  const pendingCityIds = new Set<string>();
   const checkpointRecords = new Map<string, Map<string, StoredCheckpoint>>();
   const autosaveRecords = new Map<string, Map<string, StoredAutosave>>();
   const generationHighWaterMarks = new Map<string, number>();
@@ -344,7 +355,9 @@ export function createMemorySaveStore(options?: {
     const failure = injectedFailure<CitySummary[]>("listCities");
     if (failure) return failure;
     const summaries = sortCitySummaries(
-      [...workingRecords].map(([cityId, value]) => citySummary(cityId, value)),
+      [...workingRecords].map(([cityId, value]) =>
+        citySummary(cityId, value, pendingCityIds.has(cityId)),
+      ),
     );
     return cloneResult(summaries, "listCities");
   };
@@ -389,9 +402,13 @@ export function createMemorySaveStore(options?: {
     if (failure) return failure;
 
     workingRecords.set(cityId, stored.value);
-    return cloneResult(citySummary(cityId, stored.value), "writeWorkingSave", {
-      cityId,
-    });
+    return cloneResult(
+      citySummary(cityId, stored.value, pendingCityIds.has(cityId)),
+      "writeWorkingSave",
+      {
+        cityId,
+      },
+    );
   };
 
   const createWorkingSave: SaveStore["createWorkingSave"] = async (
@@ -432,9 +449,33 @@ export function createMemorySaveStore(options?: {
     if (failure) return failure;
 
     workingRecords.set(cityId, stored.value);
-    return cloneResult(citySummary(cityId, stored.value), "createWorkingSave", {
+    pendingCityIds.add(cityId);
+    return cloneResult(
+      citySummary(cityId, stored.value, true),
+      "createWorkingSave",
+      {
+        cityId,
+      },
+    );
+  };
+
+  const finalizeWorkingSave: SaveStore["finalizeWorkingSave"] = async (
+    cityId,
+  ) => {
+    const failure = injectedFailure<CitySummary>("finalizeWorkingSave", {
       cityId,
     });
+    if (failure) return failure;
+    if (!workingRecords.has(cityId)) {
+      return errorResult("finalizeWorkingSave", "notFound", { cityId });
+    }
+    // Idempotent: if already finalized, return the current summary.
+    pendingCityIds.delete(cityId);
+    return cloneResult(
+      citySummary(cityId, workingRecords.get(cityId), false),
+      "finalizeWorkingSave",
+      { cityId },
+    );
   };
 
   const renameCity: SaveStore["renameCity"] = async (cityId, name) => {
@@ -468,7 +509,11 @@ export function createMemorySaveStore(options?: {
 
     workingRecords.set(input.value.cityId, renamed);
     return cloneResult(
-      citySummary(input.value.cityId, renamed),
+      citySummary(
+        input.value.cityId,
+        renamed,
+        pendingCityIds.has(input.value.cityId),
+      ),
       "renameCity",
       context,
     );
@@ -526,9 +571,13 @@ export function createMemorySaveStore(options?: {
     };
 
     workingRecords.set(targetCityId, duplicate);
-    return cloneResult(citySummary(targetCityId, duplicate), "duplicateCity", {
-      cityId: targetCityId,
-    });
+    return cloneResult(
+      citySummary(targetCityId, duplicate, false),
+      "duplicateCity",
+      {
+        cityId: targetCityId,
+      },
+    );
   };
 
   const deleteCity: SaveStore["deleteCity"] = async (cityId) => {
@@ -539,42 +588,10 @@ export function createMemorySaveStore(options?: {
     }
 
     workingRecords.delete(cityId);
+    pendingCityIds.delete(cityId);
     checkpointRecords.delete(cityId);
     autosaveRecords.delete(cityId);
     generationHighWaterMarks.delete(cityId);
-    return { ok: true, value: undefined };
-  };
-
-  const restoreWorkingSaveRaw: SaveStore["restoreWorkingSaveRaw"] = async (
-    cityId,
-    value,
-  ) => {
-    const failure = injectedFailure<void>("restoreWorkingSaveRaw", { cityId });
-    if (failure) return failure;
-    const inspected = inspectSaveEnvelope(value);
-    if (!inspected.ok) {
-      return errorResult(
-        "restoreWorkingSaveRaw",
-        incompatibleCode(inspected.compatibility),
-        { cityId },
-      );
-    }
-    if (inspected.envelope.city.id !== cityId) {
-      return errorResult("restoreWorkingSaveRaw", "corruptRecord", { cityId });
-    }
-    const stored = cloneResult(inspected.envelope, "restoreWorkingSaveRaw", {
-      cityId,
-    });
-    if (!stored.ok) return stored;
-    const reinspection = inspectSaveEnvelope(stored.value);
-    if (!reinspection.ok) {
-      return errorResult(
-        "restoreWorkingSaveRaw",
-        incompatibleCode(reinspection.compatibility),
-        { cityId },
-      );
-    }
-    workingRecords.set(cityId, stored.value);
     return { ok: true, value: undefined };
   };
 
@@ -939,10 +956,10 @@ export function createMemorySaveStore(options?: {
     readWorkingSave,
     writeWorkingSave,
     createWorkingSave,
+    finalizeWorkingSave,
     renameCity,
     duplicateCity,
     deleteCity,
-    restoreWorkingSaveRaw,
     listCheckpoints,
     readCheckpoint,
     writeCheckpoint,
