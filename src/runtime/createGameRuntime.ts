@@ -287,12 +287,38 @@ export async function createGameRuntime(
   // queue.
   let detachReserving = false;
   let detachAdmissionLoadToken = 0;
+  // Detach and New City are mutually exclusive lifecycle transitions: both
+  // rewrite the active-city identity and the persistence lineage, so letting
+  // them run concurrently lets one undo the other's completed result (e.g. a
+  // New City rollback restoring a city that detach already cleared). A separate
+  // admission guard — distinct from `backendAdmissionReserved` — serializes
+  // them: whichever transition acquires it first runs; the other resolves
+  // `superseded` at admission. Detach does NOT set `backendAdmissionReserved`
+  // (gameplay keeps running during its storage drain), so this guard is the
+  // sole mutual-exclusion point between the two lifecycle transitions. A second
+  // detach is likewise rejected by this guard.
+  let lifecycleTransitionReserved = false;
   // A city undergoing a storage-safe handoff (cross-city load or detach) has its
   // persistence admission fenced: new working/checkpoint/autosave/rename writes
   // for it resolve superseded at admission, while already-admitted writes drain
   // to completion. This prevents a delayed write for a departed city from
   // recreating its storage record after the caller deletes it.
-  const fencedCities = new Set<string>();
+  //
+  // Fence ownership is reference-counted so overlapping transitions fencing the
+  // same city (e.g. two cross-city loads from city A, or a cross-city load and a
+  // detach both fencing A) cannot remove each other's fence. Each transition
+  // acquires exactly one lease for its prior city and releases exactly that one
+  // lease in its finally; the fence persists until the last lease is released.
+  const fencedCities = new Map<string, number>();
+  const acquireCityFence = (cityId: string): void => {
+    fencedCities.set(cityId, (fencedCities.get(cityId) ?? 0) + 1);
+  };
+  const releaseCityFence = (cityId: string): void => {
+    const next = (fencedCities.get(cityId) ?? 0) - 1;
+    if (next <= 0) fencedCities.delete(cityId);
+    else fencedCities.set(cityId, next);
+  };
+  const isCityFenced = (cityId: string): boolean => fencedCities.has(cityId);
   // Component teardown is a one-shot lifecycle request, so unlike transient UI
   // intents it cannot be dropped while New City owns admission. The canvas is
   // halted immediately; full preview cleanup is completed once the transaction
@@ -1262,7 +1288,7 @@ export async function createGameRuntime(
     if (backendAdmissionReserved) {
       return Promise.resolve({ status: "superseded" });
     }
-    if (activeCity !== null && fencedCities.has(activeCity.id)) {
+    if (activeCity !== null && isCityFenced(activeCity.id)) {
       return Promise.resolve({ status: "superseded" });
     }
     if (saveStore === undefined) {
@@ -1460,7 +1486,7 @@ export async function createGameRuntime(
     if (backendAdmissionReserved) {
       return Promise.resolve({ status: "superseded" });
     }
-    if (activeCity !== null && fencedCities.has(activeCity.id)) {
+    if (activeCity !== null && isCityFenced(activeCity.id)) {
       return Promise.resolve({ status: "superseded" });
     }
     if (saveStore === undefined) {
@@ -1660,7 +1686,7 @@ export async function createGameRuntime(
     if (backendAdmissionReserved) {
       return Promise.resolve({ status: "superseded" });
     }
-    if (activeCity !== null && fencedCities.has(activeCity.id)) {
+    if (activeCity !== null && isCityFenced(activeCity.id)) {
       return Promise.resolve({ status: "superseded" });
     }
     if (saveStore === undefined) {
@@ -1857,7 +1883,7 @@ export async function createGameRuntime(
     const switchingCities =
       priorCityId !== undefined && priorCityId !== source.cityId;
     if (switchingCities) {
-      fencedCities.add(priorCityId);
+      acquireCityFence(priorCityId);
     }
     publishLoadTransition(requestToken, { state: "reading", source }, null);
 
@@ -2074,7 +2100,7 @@ export async function createGameRuntime(
       });
     } finally {
       if (switchingCities) {
-        fencedCities.delete(priorCityId);
+        releaseCityFence(priorCityId);
       }
     }
   };
@@ -2248,6 +2274,7 @@ export async function createGameRuntime(
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
     if (dead) return runtimeUnavailable("activateNewCity");
     if (backendAdmissionReserved) return { status: "superseded" };
+    if (lifecycleTransitionReserved) return { status: "superseded" };
     if (saveStore === undefined) {
       return unavailableStoreResult("writeWorkingSave");
     }
@@ -2276,6 +2303,7 @@ export async function createGameRuntime(
     const appVersion = options.appVersion;
     const priorLifecycleStatus = lifecycleStatus;
     backendAdmissionReserved = true;
+    lifecycleTransitionReserved = true;
     // Invalidate any in-flight load lineage immediately so a pending read
     // that settles during or after this transaction cannot continue
     // restoring. The bumped token is captured in `prior` below, so rollback
@@ -2438,6 +2466,7 @@ export async function createGameRuntime(
     } finally {
       previewAdmissionSuspended = false;
       backendAdmissionReserved = false;
+      lifecycleTransitionReserved = false;
       if (stopRequestedDuringReservation) {
         stopRequestedDuringReservation = false;
         stopRuntime();
@@ -2452,23 +2481,30 @@ export async function createGameRuntime(
     if (backendAdmissionReserved) {
       return { status: "superseded" };
     }
+    if (lifecycleTransitionReserved) {
+      return { status: "superseded" };
+    }
     const priorCityId = activeCity?.id;
     // Detach owns city-scoped persistence admission for the departing city. It
     // does NOT set `backendAdmissionReserved`, so gameplay ticks/dispatches
     // keep running during the storage drain (New City remains the sole
-    // foreground admission owner). The departing city's persistence admission
-    // is fenced (new saves for it resolve superseded) and its FIFO is drained
-    // before detach clears identity, so a delayed write cannot recreate a
-    // deleted city record. Loads admitted AFTER detach starts are superseded
-    // via `detachAdmissionLoadToken`, giving detach deterministic precedence
-    // over cross-city loads; loads already in flight are allowed to settle and
+    // foreground admission owner). It DOES acquire `lifecycleTransitionReserved`
+    // so a concurrent New City request (or a second detach) is superseded at
+    // admission rather than running alongside detach and undoing its completed
+    // result via rollback. The departing city's persistence admission is fenced
+    // (new saves for it resolve superseded) and its FIFO is drained before
+    // detach clears identity, so a delayed write cannot recreate a deleted city
+    // record. Loads admitted AFTER detach starts are superseded via
+    // `detachAdmissionLoadToken`, giving detach deterministic precedence over
+    // cross-city loads; loads already in flight are allowed to settle and
     // detach orders after them through the gameplay queue. The drain happens
     // OUTSIDE the gameplay queue so a queued save that needs the gameplay queue
     // for canonical capture is not deadlocked by detach holding it.
     detachReserving = true;
+    lifecycleTransitionReserved = true;
     detachAdmissionLoadToken = loadRequestToken;
     if (priorCityId !== undefined) {
-      fencedCities.add(priorCityId);
+      acquireCityFence(priorCityId);
     }
     try {
       if (priorCityId !== undefined) {
@@ -2498,8 +2534,9 @@ export async function createGameRuntime(
       return result;
     } finally {
       detachReserving = false;
+      lifecycleTransitionReserved = false;
       if (priorCityId !== undefined) {
-        fencedCities.delete(priorCityId);
+        releaseCityFence(priorCityId);
       }
     }
   };

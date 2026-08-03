@@ -3106,4 +3106,286 @@ describe("runtime persistence coordinator contracts", () => {
     expect(harness.checkpointRequest().kind).toBe("checkpoint");
     expect(harness.autosaveRequest().kind).toBe("autosave");
   });
+
+  // --- Fence ownership regression coverage ---
+
+  it("preserves the former-city fence when overlapping cross-city loads share it", async () => {
+    const formerCityId = "city-fence-a";
+    const harness = await createCoordinatorHarness({
+      activeCity: cityIdentity(formerCityId),
+    });
+    const sourceB = { kind: "working", cityId: "city-fence-b" } as const;
+    const sourceC = { kind: "working", cityId: "city-fence-c" } as const;
+    seedLoadSource(harness.store, sourceB);
+    seedLoadSource(harness.store, sourceC);
+    // Seed the former city's record so deletion is observable after the
+    // fence blocks the save from (re)creating it.
+    harness.store.seedRawWorking(
+      formerCityId,
+      loadEnvelope({ city: cityIdentity(formerCityId) }),
+    );
+
+    // Defer reads so both cross-city loads reach their deferred read while the
+    // former city (A) is still active and fenced by each.
+    harness.store.defer("readWorkingSave");
+    const loadB = harness.runtime.persistence.load(sourceB);
+    const loadC = harness.runtime.persistence.load(sourceC);
+    await vi.waitFor(
+      () => {
+        expect(harness.store.activeCount()).toBe(2);
+      },
+      { timeout: 3000, interval: 10 },
+    );
+
+    // Release B's read: B is superseded by C's newer token and its finally
+    // releases its fence lease on A. The fence must persist (C still holds it).
+    harness.store.releaseNext("readWorkingSave");
+    await expect(loadB).resolves.toEqual({ status: "superseded" });
+
+    // A is still the active city but still fenced by C. A working save for A
+    // must be superseded at admission, not admitted to recreate A's record
+    // after the caller later deletes it.
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual({
+      status: "superseded",
+    });
+
+    // Release C's read: C completes and becomes active. C's finally releases
+    // the last fence lease on A.
+    harness.store.releaseNext("readWorkingSave");
+    await expect(loadC).resolves.toMatchObject({
+      status: "completed",
+      value: { source: sourceC },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toMatchObject({
+      id: "city-fence-c",
+    });
+
+    // Clear the read defer so the final store assertions are not gated.
+    harness.store.releaseAll();
+
+    // Deleting the former city leaves it absent — no delayed save recreated it.
+    await expect(harness.store.deleteCity(formerCityId)).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+    await expect(
+      harness.store.readWorkingSave(formerCityId),
+    ).resolves.toMatchObject({ ok: false, error: { code: "notFound" } });
+  });
+
+  it("preserves the fence when a cross-city load and detach share it", async () => {
+    const formerCityId = "city-fence-d";
+    const harness = await createCoordinatorHarness({
+      activeCity: cityIdentity(formerCityId),
+    });
+    const sourceB = { kind: "working", cityId: "city-fence-e" } as const;
+    seedLoadSource(harness.store, sourceB);
+    // Seed the former city's record so deletion is observable after the
+    // fence blocks the save from (re)creating it.
+    harness.store.seedRawWorking(
+      formerCityId,
+      loadEnvelope({ city: cityIdentity(formerCityId) }),
+    );
+
+    // Gate a gameplay dispatch so detach's gameplay-queue clearing work waits
+    // behind it, keeping the former city active while both transitions fence it.
+    const dispatch = harness.backend.dispatch.bind(harness.backend);
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let signalDispatchStarted: (() => void) | undefined;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      signalDispatchStarted = resolve;
+    });
+    harness.backend.dispatch = async (intent) => {
+      signalDispatchStarted?.();
+      await dispatchGate;
+      return dispatch(intent);
+    };
+    const gameplay = harness.runtime.debugSetBudget(50_000);
+    await dispatchStarted;
+
+    // Defer the load's read so it reaches its deferred read while the former
+    // city is still active and fenced.
+    harness.store.defer("readWorkingSave");
+    const loadB = harness.runtime.persistence.load(sourceB);
+    await harness.store.waitForActive("readWorkingSave");
+
+    // Start detach. It also fences the former city (count=2) and enters the
+    // gameplay queue, where it waits behind the gated dispatch.
+    const detach = harness.runtime.persistence.detachActiveCity();
+
+    // Bump the load token so B is superseded when its read settles, without
+    // admitting a new fencing transition. A superseded load bumps the token
+    // at admission and returns before fencing.
+    await expect(
+      harness.runtime.persistence.load({
+        kind: "working",
+        cityId: "city-fence-f",
+      }),
+    ).resolves.toEqual({ status: "superseded" });
+
+    // Release B's read. B is superseded (token mismatch) and its finally
+    // releases its fence lease on A. The fence must persist (detach still
+    // holds it).
+    harness.store.releaseNext("readWorkingSave");
+    await expect(loadB).resolves.toEqual({ status: "superseded" });
+
+    // A is still the active city (detach hasn't cleared identity) and still
+    // fenced by detach. A working save for A must be superseded at admission.
+    await expect(harness.runtime.persistence.saveWorking()).resolves.toEqual({
+      status: "superseded",
+    });
+
+    // Release the gated dispatch. Detach clears identity and completes.
+    releaseDispatch?.();
+    await gameplay;
+    await expect(detach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+
+    // Clear the read defer so the final store assertions are not gated.
+    harness.store.releaseAll();
+
+    // Deleting the former city leaves it absent.
+    await expect(harness.store.deleteCity(formerCityId)).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+    await expect(
+      harness.store.readWorkingSave(formerCityId),
+    ).resolves.toMatchObject({ ok: false, error: { code: "notFound" } });
+  });
+
+  // --- Detach / New City mutual exclusion regression coverage ---
+
+  it("supersedes a failing New City request started while detach is in progress", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    // Start detach. It fences the city and waits for the save to complete.
+    const detach = harness.runtime.persistence.detachActiveCity();
+
+    // Make sandbox creation fail. A New City request started while detach owns
+    // lifecycle admission must be superseded, not admitted to roll back and
+    // resurrect the city detach is clearing.
+    harness.backend.createSandbox = async () => {
+      harness.backend.createSandboxCalls += 1;
+      return {
+        ok: false,
+        error: {
+          code: "unknownTemplateId",
+          context: { field: "templateId", attemptedValue: "missing" },
+        },
+      };
+    };
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    // New City is superseded at admission — it never creates a sandbox.
+    await expect(activation).resolves.toEqual({ status: "superseded" });
+    expect(harness.backend.createSandboxCalls).toBe(0);
+
+    // Release the save. Detach drains and completes, clearing identity.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    const detachResult = await detach;
+    expect(detachResult).toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+
+    // A completed detach can never be undone by New City rollback.
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+  });
+
+  it("supersedes a successful New City request started while detach is in progress", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const detach = harness.runtime.persistence.detachActiveCity();
+
+    const activation = harness.runtime.persistence.activateNewCity(
+      sandboxRequest(),
+      newCityIdentity(),
+    );
+
+    // New City is superseded at admission — it never creates a sandbox.
+    await expect(activation).resolves.toEqual({ status: "superseded" });
+    expect(harness.backend.createSandboxCalls).toBe(0);
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(detach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+  });
+
+  it("supersedes a second concurrent detach request", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const firstDetach = harness.runtime.persistence.detachActiveCity();
+    const secondDetach = harness.runtime.persistence.detachActiveCity();
+
+    // The second detach is superseded at admission.
+    await expect(secondDetach).resolves.toEqual({ status: "superseded" });
+
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(firstDetach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+  });
+
+  it("gives New City and detach deterministic precedence regardless of admission order", async () => {
+    for (const ordering of ["new-city-first", "detach-first"] as const) {
+      const harness = await createCoordinatorHarness({ clean: true });
+
+      if (ordering === "new-city-first") {
+        const activation = harness.runtime.persistence.activateNewCity(
+          sandboxRequest(),
+          newCityIdentity(),
+        );
+        // New City sets backendAdmissionReserved synchronously, so detach is
+        // superseded at admission regardless of microtask timing.
+        const detach = harness.runtime.persistence.detachActiveCity();
+        await expect(detach).resolves.toEqual({ status: "superseded" });
+        await expect(activation).resolves.toMatchObject({
+          status: "completed",
+        });
+        expect(
+          harness.runtime.getSnapshot().persistence.activeCity,
+        ).toMatchObject({ id: "city-002" });
+      } else {
+        const detach = harness.runtime.persistence.detachActiveCity();
+        // Detach sets lifecycleTransitionReserved synchronously, so New City is
+        // superseded at admission regardless of microtask timing.
+        const activation = harness.runtime.persistence.activateNewCity(
+          sandboxRequest(),
+          newCityIdentity(),
+        );
+        await expect(activation).resolves.toEqual({ status: "superseded" });
+        await expect(detach).resolves.toMatchObject({ status: "completed" });
+        expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+      }
+    }
+  });
 });
