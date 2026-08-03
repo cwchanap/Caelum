@@ -417,6 +417,32 @@ describe("persistence contract types", () => {
     });
   });
 
+  it("normalizes a plain object with a throwing getter as an unreadable invokeFailed", async () => {
+    // isPlainObject returns true (prototype is Object.prototype, no getter
+    // access), but detachValue materializes the getter during detachment and
+    // the throw is caught — classifying the value as unreadable, which maps
+    // to host/invokeFailed.
+    const hostile: Record<string, unknown> = {};
+    Object.defineProperty(hostile, "kind", {
+      get() {
+        throw new Error("hostile kind getter");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    await expect(
+      runPersistenceValidationOperation(null, () => Promise.reject(hostile)),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "host",
+        operation: "validateSnapshot",
+        code: "invokeFailed",
+      },
+    });
+  });
+
   it("detaches a stateful operation getter into a safe recognized error", async () => {
     let operationReads = 0;
     const stateful = new Proxy(

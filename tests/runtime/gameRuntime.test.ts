@@ -34,6 +34,12 @@ import {
   createMemorySaveStore,
   createMemorySaveStoreFailureControls,
 } from "../../src/persistence/memorySaveStore";
+import type {
+  SaveStore,
+  SaveStoreOperation,
+  SaveStoreResult,
+  CheckpointSummary,
+} from "../../src/persistence/saveStore";
 import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import { createTestGameState } from "../helpers/gameState";
 import { createDelayedSaveStore } from "./delayedSaveStore";
@@ -5186,5 +5192,805 @@ describe("fake backend applyIntent coverage", () => {
     expect(after.rejection).toBeNull();
     expect(after.state).toBe(before.state);
     expect(after.ui).toBe(before.ui);
+  });
+});
+
+describe("persistence error path coverage", () => {
+  // Wraps a SaveStore so the named operations reject by throwing. The runtime
+  // catches store throws and normalizes them into `ioFailure` store errors.
+  function throwingStore(
+    delegate: SaveStore,
+    throwingOps: SaveStoreOperation[],
+  ): SaveStore {
+    const throwSet = new Set(throwingOps);
+    const shouldThrow = (op: SaveStoreOperation): boolean => throwSet.has(op);
+    return {
+      ...delegate,
+      async readWorkingSave(cityId: string) {
+        if (shouldThrow("readWorkingSave")) {
+          throw new Error("readWorkingSave threw for test");
+        }
+        return delegate.readWorkingSave(cityId);
+      },
+      async writeWorkingSave(envelope) {
+        if (shouldThrow("writeWorkingSave")) {
+          throw new Error("writeWorkingSave threw for test");
+        }
+        return delegate.writeWorkingSave(envelope);
+      },
+      async renameCity(cityId: string, name: string) {
+        if (shouldThrow("renameCity")) {
+          throw new Error("renameCity threw for test");
+        }
+        return delegate.renameCity(cityId, name);
+      },
+    };
+  }
+
+  const basePersistenceOptions = () => ({
+    saveStore: createMemorySaveStore(),
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+
+  describe("saveWorking error paths", () => {
+    it("returns superseded when a New City admission has reserved the backend", async () => {
+      const store = createDelayedSaveStore(createMemorySaveStore());
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await runtime.debugSetBudget(100_000);
+
+      // activateNewCity sets backendAdmissionReserved synchronously before
+      // its first await, so a saveWorking issued immediately after resolves
+      // superseded without entering the city FIFO.
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "superseded",
+      });
+      store.releaseAll();
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+    });
+
+    it("surfaces a snapshotForSave host failure as a backend host error", async () => {
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => {
+        throw new Error("snapshotForSave threw");
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      await runtime.debugSetBudget(100_000);
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "snapshotForSave",
+            code: "invokeFailed",
+            diagnostic: "snapshotForSave threw",
+          },
+        },
+      });
+      expect(runtime.getSnapshot().persistence.error).toMatchObject({
+        kind: "backend",
+      });
+    });
+
+    it("surfaces a snapshotForSave not-ok result as a backend error", async () => {
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          kind: "host" as const,
+          operation: "snapshotForSave" as const,
+          code: "invokeFailed" as const,
+          diagnostic: "backend refused capture",
+        },
+      }));
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      await runtime.debugSetBudget(100_000);
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: { kind: "backend" },
+      });
+    });
+
+    it("normalizes a writeWorkingSave throw into a store ioFailure", async () => {
+      const store = throwingStore(createMemorySaveStore(), [
+        "writeWorkingSave",
+      ]);
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await runtime.debugSetBudget(100_000);
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "ioFailure",
+            retryable: true,
+          },
+        },
+      });
+    });
+  });
+
+  describe("runGameplayWrite (checkpoint) error paths", () => {
+    const checkpointRequest = (
+      store: SaveStore,
+    ): {
+      kind: "checkpoint";
+      write: (input: {
+        city: { id: string; name: string; cityCreatedAt: string };
+        envelope: Parameters<SaveStore["writeCheckpoint"]>[0]["envelope"];
+      }) => Promise<SaveStoreResult<CheckpointSummary>>;
+    } => ({
+      kind: "checkpoint",
+      write: async ({ city, envelope }) =>
+        store.writeCheckpoint({
+          checkpointId: "cp-1",
+          cityId: city.id,
+          name: "Checkpoint 1",
+          note: null,
+          envelope,
+        }),
+    });
+
+    it("fails with noActiveCity when no city is active", async () => {
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: createMemorySaveStore(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      });
+      await expect(
+        runtime.persistence.runGameplayWrite(
+          checkpointRequest(createMemorySaveStore()),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "precondition",
+          error: { code: "noActiveCity", operation: "createCheckpoint" },
+        },
+      });
+    });
+
+    it("fails with serializationFailed when now/appVersion are not configured", async () => {
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: createMemorySaveStore(),
+        initialCity: cityIdentity(),
+      });
+      await expect(
+        runtime.persistence.runGameplayWrite(
+          checkpointRequest(createMemorySaveStore()),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeCheckpoint",
+            code: "serializationFailed",
+            diagnostic: "Gameplay-write dependencies are not configured",
+          },
+        },
+      });
+    });
+
+    it("surfaces a snapshotForSave host failure as a backend host error", async () => {
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => {
+        throw new Error("capture threw");
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      await expect(
+        runtime.persistence.runGameplayWrite(
+          checkpointRequest(createMemorySaveStore()),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "snapshotForSave",
+            code: "invokeFailed",
+            diagnostic: "capture threw",
+          },
+        },
+      });
+    });
+
+    it("surfaces a snapshotForSave not-ok result as a backend error", async () => {
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          kind: "host" as const,
+          operation: "snapshotForSave" as const,
+          code: "invokeFailed" as const,
+          diagnostic: "refused",
+        },
+      }));
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      await expect(
+        runtime.persistence.runGameplayWrite(
+          checkpointRequest(createMemorySaveStore()),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: { kind: "backend" },
+      });
+    });
+
+    it("normalizes a store write throw into a store ioFailure", async () => {
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+      });
+      const request: {
+        kind: "checkpoint";
+        write: () => Promise<SaveStoreResult<CheckpointSummary>>;
+      } = {
+        kind: "checkpoint",
+        write: async () => {
+          throw new Error("write threw");
+        },
+      };
+      await expect(
+        runtime.persistence.runGameplayWrite(request),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeCheckpoint",
+            code: "ioFailure",
+            retryable: true,
+          },
+        },
+      });
+    });
+
+    it("surfaces a store write not-ok result as a store error", async () => {
+      const failures = createMemorySaveStoreFailureControls();
+      failures.failNext("writeCheckpoint", "quotaExceeded");
+      const store = createMemorySaveStore({ failures });
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await expect(
+        runtime.persistence.runGameplayWrite(checkpointRequest(store)),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "writeCheckpoint", code: "quotaExceeded" },
+        },
+      });
+    });
+
+    it("returns superseded when a New City admission has reserved the backend", async () => {
+      const store = createDelayedSaveStore(createMemorySaveStore());
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+      await expect(
+        runtime.persistence.runGameplayWrite(
+          checkpointRequest(createMemorySaveStore()),
+        ),
+      ).resolves.toMatchObject({ status: "superseded" });
+      store.releaseAll();
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+    });
+  });
+
+  describe("renameActiveCity error paths", () => {
+    it("fails with noActiveCity when no city is active", async () => {
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: createMemorySaveStore(),
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      });
+      await expect(
+        runtime.persistence.renameActiveCity("Renamed"),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "precondition",
+          error: { code: "noActiveCity", operation: "renameActiveCity" },
+        },
+      });
+    });
+
+    it("normalizes a renameCity throw into a store ioFailure", async () => {
+      const store = throwingStore(createMemorySaveStore(), ["renameCity"]);
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await expect(
+        runtime.persistence.renameActiveCity("Renamed"),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "renameCity",
+            code: "ioFailure",
+            retryable: true,
+          },
+        },
+      });
+    });
+
+    it("returns superseded when a New City admission has reserved the backend", async () => {
+      const store = createDelayedSaveStore(createMemorySaveStore());
+      store.defer("writeWorkingSave");
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      const activation = runtime.persistence.activateNewCity(
+        {
+          templateId: "blankGrid",
+          economyPreset: "standard",
+          startingCapital: 120_000,
+          demandMultiplier: 1,
+          moveInRate: "paused",
+        },
+        {
+          id: "city-002",
+          name: "New City",
+          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        },
+      );
+      await expect(
+        runtime.persistence.renameActiveCity("Renamed"),
+      ).resolves.toMatchObject({ status: "superseded" });
+      store.releaseAll();
+      await expect(activation).resolves.toMatchObject({ status: "completed" });
+    });
+  });
+
+  describe("load error paths", () => {
+    it("normalizes a readWorkingSave throw into a store ioFailure", async () => {
+      const city = cityIdentity("city-load-throw");
+      const base = createMemorySaveStore();
+      base.seedRawWorking(
+        city.id,
+        buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: "2026-08-01T11:00:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: fullRustSnapshot(),
+        }),
+      );
+      const store = throwingStore(base, ["readWorkingSave"]);
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await expect(
+        runtime.persistence.load({ kind: "working", cityId: city.id }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "readWorkingSave",
+            code: "ioFailure",
+            retryable: true,
+            cityId: city.id,
+          },
+        },
+      });
+    });
+
+    it("surfaces a snapshotForSave host failure during restore as a backend host error", async () => {
+      const city = cityIdentity("city-load-snapthrow");
+      const store = createMemorySaveStore();
+      store.seedRawWorking(
+        city.id,
+        buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: "2026-08-01T11:00:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: fullRustSnapshot(),
+        }),
+      );
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => {
+        throw new Error("snapshotForSave threw during load");
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await expect(
+        runtime.persistence.load({ kind: "working", cityId: city.id }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "snapshotForSave",
+            code: "invokeFailed",
+            diagnostic: "snapshotForSave threw during load",
+          },
+        },
+      });
+    });
+
+    it("surfaces a snapshotForSave not-ok result during restore as a backend error", async () => {
+      const city = cityIdentity("city-load-snapnotok");
+      const store = createMemorySaveStore();
+      store.seedRawWorking(
+        city.id,
+        buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: "2026-08-01T11:00:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: fullRustSnapshot(),
+        }),
+      );
+      const backend = transactionalBackend(backendSpy());
+      backend.snapshotForSave = vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          kind: "host" as const,
+          operation: "snapshotForSave" as const,
+          code: "invokeFailed" as const,
+          diagnostic: "refused during load",
+        },
+      }));
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      await expect(
+        runtime.persistence.load({ kind: "working", cityId: city.id }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: { kind: "backend" },
+      });
+    });
+
+    it("rolls back and surfaces a backend host error when restoreSnapshot throws", async () => {
+      const city = cityIdentity("city-load-restorethrow");
+      const store = createMemorySaveStore();
+      store.seedRawWorking(
+        city.id,
+        buildSaveEnvelope({
+          city: { id: city.id, name: city.name },
+          cityCreatedAt: city.cityCreatedAt,
+          savedAt: "2026-08-01T11:00:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: fullRustSnapshot({ budget: 90_000 }),
+        }),
+      );
+      const backend = transactionalBackend(backendSpy());
+      let restoreCall = 0;
+      const realRestore = backend.restoreSnapshot.bind(backend);
+      backend.restoreSnapshot = vi.fn(async (request) => {
+        restoreCall += 1;
+        // First call (the load restore) throws; subsequent calls (rollback)
+        // succeed so the canonical state is restored.
+        if (restoreCall === 1) {
+          throw new Error("restoreSnapshot threw");
+        }
+        return realRestore(request);
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.load({ kind: "working", cityId: city.id }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "restoreSnapshot",
+            code: "invokeFailed",
+            diagnostic: "restoreSnapshot threw",
+          },
+        },
+      });
+      // Rollback restored the canonical pre-load state.
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+    });
+  });
+
+  describe("activateNewCity error paths", () => {
+    const newCityRequest = () => ({
+      templateId: "blankGrid" as const,
+      economyPreset: "standard" as const,
+      startingCapital: 120_000,
+      demandMultiplier: 1,
+      moveInRate: "paused" as const,
+    });
+    const newCityIdentity = () => ({
+      id: "city-new-err",
+      name: "New City",
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+    });
+
+    it("fails with serializationFailed when now/appVersion are not configured", async () => {
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: createMemorySaveStore(),
+        initialCity: cityIdentity(),
+      });
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "serializationFailed",
+            diagnostic: "New-city dependencies are not configured",
+          },
+        },
+      });
+    });
+
+    it("rolls back and surfaces a backend host error when createSandbox throws", async () => {
+      const backend = transactionalBackend(backendSpy());
+      backend.createSandbox = vi.fn(async () => {
+        throw new Error("createSandbox threw");
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "createSandbox",
+            code: "invokeFailed",
+            diagnostic: "createSandbox threw",
+          },
+        },
+      });
+      // Rollback restored the prior canonical state.
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+      expect(runtime.getSnapshot().persistence.activeCity?.id).toBe(
+        cityIdentity().id,
+      );
+    });
+
+    it("rolls back when the candidate snapshotForSave throws", async () => {
+      let snapshotCall = 0;
+      const backend = transactionalBackend(backendSpy());
+      const realSnapshotForSave = backend.snapshotForSave.bind(backend);
+      backend.snapshotForSave = vi.fn(async () => {
+        snapshotCall += 1;
+        // First call (prior capture) succeeds; second call (candidate) throws.
+        if (snapshotCall === 2) {
+          throw new Error("candidate snapshotForSave threw");
+        }
+        return realSnapshotForSave();
+      });
+      const runtime = await createGameRuntime({
+        backend,
+        ...basePersistenceOptions(),
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: {
+            kind: "host",
+            operation: "snapshotForSave",
+            code: "invokeFailed",
+          },
+        },
+      });
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+    });
+
+    it("rolls back when the prior-record readWorkingSave throws", async () => {
+      const store = throwingStore(createMemorySaveStore(), ["readWorkingSave"]);
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "readWorkingSave",
+            code: "ioFailure",
+            retryable: true,
+          },
+        },
+      });
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+    });
+
+    it("rolls back when writeWorkingSave throws", async () => {
+      const store = throwingStore(createMemorySaveStore(), [
+        "writeWorkingSave",
+      ]);
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: store,
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "writeWorkingSave",
+            code: "ioFailure",
+            retryable: true,
+          },
+        },
+      });
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+    });
+
+    it("rolls back when the prior-record read returns a non-notFound store error", async () => {
+      const failures = createMemorySaveStoreFailureControls();
+      failures.failNext("readWorkingSave", "corruptRecord");
+      const runtime = await createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        ...basePersistenceOptions(),
+        saveStore: createMemorySaveStore({ failures }),
+      });
+      const beforeBudget = runtime.getSnapshot().state.budget;
+      await expect(
+        runtime.persistence.activateNewCity(
+          newCityRequest(),
+          newCityIdentity(),
+        ),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "readWorkingSave", code: "corruptRecord" },
+        },
+      });
+      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
+    });
+  });
+});
+
+describe("UI helper no-op coverage", () => {
+  it("setHoverTile is a no-op commit when the hover tile does not change", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setHoverTile({ x: 3, y: 3 });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    const before = runtime.getSnapshot();
+    runtime.setHoverTile({ x: 3, y: 3 });
+    // Same point: commit receives identical state+ui references, does not
+    // publish, and leaves the snapshot unchanged.
+    expect(listener).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot()).toEqual(before);
+    expect(runtime.getSnapshot().ui.hoverTile).toEqual({ x: 3, y: 3 });
+  });
+
+  it("setRoutePattern is a no-op when no route draft is active", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    const before = runtime.getSnapshot();
+    runtime.setRoutePattern("shuttle");
+    expect(listener).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot()).toEqual(before);
   });
 });
