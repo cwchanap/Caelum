@@ -17,6 +17,7 @@ import {
   type SaveStoreOperation,
   type SaveStoreResult,
   type StorageIdentity,
+  type WorkingSaveState,
 } from "./saveStore";
 
 export interface MemorySaveStore extends SaveStore {
@@ -481,6 +482,23 @@ export function createMemorySaveStore(options?: {
       "finalizeWorkingSave",
       { cityId },
     );
+  };
+
+  const inspectWorkingSaveState: SaveStore["inspectWorkingSaveState"] = async (
+    cityId,
+  ) => {
+    const failure = injectedFailure<WorkingSaveState>(
+      "inspectWorkingSaveState",
+      { cityId },
+    );
+    if (failure) return failure;
+    if (!workingRecords.has(cityId)) {
+      return { ok: true, value: "notFound" };
+    }
+    return {
+      ok: true,
+      value: pendingCityIds.has(cityId) ? "pending" : "active",
+    };
   };
 
   const renameCity: SaveStore["renameCity"] = async (cityId, name) => {
@@ -963,6 +981,7 @@ export function createMemorySaveStore(options?: {
     writeWorkingSave,
     createWorkingSave,
     finalizeWorkingSave,
+    inspectWorkingSaveState,
     renameCity,
     duplicateCity,
     deleteCity,

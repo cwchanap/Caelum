@@ -241,6 +241,11 @@ export type RuntimeRecoveryState =
       state: "recoveryRequired";
       reason: "bootstrapReconciliationFailed";
       cityId: string | null;
+    }
+  | {
+      state: "recoveryRequired";
+      reason: "multiRealmAmbiguousCleanup";
+      cityId: string;
     };
 
 /**
@@ -280,6 +285,11 @@ export type RuntimeDisposeResult =
       status: "recoveryRequired";
       reason: "bootstrapReconciliationFailed";
       cityId: string | null;
+    }
+  | {
+      status: "recoveryRequired";
+      reason: "multiRealmAmbiguousCleanup";
+      cityId: string;
     };
 
 export interface RuntimeController {
@@ -322,6 +332,16 @@ export interface RuntimeController {
    *   record's ID when known, or `null` when `listCities` itself failed. The
    *   lease is permanently pinned; the application MUST reconcile the
    *   durable storage out of band before retrying `createGameRuntime`.
+   *
+   * - `{ status: "recoveryRequired", reason: "multiRealmAmbiguousCleanup",
+   *   cityId }` — a New City transaction on a multi-realm adapter (one that
+   *   does not declare `singleRealm: true`) encountered an ambiguous
+   *   create/finalize failure and the runtime could not safely delete the
+   *   pending/active record because it may belong to a live transaction in
+   *   another realm. The record is preserved for manual/durable
+   *   reconciliation. The lease is permanently pinned; the application MUST
+   *   reconcile the durable storage out of band before retrying
+   *   `createGameRuntime`.
    *
    * If an uncancellable store operation never settles, this promise never
    * resolves — safe rebootstrap cannot proceed until pending storage I/O
