@@ -52,7 +52,6 @@ import type {
 import {
   buildSaveEnvelope,
   type InspectedSaveEnvelope,
-  type UntrustedSaveValue,
 } from "../persistence/envelope";
 import {
   compatibilityToEnvelopeError,
@@ -91,6 +90,7 @@ import {
 } from "./persistenceCoordinator";
 import type {
   RuntimeController,
+  RuntimeDisposeResult,
   RuntimeListener,
   RuntimeSnapshot,
 } from "./types";
@@ -269,6 +269,10 @@ export async function createGameRuntime(
   // that never settle. Safe rebootstrap cannot proceed until the orphan is
   // reconciled out of band.
   let leaseStuck = false;
+  // The city ID whose late-success cleanup failed, when `leaseStuck` is true.
+  // Used by `dispose()` to report which city requires out-of-band recovery
+  // via the typed `RuntimeDisposeResult`.
+  let leaseStuckCityId: string | null = null;
   const startDrainAndRelease = (): Promise<void> => {
     if (drainAndReleasePromise !== null) return drainAndReleasePromise;
     lease.beginClosing();
@@ -555,13 +559,19 @@ export async function createGameRuntime(
     return commit(state, clearedUi);
   };
 
-  const dispose = async (): Promise<void> => {
+  const dispose = async (): Promise<RuntimeDisposeResult> => {
     if (dead) {
       // Already fatal: `failBackend` started the drain-and-release. Await
       // it so the caller knows the lease has been released before creating
       // a replacement runtime.
       await startDrainAndRelease();
-      return;
+      return leaseStuck
+        ? {
+            status: "recoveryRequired",
+            reason: "lateSuccessCleanupFailed",
+            cityId: leaseStuckCityId!,
+          }
+        : { status: "released" };
     }
     dead = true;
     previewCoordinator.invalidateRoute();
@@ -582,6 +592,13 @@ export async function createGameRuntime(
     // can acquire it. Unlike `failBackend` (fire-and-forget), `dispose`
     // awaits the drain so the caller knows the lease has been released.
     await startDrainAndRelease();
+    return leaseStuck
+      ? {
+          status: "recoveryRequired",
+          reason: "lateSuccessCleanupFailed",
+          cityId: leaseStuckCityId!,
+        }
+      : { status: "released" };
   };
 
   const queueBackend = (
@@ -2390,30 +2407,20 @@ export async function createGameRuntime(
     return { status: "failed", error: failure };
   };
 
-  // Prior-record capture for late-success cleanup. `writeWorkingSave` is an
-  // upsert: a New City write whose `identity.id` collides with a pre-existing
-  // city overwrites that city's record. New City IDs SHOULD be unique by
-  // construction (the caller generates a fresh id), but late-success cleanup
-  // must be defense-in-depth — it must never delete a pre-existing city that
-  // the uncancellable write overwrote. So before the write we capture whether
-  // a record existed for `identity.id` and, if so, its raw value; on
-  // late-success cleanup we restore that prior record rather than deleting.
-  type NewCityPriorRecord =
-    | { existed: true; value: UntrustedSaveValue }
-    | { existed: false };
-
   // Enter the fatal persistence-recovery state: late-success cleanup could
   // not undo the orphan storage mutation (or the backend rollback failed).
   // The lease is never released, so a replacement runtime against the same
   // storage identity cannot acquire it. The runtime is already disposed
   // (`dead`), so this does not publish or restart the canvas — it only pins
   // the lease so safe rebootstrap cannot proceed until the orphan is
-  // reconciled out of band.
-  const enterLateSuccessCleanupFailure = (): void => {
+  // reconciled out of band. The `cityId` is captured so `dispose()` can
+  // report which city's cleanup failed via the typed disposal outcome.
+  const enterLateSuccessCleanupFailure = (cityId: string): void => {
     leaseStuck = true;
+    leaseStuckCityId = cityId;
   };
 
-  // Late-success cleanup: the initial `writeWorkingSave` succeeded AFTER
+  // Late-success cleanup: the initial `createWorkingSave` succeeded AFTER
   // disposal began, so the candidate city record is committed in storage
   // even though New City never completed or published success. Roll back the
   // backend to the prior canonical state (coherence) and undo the orphan
@@ -2425,44 +2432,45 @@ export async function createGameRuntime(
   // on the now-closing lease) — this is safe because the lease is still
   // exclusively held and the successful city FIFO write has already settled.
   //
-  // Identity safety: if a prior record existed for `identity.id` (an ID
-  // collision), restore it via `restoreWorkingSaveRaw` rather than deleting,
-  // so cleanup never deletes a pre-existing city. If no prior record existed,
-  // `deleteCity` removes the orphan.
+  // Identity safety: `createWorkingSave` is an atomic create-only operation
+  // that returns `conflict` when ANY storage already exists for the city ID.
+  // A successful create PROVES no prior storage existed, so cleanup can
+  // safely `deleteCity` the newly created city without restoring a prior
+  // record. There is no ID-collision overwrite path — the create would have
+  // been rejected with `conflict` before committing.
   //
-  // Cleanup-failure policy: if the backend rollback or the storage
-  // restore/delete fails, enter the fatal persistence-recovery state — the
-  // lease is never released. Silently releasing the lease while an orphan or
-  // overwritten record remains is not acceptable.
+  // Cleanup-failure policy: if the backend rollback or the storage delete
+  // fails (typed error OR a thrown adapter exception), enter the fatal
+  // persistence-recovery state — the lease is never released. Silently
+  // releasing the lease while an orphan remains is not acceptable. A thrown
+  // adapter exception is caught and normalized into the pinned state so the
+  // activation resolves with a typed `runtimeUnavailable` rather than
+  // rejecting with the untyped adapter exception.
   const cleanupLateSuccessNewCity = async (
     prior: NewCityPriorRuntime,
     priorCanonicalSnapshot: RustGameSnapshot,
     identity: NewCityIdentity,
-    priorRecord: NewCityPriorRecord,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
     const restored = await restoreCanonicalBackendState(
       priorCanonicalSnapshot,
       prior.paused,
     );
     if (!restored.ok) {
-      enterLateSuccessCleanupFailure();
+      enterLateSuccessCleanupFailure(identity.id);
       return runtimeUnavailable("activateNewCity");
     }
 
-    let cleanupOk: boolean;
-    if (priorRecord.existed) {
-      const restoredRecord = await saveStore!.restoreWorkingSaveRaw(
-        identity.id,
-        priorRecord.value,
-      );
-      cleanupOk = restoredRecord.ok;
-    } else {
+    try {
       const deleted = await saveStore!.deleteCity(identity.id);
       // `notFound` means the orphan is already absent — acceptable.
-      cleanupOk = deleted.ok || deleted.error.code === "notFound";
-    }
-    if (!cleanupOk) {
-      enterLateSuccessCleanupFailure();
+      if (!deleted.ok && deleted.error.code !== "notFound") {
+        enterLateSuccessCleanupFailure(identity.id);
+      }
+    } catch {
+      // A thrown adapter exception must not reject the activation or bypass
+      // the pinned recovery state. Normalize it: pin the lease so a
+      // replacement runtime cannot acquire it while the orphan remains.
+      enterLateSuccessCleanupFailure(identity.id);
     }
     return runtimeUnavailable("activateNewCity");
   };
@@ -2475,7 +2483,7 @@ export async function createGameRuntime(
     if (backendAdmissionReserved) return { status: "superseded" };
     if (lifecycleTransitionReserved) return { status: "superseded" };
     if (saveStore === undefined) {
-      return unavailableStoreResult("writeWorkingSave");
+      return unavailableStoreResult("createWorkingSave");
     }
     if (options.now === undefined || options.appVersion === undefined) {
       const result: PersistenceOperationResult<LoadCityValue> = {
@@ -2483,7 +2491,7 @@ export async function createGameRuntime(
         error: {
           kind: "store",
           error: {
-            operation: "writeWorkingSave",
+            operation: "createWorkingSave",
             code: "serializationFailed",
             cityId: requestedIdentity.id,
             retryable: false,
@@ -2635,7 +2643,7 @@ export async function createGameRuntime(
         return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "store",
           error: {
-            operation: "writeWorkingSave",
+            operation: "createWorkingSave",
             code: "serializationFailed",
             cityId: identity.id,
             retryable: false,
@@ -2654,57 +2662,24 @@ export async function createGameRuntime(
         });
       }
 
-      // Capture whether a prior record existed for identity.id before the
-      // write, so late-success cleanup can restore it (ID collision) rather
-      // than deleting a pre-existing city. New City IDs should be unique by
-      // construction; this is defense-in-depth. The read is issued directly
-      // (not through the closing lease) because no other writer can touch
-      // identity.id under the exclusive lease + foreground reservation, and
-      // the write below is what would overwrite any prior record. A read
-      // failure other than `notFound` aborts the write as a store failure.
-      let priorRecord: NewCityPriorRecord = { existed: false };
-      try {
-        const existing = await saveStore.readWorkingSave(identity.id);
-        if (existing.ok) {
-          priorRecord = { existed: true, value: existing.value };
-        } else if (existing.error.code !== "notFound") {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "store",
-            error: existing.error,
-          });
-        }
-      } catch (error: unknown) {
-        return await rollbackNewCity(prior, priorCapture.snapshot, {
-          kind: "store",
-          error: {
-            operation: "readWorkingSave",
-            code: "ioFailure",
-            cityId: identity.id,
-            retryable: true,
-            diagnostic: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-      // Disposal may have begun while the prior-record read was in flight.
-      // The candidate is installed but no write has been issued, so rollback
-      // the backend; no orphan can exist yet.
-      if (dead) {
-        return await rollbackNewCity(prior, priorCapture.snapshot, {
-          kind: "precondition",
-          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-        });
-      }
-
-      let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
+      // Atomic create-only write: `createWorkingSave` returns `conflict` when
+      // ANY storage already exists for the city ID (working record,
+      // checkpoints, autosaves, generation high-water). This proves a
+      // successful write created the city's storage rather than overwriting a
+      // pre-existing city. An ID collision rolls the candidate backend back
+      // and returns a typed store conflict — no overwrite occurs. Late-success
+      // cleanup can then safely `deleteCity` the newly created city because
+      // the create proved no prior storage existed.
+      let stored: Awaited<ReturnType<SaveStore["createWorkingSave"]>>;
       try {
         stored = await cityQueues.enqueue(identity.id, () =>
-          saveStore.writeWorkingSave(envelope),
+          saveStore.createWorkingSave(envelope),
         );
       } catch (error: unknown) {
         stored = {
           ok: false,
           error: {
-            operation: "writeWorkingSave",
+            operation: "createWorkingSave",
             code: "ioFailure",
             cityId: identity.id,
             retryable: true,
@@ -2718,15 +2693,14 @@ export async function createGameRuntime(
           error: stored.error,
         });
       }
-      // Late-success branch: the initial write SUCCEEDED after disposal
+      // Late-success branch: the initial create SUCCEEDED after disposal
       // began. The candidate city record is now committed in storage even
       // though New City never completed or published success. This is the
       // orphan scenario the persistence design warns about (§15.5) for
       // uncancellable writes. Roll back the backend for coherence AND undo
-      // the orphan storage mutation: if no prior record existed, delete the
-      // orphan; if a prior record existed (ID collision), restore it. The
-      // runtime remains terminal — no success is published, no candidate is
-      // installed. Cleanup runs inside this admitted foreground operation, so
+      // the orphan storage mutation via `deleteCity`. The runtime remains
+      // terminal — no success is published, no candidate is installed.
+      // Cleanup runs inside this admitted foreground operation, so
       // `drainAll` waits for it and the lease is not released until cleanup
       // settles (or never, if cleanup fails — see the fatal recovery state).
       if (dead) {
@@ -2734,7 +2708,6 @@ export async function createGameRuntime(
           prior,
           priorCapture.snapshot,
           identity,
-          priorRecord,
         );
       }
 

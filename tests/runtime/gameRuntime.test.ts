@@ -1181,7 +1181,7 @@ describe("Game Runtime", () => {
     it("drains admitted gameplay and never backlogs dispatches behind New City", async () => {
       const backend = transactionalBackend(deferredDispatchBackend());
       const store = createDelayedSaveStore(createMemorySaveStore());
-      store.defer("writeWorkingSave");
+      store.defer("createWorkingSave");
       const runtime = await createGameRuntime({
         backend,
         saveStore: store,
@@ -1228,7 +1228,7 @@ describe("Game Runtime", () => {
       await expect(runtime.commitDrag()).resolves.toEqual(beforeDroppedDrag);
       expect(runtime.getSnapshot()).toEqual(beforeDroppedDrag);
 
-      store.releaseNext("writeWorkingSave");
+      store.releaseNext("createWorkingSave");
       await expect(activation).resolves.toMatchObject({
         status: "completed",
         value: {
@@ -1251,7 +1251,7 @@ describe("Game Runtime", () => {
       });
       const failures = createMemorySaveStoreFailureControls();
       const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
-      store.defer("writeWorkingSave");
+      store.defer("createWorkingSave");
       const runtime = await createGameRuntime({
         backend,
         saveStore: store,
@@ -1263,7 +1263,7 @@ describe("Game Runtime", () => {
       runtime.setTool("road");
       runtime.setHoverTile({ x: 5, y: 5 });
       const priorBudget = runtime.getSnapshot().state.budget;
-      failures.failNext("writeWorkingSave", "ioFailure");
+      failures.failNext("createWorkingSave", "ioFailure");
 
       const activation = runtime.persistence.activateNewCity(
         {
@@ -1281,7 +1281,7 @@ describe("Game Runtime", () => {
       );
 
       try {
-        await store.waitForActive("writeWorkingSave");
+        await store.waitForActive("createWorkingSave");
         vi.advanceTimersByTime(50);
         runtime.previewRoadMutation({
           type: "layRoad",
@@ -1290,7 +1290,7 @@ describe("Game Runtime", () => {
         await flushPromises();
         expect(previewBudgets).toEqual([]);
 
-        store.releaseNext("writeWorkingSave");
+        store.releaseNext("createWorkingSave");
         await expect(activation).resolves.toMatchObject({
           status: "failed",
         });
@@ -1321,7 +1321,7 @@ describe("Game Runtime", () => {
         return roadPreview(request.generation, point);
       });
       const failures = createMemorySaveStoreFailureControls();
-      failures.failNext("writeWorkingSave", "ioFailure");
+      failures.failNext("createWorkingSave", "ioFailure");
       const runtime = await createGameRuntime({
         backend,
         saveStore: createMemorySaveStore({ failures }),
@@ -1410,7 +1410,7 @@ describe("Game Runtime", () => {
 
     const setupStopDuringNewCityTransaction = async (
       options: {
-        failWriteWorkingSave?: boolean;
+        failCreateWorkingSave?: boolean;
       } = {},
     ) => {
       const frameCallbacks: Array<(timestamp: number) => void> = [];
@@ -1429,11 +1429,11 @@ describe("Game Runtime", () => {
       const tick = backend.tick.bind(backend);
       backend.tick = vi.fn(async (deltaSeconds: number) => tick(deltaSeconds));
       const failures = createMemorySaveStoreFailureControls();
-      if (options.failWriteWorkingSave) {
-        failures.failNext("writeWorkingSave", "ioFailure");
+      if (options.failCreateWorkingSave) {
+        failures.failNext("createWorkingSave", "ioFailure");
       }
       const store = createDelayedSaveStore(createMemorySaveStore({ failures }));
-      store.defer("writeWorkingSave");
+      store.defer("createWorkingSave");
       const runtime = await createGameRuntime({
         backend,
         saveStore: store,
@@ -1479,7 +1479,7 @@ describe("Game Runtime", () => {
       } = await setupStopDuringNewCityTransaction();
 
       try {
-        await store.waitForActive("writeWorkingSave");
+        await store.waitForActive("createWorkingSave");
         runtime.stop();
         runtime.stop();
         expect(runtime.isRunning()).toBe(false);
@@ -1487,7 +1487,7 @@ describe("Game Runtime", () => {
         frameCallbacks.shift()?.(1_016);
         await flushPromises();
 
-        store.releaseNext("writeWorkingSave");
+        store.releaseNext("createWorkingSave");
         await expect(activation).resolves.toMatchObject({
           status: "completed",
         });
@@ -1517,11 +1517,11 @@ describe("Game Runtime", () => {
         runtime,
         activation,
       } = await setupStopDuringNewCityTransaction({
-        failWriteWorkingSave: true,
+        failCreateWorkingSave: true,
       });
 
       try {
-        await store.waitForActive("writeWorkingSave");
+        await store.waitForActive("createWorkingSave");
         runtime.stop();
         runtime.stop();
         expect(runtime.isRunning()).toBe(false);
@@ -1529,7 +1529,7 @@ describe("Game Runtime", () => {
         frameCallbacks.shift()?.(1_016);
         await flushPromises();
 
-        store.releaseNext("writeWorkingSave");
+        store.releaseNext("createWorkingSave");
         await expect(activation).resolves.toMatchObject({ status: "failed" });
         expect(runtime.isRunning()).toBe(false);
         frameCallbacks.shift()?.(1_032);
@@ -1566,7 +1566,7 @@ describe("Game Runtime", () => {
       const before = runtime.getSnapshot();
       const draft = before.ui.routeDraft;
       expect(draft?.previewPending).toBe(true);
-      failures.failNext("writeWorkingSave", "ioFailure");
+      failures.failNext("createWorkingSave", "ioFailure");
 
       await expect(
         runtime.persistence.activateNewCity(
@@ -1622,7 +1622,7 @@ describe("Game Runtime", () => {
       runtime.previewRoadMutation(mutation);
       const before = runtime.getSnapshot();
       const generation = before.ui.roadPreviewGeneration;
-      failures.failNext("writeWorkingSave", "ioFailure");
+      failures.failNext("createWorkingSave", "ioFailure");
 
       await expect(
         runtime.persistence.activateNewCity(
@@ -5218,6 +5218,12 @@ describe("persistence error path coverage", () => {
         }
         return delegate.writeWorkingSave(envelope);
       },
+      async createWorkingSave(envelope) {
+        if (shouldThrow("createWorkingSave")) {
+          throw new Error("createWorkingSave threw for test");
+        }
+        return delegate.createWorkingSave(envelope);
+      },
       async renameCity(cityId: string, name: string) {
         if (shouldThrow("renameCity")) {
           throw new Error("renameCity threw for test");
@@ -5512,7 +5518,7 @@ describe("persistence error path coverage", () => {
 
     it("returns superseded when a New City admission has reserved the backend", async () => {
       const store = createDelayedSaveStore(createMemorySaveStore());
-      store.defer("writeWorkingSave");
+      store.defer("createWorkingSave");
       const runtime = await createGameRuntime({
         backend: transactionalBackend(backendSpy()),
         ...basePersistenceOptions(),
@@ -5585,7 +5591,7 @@ describe("persistence error path coverage", () => {
 
     it("returns superseded when a New City admission has reserved the backend", async () => {
       const store = createDelayedSaveStore(createMemorySaveStore());
-      store.defer("writeWorkingSave");
+      store.defer("createWorkingSave");
       const runtime = await createGameRuntime({
         backend: transactionalBackend(backendSpy()),
         ...basePersistenceOptions(),
@@ -5803,7 +5809,7 @@ describe("persistence error path coverage", () => {
         error: {
           kind: "store",
           error: {
-            operation: "writeWorkingSave",
+            operation: "createWorkingSave",
             code: "serializationFailed",
             diagnostic: "New-city dependencies are not configured",
           },
@@ -5881,36 +5887,9 @@ describe("persistence error path coverage", () => {
       expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
     });
 
-    it("rolls back when the prior-record readWorkingSave throws", async () => {
-      const store = throwingStore(createMemorySaveStore(), ["readWorkingSave"]);
-      const runtime = await createGameRuntime({
-        backend: transactionalBackend(backendSpy()),
-        ...basePersistenceOptions(),
-        saveStore: store,
-      });
-      const beforeBudget = runtime.getSnapshot().state.budget;
-      await expect(
-        runtime.persistence.activateNewCity(
-          newCityRequest(),
-          newCityIdentity(),
-        ),
-      ).resolves.toMatchObject({
-        status: "failed",
-        error: {
-          kind: "store",
-          error: {
-            operation: "readWorkingSave",
-            code: "ioFailure",
-            retryable: true,
-          },
-        },
-      });
-      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
-    });
-
-    it("rolls back when writeWorkingSave throws", async () => {
+    it("rolls back when createWorkingSave throws", async () => {
       const store = throwingStore(createMemorySaveStore(), [
-        "writeWorkingSave",
+        "createWorkingSave",
       ]);
       const runtime = await createGameRuntime({
         backend: transactionalBackend(backendSpy()),
@@ -5928,34 +5907,10 @@ describe("persistence error path coverage", () => {
         error: {
           kind: "store",
           error: {
-            operation: "writeWorkingSave",
+            operation: "createWorkingSave",
             code: "ioFailure",
             retryable: true,
           },
-        },
-      });
-      expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);
-    });
-
-    it("rolls back when the prior-record read returns a non-notFound store error", async () => {
-      const failures = createMemorySaveStoreFailureControls();
-      failures.failNext("readWorkingSave", "corruptRecord");
-      const runtime = await createGameRuntime({
-        backend: transactionalBackend(backendSpy()),
-        ...basePersistenceOptions(),
-        saveStore: createMemorySaveStore({ failures }),
-      });
-      const beforeBudget = runtime.getSnapshot().state.budget;
-      await expect(
-        runtime.persistence.activateNewCity(
-          newCityRequest(),
-          newCityIdentity(),
-        ),
-      ).resolves.toMatchObject({
-        status: "failed",
-        error: {
-          kind: "store",
-          error: { operation: "readWorkingSave", code: "corruptRecord" },
         },
       });
       expect(runtime.getSnapshot().state.budget).toBe(beforeBudget);

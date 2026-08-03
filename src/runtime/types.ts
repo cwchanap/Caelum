@@ -211,6 +211,28 @@ export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
 
+/**
+ * The outcome of {@link RuntimeController.dispose}. Distinguishes a normal
+ * release (the lease was released and a replacement runtime can acquire it)
+ * from a fatal persistence-recovery state (the lease is permanently pinned
+ * and a replacement runtime against the same storage identity cannot
+ * acquire it).
+ *
+ * Application code that does `await oldRuntime.dispose()` followed by
+ * `await createGameRuntime(options)` MUST check the outcome: if
+ * `status === "recoveryRequired"`, the second call hangs indefinitely
+ * because the lease is never released. The application must reconcile the
+ * orphan storage out of band (e.g. by reloading the page/process, or by
+ * manually repairing the durable storage for `cityId`) before retrying.
+ */
+export type RuntimeDisposeResult =
+  | { status: "released" }
+  | {
+      status: "recoveryRequired";
+      reason: "lateSuccessCleanupFailed";
+      cityId: string;
+    };
+
 export interface RuntimeController {
   persistence: RuntimePersistenceController;
   getSnapshot: () => RuntimeSnapshot;
@@ -224,11 +246,25 @@ export interface RuntimeController {
    * the same durable storage can acquire it.
    *
    * The returned promise resolves after all pending storage mutations have
-   * settled and the lease has been released. A replacement
-   * `createGameRuntime` against the same `SaveStore` (or a different adapter
-   * object with the same `storageIdentity`) that was started before this
-   * `dispose` resolves will have been waiting for the lease; it acquires the
-   * lease and proceeds only after this runtime's writes have drained.
+   * settled. The {@link RuntimeDisposeResult} outcome reports whether the
+   * lease was released:
+   *
+   * - `{ status: "released" }` — the lease was released. A replacement
+   *   `createGameRuntime` against the same `SaveStore` (or a different
+   *   adapter object with the same `storageIdentity`) that was started
+   *   before this `dispose` resolves will have been waiting for the lease;
+   *   it acquires the lease and proceeds only after this runtime's writes
+   *   have drained.
+   *
+   * - `{ status: "recoveryRequired", reason: "lateSuccessCleanupFailed",
+   *   cityId }` — late-success cleanup of a New City write could not undo
+   *   the orphan storage mutation (the store returned a typed error or threw
+   *   an adapter exception). The lease is permanently pinned so a
+   *   replacement runtime against the same storage identity cannot acquire
+   *   it. The application MUST reconcile the orphan storage for `cityId` out
+   *   of band (e.g. by reloading the page/process) before retrying
+   *   `createGameRuntime`. Calling `createGameRuntime` against the same
+   *   storage identity after this outcome hangs indefinitely.
    *
    * If an uncancellable store operation never settles, this promise never
    * resolves — safe rebootstrap cannot proceed until pending storage I/O
@@ -237,7 +273,7 @@ export interface RuntimeController {
    * Idempotent: calling `dispose` after a fatal backend failure awaits the
    * drain-and-release that `failBackend` started.
    */
-  dispose: () => Promise<void>;
+  dispose: () => Promise<RuntimeDisposeResult>;
   isRunning: () => boolean;
   tick: (deltaSeconds: number) => RuntimeCommandResult;
   reset: () => RuntimeCommandResult;

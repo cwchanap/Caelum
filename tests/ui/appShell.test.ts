@@ -157,7 +157,7 @@ function createRuntimeHarness(
     }),
     start: vi.fn(),
     stop: vi.fn(),
-    dispose: vi.fn(() => Promise.resolve()),
+    dispose: vi.fn(() => Promise.resolve({ status: "released" } as const)),
     isRunning: vi.fn(() => false),
     tick: vi.fn((_deltaSeconds: number) => publish()),
     reset: vi.fn(() => {
