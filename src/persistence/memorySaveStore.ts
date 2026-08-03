@@ -319,6 +319,11 @@ export function createMemorySaveStore(options?: {
   failures?: MemorySaveStoreFailureControls;
 }): MemorySaveStore {
   const storageIdentity: StorageIdentity = `memory-store-${memoryStoreIdentityCounter++}`;
+  // In-memory stores live in a single process/registry, so the runtime's
+  // exclusive coordinator lease proves no other consumer can hold a live New
+  // City transaction against this storage. Bootstrap reconciliation may
+  // safely delete leftover pending records.
+  const singleRealm = true as const;
   const workingRecords = new Map<string, unknown>();
   // City IDs whose working-save record was created by `createWorkingSave` but
   // not yet finalized by `finalizeWorkingSave`. A pending record is a durable
@@ -914,6 +919,7 @@ export function createMemorySaveStore(options?: {
 
   return {
     storageIdentity,
+    singleRealm,
     seedRawWorking: (cityId, value) => {
       workingRecords.set(cityId, structuredClone(value));
     },

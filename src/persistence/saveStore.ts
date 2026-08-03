@@ -122,6 +122,33 @@ export interface SaveStore {
    */
   readonly storageIdentity?: StorageIdentity;
 
+  /**
+   * Whether this adapter guarantees its durable storage is only ever
+   * accessed from a single realm/process (a single in-memory
+   * `SharedPersistenceCoordinator` registry). When `true`, the runtime's
+   * in-memory exclusive coordinator lease proves cross-consumer ownership,
+   * so bootstrap reconciliation may safely delete leftover pending city
+   * records from crashed New City transactions: no other realm can hold a
+   * live New City transaction against the same storage.
+   *
+   * When `false` or absent, the storage may be shared across independent
+   * realms/processes (e.g. multiple browser tabs, Tauri windows, or workers),
+   * each with its own coordinator registry. The in-memory lease then proves
+   * nothing about other realms: a pending record observed by realm B may
+   * belong to a live New City transaction still running in realm A. Bootstrap
+   * reconciliation MUST NOT delete pending records in this case — doing so
+   * would destroy realm A's live transaction. Instead, the runtime enters a
+   * terminal bootstrap-recovery state so the user reconciles the orphan out
+   * of band (e.g. by closing the other realm or reloading). Durable
+   * cross-process ownership (transaction IDs, heartbeat leases, or
+   * OS-level file locks) is the long-term fix; until then, multi-realm
+   * adapters must not auto-delete.
+   *
+   * In-memory test stores SHOULD declare `singleRealm: true` so the
+   * bootstrap reconciliation tests exercise the deletion path.
+   */
+  readonly singleRealm?: boolean;
+
   listCities(): Promise<SaveStoreResult<CitySummary[]>>;
 
   readWorkingSave(cityId: string): Promise<SaveStoreResult<UntrustedSaveValue>>;

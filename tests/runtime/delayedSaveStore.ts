@@ -39,6 +39,10 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
   // Forward the delegate's storage identity so two DelayedSaveStore wrappers
   // around the same underlying store share one persistence coordinator.
   const storageIdentity: StorageIdentity | undefined = delegate.storageIdentity;
+  // Forward the delegate's single-realm capability so a delayed wrapper
+  // around a single-realm store preserves the bootstrap-reconciliation
+  // contract.
+  const singleRealm: boolean | undefined = delegate.singleRealm;
 
   const beforeDelegate = (
     operation: SaveStoreOperation,
@@ -67,6 +71,7 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
 
   const store: DelayedSaveStore = {
     ...(storageIdentity !== undefined ? { storageIdentity } : {}),
+    ...(singleRealm !== undefined ? { singleRealm } : {}),
     defer(operation) {
       deferredOperations.add(operation);
     },
