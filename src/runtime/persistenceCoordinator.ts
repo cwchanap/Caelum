@@ -176,26 +176,41 @@ export interface RuntimePersistenceController {
   ): Promise<PersistenceOperationResult<GenerationWriteValue<TSummary>>>;
 }
 
-const cityTails = new Map<string, Promise<void>>();
-
-export function enqueueCityPersistence<T>(
-  cityId: string,
-  work: () => Promise<T>,
-): Promise<T> {
-  const previous = cityTails.get(cityId) ?? Promise.resolve();
-  const run = previous.then(work, work);
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  cityTails.set(cityId, tail);
-  return run.finally(() => {
-    if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
-  });
+// Per-city persistence FIFO. Each `createGameRuntime` instance owns its own
+// queue set via `createCityPersistenceQueues`; there is NO module-global
+// `cityTails`. This is the single-runtime-per-store invariant: one runtime
+// owns one `SaveStore`, and its queues, fences, lifecycle ownership, and
+// session/load tokens are all closure-local. A second live runtime in the
+// same realm MUST use a separate store — sharing one store across runtimes is
+// unsupported and would let their independent queues/fences interleave writes
+// at the storage layer. Keeping the FIFO instance-local (not module-global)
+// is what prevents the cross-city-load lock cycle: a cross-city load that
+// awaits the former city's drain while holding the target city's FIFO cannot
+// deadlock, because no other runtime can hold the former city's FIFO.
+export interface CityPersistenceQueues {
+  enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T>;
+  drain(cityId: string): Promise<void>;
 }
 
-export function drainCityPersistence(cityId: string): Promise<void> {
-  return cityTails.get(cityId) ?? Promise.resolve();
+export function createCityPersistenceQueues(): CityPersistenceQueues {
+  const cityTails = new Map<string, Promise<void>>();
+  return {
+    enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T> {
+      const previous = cityTails.get(cityId) ?? Promise.resolve();
+      const run = previous.then(work, work);
+      const tail = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      cityTails.set(cityId, tail);
+      return run.finally(() => {
+        if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
+      });
+    },
+    drain(cityId: string): Promise<void> {
+      return cityTails.get(cityId) ?? Promise.resolve();
+    },
+  };
 }
 
 export function resolveWorkingSaveCompletion(input: {
