@@ -2259,7 +2259,12 @@ export async function createGameRuntime(
       activeRouteSaveTokens.add(token);
     }
     activeRoadMutation = prior.activeRoadMutation;
+    // Defense in depth: a disposed runtime must never restart its canvas.
+    // The dead-check paths in `activateNewCity`/`rollbackNewCity` already
+    // skip calling this when `dead`, but guard the restart itself so a
+    // future caller cannot resurrect a disposed runtime's animation loop.
     if (
+      !dead &&
       prior.running &&
       !stopRequestedDuringReservation &&
       !canvasHost.isRunning()
@@ -2310,33 +2315,36 @@ export async function createGameRuntime(
     priorCanonicalSnapshot: RustGameSnapshot,
     failure: PersistenceCoordinatorError,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
-    lifecycleStatus = { state: "rollingBack" };
-    publish();
-
-    let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
-    try {
-      restored = await backend.restoreSnapshot({
-        snapshot: priorCanonicalSnapshot,
-      });
-    } catch (error: unknown) {
-      failRollbackCoherence(error);
-      return runtimeUnavailable("activateNewCity");
+    // A disposed runtime must remain terminal even though its private
+    // backend must be rolled back for coherence. Separate the backend
+    // rollback (always needed so the disposed backend is not left in the
+    // candidate state) from the public runtime restoration (canvas
+    // restart, status/error restoration, snapshot publication, preview
+    // resumption) — the latter must NOT run once disposal has begun,
+    // otherwise it resurrects the runtime's public presentation: restarts
+    // the canvas, restores pre-disposal statuses, and publishes snapshots
+    // after disposal. Capture `terminal` at entry; re-check `dead` after
+    // the backend rollback because disposal may begin while rollback
+    // itself is awaiting the backend.
+    const terminal = dead;
+    if (!terminal) {
+      lifecycleStatus = { state: "rollingBack" };
+      publish();
     }
+
+    const restored = await restoreCanonicalBackendState(
+      priorCanonicalSnapshot,
+      prior.paused,
+    );
     if (!restored.ok) {
       failRollbackCoherence(restored.error);
       return runtimeUnavailable("activateNewCity");
     }
 
-    try {
-      const pause = await backend.dispatch({
-        type: "setPaused",
-        paused: prior.paused,
-      });
-      if (pause.snapshot.paused !== prior.paused) {
-        throw new Error("Rollback pause restoration did not take effect");
-      }
-    } catch (error: unknown) {
-      failRollbackCoherence(error);
+    // Disposal may have begun while rollback was awaiting the backend. A
+    // disposed runtime must not be resurrected: do not restore the prior
+    // public runtime, restart the canvas, resume previews, or publish.
+    if (dead) {
       return runtimeUnavailable("activateNewCity");
     }
 
@@ -2445,10 +2453,9 @@ export async function createGameRuntime(
       }
       // Dead check after prior capture: the backend still holds the prior
       // state (createSandbox has not run), so no backend rollback is
-      // needed — only restore the prior runtime UI/preview state.
+      // needed. A disposed runtime must remain terminal — do not restore
+      // the prior public runtime, restart the canvas, or publish.
       if (dead) {
-        restoreNewCityPriorRuntime(prior);
-        publish();
         return runtimeUnavailable("activateNewCity");
       }
 
