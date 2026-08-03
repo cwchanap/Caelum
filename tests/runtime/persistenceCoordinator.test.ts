@@ -9,6 +9,7 @@ import { buildSaveEnvelope } from "../../src/persistence/envelope";
 import type {
   AutosaveSummary,
   CheckpointSummary,
+  SaveStore,
 } from "../../src/persistence/saveStore";
 import type {
   GameBackend,
@@ -19,12 +20,15 @@ import type { PersistenceOperationError } from "../../src/runtime/backend/persis
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   activeCityDeleteRequiresTransition,
+  createCityPersistenceQueues,
   createSharedPersistenceCoordinator,
   guardActiveCityDelete,
   noActiveCity,
   PersistenceLeaseClosedError,
+  resolvePersistenceCoordinator,
   resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
+  resetPersistenceCoordinatorRegistry,
   runtimeUnavailable,
   type ActiveCityIdentity,
   type GameplayWriteRequest,
@@ -3934,6 +3938,35 @@ describe("runtime persistence coordinator contracts", () => {
       lease2.release();
     });
 
+    it("releaseCityFence decrements the refcount and keeps the fence until the last release", async () => {
+      const coordinator = createSharedPersistenceCoordinator();
+      const lease = await coordinator.acquireLease();
+      // Acquire the same fence twice to exercise the refcount > 1 path.
+      lease.acquireCityFence("city-ref");
+      lease.acquireCityFence("city-ref");
+      expect(lease.isCityFenced("city-ref")).toBe(true);
+      // First release decrements but the fence remains.
+      lease.releaseCityFence("city-ref");
+      expect(lease.isCityFenced("city-ref")).toBe(true);
+      // Second release drops the refcount to zero and removes the fence.
+      lease.releaseCityFence("city-ref");
+      expect(lease.isCityFenced("city-ref")).toBe(false);
+      lease.beginClosing();
+      await lease.drainAll();
+      lease.release();
+    });
+
+    it("admitForeground returns false once the lease is closing", async () => {
+      const coordinator = createSharedPersistenceCoordinator();
+      const lease = await coordinator.acquireLease();
+      expect(lease.admitForeground()).toBe(true);
+      lease.releaseForeground();
+      lease.beginClosing();
+      expect(lease.admitForeground()).toBe(false);
+      await lease.drainAll();
+      lease.release();
+    });
+
     it("a replacement runtime receives a usable lease after a queued handoff", async () => {
       // Regression: when runtime 2 queued before runtime 1 released,
       // `release()` handed off the closed predecessor lease. Runtime 2
@@ -5134,5 +5167,106 @@ describe("runtime persistence coordinator contracts", () => {
         if (harness2 !== null) await harness2.runtime.dispose();
       }
     });
+  });
+});
+
+describe("resolvePersistenceCoordinator", () => {
+  // A minimal store-shaped object is sufficient — resolvePersistenceCoordinator
+  // only reads `storageIdentity` (or falls back to object identity).
+  function bareStore(storageIdentity?: string): SaveStore {
+    return { storageIdentity } as unknown as SaveStore;
+  }
+
+  it("returns the same coordinator for two stores sharing a storage identity", () => {
+    resetPersistenceCoordinatorRegistry();
+    const a = bareStore("shared-identity");
+    const b = bareStore("shared-identity");
+    expect(resolvePersistenceCoordinator(a)).toBe(
+      resolvePersistenceCoordinator(b),
+    );
+  });
+
+  it("returns distinct coordinators for stores with different storage identities", () => {
+    resetPersistenceCoordinatorRegistry();
+    const a = bareStore("identity-a");
+    const b = bareStore("identity-b");
+    expect(resolvePersistenceCoordinator(a)).not.toBe(
+      resolvePersistenceCoordinator(b),
+    );
+  });
+
+  it("falls back to object identity when storageIdentity is absent", () => {
+    resetPersistenceCoordinatorRegistry();
+    const a = bareStore(undefined);
+    const b = bareStore(undefined);
+    // Same store object resolves to the same coordinator.
+    expect(resolvePersistenceCoordinator(a)).toBe(
+      resolvePersistenceCoordinator(a),
+    );
+    // Different store objects without identity resolve to distinct coordinators.
+    expect(resolvePersistenceCoordinator(a)).not.toBe(
+      resolvePersistenceCoordinator(b),
+    );
+  });
+
+  it("resetPersistenceCoordinatorRegistry clears the identity-keyed registry", () => {
+    resetPersistenceCoordinatorRegistry();
+    const store = bareStore("reset-identity");
+    const before = resolvePersistenceCoordinator(store);
+    resetPersistenceCoordinatorRegistry();
+    const after = resolvePersistenceCoordinator(store);
+    expect(after).not.toBe(before);
+  });
+});
+
+describe("createCityPersistenceQueues", () => {
+  it("serializes work per city and cleans up the tail after completion", async () => {
+    const queues = createCityPersistenceQueues();
+    const order: string[] = [];
+    const first = queues.enqueue("city-a", async () => {
+      order.push("first");
+    });
+    const second = queues.enqueue("city-a", async () => {
+      order.push("second");
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first", "second"]);
+    // The tail is cleaned up after completion, so drain resolves immediately.
+    await expect(queues.drain("city-a")).resolves.toBeUndefined();
+  });
+
+  it("runs work for different cities concurrently", async () => {
+    const queues = createCityPersistenceQueues();
+    let aDone = false;
+    let bDone = false;
+    const a = queues.enqueue("city-a", async () => {
+      await Promise.resolve();
+      aDone = true;
+    });
+    const b = queues.enqueue("city-b", async () => {
+      bDone = true;
+    });
+    await b;
+    expect(bDone).toBe(true);
+    await a;
+    expect(aDone).toBe(true);
+  });
+
+  it("drain resolves immediately for a city with no pending work", async () => {
+    const queues = createCityPersistenceQueues();
+    await expect(queues.drain("city-none")).resolves.toBeUndefined();
+  });
+
+  it("runs the next work even when the previous work rejects", async () => {
+    const queues = createCityPersistenceQueues();
+    const first = queues.enqueue("city-a", async () => {
+      throw new Error("boom");
+    });
+    await expect(first).rejects.toThrow("boom");
+    let secondRan = false;
+    await queues.enqueue("city-a", async () => {
+      secondRan = true;
+    });
+    expect(secondRan).toBe(true);
   });
 });
