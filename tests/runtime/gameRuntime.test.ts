@@ -6625,3 +6625,366 @@ describe("bootstrap recovery surfacing", () => {
     ).rejects.toThrow("Bootstrap reconciliation failed");
   });
 });
+
+describe("terminal snapshot subscriber delivery", () => {
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+  const newCityRequest = {
+    templateId: "blankGrid" as const,
+    economyPreset: "standard",
+    startingCapital: 120_000,
+    demandMultiplier: 1,
+    moveInRate: "paused" as const,
+  };
+
+  it("delivers the recovery terminal snapshot to subscribers when live ambiguous reconciliation read fails", async () => {
+    const memoryStore = createMemorySaveStore();
+    // createWorkingSave commits the pending record, then throws. The
+    // reconciliation read (readWorkingSave) also throws, so the runtime
+    // enters the terminal late-success-cleanup-failure state.
+    let createCommitted = false;
+    const throwingStore: SaveStore = {
+      ...memoryStore,
+      async createWorkingSave(envelope) {
+        const result = await memoryStore.createWorkingSave(envelope);
+        if (!result.ok) return result;
+        createCommitted = true;
+        throw new Error("createWorkingSave threw after commit");
+      },
+      async readWorkingSave(_cityId) {
+        if (createCommitted) throw new Error("readWorkingSave threw");
+        return memoryStore.readWorkingSave(_cityId);
+      },
+    };
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(throwingStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    listener.mockClear();
+
+    await runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-subscriber-recovery",
+      name: "Subscriber Recovery",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // The terminal transition publishes exactly one snapshot with the
+    // recovery state. Earlier publishes during the transaction (e.g.
+    // creatingCity status) do not carry recovery.state === recoveryRequired.
+    const calls = listener.mock.calls as RuntimeSnapshot[][];
+    const recoveryCalls = calls.filter(
+      (call) => call[0].recovery.state === "recoveryRequired",
+    );
+    expect(recoveryCalls).toHaveLength(1);
+    const terminal = recoveryCalls[0][0];
+    expect(terminal.recovery.state).toBe("recoveryRequired");
+    if (terminal.recovery.state === "recoveryRequired") {
+      expect(terminal.recovery.reason).toBe("lateSuccessCleanupFailed");
+      expect(terminal.recovery.cityId).toBe("city-subscriber-recovery");
+    }
+    expect(terminal.persistence.activeCity).toBeNull();
+    expect(terminal.persistence.saveStatus.state).toBe("idle");
+    expect(terminal.persistence.loadStatus.state).toBe("idle");
+    expect(terminal.persistence.lifecycleStatus.state).toBe("idle");
+
+    // The recovery snapshot is the last call: no later calls notify the
+    // listener. A subsequent controller mutation is a no-op on a dead runtime
+    // and does not publish.
+    expect(recoveryCalls[0]).toBe(calls[calls.length - 1]);
+    const callCountBefore = listener.mock.calls.length;
+    runtime.setTool("busStop");
+    expect(listener.mock.calls.length).toBe(callCountBefore);
+
+    await runtime.dispose();
+  });
+
+  it("delivers the backendError terminal snapshot to subscribers when tick throws", async () => {
+    const backend = backendSpy();
+    backend.tick = vi.fn(async () => {
+      throw new Error("backend unavailable");
+    });
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    listener.mockClear();
+
+    runtime.start();
+    // Match canvas behavior: invoke tick() without consuming its returned
+    // snapshot. The terminal snapshot must reach the subscriber channel.
+    void runtime.tick(1);
+    // Allow the queued tick to settle.
+    await vi.waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    const terminal = listener.mock.calls[0][0] as RuntimeSnapshot;
+    expect(terminal.backendError).toBe("backend unavailable");
+
+    // No later call notifies the listener after the terminal publish.
+    runtime.setTool("busStop");
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    await runtime.dispose();
+  });
+
+  it("does not publish a snapshot on explicit dispose", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    listener.mockClear();
+
+    await runtime.dispose();
+
+    // Disposal is silent teardown — no terminal snapshot is published.
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("finalize notFound live rollback result contract", () => {
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+  const newCityRequest = {
+    templateId: "blankGrid" as const,
+    economyPreset: "standard",
+    startingCapital: 120_000,
+    demandMultiplier: 1,
+    moveInRate: "paused" as const,
+  };
+
+  it("finalize notFound after a successful create returns the original finalize store failure with a live, usable runtime", async () => {
+    const memoryStore = createMemorySaveStore();
+    // createWorkingSave succeeds (commits pending). finalizeWorkingSave
+    // returns notFound WITHOUT committing — but to reach the notFound
+    // reconciliation branch, the record must also be absent when read back.
+    // Simulate: finalize returns notFound, and a concurrent external delete
+    // removes the pending record before reconciliation reads it.
+    const throwingStore: SaveStore = {
+      ...memoryStore,
+      async finalizeWorkingSave(cityId) {
+        // Remove the pending record (simulate an external delete / lost
+        // record) so the reconciliation read observes notFound.
+        await memoryStore.deleteCity(cityId);
+        return {
+          ok: false,
+          error: {
+            operation: "finalizeWorkingSave",
+            code: "notFound",
+            cityId,
+            retryable: false,
+            diagnostic: "finalizeWorkingSave notFound",
+          },
+        };
+      },
+    };
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(throwingStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-finalize-notfound",
+      name: "Finalize Not Found",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // The result is the ORIGINAL finalize store failure (notFound), not
+    // runtimeUnavailable. A live, usable runtime must not report
+    // runtimeUnavailable.
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("store");
+      if (result.error.kind === "store") {
+        expect(result.error.error.operation).toBe("finalizeWorkingSave");
+        expect(result.error.error.code).toBe("notFound");
+      }
+    }
+
+    // The runtime is restored to the prior city and remains usable.
+    const snap = runtime.getSnapshot();
+    expect(snap.persistence.activeCity?.id).toBe("city-001");
+    expect(snap.persistence.lifecycleStatus.state).toBe("idle");
+    expect(snap.recovery.state).toBe("ok");
+
+    // A subsequent operation succeeds.
+    const after = runtime.setTool("busStop");
+    expect(after.ui.activeTool).toBe("busStop");
+
+    await runtime.dispose();
+  });
+});
+
+describe("multi-realm bootstrap deletion safety", () => {
+  // A wrapper that exposes a configurable storageIdentity and singleRealm
+  // over a shared underlying MemorySaveStore, simulating two independent
+  // realms/processes (independent coordinator registries) backed by one
+  // durable database.
+  function sharedRealmStore(
+    delegate: SaveStore,
+    storageIdentity: string,
+    singleRealm: boolean,
+  ): SaveStore {
+    return {
+      ...(delegate as object),
+      storageIdentity,
+      singleRealm,
+    } as SaveStore;
+  }
+
+  it("multi-realm adapter does not auto-delete pending records and enters recovery", async () => {
+    const memoryStore = createMemorySaveStore();
+    // Seed a pending orphan directly.
+    const envelope = buildSaveEnvelope({
+      city: { id: "city-multi-realm", name: "Multi Realm" },
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      savedAt: "2026-08-01T10:05:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot(),
+    });
+    await memoryStore.createWorkingSave(envelope);
+
+    const multiRealm = sharedRealmStore(
+      memoryStore,
+      "multi-realm-shared-db",
+      false,
+    );
+
+    // createGameRuntime rejects — the multi-realm adapter must not auto-delete
+    // a pending record that may belong to a live transaction in another realm.
+    await expect(
+      createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: multiRealm,
+        initialCity: null,
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      }),
+    ).rejects.toThrow("Bootstrap reconciliation failed");
+
+    // The pending record is preserved (not deleted).
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find((c) => c.cityId === "city-multi-realm");
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+  });
+
+  it("single-realm adapter still auto-deletes pending orphans", async () => {
+    const memoryStore = createMemorySaveStore();
+    const envelope = buildSaveEnvelope({
+      city: { id: "city-single-realm", name: "Single Realm" },
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      savedAt: "2026-08-01T10:05:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot(),
+    });
+    await memoryStore.createWorkingSave(envelope);
+
+    const singleRealm = sharedRealmStore(memoryStore, "single-realm-db", true);
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      saveStore: singleRealm,
+      initialCity: null,
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+
+    // The pending orphan was deleted by bootstrap reconciliation.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-single-realm"),
+      ).toBeUndefined();
+    }
+
+    await runtime.dispose();
+  });
+
+  it("two independent realms sharing one durable store: realm B cannot delete realm A's live pending transaction", async () => {
+    const memoryStore = createMemorySaveStore();
+
+    // Realm A: a single-realm store with its own coordinator identity. It
+    // creates a pending record and blocks before finalization (simulating a
+    // live New City transaction in another tab/process).
+    const realmAStore = sharedRealmStore(memoryStore, "realm-a-db", true);
+    const realmA = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      saveStore: realmAStore,
+      initialCity: null,
+      now: () => "2026-08-01T10:00:00.000Z",
+      appVersion: "0.1.0",
+    });
+    await realmA.debugSetBudget(100_000);
+
+    // Realm A commits a pending record directly (simulating the
+    // createWorkingSave step of a New City transaction).
+    const envelope = buildSaveEnvelope({
+      city: { id: "city-shared-live", name: "Shared Live" },
+      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      savedAt: "2026-08-01T10:05:00.000Z",
+      appVersion: "0.1.0",
+      snapshot: createRustSnapshot(),
+    });
+    await memoryStore.createWorkingSave(envelope);
+
+    // Realm B: a multi-realm store over the SAME underlying durable data but
+    // with an independent coordinator identity (a separate process/registry).
+    // It must NOT delete realm A's live pending record.
+    const realmBStore = sharedRealmStore(memoryStore, "realm-b-db", false);
+    await expect(
+      createGameRuntime({
+        backend: transactionalBackend(backendSpy()),
+        saveStore: realmBStore,
+        initialCity: null,
+        now: () => "2026-08-01T10:00:00.000Z",
+        appVersion: "0.1.0",
+      }),
+    ).rejects.toThrow("Bootstrap reconciliation failed");
+
+    // Realm A's pending record is intact.
+    const citiesAfterB = await memoryStore.listCities();
+    expect(citiesAfterB.ok).toBe(true);
+    if (citiesAfterB.ok) {
+      const found = citiesAfterB.value.find(
+        (c) => c.cityId === "city-shared-live",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+
+    // Realm A finalizes its transaction (simulate finalize). The record
+    // becomes active and remains loadable despite realm B's bootstrap
+    // attempt.
+    const finalized = await memoryStore.finalizeWorkingSave("city-shared-live");
+    expect(finalized.ok).toBe(true);
+    if (finalized.ok) {
+      expect(finalized.value.pending).toBe(false);
+    }
+
+    await realmA.dispose();
+  });
+});

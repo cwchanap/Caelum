@@ -265,6 +265,21 @@ export async function createGameRuntime(
   // is not a real city the user can load. If deletion fails for any pending
   // record, the lease is pinned so a replacement runtime cannot proceed
   // while inconsistent storage remains.
+  //
+  // Cross-realm safety: the in-memory coordinator lease only proves
+  // ownership within a single process/registry. A multi-realm adapter
+  // (multiple browser tabs, Tauri windows, workers, or processes sharing one
+  // durable database) has independent registries, so a pending record
+  // observed here may belong to a LIVE New City transaction in another
+  // realm. Deleting it would destroy that realm's transaction. Auto-deletion
+  // is therefore gated behind `saveStore.singleRealm`: only adapters that
+  // guarantee single-realm access may auto-delete. Multi-realm adapters
+  // (singleRealm false/absent) MUST NOT auto-delete — instead, any leftover
+  // pending record enters the terminal bootstrap-recovery state so the user
+  // reconciles out of band (close the other realm, reload, or manually
+  // repair). Durable cross-process ownership (transaction IDs, heartbeat
+  // leases, OS-level locks) is the long-term fix tracked separately; until
+  // then, multi-realm adapters must not auto-delete.
   let leaseStuck = false;
   let leaseStuckCityId: string | null = null;
   // Distinguishes bootstrap-reconciliation failure from late-success cleanup
@@ -274,11 +289,33 @@ export async function createGameRuntime(
   // current New City transaction's late-success cleanup failed."
   let bootstrapStuck = false;
   if (saveStore !== undefined) {
+    const singleRealm = saveStore.singleRealm === true;
     try {
       const listed = await saveStore.listCities();
-      if (listed.ok) {
-        for (const city of listed.value) {
-          if (city.pending) {
+      if (!listed.ok) {
+        if (listed.error.code !== "notFound") {
+          // listCities failed — cannot determine if pending orphans exist.
+          // Pin the lease so a replacement runtime cannot proceed while
+          // potentially inconsistent storage remains unreconciled.
+          leaseStuck = true;
+          bootstrapStuck = true;
+        }
+      } else {
+        const pendingOrphans = listed.value.filter((c) => c.pending);
+        if (pendingOrphans.length > 0 && !singleRealm) {
+          // Multi-realm adapter: a pending record may belong to a live New
+          // City transaction in another realm. The in-memory lease does not
+          // prove otherwise. Do NOT delete — enter the terminal
+          // bootstrap-recovery state so the user reconciles out of band.
+          // Report the first pending city id (if any) for diagnostics.
+          leaseStuck = true;
+          leaseStuckCityId = pendingOrphans[0].cityId;
+          bootstrapStuck = true;
+        } else if (singleRealm) {
+          // Single-realm adapter: the in-memory lease proves no other realm
+          // can hold a live transaction, so leftover pending records are
+          // orphans from crashed New City transactions. Delete them.
+          for (const city of pendingOrphans) {
             try {
               const deleted = await saveStore.deleteCity(city.cityId);
               if (!deleted.ok && deleted.error.code !== "notFound") {
@@ -293,12 +330,6 @@ export async function createGameRuntime(
             }
           }
         }
-      } else if (listed.error.code !== "notFound") {
-        // listCities failed — cannot determine if pending orphans exist.
-        // Pin the lease so a replacement runtime cannot proceed while
-        // potentially inconsistent storage remains unreconciled.
-        leaseStuck = true;
-        bootstrapStuck = true;
       }
     } catch {
       // listCities threw — cannot determine if pending orphans exist.
@@ -510,6 +541,19 @@ export async function createGameRuntime(
     },
   });
 
+  // Whether the single terminal snapshot has already been delivered to
+  // subscribers. `dead` gates all further backend/store mutations and
+  // publication of normal snapshots; `terminalPublished` records that the
+  // one-shot transition snapshot (recovery/backendError) has already been
+  // pushed to listeners. The terminal transition must publish exactly once
+  // so App's `setSnapshot` observes the terminal state and renders the shell
+  // error screen — `publish()`'s `!dead` guard would otherwise suppress it.
+  // Explicit `dispose()` must NOT publish: unmount teardown must not emit a
+  // stale UI update, and a runtime that is already terminal (via
+  // `failBackend`/`enterLateSuccessCleanupFailure`) has already delivered its
+  // terminal snapshot.
+  let terminalPublished = false;
+
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
     if (!dead) {
@@ -520,6 +564,28 @@ export async function createGameRuntime(
       }
     }
 
+    return snapshot;
+  };
+
+  // Deliver the terminal snapshot to subscribers exactly once. Called only
+  // from the terminal transitions (`failBackend`,
+  // `enterLateSuccessCleanupFailure`) after all terminal state (recovery,
+  // backendError, cleared UI, bumped tokens) has been installed and the
+  // canvas/preview cleanup has run. Renders one final frame so the cleared
+  // preview overlay is drawn, stops the animation loop, notifies every
+  // listener with the terminal snapshot, and latches `terminalPublished` so a
+  // second transition (or any later `publish()` via a late preview response)
+  // cannot re-notify. Idempotent: a runtime that is already terminal-and-
+  // published just returns the current snapshot without re-notifying.
+  const publishTerminalSnapshot = (): RuntimeSnapshot => {
+    if (terminalPublished) return getSnapshot();
+    const snapshot = getSnapshot();
+    canvasHost.render();
+    canvasHost.stop();
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    terminalPublished = true;
     return snapshot;
   };
 
@@ -626,7 +692,14 @@ export async function createGameRuntime(
     // replacement runtime's `createGameRuntime` never resolves — safe
     // rebootstrap cannot proceed.
     void startDrainAndRelease();
-    return commit(state, clearedUi);
+    // Install the cleared UI and deliver the terminal snapshot to
+    // subscribers exactly once. `publish()`'s `!dead` guard would suppress
+    // this, leaving App's `setSnapshot` unaware of `backendError` and the
+    // game silently frozen. `commit()` is bypassed because it routes through
+    // `publish()`; the state reference is unchanged (the backend failed, no
+    // new snapshot exists).
+    ui = clearedUi;
+    return publishTerminalSnapshot();
   };
 
   const dispose = async (): Promise<RuntimeDisposeResult> => {
@@ -2557,6 +2630,14 @@ export async function createGameRuntime(
     // block will `releaseForeground`, allowing `drainAll` to resolve, but
     // `startDrainAndRelease` skips `lease.release()` when `leaseStuck`.
     void startDrainAndRelease();
+    // Deliver the terminal snapshot to subscribers exactly once so App's
+    // `setSnapshot` observes `recovery.state === "recoveryRequired"` and
+    // renders the shell error screen. Without this, the runtime is dead and
+    // the lease is pinned but the UI retains its previous healthy-looking
+    // snapshot. The activation returns a `PersistenceOperationResult` (not a
+    // `RuntimeSnapshot`), so the terminal state is only observable through
+    // the subscriber channel.
+    publishTerminalSnapshot();
   };
 
   // Late-success cleanup: the initial `createWorkingSave` succeeded AFTER
@@ -2766,15 +2847,15 @@ export async function createGameRuntime(
     const state = await readCityPendingState(identity.id);
     switch (state.status) {
       case "notFound":
-        // The city doesn't exist — unexpected after a successful create.
-        // Rollback the backend.
-        return await rollbackNewCity(prior, priorCanonicalSnapshot, {
-          kind: "precondition",
-          error: {
-            code: "runtimeUnavailable",
-            operation: "activateNewCity",
-          },
-        });
+        // The city doesn't exist — unexpected after a successful create, but
+        // the finalize did not commit a durable record. Roll back the backend
+        // and restore the prior public runtime. The runtime remains usable,
+        // so return the ORIGINAL finalize store failure (not
+        // `runtimeUnavailable`): a vanished record is a store-level failure
+        // the caller can surface, not a terminal runtime condition. Returning
+        // `runtimeUnavailable` here would contradict the live, usable state
+        // the rollback just restored.
+        return await rollbackNewCity(prior, priorCanonicalSnapshot, failure);
       case "pending":
         // Finalize did not commit — delete the pending orphan and rollback.
         // Pass the original finalize failure so the live-runtime cleanup
