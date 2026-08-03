@@ -282,12 +282,6 @@ export async function createGameRuntime(
   // then, multi-realm adapters must not auto-delete.
   let leaseStuck = false;
   let leaseStuckCityId: string | null = null;
-  // Distinguishes bootstrap-reconciliation failure from late-success cleanup
-  // failure. Both set `leaseStuck` and `leaseStuckCityId`, but the disposal
-  // outcome reports a different `reason` so the application can distinguish
-  // "a pending orphan from a prior crash could not be deleted" from "the
-  // current New City transaction's late-success cleanup failed."
-  let bootstrapStuck = false;
   if (saveStore !== undefined) {
     const singleRealm = saveStore.singleRealm === true;
     try {
@@ -298,7 +292,6 @@ export async function createGameRuntime(
           // Pin the lease so a replacement runtime cannot proceed while
           // potentially inconsistent storage remains unreconciled.
           leaseStuck = true;
-          bootstrapStuck = true;
         }
       } else {
         const pendingOrphans = listed.value.filter((c) => c.pending);
@@ -310,7 +303,6 @@ export async function createGameRuntime(
           // Report the first pending city id (if any) for diagnostics.
           leaseStuck = true;
           leaseStuckCityId = pendingOrphans[0].cityId;
-          bootstrapStuck = true;
         } else if (singleRealm) {
           // Single-realm adapter: the in-memory lease proves no other realm
           // can hold a live transaction, so leftover pending records are
@@ -321,12 +313,10 @@ export async function createGameRuntime(
               if (!deleted.ok && deleted.error.code !== "notFound") {
                 leaseStuck = true;
                 leaseStuckCityId = city.cityId;
-                bootstrapStuck = true;
               }
             } catch {
               leaseStuck = true;
               leaseStuckCityId = city.cityId;
-              bootstrapStuck = true;
             }
           }
         }
@@ -334,7 +324,6 @@ export async function createGameRuntime(
     } catch {
       // listCities threw — cannot determine if pending orphans exist.
       leaseStuck = true;
-      bootstrapStuck = true;
     }
   }
   // Track the drain-and-release promise so both `failBackend` (fire-and-
@@ -702,6 +691,37 @@ export async function createGameRuntime(
     return publishTerminalSnapshot();
   };
 
+  // Map the current `recovery` state to a `RuntimeDisposeResult`. Called
+  // after `startDrainAndRelease` settles in both the already-dead and
+  // normal disposal paths. When `leaseStuck` is set, `recovery` is always
+  // `recoveryRequired` with a typed reason; this maps it directly so new
+  // recovery reasons (e.g. `multiRealmAmbiguousCleanup`) are surfaced
+  // without needing a parallel branch here.
+  const disposeResultFromRecovery = (): RuntimeDisposeResult => {
+    if (!leaseStuck) return { status: "released" };
+    if (recovery.state !== "recoveryRequired") return { status: "released" };
+    switch (recovery.reason) {
+      case "lateSuccessCleanupFailed":
+        return {
+          status: "recoveryRequired",
+          reason: "lateSuccessCleanupFailed",
+          cityId: recovery.cityId,
+        };
+      case "multiRealmAmbiguousCleanup":
+        return {
+          status: "recoveryRequired",
+          reason: "multiRealmAmbiguousCleanup",
+          cityId: recovery.cityId,
+        };
+      case "bootstrapReconciliationFailed":
+        return {
+          status: "recoveryRequired",
+          reason: "bootstrapReconciliationFailed",
+          cityId: recovery.cityId,
+        };
+    }
+  };
+
   const dispose = async (): Promise<RuntimeDisposeResult> => {
     if (dead) {
       // Already fatal: `failBackend` started the drain-and-release, OR
@@ -709,21 +729,7 @@ export async function createGameRuntime(
       // Await it so the caller knows the lease has been released before
       // creating a replacement runtime.
       await startDrainAndRelease();
-      if (leaseStuck) {
-        if (bootstrapStuck) {
-          return {
-            status: "recoveryRequired",
-            reason: "bootstrapReconciliationFailed",
-            cityId: leaseStuckCityId,
-          };
-        }
-        return {
-          status: "recoveryRequired",
-          reason: "lateSuccessCleanupFailed",
-          cityId: leaseStuckCityId!,
-        };
-      }
-      return { status: "released" };
+      return disposeResultFromRecovery();
     }
     dead = true;
     previewCoordinator.invalidateRoute();
@@ -744,21 +750,7 @@ export async function createGameRuntime(
     // can acquire it. Unlike `failBackend` (fire-and-forget), `dispose`
     // awaits the drain so the caller knows the lease has been released.
     await startDrainAndRelease();
-    if (leaseStuck) {
-      if (bootstrapStuck) {
-        return {
-          status: "recoveryRequired",
-          reason: "bootstrapReconciliationFailed",
-          cityId: leaseStuckCityId,
-        };
-      }
-      return {
-        status: "recoveryRequired",
-        reason: "lateSuccessCleanupFailed",
-        cityId: leaseStuckCityId!,
-      };
-    }
-    return { status: "released" };
+    return disposeResultFromRecovery();
   };
 
   const queueBackend = (
@@ -2586,12 +2578,24 @@ export async function createGameRuntime(
   // reset statuses, stop canvas/preview, start drain-and-release) but pins
   // the lease instead of releasing it, and does not set `backendError`
   // (this is a persistence-recovery condition, not a backend failure).
-  const enterLateSuccessCleanupFailure = (cityId: string): void => {
+  // Terminal persistence-recovery state for a live runtime's late-success
+  // cleanup or ambiguous-failure reconciliation. `reason` distinguishes:
+  // - `"lateSuccessCleanupFailed"` — cleanup was attempted but the store
+  //   delete or backend rollback failed (typed error or thrown exception).
+  // - `"multiRealmAmbiguousCleanup"` — the adapter does not declare
+  //   `singleRealm: true`, so the pending/active record may belong to a live
+  //   New City transaction in another realm. The record is preserved and the
+  //   runtime becomes terminal rather than risk deleting another realm's
+  //   transaction.
+  const enterPersistenceRecovery = (
+    cityId: string,
+    reason: "lateSuccessCleanupFailed" | "multiRealmAmbiguousCleanup",
+  ): void => {
     leaseStuck = true;
     leaseStuckCityId = cityId;
     recovery = {
       state: "recoveryRequired",
-      reason: "lateSuccessCleanupFailed",
+      reason,
       cityId,
     };
     dead = true;
@@ -2639,6 +2643,12 @@ export async function createGameRuntime(
     // the subscriber channel.
     publishTerminalSnapshot();
   };
+
+  // Convenience wrapper for the common case: cleanup was attempted but
+  // failed (store delete or backend rollback returned a typed error or
+  // threw).
+  const enterLateSuccessCleanupFailure = (cityId: string): void =>
+    enterPersistenceRecovery(cityId, "lateSuccessCleanupFailed");
 
   // Late-success cleanup: the initial `createWorkingSave` succeeded AFTER
   // disposal began, so the candidate city record is committed in storage
@@ -2690,6 +2700,17 @@ export async function createGameRuntime(
   // adapter exception is caught and normalized into the terminal state so
   // the activation resolves with a typed `runtimeUnavailable` rather than
   // rejecting with the untyped adapter exception.
+  //
+  // Multi-realm safety: if the adapter does not declare `singleRealm: true`,
+  // the pending/active record may belong to a live New City transaction in
+  // another realm (the in-memory coordinator lease only proves ownership
+  // within a single process/registry). In that case, do NOT delete — enter
+  // the terminal `multiRealmAmbiguousCleanup` recovery state and preserve
+  // the record for manual/durable reconciliation. The backend rollback is
+  // still safe (it is an in-memory operation that does not affect durable
+  // storage). Durable cross-process ownership (transaction IDs, heartbeat
+  // leases) is the long-term fix tracked separately; until then, multi-realm
+  // adapters must not auto-delete after ambiguous reconciliation.
   const cleanupLateSuccessNewCity = async (
     prior: NewCityPriorRuntime,
     priorCanonicalSnapshot: RustGameSnapshot,
@@ -2702,6 +2723,15 @@ export async function createGameRuntime(
     );
     if (!restored.ok) {
       enterLateSuccessCleanupFailure(identity.id);
+      return runtimeUnavailable("activateNewCity");
+    }
+
+    // Multi-realm safety: do not delete a record that may belong to another
+    // realm's live transaction. The backend rollback above is safe
+    // (in-memory only). The durable record is preserved.
+    const singleRealm = saveStore!.singleRealm === true;
+    if (!singleRealm) {
+      enterPersistenceRecovery(identity.id, "multiRealmAmbiguousCleanup");
       return runtimeUnavailable("activateNewCity");
     }
 
@@ -2760,27 +2790,28 @@ export async function createGameRuntime(
     | { status: "active" }
     | { status: "readFailed" };
 
+  // This calls `saveStore.inspectWorkingSaveState` DIRECTLY (not through
+  // `lease.enqueue`, which rejects once the lease begins closing during
+  // disposal). This is safe because:
+  // - The candidate city's create/finalize FIFO operation has already settled
+  //   (the ambiguous failure happened after the FIFO operation completed).
+  // - New City still owns the foreground reservation (counted by `drainAll`),
+  //   so disposal waits for the entire workflow including this read.
+  // - Replacement runtime acquisition remains blocked until
+  //   `releaseForeground()` is called in the finally block.
+  // - No normal candidate-city operation can be admitted through this runtime
+  //   (the lease is closing).
+  // This mirrors the existing direct `deleteCity` call in
+  // `cleanupLateSuccessNewCity`. Using a single `inspectWorkingSaveState`
+  // call instead of `readWorkingSave` + `listCities` provides one coherent
+  // storage observation with no inter-call race window.
   const readCityPendingState = async (
     cityId: string,
   ): Promise<CityPendingState> => {
     try {
-      const read = await cityQueues.enqueue(cityId, () =>
-        saveStore!.readWorkingSave(cityId),
-      );
-      if (!read.ok) {
-        if (read.error.code === "notFound") return { status: "notFound" };
-        return { status: "readFailed" };
-      }
-      // Inspect the envelope to determine if the record is valid. Use
-      // listCities to check the pending flag (readWorkingSave returns the
-      // raw value without the pending flag).
-      const listed = await cityQueues.enqueue(cityId, () =>
-        saveStore!.listCities(),
-      );
-      if (!listed.ok) return { status: "readFailed" };
-      const found = listed.value.find((c) => c.cityId === cityId);
-      if (found === undefined) return { status: "notFound" };
-      return found.pending ? { status: "pending" } : { status: "active" };
+      const result = await saveStore!.inspectWorkingSaveState(cityId);
+      if (!result.ok) return { status: "readFailed" };
+      return { status: result.value };
     } catch {
       return { status: "readFailed" };
     }

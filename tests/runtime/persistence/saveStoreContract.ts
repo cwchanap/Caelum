@@ -2228,6 +2228,77 @@ export function defineSaveStoreContract(
       );
     });
 
+    describe("inspectWorkingSaveState", () => {
+      it("returns notFound when no working-save record exists", async () => {
+        const { store } = createHarness();
+        const result = await expectOk(
+          store.inspectWorkingSaveState("city-missing"),
+        );
+        expect(result).toBe("notFound");
+      });
+
+      it("returns pending after createWorkingSave", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-inspect", "Inspect")),
+        );
+        const result = await expectOk(
+          store.inspectWorkingSaveState("city-inspect"),
+        );
+        expect(result).toBe("pending");
+      });
+
+      it("returns active after finalizeWorkingSave", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-inspect", "Inspect")),
+        );
+        await expectOk(store.finalizeWorkingSave("city-inspect"));
+        const result = await expectOk(
+          store.inspectWorkingSaveState("city-inspect"),
+        );
+        expect(result).toBe("active");
+      });
+
+      it("returns notFound after deleteCity removes a pending record", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-inspect", "Inspect")),
+        );
+        await expectOk(store.deleteCity("city-inspect"));
+        const result = await expectOk(
+          store.inspectWorkingSaveState("city-inspect"),
+        );
+        expect(result).toBe("notFound");
+      });
+
+      it("returns active after writeWorkingSave (upsert without create)", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeWorkingSave(envelopeFor("city-upsert", "Upsert")),
+        );
+        const result = await expectOk(
+          store.inspectWorkingSaveState("city-upsert"),
+        );
+        // writeWorkingSave is an upsert that creates an active (non-pending)
+        // record directly.
+        expect(result).toBe("active");
+      });
+
+      injectedFailureIt(
+        "surfaces injected inspectWorkingSaveState failures",
+        async () => {
+          const { store, failNext } = createHarness();
+          const fail = requireCapability(failNext, "injectedStorageFailures");
+          fail("inspectWorkingSaveState", "ioFailure");
+          await expectError(
+            store.inspectWorkingSaveState("city-inspect"),
+            "ioFailure",
+          );
+        },
+      );
+    });
+
     describe("missing record notFound", () => {
       it.each([
         {

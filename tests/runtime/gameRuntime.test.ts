@@ -5224,6 +5224,12 @@ describe("persistence error path coverage", () => {
         }
         return delegate.createWorkingSave(envelope);
       },
+      async inspectWorkingSaveState(cityId: string) {
+        if (shouldThrow("inspectWorkingSaveState")) {
+          throw new Error("inspectWorkingSaveState threw for test");
+        }
+        return delegate.inspectWorkingSaveState(cityId);
+      },
       async renameCity(cityId: string, name: string) {
         if (shouldThrow("renameCity")) {
           throw new Error("renameCity threw for test");
@@ -6465,7 +6471,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
   it("create commits pending then reconciliation read throws: runtime becomes terminal", async () => {
     const memoryStore = createMemorySaveStore();
     // createWorkingSave commits the pending record, then throws.
-    // readWorkingSave (used by reconciliation) also throws.
+    // inspectWorkingSaveState (used by reconciliation) also throws.
     let createCommitted = false;
     const throwingStore: SaveStore = {
       ...memoryStore,
@@ -6475,9 +6481,9 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
         createCommitted = true;
         throw new Error("createWorkingSave threw after commit");
       },
-      async readWorkingSave(_cityId) {
-        if (createCommitted) throw new Error("readWorkingSave threw");
-        return memoryStore.readWorkingSave(_cityId);
+      async inspectWorkingSaveState(_cityId) {
+        if (createCommitted) throw new Error("inspectWorkingSaveState threw");
+        return memoryStore.inspectWorkingSaveState(_cityId);
       },
     };
     const runtime = await createGameRuntime({
@@ -6523,10 +6529,10 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     }
   });
 
-  it("finalize fails then listCities reconciliation fails: runtime becomes terminal", async () => {
+  it("finalize fails then inspectWorkingSaveState reconciliation fails: runtime becomes terminal", async () => {
     const memoryStore = createMemorySaveStore();
-    // finalizeWorkingSave throws. listCities (used by reconciliation) also
-    // throws.
+    // finalizeWorkingSave throws. inspectWorkingSaveState (used by
+    // reconciliation) also throws.
     let finalizeAttempted = false;
     const throwingStore: SaveStore = {
       ...memoryStore,
@@ -6534,9 +6540,9 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
         finalizeAttempted = true;
         throw new Error("finalizeWorkingSave threw");
       },
-      async listCities() {
-        if (finalizeAttempted) throw new Error("listCities threw");
-        return memoryStore.listCities();
+      async inspectWorkingSaveState(_cityId) {
+        if (finalizeAttempted) throw new Error("inspectWorkingSaveState threw");
+        return memoryStore.inspectWorkingSaveState(_cityId);
       },
     };
     const runtime = await createGameRuntime({
@@ -6644,8 +6650,8 @@ describe("terminal snapshot subscriber delivery", () => {
   it("delivers the recovery terminal snapshot to subscribers when live ambiguous reconciliation read fails", async () => {
     const memoryStore = createMemorySaveStore();
     // createWorkingSave commits the pending record, then throws. The
-    // reconciliation read (readWorkingSave) also throws, so the runtime
-    // enters the terminal late-success-cleanup-failure state.
+    // reconciliation read (inspectWorkingSaveState) also throws, so the
+    // runtime enters the terminal late-success-cleanup-failure state.
     let createCommitted = false;
     const throwingStore: SaveStore = {
       ...memoryStore,
@@ -6655,9 +6661,9 @@ describe("terminal snapshot subscriber delivery", () => {
         createCommitted = true;
         throw new Error("createWorkingSave threw after commit");
       },
-      async readWorkingSave(_cityId) {
-        if (createCommitted) throw new Error("readWorkingSave threw");
-        return memoryStore.readWorkingSave(_cityId);
+      async inspectWorkingSaveState(_cityId) {
+        if (createCommitted) throw new Error("inspectWorkingSaveState threw");
+        return memoryStore.inspectWorkingSaveState(_cityId);
       },
     };
     const runtime = await createGameRuntime({
@@ -6983,6 +6989,670 @@ describe("multi-realm bootstrap deletion safety", () => {
     expect(finalized.ok).toBe(true);
     if (finalized.ok) {
       expect(finalized.value.pending).toBe(false);
+    }
+
+    await realmA.dispose();
+  });
+});
+
+describe("disposal-time create/finalize failure reconciliation", () => {
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+  const newCityRequest = {
+    templateId: "blankGrid" as const,
+    economyPreset: "standard",
+    startingCapital: 120_000,
+    demandMultiplier: 1,
+    moveInRate: "paused" as const,
+  };
+
+  it("delayed create returns typed failure without committing: dispose returns released, replacement acquires lease, no city record", async () => {
+    const failures = createMemorySaveStoreFailureControls();
+    const memoryStore = createMemorySaveStore({ failures });
+    const store = createDelayedSaveStore(memoryStore);
+    store.defer("createWorkingSave");
+    // Make createWorkingSave return a typed ioFailure WITHOUT committing.
+    failures.failNext("createWorkingSave", "ioFailure");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const activation = runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-disposal-typed",
+      name: "Disposal Typed",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // Wait for createWorkingSave to be active (blocked on the gate).
+    await vi.waitFor(() => {
+      expect(store.activeCount()).toBe(1);
+    });
+
+    // Start dispose() while the create is delayed. The lease begins closing,
+    // but the admitted foreground workflow continues.
+    let disposeResolved = false;
+    const disposePromise = runtime.dispose().then((r) => {
+      disposeResolved = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposeResolved).toBe(false);
+
+    // Release the create — it returns typed ioFailure without committing.
+    store.releaseNext("createWorkingSave");
+
+    const activationResult = await activation;
+    // dead=true after disposal, so the rollback path returns runtimeUnavailable.
+    expect(activationResult.status).toBe("failed");
+    if (activationResult.status === "failed") {
+      expect(activationResult.error.kind).toBe("precondition");
+    }
+
+    // dispose() returns released — no orphan, no recovery pin.
+    const disposeResult = await disposePromise;
+    expect(disposeResult.status).toBe("released");
+
+    // No city record exists.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-disposal-typed"),
+      ).toBeUndefined();
+    }
+
+    // A replacement runtime can acquire the lease and proceed.
+    const runtime2 = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(memoryStore),
+    });
+    expect(runtime2.getSnapshot().recovery.state).toBe("ok");
+    await runtime2.dispose();
+  });
+
+  it("delayed create commits pending then throws: reconciliation detects pending, cleanup deletes it, dispose returns released", async () => {
+    const memoryStore = createMemorySaveStore();
+    // createWorkingSave commits the pending record, then throws.
+    const throwingMemoryStore: SaveStore = {
+      ...memoryStore,
+      async createWorkingSave(envelope) {
+        const result = await memoryStore.createWorkingSave(envelope);
+        if (!result.ok) return result;
+        throw new Error("createWorkingSave threw after commit");
+      },
+    };
+    const store = createDelayedSaveStore(throwingMemoryStore);
+    store.defer("createWorkingSave");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const activation = runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-disposal-pending",
+      name: "Disposal Pending",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    await vi.waitFor(() => {
+      expect(store.activeCount()).toBe(1);
+    });
+
+    let disposeResolved = false;
+    const disposePromise = runtime.dispose().then((r) => {
+      disposeResolved = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposeResolved).toBe(false);
+
+    // Release the create — it commits pending then throws.
+    store.releaseNext("createWorkingSave");
+
+    const activationResult = await activation;
+    // dead=true, so cleanup returns runtimeUnavailable.
+    expect(activationResult.status).toBe("failed");
+    if (activationResult.status === "failed") {
+      expect(activationResult.error.kind).toBe("precondition");
+    }
+
+    const disposeResult = await disposePromise;
+    // The pending orphan was deleted (singleRealm=true), so dispose returns
+    // released — no recovery pin.
+    expect(disposeResult.status).toBe("released");
+
+    // No city record exists (cleanup deleted the pending orphan).
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-disposal-pending"),
+      ).toBeUndefined();
+    }
+
+    // Replacement runtime proceeds.
+    const runtime2 = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(memoryStore),
+    });
+    expect(runtime2.getSnapshot().recovery.state).toBe("ok");
+    await runtime2.dispose();
+  });
+
+  it("delayed finalize returns typed failure and leaves pending: pending record is cleaned up, no recovery pin", async () => {
+    const failures = createMemorySaveStoreFailureControls();
+    const memoryStore = createMemorySaveStore({ failures });
+    const store = createDelayedSaveStore(memoryStore);
+    // createWorkingSave succeeds (commits pending). finalizeWorkingSave
+    // returns a typed ioFailure WITHOUT committing (the record remains
+    // pending).
+    failures.failNext("finalizeWorkingSave", "ioFailure");
+    store.defer("finalizeWorkingSave");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const activation = runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-disposal-finalize-typed",
+      name: "Disposal Finalize Typed",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    await vi.waitFor(() => {
+      expect(store.activeCount()).toBe(1);
+    });
+
+    let disposeResolved = false;
+    const disposePromise = runtime.dispose().then((r) => {
+      disposeResolved = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposeResolved).toBe(false);
+
+    // Release the finalize — it returns typed ioFailure without committing.
+    store.releaseNext("finalizeWorkingSave");
+
+    const activationResult = await activation;
+    expect(activationResult.status).toBe("failed");
+    if (activationResult.status === "failed") {
+      expect(activationResult.error.kind).toBe("precondition");
+    }
+
+    const disposeResult = await disposePromise;
+    // The pending orphan was deleted (singleRealm=true), so dispose returns
+    // released.
+    expect(disposeResult.status).toBe("released");
+
+    // No city record exists.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-disposal-finalize-typed"),
+      ).toBeUndefined();
+    }
+  });
+
+  it("delayed finalize commits active then throws: reconciliation detects active, active city record is preserved, disposal returns released", async () => {
+    const memoryStore = createMemorySaveStore();
+    // finalizeWorkingSave commits (flips pending → active), then throws.
+    const throwingMemoryStore: SaveStore = {
+      ...memoryStore,
+      async finalizeWorkingSave(cityId) {
+        const result = await memoryStore.finalizeWorkingSave(cityId);
+        if (!result.ok) return result;
+        throw new Error("finalizeWorkingSave threw after commit");
+      },
+    };
+    const store = createDelayedSaveStore(throwingMemoryStore);
+    store.defer("finalizeWorkingSave");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const activation = runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-disposal-finalize-active",
+      name: "Disposal Finalize Active",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    await vi.waitFor(() => {
+      expect(store.activeCount()).toBe(1);
+    });
+
+    let disposeResolved = false;
+    const disposePromise = runtime.dispose().then((r) => {
+      disposeResolved = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposeResolved).toBe(false);
+
+    // Release the finalize — it commits active then throws.
+    store.releaseNext("finalizeWorkingSave");
+
+    const activationResult = await activation;
+    // dead=true and finalize committed, so the active-record branch returns
+    // runtimeUnavailable without deleting.
+    expect(activationResult.status).toBe("failed");
+    if (activationResult.status === "failed") {
+      expect(activationResult.error.kind).toBe("precondition");
+    }
+
+    const disposeResult = await disposePromise;
+    // The active city record is preserved (not deleted). No recovery pin
+    // because the record is a valid active city, not an orphan.
+    expect(disposeResult.status).toBe("released");
+
+    // The active city record is preserved.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find(
+        (c) => c.cityId === "city-disposal-finalize-active",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(false);
+    }
+  });
+
+  it("disposal starts during inspectWorkingSaveState: classification completes without PersistenceLeaseClosedError", async () => {
+    const memoryStore = createMemorySaveStore();
+    // createWorkingSave commits the pending record, then throws.
+    const throwingMemoryStore: SaveStore = {
+      ...memoryStore,
+      async createWorkingSave(envelope) {
+        const result = await memoryStore.createWorkingSave(envelope);
+        if (!result.ok) return result;
+        throw new Error("createWorkingSave threw after commit");
+      },
+    };
+    const store = createDelayedSaveStore(throwingMemoryStore);
+    // Defer inspectWorkingSaveState so disposal can start while the
+    // reconciliation read is in flight.
+    store.defer("inspectWorkingSaveState");
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(store),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const activation = runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-disposal-inspect",
+      name: "Disposal Inspect",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // The create throws after committing, triggering reconciliation.
+    // Wait for inspectWorkingSaveState to be active (blocked on the gate).
+    await vi.waitFor(() => {
+      expect(store.activeCount()).toBe(1);
+    });
+
+    // Start dispose() while inspectWorkingSaveState is delayed. The lease
+    // begins closing, but the admitted foreground workflow continues. The
+    // reconciliation read is issued directly on saveStore (not through the
+    // lease), so it must NOT be rejected by PersistenceLeaseClosedError.
+    let disposeResolved = false;
+    const disposePromise = runtime.dispose().then((r) => {
+      disposeResolved = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disposeResolved).toBe(false);
+
+    // Release inspectWorkingSaveState — it returns "pending".
+    store.releaseNext("inspectWorkingSaveState");
+
+    const activationResult = await activation;
+    // dead=true, so cleanup returns runtimeUnavailable.
+    expect(activationResult.status).toBe("failed");
+    if (activationResult.status === "failed") {
+      expect(activationResult.error.kind).toBe("precondition");
+    }
+
+    // The reconciliation completed successfully (no
+    // PersistenceLeaseClosedError), cleanup deleted the pending orphan
+    // (singleRealm=true), and dispose returns released.
+    const disposeResult = await disposePromise;
+    expect(disposeResult.status).toBe("released");
+
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      expect(
+        cities.value.find((c) => c.cityId === "city-disposal-inspect"),
+      ).toBeUndefined();
+    }
+  });
+});
+
+describe("multi-realm live cleanup safety", () => {
+  // A wrapper that exposes a configurable storageIdentity and singleRealm
+  // over a shared underlying MemorySaveStore, simulating a multi-realm
+  // adapter (multiple processes/registries sharing one durable database).
+  function multiRealmStore(
+    delegate: SaveStore,
+    storageIdentity: string,
+  ): SaveStore {
+    return {
+      ...(delegate as object),
+      storageIdentity,
+      singleRealm: false,
+    } as SaveStore;
+  }
+
+  const baseOpts = (saveStore: SaveStore) => ({
+    saveStore,
+    initialCity: cityIdentity(),
+    now: () => "2026-08-01T10:00:00.000Z",
+    appVersion: "0.1.0",
+  });
+  const newCityRequest = {
+    templateId: "blankGrid" as const,
+    economyPreset: "standard",
+    startingCapital: 120_000,
+    demandMultiplier: 1,
+    moveInRate: "paused" as const,
+  };
+
+  it("multi-realm ambiguous create failure: returns recoveryRequired, preserves pending record, never calls deleteCity", async () => {
+    const memoryStore = createMemorySaveStore();
+    // Track deleteCity calls to assert it is never called.
+    let deleteCityCalled = false;
+    const trackedStore: SaveStore = {
+      ...memoryStore,
+      async deleteCity(cityId) {
+        deleteCityCalled = true;
+        return memoryStore.deleteCity(cityId);
+      },
+    };
+    const multiRealm = multiRealmStore(trackedStore, "multi-realm-live-1");
+
+    // createWorkingSave commits the pending record, then throws.
+    const throwingStore: SaveStore = {
+      ...multiRealm,
+      async createWorkingSave(envelope) {
+        const result = await memoryStore.createWorkingSave(envelope);
+        if (!result.ok) return result;
+        throw new Error("createWorkingSave threw after commit");
+      },
+    };
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(throwingStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-multi-realm-live",
+      name: "Multi Realm Live",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // The runtime is terminal: result is runtimeUnavailable.
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("precondition");
+    }
+
+    // The snapshot exposes the multiRealmAmbiguousCleanup recovery state.
+    const snap = runtime.getSnapshot();
+    expect(snap.recovery.state).toBe("recoveryRequired");
+    if (snap.recovery.state === "recoveryRequired") {
+      expect(snap.recovery.reason).toBe("multiRealmAmbiguousCleanup");
+      expect(snap.recovery.cityId).toBe("city-multi-realm-live");
+    }
+
+    // deleteCity was never called — the record is preserved.
+    expect(deleteCityCalled).toBe(false);
+
+    // The pending record is preserved.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find(
+        (c) => c.cityId === "city-multi-realm-live",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+
+    // dispose() reports recoveryRequired with multiRealmAmbiguousCleanup.
+    const disposeResult = await runtime.dispose();
+    expect(disposeResult.status).toBe("recoveryRequired");
+    if (disposeResult.status === "recoveryRequired") {
+      expect(disposeResult.reason).toBe("multiRealmAmbiguousCleanup");
+    }
+  });
+
+  it("multi-realm ambiguous finalize failure: returns recoveryRequired, preserves pending record, never calls deleteCity", async () => {
+    const memoryStore = createMemorySaveStore();
+    let deleteCityCalled = false;
+    const trackedStore: SaveStore = {
+      ...memoryStore,
+      async deleteCity(cityId) {
+        deleteCityCalled = true;
+        return memoryStore.deleteCity(cityId);
+      },
+    };
+    const multiRealm = multiRealmStore(trackedStore, "multi-realm-live-2");
+
+    // finalizeWorkingSave throws before committing (record remains pending).
+    const throwingStore: SaveStore = {
+      ...multiRealm,
+      async finalizeWorkingSave(_cityId) {
+        throw new Error("finalizeWorkingSave threw before commit");
+      },
+    };
+
+    const runtime = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(throwingStore),
+    });
+    await runtime.debugSetBudget(100_000);
+
+    const result = await runtime.persistence.activateNewCity(newCityRequest, {
+      id: "city-multi-realm-finalize",
+      name: "Multi Realm Finalize",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("precondition");
+    }
+
+    const snap = runtime.getSnapshot();
+    expect(snap.recovery.state).toBe("recoveryRequired");
+    if (snap.recovery.state === "recoveryRequired") {
+      expect(snap.recovery.reason).toBe("multiRealmAmbiguousCleanup");
+    }
+
+    expect(deleteCityCalled).toBe(false);
+
+    // The pending record is preserved.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find(
+        (c) => c.cityId === "city-multi-realm-finalize",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+
+    const disposeResult = await runtime.dispose();
+    expect(disposeResult.status).toBe("recoveryRequired");
+    if (disposeResult.status === "recoveryRequired") {
+      expect(disposeResult.reason).toBe("multiRealmAmbiguousCleanup");
+    }
+  });
+
+  it("cross-realm race: realm A does not delete realm B's live pending record", async () => {
+    const memoryStore = createMemorySaveStore();
+
+    // Realm A: a multi-realm store with its own coordinator identity.
+    const realmAStore = multiRealmStore(memoryStore, "realm-a-live-db");
+
+    // Realm A's createWorkingSave fails without committing (throws before
+    // commit). But before A's reconciliation runs, realm B creates the same
+    // ID as a pending record (simulating a live New City transaction in
+    // another realm).
+    let createAttempted = false;
+    const realmAThrowingStore: SaveStore = {
+      ...realmAStore,
+      async createWorkingSave(_envelope) {
+        createAttempted = true;
+        throw new Error("createWorkingSave threw before commit");
+      },
+      async inspectWorkingSaveState(cityId) {
+        // Simulate realm B creating the pending record before A's
+        // reconciliation reads it: when A inspects, the record exists as
+        // pending (created by realm B).
+        if (createAttempted && cityId === "city-cross-realm") {
+          // Seed the pending record as if realm B created it.
+          const existing = await memoryStore.inspectWorkingSaveState(cityId);
+          if (existing.ok && existing.value === "notFound") {
+            const envelope = buildSaveEnvelope({
+              city: { id: "city-cross-realm", name: "Cross Realm B" },
+              cityCreatedAt: "2026-08-01T10:00:00.000Z",
+              savedAt: "2026-08-01T10:05:00.000Z",
+              appVersion: "0.1.0",
+              snapshot: createRustSnapshot(),
+            });
+            await memoryStore.createWorkingSave(envelope);
+          }
+        }
+        return memoryStore.inspectWorkingSaveState(cityId);
+      },
+    };
+
+    const realmA = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(realmAThrowingStore),
+    });
+    await realmA.debugSetBudget(100_000);
+
+    const result = await realmA.persistence.activateNewCity(newCityRequest, {
+      id: "city-cross-realm",
+      name: "Cross Realm A",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // Realm A is terminal with multiRealmAmbiguousCleanup — it did NOT
+    // delete realm B's pending record.
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("precondition");
+    }
+
+    const snap = realmA.getSnapshot();
+    expect(snap.recovery.state).toBe("recoveryRequired");
+    if (snap.recovery.state === "recoveryRequired") {
+      expect(snap.recovery.reason).toBe("multiRealmAmbiguousCleanup");
+    }
+
+    // Realm B's pending record is intact.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find((c) => c.cityId === "city-cross-realm");
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+
+    await realmA.dispose();
+  });
+
+  it("cross-realm race: A observes pending, B finalizes, A does not delete B's active record", async () => {
+    const memoryStore = createMemorySaveStore();
+    const realmAStore = multiRealmStore(memoryStore, "realm-a-finalize-db");
+
+    // Realm A's createWorkingSave commits pending then throws. A's
+    // reconciliation observes "pending" and would attempt cleanup, but the
+    // multi-realm check (singleRealm=false) prevents the delete. Realm B
+    // then finalizes the record (flips pending → active). A must NOT have
+    // deleted it.
+    const realmAThrowingStore: SaveStore = {
+      ...realmAStore,
+      async createWorkingSave(envelope) {
+        const result = await memoryStore.createWorkingSave(envelope);
+        if (!result.ok) return result;
+        throw new Error("createWorkingSave threw after commit");
+      },
+    };
+
+    const realmA = await createGameRuntime({
+      backend: transactionalBackend(backendSpy()),
+      ...baseOpts(realmAThrowingStore),
+    });
+    await realmA.debugSetBudget(100_000);
+
+    const result = await realmA.persistence.activateNewCity(newCityRequest, {
+      id: "city-cross-finalize",
+      name: "Cross Finalize",
+      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+    });
+
+    // Realm A is terminal with multiRealmAmbiguousCleanup — the multi-realm
+    // check prevented the delete.
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.kind).toBe("precondition");
+    }
+
+    const snap = realmA.getSnapshot();
+    expect(snap.recovery.state).toBe("recoveryRequired");
+    if (snap.recovery.state === "recoveryRequired") {
+      expect(snap.recovery.reason).toBe("multiRealmAmbiguousCleanup");
+    }
+
+    // The pending record is preserved (A did not delete it).
+    const citiesBefore = await memoryStore.listCities();
+    expect(citiesBefore.ok).toBe(true);
+    if (citiesBefore.ok) {
+      const found = citiesBefore.value.find(
+        (c) => c.cityId === "city-cross-finalize",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(true);
+    }
+
+    // Realm B finalizes the record (simulating a live transaction in another
+    // realm completing). The record becomes active and remains loadable.
+    const finalized = await memoryStore.finalizeWorkingSave(
+      "city-cross-finalize",
+    );
+    expect(finalized.ok).toBe(true);
+
+    // Realm B's active record is preserved.
+    const cities = await memoryStore.listCities();
+    expect(cities.ok).toBe(true);
+    if (cities.ok) {
+      const found = cities.value.find(
+        (c) => c.cityId === "city-cross-finalize",
+      );
+      expect(found).toBeDefined();
+      expect(found!.pending).toBe(false);
     }
 
     await realmA.dispose();

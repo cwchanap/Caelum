@@ -86,7 +86,8 @@ export type SaveStoreOperation =
   | "listAutosaves"
   | "readAutosave"
   | "writeAutosave"
-  | "deleteAutosave";
+  | "deleteAutosave"
+  | "inspectWorkingSaveState";
 
 export type SaveStoreErrorCode =
   | "notFound"
@@ -112,6 +113,27 @@ export interface SaveStoreError {
 export type SaveStoreResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: SaveStoreError };
+
+/**
+ * The committed state of a city's working-save record, as observed by a single
+ * coherent storage read. Used by the runtime's ambiguous-failure
+ * reconciliation to classify whether a `createWorkingSave` or
+ * `finalizeWorkingSave` operation committed before an ambiguous failure.
+ *
+ * - `"notFound"` — no working-save record exists for the city ID.
+ * - `"pending"` — a pending record exists (created by `createWorkingSave` but
+ *   not yet finalized by `finalizeWorkingSave`).
+ * - `"active"` — a finalized record exists (the city is durable and loadable).
+ *
+ * Unlike a `readWorkingSave` + `listCities` two-call sequence, this is a single
+ * storage observation with no inter-call race window. The runtime calls this
+ * directly on the `SaveStore` (not through the persistence coordinator's
+ * per-city FIFO) during an admitted foreground New City workflow, so it
+ * remains callable after the lease begins closing — the foreground reservation
+ * is counted by `drainAll`, so disposal waits for the entire workflow
+ * including this read.
+ */
+export type WorkingSaveState = "notFound" | "pending" | "active";
 
 export interface SaveStore {
   /**
@@ -202,6 +224,25 @@ export interface SaveStore {
    * city that survives process restarts.
    */
   finalizeWorkingSave(cityId: string): Promise<SaveStoreResult<CitySummary>>;
+  /**
+   * Atomically inspect the committed state of a city's working-save record in
+   * a single storage observation, returning {@link WorkingSaveState}.
+   *
+   * Unlike a `readWorkingSave` + `listCities` two-call sequence, this is one
+   * coherent read with no inter-call race window. The runtime uses this
+   * during ambiguous-failure reconciliation of a New City transaction to
+   * classify whether a `createWorkingSave` or `finalizeWorkingSave` operation
+   * committed before the failure.
+   *
+   * Returns `{ ok: true, value: "notFound" }` when no working-save record
+   * exists, `{ ok: true, value: "pending" }` when a pending record exists
+   * (created but not finalized), and `{ ok: true, value: "active" }` when a
+   * finalized record exists. Returns `{ ok: false, error }` when the
+   * inspection itself failed (the committed state is unknowable).
+   */
+  inspectWorkingSaveState(
+    cityId: string,
+  ): Promise<SaveStoreResult<WorkingSaveState>>;
   renameCity(
     cityId: string,
     name: string,

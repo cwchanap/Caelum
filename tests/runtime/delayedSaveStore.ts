@@ -132,6 +132,11 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
         delegate.finalizeWorkingSave(cityId),
       );
     },
+    inspectWorkingSaveState(cityId) {
+      return delegateAfterGate("inspectWorkingSaveState", () =>
+        delegate.inspectWorkingSaveState(cityId),
+      );
+    },
     renameCity(cityId, name) {
       return delegateAfterGate("renameCity", () =>
         delegate.renameCity(cityId, name),
