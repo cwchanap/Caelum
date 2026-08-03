@@ -373,6 +373,9 @@ function createRuntimeHarness(
       return publish();
     }),
     debugSetBudget: vi.fn(() => publish()),
+    debugEnqueueCityPersistence: vi.fn(
+      <T>(_cityId: string, work: () => Promise<T>): Promise<T> => work(),
+    ) as unknown as <T>(cityId: string, work: () => Promise<T>) => Promise<T>,
     mountCanvas: vi.fn(() => () => {}),
   };
 

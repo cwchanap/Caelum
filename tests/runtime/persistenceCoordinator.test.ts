@@ -19,7 +19,6 @@ import type { PersistenceOperationError } from "../../src/runtime/backend/persis
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   activeCityDeleteRequiresTransition,
-  enqueueCityPersistence,
   guardActiveCityDelete,
   noActiveCity,
   resolvePersistenceSessionCompletion,
@@ -2837,8 +2836,9 @@ describe("runtime persistence coordinator contracts", () => {
       snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
     });
     harness.store.defer("writeWorkingSave");
-    const olderWrite = enqueueCityPersistence(identity.id, () =>
-      harness.store.writeWorkingSave(olderEnvelope),
+    const olderWrite = harness.runtime.debugEnqueueCityPersistence(
+      identity.id,
+      () => harness.store.writeWorkingSave(olderEnvelope),
     );
     await harness.store.waitForActive("writeWorkingSave");
 
@@ -3387,5 +3387,126 @@ describe("runtime persistence coordinator contracts", () => {
         expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
       }
     }
+  });
+
+  // Regression coverage for the single-runtime-per-store invariant. The
+  // persistence FIFOs, city fences, lifecycle ownership, and session/load
+  // tokens are all owned by the runtime instance — there is no module-global
+  // `cityTails`. These tests guard against re-introducing module-global
+  // coordination state, which previously coupled independent runtimes in the
+  // same realm and made opposite cross-city loads capable of a FIFO lock
+  // cycle. Multiple live runtimes sharing one SaveStore is unsupported; each
+  // runtime here uses its own store.
+  describe("runtime-local persistence coordination", () => {
+    it("owns its per-city FIFO: a held write on one runtime does not block a same-city save on another", async () => {
+      const sharedCityId = "shared-city";
+      const harness1 = await createCoordinatorHarness({
+        activeCity: cityIdentity(sharedCityId),
+        clean: true,
+      });
+      const harness2 = await createCoordinatorHarness({
+        activeCity: cityIdentity(sharedCityId),
+        clean: true,
+      });
+      try {
+        // Hold an "older write" for sharedCityId on runtime 1's FIFO. Under the
+        // old module-global `cityTails`, runtime 2's saveWorking for the same
+        // city id would chain onto this held tail and hang.
+        const olderEnvelope = buildSaveEnvelope({
+          city: { id: sharedCityId, name: "Test City" },
+          cityCreatedAt: "2026-08-01T09:00:00.000Z",
+          savedAt: "2026-08-01T09:45:00.000Z",
+          appVersion: "0.1.0",
+          snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
+        });
+        harness1.store.defer("writeWorkingSave");
+        const olderWrite = harness1.runtime.debugEnqueueCityPersistence(
+          sharedCityId,
+          () => harness1.store.writeWorkingSave(olderEnvelope),
+        );
+        await harness1.store.waitForActive("writeWorkingSave");
+
+        // Runtime 2's save must settle on its own FIFO, independent of runtime
+        // 1's held tail.
+        const save2 = harness2.runtime.persistence.saveWorking();
+        await expect(save2).resolves.toMatchObject({ status: "completed" });
+
+        // Runtime 1's older write is still held — runtime 2 did not drain it.
+        expect(harness1.store.activeCount()).toBe(1);
+        expect(harness2.store.mutationOrder()).toEqual(["writeWorkingSave"]);
+
+        harness1.store.releaseAll();
+        await olderWrite;
+      } finally {
+        harness1.runtime.stop();
+        harness2.runtime.stop();
+      }
+    });
+
+    it("keeps city fences instance-local: a fence on one runtime does not reject a save on another", async () => {
+      const sharedCityId = "shared-city";
+      const harness1 = await createCoordinatorHarness({
+        activeCity: cityIdentity(sharedCityId),
+        clean: true,
+      });
+      const harness2 = await createCoordinatorHarness({
+        activeCity: cityIdentity(sharedCityId),
+        clean: true,
+      });
+      // Give runtime 1 a target city to load so it fences its prior city.
+      const targetEnvelope = loadEnvelope({
+        city: cityIdentity("city-target"),
+        savedAt: "2026-08-01T11:00:00.000Z",
+      });
+      harness1.store.seedRawWorking("city-target", targetEnvelope);
+      try {
+        // A cross-city load fences the prior city synchronously at admission.
+        // Hold the read so the fence stays in place during the assertion.
+        harness1.store.defer("readWorkingSave");
+        const load1 = harness1.runtime.persistence.load({
+          kind: "working",
+          cityId: "city-target",
+        });
+        await harness1.store.waitForActive("readWorkingSave");
+
+        // Runtime 2, on its own store, is unaffected by runtime 1's fence.
+        const save2 = harness2.runtime.persistence.saveWorking();
+        await expect(save2).resolves.toMatchObject({ status: "completed" });
+
+        harness1.store.releaseAll();
+        await expect(load1).resolves.toMatchObject({ status: "completed" });
+      } finally {
+        harness1.runtime.stop();
+        harness2.runtime.stop();
+      }
+    });
+
+    it("does not coordinate lifecycle transitions across runtime instances", async () => {
+      const harness1 = await createCoordinatorHarness({ clean: true });
+      const harness2 = await createCoordinatorHarness({ clean: true });
+      try {
+        // Detach on runtime 1 and New City on runtime 2 are independent
+        // lifecycle transitions; neither sees the other's
+        // `lifecycleTransitionReserved` (which is closure-local).
+        const detach1 = harness1.runtime.persistence.detachActiveCity();
+        const activation2 = harness2.runtime.persistence.activateNewCity(
+          sandboxRequest(),
+          newCityIdentity(),
+        );
+        await expect(detach1).resolves.toMatchObject({ status: "completed" });
+        await expect(activation2).resolves.toMatchObject({
+          status: "completed",
+        });
+        expect(
+          harness1.runtime.getSnapshot().persistence.activeCity,
+        ).toBeNull();
+        expect(
+          harness2.runtime.getSnapshot().persistence.activeCity,
+        ).not.toBeNull();
+      } finally {
+        harness1.runtime.stop();
+        harness2.runtime.stop();
+      }
+    });
   });
 });

@@ -63,8 +63,7 @@ import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import {
-  drainCityPersistence,
-  enqueueCityPersistence,
+  createCityPersistenceQueues,
   noActiveCity,
   readForLoadSource,
   resolvePersistenceSessionCompletion,
@@ -325,6 +324,10 @@ export async function createGameRuntime(
   // leaves its protected backend window.
   let stopRequestedDuringReservation = false;
   const gameplayQueue = createSerializedQueue(() => dead);
+  // Per-city persistence FIFOs are owned by THIS runtime instance, not a
+  // module-global map. See `createCityPersistenceQueues` for the
+  // single-runtime-per-store invariant that keeps these instance-local.
+  const cityQueues = createCityPersistenceQueues();
   const listeners = new Set<RuntimeListener>();
 
   const getPersistenceView = (): RuntimePersistenceView => {
@@ -1326,7 +1329,7 @@ export async function createGameRuntime(
     const cityId = activeCity.id;
     const capturedSessionToken = sessionToken;
 
-    return enqueueCityPersistence(cityId, async () => {
+    return cityQueues.enqueue(cityId, async () => {
       if (dead) return runtimeUnavailable("saveWorking");
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
@@ -1525,7 +1528,7 @@ export async function createGameRuntime(
     const cityId = activeCity.id;
     const capturedSessionToken = sessionToken;
 
-    return enqueueCityPersistence(cityId, async () => {
+    return cityQueues.enqueue(cityId, async () => {
       if (dead) return runtimeUnavailable(coordinatorOperation);
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(cityId, capturedSessionToken)) {
@@ -1702,7 +1705,7 @@ export async function createGameRuntime(
 
     const city = { ...activeCity };
     const capturedSessionToken = sessionToken;
-    return enqueueCityPersistence(city.id, async () => {
+    return cityQueues.enqueue(city.id, async () => {
       if (dead) return runtimeUnavailable("renameActiveCity");
       if (backendAdmissionReserved) return { status: "superseded" };
       if (!isCurrentPersistenceSession(city.id, capturedSessionToken)) {
@@ -1895,7 +1898,7 @@ export async function createGameRuntime(
     // would then write revision B and return superseded — leaving runtime at
     // revision A with dirty === false while storage holds revision B.
     try {
-      return await enqueueCityPersistence(source.cityId, async () => {
+      return await cityQueues.enqueue(source.cityId, async () => {
         if (dead) return runtimeUnavailable(read.coordinatorOperation);
         if (loadSupersededByAdmission(requestToken)) {
           return { status: "superseded" };
@@ -1904,10 +1907,11 @@ export async function createGameRuntime(
           // Drain the former city's persistence tail before reading the target
           // so any already-admitted write for it completes (or settles) before
           // the new city becomes active. The drain runs inside the target
-          // city's FIFO so a same-target load serializes behind it; it cannot
-          // deadlock because the former city's tail only awaits its own FIFO
-          // (and any gameplay-queue capture, which is free here).
-          await drainCityPersistence(priorCityId);
+          // city's FIFO so a same-target load serializes behind it. This cannot
+          // form a lock cycle: the persistence FIFOs are owned by THIS runtime
+          // instance (see `cityQueues` / `createCityPersistenceQueues`), so no
+          // other runtime can hold the former city's FIFO while we await it.
+          await cityQueues.drain(priorCityId);
           if (dead) return runtimeUnavailable(read.coordinatorOperation);
           if (loadSupersededByAdmission(requestToken)) {
             return { status: "superseded" };
@@ -2319,7 +2323,7 @@ export async function createGameRuntime(
       if (dead) return runtimeUnavailable("activateNewCity");
       const priorCityId = activeCity?.id;
       if (priorCityId !== undefined) {
-        await drainCityPersistence(priorCityId);
+        await cityQueues.drain(priorCityId);
       }
       if (dead) return runtimeUnavailable("activateNewCity");
 
@@ -2417,7 +2421,7 @@ export async function createGameRuntime(
 
       let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
       try {
-        stored = await enqueueCityPersistence(identity.id, () =>
+        stored = await cityQueues.enqueue(identity.id, () =>
           saveStore.writeWorkingSave(envelope),
         );
       } catch (error: unknown) {
@@ -2508,7 +2512,7 @@ export async function createGameRuntime(
     }
     try {
       if (priorCityId !== undefined) {
-        await drainCityPersistence(priorCityId);
+        await cityQueues.drain(priorCityId);
       }
       if (dead) return runtimeUnavailable("detachActiveCity");
       const result = await gameplayQueue.enqueue<
@@ -3070,6 +3074,16 @@ export async function createGameRuntime(
     },
     debugSetBudget(budget) {
       return enqueueDispatch({ type: "setBudget", budget });
+    },
+    // Test-only seam onto this runtime's per-city persistence FIFO. Lets a
+    // harness inject an "older write" for a city that the runtime's own
+    // candidate write must serialize behind, without exposing any module-global
+    // queue (there is none). Production code never calls this.
+    debugEnqueueCityPersistence<T>(
+      cityId: string,
+      work: () => Promise<T>,
+    ): Promise<T> {
+      return cityQueues.enqueue(cityId, work);
     },
     mountCanvas: canvasHost.mount,
   };

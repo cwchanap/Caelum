@@ -81,6 +81,12 @@ Routes store Loop/Shuttle directional service legs with current and last-valid t
 
 Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement captures compatible boundary ports, may replace only fully contained bare roads/automatic junctions, preserves latent area, and removes as one structure.
 
+### Persistence coordination scope
+
+**One `createGameRuntime()` instance owns one `SaveStore`.** Production mounts exactly one runtime per realm (`src/main.ts`, shared by browser and Tauri). All persistence coordination state — per-city persistence FIFOs (`createCityPersistenceQueues` in `persistenceCoordinator.ts`), reference-counted city fences, `lifecycleTransitionReserved`, `detachReserving`, and the session/load/revision tokens — is closure-local to that runtime instance. There is deliberately **no module-global** `cityTails`: a second live runtime in the same realm MUST use a separate store. Sharing one store across runtimes is unsupported and would let their independent queues/fences interleave writes at the storage layer.
+
+Keeping the FIFO instance-local is what makes the cross-city load safe: a load enters the target city's FIFO and awaits `drain` of the former city's FIFO, and this cannot form a lock cycle because no other runtime can hold the former city's FIFO. Do not reintroduce a module-global persistence queue. The `debugEnqueueCityPersistence` controller seam is test-only (mirrors `debugSetBudget`); production never calls it.
+
 ## Conventions
 
 - **Svelte 5 runes mode** is enabled globally (`svelte.config.js`). Use `$state`, `$props`, `$derived`, `$effect` — not legacy `export let` / stores.

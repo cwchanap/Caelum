@@ -268,5 +268,12 @@ export interface RuntimeController {
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
   debugSetBudget: (budget: number) => RuntimeCommandResult;
+  // Test-only seam onto this runtime's per-city persistence FIFO. Production
+  // code never calls this; it exists so a harness can inject an "older write"
+  // that the runtime's own candidate write must serialize behind.
+  debugEnqueueCityPersistence: <T>(
+    cityId: string,
+    work: () => Promise<T>,
+  ) => Promise<T>;
   mountCanvas: (host: HTMLElement) => () => void;
 }
