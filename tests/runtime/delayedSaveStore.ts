@@ -22,6 +22,7 @@ const MUTATION_OPERATIONS = new Set<SaveStoreOperation>([
   "renameCity",
   "duplicateCity",
   "deleteCity",
+  "restoreWorkingSaveRaw",
   "writeCheckpoint",
   "renameCheckpoint",
   "deleteCheckpoint",
@@ -127,6 +128,11 @@ export function createDelayedSaveStore(delegate: SaveStore): DelayedSaveStore {
     },
     deleteCity(cityId) {
       return delegateAfterGate("deleteCity", () => delegate.deleteCity(cityId));
+    },
+    restoreWorkingSaveRaw(cityId, value) {
+      return delegateAfterGate("restoreWorkingSaveRaw", () =>
+        delegate.restoreWorkingSaveRaw(cityId, value),
+      );
     },
     listCheckpoints(cityId) {
       return delegateAfterGate("listCheckpoints", () =>

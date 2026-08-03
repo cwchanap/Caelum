@@ -2133,6 +2133,85 @@ export function defineSaveStoreContract(
       );
     });
 
+    describe("raw working-save restore", () => {
+      it("restores a previously-read raw value, reverting an overwrite", async () => {
+        const { store } = createHarness();
+        const original = envelopeFor("city-1", "Original");
+        await expectOk(store.writeWorkingSave(original));
+        // Capture the prior raw value, then overwrite with a new envelope.
+        const priorRaw = await expectOk(store.readWorkingSave("city-1"));
+        const overwritten = envelopeFor("city-1", "Overwritten", {
+          savedAt: "2026-08-01T11:00:00.000Z",
+        });
+        await expectOk(store.writeWorkingSave(overwritten));
+        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+          overwritten,
+        );
+
+        // Restore the prior raw value — the overwrite is reverted.
+        await expectOk(store.restoreWorkingSaveRaw("city-1", priorRaw));
+        expect(await expectOk(store.readWorkingSave("city-1"))).toEqual(
+          original,
+        );
+      });
+
+      it("rejects a raw value whose city id does not match the storage cityId", async () => {
+        const { store } = createHarness();
+        await expectOk(store.writeWorkingSave(envelopeFor("city-1", "City 1")));
+        const priorRaw = await expectOk(store.readWorkingSave("city-1"));
+        await expectError(
+          store.restoreWorkingSaveRaw("city-other", priorRaw),
+          "corruptRecord",
+        );
+      });
+
+      rawWorkingIt(
+        "rejects an incompatible raw value without changing storage",
+        async () => {
+          const { store, seedRawWorking } = createHarness();
+          const seedWorking = requireCapability(
+            seedRawWorking,
+            "rawWorkingRecords",
+          );
+          const original = envelopeFor("city-1", "Original");
+          await expectOk(store.writeWorkingSave(original));
+          // An unsupported envelope version is classified as incompatible
+          // (not corrupt). readWorkingSave returns it without inspecting;
+          // restoreWorkingSaveRaw inspects and rejects.
+          seedWorking("city-1", { ...makeEnvelope(), envelopeVersion: 99 });
+          const incompatibleRaw = await expectOk(
+            store.readWorkingSave("city-1"),
+          );
+          await expectError(
+            store.restoreWorkingSaveRaw("city-1", incompatibleRaw),
+            "incompatibleRecord",
+          );
+          // Storage is unchanged — the original record was not replaced.
+          expect(await expectOk(store.readWorkingSave("city-1"))).toEqual({
+            ...makeEnvelope(),
+            envelopeVersion: 99,
+          });
+        },
+      );
+
+      injectedFailureIt(
+        "surfaces injected restoreWorkingSaveRaw failures",
+        async () => {
+          const { store, failNext } = createHarness();
+          const fail = requireCapability(failNext, "injectedStorageFailures");
+          await expectOk(
+            store.writeWorkingSave(envelopeFor("city-1", "City 1")),
+          );
+          const priorRaw = await expectOk(store.readWorkingSave("city-1"));
+          fail("restoreWorkingSaveRaw", "ioFailure");
+          await expectError(
+            store.restoreWorkingSaveRaw("city-1", priorRaw),
+            "ioFailure",
+          );
+        },
+      );
+    });
+
     describe("missing record notFound", () => {
       it.each([
         {
