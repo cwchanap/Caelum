@@ -1930,7 +1930,7 @@ describe("runtime persistence coordinator contracts", () => {
     });
   });
 
-  it("supersedes an old working-save completion after load advances lineage", async () => {
+  it("drains the former city's persistence FIFO before a cross-city load commits", async () => {
     const harness = await createCoordinatorHarness();
     const source = { kind: "working", cityId: "city-loaded" } as const;
     seedLoadSource(harness.store, source);
@@ -1938,14 +1938,74 @@ describe("runtime persistence coordinator contracts", () => {
     const save = harness.runtime.persistence.saveWorking();
     await harness.store.waitForActive("writeWorkingSave");
 
-    await expect(
-      harness.runtime.persistence.load(source),
-    ).resolves.toMatchObject({ status: "completed" });
-    const afterLoad = harness.runtime.getSnapshot();
-    harness.store.releaseNext("writeWorkingSave");
+    // The cross-city load fences the former city and drains its FIFO before
+    // the new city becomes active, so the load cannot commit until the delayed
+    // save settles. This is the storage-safe handoff: a delayed write for the
+    // former city cannot recreate its record after the caller deletes it.
+    const load = harness.runtime.persistence.load(source);
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
 
-    await expect(save).resolves.toEqual({ status: "superseded" });
+    // Releasing the save lets it complete; only then can the load read and
+    // restore the target city. The save completes (it settled before the
+    // load advanced the lineage) rather than being superseded.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(load).resolves.toMatchObject({
+      status: "completed",
+      value: { source },
+    });
+
+    const afterLoad = harness.runtime.getSnapshot();
+    expect(afterLoad.persistence.activeCity).toMatchObject({
+      id: "city-loaded",
+    });
     expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
+  });
+
+  it("keeps a deleted former city absent after delayed-save → cross-city load → delete", async () => {
+    const harness = await createCoordinatorHarness();
+    const formerCityId = "city-001";
+    const targetSource = { kind: "working", cityId: "city-loaded" } as const;
+    seedLoadSource(harness.store, targetSource);
+
+    // Start a delayed working save for the former city and block its write.
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    // Load a different city. The load fences the former city and drains its
+    // FIFO, so it cannot commit until the delayed save settles.
+    const load = harness.runtime.persistence.load(targetSource);
+    await vi.waitFor(() => {
+      expect(harness.store.activeCount()).toBe(1);
+    });
+
+    // Release the save: it completes (writes the former city's record), then
+    // the load drains and commits the target city.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(load).resolves.toMatchObject({
+      status: "completed",
+      value: { source: targetSource },
+    });
+    expect(harness.runtime.getSnapshot().persistence.activeCity).toMatchObject({
+      id: "city-loaded",
+    });
+
+    // The target city is now active, so deletion of the former city is
+    // permitted. The delayed save already settled before the lineage advanced,
+    // so no in-flight write can recreate the former city's record after the
+    // caller deletes it.
+    await expect(harness.store.deleteCity(formerCityId)).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+    await expect(
+      harness.store.readWorkingSave(formerCityId),
+    ).resolves.toMatchObject({ ok: false, error: { code: "notFound" } });
   });
 
   it("serializes a same-city load behind a delayed working save", async () => {
@@ -2212,6 +2272,90 @@ describe("runtime persistence coordinator contracts", () => {
       budget: harness.runtime.getSnapshot().state.budget,
     });
     unsubscribe();
+  });
+
+  it("gives detach deterministic precedence over a concurrent cross-city load regardless of read latency", async () => {
+    const orderings = ["detach-clears-first", "load-restores-first"] as const;
+    for (const ordering of orderings) {
+      const harness = await createCoordinatorHarness();
+      const targetSource = { kind: "working", cityId: "city-loaded" } as const;
+      seedLoadSource(harness.store, targetSource);
+
+      // Delay the former city's save; both detach and the cross-city load must
+      // drain it before they can proceed.
+      harness.store.defer("writeWorkingSave");
+      const save = harness.runtime.persistence.saveWorking();
+      await harness.store.waitForActive("writeWorkingSave");
+
+      // Start the cross-city load first, then detach. Both block on the
+      // former city's persistence drain.
+      const load = harness.runtime.persistence.load(targetSource);
+      const detach = harness.runtime.persistence.detachActiveCity();
+
+      if (ordering === "detach-clears-first") {
+        // Gate the target read so detach can clear identity before the load's
+        // read settles. The read has not started yet (the load is still
+        // draining the former city), so deferring now gates it when it runs.
+        harness.store.defer("readWorkingSave");
+        harness.store.releaseNext("writeWorkingSave");
+        await expect(detach).resolves.toMatchObject({ status: "completed" });
+        harness.store.releaseNext("readWorkingSave");
+      } else {
+        // Let the load's read run immediately once the drain settles, so its
+        // restore commits before detach clears.
+        harness.store.releaseNext("writeWorkingSave");
+      }
+
+      const [detachResult, saveResult, loadResult] = await Promise.all([
+        detach,
+        save,
+        load,
+      ]);
+      expect(detachResult).toMatchObject({ status: "completed" });
+      expect(saveResult).toMatchObject({ status: "completed" });
+      // The final active city is null in both orderings: detach always clears
+      // identity. The load either completes (its restore commits before detach
+      // clears) or is superseded (detach cleared first), but it never leaves a
+      // different active city based only on read latency.
+      expect(harness.runtime.getSnapshot().persistence.activeCity).toBeNull();
+      expect(["completed", "superseded"]).toContain(loadResult.status);
+    }
+  });
+
+  it("does not drop gameplay dispatches while detach waits for storage", async () => {
+    const harness = await createCoordinatorHarness();
+    harness.store.defer("writeWorkingSave");
+    const save = harness.runtime.persistence.saveWorking();
+    await harness.store.waitForActive("writeWorkingSave");
+
+    const budgetBefore = harness.runtime.getSnapshot().state.budget;
+    // Detach waits on the former city's persistence drain.
+    const detach = harness.runtime.persistence.detachActiveCity();
+
+    // Detach does not globally freeze gameplay (New City is the sole foreground
+    // admission owner), so a dispatch admitted while detach waits must apply
+    // rather than being silently dropped.
+    const dispatch = harness.runtime.debugSetBudget(44_000);
+    await dispatch;
+    const duringDetach = harness.runtime.getSnapshot();
+    expect(duringDetach.state.budget).toBe(44_000);
+    expect(duringDetach.state.budget).not.toBe(budgetBefore);
+
+    // Releasing the save lets it complete; detach then clears identity. Detach
+    // still provides a storage-safe handoff: the delayed save settled before
+    // identity cleared, so deleting the former city leaves it absent.
+    harness.store.releaseNext("writeWorkingSave");
+    await expect(save).resolves.toMatchObject({ status: "completed" });
+    await expect(detach).resolves.toMatchObject({
+      status: "completed",
+      value: { persistence: { activeCity: null } },
+    });
+    await expect(harness.store.deleteCity("city-001")).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      harness.store.readWorkingSave("city-001"),
+    ).resolves.toMatchObject({ ok: false, error: { code: "notFound" } });
   });
 
   it("activates a new city only after its initial working save commits", async () => {
