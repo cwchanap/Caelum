@@ -33,6 +33,11 @@
     if (nextSnapshot.backendError !== null) {
       shellError = nextSnapshot.backendError;
     }
+    if (nextSnapshot.recovery.state === "recoveryRequired") {
+      const { reason, cityId } = nextSnapshot.recovery;
+      const city = cityId !== null ? ` (city: ${cityId})` : "";
+      shellError = `Persistence recovery required: ${reason}${city}`;
+    }
   }
 
   function handleDismissRejection(): void {
@@ -398,7 +403,22 @@
         // race a replacement runtime. Dispose makes the runtime terminal:
         // `start()` and all UI methods become no-ops, and the shared
         // coordinator lease is released for a replacement runtime.
-        void runtime.dispose();
+        //
+        // If the runtime entered a terminal persistence-recovery state
+        // (late-success cleanup failed or bootstrap reconciliation failed),
+        // dispose() resolves with `recoveryRequired` and the lease is
+        // permanently pinned. A replacement `createGameRuntime` against the
+        // same storage identity would hang indefinitely. The application
+        // must NOT blindly start a replacement runtime after disposal —
+        // check the dispose result and surface the recovery requirement.
+        void runtime.dispose().then((result) => {
+          if (result.status === "recoveryRequired") {
+            // The lease is permanently pinned. A replacement runtime
+            // cannot acquire it. Surface this so the user knows to
+            // reconcile storage out of band (e.g. reload the page).
+            shellError = `Persistence recovery required: ${result.reason}`;
+          }
+        });
       };
     }
   });

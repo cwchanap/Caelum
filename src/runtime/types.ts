@@ -205,11 +205,55 @@ export interface RuntimeSnapshot {
   // Auto-clears on the next successful dispatch.
   rejection: GameplayRejection | null;
   sandboxResetError: SandboxResetError | null;
+  // Terminal persistence-recovery state. When `state === "recoveryRequired"`,
+  // the runtime is dead: the lease is permanently pinned and no further
+  // gameplay, saves, or controller calls reach the backend or store. The
+  // application MUST render a recovery/error screen and NOT attempt to start
+  // a replacement `createGameRuntime` against the same storage identity
+  // (it would hang indefinitely because the lease is never released). The
+  // user must reconcile the durable storage out of band (e.g. by reloading
+  // the page/process) before retrying.
+  //
+  // Present in the initial snapshot so App can detect a bootstrap-born
+  // terminal runtime before calling `start()`. Also set when a live
+  // runtime's late-success cleanup or ambiguous-failure reconciliation
+  // enters the terminal persistence-recovery state.
+  recovery: RuntimeRecoveryState;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
+
+/**
+ * Terminal persistence-recovery state surfaced through {@link RuntimeSnapshot.recovery}
+ * and {@link RuntimeDisposeResult}. When `state === "recoveryRequired"`, the
+ * runtime is dead and the lease is permanently pinned.
+ */
+export type RuntimeRecoveryState =
+  | { state: "ok" }
+  | {
+      state: "recoveryRequired";
+      reason: "lateSuccessCleanupFailed";
+      cityId: string;
+    }
+  | {
+      state: "recoveryRequired";
+      reason: "bootstrapReconciliationFailed";
+      cityId: string | null;
+    };
+
+/**
+ * Typed error thrown by {@link createGameRuntime} when bootstrap reconciliation
+ * fails (a leftover pending city record could not be deleted, or `listCities`
+ * itself failed). The runtime is NOT created — the application should render
+ * a recovery/error screen and NOT attempt to create a replacement runtime
+ * against the same storage identity (the lease is permanently pinned).
+ */
+export interface BootstrapRecoveryError {
+  reason: "bootstrapReconciliationFailed";
+  cityId: string | null;
+}
 
 /**
  * The outcome of {@link RuntimeController.dispose}. Distinguishes a normal

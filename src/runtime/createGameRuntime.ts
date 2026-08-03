@@ -89,9 +89,11 @@ import {
   type SharedPersistenceCoordinator,
 } from "./persistenceCoordinator";
 import type {
+  BootstrapRecoveryError,
   RuntimeController,
   RuntimeDisposeResult,
   RuntimeListener,
+  RuntimeRecoveryState,
   RuntimeSnapshot,
 } from "./types";
 
@@ -364,6 +366,18 @@ export async function createGameRuntime(
   let lastSavedAt = options.lastSavedAt ?? null;
   let loadRequestToken = 0;
   let persistenceError: PersistenceCoordinatorError | null = null;
+  // Terminal persistence-recovery state, surfaced through `RuntimeSnapshot.recovery`
+  // so the application can detect a dead runtime without calling `dispose()`.
+  // Set when bootstrap reconciliation fails (runtime is born terminal) or when
+  // a live runtime's late-success cleanup / ambiguous-failure reconciliation
+  // enters the fatal persistence-recovery state.
+  let recovery: RuntimeRecoveryState = leaseStuck
+    ? {
+        state: "recoveryRequired",
+        reason: "bootstrapReconciliationFailed",
+        cityId: leaseStuckCityId,
+      }
+    : { state: "ok" };
   // Once the backend has failed fatally, no further dispatches or ticks are
   // attempted. `failBackend` sets this; `queueBackend` short-circuits on it so
   // user-initiated intents after a fatal error do not reach a dead backend.
@@ -455,6 +469,7 @@ export async function createGameRuntime(
     backendError,
     rejection,
     sandboxResetError,
+    recovery,
   });
 
   // The canvas surface, 2D context, and requestAnimationFrame loop live in a
@@ -2480,16 +2495,68 @@ export async function createGameRuntime(
   };
 
   // Enter the fatal persistence-recovery state: late-success cleanup could
-  // not undo the orphan storage mutation (or the backend rollback failed).
-  // The lease is never released, so a replacement runtime against the same
-  // storage identity cannot acquire it. The runtime is already disposed
-  // (`dead`), so this does not publish or restart the canvas — it only pins
-  // the lease so safe rebootstrap cannot proceed until the orphan is
-  // reconciled out of band. The `cityId` is captured so `dispose()` can
-  // report which city's cleanup failed via the typed disposal outcome.
+  // not undo the orphan storage mutation (or the backend rollback failed),
+  // OR reconciliation could not determine the committed state (readFailed) or
+  // observed an impossible state (active after an atomic create-only). This
+  // is a complete terminal transition — not merely pinning the lease. The
+  // runtime becomes immediately dead: no further gameplay, saves, or
+  // controller calls reach the backend or store. The lease is pinned
+  // (`leaseStuck`) so a replacement runtime against the same storage
+  // identity cannot acquire it — safe rebootstrap cannot proceed until the
+  // orphan is reconciled out of band. The candidate backend may remain
+  // installed but `dead = true` prevents any gameplay from reaching it. The
+  // active-city identity is cleared so the candidate is never presented as a
+  // coherent active city. The `cityId` is captured so `dispose()` can report
+  // which city's cleanup failed via the typed disposal outcome.
+  //
+  // This mirrors `failBackend`'s terminal discipline (invalidate tokens,
+  // reset statuses, stop canvas/preview, start drain-and-release) but pins
+  // the lease instead of releasing it, and does not set `backendError`
+  // (this is a persistence-recovery condition, not a backend failure).
   const enterLateSuccessCleanupFailure = (cityId: string): void => {
     leaseStuck = true;
     leaseStuckCityId = cityId;
+    recovery = {
+      state: "recoveryRequired",
+      reason: "lateSuccessCleanupFailed",
+      cityId,
+    };
+    dead = true;
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    activeRoadMutation = null;
+    clearHoverPreviewTimer();
+    sessionToken += 1;
+    loadRequestToken += 1;
+    saveStatus = { state: "idle" };
+    loadStatus = { state: "idle" };
+    lifecycleStatus = { state: "idle" };
+    persistenceError = null;
+    stopRequestedDuringReservation = false;
+    stopRuntime();
+    // Clear the active-city identity and revision baselines so the
+    // candidate backend is never presented as a coherent active city.
+    activeCity = null;
+    currentRevision = 0;
+    persistedRevision = 0;
+    lastSavedAt = null;
+    // Clear stale preview UI so the terminal snapshot does not show a
+    // road preview overlay or a route draft stuck at previewPending.
+    ui = {
+      ...ui,
+      roadMutationPreview: null,
+      roadMutationPreviewError: null,
+      routeDraft:
+        ui.routeDraft === null
+          ? ui.routeDraft
+          : { ...ui.routeDraft, previewPending: false },
+    };
+    // Fire-and-forget: close the lease so no new work can be admitted, and
+    // drain already-admitted work. The lease is never released because
+    // `leaseStuck` is set. The current foreground operation's `finally`
+    // block will `releaseForeground`, allowing `drainAll` to resolve, but
+    // `startDrainAndRelease` skips `lease.release()` when `leaseStuck`.
+    void startDrainAndRelease();
   };
 
   // Late-success cleanup: the initial `createWorkingSave` succeeded AFTER
@@ -2497,6 +2564,29 @@ export async function createGameRuntime(
   // even though New City never completed or published success. Roll back the
   // backend to the prior canonical state (coherence) and undo the orphan
   // storage mutation.
+  //
+  // This function is called from two distinct contexts that require
+  // different public-runtime handling:
+  //
+  // 1. Disposal-time cleanup (the `if (dead)` branch in `activateNewCity`):
+  //    the runtime is already disposed. Roll back the backend and delete the
+  //    orphan for coherence, but do NOT restore the prior public runtime,
+  //    restart the canvas, publish, or resume previews. Return
+  //    `runtimeUnavailable`.
+  //
+  // 2. Live-runtime reconciliation (`reconcileAmbiguousCreateFailure` /
+  //    `reconcileAmbiguousFinalizeFailure` → `case "pending"`): the runtime
+  //    is alive. The create committed a pending record but the operation
+  //    failed (thrown or typed). Roll back the backend, delete the orphan,
+  //    restore the prior public runtime, publish, resume previews, and
+  //    return the ORIGINAL typed failure (not `runtimeUnavailable`). The
+  //    runtime remains usable.
+  //
+  // Disposal may begin during the async cleanup operations (backend rollback
+  // or storage delete). After cleanup succeeds, a `dead` check gates the
+  // public-runtime restoration: if disposal began during cleanup, remain
+  // terminal and return `runtimeUnavailable` — mirroring `rollbackNewCity`'s
+  // terminal discipline.
   //
   // Serialization: this runs inside the admitted foreground operation, so
   // `drainAll` waits for it before the lease can be released. The cleanup
@@ -2513,15 +2603,17 @@ export async function createGameRuntime(
   //
   // Cleanup-failure policy: if the backend rollback or the storage delete
   // fails (typed error OR a thrown adapter exception), enter the fatal
-  // persistence-recovery state — the lease is never released. Silently
+  // persistence-recovery state (`enterLateSuccessCleanupFailure`) — the
+  // runtime becomes terminal and the lease is never released. Silently
   // releasing the lease while an orphan remains is not acceptable. A thrown
-  // adapter exception is caught and normalized into the pinned state so the
-  // activation resolves with a typed `runtimeUnavailable` rather than
+  // adapter exception is caught and normalized into the terminal state so
+  // the activation resolves with a typed `runtimeUnavailable` rather than
   // rejecting with the untyped adapter exception.
   const cleanupLateSuccessNewCity = async (
     prior: NewCityPriorRuntime,
     priorCanonicalSnapshot: RustGameSnapshot,
     identity: NewCityIdentity,
+    failure: PersistenceCoordinatorError,
   ): Promise<PersistenceOperationResult<LoadCityValue>> => {
     const restored = await restoreCanonicalBackendState(
       priorCanonicalSnapshot,
@@ -2537,14 +2629,36 @@ export async function createGameRuntime(
       // `notFound` means the orphan is already absent — acceptable.
       if (!deleted.ok && deleted.error.code !== "notFound") {
         enterLateSuccessCleanupFailure(identity.id);
+        return runtimeUnavailable("activateNewCity");
       }
     } catch {
       // A thrown adapter exception must not reject the activation or bypass
-      // the pinned recovery state. Normalize it: pin the lease so a
-      // replacement runtime cannot acquire it while the orphan remains.
+      // the terminal recovery state. Normalize it: enter the fatal state so
+      // the runtime is terminal and the lease is pinned.
       enterLateSuccessCleanupFailure(identity.id);
+      return runtimeUnavailable("activateNewCity");
     }
-    return runtimeUnavailable("activateNewCity");
+
+    // Cleanup succeeded. If the runtime is already disposed (or disposal
+    // began during the async cleanup operations), remain terminal — do not
+    // restore the prior public runtime, restart the canvas, publish, or
+    // resume previews. This mirrors `rollbackNewCity`'s terminal discipline.
+    if (dead) {
+      return runtimeUnavailable("activateNewCity");
+    }
+
+    // Live runtime: the pending orphan is deleted and the backend is rolled
+    // back, so the runtime is coherent again. Restore the prior public
+    // runtime, publish the restored view, resume previews, and return the
+    // ORIGINAL typed failure — not `runtimeUnavailable`. The runtime remains
+    // usable for subsequent operations.
+    previewRuntimeEpoch += 1;
+    previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
+    restoreNewCityPriorRuntime(prior);
+    publish();
+    resumeNewCityPriorPreviews(prior);
+    return { status: "failed", error: failure };
   };
 
   // Read a city's committed state to reconcile an ambiguous store operation.
@@ -2612,11 +2726,13 @@ export async function createGameRuntime(
         return await rollbackNewCity(prior, priorCanonicalSnapshot, failure);
       case "pending":
         // The create committed a pending record — treat as late-success
-        // orphan. Delete it and roll back the backend.
+        // orphan. Delete it and roll back the backend. Pass the original
+        // failure so the live-runtime path returns it (not runtimeUnavailable).
         return await cleanupLateSuccessNewCity(
           prior,
           priorCanonicalSnapshot,
           identity,
+          failure,
         );
       case "active":
       case "readFailed":
@@ -2633,6 +2749,8 @@ export async function createGameRuntime(
   // city to determine committed state:
   // - notFound: the city doesn't exist — unexpected; rollback.
   // - pending: finalize did not commit — cleanup (delete pending + rollback).
+  //   Pass the original finalize failure so the live-runtime cleanup path
+  //   returns it (not runtimeUnavailable).
   // - active: finalize committed — the city is durably active. If dead, do
   //   NOT delete it (it's a real city); return runtimeUnavailable. If alive,
   //   return null to signal the caller to proceed to the normal success path.
@@ -2643,6 +2761,7 @@ export async function createGameRuntime(
     prior: NewCityPriorRuntime,
     priorCanonicalSnapshot: RustGameSnapshot,
     identity: NewCityIdentity,
+    failure: PersistenceCoordinatorError,
   ): Promise<PersistenceOperationResult<LoadCityValue> | null> => {
     const state = await readCityPendingState(identity.id);
     switch (state.status) {
@@ -2658,10 +2777,13 @@ export async function createGameRuntime(
         });
       case "pending":
         // Finalize did not commit — delete the pending orphan and rollback.
+        // Pass the original finalize failure so the live-runtime cleanup
+        // path returns it (not runtimeUnavailable).
         return await cleanupLateSuccessNewCity(
           prior,
           priorCanonicalSnapshot,
           identity,
+          failure,
         );
       case "active":
         // Finalize committed — the city is durably active. If dead, do NOT
@@ -2934,6 +3056,10 @@ export async function createGameRuntime(
           prior,
           priorCapture.snapshot,
           identity,
+          {
+            kind: "precondition",
+            error: { code: "runtimeUnavailable", operation: "activateNewCity" },
+          },
         );
       }
 
@@ -2966,6 +3092,7 @@ export async function createGameRuntime(
           prior,
           priorCapture.snapshot,
           identity,
+          { kind: "store", error: finalized.error },
         );
         if (reconciled !== null) return reconciled;
         // Finalization committed despite the failure — fall through to the
@@ -3698,6 +3825,27 @@ export async function createGameRuntime(
     },
     mountCanvas: canvasHost.mount,
   };
+
+  // Bootstrap reconciliation failed: the runtime is born terminal (dead,
+  // leaseStuck). Rather than returning a frozen runtime that the application
+  // cannot distinguish from a healthy one without calling `dispose()`, reject
+  // with a typed BootstrapRecoveryError so the application's catch block
+  // renders a recovery/error screen immediately. The lease is permanently
+  // pinned (startDrainAndRelease skips release when leaseStuck), so a
+  // replacement createGameRuntime against the same storage identity hangs
+  // indefinitely — the user must reconcile the durable storage out of band
+  // (e.g. by reloading the page/process) before retrying.
+  if (leaseStuck) {
+    void startDrainAndRelease();
+    const error = new Error(
+      leaseStuckCityId !== null
+        ? `Bootstrap reconciliation failed for city ${leaseStuckCityId}`
+        : "Bootstrap reconciliation failed",
+    ) as Error & BootstrapRecoveryError;
+    error.reason = "bootstrapReconciliationFailed";
+    error.cityId = leaseStuckCityId;
+    throw error;
+  }
 
   return api;
 }

@@ -134,6 +134,7 @@ function createRuntimeHarness(
     backendError,
     rejection,
     sandboxResetError: null,
+    recovery: { state: "ok" as const },
   });
 
   const publish = (): RuntimeSnapshot => {
@@ -508,6 +509,7 @@ describe("App shell bootstrap", () => {
       backendError: null,
       rejection: null,
       sandboxResetError: null,
+      recovery: { state: "ok" },
     });
 
     await waitFor(() =>
@@ -871,6 +873,32 @@ describe("App shell bootstrap", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Rust backend failed");
+    expect(runtime.stop).toHaveBeenCalled();
+  });
+
+  it("surfaces persistence recovery state from resolved runtime commands", async () => {
+    const { runtime } = createRuntimeHarness();
+    const deferred = deferredRuntimeResult();
+    runtime.togglePause = vi.fn((): RuntimeCommandResult => deferred.promise);
+
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    const current = runtime.getSnapshot();
+    deferred.resolve({
+      ...current,
+      rejection: null,
+      recovery: {
+        state: "recoveryRequired",
+        reason: "lateSuccessCleanupFailed",
+        cityId: "city-orphan",
+      },
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Persistence recovery required");
+    expect(alert).toHaveTextContent("lateSuccessCleanupFailed");
+    expect(alert).toHaveTextContent("city-orphan");
     expect(runtime.stop).toHaveBeenCalled();
   });
 
