@@ -410,7 +410,13 @@ export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinat
         if (next === undefined) {
           leaseHolder = false;
         } else {
-          next(lease);
+          // Hand off a FRESH open capability. The released lease has been
+          // marked closing by `beginClosing()`; passing it on would give
+          // the next owner a closed lease whose `enqueue`/`acquireCityFence`
+          // reject and whose further handoffs would keep circulating the
+          // same closed capability. Each ownership generation must receive
+          // its own distinct open lease.
+          next(createLease());
         }
       },
     };

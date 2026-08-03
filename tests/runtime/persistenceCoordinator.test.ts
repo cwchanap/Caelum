@@ -3897,6 +3897,120 @@ describe("runtime persistence coordinator contracts", () => {
       lease2.release();
     });
 
+    it("a queued lease handoff creates a fresh open capability", async () => {
+      // Regression: `release()` previously passed the closed predecessor
+      // lease to the queued waiter. The waiter then received an unusable
+      // capability whose `enqueue` rejected and `acquireCityFence` threw,
+      // while `createGameRuntime` had already resolved successfully.
+      const coordinator = createSharedPersistenceCoordinator();
+      const lease1 = await coordinator.acquireLease();
+
+      // Queue runtime 2 BEFORE runtime 1 releases. This exercises the
+      // queued-handoff branch in `release()`, not the empty-holder branch
+      // that `acquireLease()` takes when no holder is set.
+      const lease2Promise = coordinator.acquireLease();
+
+      lease1.beginClosing();
+      await lease1.drainAll();
+      lease1.release();
+
+      const lease2 = await lease2Promise;
+
+      // The new owner must receive a distinct, OPEN capability — not the
+      // closed lease being released.
+      expect(lease2).not.toBe(lease1);
+      expect(lease2.isClosed).toBe(false);
+
+      // The fresh lease must be fully usable: enqueue runs work and
+      // resolves with the typed value, and fence acquisition succeeds.
+      await expect(lease2.enqueue("city-B", async () => "ok")).resolves.toBe(
+        "ok",
+      );
+      expect(() => lease2.acquireCityFence("city-B")).not.toThrow();
+      lease2.releaseCityFence("city-B");
+
+      lease2.beginClosing();
+      await lease2.drainAll();
+      lease2.release();
+    });
+
+    it("a replacement runtime receives a usable lease after a queued handoff", async () => {
+      // Regression: when runtime 2 queued before runtime 1 released,
+      // `release()` handed off the closed predecessor lease. Runtime 2
+      // resolved successfully but its persistence operations reached
+      // `lease.enqueue`, which rejected with `PersistenceLeaseClosedError`
+      // — a thrown error instead of the documented typed
+      // `PersistenceOperationResult`. This test exercises the full
+      // runtime-level path: runtime 2 must hold a real active city and
+      // `saveWorking()` must complete with a typed result and a store
+      // mutation.
+      const failures = createMemorySaveStoreFailureControls();
+      const memoryStore = createMemorySaveStore({ failures });
+      const cityA = cityIdentity("city-A");
+      const cityB = cityIdentity("city-B");
+      memoryStore.seedRawWorking(
+        cityA.id,
+        loadEnvelope({ city: cityA, savedAt: "2026-08-01T09:00:00.000Z" }),
+      );
+
+      const harness1 = await createSharedStoreHarness({
+        memoryStore,
+        failures,
+        activeCity: cityA,
+        clean: true,
+      });
+      let harness2: CoordinatorHarness | null = null;
+      try {
+        // Queue runtime 2 BEFORE runtime 1 releases. It targets the same
+        // storage identity, so it must wait for the lease.
+        let runtime2Resolved = false;
+        const harness2Promise = createSharedStoreHarness({
+          memoryStore,
+          failures,
+          activeCity: cityB,
+          clean: true,
+        }).then((harness) => {
+          runtime2Resolved = true;
+          return harness;
+        });
+
+        // Flush microtasks + a macrotask. Runtime 2 must still be waiting
+        // because runtime 1 holds the lease.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(runtime2Resolved).toBe(false);
+
+        // Dispose runtime 1. Its lease closes, drains (no outstanding
+        // work), and releases — handing off a FRESH open capability to
+        // the queued runtime 2.
+        await harness1.runtime.dispose();
+
+        harness2 = await harness2Promise;
+        expect(runtime2Resolved).toBe(true);
+
+        // Runtime 2 has a real active city (city B). Calling saveWorking
+        // must reach `lease.enqueue` on the fresh capability, complete
+        // with a typed `PersistenceOperationResult`, and produce an
+        // actual store mutation — not throw `PersistenceLeaseClosedError`.
+        const saveResult = await harness2.runtime.persistence.saveWorking();
+        expect(saveResult.status).toBe("completed");
+        if (saveResult.status !== "completed") {
+          throw new Error("unreachable");
+        }
+        expect(saveResult.value.summary.cityId).toBe(cityB.id);
+
+        // The working save for city B was actually written to storage.
+        const readResult = await memoryStore.readWorkingSave(cityB.id);
+        expect(readResult.ok).toBe(true);
+      } finally {
+        harness1.store.releaseAll();
+        await harness1.runtime.dispose();
+        if (harness2 !== null) {
+          harness2.store.releaseAll();
+          await harness2.runtime.dispose();
+        }
+      }
+    });
+
     it("dispose during New City blocks lease transfer until the workflow terminates (createSandbox blocked)", async () => {
       const failures = createMemorySaveStoreFailureControls();
       const memoryStore = createMemorySaveStore({ failures });
@@ -4174,6 +4288,183 @@ describe("runtime persistence coordinator contracts", () => {
         expect(
           harness2.runtime.getSnapshot().persistence.activeCity,
         ).toBeNull();
+      } finally {
+        harness1.store.releaseAll();
+        await harness1.runtime.dispose();
+        if (harness2 !== null) await harness2.runtime.dispose();
+      }
+    });
+
+    it("disposal during New City rollback keeps a running runtime terminal (candidate capture blocked)", async () => {
+      // Regression: when a running runtime was disposed after New City
+      // installed the candidate, the rollback path restored the prior
+      // public runtime — restarting the canvas, restoring pre-disposal
+      // statuses, publishing snapshots, and resuming previews —
+      // resurrecting a disposed runtime. A disposed runtime must remain
+      // terminal even though its private backend must be rolled back for
+      // coherence.
+      const failures = createMemorySaveStoreFailureControls();
+      const memoryStore = createMemorySaveStore({ failures });
+      const cityA = cityIdentity("city-A");
+      memoryStore.seedRawWorking(
+        cityA.id,
+        loadEnvelope({ city: cityA, savedAt: "2026-08-01T09:00:00.000Z" }),
+      );
+
+      const harness1 = await createSharedStoreHarness({
+        memoryStore,
+        failures,
+        activeCity: cityA,
+        clean: true,
+      });
+      let harness2: CoordinatorHarness | null = null;
+      try {
+        // The runtime is actively running before New City begins.
+        harness1.runtime.start();
+        expect(harness1.runtime.isRunning()).toBe(true);
+
+        // Spy on preview requests so we can assert none are restarted
+        // after disposal.
+        const previewRouteSpy = vi.spyOn(harness1.backend, "previewRoute");
+        const previewRoadMutationSpy = vi.spyOn(
+          harness1.backend,
+          "previewRoadMutation",
+        );
+
+        // Block the candidate-capture snapshotForSave (the 2nd call) so
+        // New City has installed the candidate via createSandbox but has
+        // not yet captured or written it.
+        let snapshotForSaveCount = 0;
+        let releaseCandidateCapture: (() => void) | undefined;
+        const originalSnapshotForSave = harness1.backend.snapshotForSave;
+        harness1.backend.snapshotForSave = async () => {
+          snapshotForSaveCount += 1;
+          if (snapshotForSaveCount === 2) {
+            await new Promise<void>((resolve) => {
+              releaseCandidateCapture = resolve;
+            });
+          }
+          return originalSnapshotForSave();
+        };
+
+        const listener = vi.fn();
+        harness1.runtime.subscribe(listener);
+
+        // Start New City. It admits, creates the sandbox (candidate
+        // installed), and blocks in the candidate-capture snapshotForSave.
+        const activation = harness1.runtime.persistence.activateNewCity(
+          sandboxRequest(),
+          newCityIdentity(),
+        );
+
+        // Wait for the 2nd snapshotForSave call (candidate capture is
+        // blocked).
+        await vi.waitFor(() => {
+          expect(snapshotForSaveCount).toBe(2);
+        });
+
+        // Capture the listener call count once New City has settled into
+        // the blocked candidate-capture state.
+        const listenerCallsBeforeDispose = listener.mock.calls.length;
+        const previewRouteCallsBeforeDispose =
+          previewRouteSpy.mock.calls.length;
+        const previewRoadMutationCallsBeforeDispose =
+          previewRoadMutationSpy.mock.calls.length;
+
+        // Dispose the running runtime. It sets dead=true, stops the
+        // canvas, resets statuses to idle, and awaits drainAll — which
+        // must wait for the foreground New City workflow.
+        expect(harness1.runtime.isRunning()).toBe(true);
+        let disposeResolved = false;
+        const disposePromise = harness1.runtime.dispose().then(() => {
+          disposeResolved = true;
+        });
+
+        // The canvas must be stopped immediately by disposal.
+        expect(harness1.runtime.isRunning()).toBe(false);
+
+        // Start creating runtime 2 against the same shared store. It
+        // must wait for the lease until the foreground New City workflow
+        // (and its backend rollback) finishes.
+        let runtime2Resolved = false;
+        const harness2Promise = createSharedStoreHarness({
+          memoryStore,
+          failures,
+          activeCity: null,
+          clean: true,
+        }).then((harness) => {
+          runtime2Resolved = true;
+          return harness;
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(disposeResolved).toBe(false);
+        expect(runtime2Resolved).toBe(false);
+
+        // Release the candidate capture. New City sees dead=true, rolls
+        // back the candidate backend for coherence, and returns
+        // runtimeUnavailable — WITHOUT restoring the prior public
+        // runtime.
+        releaseCandidateCapture?.();
+
+        const activationResult = await activation;
+        expect(activationResult).toEqual(runtimeUnavailable("activateNewCity"));
+
+        // The runtime must remain terminal: the canvas must NOT have
+        // been restarted by rollback.
+        expect(harness1.runtime.isRunning()).toBe(false);
+
+        // No candidate active city was ever published.
+        expect(
+          listener.mock.calls.some(
+            ([published]) =>
+              published.persistence.activeCity?.id === newCityIdentity().id,
+          ),
+        ).toBe(false);
+
+        // No lifecycle status was restored to "rollingBack" after
+        // disposal began, and persistence statuses remain idle.
+        const callsAfterDispose = listener.mock.calls.slice(
+          listenerCallsBeforeDispose,
+        );
+        for (const [published] of callsAfterDispose) {
+          expect(published.persistence.lifecycleStatus).not.toEqual({
+            state: "rollingBack",
+          });
+          expect(published.persistence.saveStatus).toEqual({
+            state: "idle",
+          });
+          expect(published.persistence.loadStatus).toEqual({
+            state: "idle",
+          });
+        }
+
+        // No preview request was restarted after disposal began.
+        expect(previewRouteSpy.mock.calls.length).toBe(
+          previewRouteCallsBeforeDispose,
+        );
+        expect(previewRoadMutationSpy.mock.calls.length).toBe(
+          previewRoadMutationCallsBeforeDispose,
+        );
+
+        // Disposal cleanup does not emit later runtime-view
+        // publications: the only post-dispose listener calls, if any,
+        // are the terminal snapshot from dispose itself (no further
+        // publications from rollback).
+        await disposePromise;
+        expect(disposeResolved).toBe(true);
+
+        // Runtime 2 acquires the lease only after the backend rollback
+        // finishes (the foreground New City workflow released).
+        harness2 = await harness2Promise;
+        expect(runtime2Resolved).toBe(true);
+
+        // No working save was written for the new city.
+        const listResult = await memoryStore.listCities();
+        expect(
+          listResult.ok &&
+            listResult.value.some((c) => c.cityId === newCityIdentity().id),
+        ).toBe(false);
       } finally {
         harness1.store.releaseAll();
         await harness1.runtime.dispose();
