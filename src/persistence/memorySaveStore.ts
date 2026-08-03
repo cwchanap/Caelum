@@ -502,6 +502,39 @@ export function createMemorySaveStore(options?: {
     return { ok: true, value: undefined };
   };
 
+  const restoreWorkingSaveRaw: SaveStore["restoreWorkingSaveRaw"] = async (
+    cityId,
+    value,
+  ) => {
+    const failure = injectedFailure<void>("restoreWorkingSaveRaw", { cityId });
+    if (failure) return failure;
+    const inspected = inspectSaveEnvelope(value);
+    if (!inspected.ok) {
+      return errorResult(
+        "restoreWorkingSaveRaw",
+        incompatibleCode(inspected.compatibility),
+        { cityId },
+      );
+    }
+    if (inspected.envelope.city.id !== cityId) {
+      return errorResult("restoreWorkingSaveRaw", "corruptRecord", { cityId });
+    }
+    const stored = cloneResult(inspected.envelope, "restoreWorkingSaveRaw", {
+      cityId,
+    });
+    if (!stored.ok) return stored;
+    const reinspection = inspectSaveEnvelope(stored.value);
+    if (!reinspection.ok) {
+      return errorResult(
+        "restoreWorkingSaveRaw",
+        incompatibleCode(reinspection.compatibility),
+        { cityId },
+      );
+    }
+    workingRecords.set(cityId, stored.value);
+    return { ok: true, value: undefined };
+  };
+
   const listCheckpoints: SaveStore["listCheckpoints"] = async (cityId) => {
     const failure = injectedFailure<CheckpointSummary[]>("listCheckpoints", {
       cityId,
@@ -865,6 +898,7 @@ export function createMemorySaveStore(options?: {
     renameCity,
     duplicateCity,
     deleteCity,
+    restoreWorkingSaveRaw,
     listCheckpoints,
     readCheckpoint,
     writeCheckpoint,

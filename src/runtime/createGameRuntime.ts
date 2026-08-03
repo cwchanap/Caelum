@@ -52,6 +52,7 @@ import type {
 import {
   buildSaveEnvelope,
   type InspectedSaveEnvelope,
+  type UntrustedSaveValue,
 } from "../persistence/envelope";
 import {
   compatibilityToEnvelopeError,
@@ -257,16 +258,27 @@ export async function createGameRuntime(
   // or FIFO enqueues can be admitted through this lease while disposal
   // waits for already-admitted work to settle.
   let drainAndReleasePromise: Promise<void> | null = null;
+  // Fatal persistence-recovery flag: when late-success cleanup of an orphan
+  // New City write cannot settle (backend rollback or storage restore/delete
+  // fails), the lease must NOT be released. A replacement runtime against the
+  // same storage identity would otherwise acquire the lease and observe or
+  // further mutate inconsistent storage. Setting this before `drainAll`
+  // resolves makes `startDrainAndRelease` skip `lease.release()`, so the
+  // replacement runtime's `createGameRuntime` (which awaits `acquireLease`)
+  // never resolves — matching the defined behavior for uncancellable writes
+  // that never settle. Safe rebootstrap cannot proceed until the orphan is
+  // reconciled out of band.
+  let leaseStuck = false;
   const startDrainAndRelease = (): Promise<void> => {
     if (drainAndReleasePromise !== null) return drainAndReleasePromise;
     lease.beginClosing();
     drainAndReleasePromise = lease
       .drainAll()
       .then(() => {
-        lease.release();
+        if (!leaseStuck) lease.release();
       })
       .catch(() => {
-        lease.release();
+        if (!leaseStuck) lease.release();
       });
     return drainAndReleasePromise;
   };
@@ -2357,6 +2369,104 @@ export async function createGameRuntime(
     return { status: "failed", error: failure };
   };
 
+  // Centralized "restore the prior public runtime only while live" for the
+  // pre-candidate failure branches that do NOT route through `rollbackNewCity`
+  // (no candidate is installed, so no backend rollback is needed). Disposal
+  // may begin while the awaited backend call is pending; a disposed runtime
+  // must remain terminal — do not restore pre-disposal statuses/tokens,
+  // restart the canvas, publish, or resume previews after disposal. This
+  // mirrors `rollbackNewCity`'s terminal discipline for the branches that
+  // bypass it.
+  const restorePriorRuntimeAfterNewCityFailure = (
+    prior: NewCityPriorRuntime,
+    failure: PersistenceCoordinatorError,
+  ): PersistenceOperationResult<LoadCityValue> => {
+    if (dead) {
+      return runtimeUnavailable("activateNewCity");
+    }
+    restoreNewCityPriorRuntime(prior);
+    publish();
+    resumeNewCityPriorPreviews(prior);
+    return { status: "failed", error: failure };
+  };
+
+  // Prior-record capture for late-success cleanup. `writeWorkingSave` is an
+  // upsert: a New City write whose `identity.id` collides with a pre-existing
+  // city overwrites that city's record. New City IDs SHOULD be unique by
+  // construction (the caller generates a fresh id), but late-success cleanup
+  // must be defense-in-depth — it must never delete a pre-existing city that
+  // the uncancellable write overwrote. So before the write we capture whether
+  // a record existed for `identity.id` and, if so, its raw value; on
+  // late-success cleanup we restore that prior record rather than deleting.
+  type NewCityPriorRecord =
+    | { existed: true; value: UntrustedSaveValue }
+    | { existed: false };
+
+  // Enter the fatal persistence-recovery state: late-success cleanup could
+  // not undo the orphan storage mutation (or the backend rollback failed).
+  // The lease is never released, so a replacement runtime against the same
+  // storage identity cannot acquire it. The runtime is already disposed
+  // (`dead`), so this does not publish or restart the canvas — it only pins
+  // the lease so safe rebootstrap cannot proceed until the orphan is
+  // reconciled out of band.
+  const enterLateSuccessCleanupFailure = (): void => {
+    leaseStuck = true;
+  };
+
+  // Late-success cleanup: the initial `writeWorkingSave` succeeded AFTER
+  // disposal began, so the candidate city record is committed in storage
+  // even though New City never completed or published success. Roll back the
+  // backend to the prior canonical state (coherence) and undo the orphan
+  // storage mutation.
+  //
+  // Serialization: this runs inside the admitted foreground operation, so
+  // `drainAll` waits for it before the lease can be released. The cleanup
+  // store call is issued DIRECTLY (not through `lease.enqueue`, which rejects
+  // on the now-closing lease) — this is safe because the lease is still
+  // exclusively held and the successful city FIFO write has already settled.
+  //
+  // Identity safety: if a prior record existed for `identity.id` (an ID
+  // collision), restore it via `restoreWorkingSaveRaw` rather than deleting,
+  // so cleanup never deletes a pre-existing city. If no prior record existed,
+  // `deleteCity` removes the orphan.
+  //
+  // Cleanup-failure policy: if the backend rollback or the storage
+  // restore/delete fails, enter the fatal persistence-recovery state — the
+  // lease is never released. Silently releasing the lease while an orphan or
+  // overwritten record remains is not acceptable.
+  const cleanupLateSuccessNewCity = async (
+    prior: NewCityPriorRuntime,
+    priorCanonicalSnapshot: RustGameSnapshot,
+    identity: NewCityIdentity,
+    priorRecord: NewCityPriorRecord,
+  ): Promise<PersistenceOperationResult<LoadCityValue>> => {
+    const restored = await restoreCanonicalBackendState(
+      priorCanonicalSnapshot,
+      prior.paused,
+    );
+    if (!restored.ok) {
+      enterLateSuccessCleanupFailure();
+      return runtimeUnavailable("activateNewCity");
+    }
+
+    let cleanupOk: boolean;
+    if (priorRecord.existed) {
+      const restoredRecord = await saveStore!.restoreWorkingSaveRaw(
+        identity.id,
+        priorRecord.value,
+      );
+      cleanupOk = restoredRecord.ok;
+    } else {
+      const deleted = await saveStore!.deleteCity(identity.id);
+      // `notFound` means the orphan is already absent — acceptable.
+      cleanupOk = deleted.ok || deleted.error.code === "notFound";
+    }
+    if (!cleanupOk) {
+      enterLateSuccessCleanupFailure();
+    }
+    return runtimeUnavailable("activateNewCity");
+  };
+
   const activateNewCity = async (
     requestedSandbox: SandboxCreationRequest,
     requestedIdentity: NewCityIdentity,
@@ -2435,21 +2545,16 @@ export async function createGameRuntime(
       try {
         priorCapture = await backend.snapshotForSave();
       } catch (error: unknown) {
-        const failure = persistenceHostFailure("snapshotForSave", error);
-        restoreNewCityPriorRuntime(prior);
-        publish();
-        resumeNewCityPriorPreviews(prior);
-        return { status: "failed", error: failure };
+        return restorePriorRuntimeAfterNewCityFailure(
+          prior,
+          persistenceHostFailure("snapshotForSave", error),
+        );
       }
       if (!priorCapture.ok) {
-        const failure: PersistenceCoordinatorError = {
+        return restorePriorRuntimeAfterNewCityFailure(prior, {
           kind: "backend",
           error: priorCapture.error,
-        };
-        restoreNewCityPriorRuntime(prior);
-        publish();
-        resumeNewCityPriorPreviews(prior);
-        return { status: "failed", error: failure };
+        });
       }
       // Dead check after prior capture: the backend still holds the prior
       // state (createSandbox has not run), so no backend rollback is
@@ -2474,13 +2579,10 @@ export async function createGameRuntime(
         });
       }
       if (!created.ok) {
-        restoreNewCityPriorRuntime(prior);
-        publish();
-        resumeNewCityPriorPreviews(prior);
-        return {
-          status: "failed",
-          error: { kind: "sandbox", error: created.error },
-        };
+        return restorePriorRuntimeAfterNewCityFailure(prior, {
+          kind: "sandbox",
+          error: created.error,
+        });
       }
       // Dead check after createSandbox: the backend now holds the candidate
       // sandbox. Rollback to the prior canonical snapshot so the disposed
@@ -2552,6 +2654,47 @@ export async function createGameRuntime(
         });
       }
 
+      // Capture whether a prior record existed for identity.id before the
+      // write, so late-success cleanup can restore it (ID collision) rather
+      // than deleting a pre-existing city. New City IDs should be unique by
+      // construction; this is defense-in-depth. The read is issued directly
+      // (not through the closing lease) because no other writer can touch
+      // identity.id under the exclusive lease + foreground reservation, and
+      // the write below is what would overwrite any prior record. A read
+      // failure other than `notFound` aborts the write as a store failure.
+      let priorRecord: NewCityPriorRecord = { existed: false };
+      try {
+        const existing = await saveStore.readWorkingSave(identity.id);
+        if (existing.ok) {
+          priorRecord = { existed: true, value: existing.value };
+        } else if (existing.error.code !== "notFound") {
+          return await rollbackNewCity(prior, priorCapture.snapshot, {
+            kind: "store",
+            error: existing.error,
+          });
+        }
+      } catch (error: unknown) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "store",
+          error: {
+            operation: "readWorkingSave",
+            code: "ioFailure",
+            cityId: identity.id,
+            retryable: true,
+            diagnostic: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      // Disposal may have begun while the prior-record read was in flight.
+      // The candidate is installed but no write has been issued, so rollback
+      // the backend; no orphan can exist yet.
+      if (dead) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
+        });
+      }
+
       let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
       try {
         stored = await cityQueues.enqueue(identity.id, () =>
@@ -2575,19 +2718,24 @@ export async function createGameRuntime(
           error: stored.error,
         });
       }
-      // Dead check after the store enqueue: if disposal occurred while the
-      // write was in flight, the save was already written (it was
-      // enqueued before the lease closed and drainAll waited for it —
-      // this is the existing already-enqueued-work behavior). But the
-      // runtime is disposed, so do not publish a successful result or
-      // install the candidate as the active city. Rollback the backend to
-      // the prior canonical state so the disposed backend is not left in
-      // the candidate state.
+      // Late-success branch: the initial write SUCCEEDED after disposal
+      // began. The candidate city record is now committed in storage even
+      // though New City never completed or published success. This is the
+      // orphan scenario the persistence design warns about (§15.5) for
+      // uncancellable writes. Roll back the backend for coherence AND undo
+      // the orphan storage mutation: if no prior record existed, delete the
+      // orphan; if a prior record existed (ID collision), restore it. The
+      // runtime remains terminal — no success is published, no candidate is
+      // installed. Cleanup runs inside this admitted foreground operation, so
+      // `drainAll` waits for it and the lease is not released until cleanup
+      // settles (or never, if cleanup fails — see the fatal recovery state).
       if (dead) {
-        return await rollbackNewCity(prior, priorCapture.snapshot, {
-          kind: "precondition",
-          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-        });
+        return await cleanupLateSuccessNewCity(
+          prior,
+          priorCapture.snapshot,
+          identity,
+          priorRecord,
+        );
       }
 
       clearHoverPreviewTimer();

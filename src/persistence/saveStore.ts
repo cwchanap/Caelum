@@ -62,6 +62,7 @@ export type SaveStoreOperation =
   | "renameCity"
   | "duplicateCity"
   | "deleteCity"
+  | "restoreWorkingSaveRaw"
   | "listCheckpoints"
   | "readCheckpoint"
   | "writeCheckpoint"
@@ -127,6 +128,26 @@ export interface SaveStore {
     },
   ): Promise<SaveStoreResult<CitySummary>>;
   deleteCity(cityId: string): Promise<SaveStoreResult<void>>;
+  /**
+   * Restore a previously-read raw working-save value for a city. Used by the
+   * runtime's late-success cleanup to undo an orphan New City write that
+   * overwrote a pre-existing record: the caller captures the prior
+   * {@link UntrustedSaveValue} via {@link readWorkingSave} before the write,
+   * and writes it back through this method when the write succeeded after
+   * the transaction decided to roll back.
+   *
+   * The `value` MUST be a value previously returned by `readWorkingSave` for
+   * the same `cityId`. Implementations re-inspect it and store it verbatim;
+   * they do not re-derive or normalize the snapshot. This is the only store
+   * operation that accepts an `UntrustedSaveValue` for writing — it exists so
+   * late-success cleanup can restore a pre-existing record that an
+   * uncancellable `writeWorkingSave` overwrote, without an unsafe cast and
+   * without deleting a city whose ID collided with the New City identity.
+   */
+  restoreWorkingSaveRaw(
+    cityId: string,
+    value: UntrustedSaveValue,
+  ): Promise<SaveStoreResult<void>>;
 
   listCheckpoints(
     cityId: string,

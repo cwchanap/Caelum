@@ -925,6 +925,26 @@ The contract intentionally does **not** use a generic `Promise.race` timeout. `S
 
 If profiling or field evidence reveals genuinely hung host writes, the follow-up must add cancellable/abortable storage semantics and late-success cleanup as one reviewed protocol rather than layering an unsafe timeout over an uncancellable write.
 
+### 15.6 Disposal during New City
+
+`dispose()` may begin at any point while the New City foreground workflow is in flight. The workflow is registered as a foreground lifecycle operation on the persistence lease, so `drainAll` during disposal waits for the entire workflow — not only its eventual store enqueue — before the lease can be released. A replacement runtime's `createGameRuntime` awaits `acquireLease` and therefore cannot proceed until the workflow has settled. The disposal protocol defines the point-of-no-return for each phase:
+
+- **Before the initial write is admitted.** If disposal occurs before the workflow enqueues its `writeWorkingSave`, the workflow observes `dead` at the next check, rolls back any installed candidate backend for coherence, and returns `runtimeUnavailable("activateNewCity")`. No storage mutation is issued.
+- **While the initial write is in flight.** The write was enqueued before the lease closed and `drainAll` waits for it. If the write *fails*, the workflow rolls back the candidate backend and returns `runtimeUnavailable`. No orphan is created.
+- **Late write success (the orphan case).** If the write *succeeds* after disposal began, the candidate city record is committed in storage even though New City never completed or published success. This is the same late-success orphan condition §15.5 warns about for uncancellable writes, reached via disposal rather than a timeout. The workflow must undo the orphan storage mutation before the lease transfers:
+  - roll back the backend to the prior canonical snapshot (coherence);
+  - if no prior record existed for the New City id, `deleteCity` removes the orphan;
+  - if a prior record existed (a caller-supplied id collision — New City ids should be unique by construction, but this is defense-in-depth), restore the prior record via `SaveStore.restoreWorkingSaveRaw` rather than deleting, so cleanup never deletes a pre-existing city that the uncancellable write overwrote; and
+  - return `runtimeUnavailable("activateNewCity")` without publishing a successful result or installing the candidate as the active city.
+
+  The cleanup store call is issued directly on the `SaveStore` (not through `lease.enqueue`, which rejects on the now-closing lease). This is safe because the lease is still exclusively held and the successful city FIFO write has already settled. Cleanup runs inside the admitted foreground operation, so `drainAll` waits for it and the lease is not released until cleanup settles.
+
+- **Cleanup failure (fatal persistence-recovery state).** If the backend rollback or the storage restore/delete fails, the orphan cannot be reconciled. The runtime enters a fatal persistence-recovery state: the lease is never released (`startDrainAndRelease` skips `lease.release()`). A replacement runtime against the same storage identity cannot acquire the lease, so its `createGameRuntime` never resolves — matching the defined behavior for uncancellable writes that never settle. `dispose()` itself resolves (the runtime is dead and drained), but safe rebootstrap cannot proceed until the orphan is reconciled out of band. Silently releasing the lease while an orphan or overwritten record remains is not acceptable.
+
+- **Pre-candidate typed failures during disposal.** Branches that fail before a candidate is installed (a thrown or typed-failure prior `snapshotForSave`, or a typed `createSandbox` rejection) do not need a backend rollback, but they must not restore the prior public runtime, restart the canvas, publish, or resume previews once disposal has begun. These branches check `dead` before any public restoration and return `runtimeUnavailable("activateNewCity")` when disposed, mirroring `rollbackNewCity`'s terminal discipline. A thrown `createSandbox` already routes through `rollbackNewCity`, which performs the backend rollback and the same terminal check.
+
+`SaveStore.restoreWorkingSaveRaw` is the store operation that accepts a previously-read `UntrustedSaveValue` for writing, so late-success cleanup can restore a pre-existing record without an unsafe cast and without deleting a city whose id collided with the New City identity. It re-inspects and stores the value verbatim; it does not re-derive or normalize the snapshot.
+
 ## 16. Reset, detach, and active-city deletion
 
 A successful `reset()` keeps the same active city identity but starts a new runtime lineage:
