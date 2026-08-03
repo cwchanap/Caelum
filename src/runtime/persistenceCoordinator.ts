@@ -215,7 +215,7 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
 }
 
 // ---------------------------------------------------------------------------
-// Shared persistence coordinator — ownership model for durable storage
+// Shared persistence coordinator — capability-based ownership model
 // ---------------------------------------------------------------------------
 //
 // A `SharedPersistenceCoordinator` is keyed by `StorageIdentity` (not adapter
@@ -224,117 +224,211 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
 // lifetimes so that a replacement runtime against the same durable storage
 // cannot race an old runtime's pending writes.
 //
-// The lease is exclusive: only one runtime may hold it at a time.
-// `createGameRuntime` acquires the lease before the runtime becomes usable
-// and releases it after all pending persistence work has drained (on fatal
-// backend failure or explicit `dispose()`). A second `createGameRuntime`
-// against the same storage identity waits for the lease to be released,
-// which waits for the old runtime's pending writes to drain. This prevents
-// the late-write race: by the time the replacement runtime can issue any
-// operation (including city deletion), the old runtime's writes have
-// settled.
+// The lease is exclusive and capability-based: `acquireLease()` returns a
+// `PersistenceLease` handle that is the sole channel through which a runtime
+// may enqueue city FIFO work, acquire fences, or register foreground
+// lifecycle operations. The coordinator tracks an `outstanding` counter per
+// lease that includes both enqueued FIFO work and admitted foreground
+// operations (e.g. `activateNewCity`, `detachActiveCity`). `drainAll()` on a
+// lease waits for that lease's `outstanding` to reach zero, so disposal
+// waits for already-admitted foreground workflows — not only their eventual
+// store writes.
+//
+// When disposal begins, the lease is atomically marked closing via
+// `beginClosing()`. After closing:
+//   - `enqueue` rejects (the work is never executed);
+//   - `admitForeground` returns false (the foreground workflow must bail
+//     out, not proceed to a store write);
+//   - `acquireCityFence` is rejected (no new fence mutations).
+// Already-admitted foreground operations and already-enqueued FIFO work
+// continue to drain. `releaseCityFence` and `isCityFenced` remain callable
+// on a closing lease so cleanup (finally blocks) can release fences
+// previously acquired while the lease was open.
+//
+// Ownership transfers only when `drainAll()` resolves (all outstanding work
+// for this lease has settled) and `release()` is called. This guarantees the
+// central lease invariant: after runtime 2 acquires ownership, runtime 1's
+// lease is closed and cannot submit any new coordinator work, mutate shared
+// fences, or publish successful results.
+//
+// If an uncancellable store or backend operation never settles,
+// `drainAll()` never resolves, the lease is never released, and the
+// replacement runtime's `createGameRuntime` never resolves. This is the
+// defined behavior: safe rebootstrap cannot proceed until pending
+// operations settle.
 //
 // Because the lease is exclusive, the coordinator's FIFOs and fences are
 // only ever accessed by one runtime at a time. The cross-city-load deadlock
-// argument is unchanged from the instance-local model: within a single
-// lease, no other runtime can hold the former city's FIFO while a
-// cross-city load awaits it.
-//
-// If an uncancellable store operation never settles, `drainAll()` never
-// resolves, the lease is never released, and the replacement runtime's
-// `createGameRuntime` never resolves. This is the defined behavior: safe
-// rebootstrap cannot proceed until pending storage I/O settles.
+// argument is unchanged: within a single lease, no other runtime can hold
+// the former city's FIFO while a cross-city load awaits it.
 //
 // When a `SaveStore` does not expose `storageIdentity`, the coordinator
 // falls back to object identity via a `WeakMap`. This is safe for
 // single-adapter usage but does not protect against two adapter objects
 // targeting the same durable database.
 
-export interface SharedPersistenceCoordinator {
+/**
+ * Error thrown when an operation is attempted on a closed lease. This is a
+ * defense-in-depth invariant violation: correct runtime code checks `dead`
+ * before calling `enqueue` or `admitForeground`, so this error should never
+ * be reached in production. It exists so that a missed `dead` check fails
+ * loudly instead of silently executing work after ownership transfer.
+ */
+export class PersistenceLeaseClosedError extends Error {
+  constructor(operation: string) {
+    super(`Persistence lease is closed: ${operation}`);
+    this.name = "PersistenceLeaseClosedError";
+  }
+}
+
+export interface PersistenceLease {
+  /** Whether this lease has been marked closing. Once true, no new work may
+   *  be admitted through this lease. */
+  readonly isClosed: boolean;
+  /** Enqueue work into the per-city FIFO. Rejects if the lease is closed. */
   enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T>;
+  /** Await the tail of a city's FIFO. Always callable (draining existing
+   *  work is safe on a closing lease). */
   drain(cityId: string): Promise<void>;
+  /** Wait for all outstanding work (enqueued + foreground) on this lease.
+   *  Always callable. */
   drainAll(): Promise<void>;
+  /** Acquire a reference-counted city fence. Throws if the lease is closed
+   *  (no new fence mutations after disposal begins). */
   acquireCityFence(cityId: string): void;
+  /** Release a city fence. Always callable (cleanup in finally blocks). */
   releaseCityFence(cityId: string): void;
+  /** Check if a city is fenced. Always callable. */
   isCityFenced(cityId: string): boolean;
-  acquireLease(): Promise<void>;
-  releaseLease(): void;
+  /** Register a foreground lifecycle operation (e.g. activateNewCity,
+   *  detachActiveCity) as outstanding so `drainAll` waits for it. Returns
+   *  true if admitted, false if the lease is closing/closed. The caller
+   *  must call `releaseForeground` exactly once in its final cleanup. */
+  admitForeground(): boolean;
+  /** Unregister a foreground lifecycle operation. Always callable (cleanup
+   *  in finally blocks). */
+  releaseForeground(): void;
+  /** Atomically mark the lease as closing. No new work may be admitted
+   *  through this lease after this call. Idempotent. */
+  beginClosing(): void;
+  /** Release the lease, transferring ownership to the next waiter in the
+   *  coordinator's lease queue. Must only be called after `drainAll` has
+   *  resolved. */
+  release(): void;
+}
+
+export interface SharedPersistenceCoordinator {
+  acquireLease(): Promise<PersistenceLease>;
 }
 
 export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinator {
+  // Shared state across lease lifetimes: city FIFO tails and fences persist
+  // so a replacement lease sees the same durable-storage coordination state.
   const cityTails = new Map<string, Promise<void>>();
   const fencedCities = new Map<string, number>();
-  let outstanding = 0;
-  let idleResolvers: Array<() => void> = [];
   let leaseHolder = false;
-  const leaseQueue: Array<() => void> = [];
+  const leaseQueue: Array<(lease: PersistenceLease) => void> = [];
 
-  const trackStart = (): void => {
-    outstanding += 1;
-  };
-  const trackEnd = (): void => {
-    outstanding -= 1;
-    if (outstanding === 0) {
-      const resolvers = idleResolvers;
-      idleResolvers = [];
-      for (const resolve of resolvers) resolve();
-    }
+  const createLease = (): PersistenceLease => {
+    // Per-lease outstanding counter: tracks both enqueued FIFO work and
+    // admitted foreground operations. `drainAll` waits for this to reach
+    // zero, so disposal waits for foreground workflows that have not yet
+    // reached their store enqueue.
+    let outstanding = 0;
+    let closed = false;
+    let idleResolvers: Array<() => void> = [];
+
+    const trackStart = (): void => {
+      outstanding += 1;
+    };
+    const trackEnd = (): void => {
+      outstanding -= 1;
+      if (outstanding === 0) {
+        const resolvers = idleResolvers;
+        idleResolvers = [];
+        for (const resolve of resolvers) resolve();
+      }
+    };
+
+    const lease: PersistenceLease = {
+      get isClosed(): boolean {
+        return closed;
+      },
+      enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T> {
+        if (closed) {
+          return Promise.reject(new PersistenceLeaseClosedError("enqueue"));
+        }
+        const previous = cityTails.get(cityId) ?? Promise.resolve();
+        trackStart();
+        const run = previous.then(work, work);
+        const tail = run.then(
+          () => undefined,
+          () => undefined,
+        );
+        cityTails.set(cityId, tail);
+        return run.finally(() => {
+          if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
+          trackEnd();
+        });
+      },
+      drain(cityId: string): Promise<void> {
+        return cityTails.get(cityId) ?? Promise.resolve();
+      },
+      drainAll(): Promise<void> {
+        if (outstanding === 0) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          idleResolvers.push(resolve);
+        });
+      },
+      acquireCityFence(cityId: string): void {
+        if (closed) {
+          throw new PersistenceLeaseClosedError("acquireCityFence");
+        }
+        fencedCities.set(cityId, (fencedCities.get(cityId) ?? 0) + 1);
+      },
+      releaseCityFence(cityId: string): void {
+        const next = (fencedCities.get(cityId) ?? 0) - 1;
+        if (next <= 0) fencedCities.delete(cityId);
+        else fencedCities.set(cityId, next);
+      },
+      isCityFenced(cityId: string): boolean {
+        return fencedCities.has(cityId);
+      },
+      admitForeground(): boolean {
+        if (closed) return false;
+        trackStart();
+        return true;
+      },
+      releaseForeground(): void {
+        trackEnd();
+      },
+      beginClosing(): void {
+        closed = true;
+      },
+      release(): void {
+        const next = leaseQueue.shift();
+        if (next === undefined) {
+          leaseHolder = false;
+        } else {
+          next(lease);
+        }
+      },
+    };
+    return lease;
   };
 
   return {
-    enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T> {
-      const previous = cityTails.get(cityId) ?? Promise.resolve();
-      trackStart();
-      const run = previous.then(work, work);
-      const tail = run.then(
-        () => undefined,
-        () => undefined,
-      );
-      cityTails.set(cityId, tail);
-      return run.finally(() => {
-        if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
-        trackEnd();
-      });
-    },
-    drain(cityId: string): Promise<void> {
-      return cityTails.get(cityId) ?? Promise.resolve();
-    },
-    drainAll(): Promise<void> {
-      if (outstanding === 0) return Promise.resolve();
-      return new Promise<void>((resolve) => {
-        idleResolvers.push(resolve);
-      });
-    },
-    acquireCityFence(cityId: string): void {
-      fencedCities.set(cityId, (fencedCities.get(cityId) ?? 0) + 1);
-    },
-    releaseCityFence(cityId: string): void {
-      const next = (fencedCities.get(cityId) ?? 0) - 1;
-      if (next <= 0) fencedCities.delete(cityId);
-      else fencedCities.set(cityId, next);
-    },
-    isCityFenced(cityId: string): boolean {
-      return fencedCities.has(cityId);
-    },
-    acquireLease(): Promise<void> {
+    acquireLease(): Promise<PersistenceLease> {
       if (!leaseHolder) {
         leaseHolder = true;
-        return Promise.resolve();
+        return Promise.resolve(createLease());
       }
-      return new Promise<void>((resolve) => {
-        leaseQueue.push(() => {
+      return new Promise<PersistenceLease>((resolve) => {
+        leaseQueue.push((lease) => {
           leaseHolder = true;
-          resolve();
+          resolve(lease);
         });
       });
-    },
-    releaseLease(): void {
-      const next = leaseQueue.shift();
-      if (next === undefined) {
-        leaseHolder = false;
-      } else {
-        next();
-      }
     },
   };
 }

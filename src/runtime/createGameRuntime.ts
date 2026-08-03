@@ -77,6 +77,7 @@ import {
   type LoadSource,
   type NewCityIdentity,
   type PersistenceCoordinatorError,
+  type PersistenceLease,
   type PersistenceOperationResult,
   type RuntimeLifecycleStatus,
   type RuntimeLoadStatus,
@@ -248,20 +249,24 @@ export async function createGameRuntime(
   const coordinator: SharedPersistenceCoordinator = saveStore
     ? resolvePersistenceCoordinator(saveStore)
     : createSharedPersistenceCoordinator();
-  await coordinator.acquireLease();
+  const lease: PersistenceLease = await coordinator.acquireLease();
   // Track the drain-and-release promise so both `failBackend` (fire-and-
   // forget) and `dispose()` (awaited) share one release. Idempotent: the
   // second caller awaits the same promise the first caller started.
+  // The lease is marked closing before draining so no new foreground work
+  // or FIFO enqueues can be admitted through this lease while disposal
+  // waits for already-admitted work to settle.
   let drainAndReleasePromise: Promise<void> | null = null;
   const startDrainAndRelease = (): Promise<void> => {
     if (drainAndReleasePromise !== null) return drainAndReleasePromise;
-    drainAndReleasePromise = coordinator
+    lease.beginClosing();
+    drainAndReleasePromise = lease
       .drainAll()
       .then(() => {
-        coordinator.releaseLease();
+        lease.release();
       })
       .catch(() => {
-        coordinator.releaseLease();
+        lease.release();
       });
     return drainAndReleasePromise;
   };
@@ -343,13 +348,12 @@ export async function createGameRuntime(
   // they persist across runtime lifetimes. Because the lease is exclusive,
   // only this runtime can modify fences during its lifetime.
   const acquireCityFence = (cityId: string): void => {
-    coordinator.acquireCityFence(cityId);
+    lease.acquireCityFence(cityId);
   };
   const releaseCityFence = (cityId: string): void => {
-    coordinator.releaseCityFence(cityId);
+    lease.releaseCityFence(cityId);
   };
-  const isCityFenced = (cityId: string): boolean =>
-    coordinator.isCityFenced(cityId);
+  const isCityFenced = (cityId: string): boolean => lease.isCityFenced(cityId);
   // Component teardown is a one-shot lifecycle request, so unlike transient UI
   // intents it cannot be dropped while New City owns admission. The canvas is
   // halted immediately; full preview cleanup is completed once the transaction
@@ -360,7 +364,7 @@ export async function createGameRuntime(
   // storage identity) so they persist across runtime lifetimes. Because the
   // lease is exclusive, only this runtime can enqueue work during its
   // lifetime. See `SharedPersistenceCoordinator` for the ownership model.
-  const cityQueues = coordinator;
+  const cityQueues = lease;
   const listeners = new Set<RuntimeListener>();
 
   const getPersistenceView = (): RuntimePersistenceView => {
@@ -525,14 +529,16 @@ export async function createGameRuntime(
           ? ui.routeDraft
           : { ...ui.routeDraft, previewPending: false },
     };
-    // Fire-and-forget: drain all pending persistence writes, then release
-    // the coordinator lease so a replacement runtime against the same
+    // Fire-and-forget: close the lease, drain all pending persistence work
+    // (enqueued FIFO writes and admitted foreground lifecycle operations),
+    // then release the lease so a replacement runtime against the same
     // storage identity can acquire it. The lease is not released until
-    // every in-flight city FIFO operation has settled, preventing a late
-    // write from mutating storage after a replacement runtime takes over.
-    // If an uncancellable store operation never settles, the lease is never
-    // released and a replacement runtime's `createGameRuntime` never
-    // resolves — safe rebootstrap cannot proceed.
+    // every in-flight operation has settled, preventing a late write or
+    // foreground result from mutating storage or publishing after a
+    // replacement runtime takes over. If an uncancellable store or backend
+    // operation never settles, the lease is never released and a
+    // replacement runtime's `createGameRuntime` never resolves — safe
+    // rebootstrap cannot proceed.
     void startDrainAndRelease();
     return commit(state, clearedUi);
   };
@@ -558,10 +564,11 @@ export async function createGameRuntime(
     persistenceError = null;
     stopRequestedDuringReservation = false;
     stopRuntime();
-    // Drain all pending persistence writes, then release the coordinator
-    // lease so a replacement runtime against the same storage identity can
-    // acquire it. Unlike `failBackend` (fire-and-forget), `dispose` awaits
-    // the drain so the caller knows the lease has been released.
+    // Close the lease, drain all pending persistence work (enqueued FIFO
+    // writes and admitted foreground lifecycle operations), then release
+    // the lease so a replacement runtime against the same storage identity
+    // can acquire it. Unlike `failBackend` (fire-and-forget), `dispose`
+    // awaits the drain so the caller knows the lease has been released.
     await startDrainAndRelease();
   };
 
@@ -2388,7 +2395,20 @@ export async function createGameRuntime(
     lifecycleStatus = { state: "creatingCity" };
     publish();
 
+    // Register as a foreground lifecycle operation so `drainAll` during
+    // disposal waits for this entire workflow — not only its eventual store
+    // enqueue. Without this, dispose() could drain zero outstanding FIFO
+    // work while New City is blocked in createSandbox, release the lease,
+    // and let a replacement runtime acquire it before this workflow
+    // enqueues its write. If the lease is already closing (disposal
+    // started), bail out without admitting.
+    let foregroundAdmitted = false;
     try {
+      foregroundAdmitted = lease.admitForeground();
+      if (!foregroundAdmitted) {
+        return runtimeUnavailable("activateNewCity");
+      }
+
       await gameplayQueue.drain();
       if (dead) return runtimeUnavailable("activateNewCity");
       const priorCityId = activeCity?.id;
@@ -2423,6 +2443,14 @@ export async function createGameRuntime(
         resumeNewCityPriorPreviews(prior);
         return { status: "failed", error: failure };
       }
+      // Dead check after prior capture: the backend still holds the prior
+      // state (createSandbox has not run), so no backend rollback is
+      // needed — only restore the prior runtime UI/preview state.
+      if (dead) {
+        restoreNewCityPriorRuntime(prior);
+        publish();
+        return runtimeUnavailable("activateNewCity");
+      }
 
       let created: Awaited<ReturnType<GameBackend["createSandbox"]>>;
       try {
@@ -2447,6 +2475,15 @@ export async function createGameRuntime(
           error: { kind: "sandbox", error: created.error },
         };
       }
+      // Dead check after createSandbox: the backend now holds the candidate
+      // sandbox. Rollback to the prior canonical snapshot so the disposed
+      // backend is not left in the candidate state, and no save is written.
+      if (dead) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
+        });
+      }
 
       let candidateCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
       try {
@@ -2462,6 +2499,15 @@ export async function createGameRuntime(
         return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "backend",
           error: candidateCapture.error,
+        });
+      }
+      // Dead check after candidate capture: the candidate is installed.
+      // Rollback and return — no save is written, no successful result is
+      // published.
+      if (dead) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
         });
       }
 
@@ -2489,6 +2535,16 @@ export async function createGameRuntime(
         });
       }
 
+      // Dead check immediately before the store enqueue: if disposal
+      // occurred during envelope construction (synchronous, but defense in
+      // depth), do not write. The candidate is installed, so rollback.
+      if (dead) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
+        });
+      }
+
       let stored: Awaited<ReturnType<SaveStore["writeWorkingSave"]>>;
       try {
         stored = await cityQueues.enqueue(identity.id, () =>
@@ -2510,6 +2566,20 @@ export async function createGameRuntime(
         return await rollbackNewCity(prior, priorCapture.snapshot, {
           kind: "store",
           error: stored.error,
+        });
+      }
+      // Dead check after the store enqueue: if disposal occurred while the
+      // write was in flight, the save was already written (it was
+      // enqueued before the lease closed and drainAll waited for it —
+      // this is the existing already-enqueued-work behavior). But the
+      // runtime is disposed, so do not publish a successful result or
+      // install the candidate as the active city. Rollback the backend to
+      // the prior canonical state so the disposed backend is not left in
+      // the candidate state.
+      if (dead) {
+        return await rollbackNewCity(prior, priorCapture.snapshot, {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
         });
       }
 
@@ -2538,6 +2608,7 @@ export async function createGameRuntime(
       const source: LoadSource = { kind: "working", cityId: identity.id };
       return { status: "completed", value: { snapshot, source } };
     } finally {
+      if (foregroundAdmitted) lease.releaseForeground();
       previewAdmissionSuspended = false;
       backendAdmissionReserved = false;
       lifecycleTransitionReserved = false;
@@ -2574,13 +2645,26 @@ export async function createGameRuntime(
     // detach orders after them through the gameplay queue. The drain happens
     // OUTSIDE the gameplay queue so a queued save that needs the gameplay queue
     // for canonical capture is not deadlocked by detach holding it.
+    //
+    // Detach is registered as a foreground lifecycle operation so `drainAll`
+    // during disposal waits for the entire detach workflow — not only its
+    // (nonexistent) FIFO enqueue. Without this, dispose() could drain zero
+    // outstanding FIFO work while detach holds a shared city fence and is
+    // blocked in the gameplay queue, release the lease, and let a
+    // replacement runtime acquire it while the old runtime can still
+    // release the fence in its finally.
     detachReserving = true;
     lifecycleTransitionReserved = true;
     detachAdmissionLoadToken = loadRequestToken;
-    if (priorCityId !== undefined) {
-      acquireCityFence(priorCityId);
-    }
+    let foregroundAdmitted = false;
     try {
+      foregroundAdmitted = lease.admitForeground();
+      if (!foregroundAdmitted) {
+        return runtimeUnavailable("detachActiveCity");
+      }
+      if (priorCityId !== undefined) {
+        acquireCityFence(priorCityId);
+      }
       if (priorCityId !== undefined) {
         await cityQueues.drain(priorCityId);
       }
@@ -2607,6 +2691,7 @@ export async function createGameRuntime(
       });
       return result;
     } finally {
+      if (foregroundAdmitted) lease.releaseForeground();
       detachReserving = false;
       lifecycleTransitionReserved = false;
       if (priorCityId !== undefined) {
