@@ -8,6 +8,7 @@ import type {
   SaveStore,
   SaveStoreError,
   SaveStoreResult,
+  StorageIdentity,
 } from "../persistence/saveStore";
 import type { RuntimeSnapshot } from "./types";
 import type {
@@ -211,6 +212,187 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
       return cityTails.get(cityId) ?? Promise.resolve();
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared persistence coordinator — ownership model for durable storage
+// ---------------------------------------------------------------------------
+//
+// A `SharedPersistenceCoordinator` is keyed by `StorageIdentity` (not adapter
+// object identity) and owns the per-city FIFO tails, reference-counted city
+// fences, and an exclusive ownership lease. It persists across runtime
+// lifetimes so that a replacement runtime against the same durable storage
+// cannot race an old runtime's pending writes.
+//
+// The lease is exclusive: only one runtime may hold it at a time.
+// `createGameRuntime` acquires the lease before the runtime becomes usable
+// and releases it after all pending persistence work has drained (on fatal
+// backend failure or explicit `dispose()`). A second `createGameRuntime`
+// against the same storage identity waits for the lease to be released,
+// which waits for the old runtime's pending writes to drain. This prevents
+// the late-write race: by the time the replacement runtime can issue any
+// operation (including city deletion), the old runtime's writes have
+// settled.
+//
+// Because the lease is exclusive, the coordinator's FIFOs and fences are
+// only ever accessed by one runtime at a time. The cross-city-load deadlock
+// argument is unchanged from the instance-local model: within a single
+// lease, no other runtime can hold the former city's FIFO while a
+// cross-city load awaits it.
+//
+// If an uncancellable store operation never settles, `drainAll()` never
+// resolves, the lease is never released, and the replacement runtime's
+// `createGameRuntime` never resolves. This is the defined behavior: safe
+// rebootstrap cannot proceed until pending storage I/O settles.
+//
+// When a `SaveStore` does not expose `storageIdentity`, the coordinator
+// falls back to object identity via a `WeakMap`. This is safe for
+// single-adapter usage but does not protect against two adapter objects
+// targeting the same durable database.
+
+export interface SharedPersistenceCoordinator {
+  enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T>;
+  drain(cityId: string): Promise<void>;
+  drainAll(): Promise<void>;
+  acquireCityFence(cityId: string): void;
+  releaseCityFence(cityId: string): void;
+  isCityFenced(cityId: string): boolean;
+  acquireLease(): Promise<void>;
+  releaseLease(): void;
+}
+
+export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinator {
+  const cityTails = new Map<string, Promise<void>>();
+  const fencedCities = new Map<string, number>();
+  let outstanding = 0;
+  let idleResolvers: Array<() => void> = [];
+  let leaseHolder = false;
+  const leaseQueue: Array<() => void> = [];
+
+  const trackStart = (): void => {
+    outstanding += 1;
+  };
+  const trackEnd = (): void => {
+    outstanding -= 1;
+    if (outstanding === 0) {
+      const resolvers = idleResolvers;
+      idleResolvers = [];
+      for (const resolve of resolvers) resolve();
+    }
+  };
+
+  return {
+    enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T> {
+      const previous = cityTails.get(cityId) ?? Promise.resolve();
+      trackStart();
+      const run = previous.then(work, work);
+      const tail = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      cityTails.set(cityId, tail);
+      return run.finally(() => {
+        if (cityTails.get(cityId) === tail) cityTails.delete(cityId);
+        trackEnd();
+      });
+    },
+    drain(cityId: string): Promise<void> {
+      return cityTails.get(cityId) ?? Promise.resolve();
+    },
+    drainAll(): Promise<void> {
+      if (outstanding === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        idleResolvers.push(resolve);
+      });
+    },
+    acquireCityFence(cityId: string): void {
+      fencedCities.set(cityId, (fencedCities.get(cityId) ?? 0) + 1);
+    },
+    releaseCityFence(cityId: string): void {
+      const next = (fencedCities.get(cityId) ?? 0) - 1;
+      if (next <= 0) fencedCities.delete(cityId);
+      else fencedCities.set(cityId, next);
+    },
+    isCityFenced(cityId: string): boolean {
+      return fencedCities.has(cityId);
+    },
+    acquireLease(): Promise<void> {
+      if (!leaseHolder) {
+        leaseHolder = true;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        leaseQueue.push(() => {
+          leaseHolder = true;
+          resolve();
+        });
+      });
+    },
+    releaseLease(): void {
+      const next = leaseQueue.shift();
+      if (next === undefined) {
+        leaseHolder = false;
+      } else {
+        next();
+      }
+    },
+  };
+}
+
+// Module-level registry of shared coordinators keyed by storage identity.
+// This is NOT the old module-global `cityTails`: it maps a stable storage
+// identity to a coordinator that is only ever used by one runtime at a time
+// (exclusive lease). Different storage identities get different
+// coordinators, so runtimes on different stores never interfere.
+const coordinatorRegistry = new Map<
+  StorageIdentity,
+  SharedPersistenceCoordinator
+>();
+
+const objectIdentityCoordinators = new WeakMap<
+  SaveStore,
+  SharedPersistenceCoordinator
+>();
+
+/**
+ * Resolve the shared persistence coordinator for a `SaveStore`.
+ *
+ * If the store exposes `storageIdentity`, the coordinator is looked up or
+ * created in the module-level registry keyed by that identity. Two adapter
+ * objects targeting the same durable database (and thus exposing the same
+ * identity) share one coordinator.
+ *
+ * If the store does not expose `storageIdentity`, the coordinator is looked
+ * up or created in a `WeakMap` keyed by the store object itself. This is
+ * safe for single-adapter usage but does not protect against two adapter
+ * objects targeting the same durable database.
+ */
+export function resolvePersistenceCoordinator(
+  store: SaveStore,
+): SharedPersistenceCoordinator {
+  if (store.storageIdentity !== undefined) {
+    let coordinator = coordinatorRegistry.get(store.storageIdentity);
+    if (coordinator === undefined) {
+      coordinator = createSharedPersistenceCoordinator();
+      coordinatorRegistry.set(store.storageIdentity, coordinator);
+    }
+    return coordinator;
+  }
+  let coordinator = objectIdentityCoordinators.get(store);
+  if (coordinator === undefined) {
+    coordinator = createSharedPersistenceCoordinator();
+    objectIdentityCoordinators.set(store, coordinator);
+  }
+  return coordinator;
+}
+
+/**
+ * Test-only: reset the module-level coordinator registry. Production code
+ * never calls this. Tests use it to isolate coordinator state between test
+ * cases so that storage identities from one test do not leak into another.
+ */
+export function resetPersistenceCoordinatorRegistry(): void {
+  coordinatorRegistry.clear();
 }
 
 export function resolveWorkingSaveCompletion(input: {

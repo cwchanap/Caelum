@@ -217,6 +217,27 @@ export interface RuntimeController {
   subscribe: (listener: RuntimeListener) => () => void;
   start: () => void;
   stop: () => void;
+  /**
+   * Gracefully shut down the runtime: reject new persistence operations,
+   * stop animation/preview, drain all pending city persistence FIFOs, and
+   * release the shared coordinator lease so a replacement runtime against
+   * the same durable storage can acquire it.
+   *
+   * The returned promise resolves after all pending storage mutations have
+   * settled and the lease has been released. A replacement
+   * `createGameRuntime` against the same `SaveStore` (or a different adapter
+   * object with the same `storageIdentity`) that was started before this
+   * `dispose` resolves will have been waiting for the lease; it acquires the
+   * lease and proceeds only after this runtime's writes have drained.
+   *
+   * If an uncancellable store operation never settles, this promise never
+   * resolves — safe rebootstrap cannot proceed until pending storage I/O
+   * settles.
+   *
+   * Idempotent: calling `dispose` after a fatal backend failure awaits the
+   * drain-and-release that `failBackend` started.
+   */
+  dispose: () => Promise<void>;
   isRunning: () => boolean;
   tick: (deltaSeconds: number) => RuntimeCommandResult;
   reset: () => RuntimeCommandResult;
