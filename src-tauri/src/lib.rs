@@ -30,8 +30,10 @@ type EngineState = Mutex<OwnedEngine>;
 
 /// Wire-format error for a stale runtime epoch. Serializes as
 /// `{ "code": "staleRuntimeEpoch", "context": { "expected": N, "actual": M } }`,
-/// matching the `code`/`context` shape used by `GameplayRejection` and sandbox
-/// errors so the frontend can discriminate it via `error.code`.
+/// where `expected` is the current authoritative host epoch and `actual` is
+/// the epoch supplied by the stale caller. This matches the `code`/`context`
+/// shape used by `GameplayRejection` and sandbox errors so the frontend can
+/// discriminate it via `error.code`.
 #[derive(Debug, Serialize)]
 struct StaleRuntimeEpoch {
     code: &'static str,
@@ -176,7 +178,7 @@ fn capture_save(
             PersistenceOperation::SnapshotForSave,
             PersistenceHostErrorCode::StaleRuntimeEpoch,
             format!(
-                "stale runtime epoch: expected {runtime_epoch}, actual {}",
+                "stale runtime epoch: expected {}, actual {runtime_epoch}",
                 owned.runtime_epoch
             ),
         ));
@@ -225,7 +227,7 @@ where
             operation,
             PersistenceHostErrorCode::StaleRuntimeEpoch,
             format!(
-                "stale runtime epoch: expected {runtime_epoch}, actual {}",
+                "stale runtime epoch: expected {}, actual {runtime_epoch}",
                 owned.runtime_epoch
             ),
         ));
@@ -270,8 +272,8 @@ fn game_dispatch(
         .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
     if owned.runtime_epoch != runtime_epoch {
         return Err(GameplayCommandError::StaleEpoch(stale_runtime_epoch(
-            runtime_epoch,
             owned.runtime_epoch,
+            runtime_epoch,
         )));
     }
     Ok(owned.engine.dispatch(intent))
@@ -288,8 +290,8 @@ fn game_tick(
         .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
     if owned.runtime_epoch != runtime_epoch {
         return Err(GameplayCommandError::StaleEpoch(stale_runtime_epoch(
-            runtime_epoch,
             owned.runtime_epoch,
+            runtime_epoch,
         )));
     }
     Ok(owned.engine.tick(delta_seconds))
@@ -308,8 +310,8 @@ fn game_create_sandbox(
         .map_err(|error| TauriCommandError::Host(error.to_string()))?;
     if owned.runtime_epoch != runtime_epoch {
         return Err(TauriCommandError::StaleEpoch(stale_runtime_epoch(
-            runtime_epoch,
             owned.runtime_epoch,
+            runtime_epoch,
         )));
     }
     owned.engine = candidate;
@@ -326,8 +328,8 @@ fn game_reset(
         .map_err(|error| TauriCommandError::Host(error.to_string()))?;
     if owned.runtime_epoch != runtime_epoch {
         return Err(TauriCommandError::StaleEpoch(stale_runtime_epoch(
-            runtime_epoch,
             owned.runtime_epoch,
+            runtime_epoch,
         )));
     }
     owned.engine.reset().map_err(TauriCommandError::Domain)
@@ -1389,8 +1391,10 @@ mod tests {
         .expect_err("stale dispatch must be rejected");
         assert!(error.is_object());
         assert_eq!(error["code"], "staleRuntimeEpoch");
-        assert_eq!(error["context"]["expected"], json!(epoch_a));
-        assert_eq!(error["context"]["actual"], json!(epoch_b));
+        // `expected` is the current authoritative host epoch (B);
+        // `actual` is the stale epoch supplied by the caller (A).
+        assert_eq!(error["context"]["expected"], json!(epoch_b));
+        assert_eq!(error["context"]["actual"], json!(epoch_a));
 
         // The engine was NOT mutated by the stale dispatch.
         let current =
@@ -1440,7 +1444,9 @@ mod tests {
         .expect_err("stale sandbox creation must be rejected");
         assert!(error.is_object());
         assert_eq!(error["code"], "staleRuntimeEpoch");
-        assert_eq!(error["context"]["actual"], json!(epoch_b));
+        // `expected` = current host epoch (B); `actual` = stale caller epoch (A).
+        assert_eq!(error["context"]["expected"], json!(epoch_b));
+        assert_eq!(error["context"]["actual"], json!(epoch_a));
     }
 
     #[test]
@@ -1455,7 +1461,9 @@ mod tests {
             .expect_err("stale reset must be rejected");
         assert!(error.is_object());
         assert_eq!(error["code"], "staleRuntimeEpoch");
-        assert_eq!(error["context"]["actual"], json!(epoch_b));
+        // `expected` = current host epoch (B); `actual` = stale caller epoch (A).
+        assert_eq!(error["context"]["expected"], json!(epoch_b));
+        assert_eq!(error["context"]["actual"], json!(epoch_a));
     }
 
     #[test]
@@ -1538,7 +1546,9 @@ mod tests {
         )
         .expect_err("epoch1 must be stale after epoch2 begins");
         assert_eq!(error["code"], "staleRuntimeEpoch");
-        assert_eq!(error["context"]["actual"], json!(epoch2));
+        // `expected` = current host epoch (epoch2); `actual` = stale caller epoch (epoch1).
+        assert_eq!(error["context"]["expected"], json!(epoch2));
+        assert_eq!(error["context"]["actual"], json!(epoch1));
 
         // A command with epoch2 succeeds.
         let result = ipc(

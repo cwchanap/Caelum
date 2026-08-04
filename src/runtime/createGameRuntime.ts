@@ -313,7 +313,9 @@ export async function createGameRuntime(
     // P2: The pre-captured `storageIdentity` is passed to
     // `resolvePersistenceCoordinator` so the store's getter is NOT re-read
     // here — a stateful or throwing getter after acquisition would leak both
-    // capabilities.
+    // capabilities. The resolver's second argument is required, so the
+    // captured `undefined` (no identity exposed) is distinguishable from an
+    // omitted argument and uses object identity without re-reading.
     const coordinator: SharedPersistenceCoordinator = saveStore
       ? resolvePersistenceCoordinator(saveStore, storageIdentity)
       : createSharedPersistenceCoordinator();

@@ -461,26 +461,33 @@ const objectIdentityCoordinators = new WeakMap<
 /**
  * Resolve the shared persistence coordinator for a `SaveStore`.
  *
- * If the store exposes `storageIdentity`, the coordinator is looked up or
- * created in the module-level registry keyed by that identity. Two adapter
- * objects targeting the same durable database (and thus exposing the same
- * identity) share one coordinator.
+ * If `storageIdentity` is a non-undefined string, the coordinator is looked
+ * up or created in the module-level registry keyed by that identity. Two
+ * adapter objects targeting the same durable database (and thus exposing the
+ * same identity) share one coordinator.
  *
- * If the store does not expose `storageIdentity`, the coordinator is looked
- * up or created in a `WeakMap` keyed by the store object itself. This is
- * safe for single-adapter usage but does not protect against two adapter
- * objects targeting the same durable database.
+ * If `storageIdentity` is `undefined`, the coordinator is looked up or
+ * created in a `WeakMap` keyed by the store object itself. This is safe for
+ * single-adapter usage but does not protect against two adapter objects
+ * targeting the same durable database.
  *
- * @param preCapturedStorageIdentity — when provided, used instead of re-reading
- *   `store.storageIdentity`. This avoids rereading a stateful getter after
- *   ownership/lease acquisition, which could throw and leak both capabilities.
- *   The caller captures it once before acquisition and passes it here.
+ * Read-once contract: the caller MUST capture `store.storageIdentity` exactly
+ * once BEFORE acquiring any capability (backend ownership or the persistence
+ * lease) and pass that captured value here. This function NEVER re-reads
+ * `store.storageIdentity` — a stateful or throwing getter after acquisition
+ * could select a different coordinator identity or leak both capabilities.
+ * The captured `undefined` is distinguishable from "no captured value
+ * supplied" because the argument is required: `undefined` always means "the
+ * store exposes no storage identity, use object identity."
+ *
+ * @param storageIdentity — the value captured from `store.storageIdentity`
+ *   before any capability acquisition. Required; pass `undefined` explicitly
+ *   when the store exposes no identity.
  */
 export function resolvePersistenceCoordinator(
   store: SaveStore,
-  preCapturedStorageIdentity?: StorageIdentity,
+  storageIdentity: StorageIdentity | undefined,
 ): SharedPersistenceCoordinator {
-  const storageIdentity = preCapturedStorageIdentity ?? store.storageIdentity;
   if (storageIdentity !== undefined) {
     let coordinator = coordinatorRegistry.get(storageIdentity);
     if (coordinator === undefined) {
