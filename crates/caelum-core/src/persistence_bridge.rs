@@ -46,6 +46,13 @@ pub enum PersistenceSerializationPhase {
 /// Not every variant is constructed by the Rust host bridges — the frontend
 /// persistence layer also emits these codes — but they are part of the closed
 /// wire contract and must round-trip identically across hosts.
+///
+/// `StaleRuntimeEpoch` is emitted by the Tauri host when a mutating command
+/// carries a runtime epoch that does not match the current `OwnedEngine`
+/// epoch (e.g. a command from a previous webview realm after a soft reload
+/// has begun a new runtime session via `game_begin_runtime`). The WASM host
+/// never emits this code — its engine is instance-local with no cross-realm
+/// authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PersistenceHostErrorCode {
@@ -53,6 +60,7 @@ pub enum PersistenceHostErrorCode {
     InvokeFailed,
     MalformedSuccess,
     MalformedError,
+    StaleRuntimeEpoch,
 }
 
 /// The tagged persistence bridge error shared by both hosts.
