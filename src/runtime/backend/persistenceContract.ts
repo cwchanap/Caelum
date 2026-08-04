@@ -17,7 +17,8 @@ export type PersistenceHostErrorCode =
   | "stateUnavailable"
   | "invokeFailed"
   | "malformedSuccess"
-  | "malformedError";
+  | "malformedError"
+  | "staleRuntimeEpoch";
 
 export type PersistenceOperationError =
   | {

@@ -51,6 +51,7 @@ export type {
   RustMetrics,
   RustTripOutcome,
   RuntimeIdentity,
+  RuntimeSession,
   SandboxCreationError,
   SandboxCreationErrorCode,
   SandboxCreationRequest,

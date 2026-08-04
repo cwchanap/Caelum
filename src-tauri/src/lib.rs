@@ -11,7 +11,47 @@ use caelum_core::{
 };
 use tauri::State;
 
-type EngineState = Mutex<GameEngine>;
+/// The managed engine paired with a monotonic runtime epoch.
+///
+/// The epoch is the cross-reload ownership authority: every
+/// `game_begin_runtime` call increments it and returns the new value plus the
+/// authoritative snapshot from the same critical section. A webview reload
+/// destroys the JavaScript backend-ownership registry but leaves the Rust
+/// process and this `EngineState` alive. A stale command from the previous
+/// realm carries an outdated epoch and is rejected before it can mutate the
+/// engine, preventing the divergence where a new realm's public runtime
+/// represents city A while the shared engine has been swapped to city B.
+struct OwnedEngine {
+    engine: GameEngine,
+    runtime_epoch: u64,
+}
+
+type EngineState = Mutex<OwnedEngine>;
+
+/// Wire-format error for a stale runtime epoch. Serializes as
+/// `{ "code": "staleRuntimeEpoch", "context": { "expected": N, "actual": M } }`,
+/// matching the `code`/`context` shape used by `GameplayRejection` and sandbox
+/// errors so the frontend can discriminate it via `error.code`.
+#[derive(Debug, Serialize)]
+struct StaleRuntimeEpoch {
+    code: &'static str,
+    context: StaleRuntimeEpochContext,
+}
+
+#[derive(Debug, Serialize)]
+struct StaleRuntimeEpochContext {
+    expected: u64,
+    actual: u64,
+}
+
+const STALE_RUNTIME_EPOCH_CODE: &str = "staleRuntimeEpoch";
+
+fn stale_runtime_epoch(expected: u64, actual: u64) -> StaleRuntimeEpoch {
+    StaleRuntimeEpoch {
+        code: STALE_RUNTIME_EPOCH_CODE,
+        context: StaleRuntimeEpochContext { expected, actual },
+    }
+}
 
 /// Wire-format contract for Tauri command errors.
 ///
@@ -24,11 +64,36 @@ type EngineState = Mutex<GameEngine>;
 /// shapes. Changing to explicit tagged variants would be a wire-format break
 /// requiring frontend consumer updates; the typeof-based contract is
 /// intentional and documented here.
+///
+/// `StaleEpoch` serializes as a structured object with `code: "staleRuntimeEpoch"`
+/// and is listed first so the frontend can detect it via `error.code` before
+/// attempting domain-specific discrimination.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum TauriCommandError<E> {
+    StaleEpoch(StaleRuntimeEpoch),
     Domain(E),
     Host(String),
+}
+
+/// Error type for gameplay commands (`game_dispatch`, `game_tick`) that have
+/// no domain error variant — gameplay rejections travel inside `DispatchResult`.
+/// `StaleEpoch` covers the session-authority failure; `Host` covers mutex
+/// poison and other host-layer strings.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum GameplayCommandError {
+    StaleEpoch(StaleRuntimeEpoch),
+    Host(String),
+}
+
+/// Response from `game_begin_runtime`: the authoritative epoch plus the
+/// snapshot from the same critical section.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BeginRuntimeResponse {
+    runtime_epoch: u64,
+    snapshot: GameSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,11 +164,24 @@ where
     })
 }
 
-fn capture_save(state: &EngineState) -> Result<SaveSnapshotCapture, PersistenceBridgeError> {
-    let engine = state
+fn capture_save(
+    state: &EngineState,
+    runtime_epoch: u64,
+) -> Result<SaveSnapshotCapture, PersistenceBridgeError> {
+    let owned = state
         .lock()
         .map_err(|error| state_unavailable(PersistenceOperation::SnapshotForSave, error))?;
-    Ok(engine.capture_snapshot_for_save())
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(PersistenceBridgeError::host(
+            PersistenceOperation::SnapshotForSave,
+            PersistenceHostErrorCode::StaleRuntimeEpoch,
+            format!(
+                "stale runtime epoch: expected {runtime_epoch}, actual {}",
+                owned.runtime_epoch
+            ),
+        ));
+    }
+    Ok(owned.engine.capture_snapshot_for_save())
 }
 
 /// Restore a snapshot into the managed engine, encoding the prepared result.
@@ -117,9 +195,17 @@ fn capture_save(state: &EngineState) -> Result<SaveSnapshotCapture, PersistenceB
 /// duration of a restore. The frontend persistence contract treats restore as a
 /// full-state replacement, so dropping in-flight concurrent commits is the
 /// expected outcome.
+///
+/// Epoch: the runtime epoch is checked INSIDE the mutex immediately before the
+/// engine swap. Candidate decode/preparation may remain outside the mutex (a
+/// stale candidate that took a long time to decode is harmless if the epoch has
+/// since advanced), but the swap is gated on the epoch matching. A command from
+/// a previous webview realm whose epoch has been superseded by a new
+/// `game_begin_runtime` call is rejected without committing.
 fn restore_snapshot_with<T, E>(
     state: &EngineState,
     snapshot: serde_json::Value,
+    runtime_epoch: u64,
     encode: impl FnOnce(&GameSnapshot) -> Result<T, E>,
 ) -> Result<T, PersistenceBridgeError>
 where
@@ -131,62 +217,127 @@ where
         PersistenceBridgeError::validation(operation, PersistenceValidationSource::Candidate, error)
     })?;
     let encoded = encode_snapshot(prepared.snapshot(), operation, encode)?;
-    let mut engine = state
+    let mut owned = state
         .lock()
         .map_err(|error| state_unavailable(operation, error))?;
-    *engine = prepared.into_engine();
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(PersistenceBridgeError::host(
+            operation,
+            PersistenceHostErrorCode::StaleRuntimeEpoch,
+            format!(
+                "stale runtime epoch: expected {runtime_epoch}, actual {}",
+                owned.runtime_epoch
+            ),
+        ));
+    }
+    owned.engine = prepared.into_engine();
     Ok(encoded)
 }
 
 #[tauri::command]
 fn game_snapshot(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
-    let engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.snapshot())
+    let owned = state.lock().map_err(|error| error.to_string())?;
+    Ok(owned.engine.snapshot())
+}
+
+/// Atomically begin a new runtime session: increment the epoch and return the
+/// authoritative snapshot from the same critical section. This is the
+/// cross-reload ownership boundary — a webview reload destroys the JavaScript
+/// backend-ownership registry but leaves this `EngineState` alive. A new realm
+/// calls `game_begin_runtime` to receive a fresh epoch; any in-flight command
+/// from the previous realm carries a stale epoch and is rejected before
+/// mutating the engine.
+#[tauri::command]
+fn game_begin_runtime(state: State<'_, EngineState>) -> Result<BeginRuntimeResponse, String> {
+    let mut owned = state.lock().map_err(|error| error.to_string())?;
+    owned.runtime_epoch += 1;
+    let epoch = owned.runtime_epoch;
+    let snapshot = owned.engine.snapshot();
+    Ok(BeginRuntimeResponse {
+        runtime_epoch: epoch,
+        snapshot,
+    })
 }
 
 #[tauri::command]
 fn game_dispatch(
     state: State<'_, EngineState>,
     intent: GameIntent,
-) -> Result<DispatchResult, String> {
-    let mut engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.dispatch(intent))
+    runtime_epoch: u64,
+) -> Result<DispatchResult, GameplayCommandError> {
+    let mut owned = state
+        .lock()
+        .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(GameplayCommandError::StaleEpoch(stale_runtime_epoch(
+            runtime_epoch,
+            owned.runtime_epoch,
+        )));
+    }
+    Ok(owned.engine.dispatch(intent))
 }
 
 #[tauri::command]
-fn game_tick(state: State<'_, EngineState>, delta_seconds: f64) -> Result<DispatchResult, String> {
-    let mut engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.tick(delta_seconds))
+fn game_tick(
+    state: State<'_, EngineState>,
+    delta_seconds: f64,
+    runtime_epoch: u64,
+) -> Result<DispatchResult, GameplayCommandError> {
+    let mut owned = state
+        .lock()
+        .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(GameplayCommandError::StaleEpoch(stale_runtime_epoch(
+            runtime_epoch,
+            owned.runtime_epoch,
+        )));
+    }
+    Ok(owned.engine.tick(delta_seconds))
 }
 
 #[tauri::command]
 fn game_create_sandbox(
     state: State<'_, EngineState>,
     request: SandboxCreationRequest,
+    runtime_epoch: u64,
 ) -> Result<GameSnapshot, TauriCommandError<SandboxCreationError>> {
     let candidate = GameEngine::from_sandbox_request(request).map_err(TauriCommandError::Domain)?;
     let snapshot = candidate.snapshot();
-    let mut engine = state
+    let mut owned = state
         .lock()
         .map_err(|error| TauriCommandError::Host(error.to_string()))?;
-    *engine = candidate;
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(TauriCommandError::StaleEpoch(stale_runtime_epoch(
+            runtime_epoch,
+            owned.runtime_epoch,
+        )));
+    }
+    owned.engine = candidate;
     Ok(snapshot)
 }
 
 #[tauri::command]
 fn game_reset(
     state: State<'_, EngineState>,
+    runtime_epoch: u64,
 ) -> Result<GameSnapshot, TauriCommandError<SandboxResetError>> {
-    let mut engine = state
+    let mut owned = state
         .lock()
         .map_err(|error| TauriCommandError::Host(error.to_string()))?;
-    engine.reset().map_err(TauriCommandError::Domain)
+    if owned.runtime_epoch != runtime_epoch {
+        return Err(TauriCommandError::StaleEpoch(stale_runtime_epoch(
+            runtime_epoch,
+            owned.runtime_epoch,
+        )));
+    }
+    owned.engine.reset().map_err(TauriCommandError::Domain)
 }
 
 fn snapshot_for_save_body(
     state: &EngineState,
+    runtime_epoch: u64,
 ) -> Result<serde_json::Value, PersistenceBridgeError> {
-    let capture = capture_save(state)?;
+    let capture = capture_save(state, runtime_epoch)?;
     let snapshot = capture.prepare().map_err(|error| {
         PersistenceBridgeError::validation(
             PersistenceOperation::SnapshotForSave,
@@ -204,8 +355,9 @@ fn snapshot_for_save_body(
 #[tauri::command]
 fn game_snapshot_for_save(
     state: State<'_, EngineState>,
+    runtime_epoch: u64,
 ) -> Result<serde_json::Value, EncodedPersistenceBridgeError> {
-    encode_persistence_result(snapshot_for_save_body(&state))
+    encode_persistence_result(snapshot_for_save_body(&state, runtime_epoch))
 }
 
 fn validate_snapshot_body(snapshot: serde_json::Value) -> Result<(), PersistenceBridgeError> {
@@ -227,10 +379,14 @@ fn game_validate_snapshot(
 fn game_restore_snapshot(
     state: State<'_, EngineState>,
     snapshot: serde_json::Value,
+    runtime_epoch: u64,
 ) -> Result<serde_json::Value, EncodedPersistenceBridgeError> {
-    encode_persistence_result(restore_snapshot_with(&state, snapshot, |snapshot| {
-        serde_json::to_value(snapshot)
-    }))
+    encode_persistence_result(restore_snapshot_with(
+        &state,
+        snapshot,
+        runtime_epoch,
+        |snapshot| serde_json::to_value(snapshot),
+    ))
 }
 
 #[tauri::command]
@@ -238,8 +394,8 @@ fn game_preview_route(
     state: State<'_, EngineState>,
     request: RoutePreviewRequest,
 ) -> Result<RoutePreviewResponse, String> {
-    let engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.preview_route(request))
+    let owned = state.lock().map_err(|error| error.to_string())?;
+    Ok(owned.engine.preview_route(request))
 }
 
 #[tauri::command]
@@ -247,16 +403,20 @@ fn game_preview_road_mutation(
     state: State<'_, EngineState>,
     request: RoadMutationPreviewRequest,
 ) -> Result<RoadMutationPreviewResponse, String> {
-    let engine = state.lock().map_err(|error| error.to_string())?;
-    Ok(engine.preview_road_mutation(request))
+    let owned = state.lock().map_err(|error| error.to_string())?;
+    Ok(owned.engine.preview_road_mutation(request))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(Mutex::new(GameEngine::new()))
+        .manage(Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        }))
         .invoke_handler(tauri::generate_handler![
             game_snapshot,
+            game_begin_runtime,
             game_dispatch,
             game_tick,
             game_create_sandbox,
@@ -295,6 +455,7 @@ mod tests {
     fn sandbox_test_app(engine: GameEngine) -> App<MockRuntime> {
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());
         for command in [
+            "game_begin_runtime",
             "game_create_sandbox",
             "game_reset",
             "game_snapshot",
@@ -302,6 +463,7 @@ mod tests {
             "game_validate_snapshot",
             "game_restore_snapshot",
             "game_dispatch",
+            "game_tick",
         ] {
             context.runtime_authority_mut().__allow_command(
                 command.to_string(),
@@ -309,15 +471,20 @@ mod tests {
             );
         }
         tauri::test::mock_builder()
-            .manage(Mutex::new(engine))
+            .manage(Mutex::new(OwnedEngine {
+                engine,
+                runtime_epoch: 0,
+            }))
             .invoke_handler(tauri::generate_handler![
+                game_begin_runtime,
                 game_create_sandbox,
                 game_reset,
                 game_snapshot,
                 game_snapshot_for_save,
                 game_validate_snapshot,
                 game_restore_snapshot,
-                game_dispatch
+                game_dispatch,
+                game_tick
             ])
             .build(context)
             .expect("test Tauri app should build")
@@ -349,15 +516,45 @@ mod tests {
     }
 
     fn sandbox_request_body(request: &Value) -> InvokeBody {
-        InvokeBody::Json(json!({ "request": request }))
+        InvokeBody::Json(json!({ "request": request, "runtimeEpoch": 0 }))
+    }
+
+    fn sandbox_request_body_with_epoch(request: &Value, epoch: u64) -> InvokeBody {
+        InvokeBody::Json(json!({ "request": request, "runtimeEpoch": epoch }))
     }
 
     fn persistence_snapshot_body(snapshot: &Value) -> InvokeBody {
-        InvokeBody::Json(json!({ "snapshot": snapshot }))
+        InvokeBody::Json(json!({ "snapshot": snapshot, "runtimeEpoch": 0 }))
+    }
+
+    fn persistence_snapshot_body_with_epoch(snapshot: &Value, epoch: u64) -> InvokeBody {
+        InvokeBody::Json(json!({ "snapshot": snapshot, "runtimeEpoch": epoch }))
     }
 
     fn dispatch_body(intent: Value) -> InvokeBody {
-        InvokeBody::Json(json!({ "intent": intent }))
+        InvokeBody::Json(json!({ "intent": intent, "runtimeEpoch": 0 }))
+    }
+
+    fn dispatch_body_with_epoch(intent: Value, epoch: u64) -> InvokeBody {
+        InvokeBody::Json(json!({ "intent": intent, "runtimeEpoch": epoch }))
+    }
+
+    fn epoch_body(epoch: u64) -> InvokeBody {
+        InvokeBody::Json(json!({ "runtimeEpoch": epoch }))
+    }
+
+    fn begin_runtime(webview: &WebviewWindow<MockRuntime>) -> (u64, GameSnapshot) {
+        let response = ipc(webview, "game_begin_runtime", InvokeBody::default())
+            .expect("game_begin_runtime should resolve");
+        let value: Value = response
+            .deserialize()
+            .expect("begin_runtime response should decode to JSON");
+        let epoch = value["runtimeEpoch"]
+            .as_u64()
+            .expect("begin_runtime response should include runtimeEpoch");
+        let snapshot = serde_json::from_value(value["snapshot"].clone())
+            .expect("begin_runtime snapshot should decode");
+        (epoch, snapshot)
     }
 
     fn decode_snapshot_response(response: InvokeResponseBody) -> GameSnapshot {
@@ -581,16 +778,16 @@ mod tests {
 
         {
             let state = app.state::<EngineState>();
-            let mut engine = state.lock().expect("managed engine should lock");
-            engine.set_budget_for_test(7);
-            let _ = engine.dispatch(GameIntent::LayRoad {
+            let mut owned = state.lock().expect("managed engine should lock");
+            owned.engine.set_budget_for_test(7);
+            let _ = owned.engine.dispatch(GameIntent::LayRoad {
                 point: Point { x: 3, y: 3 },
             });
-            assert_ne!(engine.snapshot(), expected);
+            assert_ne!(owned.engine.snapshot(), expected);
         }
 
-        let reset = ipc(&webview, "game_reset", InvokeBody::default())
-            .expect("sandbox reset should resolve");
+        let reset =
+            ipc(&webview, "game_reset", epoch_body(0)).expect("sandbox reset should resolve");
         assert_eq!(decode_snapshot_response(reset), expected);
         let managed =
             ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
@@ -606,8 +803,8 @@ mod tests {
         let app = sandbox_test_app(engine);
         let webview = test_webview(&app);
 
-        let error = ipc(&webview, "game_reset", InvokeBody::default())
-            .expect_err("campaign reset should reject");
+        let error =
+            ipc(&webview, "game_reset", epoch_body(0)).expect_err("campaign reset should reject");
 
         assert!(error.is_object());
         assert_eq!(error["code"], json!("unsupportedGameMode"));
@@ -743,7 +940,7 @@ mod tests {
         let webview = test_webview(&app);
         let snapshot = fixture(VALID_SNAPSHOT);
 
-        let saved = ipc(&webview, "game_snapshot_for_save", InvokeBody::default())
+        let saved = ipc(&webview, "game_snapshot_for_save", epoch_body(0))
             .expect("save command should be registered");
         let saved: Value = saved.deserialize().expect("save response must be JSON");
         assert_eq!(saved["paused"], json!(true));
@@ -786,9 +983,12 @@ mod tests {
 
     #[test]
     fn capture_save_releases_mutex_before_preparation() {
-        let state = Mutex::new(GameEngine::new());
+        let state = Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        });
 
-        let capture = capture_save(&state).unwrap();
+        let capture = capture_save(&state, 0).unwrap();
 
         assert!(state.try_lock().is_ok(), "capture must release the mutex");
         let saved = capture.prepare().unwrap();
@@ -806,8 +1006,8 @@ mod tests {
         let app = sandbox_test_app(engine);
         let webview = test_webview(&app);
 
-        let saved = ipc(&webview, "game_snapshot_for_save", InvokeBody::default())
-            .expect("save should resolve");
+        let saved =
+            ipc(&webview, "game_snapshot_for_save", epoch_body(0)).expect("save should resolve");
         let saved: Value = saved.deserialize().expect("save response must be JSON");
         assert_eq!(saved["paused"], json!(true));
 
@@ -824,7 +1024,7 @@ mod tests {
         let app = sandbox_test_app(engine);
         let webview = test_webview(&app);
 
-        let error = ipc(&webview, "game_snapshot_for_save", InvokeBody::default())
+        let error = ipc(&webview, "game_snapshot_for_save", epoch_body(0))
             .expect_err("invalid active engine must reject save");
 
         assert_eq!(
@@ -967,10 +1167,13 @@ mod tests {
 
     #[test]
     fn restore_encode_failure_is_tagged_before_managed_state_swap() {
-        let state = Mutex::new(GameEngine::new());
-        let before = state.lock().unwrap().snapshot();
+        let state = Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        });
+        let before = state.lock().unwrap().engine.snapshot();
 
-        let error = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), |_snapshot| {
+        let error = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), 0, |_snapshot| {
             Err::<Value, _>("synthetic encode failure")
         })
         .expect_err("encoding failure must reject");
@@ -984,14 +1187,17 @@ mod tests {
                 "diagnostic": "synthetic encode failure"
             })
         );
-        assert_eq!(state.lock().unwrap().snapshot(), before);
+        assert_eq!(state.lock().unwrap().engine.snapshot(), before);
     }
 
     #[test]
     fn structured_error_encoding_failure_falls_back_before_managed_state_swap() {
-        let state = Mutex::new(GameEngine::new());
-        let before = state.lock().unwrap().snapshot();
-        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), |_snapshot| {
+        let state = Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        });
+        let before = state.lock().unwrap().engine.snapshot();
+        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), 0, |_snapshot| {
             Err::<Value, _>("synthetic response encode failure")
         });
 
@@ -1006,7 +1212,7 @@ mod tests {
                 "persistence bridge error encoding failed: synthetic structured error encode failure"
             )
         );
-        assert_eq!(state.lock().unwrap().snapshot(), before);
+        assert_eq!(state.lock().unwrap().engine.snapshot(), before);
     }
 
     #[test]
@@ -1015,22 +1221,25 @@ mod tests {
         // `restore_snapshot_with` acquires the engine mutex to swap. A gameplay
         // dispatch committing inside that window must be replaced by the
         // restored snapshot, matching the documented concurrency contract.
-        let state: Mutex<GameEngine> = Mutex::new(GameEngine::new());
+        let state: Mutex<OwnedEngine> = Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        });
 
         let mut prepared_snapshot: Option<GameSnapshot> = None;
         let mut dispatched_snapshot: Option<GameSnapshot> = None;
-        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), |prepared| {
+        let result = restore_snapshot_with(&state, fixture(VALID_SNAPSHOT), 0, |prepared| {
             prepared_snapshot = Some(prepared.clone());
             {
-                let mut engine = state.lock().expect("engine mutex must be lockable");
-                let dispatch = engine.dispatch(GameIntent::LayRoad {
+                let mut owned = state.lock().expect("engine mutex must be lockable");
+                let dispatch = owned.engine.dispatch(GameIntent::LayRoad {
                     point: Point { x: 2, y: 2 },
                 });
                 assert!(
                     dispatch.applied,
                     "concurrent dispatch must apply before the restore swap"
                 );
-                dispatched_snapshot = Some(engine.snapshot());
+                dispatched_snapshot = Some(owned.engine.snapshot());
             }
             Ok::<Value, std::convert::Infallible>(
                 serde_json::to_value(prepared).expect("prepared snapshot must encode"),
@@ -1045,6 +1254,7 @@ mod tests {
         let after = state
             .lock()
             .expect("engine mutex must be lockable")
+            .engine
             .snapshot();
 
         assert_eq!(
@@ -1062,7 +1272,7 @@ mod tests {
         let app = sandbox_test_app(GameEngine::new());
         let webview = test_webview(&app);
         let state = app.state::<EngineState>();
-        let before = state.lock().unwrap().snapshot();
+        let before = state.lock().unwrap().engine.snapshot();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = state.lock().unwrap();
             panic!("poison persistence mutex");
@@ -1088,6 +1298,255 @@ mod tests {
             Ok(_) => panic!("mutex must remain poisoned"),
             Err(error) => error,
         };
-        assert_eq!(poisoned.into_inner().snapshot(), before);
+        assert_eq!(poisoned.into_inner().engine.snapshot(), before);
+    }
+
+    // -----------------------------------------------------------------------
+    // Runtime epoch regression tests — cross-reload ownership authority
+    // -----------------------------------------------------------------------
+    //
+    // These tests verify that the Rust host epoch prevents a stale command
+    // from a previous webview realm from mutating the engine after a new
+    // `game_begin_runtime` has begun. The Tauri mock IPC is synchronous, so
+    // the tests simulate the race by calling `game_begin_runtime` to advance
+    // the epoch (simulating a new realm) BEFORE issuing the stale command
+    // (simulating an in-flight command from the old realm that reaches the
+    // mutex after the new realm has begun).
+
+    #[test]
+    fn game_begin_runtime_increments_epoch_and_returns_snapshot() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch1, snapshot1) = begin_runtime(&webview);
+        assert_eq!(epoch1, 1);
+        let default = GameEngine::new().snapshot();
+        assert_eq!(snapshot1, default);
+
+        let (epoch2, snapshot2) = begin_runtime(&webview);
+        assert_eq!(epoch2, 2);
+        assert_eq!(snapshot2, default);
+    }
+
+    #[test]
+    fn stale_restore_after_new_runtime_session_is_rejected_without_swapping() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        // Realm A begins a runtime session.
+        let (epoch_a, _) = begin_runtime(&webview);
+
+        // Realm A mutates the engine so we can detect a swap.
+        let dispatched = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 42_000 }), epoch_a),
+        )
+        .expect("dispatch with current epoch should succeed");
+        assert!(decode_dispatch_result(dispatched).applied);
+
+        // Realm B begins a new runtime session (simulates webview reload).
+        let (epoch_b, snapshot_b) = begin_runtime(&webview);
+        assert_eq!(epoch_b, epoch_a + 1);
+        assert_eq!(snapshot_b.budget, 42_000);
+
+        // Realm A's stale restore attempts to swap the engine. It must be
+        // rejected — the epoch has advanced to B.
+        let candidate = fixture(VALID_SNAPSHOT);
+        let error = ipc(
+            &webview,
+            "game_restore_snapshot",
+            persistence_snapshot_body_with_epoch(&candidate, epoch_a),
+        )
+        .expect_err("stale restore must be rejected");
+        assert_eq!(error["kind"], "host");
+        assert_eq!(error["operation"], "restoreSnapshot");
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+
+        // The engine was NOT swapped — it still reflects A's dispatch, which
+        // B's initial snapshot already observed.
+        let current =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot_response(current).budget, 42_000);
+    }
+
+    #[test]
+    fn stale_dispatch_after_new_runtime_session_is_rejected() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+
+        // Realm B begins a new session before A's stale dispatch arrives.
+        let (epoch_b, _) = begin_runtime(&webview);
+        assert!(epoch_b > epoch_a);
+
+        let error = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 99_999 }), epoch_a),
+        )
+        .expect_err("stale dispatch must be rejected");
+        assert!(error.is_object());
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+        assert_eq!(error["context"]["expected"], json!(epoch_a));
+        assert_eq!(error["context"]["actual"], json!(epoch_b));
+
+        // The engine was NOT mutated by the stale dispatch.
+        let current =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot_response(current).budget, 120_000);
+    }
+
+    #[test]
+    fn stale_tick_after_new_runtime_session_is_rejected() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+        let (epoch_b, _) = begin_runtime(&webview);
+        assert!(epoch_b > epoch_a);
+
+        let error = ipc(
+            &webview,
+            "game_tick",
+            InvokeBody::Json(json!({ "deltaSeconds": 0.1, "runtimeEpoch": epoch_a })),
+        )
+        .expect_err("stale tick must be rejected");
+        assert!(error.is_object());
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+    }
+
+    #[test]
+    fn stale_create_sandbox_after_new_runtime_session_is_rejected() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+        let (epoch_b, _) = begin_runtime(&webview);
+
+        let request = json!({
+            "templateId": "blankGrid",
+            "economyPreset": "creative",
+            "startingCapital": 42_000,
+            "demandMultiplier": 1.5,
+            "moveInRate": "paused"
+        });
+        let error = ipc(
+            &webview,
+            "game_create_sandbox",
+            sandbox_request_body_with_epoch(&request, epoch_a),
+        )
+        .expect_err("stale sandbox creation must be rejected");
+        assert!(error.is_object());
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+        assert_eq!(error["context"]["actual"], json!(epoch_b));
+    }
+
+    #[test]
+    fn stale_reset_after_new_runtime_session_is_rejected() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+        let (epoch_b, _) = begin_runtime(&webview);
+
+        let error = ipc(&webview, "game_reset", epoch_body(epoch_a))
+            .expect_err("stale reset must be rejected");
+        assert!(error.is_object());
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+        assert_eq!(error["context"]["actual"], json!(epoch_b));
+    }
+
+    #[test]
+    fn stale_snapshot_for_save_after_new_runtime_session_is_rejected() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+        let _ = begin_runtime(&webview);
+
+        let error = ipc(&webview, "game_snapshot_for_save", epoch_body(epoch_a))
+            .expect_err("stale save snapshot must be rejected");
+        assert_eq!(error["kind"], "host");
+        assert_eq!(error["operation"], "snapshotForSave");
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+    }
+
+    #[test]
+    fn command_committed_before_new_session_is_visible_in_initial_snapshot() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch_a, _) = begin_runtime(&webview);
+
+        // A dispatch committed with the current epoch.
+        let dispatched = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 55_000 }), epoch_a),
+        )
+        .expect("dispatch with current epoch should succeed");
+        assert!(decode_dispatch_result(dispatched).applied);
+
+        // Realm B begins and its initial snapshot reflects A's committed
+        // dispatch.
+        let (_, snapshot_b) = begin_runtime(&webview);
+        assert_eq!(snapshot_b.budget, 55_000);
+    }
+
+    #[test]
+    fn current_epoch_dispatch_succeeds_and_mutates_engine() {
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch, _) = begin_runtime(&webview);
+
+        let result = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 77_000 }), epoch),
+        )
+        .expect("dispatch with current epoch should succeed");
+        let result = decode_dispatch_result(result);
+        assert!(result.applied);
+        assert_eq!(result.snapshot.budget, 77_000);
+
+        let current =
+            ipc(&webview, "game_snapshot", InvokeBody::default()).expect("snapshot should resolve");
+        assert_eq!(decode_snapshot_response(current).budget, 77_000);
+    }
+
+    #[test]
+    fn separate_begin_runtime_calls_share_one_host_epoch_authority() {
+        // Two game_begin_runtime calls (simulating separate Tauri facade
+        // objects) both increment the same host-level epoch. The second
+        // call's epoch supersedes the first — a command with the first
+        // epoch is stale after the second call.
+        let app = sandbox_test_app(GameEngine::new());
+        let webview = test_webview(&app);
+
+        let (epoch1, _) = begin_runtime(&webview);
+        let (epoch2, _) = begin_runtime(&webview);
+        assert_eq!(epoch2, epoch1 + 1);
+
+        // A command with epoch1 is now stale.
+        let error = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 10_000 }), epoch1),
+        )
+        .expect_err("epoch1 must be stale after epoch2 begins");
+        assert_eq!(error["code"], "staleRuntimeEpoch");
+        assert_eq!(error["context"]["actual"], json!(epoch2));
+
+        // A command with epoch2 succeeds.
+        let result = ipc(
+            &webview,
+            "game_dispatch",
+            dispatch_body_with_epoch(json!({ "type": "setBudget", "budget": 20_000 }), epoch2),
+        )
+        .expect("dispatch with epoch2 should succeed");
+        assert!(decode_dispatch_result(result).applied);
     }
 }

@@ -470,15 +470,22 @@ const objectIdentityCoordinators = new WeakMap<
  * up or created in a `WeakMap` keyed by the store object itself. This is
  * safe for single-adapter usage but does not protect against two adapter
  * objects targeting the same durable database.
+ *
+ * @param preCapturedStorageIdentity — when provided, used instead of re-reading
+ *   `store.storageIdentity`. This avoids rereading a stateful getter after
+ *   ownership/lease acquisition, which could throw and leak both capabilities.
+ *   The caller captures it once before acquisition and passes it here.
  */
 export function resolvePersistenceCoordinator(
   store: SaveStore,
+  preCapturedStorageIdentity?: StorageIdentity,
 ): SharedPersistenceCoordinator {
-  if (store.storageIdentity !== undefined) {
-    let coordinator = coordinatorRegistry.get(store.storageIdentity);
+  const storageIdentity = preCapturedStorageIdentity ?? store.storageIdentity;
+  if (storageIdentity !== undefined) {
+    let coordinator = coordinatorRegistry.get(storageIdentity);
     if (coordinator === undefined) {
       coordinator = createSharedPersistenceCoordinator();
-      coordinatorRegistry.set(store.storageIdentity, coordinator);
+      coordinatorRegistry.set(storageIdentity, coordinator);
     }
     return coordinator;
   }

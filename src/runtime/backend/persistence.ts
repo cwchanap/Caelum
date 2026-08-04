@@ -786,7 +786,8 @@ function isPersistenceHostErrorCode(
     value === "stateUnavailable" ||
     value === "invokeFailed" ||
     value === "malformedSuccess" ||
-    value === "malformedError"
+    value === "malformedError" ||
+    value === "staleRuntimeEpoch"
   );
 }
 

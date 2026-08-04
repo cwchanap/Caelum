@@ -17,6 +17,7 @@ import type {
   RoadMutationPreviewResponse,
   RoutePreviewRequest,
   RoutePreviewResponse,
+  RuntimeSession,
   RustGameSnapshot,
   SandboxCreationRequest,
 } from "./types";
@@ -57,6 +58,13 @@ export async function createWasmBackend(): Promise<GameBackend> {
   let engine = new WasmGameEngine();
 
   return {
+    async beginRuntime(): Promise<RuntimeSession> {
+      // The WASM engine is instance-local — no cross-realm authority is
+      // needed. Return epoch 0 so the runtime's beginRuntime path is
+      // uniform across backends; mutating WASM calls do not carry epoch.
+      const snapshot = engine.snapshot() as RustGameSnapshot;
+      return { runtimeEpoch: 0, snapshot };
+    },
     async snapshot() {
       return engine.snapshot() as RustGameSnapshot;
     },

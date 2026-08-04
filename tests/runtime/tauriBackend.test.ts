@@ -79,7 +79,10 @@ describe("createTauriBackend", () => {
     const intent: GameIntent = { type: "setPaused", paused: false };
     const result = await backend.dispatch(intent);
 
-    expect(invokeMock).toHaveBeenCalledWith("game_dispatch", { intent });
+    expect(invokeMock).toHaveBeenCalledWith("game_dispatch", {
+      intent,
+      runtimeEpoch: 0,
+    });
     expect(result.applied).toBe(true);
     expect(result.rejection).toBeNull();
     expect(result.snapshot.paused).toBe(false);
@@ -137,7 +140,10 @@ describe("createTauriBackend", () => {
     const intent = { type: "setSpeed", speed: 3 } as unknown as GameIntent;
     const result = await backend.dispatch(intent);
 
-    expect(invokeMock).toHaveBeenCalledWith("game_dispatch", { intent });
+    expect(invokeMock).toHaveBeenCalledWith("game_dispatch", {
+      intent,
+      runtimeEpoch: 0,
+    });
     expect(result.applied).toBe(false);
     expect(result.rejection).toEqual({
       code: "invalidSpeed",
@@ -163,7 +169,10 @@ describe("createTauriBackend", () => {
     const backend = await createTauriBackend();
     const result = await backend.tick(0.5);
 
-    expect(invokeMock).toHaveBeenCalledWith("game_tick", { deltaSeconds: 0.5 });
+    expect(invokeMock).toHaveBeenCalledWith("game_tick", {
+      deltaSeconds: 0.5,
+      runtimeEpoch: 0,
+    });
     expect(result.applied).toBe(true);
     expect(result.rejection).toBeNull();
     expect(result.snapshot.day).toBe(1);
@@ -176,7 +185,7 @@ describe("createTauriBackend", () => {
     const backend = await createTauriBackend();
     const result = await backend.reset();
 
-    expect(invokeMock).toHaveBeenCalledWith("game_reset", undefined);
+    expect(invokeMock).toHaveBeenCalledWith("game_reset", { runtimeEpoch: 0 });
     expect(result).toEqual({
       ok: true,
       snapshot: snapshot as RustGameSnapshot,
@@ -209,7 +218,10 @@ describe("createTauriBackend", () => {
     const backend = await createTauriBackend();
     const result = await backend.createSandbox(request);
 
-    expect(invokeMock).toHaveBeenCalledWith("game_create_sandbox", { request });
+    expect(invokeMock).toHaveBeenCalledWith("game_create_sandbox", {
+      request,
+      runtimeEpoch: 0,
+    });
     expect(result).toEqual({ ok: true, snapshot });
   });
 
@@ -287,16 +299,15 @@ describe("createTauriBackend", () => {
       snapshot: restored,
     });
 
-    expect(invokeMock).toHaveBeenNthCalledWith(
-      1,
-      "game_snapshot_for_save",
-      undefined,
-    );
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "game_snapshot_for_save", {
+      runtimeEpoch: 0,
+    });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "game_validate_snapshot", {
       snapshot: restored,
     });
     expect(invokeMock).toHaveBeenNthCalledWith(3, "game_restore_snapshot", {
       snapshot: restored,
+      runtimeEpoch: 0,
     });
     expect(saveResult).toEqual({ ok: true, snapshot: saved });
     expect(saveResult.ok && saveResult.snapshot).toBe(saved);
@@ -491,5 +502,215 @@ describe("createTauriBackend", () => {
         request: roadRequest,
       },
     );
+  });
+
+  it("beginRuntime() invokes game_begin_runtime and stores the epoch for subsequent commands", async () => {
+    const snapshot = createRustSnapshot({ paused: true });
+    invokeMock
+      .mockResolvedValueOnce({ runtimeEpoch: 7, snapshot })
+      .mockResolvedValueOnce({
+        snapshot: createRustSnapshot({ paused: false }),
+        applied: true,
+        rejection: null,
+        context: {
+          changedTiles: [],
+          skippedTiles: [],
+          affectedRouteIds: [],
+          cost: 0,
+        },
+      });
+
+    const backend = await createTauriBackend();
+    const session = await backend.beginRuntime!();
+
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      1,
+      "game_begin_runtime",
+      undefined,
+    );
+    expect(session).toEqual({ runtimeEpoch: 7, snapshot });
+
+    // The stored epoch is passed on subsequent mutating commands.
+    await backend.dispatch({ type: "setPaused", paused: false });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "game_dispatch", {
+      intent: { type: "setPaused", paused: false },
+      runtimeEpoch: 7,
+    });
+  });
+
+  it("beginRuntime() updates the epoch on each call", async () => {
+    const snapshot = createRustSnapshot();
+    invokeMock
+      .mockResolvedValueOnce({ runtimeEpoch: 1, snapshot })
+      .mockResolvedValueOnce({ runtimeEpoch: 2, snapshot });
+
+    const backend = await createTauriBackend();
+    await backend.beginRuntime!();
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      1,
+      "game_begin_runtime",
+      undefined,
+    );
+
+    await backend.beginRuntime!();
+    expect(invokeMock).toHaveBeenNthCalledWith(
+      2,
+      "game_begin_runtime",
+      undefined,
+    );
+
+    // The latest epoch (2) is used for subsequent commands.
+    invokeMock.mockResolvedValueOnce({
+      snapshot,
+      applied: true,
+      rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
+    });
+    await backend.dispatch({ type: "setPaused", paused: false });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "game_dispatch", {
+      intent: { type: "setPaused", paused: false },
+      runtimeEpoch: 2,
+    });
+  });
+
+  it("passes the stored epoch on snapshotForSave, restoreSnapshot, createSandbox, reset, and tick", async () => {
+    const snapshot = createRustSnapshot();
+    invokeMock.mockResolvedValueOnce({ runtimeEpoch: 42, snapshot });
+
+    const backend = await createTauriBackend();
+    await backend.beginRuntime!();
+
+    // snapshotForSave
+    invokeMock.mockResolvedValueOnce(snapshot);
+    await backend.snapshotForSave();
+    expect(invokeMock).toHaveBeenLastCalledWith("game_snapshot_for_save", {
+      runtimeEpoch: 42,
+    });
+
+    // restoreSnapshot
+    invokeMock.mockResolvedValueOnce(snapshot);
+    await backend.restoreSnapshot({ snapshot });
+    expect(invokeMock).toHaveBeenLastCalledWith("game_restore_snapshot", {
+      snapshot,
+      runtimeEpoch: 42,
+    });
+
+    // createSandbox
+    invokeMock.mockResolvedValueOnce(snapshot);
+    await backend.createSandbox({
+      templateId: "blankGrid",
+      economyPreset: "creative",
+      startingCapital: 42_000,
+      demandMultiplier: 1.5,
+      moveInRate: "paused",
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("game_create_sandbox", {
+      request: {
+        templateId: "blankGrid",
+        economyPreset: "creative",
+        startingCapital: 42_000,
+        demandMultiplier: 1.5,
+        moveInRate: "paused",
+      },
+      runtimeEpoch: 42,
+    });
+
+    // reset
+    invokeMock.mockResolvedValueOnce(snapshot);
+    await backend.reset();
+    expect(invokeMock).toHaveBeenLastCalledWith("game_reset", {
+      runtimeEpoch: 42,
+    });
+
+    // tick
+    invokeMock.mockResolvedValueOnce({
+      snapshot,
+      applied: true,
+      rejection: null,
+      context: {
+        changedTiles: [],
+        skippedTiles: [],
+        affectedRouteIds: [],
+        cost: 0,
+      },
+    });
+    await backend.tick(0.1);
+    expect(invokeMock).toHaveBeenLastCalledWith("game_tick", {
+      deltaSeconds: 0.1,
+      runtimeEpoch: 42,
+    });
+  });
+
+  it("does not pass epoch on immutable preview commands", async () => {
+    const snapshot = createRustSnapshot();
+    invokeMock.mockResolvedValueOnce({ runtimeEpoch: 99, snapshot });
+
+    const backend = await createTauriBackend();
+    await backend.beginRuntime!();
+
+    // previewRoute — no epoch
+    invokeMock.mockResolvedValueOnce({
+      generation: 1,
+      legs: [],
+      totalTravelSeconds: 0,
+      initialVehicleCost: 0,
+      affordable: true,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: [],
+      warnings: [],
+      rejection: null,
+    });
+    await backend.previewRoute({
+      mode: "bus",
+      pattern: "loop",
+      waypointIds: ["stop-001", "stop-002"],
+      routeId: null,
+      expectedRevision: null,
+      generation: 1,
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("game_preview_route", {
+      request: {
+        mode: "bus",
+        pattern: "loop",
+        waypointIds: ["stop-001", "stop-002"],
+        routeId: null,
+        expectedRevision: null,
+        generation: 1,
+      },
+    });
+
+    // previewRoadMutation — no epoch
+    invokeMock.mockResolvedValueOnce({
+      generation: 2,
+      changedTiles: [],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 0,
+      skippedTiles: [],
+      routeImpacts: [],
+      warnings: [],
+      rejection: null,
+    });
+    await backend.previewRoadMutation({
+      mutation: { type: "removeAtTile", point: { x: 5, y: 5 } },
+      generation: 2,
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("game_preview_road_mutation", {
+      request: {
+        mutation: { type: "removeAtTile", point: { x: 5, y: 5 } },
+        generation: 2,
+      },
+    });
   });
 });
