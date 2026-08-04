@@ -82,7 +82,7 @@ describe("routeFailureGuidance", () => {
 });
 
 describe("warningMessage", () => {
-  const baseContext = GameplayRejectionContext();
+  const baseContext = gameplayRejectionContext();
 
   it("formats insufficientBudget", () => {
     const warning: GameplayWarning = {
@@ -127,7 +127,7 @@ describe("warningMessage", () => {
   });
 });
 
-function GameplayRejectionContext(): GameplayRejection["context"] {
+function gameplayRejectionContext(): GameplayRejection["context"] {
   return { affectedRouteIds: [] };
 }
 
@@ -138,7 +138,7 @@ describe("assertNever fallbacks", () => {
     expect(() =>
       rejectionMessage({
         code: "unknownCode" as unknown as GameplayRejection["code"],
-        context: GameplayRejectionContext(),
+        context: gameplayRejectionContext(),
       }),
     ).toThrow("Unhandled rejection code");
   });
@@ -147,7 +147,7 @@ describe("assertNever fallbacks", () => {
     expect(() =>
       warningMessage({
         code: "unknownCode" as unknown as GameplayWarning["code"],
-        context: GameplayRejectionContext(),
+        context: gameplayRejectionContext(),
       }),
     ).toThrow("Unhandled rejection code");
   });

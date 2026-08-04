@@ -29,7 +29,22 @@ export async function createTauriBackend(): Promise<GameBackend> {
   // commands whose epoch does not match the current `OwnedEngine` epoch,
   // preventing a stale command from a previous webview realm (after a soft
   // reload) from mutating the engine after a new runtime session has begun.
-  let runtimeEpoch = 0;
+  //
+  // The epoch is null until `beginRuntime` completes. The Rust host's
+  // `OwnedEngine` starts at epoch 0, so a pre-session `runtimeEpoch: 0`
+  // would match the host's initial epoch and be accepted — allowing
+  // unsessioned mutations. Rejecting all mutating commands while the epoch
+  // is null closes that gap: no command reaches the host before a session
+  // has begun.
+  let runtimeEpoch: number | null = null;
+  const requireEpoch = (): number => {
+    if (runtimeEpoch === null) {
+      throw new Error(
+        "Tauri backend command invoked before beginRuntime completed",
+      );
+    }
+    return runtimeEpoch;
+  };
   return {
     // The Tauri backend is process-global: every facade invokes commands
     // against one `Mutex<GameEngine>` in the Rust host. All facades share
@@ -48,9 +63,10 @@ export async function createTauriBackend(): Promise<GameBackend> {
     async snapshot() {
       return invoke<RustGameSnapshot>("game_snapshot");
     },
-    snapshotForSave() {
+    async snapshotForSave() {
+      const epoch = requireEpoch();
       return runPersistenceSnapshotOperation("snapshotForSave", () =>
-        invoke("game_snapshot_for_save", { runtimeEpoch }),
+        invoke("game_snapshot_for_save", { runtimeEpoch: epoch }),
       );
     },
     validateSnapshot(request) {
@@ -58,19 +74,21 @@ export async function createTauriBackend(): Promise<GameBackend> {
         invoke("game_validate_snapshot", { snapshot: request.snapshot }),
       );
     },
-    restoreSnapshot(request) {
+    async restoreSnapshot(request) {
+      const epoch = requireEpoch();
       return runPersistenceSnapshotOperation("restoreSnapshot", () =>
         invoke("game_restore_snapshot", {
           snapshot: request.snapshot,
-          runtimeEpoch,
+          runtimeEpoch: epoch,
         }),
       );
     },
     async createSandbox(request: SandboxCreationRequest) {
+      const epoch = requireEpoch();
       try {
         const snapshot = await invoke<RustGameSnapshot>("game_create_sandbox", {
           request,
-          runtimeEpoch,
+          runtimeEpoch: epoch,
         });
         return { ok: true, snapshot } as const;
       } catch (error: unknown) {
@@ -81,23 +99,26 @@ export async function createTauriBackend(): Promise<GameBackend> {
       }
     },
     async dispatch(intent: GameIntent) {
+      const epoch = requireEpoch();
       const result = await invoke<DispatchResult>("game_dispatch", {
         intent,
-        runtimeEpoch,
+        runtimeEpoch: epoch,
       });
       return normalizeDispatchResult(result);
     },
     async tick(deltaSeconds: number) {
+      const epoch = requireEpoch();
       const result = await invoke<DispatchResult>("game_tick", {
         deltaSeconds,
-        runtimeEpoch,
+        runtimeEpoch: epoch,
       });
       return normalizeDispatchResult(result);
     },
     async reset() {
+      const epoch = requireEpoch();
       try {
         const snapshot = await invoke<RustGameSnapshot>("game_reset", {
-          runtimeEpoch,
+          runtimeEpoch: epoch,
         });
         return { ok: true, snapshot } as const;
       } catch (error: unknown) {

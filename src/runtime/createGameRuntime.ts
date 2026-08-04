@@ -100,6 +100,7 @@ import type {
   RuntimeListener,
   RuntimeRecoveryState,
   RuntimeSnapshot,
+  RuntimeTestSeam,
 } from "./types";
 
 const rotations = [0, 90, 180, 270] as const;
@@ -243,7 +244,7 @@ function nextBuildingUiState(
 
 export async function createGameRuntime(
   options: CreateGameRuntimeOptions,
-): Promise<RuntimeController> {
+): Promise<RuntimeController & RuntimeTestSeam> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
   // P2: Capture adapter metadata exactly once BEFORE acquiring any capability.
   // A throwing `storageIdentity` or `singleRealm` getter after backend
@@ -811,28 +812,11 @@ export async function createGameRuntime(
     // recovery reasons (e.g. `multiRealmAmbiguousCleanup`) are surfaced
     // without needing a parallel branch here.
     const disposeResultFromRecovery = (): RuntimeDisposeResult => {
-      if (!leaseStuck) return { status: "released" };
-      if (recovery.state !== "recoveryRequired") return { status: "released" };
-      switch (recovery.reason) {
-        case "lateSuccessCleanupFailed":
-          return {
-            status: "recoveryRequired",
-            reason: "lateSuccessCleanupFailed",
-            cityId: recovery.cityId,
-          };
-        case "multiRealmAmbiguousCleanup":
-          return {
-            status: "recoveryRequired",
-            reason: "multiRealmAmbiguousCleanup",
-            cityId: recovery.cityId,
-          };
-        case "bootstrapReconciliationFailed":
-          return {
-            status: "recoveryRequired",
-            reason: "bootstrapReconciliationFailed",
-            cityId: recovery.cityId,
-          };
+      if (!leaseStuck || recovery.state !== "recoveryRequired") {
+        return { status: "released" };
       }
+      const { state: _state, ...details } = recovery;
+      return { status: "recoveryRequired", ...details };
     };
 
     const dispose = async (): Promise<RuntimeDisposeResult> => {
@@ -3533,7 +3517,7 @@ export async function createGameRuntime(
       runGameplayWrite,
     };
 
-    const api: RuntimeController = {
+    const api: RuntimeController & RuntimeTestSeam = {
       persistence,
       getSnapshot,
       subscribe(listener) {

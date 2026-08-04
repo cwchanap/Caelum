@@ -10,6 +10,7 @@ import type {
 } from "../../src/runtime/backend/types";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import type { GameBackend } from "../../src/runtime/backend/types";
 
 // Mock the Tauri IPC bridge so the backend can be exercised in a node test
 // environment without a real Tauri runtime. The mock captures every `invoke`
@@ -31,6 +32,22 @@ describe("createTauriBackend", () => {
   beforeEach(() => {
     invokeMock.mockReset();
   });
+
+  // Helper: create a backend and call `beginRuntime` so mutating commands
+  // have a valid epoch. The backend rejects mutating commands before
+  // `beginRuntime` completes (the epoch is null), so tests that exercise
+  // dispatch/tick/reset/createSandbox/snapshotForSave/restoreSnapshot must
+  // start a session first. The `beginRuntime` mock is consumed inside this
+  // helper, so callers set up their own mocks AFTER calling it.
+  async function createStartedBackend(epoch = 1): Promise<GameBackend> {
+    invokeMock.mockResolvedValueOnce({
+      runtimeEpoch: epoch,
+      snapshot: createRustSnapshot(),
+    });
+    const backend = await createTauriBackend();
+    await backend.beginRuntime!();
+    return backend;
+  }
 
   it("snapshot() invokes game_snapshot with no args and returns the raw snapshot", async () => {
     const snapshot = createRustSnapshot({ paused: false });
@@ -73,15 +90,14 @@ describe("createTauriBackend", () => {
         cost: 0,
       },
     };
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
-
-    const backend = await createTauriBackend();
     const intent: GameIntent = { type: "setPaused", paused: false };
     const result = await backend.dispatch(intent);
 
     expect(invokeMock).toHaveBeenCalledWith("game_dispatch", {
       intent,
-      runtimeEpoch: 0,
+      runtimeEpoch: 1,
     });
     expect(result.applied).toBe(true);
     expect(result.rejection).toBeNull();
@@ -105,9 +121,8 @@ describe("createTauriBackend", () => {
         cost: 0,
       },
     } as unknown as DispatchResult;
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
-
-    const backend = await createTauriBackend();
     const result = await backend.dispatch({ type: "setSpeed", speed: 2 });
 
     expect(result.rejection).toBeNull();
@@ -130,9 +145,8 @@ describe("createTauriBackend", () => {
         cost: 0,
       },
     };
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
-
-    const backend = await createTauriBackend();
     // The TS `GameIntent.setSpeed` type constrains speed to `0 | 1 | 2 | 4`,
     // but the Rust field is `u8` and the engine rejects out-of-range values at
     // runtime. Cast to exercise the rejection path that a Tauri host would
@@ -142,7 +156,7 @@ describe("createTauriBackend", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("game_dispatch", {
       intent,
-      runtimeEpoch: 0,
+      runtimeEpoch: 1,
     });
     expect(result.applied).toBe(false);
     expect(result.rejection).toEqual({
@@ -164,14 +178,13 @@ describe("createTauriBackend", () => {
         cost: 0,
       },
     };
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
-
-    const backend = await createTauriBackend();
     const result = await backend.tick(0.5);
 
     expect(invokeMock).toHaveBeenCalledWith("game_tick", {
       deltaSeconds: 0.5,
-      runtimeEpoch: 0,
+      runtimeEpoch: 1,
     });
     expect(result.applied).toBe(true);
     expect(result.rejection).toBeNull();
@@ -180,12 +193,11 @@ describe("createTauriBackend", () => {
 
   it("reset() invokes game_reset with no args and returns a success result", async () => {
     const snapshot = createRustSnapshot({ day: 0, paused: true });
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(snapshot);
-
-    const backend = await createTauriBackend();
     const result = await backend.reset();
 
-    expect(invokeMock).toHaveBeenCalledWith("game_reset", { runtimeEpoch: 0 });
+    expect(invokeMock).toHaveBeenCalledWith("game_reset", { runtimeEpoch: 1 });
     expect(result).toEqual({
       ok: true,
       snapshot: snapshot as RustGameSnapshot,
@@ -213,14 +225,13 @@ describe("createTauriBackend", () => {
         },
       },
     });
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(snapshot);
-
-    const backend = await createTauriBackend();
     const result = await backend.createSandbox(request);
 
     expect(invokeMock).toHaveBeenCalledWith("game_create_sandbox", {
       request,
-      runtimeEpoch: 0,
+      runtimeEpoch: 1,
     });
     expect(result).toEqual({ ok: true, snapshot });
   });
@@ -237,10 +248,10 @@ describe("createTauriBackend", () => {
       code: "unsupportedGameMode",
       context: { gameMode: "campaign" },
     };
+    const backend = await createStartedBackend();
     invokeMock
       .mockRejectedValueOnce(creationError)
       .mockRejectedValueOnce(resetError);
-    const backend = await createTauriBackend();
 
     await expect(
       backend.createSandbox({
@@ -258,10 +269,10 @@ describe("createTauriBackend", () => {
   });
 
   it("rethrows unexpected creation/reset command string rejections", async () => {
+    const backend = await createStartedBackend();
     invokeMock
       .mockRejectedValueOnce("mutex poisoned")
       .mockRejectedValueOnce("mutex poisoned");
-    const backend = await createTauriBackend();
 
     await expect(
       backend.createSandbox({
@@ -285,12 +296,12 @@ describe("createTauriBackend", () => {
       },
     });
     const restored = createRustSnapshot({ day: 3, paused: true });
+    const backend = await createStartedBackend();
     invokeMock
       .mockResolvedValueOnce(saved)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(restored);
 
-    const backend = await createTauriBackend();
     const saveResult = await backend.snapshotForSave();
     const validationResult = await backend.validateSnapshot({
       snapshot: restored,
@@ -299,15 +310,15 @@ describe("createTauriBackend", () => {
       snapshot: restored,
     });
 
-    expect(invokeMock).toHaveBeenNthCalledWith(1, "game_snapshot_for_save", {
-      runtimeEpoch: 0,
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "game_snapshot_for_save", {
+      runtimeEpoch: 1,
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "game_validate_snapshot", {
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "game_validate_snapshot", {
       snapshot: restored,
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "game_restore_snapshot", {
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "game_restore_snapshot", {
       snapshot: restored,
-      runtimeEpoch: 0,
+      runtimeEpoch: 1,
     });
     expect(saveResult).toEqual({ ok: true, snapshot: saved });
     expect(saveResult.ok && saveResult.snapshot).toBe(saved);
@@ -358,8 +369,8 @@ describe("createTauriBackend", () => {
         },
       },
     } as const;
+    const backend = await createStartedBackend();
     invokeMock.mockRejectedValueOnce(error);
-    const backend = await createTauriBackend();
 
     await expect(
       backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
@@ -367,10 +378,10 @@ describe("createTauriBackend", () => {
   });
 
   it("normalizes an opaque Tauri invoke rejection to host/invokeFailed", async () => {
+    const backend = await createStartedBackend();
     invokeMock.mockRejectedValueOnce(
       "persistence bridge error encoding failed: synthetic failure",
     );
-    const backend = await createTauriBackend();
 
     await expect(
       backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
@@ -388,10 +399,10 @@ describe("createTauriBackend", () => {
   });
 
   it("maps malformed Tauri successes and errors through the shared contract", async () => {
+    const backend = await createStartedBackend();
     invokeMock
       .mockResolvedValueOnce({ schemaVersion: "4" })
       .mockRejectedValueOnce({ unexpected: true });
-    const backend = await createTauriBackend();
 
     await expect(backend.snapshotForSave()).resolves.toMatchObject({
       ok: false,
@@ -414,10 +425,10 @@ describe("createTauriBackend", () => {
   });
 
   it("rejects a wrong-schema Tauri snapshot success", async () => {
+    const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce({
       schemaVersion: SNAPSHOT_SCHEMA_VERSION - 1,
     });
-    const backend = await createTauriBackend();
 
     await expect(
       backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
@@ -536,6 +547,38 @@ describe("createTauriBackend", () => {
       intent: { type: "setPaused", paused: false },
       runtimeEpoch: 7,
     });
+  });
+
+  it("rejects mutating commands before beginRuntime completes", async () => {
+    // The epoch is null until `beginRuntime` completes. The Rust host's
+    // `OwnedEngine` starts at epoch 0, so a pre-session `runtimeEpoch: 0`
+    // would match the host's initial epoch and be accepted. Rejecting all
+    // mutating commands while the epoch is null closes that gap.
+    const backend = await createTauriBackend();
+    await expect(backend.dispatch({ type: "setPaused", paused: false })).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(backend.tick(0.1)).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(backend.reset()).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(
+      backend.createSandbox({
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).rejects.toThrow("before beginRuntime completed");
+    await expect(backend.snapshotForSave()).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).rejects.toThrow("before beginRuntime completed");
   });
 
   it("beginRuntime() updates the epoch on each call", async () => {

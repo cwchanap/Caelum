@@ -63,25 +63,35 @@ export function createBackendOwnershipCoordinator(): BackendOwnershipCoordinator
   let held = false;
   const waitQueue: Array<() => void> = [];
 
-  const releaseImpl = (): void => {
-    const next = waitQueue.shift();
-    if (next === undefined) {
-      held = false;
-    } else {
-      next();
-    }
+  // Each acquired handle gets its own release guard so repeated or stale
+  // calls to `release()` on the same handle are no-ops. Without this, a
+  // double-release would shift the next waiter (or clear `held`) even
+  // though the handle no longer owns the lock — handing ownership to an
+  // unintended consumer or leaving the lock open.
+  const createRelease = (): (() => void) => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = waitQueue.shift();
+      if (next === undefined) {
+        held = false;
+      } else {
+        next();
+      }
+    };
   };
 
   return {
     acquire(): Promise<BackendOwnership> {
       if (!held) {
         held = true;
-        return Promise.resolve({ release: releaseImpl });
+        return Promise.resolve({ release: createRelease() });
       }
       return new Promise<BackendOwnership>((resolve) => {
         waitQueue.push(() => {
           held = true;
-          resolve({ release: releaseImpl });
+          resolve({ release: createRelease() });
         });
       });
     },

@@ -55,6 +55,23 @@ fn stale_runtime_epoch(expected: u64, actual: u64) -> StaleRuntimeEpoch {
     }
 }
 
+/// Build a `PersistenceBridgeError` for a stale runtime epoch in a
+/// persistence command (`capture_save` / `restore_snapshot_with`). Both
+/// call sites produce the same error shape — only the `PersistenceOperation`
+/// differs — so this shared helper keeps the diagnostic text and error code
+/// in one place.
+fn stale_epoch_persistence_error(
+    operation: PersistenceOperation,
+    expected: u64,
+    actual: u64,
+) -> PersistenceBridgeError {
+    PersistenceBridgeError::host(
+        operation,
+        PersistenceHostErrorCode::StaleRuntimeEpoch,
+        format!("stale runtime epoch: expected {expected}, actual {actual}"),
+    )
+}
+
 /// Wire-format contract for Tauri command errors.
 ///
 /// Uses `#[serde(untagged)]` so that `Domain(E)` serializes as `E`'s JSON
@@ -174,13 +191,10 @@ fn capture_save(
         .lock()
         .map_err(|error| state_unavailable(PersistenceOperation::SnapshotForSave, error))?;
     if owned.runtime_epoch != runtime_epoch {
-        return Err(PersistenceBridgeError::host(
+        return Err(stale_epoch_persistence_error(
             PersistenceOperation::SnapshotForSave,
-            PersistenceHostErrorCode::StaleRuntimeEpoch,
-            format!(
-                "stale runtime epoch: expected {}, actual {runtime_epoch}",
-                owned.runtime_epoch
-            ),
+            owned.runtime_epoch,
+            runtime_epoch,
         ));
     }
     Ok(owned.engine.capture_snapshot_for_save())
@@ -223,13 +237,10 @@ where
         .lock()
         .map_err(|error| state_unavailable(operation, error))?;
     if owned.runtime_epoch != runtime_epoch {
-        return Err(PersistenceBridgeError::host(
+        return Err(stale_epoch_persistence_error(
             operation,
-            PersistenceHostErrorCode::StaleRuntimeEpoch,
-            format!(
-                "stale runtime epoch: expected {}, actual {runtime_epoch}",
-                owned.runtime_epoch
-            ),
+            owned.runtime_epoch,
+            runtime_epoch,
         ));
     }
     owned.engine = prepared.into_engine();

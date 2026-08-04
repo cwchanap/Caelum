@@ -2196,6 +2196,91 @@ export function defineSaveStoreContract(
         );
       });
 
+      it("createWorkingSave conflicts with checkpoint-only storage", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeCheckpoint({
+            checkpointId: "checkpoint-existing",
+            cityId: "city-target",
+            name: "Existing checkpoint",
+            note: null,
+            envelope: envelopeFor("city-target", "Target", {
+              savedAt: "2026-08-01T11:00:00.000Z",
+            }),
+          }),
+        );
+        await expectError(
+          store.createWorkingSave(envelopeFor("city-target", "New Create")),
+          "conflict",
+        );
+      });
+
+      it("createWorkingSave conflicts with autosave-only storage", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeAutosave({
+            autosaveId: "autosave-existing",
+            cityId: "city-target",
+            generation: 3,
+            envelope: envelopeFor("city-target", "Target", {
+              savedAt: "2026-08-01T11:00:00.000Z",
+            }),
+          }),
+        );
+        await expectError(
+          store.createWorkingSave(envelopeFor("city-target", "New Create")),
+          "conflict",
+        );
+      });
+
+      it("createWorkingSave conflicts with generation-high-water-only storage", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.writeAutosave({
+            autosaveId: "autosave-pruned",
+            cityId: "city-target",
+            generation: 5,
+            envelope: envelopeFor("city-target", "Target"),
+          }),
+        );
+        await expectOk(store.deleteAutosave("city-target", "autosave-pruned"));
+        await expectError(
+          store.createWorkingSave(envelopeFor("city-target", "New Create")),
+          "conflict",
+        );
+      });
+
+      it("writeWorkingSave preserves the pending state of an existing pending record", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        await expectOk(
+          store.writeWorkingSave(
+            envelopeFor("city-pending", "Updated", {
+              savedAt: "2026-08-01T11:00:00.000Z",
+            }),
+          ),
+        );
+        const cities = await expectOk(store.listCities());
+        const summary = cities.find((c) => c.cityId === "city-pending");
+        expect(summary).toBeDefined();
+        expect(summary?.pending).toBe(true);
+      });
+
+      it("renameCity preserves the pending state of an existing pending record", async () => {
+        const { store } = createHarness();
+        await expectOk(
+          store.createWorkingSave(envelopeFor("city-pending", "Pending")),
+        );
+        await expectOk(store.renameCity("city-pending", "Renamed"));
+        const cities = await expectOk(store.listCities());
+        const summary = cities.find((c) => c.cityId === "city-pending");
+        expect(summary).toBeDefined();
+        expect(summary?.pending).toBe(true);
+        expect(summary?.name).toBe("Renamed");
+      });
+
       it("deleteCity removes a pending record and allows re-creation", async () => {
         const { store } = createHarness();
         await expectOk(

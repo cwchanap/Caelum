@@ -228,6 +228,17 @@ export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
 
 /**
+ * Shared reason/city mapping for the terminal persistence-recovery state.
+ * Both {@link RuntimeRecoveryState} and {@link RuntimeDisposeResult} build
+ * their recovery-required variants from this shape so adding a new reason
+ * keeps both contracts aligned.
+ */
+export type RecoveryRequiredDetails =
+  | { reason: "lateSuccessCleanupFailed"; cityId: string }
+  | { reason: "bootstrapReconciliationFailed"; cityId: string | null }
+  | { reason: "multiRealmAmbiguousCleanup"; cityId: string };
+
+/**
  * Terminal persistence-recovery state surfaced through {@link RuntimeSnapshot.recovery}
  * and {@link RuntimeDisposeResult}. When `state === "recoveryRequired"`, the
  * runtime is dead and the lease and backend ownership are permanently
@@ -235,21 +246,7 @@ export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
  */
 export type RuntimeRecoveryState =
   | { state: "ok" }
-  | {
-      state: "recoveryRequired";
-      reason: "lateSuccessCleanupFailed";
-      cityId: string;
-    }
-  | {
-      state: "recoveryRequired";
-      reason: "bootstrapReconciliationFailed";
-      cityId: string | null;
-    }
-  | {
-      state: "recoveryRequired";
-      reason: "multiRealmAmbiguousCleanup";
-      cityId: string;
-    };
+  | ({ state: "recoveryRequired" } & RecoveryRequiredDetails);
 
 /**
  * Typed error thrown by {@link createGameRuntime} when bootstrap reconciliation
@@ -285,21 +282,7 @@ export interface BootstrapRecoveryError {
  */
 export type RuntimeDisposeResult =
   | { status: "released" }
-  | {
-      status: "recoveryRequired";
-      reason: "lateSuccessCleanupFailed";
-      cityId: string;
-    }
-  | {
-      status: "recoveryRequired";
-      reason: "bootstrapReconciliationFailed";
-      cityId: string | null;
-    }
-  | {
-      status: "recoveryRequired";
-      reason: "multiRealmAmbiguousCleanup";
-      cityId: string;
-    };
+  | ({ status: "recoveryRequired" } & RecoveryRequiredDetails);
 
 export interface RuntimeController {
   persistence: RuntimePersistenceController;
@@ -416,13 +399,33 @@ export interface RuntimeController {
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
+  mountCanvas: (host: HTMLElement) => () => void;
+}
+
+/**
+ * Test-only debug seams that {@link createGameRuntime} implements but that
+ * are intentionally excluded from the public {@link RuntimeController}
+ * interface so production consumers cannot accidentally depend on them.
+ *
+ * Harnesses and tests intersect this with `RuntimeController` when they need
+ * debug access:
+ * ```ts
+ * const runtime = await createGameRuntime(options) as RuntimeController &
+ *   RuntimeTestSeam;
+ * ```
+ *
+ * `createGameRuntime` returns `Promise<RuntimeController & RuntimeTestSeam>`
+ * so tests get the full type automatically; production code narrows to
+ * `RuntimeController` via a type annotation.
+ */
+export interface RuntimeTestSeam {
   debugSetBudget: (budget: number) => RuntimeCommandResult;
-  // Test-only seam onto this runtime's per-city persistence FIFO. Production
-  // code never calls this; it exists so a harness can inject an "older write"
-  // that the runtime's own candidate write must serialize behind.
+  // Test-only seam onto this runtime's per-city persistence FIFO. Lets a
+  // harness inject an "older write" for a city that the runtime's own
+  // candidate write must serialize behind, without exposing any module-global
+  // queue (there is none). Production code never calls this.
   debugEnqueueCityPersistence: <T>(
     cityId: string,
     work: () => Promise<T>,
   ) => Promise<T>;
-  mountCanvas: (host: HTMLElement) => () => void;
 }
