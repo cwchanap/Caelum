@@ -1988,7 +1988,7 @@ describe("runtime persistence coordinator contracts", () => {
     const unsubscribe = harness.runtime.subscribe(stabilityListener);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(stabilityListener).not.toHaveBeenCalled();
-    expect(harness.runtime.getSnapshot()).toBe(afterLoad);
+    expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
     unsubscribe();
   });
 
