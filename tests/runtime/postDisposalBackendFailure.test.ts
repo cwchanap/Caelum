@@ -37,7 +37,6 @@ interface DelayedDispatchBackend extends GameBackend {
   blockNextDispatch(): Promise<void>;
   resolveDispatch(): void;
   rejectDispatch(error: Error): void;
-  dispatchCalls: number;
 }
 
 function createDelayedDispatchBackend(): DelayedDispatchBackend {
@@ -78,7 +77,6 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
       if (result.ok) snapshot = result.snapshot;
       return result;
     },
-    dispatchCalls: 0,
     blockNextDispatch() {
       dispatchGate = new Promise<void>((resolve, reject) => {
         dispatchResolve = resolve;
@@ -99,7 +97,6 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
       }
     },
     async dispatch(intent: GameIntent): Promise<DispatchResult> {
-      (this as DelayedDispatchBackend).dispatchCalls += 1;
       if (dispatchGate !== null && !dispatchStarted) {
         dispatchStarted = true;
         dispatchStartedResolve();

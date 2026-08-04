@@ -38,6 +38,7 @@ import {
 import type {
   RuntimeController,
   RuntimeDisposeResult,
+  RuntimeTestSeam,
 } from "../../src/runtime/types";
 import { createUiState } from "../../src/ui/uiState";
 import {
@@ -50,7 +51,7 @@ import {
 } from "./delayedSaveStore";
 
 interface CoordinatorHarness {
-  runtime: RuntimeController;
+  runtime: RuntimeController & RuntimeTestSeam;
   backend: GameBackend & {
     createSandboxCalls: number;
     dispatchCalls: number;
@@ -125,12 +126,13 @@ function autosaveRequest(
   };
 }
 
-async function createCoordinatorHarness(options?: {
-  activeCity?: ActiveCityIdentity | null;
-  clean?: boolean;
-  omitPersistenceDependencies?: boolean;
-  now?: () => string;
-}): Promise<CoordinatorHarness> {
+/**
+ * Shared counting backend used by both `createCoordinatorHarness` and
+ * `createSharedStoreHarness`. Provides call counters and deterministic
+ * implementations of snapshot, dispatch, tick, reset, createSandbox,
+ * snapshotForSave, and restoreSnapshot.
+ */
+function createCountingBackend(): CoordinatorHarness["backend"] {
   let snapshot = createRustSnapshot();
   const preview = previewBackendStubs();
   const backend: CoordinatorHarness["backend"] = {
@@ -202,6 +204,16 @@ async function createCoordinatorHarness(options?: {
       return { ok: true, snapshot };
     },
   };
+  return backend;
+}
+
+async function createCoordinatorHarness(options?: {
+  activeCity?: ActiveCityIdentity | null;
+  clean?: boolean;
+  omitPersistenceDependencies?: boolean;
+  now?: () => string;
+}): Promise<CoordinatorHarness> {
+  const backend = createCountingBackend();
   const failures = createMemorySaveStoreFailureControls();
   const memoryStore = createMemorySaveStore({ failures });
   const store = Object.assign(createDelayedSaveStore(memoryStore), {
@@ -1969,7 +1981,15 @@ describe("runtime persistence coordinator contracts", () => {
     expect(afterLoad.persistence.activeCity).toMatchObject({
       id: "city-loaded",
     });
-    expect(harness.runtime.getSnapshot()).toEqual(afterLoad);
+    // Assert snapshot stability: no pending runtime work should publish
+    // another state after the load completes. Subscribe and flush microtasks
+    // to catch any deferred notification.
+    const stabilityListener = vi.fn();
+    const unsubscribe = harness.runtime.subscribe(stabilityListener);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stabilityListener).not.toHaveBeenCalled();
+    expect(harness.runtime.getSnapshot()).toBe(afterLoad);
+    unsubscribe();
   });
 
   it("keeps a deleted former city absent after delayed-save → cross-city load → delete", async () => {
@@ -3549,77 +3569,7 @@ describe("runtime persistence coordinator contracts", () => {
       activeCity?: ActiveCityIdentity | null;
       clean?: boolean;
     }): Promise<CoordinatorHarness> {
-      let snapshot = createRustSnapshot();
-      const preview = previewBackendStubs();
-      const backend: CoordinatorHarness["backend"] = {
-        ...preview,
-        createSandboxCalls: 0,
-        dispatchCalls: 0,
-        snapshotForSaveCalls: 0,
-        restoreSnapshotCalls: 0,
-        tickCalls: 0,
-        async snapshot() {
-          return snapshot;
-        },
-        async dispatch(intent) {
-          backend.dispatchCalls += 1;
-          const before = snapshot;
-          switch (intent.type) {
-            case "setBudget":
-              snapshot = { ...snapshot, budget: intent.budget };
-              break;
-            case "setPaused":
-              snapshot = { ...snapshot, paused: intent.paused };
-              break;
-            case "setSpeed":
-              snapshot = { ...snapshot, speed: intent.speed };
-              break;
-            default:
-              break;
-          }
-          return {
-            snapshot,
-            applied: snapshot !== before,
-            rejection: null,
-            context: { changedTiles: [], skippedTiles: [], cost: 0 },
-          };
-        },
-        async tick(deltaSeconds) {
-          backend.tickCalls += 1;
-          const before = snapshot;
-          if (!snapshot.paused && snapshot.speed !== 0) {
-            snapshot = {
-              ...snapshot,
-              time: snapshot.time + deltaSeconds * snapshot.speed,
-            };
-          }
-          return {
-            snapshot,
-            applied: snapshot !== before,
-            rejection: null,
-            context: { changedTiles: [], skippedTiles: [], cost: 0 },
-          };
-        },
-        async reset() {
-          snapshot = createRustSnapshot();
-          return { ok: true, snapshot };
-        },
-        async createSandbox(request) {
-          backend.createSandboxCalls += 1;
-          const result = await preview.createSandbox(request);
-          if (result.ok) snapshot = result.snapshot;
-          return result;
-        },
-        async snapshotForSave() {
-          backend.snapshotForSaveCalls += 1;
-          return { ok: true, snapshot: { ...snapshot, paused: true } };
-        },
-        async restoreSnapshot(request) {
-          backend.restoreSnapshotCalls += 1;
-          snapshot = request.snapshot as RustGameSnapshot;
-          return { ok: true, snapshot };
-        },
-      };
+      const backend = createCountingBackend();
       const store = Object.assign(createDelayedSaveStore(options.memoryStore), {
         seedRawWorking: options.memoryStore.seedRawWorking,
         seedRawCheckpoint: options.memoryStore.seedRawCheckpoint,
@@ -3748,57 +3698,50 @@ describe("runtime persistence coordinator contracts", () => {
         activeCity: cityA,
         clean: true,
       });
+      // Start a delayed working save.
+      harness1.store.defer("writeWorkingSave");
+      const savePromise = harness1.runtime.persistence.saveWorking();
+      await harness1.store.waitForActive("writeWorkingSave");
+
+      // Start dispose() — it awaits drainAll(), which is blocked by the
+      // delayed save. So dispose() does not resolve yet.
+      let disposeResolved = false;
+      const disposePromise = harness1.runtime.dispose().then(() => {
+        disposeResolved = true;
+      });
+
+      // Start creating runtime 2 — it waits for the lease.
+      let runtime2Resolved = false;
+      const harness2Promise = createSharedStoreHarness({
+        memoryStore,
+        failures,
+        activeCity: null,
+        clean: true,
+      }).then((harness) => {
+        runtime2Resolved = true;
+        return harness;
+      });
+
+      // Neither should have resolved.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(disposeResolved).toBe(false);
+      expect(runtime2Resolved).toBe(false);
+
+      // Release the delayed write. Both dispose() and runtime 2 should
+      // proceed.
+      harness1.store.releaseAll();
+      await savePromise;
+      await disposePromise;
+      expect(disposeResolved).toBe(true);
+
+      const harness2 = await harness2Promise;
       try {
-        // Start a delayed working save.
-        harness1.store.defer("writeWorkingSave");
-        const savePromise = harness1.runtime.persistence.saveWorking();
-        await harness1.store.waitForActive("writeWorkingSave");
-
-        // Start dispose() — it awaits drainAll(), which is blocked by the
-        // delayed save. So dispose() does not resolve yet.
-        let disposeResolved = false;
-        const disposePromise = harness1.runtime.dispose().then(() => {
-          disposeResolved = true;
-        });
-
-        // Start creating runtime 2 — it waits for the lease.
-        let runtime2Resolved = false;
-        const harness2Promise = createSharedStoreHarness({
-          memoryStore,
-          failures,
-          activeCity: null,
-          clean: true,
-        }).then((harness) => {
-          runtime2Resolved = true;
-          return harness;
-        });
-
-        // Neither should have resolved.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(disposeResolved).toBe(false);
-        expect(runtime2Resolved).toBe(false);
-
-        // Release the delayed write. Both dispose() and runtime 2 should
-        // proceed.
-        harness1.store.releaseAll();
-        await savePromise;
-        await disposePromise;
-        expect(disposeResolved).toBe(true);
-
-        const harness2 = await harness2Promise;
-        try {
-          // Runtime 2 is operational and can save its own city.
-          const saveResult = await harness2.runtime.persistence.saveWorking();
-          // No active city on runtime 2, so saveWorking returns noActiveCity.
-          expect(saveResult.status).toBe("failed");
-        } finally {
-          await harness2.runtime.dispose();
-        }
+        // Runtime 2 is operational and can save its own city.
+        const saveResult = await harness2.runtime.persistence.saveWorking();
+        // No active city on runtime 2, so saveWorking returns noActiveCity.
+        expect(saveResult.status).toBe("failed");
       } finally {
-        // harness1 was already disposed in the test.
-        if (!harness1.runtime.isRunning()) {
-          // Already disposed — nothing to do.
-        }
+        await harness2.runtime.dispose();
       }
     });
 

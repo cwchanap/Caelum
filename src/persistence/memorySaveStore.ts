@@ -199,6 +199,7 @@ function inspectStoredEnvelope(
 function corruptSummary(
   cityId: string,
   compatibility: SaveCompatibility,
+  pending: boolean,
 ): CitySummary {
   return {
     cityId,
@@ -209,7 +210,7 @@ function corruptSummary(
     snapshotSchemaVersion: null,
     summary: null,
     compatibility,
-    pending: false,
+    pending,
   };
 }
 
@@ -220,11 +221,11 @@ function citySummary(
 ): CitySummary {
   const inspected = inspectSaveEnvelope(value);
   if (!inspected.ok) {
-    return corruptSummary(cityId, inspected.compatibility);
+    return corruptSummary(cityId, inspected.compatibility, pending);
   }
   const envelope = inspected.envelope;
   if (envelope.city.id !== cityId) {
-    return corruptSummary(cityId, { status: "corruptHeader" });
+    return corruptSummary(cityId, { status: "corruptHeader" }, pending);
   }
   return {
     cityId,

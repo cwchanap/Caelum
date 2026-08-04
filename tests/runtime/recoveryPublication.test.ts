@@ -160,15 +160,11 @@ describe("runtime recovery publication during disposal", () => {
     expect(runtime.getSnapshot().recovery.state).toBe("recoveryRequired");
   });
 
-  it("rejects multi-realm New City admission before any storage mutation (P2: singleRealm captured once)", async () => {
-    // P2: `singleRealm` is captured once at construction time and never
-    // re-read. A multi-realm adapter (`singleRealm: false`) is rejected at
-    // `activateNewCity` admission before any storage mutation occurs — the
-    // `multiRealmAmbiguousCleanup` disposal path is no longer reachable
-    // through a mutable `singleRealm` getter because the value is frozen at
-    // construction. This test verifies the new contract: the rejection
-    // happens up front, no working save is created, and no disposal recovery
-    // is needed.
+  it("rejects multi-realm New City admission before any storage mutation", async () => {
+    // A multi-realm adapter (`singleRealm: false`) is rejected at
+    // `activateNewCity` admission before any storage mutation occurs — no
+    // working save is created, and no disposal recovery is needed. The
+    // runtime remains usable after the rejection.
     const memoryStore = createMemorySaveStore();
     const store: SaveStore = {
       ...memoryStore,

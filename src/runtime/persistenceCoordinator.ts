@@ -340,6 +340,7 @@ export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinat
     // reached their store enqueue.
     let outstanding = 0;
     let closed = false;
+    let released = false;
     let idleResolvers: Array<() => void> = [];
 
     const trackStart = (): void => {
@@ -410,6 +411,8 @@ export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinat
         closed = true;
       },
       release(): void {
+        if (released) return;
+        released = true;
         const next = leaseQueue.shift();
         if (next === undefined) {
           leaseHolder = false;

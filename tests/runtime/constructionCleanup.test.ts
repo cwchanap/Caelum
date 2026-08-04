@@ -176,13 +176,14 @@ describe("construction exception cleanup (P2)", () => {
   });
 
   it("pins the lease when listCities throws (bootstrap reconciliation failure)", async () => {
-    // P2: After lease acquisition, bootstrap reconciliation calls
+    // After lease acquisition, bootstrap reconciliation calls
     // `saveStore.listCities()`. If it throws, the bootstrap reconciliation
-    // catches it and sets `leaseStuck = true`, which pins the lease
-    // (intentional — the storage may be inconsistent). The outer catch
-    // respects `pinRecovery = true` and does NOT release the lease. This is
-    // NOT a leak — it's an intentional pin that requires out-of-band
-    // reconciliation.
+    // catches it and sets `leaseStuck = true`, which pins both the lease
+    // and backend ownership (intentional — the storage may be
+    // inconsistent). `startDrainAndRelease` skips both releases when
+    // `leaseStuck` is true, and the outer catch respects `pinRecovery =
+    // true` and also skips both. This is NOT a leak — it's an intentional
+    // pin that requires out-of-band reconciliation.
     const memoryStore = createMemorySaveStore();
     const store: SaveStore = {
       ...memoryStore,
@@ -197,13 +198,20 @@ describe("construction exception cleanup (P2)", () => {
       createGameRuntime({ backend: createBackend(), saveStore: store }),
     ).rejects.toThrow("Bootstrap reconciliation failed");
 
-    // The lease is pinned — a replacement runtime against the same storage
-    // identity should hang. We verify this by checking that the construction
-    // does not resolve within a short timeout. Backend ownership IS
-    // released (the pinRecovery flag only skips lease release, not backend
-    // ownership release — wait, actually the BootstrapRecoveryError path
-    // calls startDrainAndRelease which handles both). The key assertion is
-    // that the error is a BootstrapRecoveryError, not a raw listCities error.
+    // The lease and backend ownership are both pinned — a replacement
+    // runtime against the same storage identity should hang indefinitely
+    // because `acquireLease` never resolves. Verify by checking that the
+    // construction does not resolve within a short timeout.
+    const replacementPromise = createGameRuntime({
+      backend: createBackend(),
+      saveStore: store,
+    });
+    let replacementResolved = false;
+    replacementPromise.then(() => {
+      replacementResolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(replacementResolved).toBe(false);
   });
 
   it("releases both backend ownership and lease when a post-lease construction dependency throws", async () => {

@@ -30,6 +30,7 @@ import type {
   RuntimeListener,
   RuntimeCommandResult,
   RuntimeSnapshot,
+  RuntimeTestSeam,
 } from "../../src/runtime/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
@@ -119,7 +120,7 @@ function createRuntimeHarness(
     backendError?: string | null;
     rejection?: GameplayRejection | null;
   } = {},
-): { runtime: RuntimeController } {
+): { runtime: RuntimeController & RuntimeTestSeam } {
   let state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
   const backendError = options.backendError ?? null;
@@ -149,7 +150,8 @@ function createRuntimeHarness(
   });
   const rotations = [0, 90, 180, 270] as const;
 
-  const runtime: RuntimeController & { resetUi: typeof resetUi } = {
+  const runtime: RuntimeController &
+    RuntimeTestSeam & { resetUi: typeof resetUi } = {
     persistence: persistenceController,
     getSnapshot,
     subscribe: vi.fn((listener: RuntimeListener) => {

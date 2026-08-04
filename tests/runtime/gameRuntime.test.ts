@@ -6303,11 +6303,11 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
   });
 
   const newCityRequest = {
-    templateId: "blankGrid" as const,
+    templateId: "blankGrid" as string,
     economyPreset: "standard",
     startingCapital: 120_000,
     demandMultiplier: 1,
-    moveInRate: "paused" as const,
+    moveInRate: "paused" as string,
   };
 
   // Helper: assert the runtime is restored to the prior city after a live
@@ -6951,23 +6951,26 @@ describe("finalize notFound live rollback result contract", () => {
   });
 });
 
-describe("multi-realm bootstrap deletion safety", () => {
-  // A wrapper that exposes a configurable storageIdentity and singleRealm
-  // over a shared underlying MemorySaveStore, simulating two independent
-  // realms/processes (independent coordinator registries) backed by one
-  // durable database.
-  function sharedRealmStore(
-    delegate: SaveStore,
-    storageIdentity: string,
-    singleRealm: boolean,
-  ): SaveStore {
-    return {
-      ...(delegate as object),
-      storageIdentity,
-      singleRealm,
-    } as SaveStore;
-  }
+// A wrapper that exposes a configurable storageIdentity and singleRealm
+// over a shared underlying MemorySaveStore, simulating two independent
+// realms/processes (independent coordinator registries) backed by one
+// durable database. When `singleRealm` is omitted, the capability is
+// omitted from the wrapper (matching the multi-realm default).
+function realmStore(
+  delegate: SaveStore,
+  storageIdentity: string,
+  singleRealm: boolean | undefined = false,
+): SaveStore {
+  const { singleRealm: _delegateSingleRealm, ...withoutCapability } =
+    delegate;
+  return {
+    ...withoutCapability,
+    storageIdentity,
+    ...(singleRealm !== undefined ? { singleRealm } : {}),
+  } as SaveStore;
+}
 
+describe("multi-realm bootstrap deletion safety", () => {
   it("multi-realm adapter does not auto-delete pending records and enters recovery", async () => {
     const memoryStore = createMemorySaveStore();
     // Seed a pending orphan directly.
@@ -6980,7 +6983,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     });
     await memoryStore.createWorkingSave(envelope);
 
-    const multiRealm = sharedRealmStore(
+    const multiRealm = realmStore(
       memoryStore,
       "multi-realm-shared-db",
       false,
@@ -7019,7 +7022,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     });
     await memoryStore.createWorkingSave(envelope);
 
-    const singleRealm = sharedRealmStore(memoryStore, "single-realm-db", true);
+    const singleRealm = realmStore(memoryStore, "single-realm-db", true);
 
     const runtime = await createGameRuntime({
       backend: transactionalBackend(backendSpy()),
@@ -7047,7 +7050,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     // Realm A: a single-realm store with its own coordinator identity. It
     // creates a pending record and blocks before finalization (simulating a
     // live New City transaction in another tab/process).
-    const realmAStore = sharedRealmStore(memoryStore, "realm-a-db", true);
+    const realmAStore = realmStore(memoryStore, "realm-a-db", true);
     const realmA = await createGameRuntime({
       backend: transactionalBackend(backendSpy()),
       saveStore: realmAStore,
@@ -7071,7 +7074,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     // Realm B: a multi-realm store over the SAME underlying durable data but
     // with an independent coordinator identity (a separate process/registry).
     // It must NOT delete realm A's live pending record.
-    const realmBStore = sharedRealmStore(memoryStore, "realm-b-db", false);
+    const realmBStore = realmStore(memoryStore, "realm-b-db", false);
     await expect(
       createGameRuntime({
         backend: transactionalBackend(backendSpy()),
@@ -7456,22 +7459,10 @@ describe("disposal-time create/finalize failure reconciliation", () => {
 });
 
 describe("multi-realm New City admission policy (HPA-539 temporary restriction)", () => {
-  // A wrapper that exposes a configurable storageIdentity and singleRealm
-  // over a shared underlying MemorySaveStore, simulating a multi-realm
-  // adapter (multiple processes/registries sharing one durable database).
-  function multiRealmStore(
-    delegate: SaveStore,
-    storageIdentity: string,
-    singleRealm: false | undefined = false,
-  ): SaveStore {
-    const { singleRealm: _delegateSingleRealm, ...withoutCapability } =
-      delegate;
-    return {
-      ...withoutCapability,
-      storageIdentity,
-      ...(singleRealm !== undefined ? { singleRealm } : {}),
-    } as SaveStore;
-  }
+  // Uses the shared `realmStore` helper defined above, which exposes a
+  // configurable storageIdentity and singleRealm over a shared underlying
+  // MemorySaveStore, simulating a multi-realm adapter (multiple
+  // processes/registries sharing one durable database).
 
   const baseOpts = (saveStore: SaveStore) => ({
     saveStore,
@@ -7504,7 +7495,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
         return memoryStore.deleteCity(cityId);
       },
     };
-    const multiRealm = multiRealmStore(trackedStore, "multi-realm-admit-1");
+    const multiRealm = realmStore(trackedStore, "multi-realm-admit-1");
 
     const runtime = await createGameRuntime({
       backend: transactionalBackend(backendSpy()),
@@ -7564,7 +7555,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
 
   it("treats an omitted singleRealm capability as multi-realm", async () => {
     const memoryStore = createMemorySaveStore();
-    const store = multiRealmStore(
+    const store = realmStore(
       memoryStore,
       "multi-realm-admit-omitted",
       undefined,
@@ -7596,7 +7587,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
 
   it("rejected admission leaves no pending record, so bootstrap succeeds after a simulated restart", async () => {
     const memoryStore = createMemorySaveStore();
-    const multiRealm = multiRealmStore(memoryStore, "multi-realm-restart-1");
+    const multiRealm = realmStore(memoryStore, "multi-realm-restart-1");
 
     // First process: New City is refused admission. No pending record is
     // created, so the durable storage remains clean.
@@ -7651,7 +7642,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     // multi-realm adapter. Admission is refused before any storage mutation.
     let deleteCityCalled = false;
     const realmAStore: SaveStore = {
-      ...multiRealmStore(memoryStore, "realm-a-existing-db"),
+      ...realmStore(memoryStore, "realm-a-existing-db"),
       async deleteCity(cityId) {
         deleteCityCalled = true;
         return memoryStore.deleteCity(cityId);
@@ -7700,7 +7691,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     // orphans — such state is genuinely unrecoverable without durable
     // cross-process ownership (HPA-539) and must be reconciled out of band.
     const memoryStore = createMemorySaveStore();
-    const multiRealm = multiRealmStore(memoryStore, "multi-realm-external-1");
+    const multiRealm = realmStore(memoryStore, "multi-realm-external-1");
 
     // Externally create a pending record (simulating another realm's live
     // transaction or a legacy/mixed-version orphan).

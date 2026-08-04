@@ -70,7 +70,7 @@ function createSharedBlockingBackend(options: {
   let restoreGate: Promise<void> | null = null;
   let restoreStarted = false;
   let restoreStartedResolve!: () => void;
-  const restoreStartedPromise = new Promise<void>((resolve) => {
+  let restoreStartedPromise = new Promise<void>((resolve) => {
     restoreStartedResolve = resolve;
   });
 
@@ -80,7 +80,7 @@ function createSharedBlockingBackend(options: {
   let dispatchGate: Promise<void> | null = null;
   let dispatchStarted = false;
   let dispatchStartedResolve!: () => void;
-  const dispatchStartedPromise = new Promise<void>((resolve) => {
+  let dispatchStartedPromise = new Promise<void>((resolve) => {
     dispatchStartedResolve = resolve;
   });
 
@@ -108,6 +108,10 @@ function createSharedBlockingBackend(options: {
       restoreGate = new Promise<void>((resolve) => {
         restoreResolve = resolve;
       });
+      restoreStarted = false;
+      restoreStartedPromise = new Promise<void>((resolve) => {
+        restoreStartedResolve = resolve;
+      });
       return restoreStartedPromise;
     },
     releaseRestore() {
@@ -120,6 +124,10 @@ function createSharedBlockingBackend(options: {
       dispatchGate = new Promise<void>((resolve, reject) => {
         dispatchResolve = resolve;
         dispatchReject = reject;
+      });
+      dispatchStarted = false;
+      dispatchStartedPromise = new Promise<void>((resolve) => {
+        dispatchStartedResolve = resolve;
       });
       return dispatchStartedPromise;
     },
