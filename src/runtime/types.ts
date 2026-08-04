@@ -230,7 +230,8 @@ export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
 /**
  * Terminal persistence-recovery state surfaced through {@link RuntimeSnapshot.recovery}
  * and {@link RuntimeDisposeResult}. When `state === "recoveryRequired"`, the
- * runtime is dead and the lease is permanently pinned.
+ * runtime is dead and the lease and backend ownership are permanently
+ * pinned.
  */
 export type RuntimeRecoveryState =
   | { state: "ok" }
@@ -267,19 +268,20 @@ export interface BootstrapRecoveryError {
 
 /**
  * The outcome of {@link RuntimeController.dispose}. Distinguishes a normal
- * release (the lease was released and a replacement runtime can acquire it)
- * from a fatal persistence-recovery state (the lease is permanently pinned
- * and a replacement runtime against the same storage identity cannot
- * acquire it).
+ * release (the lease and backend ownership were released and a replacement
+ * runtime can acquire them) from a fatal persistence-recovery state (both
+ * are permanently pinned and a replacement runtime against the same storage
+ * identity or backend engine cannot acquire them).
  *
  * Application code that does `await oldRuntime.dispose()` followed by
  * `await createGameRuntime(options)` MUST check the outcome: if
  * `status === "recoveryRequired"`, the second call hangs indefinitely
- * because the lease is never released. The application must reconcile the
- * orphan storage out of band before retrying. Reload only retries bootstrap;
- * it does not repair a retained multi-realm pending record. An owner-
- * authorized or manual durable-storage repair is required when the record
- * cannot be safely deleted by the current policy.
+ * because the lease and backend ownership are never released. The
+ * application must reconcile the orphan storage out of band before
+ * retrying. Reload only retries bootstrap; it does not repair a retained
+ * multi-realm pending record. An owner-authorized or manual durable-storage
+ * repair is required when the record cannot be safely deleted by the
+ * current policy.
  */
 export type RuntimeDisposeResult =
   | { status: "released" }
@@ -307,13 +309,16 @@ export interface RuntimeController {
   stop: () => void;
   /**
    * Gracefully shut down the runtime: reject new persistence operations,
-   * stop animation/preview, drain all pending city persistence FIFOs, and
-   * release the shared coordinator lease so a replacement runtime against
-   * the same durable storage can acquire it.
+   * stop animation/preview, drain all pending gameplay and persistence
+   * work (in-flight backend operations, city persistence FIFOs, and
+   * admitted foreground lifecycle operations), and release both the
+   * shared coordinator lease and the backend ownership so a replacement
+   * runtime against the same durable storage and backend engine can
+   * acquire them.
    *
-   * The returned promise resolves after all pending storage mutations have
-   * settled. The {@link RuntimeDisposeResult} outcome reports whether the
-   * lease was released:
+   * The returned promise resolves after all pending gameplay and storage
+   * operations have settled. The {@link RuntimeDisposeResult} outcome
+   * reports whether the lease was released:
    *
    * - `{ status: "released" }` — the lease was released. A replacement
    *   `createGameRuntime` against the same `SaveStore` (or a different

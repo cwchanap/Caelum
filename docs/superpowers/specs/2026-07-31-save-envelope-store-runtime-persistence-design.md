@@ -1098,9 +1098,39 @@ Once `dispose()` or `failBackend()` sets `dead = true`, the runtime is permanent
 - **`tick()`** returns the last snapshot without dispatching to the dead backend.
 - **All UI methods** (`setTool`, `resetUi`, `setBuildCategory`, `setRoadPreset`, `setOverlay`, `setHudCategory`, `rotateBuilding`, `setDragCurrent`, `cancelDrag`, `setHoverTile`, route-draft methods, etc.) return the last snapshot without committing, publishing, or notifying subscribers.
 - **`commit()` and `publish()`** skip canvas rendering, animation sync, and subscriber notification when `dead` is true, so in-flight async operations that settle after disposal do not produce stale UI updates.
+- **`failBackend()`** suppresses terminal snapshot publication when `disposalRequested` is true. A late backend failure from an already-running gameplay operation that settles after `dispose()` began records the error internally, keeps the runtime terminal, and completes ownership draining, but does not render, synchronize animation, or notify subscribers. The typed `RuntimeDisposeResult` is the lifecycle owner's channel during teardown. A live runtime (no disposal requested) still publishes exactly once.
 - **Persistence operations** (`saveWorking`, `load`, `activateNewCity`, `detachActiveCity`) already check `dead` and return `runtimeUnavailable`.
 
-`App.svelte`'s `onMount` teardown calls `runtime.dispose()` (not just `runtime.stop()`) so the persistence lease is released and pending storage writes drain before a replacement runtime can acquire the lease. A mere `stop()` leaves the runtime alive — the canvas loop can be restarted and pending writes can race a replacement runtime.
+`App.svelte`'s `onMount` teardown calls `runtime.dispose()` (not just `runtime.stop()`) so the persistence lease and backend ownership are released and pending gameplay/storage work drains before a replacement runtime can acquire either. A mere `stop()` leaves the runtime alive — the canvas loop can be restarted and pending writes can race a replacement runtime.
+
+### 16.3 Runtime/backend ownership coordination
+
+Runtime replacement coordinates two distinct ownership domains:
+
+1. **Durable storage ownership** — the `SharedPersistenceCoordinator` lease, keyed by `SaveStore.storageIdentity`, serializes runtime lifetimes by durable database. This prevents a replacement runtime from racing an old runtime's pending storage mutations.
+
+2. **Mutable backend-engine ownership** — the `BackendOwnershipCoordinator` lease, keyed by `GameBackend.runtimeIdentity`, serializes runtime lifetimes by backend engine. This prevents a replacement runtime from reading a stale or mid-mutation backend snapshot while the old runtime's backend operations are still in flight.
+
+The Tauri backend is process-global: every `createTauriBackend()` facade invokes commands against one `Mutex<GameEngine>` in the Rust host. Two separate facade objects therefore share one mutable engine, and a persistence-store lease alone cannot serialize runtime lifetimes because:
+
+- a runtime may have no `SaveStore` (no persistence lease at all);
+- two stores may address one Tauri engine; and
+- separate `createTauriBackend()` facade objects still address the same Rust engine.
+
+The Tauri backend exposes one stable `runtimeIdentity` (`"tauri:process-engine"`) so all facades share one backend ownership coordinator. A WASM backend instance does not expose `runtimeIdentity` — each instance has its own `WasmGameEngine`, so object identity via `WeakMap` is sufficient and correct.
+
+**Acquisition order.** `createGameRuntime` acquires backend ownership BEFORE the initial `backend.snapshot()` and BEFORE the persistence lease. This guarantees that by the time a replacement runtime can read the backend, the old runtime's gameplay operations have drained. Lock acquisition order is deterministic: backend ownership → persistence lease. This prevents lock cycles because no other runtime can hold backend ownership while the old runtime holds it.
+
+**Release order.** `startDrainAndRelease` drains `gameplayQueue` (in-flight backend operations), then `lease.drainAll()` (in-flight persistence/foreground work), then releases the persistence lease, then releases backend ownership. Backend ownership is released LAST so a replacement runtime cannot read the backend until both gameplay and persistence work have settled. When `leaseStuck` is true (fatal persistence-recovery), both the lease and backend ownership are pinned — a replacement runtime's `createGameRuntime` hangs at `backendOwnershipCoordinator.acquire()` before it can read the backend.
+
+**Construction failure.** If `backend.snapshot()` or `coordinator.acquireLease()` throws after backend ownership is acquired, ownership is released through a structured cleanup path so a later runtime can initialize against the same engine.
+
+**Drain ordering safety.** `gameplayQueue.drain()` is awaited before `lease.drainAll()`. This cannot deadlock admitted New City/load workflows:
+
+- `dead = true` is set before `startDrainAndRelease` is called, so no new gameplay operations can be enqueued (the serialized queue's `isDead` gate returns `whenDead` immediately).
+- `lease.beginClosing()` rejects new FIFO enqueues and foreground admissions, so no new persistence work can start.
+- Already-running gameplay operations (dispatch, tick, restoreSnapshot) drain via `gameplayQueue.drain()`.
+- Already-admitted foreground operations and already-enqueued FIFO work drain via `lease.drainAll()`. A foreground operation that needs `gameplayQueue` after `dead = true` gets `whenDead` and short-circuits — it does not wait for the gameplay queue, so there is no circular dependency.
 
 ## 17. Performance and animation-frame handoff
 
@@ -1147,6 +1177,11 @@ Tests cover:
 30. **Domain summary types:** envelope summaries use shared domain types and reject unreachable null template IDs.
 31. **Multi-realm New City policy:** adapters without `singleRealm: true` reject New City before any storage mutation with a typed capability/precondition error; bootstrap preserves any pre-existing pending record.
 32. **Disposal publication:** live terminal recovery publishes once, while recovery discovered after explicit `dispose()` changes internal state and disposal outcome without rendering or notifying subscribers.
+33. **Backend ownership — load during replacement:** runtime A blocks in restoration against a shared mutable backend; runtime B construction begins; B cannot take its initial snapshot until A's restoration settles and A is disposed; B's runtime state equals the final shared backend state.
+34. **Backend ownership — dispatch during disposal:** runtime A starts a dispatch that blocks before mutating the shared backend; `dispose()` is called; runtime B construction begins; both disposal and B remain pending; the dispatch releases; B initializes from the post-dispatch backend state.
+35. **Backend ownership — no-store replacement:** the load-during-replacement and dispatch-during-disposal scenarios repeat with no `SaveStore`; backend ownership alone serializes the runtimes.
+36. **Backend ownership — construction failure:** runtime B's initial `backend.snapshot()` throws; backend ownership is released so a later runtime can initialize against the same engine.
+37. **Post-disposal backend-failure publication:** a delayed backend dispatch/tick that rejects after `dispose()` began does not notify subscribers or render; disposal settles only after the backend operation settles; a comparable failure without disposal still publishes exactly once.
 
 ## 19. File boundaries
 
@@ -1165,6 +1200,7 @@ Tests cover:
 ### HPA-499 creates or owns
 
 - `src/runtime/persistenceCoordinator.ts`
+- `src/runtime/backendOwnership.ts`
 - persistence additions to `src/runtime/types.ts`
 - focused integration changes in `src/runtime/createGameRuntime.ts`
 - `tests/runtime/persistenceCoordinator.test.ts`
