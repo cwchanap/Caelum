@@ -59,6 +59,10 @@ import {
 } from "../persistence/envelopeInspection";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
+import {
+  resolveBackendOwnershipCoordinator,
+  type BackendOwnership,
+} from "./backendOwnership";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
@@ -241,7 +245,34 @@ export async function createGameRuntime(
   options: CreateGameRuntimeOptions,
 ): Promise<RuntimeController> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
-  let state = normalizeRustSnapshot(await backend.snapshot());
+  // Acquire exclusive backend ownership BEFORE the initial snapshot. The
+  // Tauri backend is process-global (one `Mutex<GameEngine>` shared by every
+  // facade), and a replacement runtime that reads `backend.snapshot()` before
+  // the old runtime's backend operations have settled can observe a stale or
+  // mid-mutation snapshot. The persistence lease alone cannot prevent this
+  // because a runtime may have no `SaveStore`, two stores may address one
+  // engine, and separate facades share one engine. Backend ownership
+  // serializes runtime lifetimes by engine identity, guaranteeing that by the
+  // time a replacement runtime can read the backend, the old runtime's
+  // gameplay operations have drained.
+  //
+  // Lock acquisition order is deterministic: backend ownership is acquired
+  // BEFORE the persistence lease, and released AFTER the persistence lease.
+  // This prevents lock cycles because no other runtime can hold backend
+  // ownership while the old runtime holds it.
+  const backendOwnershipCoordinator =
+    resolveBackendOwnershipCoordinator(backend);
+  const backendOwnership: BackendOwnership =
+    await backendOwnershipCoordinator.acquire();
+  let state: ReturnType<typeof normalizeRustSnapshot>;
+  try {
+    state = normalizeRustSnapshot(await backend.snapshot());
+  } catch (error) {
+    // Construction failure: release backend ownership so a later runtime can
+    // initialize against the same engine.
+    backendOwnership.release();
+    throw error;
+  }
   // Resolve the shared persistence coordinator for this store and acquire
   // the exclusive ownership lease. If another runtime still holds the lease
   // for the same storage identity, this waits for its pending writes to
@@ -253,7 +284,15 @@ export async function createGameRuntime(
   const coordinator: SharedPersistenceCoordinator = saveStore
     ? resolvePersistenceCoordinator(saveStore)
     : createSharedPersistenceCoordinator();
-  const lease: PersistenceLease = await coordinator.acquireLease();
+  let lease: PersistenceLease;
+  try {
+    lease = await coordinator.acquireLease();
+  } catch (error) {
+    // Lease acquisition failure: release backend ownership before
+    // propagating so a later runtime can initialize.
+    backendOwnership.release();
+    throw error;
+  }
   // Durable bootstrap reconciliation (pending-then-finalize): after acquiring
   // the exclusive lease, delete any leftover pending city records from New
   // City transactions that committed their initial `createWorkingSave` write
@@ -346,16 +385,44 @@ export async function createGameRuntime(
   // resolves — matching the defined behavior for uncancellable writes that
   // never settle. Safe rebootstrap cannot proceed until the orphan is
   // reconciled out of band.
+  //
+  // Backend ownership is released AFTER the persistence lease. When
+  // `leaseStuck` is true, backend ownership is also pinned — a replacement
+  // runtime's `createGameRuntime` awaits `backendOwnershipCoordinator
+  // .acquire()` before the initial snapshot, so pinning prevents it from
+  // reading a stale or inconsistent backend state.
+  //
+  // `gameplayQueue.drain()` is awaited BEFORE `lease.drainAll()`. This
+  // ordering cannot deadlock admitted New City/load workflows:
+  // - `dead = true` is set before `startDrainAndRelease` is called, so no
+  //   new gameplay operations can be enqueued (the serialized queue's
+  //   `isDead` gate returns `whenDead` immediately).
+  // - `lease.beginClosing()` rejects new FIFO enqueues and foreground
+  //   admissions, so no new persistence work can start.
+  // - Already-running gameplay operations (dispatch, tick, restoreSnapshot)
+  //   drain via `gameplayQueue.drain()`.
+  // - Already-admitted foreground operations and already-enqueued FIFO work
+  //   drain via `lease.drainAll()`. A foreground operation that needs
+  //   `gameplayQueue` after `dead = true` gets `whenDead` and short-circuits
+  //   — it does not wait for the gameplay queue, so there is no circular
+  //   dependency.
   const startDrainAndRelease = (): Promise<void> => {
     if (drainAndReleasePromise !== null) return drainAndReleasePromise;
     lease.beginClosing();
-    drainAndReleasePromise = lease
-      .drainAll()
+    drainAndReleasePromise = gameplayQueue
+      .drain()
+      .then(() => lease.drainAll())
       .then(() => {
         if (!leaseStuck) lease.release();
       })
+      .then(() => {
+        if (!leaseStuck) backendOwnership.release();
+      })
       .catch(() => {
-        if (!leaseStuck) lease.release();
+        if (!leaseStuck) {
+          lease.release();
+          backendOwnership.release();
+        }
       });
     return drainAndReleasePromise;
   };
@@ -681,25 +748,29 @@ export async function createGameRuntime(
           ? ui.routeDraft
           : { ...ui.routeDraft, previewPending: false },
     };
-    // Fire-and-forget: close the lease, drain all pending persistence work
-    // (enqueued FIFO writes and admitted foreground lifecycle operations),
-    // then release the lease so a replacement runtime against the same
-    // storage identity can acquire it. The lease is not released until
-    // every in-flight operation has settled, preventing a late write or
-    // foreground result from mutating storage or publishing after a
-    // replacement runtime takes over. If an uncancellable store or backend
-    // operation never settles, the lease is never released and a
-    // replacement runtime's `createGameRuntime` never resolves — safe
-    // rebootstrap cannot proceed.
+    // Fire-and-forget: close the lease, drain all pending gameplay and
+    // persistence work (in-flight backend operations, enqueued FIFO writes,
+    // and admitted foreground lifecycle operations), then release the lease
+    // and backend ownership so a replacement runtime against the same
+    // storage identity and backend engine can acquire them. Neither is
+    // released until every in-flight operation has settled, preventing a
+    // late write, backend mutation, or foreground result from mutating
+    // storage or the backend after a replacement runtime takes over. If an
+    // uncancellable store or backend operation never settles, neither is
+    // released and a replacement runtime's `createGameRuntime` never
+    // resolves — safe rebootstrap cannot proceed.
     void startDrainAndRelease();
-    // Install the cleared UI and deliver the terminal snapshot to
-    // subscribers exactly once. `publish()`'s `!dead` guard would suppress
-    // this, leaving App's `setSnapshot` unaware of `backendError` and the
-    // game silently frozen. `commit()` is bypassed because it routes through
-    // `publish()`; the state reference is unchanged (the backend failed, no
-    // new snapshot exists).
+    // Install the cleared UI. When disposal has been explicitly requested,
+    // a late backend failure must NOT publish a terminal snapshot: the
+    // typed `RuntimeDisposeResult` is the lifecycle owner's channel during
+    // teardown, not a stale UI update. The runtime remains terminal (dead,
+    // backendError recorded), ownership draining proceeds, but no render,
+    // animation sync, or subscriber notification occurs. A LIVE runtime
+    // (no disposal requested) still publishes exactly once so App's
+    // `setSnapshot` observes `backendError` and renders the shell error
+    // screen.
     ui = clearedUi;
-    return publishTerminalSnapshot();
+    return disposalRequested ? getSnapshot() : publishTerminalSnapshot();
   };
 
   // Map the current `recovery` state to a `RuntimeDisposeResult`. Called
@@ -743,8 +814,8 @@ export async function createGameRuntime(
     if (dead) {
       // Already fatal: `failBackend` started the drain-and-release, OR
       // bootstrap reconciliation failed and the runtime was born terminal.
-      // Await it so the caller knows the lease has been released before
-      // creating a replacement runtime.
+      // Await it so the caller knows the lease and backend ownership have
+      // been released before creating a replacement runtime.
       await startDrainAndRelease();
       return disposeResultFromRecovery();
     }
@@ -761,11 +832,13 @@ export async function createGameRuntime(
     persistenceError = null;
     stopRequestedDuringReservation = false;
     stopRuntime();
-    // Close the lease, drain all pending persistence work (enqueued FIFO
-    // writes and admitted foreground lifecycle operations), then release
-    // the lease so a replacement runtime against the same storage identity
-    // can acquire it. Unlike `failBackend` (fire-and-forget), `dispose`
-    // awaits the drain so the caller knows the lease has been released.
+    // Close the lease, drain all pending gameplay and persistence work
+    // (in-flight backend operations, enqueued FIFO writes, and admitted
+    // foreground lifecycle operations), then release the lease and backend
+    // ownership so a replacement runtime against the same storage identity
+    // and backend engine can acquire them. Unlike `failBackend`
+    // (fire-and-forget), `dispose` awaits the drain so the caller knows
+    // both have been released.
     await startDrainAndRelease();
     return disposeResultFromRecovery();
   };
@@ -3992,12 +4065,13 @@ export async function createGameRuntime(
   // leaseStuck). Rather than returning a frozen runtime that the application
   // cannot distinguish from a healthy one without calling `dispose()`, reject
   // with a typed BootstrapRecoveryError so the application's catch block
-  // renders a recovery/error screen immediately. The lease is permanently
-  // pinned (startDrainAndRelease skips release when leaseStuck), so a
-  // replacement createGameRuntime against the same storage identity hangs
-  // indefinitely — the user must reconcile the durable storage out of band
-  // before retrying. Reload alone only retries bootstrap and does not repair
-  // a retained multi-realm pending record.
+  // renders a recovery/error screen immediately. The lease and backend
+  // ownership are permanently pinned (startDrainAndRelease skips release
+  // when leaseStuck), so a replacement createGameRuntime against the same
+  // storage identity or backend engine hangs indefinitely — the user must
+  // reconcile the durable storage out of band before retrying. Reload alone
+  // only retries bootstrap and does not repair a retained multi-realm
+  // pending record.
   if (leaseStuck) {
     void startDrainAndRelease();
     const error = new Error(
