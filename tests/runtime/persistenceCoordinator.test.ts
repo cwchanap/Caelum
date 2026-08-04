@@ -5423,8 +5423,9 @@ describe("runtime persistence coordinator contracts", () => {
 });
 
 describe("resolvePersistenceCoordinator", () => {
-  // A minimal store-shaped object is sufficient — resolvePersistenceCoordinator
-  // only reads `storageIdentity` (or falls back to object identity).
+  // A minimal store-shaped object is sufficient — the caller passes the
+  // captured `storageIdentity` explicitly; the resolver never re-reads the
+  // store's getter.
   function bareStore(storageIdentity?: string): SaveStore {
     return { storageIdentity } as unknown as SaveStore;
   }
@@ -5433,8 +5434,8 @@ describe("resolvePersistenceCoordinator", () => {
     resetPersistenceCoordinatorRegistry();
     const a = bareStore("shared-identity");
     const b = bareStore("shared-identity");
-    expect(resolvePersistenceCoordinator(a)).toBe(
-      resolvePersistenceCoordinator(b),
+    expect(resolvePersistenceCoordinator(a, "shared-identity")).toBe(
+      resolvePersistenceCoordinator(b, "shared-identity"),
     );
   });
 
@@ -5442,8 +5443,8 @@ describe("resolvePersistenceCoordinator", () => {
     resetPersistenceCoordinatorRegistry();
     const a = bareStore("identity-a");
     const b = bareStore("identity-b");
-    expect(resolvePersistenceCoordinator(a)).not.toBe(
-      resolvePersistenceCoordinator(b),
+    expect(resolvePersistenceCoordinator(a, "identity-a")).not.toBe(
+      resolvePersistenceCoordinator(b, "identity-b"),
     );
   });
 
@@ -5452,22 +5453,101 @@ describe("resolvePersistenceCoordinator", () => {
     const a = bareStore(undefined);
     const b = bareStore(undefined);
     // Same store object resolves to the same coordinator.
-    expect(resolvePersistenceCoordinator(a)).toBe(
-      resolvePersistenceCoordinator(a),
+    expect(resolvePersistenceCoordinator(a, undefined)).toBe(
+      resolvePersistenceCoordinator(a, undefined),
     );
     // Different store objects without identity resolve to distinct coordinators.
-    expect(resolvePersistenceCoordinator(a)).not.toBe(
-      resolvePersistenceCoordinator(b),
+    expect(resolvePersistenceCoordinator(a, undefined)).not.toBe(
+      resolvePersistenceCoordinator(b, undefined),
     );
   });
 
   it("resetPersistenceCoordinatorRegistry clears the identity-keyed registry", () => {
     resetPersistenceCoordinatorRegistry();
     const store = bareStore("reset-identity");
-    const before = resolvePersistenceCoordinator(store);
+    const before = resolvePersistenceCoordinator(store, "reset-identity");
     resetPersistenceCoordinatorRegistry();
-    const after = resolvePersistenceCoordinator(store);
+    const after = resolvePersistenceCoordinator(store, "reset-identity");
     expect(after).not.toBe(before);
+  });
+
+  it("does not re-read a stateful storageIdentity getter — captured undefined uses object identity", () => {
+    // Read-once contract: the caller captures `store.storageIdentity` once
+    // before acquisition and passes that captured value. The resolver must
+    // NEVER re-read the getter. This test uses a getter that returns
+    // `undefined` on its first read and throws on any subsequent read,
+    // proving the resolver does not re-read.
+    resetPersistenceCoordinatorRegistry();
+    let reads = 0;
+    const store = {
+      get storageIdentity(): string | undefined {
+        reads += 1;
+        if (reads === 1) return undefined;
+        throw new Error("storageIdentity getter re-read after capture");
+      },
+    } as unknown as SaveStore;
+
+    // Simulate the caller's capture: read once before acquisition.
+    const captured = store.storageIdentity;
+    expect(reads).toBe(1);
+    expect(captured).toBeUndefined();
+
+    // The resolver uses the captured value and does NOT re-read the getter.
+    const coordinator = resolvePersistenceCoordinator(store, captured);
+    expect(reads).toBe(1);
+    expect(coordinator).toBeDefined();
+
+    // A second resolution with the same captured value also does not re-read.
+    const again = resolvePersistenceCoordinator(store, captured);
+    expect(reads).toBe(1);
+    expect(again).toBe(coordinator);
+
+    // No identity was added to the named registry — the coordinator came
+    // from the object-identity WeakMap.
+    // (Indirectly verified: the getter never returned a string, so no
+    // registry key could have been created. We also verify the registry
+    // is empty by checking that a fresh identity gets a distinct coordinator.)
+    const other = resolvePersistenceCoordinator(
+      bareStore("other-identity"),
+      "other-identity",
+    );
+    expect(other).not.toBe(coordinator);
+  });
+
+  it("does not re-read a stateful storageIdentity getter — captured string is used directly", () => {
+    // A getter that returns a stable identity on the first read but a
+    // DIFFERENT identity on any subsequent read. The resolver must use the
+    // captured value, not the second-read value, so only the first identity
+    // enters the named registry.
+    resetPersistenceCoordinatorRegistry();
+    let reads = 0;
+    const store = {
+      get storageIdentity(): string {
+        reads += 1;
+        if (reads === 1) return "first-identity";
+        return "second-identity";
+      },
+    } as unknown as SaveStore;
+
+    const captured = store.storageIdentity;
+    expect(reads).toBe(1);
+    expect(captured).toBe("first-identity");
+
+    const coordinator = resolvePersistenceCoordinator(store, captured);
+    expect(reads).toBe(1);
+
+    // Resolving with the same captured value returns the same coordinator.
+    const again = resolvePersistenceCoordinator(store, captured);
+    expect(reads).toBe(1);
+    expect(again).toBe(coordinator);
+
+    // Only "first-identity" is in the registry — "second-identity" was
+    // never read, so it gets its own distinct coordinator.
+    const secondCoordinator = resolvePersistenceCoordinator(
+      bareStore("second-identity"),
+      "second-identity",
+    );
+    expect(secondCoordinator).not.toBe(coordinator);
   });
 });
 
