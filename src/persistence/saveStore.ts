@@ -40,11 +40,12 @@ export interface CitySummary extends SaveHeaderSummary {
    * A pending record is a durable marker from a New City creation transaction
    * that committed its initial write but did not complete the runtime
    * transaction (the candidate was installed but the runtime crashed, was
-   * disposed, or failed before finalization). Bootstrap reconciliation deletes
-   * leftover pending records so a crashed New City does not leave an orphan
-   * that blocks future creates for the same city ID. `listCities` includes
-   * pending records so the reconciliation pass can find them; production UI
-   * that lists loadable cities should filter them out.
+   * disposed, or failed before finalization). Bootstrap reconciliation may
+   * delete leftover pending records only when the adapter declares
+   * `singleRealm: true`; a multi-realm adapter must preserve them because the
+   * record may belong to a live transaction in another realm. `listCities`
+   * includes pending records so reconciliation can classify them; production
+   * UI that lists loadable cities should filter them out.
    */
   pending: boolean;
 }
@@ -159,12 +160,13 @@ export interface SaveStore {
    * nothing about other realms: a pending record observed by realm B may
    * belong to a live New City transaction still running in realm A. Bootstrap
    * reconciliation MUST NOT delete pending records in this case — doing so
-   * would destroy realm A's live transaction. Instead, the runtime enters a
-   * terminal bootstrap-recovery state so the user reconciles the orphan out
-   * of band (e.g. by closing the other realm or reloading). Durable
-   * cross-process ownership (transaction IDs, heartbeat leases, or
-   * OS-level file locks) is the long-term fix; until then, multi-realm
-   * adapters must not auto-delete.
+   * would destroy realm A's live transaction. Until durable transaction
+   * ownership lands in HPA-539, New City admission is rejected up front for
+   * these adapters with the typed `multiRealmNewCityUnsupported`
+   * precondition error, before any storage mutation. A retained pending
+   * record from a legacy, mixed-version, or external source is not repaired
+   * by Reload alone; it requires owner-authorized or manual durable-storage
+   * repair.
    *
    * In-memory test stores SHOULD declare `singleRealm: true` so the
    * bootstrap reconciliation tests exercise the deletion path.
@@ -190,9 +192,9 @@ export interface SaveStore {
    * (candidate installed, state ready to publish) to flip the record from
    * pending to active. If the runtime crashes, is disposed, or fails before
    * finalization, the pending record remains in storage as a durable marker.
-   * Bootstrap reconciliation deletes leftover pending records so a crashed
-   * New City does not leave an orphan that blocks future creates for the same
-   * city ID.
+   * Bootstrap reconciliation deletes leftover pending records only for
+   * `singleRealm: true` adapters. Multi-realm adapters preserve them because
+   * the in-memory lease cannot establish ownership.
    *
    * Returns `conflict` when ANY storage already exists for the city ID
    * (including a pending record from a prior unfinalized create). This is an
@@ -230,9 +232,11 @@ export interface SaveStore {
    *
    * Unlike a `readWorkingSave` + `listCities` two-call sequence, this is one
    * coherent read with no inter-call race window. The runtime uses this
-   * during ambiguous-failure reconciliation of a New City transaction to
-   * classify whether a `createWorkingSave` or `finalizeWorkingSave` operation
-   * committed before the failure.
+   * during ambiguous-failure reconciliation of an admitted New City
+   * transaction to classify whether a `createWorkingSave` or
+   * `finalizeWorkingSave` operation committed before the failure. The call is
+   * made directly by that owner workflow, including after the general lease
+   * begins closing; it is not a public repair or ownership mechanism.
    *
    * Returns `{ ok: true, value: "notFound" }` when no working-save record
    * exists, `{ ok: true, value: "pending" }` when a pending record exists

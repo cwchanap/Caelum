@@ -211,8 +211,10 @@ export interface RuntimeSnapshot {
   // application MUST render a recovery/error screen and NOT attempt to start
   // a replacement `createGameRuntime` against the same storage identity
   // (it would hang indefinitely because the lease is never released). The
-  // user must reconcile the durable storage out of band (e.g. by reloading
-  // the page/process) before retrying.
+  // user must reconcile the durable storage out of band before retrying.
+  // Reload alone is not a repair for a retained multi-realm pending record:
+  // it creates a new coordinator registry and repeats the same ownership
+  // uncertainty.
   //
   // Present in the initial snapshot so App can detect a bootstrap-born
   // terminal runtime before calling `start()`. Also set when a live
@@ -251,9 +253,12 @@ export type RuntimeRecoveryState =
 /**
  * Typed error thrown by {@link createGameRuntime} when bootstrap reconciliation
  * fails (a leftover pending city record could not be deleted, or `listCities`
- * itself failed). The runtime is NOT created — the application should render
- * a recovery/error screen and NOT attempt to create a replacement runtime
- * against the same storage identity (the lease is permanently pinned).
+ * itself failed). On a multi-realm adapter, conservative non-deletion of a
+ * retained pending record is intentional because the in-memory lease cannot
+ * prove ownership. The runtime is NOT created — the application should
+ * render a recovery/error screen and NOT attempt to create a replacement
+ * runtime against the same storage identity (the lease is permanently
+ * pinned). Reload alone only retries the same reconciliation.
  */
 export interface BootstrapRecoveryError {
   reason: "bootstrapReconciliationFailed";
@@ -271,8 +276,10 @@ export interface BootstrapRecoveryError {
  * `await createGameRuntime(options)` MUST check the outcome: if
  * `status === "recoveryRequired"`, the second call hangs indefinitely
  * because the lease is never released. The application must reconcile the
- * orphan storage out of band (e.g. by reloading the page/process, or by
- * manually repairing the durable storage for `cityId`) before retrying.
+ * orphan storage out of band before retrying. Reload only retries bootstrap;
+ * it does not repair a retained multi-realm pending record. An owner-
+ * authorized or manual durable-storage repair is required when the record
+ * cannot be safely deleted by the current policy.
  */
 export type RuntimeDisposeResult =
   | { status: "released" }
@@ -321,9 +328,10 @@ export interface RuntimeController {
    *   an adapter exception). The lease is permanently pinned so a
    *   replacement runtime against the same storage identity cannot acquire
    *   it. The application MUST reconcile the orphan storage for `cityId` out
-   *   of band (e.g. by reloading the page/process) before retrying
-   *   `createGameRuntime`. Calling `createGameRuntime` against the same
-   *   storage identity after this outcome hangs indefinitely.
+   *   of band before retrying `createGameRuntime`. Reload only retries the
+   *   failed cleanup and may reproduce the same result. Calling
+   *   `createGameRuntime` against the same storage identity after this
+   *   outcome hangs indefinitely.
    *
    * - `{ status: "recoveryRequired", reason: "bootstrapReconciliationFailed",
    *   cityId }` — bootstrap reconciliation could not delete a leftover
@@ -331,17 +339,19 @@ export interface RuntimeController {
    *   could not list cities to find pending orphans. `cityId` is the pending
    *   record's ID when known, or `null` when `listCities` itself failed. The
    *   lease is permanently pinned; the application MUST reconcile the
-   *   durable storage out of band before retrying `createGameRuntime`.
+   *   durable storage out of band before retrying `createGameRuntime`. Reload
+   *   only retries the reconciliation and may reproduce the same failure.
    *
    * - `{ status: "recoveryRequired", reason: "multiRealmAmbiguousCleanup",
    *   cityId }` — a New City transaction on a multi-realm adapter (one that
-   *   does not declare `singleRealm: true`) encountered an ambiguous
-   *   create/finalize failure and the runtime could not safely delete the
-   *   pending/active record because it may belong to a live transaction in
-   *   another realm. The record is preserved for manual/durable
-   *   reconciliation. The lease is permanently pinned; the application MUST
-   *   reconcile the durable storage out of band before retrying
-   *   `createGameRuntime`.
+   *   does not declare `singleRealm: true`) reached ambiguous cleanup and the
+   *   runtime could not safely delete the record because it may belong to a
+   *   live transaction in another realm. Current admission rejects new
+   *   multi-realm New City transactions before mutation; this reason remains
+   *   as a defense-in-depth state for legacy, mixed-version, or bypassed
+   *   workflows. The record is preserved for owner-authorized/manual
+   *   reconciliation. The lease is permanently pinned; Reload alone cannot
+   *   repair it.
    *
    * If an uncancellable store operation never settles, this promise never
    * resolves — safe rebootstrap cannot proceed until pending storage I/O

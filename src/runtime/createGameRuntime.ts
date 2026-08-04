@@ -64,6 +64,7 @@ import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
 import {
   createSharedPersistenceCoordinator,
+  multiRealmNewCityUnsupported,
   noActiveCity,
   readForLoadSource,
   resolvePersistenceCoordinator,
@@ -276,10 +277,11 @@ export async function createGameRuntime(
   // guarantee single-realm access may auto-delete. Multi-realm adapters
   // (singleRealm false/absent) MUST NOT auto-delete — instead, any leftover
   // pending record enters the terminal bootstrap-recovery state so the user
-  // reconciles out of band (close the other realm, reload, or manually
-  // repair). Durable cross-process ownership (transaction IDs, heartbeat
-  // leases, OS-level locks) is the long-term fix tracked separately; until
-  // then, multi-realm adapters must not auto-delete.
+  // reconciles out of band (close or coordinate the other realm, then use
+  // owner-authorized or manual durable-storage repair). Reload alone only
+  // retries the same ownership check. Durable cross-process ownership
+  // (transaction IDs, heartbeat leases, OS-level locks) is the long-term fix
+  // tracked separately; until then, multi-realm adapters must not auto-delete.
   let leaseStuck = false;
   let leaseStuckCityId: string | null = null;
   if (saveStore !== undefined) {
@@ -542,6 +544,15 @@ export async function createGameRuntime(
   // `failBackend`/`enterLateSuccessCleanupFailure`) has already delivered its
   // terminal snapshot.
   let terminalPublished = false;
+  // Set synchronously when `dispose()` begins. Distinguishes a fatal
+  // transition on a LIVE runtime (subscriber notification is required so
+  // App's `setSnapshot` renders the recovery screen) from a recovery state
+  // discovered DURING teardown (no subscriber notification — the typed
+  // `RuntimeDisposeResult` is the lifecycle owner's channel). `failBackend`
+  // does NOT set this: it is a fatal transition on a live runtime and must
+  // publish exactly once (its own `publishTerminalSnapshot` call), after
+  // which `terminalPublished` suppresses any later recovery publication.
+  let disposalRequested = false;
 
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
@@ -723,6 +734,12 @@ export async function createGameRuntime(
   };
 
   const dispose = async (): Promise<RuntimeDisposeResult> => {
+    // Mark disposal synchronously in both branches so any recovery state
+    // discovered during the awaited drain (an admitted New City workflow
+    // settling ambiguously, or cleanup failing) suppresses subscriber
+    // notification — the typed `RuntimeDisposeResult` is the lifecycle
+    // owner's channel during teardown, not a late terminal snapshot.
+    disposalRequested = true;
     if (dead) {
       // Already fatal: `failBackend` started the drain-and-release, OR
       // bootstrap reconciliation failed and the runtime was born terminal.
@@ -2641,7 +2658,19 @@ export async function createGameRuntime(
     // snapshot. The activation returns a `PersistenceOperationResult` (not a
     // `RuntimeSnapshot`), so the terminal state is only observable through
     // the subscriber channel.
-    publishTerminalSnapshot();
+    //
+    // Suppressed when disposal has begun: an explicit `dispose()` is
+    // tearing the runtime down, and the recovery reason is delivered through
+    // the typed `RuntimeDisposeResult` (the lifecycle owner's channel during
+    // teardown). Publishing a terminal snapshot after the unmount began
+    // would emit a stale UI update. A LIVE runtime that enters recovery
+    // (not disposed) still publishes so App renders the recovery screen.
+    // `failBackend` is unaffected: it is a live fatal transition that
+    // publishes through its own `publishTerminalSnapshot` call, and the
+    // `terminalPublished` latch suppresses any later recovery publication.
+    if (!disposalRequested) {
+      publishTerminalSnapshot();
+    }
   };
 
   // Convenience wrapper for the common case: cleanup was attempted but
@@ -2918,6 +2947,27 @@ export async function createGameRuntime(
     if (lifecycleTransitionReserved) return { status: "superseded" };
     if (saveStore === undefined) {
       return unavailableStoreResult("createWorkingSave");
+    }
+    // Multi-realm admission gate (HPA-539 temporary policy): a store that
+    // does not declare `singleRealm: true` may be shared across independent
+    // realms/processes, each with its own coordinator registry. An ambiguous
+    // create/finalize failure on such a store leaves a pending record that
+    // this process cannot safely delete or finalize — it may belong to a
+    // live New City transaction in another realm, and bootstrap
+    // reconciliation after a restart cannot prove otherwise without durable
+    // cross-process ownership. Rather than create a durable state the
+    // current application cannot repair, refuse admission BEFORE any storage
+    // mutation. The runtime stays alive and usable; the typed precondition
+    // error is surfaced through `persistenceError`. This check happens
+    // before `backendAdmissionReserved`/`lifecycleTransitionReserved` are
+    // set, so no rollback or foreground admission is involved.
+    if (saveStore.singleRealm !== true) {
+      const result = multiRealmNewCityUnsupported(requestedIdentity.id);
+      if (result.status === "failed") {
+        persistenceError = result.error;
+      }
+      publish();
+      return result;
     }
     if (options.now === undefined || options.appVersion === undefined) {
       const result: PersistenceOperationResult<LoadCityValue> = {
@@ -3946,7 +3996,8 @@ export async function createGameRuntime(
   // pinned (startDrainAndRelease skips release when leaseStuck), so a
   // replacement createGameRuntime against the same storage identity hangs
   // indefinitely — the user must reconcile the durable storage out of band
-  // (e.g. by reloading the page/process) before retrying.
+  // before retrying. Reload alone only retries bootstrap and does not repair
+  // a retained multi-realm pending record.
   if (leaseStuck) {
     void startDrainAndRelease();
     const error = new Error(

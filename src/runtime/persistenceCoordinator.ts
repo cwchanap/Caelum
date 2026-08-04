@@ -37,7 +37,11 @@ export type NoActiveCityOperation =
 export type PersistenceCoordinatorPreconditionError =
   | { code: "noActiveCity"; operation: NoActiveCityOperation }
   | { code: "activeCityDeleteRequiresTransition"; cityId: string }
-  | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation };
+  | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation }
+  | {
+      code: "multiRealmNewCityUnsupported";
+      cityId: string;
+    };
 
 export type PersistenceCoordinatorBackendError =
   | PersistenceOperationError
@@ -564,4 +568,26 @@ export function runtimeUnavailable(
   operation: PersistenceCoordinatorOperation,
 ): PersistenceOperationResult<never> {
   return preconditionFailure({ code: "runtimeUnavailable", operation });
+}
+
+/**
+ * New City admission is rejected up front for adapters that do not declare
+ * `singleRealm: true`. A multi-realm store may be shared across independent
+ * realms/processes (multiple browser tabs, Tauri windows, workers), and an
+ * ambiguous create/finalize failure on such a store leaves a pending record
+ * that this process cannot safely delete or finalize — it may belong to a
+ * live New City transaction in another realm. Rather than create a durable
+ * state the current application cannot repair, admission is refused before
+ * any storage mutation. The runtime stays alive and usable; the typed
+ * precondition error is surfaced through `persistenceError`. Durable
+ * cross-process ownership (HPA-539) is the long-term fix that will lift
+ * this restriction.
+ */
+export function multiRealmNewCityUnsupported(
+  cityId: string,
+): PersistenceOperationResult<never> {
+  return preconditionFailure({
+    code: "multiRealmNewCityUnsupported",
+    cityId,
+  });
 }
