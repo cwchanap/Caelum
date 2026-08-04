@@ -2196,44 +2196,77 @@ export function defineSaveStoreContract(
         );
       });
 
-      it("createWorkingSave conflicts with checkpoint-only storage", async () => {
+      it("createWorkingSave conflicts with checkpoint-only storage and leaves the checkpoint intact", async () => {
         const { store } = createHarness();
+        const targetEnvelope = envelopeFor("city-target", "Target", {
+          savedAt: "2026-08-01T11:00:00.000Z",
+        });
         await expectOk(
           store.writeCheckpoint({
             checkpointId: "checkpoint-existing",
             cityId: "city-target",
             name: "Existing checkpoint",
             note: null,
-            envelope: envelopeFor("city-target", "Target", {
-              savedAt: "2026-08-01T11:00:00.000Z",
-            }),
+            envelope: targetEnvelope,
           }),
         );
         await expectError(
           store.createWorkingSave(envelopeFor("city-target", "New Create")),
           "conflict",
         );
+
+        // The failed create must not have touched the existing checkpoint.
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(
+          await expectOk(
+            store.readCheckpoint("city-target", "checkpoint-existing"),
+          ),
+        ).toEqual(targetEnvelope);
+        expect(
+          await expectOk(store.listCheckpoints("city-target")),
+        ).toMatchObject([
+          {
+            checkpointId: "checkpoint-existing",
+            name: "Existing checkpoint",
+            note: null,
+          },
+        ]);
       });
 
-      it("createWorkingSave conflicts with autosave-only storage", async () => {
+      it("createWorkingSave conflicts with autosave-only storage and leaves the autosave intact", async () => {
         const { store } = createHarness();
+        const targetEnvelope = envelopeFor("city-target", "Target", {
+          savedAt: "2026-08-01T11:00:00.000Z",
+        });
         await expectOk(
           store.writeAutosave({
             autosaveId: "autosave-existing",
             cityId: "city-target",
             generation: 3,
-            envelope: envelopeFor("city-target", "Target", {
-              savedAt: "2026-08-01T11:00:00.000Z",
-            }),
+            envelope: targetEnvelope,
           }),
         );
         await expectError(
           store.createWorkingSave(envelopeFor("city-target", "New Create")),
           "conflict",
         );
+
+        // The failed create must not have touched the existing autosave.
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(
+          await expectOk(
+            store.readAutosave("city-target", "autosave-existing"),
+          ),
+        ).toEqual(targetEnvelope);
+        expect(
+          await expectOk(store.listAutosaves("city-target")),
+        ).toMatchObject({
+          items: [{ autosaveId: "autosave-existing", generation: 3 }],
+          generationHighWaterMark: 3,
+        });
       });
 
-      it("createWorkingSave conflicts with generation-high-water-only storage", async () => {
+      it("createWorkingSave conflicts with generation-high-water-only storage and preserves the high-water mark", async () => {
         const { store } = createHarness();
         await expectOk(
           store.writeAutosave({
@@ -2248,6 +2281,14 @@ export function defineSaveStoreContract(
           store.createWorkingSave(envelopeFor("city-target", "New Create")),
           "conflict",
         );
+
+        // The failed create must not have cleared the retained high-water
+        // mark, which is what makes the city still occupy storage identity.
+        await expectError(store.readWorkingSave("city-target"), "notFound");
+        expect(await expectOk(store.listAutosaves("city-target"))).toEqual({
+          items: [],
+          generationHighWaterMark: 5,
+        });
       });
 
       it("writeWorkingSave preserves the pending state of an existing pending record", async () => {
@@ -2309,6 +2350,11 @@ export function defineSaveStoreContract(
             store.finalizeWorkingSave("city-pending"),
             "ioFailure",
           );
+          // The failed finalize must not have flipped the pending record;
+          // it remains pending so a later finalize can retry.
+          expect(
+            await expectOk(store.inspectWorkingSaveState("city-pending")),
+          ).toBe("pending");
         },
       );
     });
