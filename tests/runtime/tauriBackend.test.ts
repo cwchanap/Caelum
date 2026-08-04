@@ -581,6 +581,67 @@ describe("createTauriBackend", () => {
     ).rejects.toThrow("before beginRuntime completed");
   });
 
+  it("rejects mutating commands while the game_begin_runtime IPC request is still pending", async () => {
+    // `beginRuntime` is in flight but the host has not yet responded, so the
+    // epoch is still null. Every mutating command must reject without
+    // reaching the host — `invokeMock` should only have seen
+    // `game_begin_runtime`, never a mutable command. The pending request is
+    // released at the end so the test does not hang.
+    let resolveBegin!: (value: {
+      runtimeEpoch: number;
+      snapshot: RustGameSnapshot;
+    }) => void;
+    const pendingBegin = new Promise<{
+      runtimeEpoch: number;
+      snapshot: RustGameSnapshot;
+    }>((resolve) => {
+      resolveBegin = resolve;
+    });
+    invokeMock.mockResolvedValueOnce(pendingBegin);
+
+    const backend = await createTauriBackend();
+    const beginRuntimePromise = backend.beginRuntime!();
+    // Intentionally not awaited: keep the IPC request unresolved.
+
+    await expect(backend.dispatch({ type: "setPaused", paused: false })).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(backend.tick(0.1)).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(backend.reset()).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(
+      backend.createSandbox({
+        templateId: "blankGrid",
+        economyPreset: "standard",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      }),
+    ).rejects.toThrow("before beginRuntime completed");
+    await expect(backend.snapshotForSave()).rejects.toThrow(
+      "before beginRuntime completed",
+    );
+    await expect(
+      backend.restoreSnapshot({ snapshot: createRustSnapshot() }),
+    ).rejects.toThrow("before beginRuntime completed");
+
+    // No mutable command reached the host while startup was unresolved.
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      "game_begin_runtime",
+    ]);
+
+    // Release the pending request and let beginRuntime settle so the
+    // outstanding promise does not leak.
+    resolveBegin({ runtimeEpoch: 1, snapshot: createRustSnapshot() });
+    await expect(beginRuntimePromise).resolves.toEqual({
+      runtimeEpoch: 1,
+      snapshot: expect.objectContaining({ paused: true }),
+    });
+  });
+
   it("beginRuntime() updates the epoch on each call", async () => {
     const snapshot = createRustSnapshot();
     invokeMock
