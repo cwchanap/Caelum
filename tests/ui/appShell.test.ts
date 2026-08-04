@@ -856,6 +856,24 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("bottom-hud")).toBeNull();
   });
 
+  it("explains that bootstrap recovery needs storage repair before retrying", () => {
+    render(App, {
+      props: {
+        runtime: null,
+        error: {
+          reason: "bootstrapReconciliationFailed",
+          cityId: "city-pending",
+        },
+      },
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Close other realms and use owner-authorized or manual storage repair",
+    );
+    expect(alert).toHaveTextContent("Reload alone only retries reconciliation");
+  });
+
   it("surfaces backendError from resolved runtime commands", async () => {
     const { runtime } = createRuntimeHarness();
     const deferred = deferredRuntimeResult();
@@ -899,6 +917,9 @@ describe("App shell bootstrap", () => {
     expect(alert).toHaveTextContent("Persistence recovery required");
     expect(alert).toHaveTextContent("lateSuccessCleanupFailed");
     expect(alert).toHaveTextContent("city-orphan");
+    expect(alert).toHaveTextContent(
+      "Reload alone may repeat the cleanup failure",
+    );
     expect(runtime.stop).toHaveBeenCalled();
   });
 

@@ -3,6 +3,7 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import { createBackend, type GameBackend } from "./runtime/backend";
 import { createGameRuntime } from "./runtime/createGameRuntime";
+import type { BootstrapRecoveryError } from "./runtime/types";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -19,6 +20,21 @@ interface DevE2eHooks {
 
 interface DevWindow extends Window {
   __caelumE2E?: DevE2eHooks;
+}
+
+function bootstrapRecoveryError(error: unknown): BootstrapRecoveryError | null {
+  if (!(error instanceof Error)) return null;
+  const candidate = error as Error & Partial<BootstrapRecoveryError>;
+  if (
+    candidate.reason !== "bootstrapReconciliationFailed" ||
+    (candidate.cityId !== null && typeof candidate.cityId !== "string")
+  ) {
+    return null;
+  }
+  return {
+    reason: candidate.reason,
+    cityId: candidate.cityId,
+  };
 }
 
 function installDeferredRoutePreviewHarness(backend: GameBackend): GameBackend {
@@ -81,11 +97,13 @@ async function mountApp(): Promise<void> {
 
 mountApp().catch((err: unknown) => {
   target.innerHTML = "";
+  const recovery = bootstrapRecoveryError(err);
   mount(App, {
     target,
     props: {
       runtime: null,
-      error: err instanceof Error ? err.message : "Bootstrap failed",
+      error:
+        recovery ?? (err instanceof Error ? err.message : "Bootstrap failed"),
     },
   });
 });

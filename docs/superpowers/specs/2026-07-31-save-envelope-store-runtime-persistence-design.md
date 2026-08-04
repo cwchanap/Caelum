@@ -234,6 +234,7 @@ export interface CitySummary extends SaveHeaderSummary {
   name: string | null;
   cityCreatedAt: string | null;
   savedAt: string | null;
+  pending: boolean;
 }
 
 export interface CheckpointSummary extends SaveHeaderSummary {
@@ -285,6 +286,9 @@ export type SaveStoreOperation =
   | "listCities"
   | "readWorkingSave"
   | "writeWorkingSave"
+  | "createWorkingSave"
+  | "finalizeWorkingSave"
+  | "inspectWorkingSaveState"
   | "renameCity"
   | "duplicateCity"
   | "deleteCity"
@@ -330,12 +334,24 @@ Diagnostics are opaque support information and never drive control flow. The Tau
 
 ```ts
 export interface SaveStore {
+  readonly storageIdentity?: StorageIdentity;
+  readonly singleRealm?: boolean;
+
   listCities(): Promise<SaveStoreResult<CitySummary[]>>;
 
   readWorkingSave(cityId: string): Promise<SaveStoreResult<UntrustedSaveValue>>;
   writeWorkingSave(
     envelope: WritableSaveEnvelope,
   ): Promise<SaveStoreResult<CitySummary>>;
+  createWorkingSave(
+    envelope: WritableSaveEnvelope,
+  ): Promise<SaveStoreResult<CitySummary>>;
+  finalizeWorkingSave(
+    cityId: string,
+  ): Promise<SaveStoreResult<CitySummary>>;
+  inspectWorkingSaveState(
+    cityId: string,
+  ): Promise<SaveStoreResult<WorkingSaveState>>;
   renameCity(cityId: string, name: string): Promise<SaveStoreResult<CitySummary>>;
   duplicateCity(
     sourceCityId: string,
@@ -390,6 +406,44 @@ export interface SaveStore {
 ```
 
 Read methods return `UntrustedSaveValue` because adapters provide storage transport, not trust. The envelope inspector establishes the header contract, and Rust validation/restoration establishes gameplay validity.
+
+`storageIdentity` identifies the durable database addressed by an adapter. When
+present, adapters targeting the same database MUST expose the same identity so
+the runtime can coordinate leases across adapter objects. `singleRealm` is a
+separate capability declaration:
+
+- `singleRealm: true` means the adapter guarantees that the durable storage is
+  accessed only through one in-memory coordinator registry. The runtime may
+  use its exclusive lease to prove that a pending New City record is an orphan
+  and may reconcile it by deletion.
+- `singleRealm: false` or an omitted value means independent realms/processes
+  may access the same storage. An in-memory lease proves nothing about those
+  other realms, so bootstrap and ambiguous cleanup MUST preserve pending
+  records rather than delete them.
+
+Until durable transaction ownership lands in HPA-539, New City admission is
+rejected before any storage mutation for adapters that do not declare
+`singleRealm: true`. The typed precondition error is
+`multiRealmNewCityUnsupported`; this temporary restriction prevents the
+application from creating a pending record it cannot safely repair. A pending
+record that already exists on such a store can still be a legacy, mixed-version,
+or externally-created record and is not made actionable by Reload alone.
+
+The New City storage lifecycle is intentionally two-phase. `createWorkingSave`
+is an atomic create-only operation that commits a pending record. The runtime
+calls `finalizeWorkingSave` only after the candidate backend and public runtime
+state are ready to publish. `finalizeWorkingSave` atomically changes the record
+to active and is idempotent when the record is already active.
+
+```ts
+export type WorkingSaveState = "notFound" | "pending" | "active";
+```
+
+`inspectWorkingSaveState(cityId)` returns this state from one coherent storage
+observation. It is the owner-only reconciliation primitive for ambiguous
+`createWorkingSave` and `finalizeWorkingSave` outcomes; it is called directly
+by the admitted foreground workflow even after the general persistence lease
+starts closing. It does not provide a public repair or ownership mechanism.
 
 ### 7.3 ID, key, timestamp, and conflict semantics
 
@@ -860,6 +914,15 @@ The exact counter values are internal. The externally required property is clean
 
 A newly created city becomes active only after its initial working envelope commits successfully.
 
+New City requires a `SaveStore` that declares `singleRealm: true`. For a
+multi-realm adapter (`singleRealm: false` or absent), admission is rejected
+before `createSandbox`, `createWorkingSave`, or any foreground lease
+reservation. The operation returns the typed precondition error
+`multiRealmNewCityUnsupported` with the requested city ID; the runtime remains
+usable and no durable pending record is created. This is the temporary HPA-539
+policy until durable transaction ownership can distinguish the failed realm's
+record from another realm's live transaction.
+
 The current `GameBackend.createSandbox` operation replaces backend engine state before returning. HPA-345 therefore performs creation through a coordinator-managed foreground transaction:
 
 1. enter a modal foreground transition;
@@ -886,7 +949,7 @@ New City uses the same exported exhaustive coordinator error contract as every o
 - a typed `createSandbox` rejection returns `{ kind: "sandbox", error: SandboxCreationError }` because the host rejected the sandbox request without installing a candidate;
 - an unexpected thrown `createSandbox` invocation returns `{ kind: "backend", error: { kind: "host", operation: "createSandbox", code: "invokeFailed", ... } }`;
 - typed or thrown `snapshotForSave` failures return `kind: "backend"` through the persistence-operation/host variants;
-- clock or envelope construction failures return `kind: "store"` with `writeWorkingSave/serializationFailed`; and
+- clock or envelope construction failures return `kind: "store"` with `createWorkingSave/serializationFailed`; and
 - initial working-save failures return `kind: "store"` with the adapter's typed `SaveStoreError`.
 
 Failures after sandbox replacement use the rollback protocol below before their typed result is returned. A typed sandbox rejection does not require backend restoration because `createSandbox` did not install a candidate, but the captured runtime lifecycle view is still restored exactly.
@@ -929,9 +992,16 @@ If profiling or field evidence reveals genuinely hung host writes, the follow-up
 
 `dispose()` may begin at any point while the New City foreground workflow is in flight. The workflow is registered as a foreground lifecycle operation on the persistence lease, so `drainAll` during disposal waits for the entire workflow — not only its eventual store enqueue — before the lease can be released. A replacement runtime's `createGameRuntime` awaits `acquireLease` and therefore cannot proceed until the workflow has settled. The disposal protocol defines the point-of-no-return for each phase:
 
+When disposal has begun, recovery state is still installed internally and the
+lease remains pinned when required, but the recovery transition does not render
+or notify subscribers. Explicit teardown is silent; the typed
+`RuntimeDisposeResult` is the lifecycle owner's notification channel. A live
+runtime that has not begun disposal still publishes exactly one terminal
+recovery snapshot so the application can render the recovery screen.
+
 - **Before the initial write is admitted.** If disposal occurs before the workflow enqueues its `createWorkingSave`, the workflow observes `dead` at the next check, rolls back any installed candidate backend for coherence, and returns `runtimeUnavailable("activateNewCity")`. No storage mutation is issued.
 - **While the initial write is in flight.** The write was enqueued before the lease closed and `drainAll` waits for it. If the write *fails*, the workflow reconciles the ambiguous failure (see below) and returns `runtimeUnavailable`. No orphan is created if the write did not commit.
-- **Ambiguous write failure reconciliation.** If `createWorkingSave` throws or returns a non-`conflict` typed failure, the caller cannot know whether the pending record committed before the failure. `conflict` is safe — the atomic create-only contract guarantees no commit on conflict. For all other failures, the workflow reads the city to reconcile:
+- **Ambiguous write failure reconciliation.** If `createWorkingSave` throws or returns a non-`conflict` typed failure, the caller cannot know whether the pending record committed before the failure. `conflict` is safe — the atomic create-only contract guarantees no commit on conflict. For all other failures, the workflow calls `inspectWorkingSaveState` to reconcile:
   - `notFound`: the write did not commit — rollback normally with the original error.
   - `pending`: the write committed a pending record — cleanup (delete pending + rollback backend). If the runtime is **alive** (not disposed), restore the prior public runtime, publish, resume previews, and return the **original typed failure** (not `runtimeUnavailable`). The runtime remains usable. If the runtime is **dead** (disposal began), remain terminal — return `runtimeUnavailable` without restoring the public runtime.
   - `active` or `readFailed`: unexpected or unknowable — enter the fatal persistence-recovery state (see below).
@@ -942,7 +1012,7 @@ If profiling or field evidence reveals genuinely hung host writes, the follow-up
 
   The cleanup store call is issued directly on the `SaveStore` (not through `lease.enqueue`, which rejects on the now-closing lease). This is safe because the lease is still exclusively held and the successful city FIFO write has already settled. Cleanup runs inside the admitted foreground operation, so `drainAll` waits for it and the lease is not released until cleanup settles.
 
-- **Finalization.** After `createWorkingSave` succeeds and the runtime is still alive, the workflow calls `finalizeWorkingSave` to flip the pending record to an active city. If finalization fails ambiguously, the workflow reconciles by reading the city:
+- **Finalization.** After `createWorkingSave` succeeds and the runtime is still alive, the workflow calls `finalizeWorkingSave` to flip the pending record to an active city. If finalization fails ambiguously, the workflow calls `inspectWorkingSaveState` to reconcile:
   - `notFound`: unexpected — rollback the backend.
   - `pending`: finalize did not commit — cleanup (delete pending + rollback backend). If the runtime is **alive**, restore the prior public runtime and return the **original typed finalize failure** (not `runtimeUnavailable`). If **dead**, remain terminal.
   - `active`: finalize committed despite the failure — if dead, return `runtimeUnavailable` without deleting (the city is durably active and can be loaded on restart); if alive, proceed to publish success.
@@ -965,7 +1035,36 @@ If profiling or field evidence reveals genuinely hung host writes, the follow-up
 
 `createWorkingSave` stores the candidate as a **pending** record — durably committed but not yet finalized as an active city. The runtime MUST call `finalizeWorkingSave` after the New City transaction succeeds (candidate installed, state ready to publish) to flip the record from pending to active. If the runtime crashes, is disposed, or fails before finalization, the pending record remains in storage as a durable marker.
 
-**Bootstrap reconciliation.** On every `createGameRuntime`, after acquiring the exclusive lease, the runtime lists all cities and deletes any leftover pending records. This makes restart recovery deterministic: a crashed New City's pending orphan is cleaned up before the replacement runtime can proceed. Deletion is safe because a pending record was never finalized — it is not a real city the user can load. If deletion fails for any pending record, or if `listCities` itself fails, the lease is pinned and `createGameRuntime` **rejects** with a typed `BootstrapRecoveryError` (an `Error` with `reason: "bootstrapReconciliationFailed"` and `cityId`). The runtime is NOT created — the application's catch block renders a recovery/error screen rather than a normal frozen board. The lease is permanently pinned, so a replacement `createGameRuntime` against the same storage identity hangs indefinitely; the user must reconcile the durable storage out of band (e.g. by reloading the page/process) before retrying.
+**Ambiguous foreground reconciliation.** After a non-conflict create or finalize
+failure, the runtime calls `inspectWorkingSaveState` directly on the admitted
+store operation. The single coherent observation classifies `notFound`,
+`pending`, and `active` without a `readWorkingSave` plus `listCities` race. A
+`pending` result is cleaned up only when the adapter declares `singleRealm:
+true`; on a multi-realm adapter the record is preserved and the runtime enters
+`multiRealmAmbiguousCleanup` as a defensive terminal state. Current New City
+admission prevents this path for new multi-realm transactions, but the state is
+retained for legacy, mixed-version, or otherwise bypassed workflows.
+
+**Bootstrap reconciliation.** On every `createGameRuntime`, after acquiring
+the exclusive lease, the runtime lists cities and examines pending records.
+For `singleRealm: true`, the lease proves that no other realm can own a live
+New City transaction, so leftover pending records are deleted before the
+replacement runtime proceeds. For `singleRealm: false` or an omitted
+capability, bootstrap MUST NOT delete a pending record: the record may belong
+to a live transaction in another realm. The runtime pins the lease and rejects
+with a typed `BootstrapRecoveryError` whose reason is
+`bootstrapReconciliationFailed` and whose `cityId` identifies the retained
+record.
+
+This conservative multi-realm state is not repaired by Reload alone. Reload
+only creates another coordinator registry and repeats the same ownership
+uncertainty, so it can reproduce `bootstrapReconciliationFailed` indefinitely.
+The user must close or coordinate all other realms and use an owner-authorized
+or manual durable-storage repair, or wait for HPA-539's transaction ownership
+protocol. The current application does not expose a repair controller. A
+pending record created by the current application cannot arise from New City
+on a multi-realm adapter because admission is rejected up front; retained
+records are therefore treated as legacy, mixed-version, or external state.
 
 `CitySummary.pending` is a boolean flag indicating whether the city's working-save record is in the pending state. `listCities` includes pending records so the reconciliation pass can find them; production UI that lists loadable cities should filter them out.
 
@@ -1046,6 +1145,8 @@ Tests cover:
 28. **Mirrored schema parity:** Rust and TypeScript schema constants, Rust-generated fixture, and host compatibility paths agree.
 29. **Paused load:** every working/checkpoint/autosave restore publishes a paused runtime snapshot.
 30. **Domain summary types:** envelope summaries use shared domain types and reject unreachable null template IDs.
+31. **Multi-realm New City policy:** adapters without `singleRealm: true` reject New City before any storage mutation with a typed capability/precondition error; bootstrap preserves any pre-existing pending record.
+32. **Disposal publication:** live terminal recovery publishes once, while recovery discovered after explicit `dispose()` changes internal state and disposal outcome without rendering or notifying subscribers.
 
 ## 19. File boundaries
 

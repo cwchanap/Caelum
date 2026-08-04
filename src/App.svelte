@@ -7,9 +7,11 @@
   import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
   import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
+    BootstrapRecoveryError,
     RouteDraft,
     RuntimeCommandResult,
     RuntimeController,
+    RuntimeRecoveryState,
     RuntimeSnapshot,
   } from "./runtime/types";
   import { rejectionMessage } from "./runtime/rejectionMessages";
@@ -21,12 +23,41 @@
 
   interface Props {
     runtime: RuntimeController | null;
-    error?: string | null;
+    error?: string | BootstrapRecoveryError | null;
   }
 
   let { runtime, error = null }: Props = $props();
   let shellError = $state<string | null>(null);
   let snapshot = $state<RuntimeSnapshot | null>(null);
+
+  type RecoveryRequiredState = Extract<
+    RuntimeRecoveryState,
+    { state: "recoveryRequired" }
+  >;
+
+  function persistenceRecoveryMessage(
+    reason: RecoveryRequiredState["reason"],
+    cityId: string | null,
+  ): string {
+    const city = cityId === null ? "" : ` (city: ${cityId})`;
+    switch (reason) {
+      case "lateSuccessCleanupFailed":
+        return `Persistence recovery required: ${reason}${city}. Repair the orphan durable record before retrying; Reload alone may repeat the cleanup failure.`;
+      case "bootstrapReconciliationFailed":
+        return `Persistence recovery required: ${reason}${city}. Close other realms and use owner-authorized or manual storage repair before retrying; Reload alone only retries reconciliation.`;
+      case "multiRealmAmbiguousCleanup":
+        return `Persistence recovery required: ${reason}${city}. The retained record may belong to another realm; close other realms and use owner-authorized or manual storage repair. Reload alone will not repair it.`;
+    }
+  }
+
+  function shellErrorMessage(error: string | BootstrapRecoveryError): string {
+    return typeof error === "string"
+      ? error
+      : persistenceRecoveryMessage(
+          "bootstrapReconciliationFailed",
+          error.cityId,
+        );
+  }
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
@@ -34,9 +65,10 @@
       shellError = nextSnapshot.backendError;
     }
     if (nextSnapshot.recovery.state === "recoveryRequired") {
-      const { reason, cityId } = nextSnapshot.recovery;
-      const city = cityId !== null ? ` (city: ${cityId})` : "";
-      shellError = `Persistence recovery required: ${reason}${city}`;
+      shellError = persistenceRecoveryMessage(
+        nextSnapshot.recovery.reason,
+        nextSnapshot.recovery.cityId,
+      );
     }
   }
 
@@ -377,7 +409,7 @@
 
   $effect(() => {
     if (error !== null) {
-      shellError = error;
+      shellError = shellErrorMessage(error);
     }
   });
 
@@ -414,9 +446,13 @@
         void runtime.dispose().then((result) => {
           if (result.status === "recoveryRequired") {
             // The lease is permanently pinned. A replacement runtime
-            // cannot acquire it. Surface this so the user knows to
-            // reconcile storage out of band (e.g. reload the page).
-            shellError = `Persistence recovery required: ${result.reason}`;
+            // cannot acquire it. Surface the actual repair limitation; a
+            // reload only retries bootstrap and does not repair retained
+            // multi-realm storage.
+            shellError = persistenceRecoveryMessage(
+              result.reason,
+              result.cityId,
+            );
           }
         });
       };
