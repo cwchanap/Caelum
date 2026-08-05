@@ -101,13 +101,18 @@ uses `normalizeRustSnapshot` to recursively turn host-specific
 `undefined`/`null` option representations into the equal read-only `GameState`
 view consumed by UI and rendering.
 
-HPA-342 owns save envelopes, storage, active-city identity, dirty tracking,
-save/load coordination, transient UI reset, and publication of a normalized
-successful restore. It must serialize persistence work with gameplay
-mutations. Before enabling autosave, it must use the measured real-WASM p95—not
-the HPA-341 review ceiling—as its main-thread latency input, keep save work out
-of animation-frame-critical code, and revisit a worker or other host-execution
-boundary if autosave causes observable jank without weakening core validation.
+Runtime persistence (HPA-543) owns active-city identity, one `persistenceBusy`
+gate, one dirty boolean, and publication of a normalized successful restore. It
+serializes persistence work with gameplay mutations: Save Now waits for the
+in-flight backend mutation to settle, then blocks new ticks and dispatches until
+the store operation finishes. Because gameplay is blocked for that whole window,
+no revision baseline, operation token, or late-completion reconciliation is
+needed.
+
+Saving is a manual player action. Autosave, save history, and recovery are
+deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
+worker or other host-execution boundary only if background saving is actually
+adopted and causes observable jank.
 
 ### Sandbox factory and reset
 

@@ -1,8 +1,25 @@
 # Save Envelope, SaveStore, and Runtime Persistence Design
 
+> **SUPERSEDED — historical record only. Do not implement.**
+>
+> HPA-342 was re-decided on 2026-08-05. This document describes the rejected
+> design: `SaveEnvelope`, a 19-method `SaveStore`, checkpoints, autosaves,
+> generations, and a `SharedPersistenceCoordinator` with leases, per-city FIFOs,
+> city fences, and revision baselines.
+>
+> The current design is a six-operation `CitySaveStore`
+> (`list`/`read`/`create`/`update`/`rename`/`delete` over `CitySaveRecord`),
+> active-city identity plus one `persistenceBusy` gate and one dirty boolean, and
+> two thin adapters — browser IndexedDB and native Tauri application-data files.
+> See HPA-342 (decision), HPA-548 (store), HPA-543 (runtime), HPA-343/HPA-344
+> (adapters), and the "Persistence coordination" section of `CLAUDE.md`.
+>
+> Kept here because the candidate-first and storage-first ideas survived the
+> reversal, and because the rejected alternative is worth being able to re-read.
+
 **Issue:** HPA-342  
-**Implementation children:** HPA-498, HPA-499  
-**Status:** Draft / in review
+**Implementation children:** HPA-498, HPA-499 (both superseded; replaced by HPA-548 and HPA-543)  
+**Status:** Superseded 2026-08-05
 
 ## 1. Purpose
 

@@ -1,10 +1,20 @@
 # Save Envelope and SaveStore Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED — historical record only. DO NOT IMPLEMENT THIS PLAN.**
+>
+> The design this plan implements was reversed on 2026-08-05. It builds
+> `SaveEnvelope`, a 19-method `SaveStore`, checkpoints, autosaves, generation
+> records, and persistent autosave high-water state — none of which exist in the
+> current design.
+>
+> The replacement is **HPA-548**: a six-operation `CitySaveStore`
+> (`list`/`read`/`create`/`update`/`rename`/`delete` over `CitySaveRecord`).
+> Autosave, save history, and recovery are deferred to HPA-347. Work that ticket
+> instead, and see `CLAUDE.md` for the current contract.
 
-**Issue:** HPA-498  
-**Design source:** HPA-342 draft design PR #21  
-**Blocks:** HPA-343, HPA-344, HPA-499  
+**Issue:** HPA-498 (superseded by HPA-548)  
+**Design source:** HPA-342 draft design PR #21 — superseded, see `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md`  
+**Status:** Implemented, then superseded 2026-08-05. The resulting `src/persistence/saveStore.ts` and `memorySaveStore.ts` are being reduced to the six-operation contract by HPA-548; they were never reachable from `src/main.ts`.  
 **Execution order:** Implement before HPA-499.
 
 **Goal:** Implement HPA-498’s versioned save envelope, strict compatibility inspection, host-neutral `SaveStore`, deterministic in-memory adapter, and reusable adapter contract suite.

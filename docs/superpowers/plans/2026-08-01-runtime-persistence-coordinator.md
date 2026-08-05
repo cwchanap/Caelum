@@ -1,10 +1,23 @@
 # Runtime Persistence Coordinator Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED — historical record only. DO NOT IMPLEMENT THIS PLAN.**
+>
+> The design this plan implements was reversed on 2026-08-05. It builds
+> `SharedPersistenceCoordinator` with exclusive leases, per-city FIFO queues,
+> reference-counted city fences, storage identity, and session/load/revision
+> tokens — machinery that defends against a multi-runtime scenario production
+> never creates, since `src/main.ts` mounts exactly one runtime.
+>
+> The replacement is **HPA-543**: active-city identity, one `persistenceBusy`
+> gate, and one dirty boolean, in a focused `workingSaveRuntime.ts`. Candidate-first
+> construction and storage-first New City carried over from this design and are
+> the reason leases, rollback, and supersession are unnecessary rather than merely
+> removed. Work HPA-543 instead, and see `CLAUDE.md` for the current contract.
 
-**Issue:** HPA-499  
-**Depends on:** HPA-498  
-**Design source:** HPA-342 draft design PR #21  
+**Issue:** HPA-499 (superseded by HPA-543)  
+**Depends on:** HPA-498 (superseded by HPA-548)  
+**Design source:** HPA-342 draft design PR #21 — superseded, see `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md`  
+**Status:** Implemented, then superseded 2026-08-05. The resulting `src/runtime/persistenceCoordinator.ts` is deleted by HPA-543; it was never reachable from `src/main.ts`.  
 **Consumed by:** HPA-345, HPA-346, HPA-351, HPA-352  
 **Execution order:** Implement after HPA-498.
 
