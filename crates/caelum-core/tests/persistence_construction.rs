@@ -165,6 +165,59 @@ fn save_returns_a_paused_clone_without_mutating_live_state() {
 }
 
 #[test]
+fn accepts_stale_derived_building_footprint_and_vehicle_capacity() {
+    let mut engine = engine_with_bus_route();
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: Point { x: 2, y: 3 },
+                end: Point { x: 3, y: 3 },
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: Point { x: 2, y: 3 },
+                rotation: 0,
+            })
+            .applied
+    );
+
+    let mut candidate = engine.snapshot();
+    candidate.buildings[0].occupied_tiles.clear();
+    candidate.transit.vehicles[0].capacity = 0;
+
+    let restored = GameEngine::from_snapshot(candidate).expect("derived fields normalize");
+
+    assert_eq!(
+        restored.snapshot().buildings[0].occupied_tiles,
+        engine.snapshot().buildings[0].occupied_tiles
+    );
+    assert_eq!(
+        restored.snapshot().transit.vehicles[0].capacity,
+        engine.snapshot().transit.vehicles[0].capacity
+    );
+}
+
+#[test]
+fn rejects_vehicle_path_index_against_the_normalized_route_path() {
+    let engine = engine_with_bus_route();
+    let mut candidate = engine.snapshot();
+    let serialized_path = candidate.transit.routes[0].legs[0]
+        .current_path
+        .as_ref()
+        .expect("fixture route has a serialized path");
+    assert!(serialized_path.step_count() > 1);
+    candidate.transit.vehicles[0].path_step_index = 1;
+    candidate.transit.stops[0].status = TransitNodeStatus::Missing;
+
+    invalid_snapshot(from_snapshot_error(candidate));
+}
+
+#[test]
 fn deterministic_round_trip_preserves_the_save_snapshot() {
     let engine = engine_with_bus_route();
     let saved = engine.snapshot_for_save();

@@ -60,11 +60,7 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
       snapshot = candidate as RustGameSnapshot;
       return { ok: true, snapshot };
     },
-    async buildSandboxSnapshot(request) {
-      const result = await stubs.buildSandboxSnapshot(request);
-      if (result.ok) snapshot = result.snapshot;
-      return result;
-    },
+    buildSandboxSnapshot: stubs.buildSandboxSnapshot,
     blockNextDispatch() {
       dispatchGate = new Promise<void>((resolve, reject) => {
         dispatchResolve = resolve;

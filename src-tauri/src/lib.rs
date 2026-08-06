@@ -283,6 +283,7 @@ pub fn run() {
 mod tests {
     use super::*;
     use caelum_core::{canonical_default_request, create_sandbox_snapshot};
+    use tauri::Manager;
 
     #[test]
     fn sandbox_build_is_pure() {
@@ -337,5 +338,35 @@ mod tests {
             state.lock().expect("state lock").engine.snapshot(),
             engine.snapshot()
         );
+    }
+
+    #[test]
+    fn command_happy_path_dispatches_ticks_saves_and_restores() {
+        let app = tauri::test::mock_app();
+        assert!(app.manage(Mutex::new(OwnedEngine {
+            engine: GameEngine::new(),
+            runtime_epoch: 0,
+        })));
+        let state = app.state::<EngineState>();
+        let session = game_begin_runtime(state.clone()).expect("runtime begins");
+
+        let dispatched = game_dispatch(
+            state.clone(),
+            GameIntent::SetPaused { paused: false },
+            session.runtime_epoch,
+        )
+        .unwrap_or_else(|_| panic!("dispatch succeeds"));
+        assert!(dispatched.applied);
+
+        let ticked = game_tick(state.clone(), 1.0, session.runtime_epoch)
+            .unwrap_or_else(|_| panic!("tick succeeds"));
+        assert!(ticked.snapshot.time > dispatched.snapshot.time);
+
+        let saved = game_snapshot_for_save(state.clone(), session.runtime_epoch)
+            .expect("save capture succeeds");
+        let restored = game_restore_snapshot(state, saved.clone(), session.runtime_epoch)
+            .expect("valid restore succeeds");
+
+        assert_eq!(restored, saved);
     }
 }

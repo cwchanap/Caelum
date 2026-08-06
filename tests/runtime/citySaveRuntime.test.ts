@@ -59,7 +59,6 @@ function backend(
     snapshot,
     applied,
     rejection: null,
-    context: { changedTiles: [], skippedTiles: [], cost: 0 },
   });
 
   return {
@@ -86,22 +85,20 @@ function backend(
       current = createRustSnapshot({ paused: true });
       return { ok: true, snapshot: current };
     },
-    async createSandbox(request) {
-      const created = await base.createSandbox(request);
-      if (created.ok) current = created.snapshot;
-      return created;
+    async buildSandboxSnapshot(request) {
+      return base.buildSandboxSnapshot(request);
     },
     async snapshotForSave() {
       return { ok: true, snapshot: { ...current, paused: true } };
     },
-    async restoreSnapshot(request) {
+    async restoreSnapshot(snapshot) {
       if (restoreFailure !== null) {
         const error = restoreFailure;
         restoreFailure = null;
         if (error instanceof Error) throw error;
         return { ok: false, error } as never;
       }
-      current = request.snapshot as RustGameSnapshot;
+      current = snapshot as RustGameSnapshot;
       return { ok: true, snapshot: current };
     },
   };
@@ -472,7 +469,7 @@ describe("runtime city save store cutover", () => {
     );
   });
 
-  it("does not publish a create that completes after disposal", async () => {
+  it("keeps a city record when activation completes after disposal", async () => {
     const saveStore = createMemoryCitySaveStore();
     await saveStore.createCity(record());
     const delayed = createDelayedCitySaveStore(saveStore);
@@ -498,42 +495,9 @@ describe("runtime city save store cutover", () => {
     });
     await expect(dispose).resolves.toBeUndefined();
     await expect(saveStore.readCity(NEW_CITY.id)).resolves.toMatchObject({
-      ok: false,
-      error: { code: "notFound" },
+      ok: true,
+      value: { city: NEW_CITY },
     });
-  });
-
-  it("releases disposal when late-create cleanup fails", async () => {
-    const failures = createMemoryCitySaveStoreFailureControls();
-    const saveStore = createMemoryCitySaveStore({ failures });
-    await saveStore.createCity(record());
-    const delayed = createDelayedCitySaveStore(saveStore);
-    delayed.defer("createCity");
-    delayed.defer("deleteCity");
-    const runtime = await runtimeWithStore(delayed);
-    const activation = runtime.persistence.activateNewCity(
-      {
-        templateId: "blankGrid",
-        economyPreset: "standard",
-        startingCapital: 120_000,
-        demandMultiplier: 1,
-        moveInRate: "paused",
-      },
-      NEW_CITY,
-    );
-    await delayed.waitForActive("createCity");
-    const dispose = runtime.dispose();
-    delayed.releaseNext("createCity");
-    await delayed.waitForActive("deleteCity");
-
-    failures.failNext("deleteCity", "failed");
-    delayed.releaseNext("deleteCity");
-
-    await expect(activation).resolves.toMatchObject({
-      status: "failed",
-      error: { kind: "store", error: { operation: "deleteCity" } },
-    });
-    await expect(dispose).resolves.toBeUndefined();
   });
 });
 
@@ -809,66 +773,6 @@ describe("runtime persistence error and cleanup paths", () => {
         },
       });
       await disposePromise;
-    });
-  });
-
-  describe("late-create cleanup after disposal", () => {
-    it("reports a backend failure when rollback restore fails", async () => {
-      const saveStore = createMemoryCitySaveStore();
-      await saveStore.createCity(record());
-      const targetBackend = backend();
-      const delayed = createDelayedCitySaveStore(saveStore);
-      delayed.defer("createCity");
-      const runtime = await runtimeWithStore(delayed, {
-        backend: targetBackend,
-      });
-
-      const activation = runtime.persistence.activateNewCity(
-        SANDBOX_REQUEST,
-        NEW_CITY,
-      );
-      await delayed.waitForActive("createCity");
-      const dispose = runtime.dispose();
-      // The cleanup rollback restore fails (returns a validation error).
-      targetBackend.failRestoreWith({
-        kind: "validation",
-        operation: "restoreSnapshot",
-      });
-      delayed.releaseNext("createCity");
-
-      await expect(activation).resolves.toMatchObject({
-        status: "failed",
-        error: {
-          kind: "backend",
-          error: { kind: "host", operation: "restoreSnapshot" },
-        },
-      });
-      await expect(dispose).resolves.toBeUndefined();
-    });
-
-    it("reports a store failure when cleanup deleteCity rejects", async () => {
-      const base = createMemoryCitySaveStore();
-      await base.createCity(record());
-      // deleteCity rejects (rather than returning an error result) during the
-      // late-success cleanup, exercising the catch-and-report path.
-      const throwing = throwingCitySaveStore("deleteCity", base);
-      const delayed = createDelayedCitySaveStore(throwing);
-      delayed.defer("createCity");
-      const runtime = await runtimeWithStore(delayed);
-
-      const activation = runtime.persistence.activateNewCity(
-        SANDBOX_REQUEST,
-        NEW_CITY,
-      );
-      await delayed.waitForActive("createCity");
-      const dispose = runtime.dispose();
-      delayed.releaseNext("createCity");
-
-      await expect(activation).resolves.toMatchObject({
-        status: "failed",
-        error: { kind: "store", error: { operation: "deleteCity" } },
-      });
-      await expect(dispose).resolves.toBeUndefined();
     });
   });
 

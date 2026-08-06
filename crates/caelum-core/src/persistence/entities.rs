@@ -78,12 +78,27 @@ pub(super) fn validate_entities<'a>(
     snapshot: &'a GameSnapshot,
     _topology: &RoadTopology,
 ) -> PersistenceResult<EntityIndexes<'a>> {
+    let indexes = validate_entity_references(snapshot)?;
+    validate_routes(snapshot, &indexes)?;
+    validate_vehicles(snapshot, &indexes)?;
+    Ok(indexes)
+}
+
+pub(super) fn validate_entities_for_normalization(
+    snapshot: &GameSnapshot,
+    _topology: &RoadTopology,
+) -> PersistenceResult<()> {
+    let _ = validate_entity_references(snapshot)?;
+    Ok(())
+}
+
+fn validate_entity_references<'a>(
+    snapshot: &'a GameSnapshot,
+) -> PersistenceResult<EntityIndexes<'a>> {
     let indexes = build_indexes(snapshot)?;
     validate_route_references(snapshot, &indexes)?;
     let building_footprint = validate_buildings(snapshot, &indexes)?;
     validate_nodes_and_platforms(snapshot, &indexes, &building_footprint)?;
-    validate_routes(snapshot, &indexes)?;
-    validate_vehicles(snapshot, &indexes)?;
     Ok(indexes)
 }
 
@@ -493,14 +508,7 @@ fn validate_buildings<'a>(
                 reason: EntityError::InvalidStaticShape,
             });
         };
-        if expected != building.occupied_tiles {
-            return Err(PersistenceError::InvalidOwnership {
-                owner: entity.clone(),
-                owned: entity.clone(),
-                reason: OwnershipError::FootprintMismatch,
-            });
-        }
-        for point in &building.occupied_tiles {
+        for point in &expected {
             let Some(tile) = snapshot.map.tile(*point) else {
                 return Err(PersistenceError::InvalidEntity {
                     entity: entity.clone(),
