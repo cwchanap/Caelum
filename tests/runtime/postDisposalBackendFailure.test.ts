@@ -6,7 +6,6 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { resetPersistenceCoordinatorRegistry } from "../../src/runtime/persistenceCoordinator";
 import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
@@ -137,7 +136,6 @@ describe("post-disposal backend failure publication", () => {
   });
 
   afterEach(() => {
-    resetPersistenceCoordinatorRegistry();
     resetBackendOwnershipRegistry();
   });
 

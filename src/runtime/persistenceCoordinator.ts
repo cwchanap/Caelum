@@ -8,7 +8,6 @@ import type {
   SaveStore,
   SaveStoreError,
   SaveStoreResult,
-  StorageIdentity,
 } from "../persistence/saveStore";
 import type { RuntimeSnapshot } from "./types";
 import type {
@@ -222,11 +221,10 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
 // Shared persistence coordinator — capability-based ownership model
 // ---------------------------------------------------------------------------
 //
-// A `SharedPersistenceCoordinator` is keyed by `StorageIdentity` (not adapter
-// object identity) and owns the per-city FIFO tails, reference-counted city
-// fences, and an exclusive ownership lease. It persists across runtime
-// lifetimes so that a replacement runtime against the same durable storage
-// cannot race an old runtime's pending writes.
+// A `SharedPersistenceCoordinator` owns the per-city FIFO tails,
+// reference-counted city fences, and an exclusive ownership lease. Each
+// runtime constructs its own coordinator; coordination is per-runtime and is
+// not shared across stores or runtime lifetimes.
 //
 // The lease is exclusive and capability-based: `acquireLease()` returns a
 // `PersistenceLease` handle that is the sole channel through which a runtime
@@ -249,27 +247,17 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
 // on a closing lease so cleanup (finally blocks) can release fences
 // previously acquired while the lease was open.
 //
-// Ownership transfers only when `drainAll()` resolves (all outstanding work
-// for this lease has settled) and `release()` is called. This guarantees the
-// central lease invariant: after runtime 2 acquires ownership, runtime 1's
-// lease is closed and cannot submit any new coordinator work, mutate shared
-// fences, or publish successful results.
+// Within a single coordinator, ownership transfers only when `drainAll()`
+// resolves (all outstanding work for this lease has settled) and `release()`
+// is called. This guarantees the central lease invariant: after a successor
+// lease is acquired on the same coordinator, the predecessor lease is closed
+// and cannot submit any new coordinator work, mutate shared fences, or
+// publish successful results.
 //
 // If an uncancellable store or backend operation never settles,
-// `drainAll()` never resolves, the lease is never released, and the
-// replacement runtime's `createGameRuntime` never resolves. This is the
-// defined behavior: safe rebootstrap cannot proceed until pending
-// operations settle.
-//
-// Because the lease is exclusive, the coordinator's FIFOs and fences are
-// only ever accessed by one runtime at a time. The cross-city-load deadlock
-// argument is unchanged: within a single lease, no other runtime can hold
-// the former city's FIFO while a cross-city load awaits it.
-//
-// When a `SaveStore` does not expose `storageIdentity`, the coordinator
-// falls back to object identity via a `WeakMap`. This is safe for
-// single-adapter usage but does not protect against two adapter objects
-// targeting the same durable database.
+// `drainAll()` never resolves and the lease is never released: within the
+// coordinator, safe rebootstrap cannot proceed until pending operations
+// settle.
 
 /**
  * Error thrown when an operation is attempted on a closed lease. This is a
@@ -444,76 +432,6 @@ export function createSharedPersistenceCoordinator(): SharedPersistenceCoordinat
       });
     },
   };
-}
-
-// Module-level registry of shared coordinators keyed by storage identity.
-// This is NOT the old module-global `cityTails`: it maps a stable storage
-// identity to a coordinator that is only ever used by one runtime at a time
-// (exclusive lease). Different storage identities get different
-// coordinators, so runtimes on different stores never interfere.
-const coordinatorRegistry = new Map<
-  StorageIdentity,
-  SharedPersistenceCoordinator
->();
-
-const objectIdentityCoordinators = new WeakMap<
-  SaveStore,
-  SharedPersistenceCoordinator
->();
-
-/**
- * Resolve the shared persistence coordinator for a `SaveStore`.
- *
- * If `storageIdentity` is a non-undefined string, the coordinator is looked
- * up or created in the module-level registry keyed by that identity. Two
- * adapter objects targeting the same durable database (and thus exposing the
- * same identity) share one coordinator.
- *
- * If `storageIdentity` is `undefined`, the coordinator is looked up or
- * created in a `WeakMap` keyed by the store object itself. This is safe for
- * single-adapter usage but does not protect against two adapter objects
- * targeting the same durable database.
- *
- * Read-once contract: the caller MUST capture `store.storageIdentity` exactly
- * once BEFORE acquiring any capability (backend ownership or the persistence
- * lease) and pass that captured value here. This function NEVER re-reads
- * `store.storageIdentity` — a stateful or throwing getter after acquisition
- * could select a different coordinator identity or leak both capabilities.
- * The captured `undefined` is distinguishable from "no captured value
- * supplied" because the argument is required: `undefined` always means "the
- * store exposes no storage identity, use object identity."
- *
- * @param storageIdentity — the value captured from `store.storageIdentity`
- *   before any capability acquisition. Required; pass `undefined` explicitly
- *   when the store exposes no identity.
- */
-export function resolvePersistenceCoordinator(
-  store: SaveStore,
-  storageIdentity: StorageIdentity | undefined,
-): SharedPersistenceCoordinator {
-  if (storageIdentity !== undefined) {
-    let coordinator = coordinatorRegistry.get(storageIdentity);
-    if (coordinator === undefined) {
-      coordinator = createSharedPersistenceCoordinator();
-      coordinatorRegistry.set(storageIdentity, coordinator);
-    }
-    return coordinator;
-  }
-  let coordinator = objectIdentityCoordinators.get(store);
-  if (coordinator === undefined) {
-    coordinator = createSharedPersistenceCoordinator();
-    objectIdentityCoordinators.set(store, coordinator);
-  }
-  return coordinator;
-}
-
-/**
- * Test-only: reset the module-level coordinator registry. Production code
- * never calls this. Tests use it to isolate coordinator state between test
- * cases so that storage identities from one test do not leak into another.
- */
-export function resetPersistenceCoordinatorRegistry(): void {
-  coordinatorRegistry.clear();
 }
 
 export function resolveWorkingSaveCompletion(input: {

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameBackend } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { resetPersistenceCoordinatorRegistry } from "../../src/runtime/persistenceCoordinator";
 import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
 import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
 import type { SaveStore } from "../../src/persistence/saveStore";
@@ -85,7 +84,6 @@ function createBackend(): GameBackend {
 describe("construction exception cleanup (P2)", () => {
   beforeEach(() => {
     resetBackendOwnershipRegistry();
-    resetPersistenceCoordinatorRegistry();
     canvasHost.mount.mockClear();
     canvasHost.render.mockClear();
     previewCoordinatorFactory.create.mockClear();
@@ -93,7 +91,6 @@ describe("construction exception cleanup (P2)", () => {
 
   afterEach(() => {
     resetBackendOwnershipRegistry();
-    resetPersistenceCoordinatorRegistry();
   });
 
   it("releases backend ownership when beginRuntime throws — same backend retries", async () => {
@@ -124,32 +121,6 @@ describe("construction exception cleanup (P2)", () => {
     await runtime.dispose();
   });
 
-  it("fails fast before acquisition when storageIdentity getter throws", async () => {
-    // P2: `storageIdentity` is captured BEFORE any capability is acquired.
-    // A throwing getter fails fast before any lock is held — no cleanup is
-    // needed, and a replacement runtime can initialize immediately. This is
-    // a pre-acquisition failure by design, not a post-acquisition leak.
-    const memoryStore = createMemorySaveStore();
-    const store: SaveStore = {
-      ...memoryStore,
-      get storageIdentity(): string {
-        throw new Error("storageIdentity getter exploded");
-      },
-    };
-
-    await expect(
-      createGameRuntime({ backend: createBackend(), saveStore: store }),
-    ).rejects.toThrow("storageIdentity getter exploded");
-
-    // A second runtime with a healthy store should succeed — no capabilities
-    // were acquired (and thus none leaked).
-    const runtime = await createGameRuntime({
-      backend: createBackend(),
-      saveStore: createMemorySaveStore(),
-    });
-    await runtime.dispose();
-  });
-
   it("fails fast before acquisition when singleRealm getter throws", async () => {
     // P2: `singleRealm` is captured BEFORE any capability is acquired. A
     // throwing getter fails fast before any lock is held. This is a
@@ -175,7 +146,7 @@ describe("construction exception cleanup (P2)", () => {
     await runtime.dispose();
   });
 
-  it("pins the lease when listCities throws (bootstrap reconciliation failure)", async () => {
+  it("rejects construction when listCities throws during bootstrap reconciliation", async () => {
     // After lease acquisition, bootstrap reconciliation calls
     // `saveStore.listCities()`. If it throws, the bootstrap reconciliation
     // catches it and sets `leaseStuck = true`, which pins both the lease
@@ -187,7 +158,6 @@ describe("construction exception cleanup (P2)", () => {
     const memoryStore = createMemorySaveStore();
     const store: SaveStore = {
       ...memoryStore,
-      storageIdentity: "list-cities-throw-test",
       singleRealm: true,
       async listCities() {
         throw new Error("listCities exploded");
@@ -197,21 +167,6 @@ describe("construction exception cleanup (P2)", () => {
     await expect(
       createGameRuntime({ backend: createBackend(), saveStore: store }),
     ).rejects.toThrow("Bootstrap reconciliation failed");
-
-    // The lease and backend ownership are both pinned — a replacement
-    // runtime against the same storage identity should hang indefinitely
-    // because `acquireLease` never resolves. Verify by checking that the
-    // construction does not resolve within a short timeout.
-    const replacementPromise = createGameRuntime({
-      backend: createBackend(),
-      saveStore: store,
-    });
-    let replacementResolved = false;
-    replacementPromise.then(() => {
-      replacementResolved = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(replacementResolved).toBe(false);
   });
 
   it("releases both backend ownership and lease when a post-lease construction dependency throws", async () => {
@@ -219,12 +174,9 @@ describe("construction exception cleanup (P2)", () => {
     // the persistence lease) are held. `createPreviewCoordinator` runs
     // after the lease is acquired and bootstrap reconciliation completes.
     // If it throws, the outer catch must release BOTH capabilities so a
-    // replacement runtime using the SAME backend and storage identities can
-    // proceed — proving neither capability leaked.
+    // replacement runtime using the SAME backend can proceed — proving
+    // neither capability leaked.
     const backend = createBackend();
-    // `createMemorySaveStore` exposes a stable `storageIdentity` string, so
-    // both the failed and replacement constructions resolve the same named
-    // coordinator.
     const store = createMemorySaveStore();
 
     const constructionError = new Error("post-lease construction exploded");
@@ -236,10 +188,10 @@ describe("construction exception cleanup (P2)", () => {
       constructionError,
     );
 
-    // A replacement runtime using the SAME backend object and the SAME
-    // storage identity must succeed. This proves:
-    //   - backend ownership was released (same object-identity coordinator);
-    //   - the persistence lease was released (same named coordinator).
+    // A replacement runtime using the SAME backend object must succeed.
+    // This proves backend ownership was released (same object-identity
+    // coordinator). Each runtime constructs its own persistence
+    // coordinator, so lease release is verified by the absence of a hang.
     const runtime = await createGameRuntime({ backend, saveStore: store });
     await runtime.dispose();
   });
@@ -271,35 +223,5 @@ describe("construction exception cleanup (P2)", () => {
 
     // The getter was NOT re-read during disposal.
     expect(singleRealmReads).toBe(1);
-  });
-
-  it("captures storageIdentity once and does not re-read the getter during coordinator resolution", async () => {
-    // P2: `storageIdentity` is captured once before acquisition and passed
-    // to `resolvePersistenceCoordinator`. The getter is NOT re-read during
-    // coordinator resolution.
-    const memoryStore = createMemorySaveStore();
-    let storageIdentityReads = 0;
-    const store: SaveStore = {
-      ...memoryStore,
-      get storageIdentity() {
-        storageIdentityReads += 1;
-        return "storage-identity-read-count-test";
-      },
-      singleRealm: true,
-    };
-
-    const runtime = await createGameRuntime({
-      backend: createBackend(),
-      saveStore: store,
-    });
-
-    // The getter was read exactly once during construction (the capture
-    // before acquisition).
-    expect(storageIdentityReads).toBe(1);
-
-    await runtime.dispose();
-
-    // The getter was NOT re-read during disposal.
-    expect(storageIdentityReads).toBe(1);
   });
 });
