@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameBackend } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
-import { createMemorySaveStore } from "../../src/persistence/memorySaveStore";
-import type { SaveStore } from "../../src/persistence/saveStore";
+import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import {
   createRustSnapshot,
   previewBackendStubs,
@@ -121,54 +120,6 @@ describe("construction exception cleanup (P2)", () => {
     await runtime.dispose();
   });
 
-  it("fails fast before acquisition when singleRealm getter throws", async () => {
-    // P2: `singleRealm` is captured BEFORE any capability is acquired. A
-    // throwing getter fails fast before any lock is held. This is a
-    // pre-acquisition failure by design.
-    const memoryStore = createMemorySaveStore();
-    const store: SaveStore = {
-      ...memoryStore,
-      storageIdentity: "single-realm-throw-test",
-      get singleRealm(): boolean {
-        throw new Error("singleRealm getter exploded");
-      },
-    };
-
-    await expect(
-      createGameRuntime({ backend: createBackend(), saveStore: store }),
-    ).rejects.toThrow("singleRealm getter exploded");
-
-    // A second runtime with a healthy store should succeed.
-    const runtime = await createGameRuntime({
-      backend: createBackend(),
-      saveStore: createMemorySaveStore(),
-    });
-    await runtime.dispose();
-  });
-
-  it("rejects construction when listCities throws during bootstrap reconciliation", async () => {
-    // After lease acquisition, bootstrap reconciliation calls
-    // `saveStore.listCities()`. If it throws, the bootstrap reconciliation
-    // catches it and sets `leaseStuck = true`, which pins both the lease
-    // and backend ownership (intentional — the storage may be
-    // inconsistent). `startDrainAndRelease` skips both releases when
-    // `leaseStuck` is true, and the outer catch respects `pinRecovery =
-    // true` and also skips both. This is NOT a leak — it's an intentional
-    // pin that requires out-of-band reconciliation.
-    const memoryStore = createMemorySaveStore();
-    const store: SaveStore = {
-      ...memoryStore,
-      singleRealm: true,
-      async listCities() {
-        throw new Error("listCities exploded");
-      },
-    };
-
-    await expect(
-      createGameRuntime({ backend: createBackend(), saveStore: store }),
-    ).rejects.toThrow("Bootstrap reconciliation failed");
-  });
-
   it("releases both backend ownership and lease when a post-lease construction dependency throws", async () => {
     // P2: A genuine failure AFTER both capabilities (backend ownership and
     // the persistence lease) are held. `createPreviewCoordinator` runs
@@ -177,7 +128,7 @@ describe("construction exception cleanup (P2)", () => {
     // replacement runtime using the SAME backend can proceed — proving
     // neither capability leaked.
     const backend = createBackend();
-    const store = createMemorySaveStore();
+    const store = createMemoryCitySaveStore();
 
     const constructionError = new Error("post-lease construction exploded");
     previewCoordinatorFactory.create.mockImplementationOnce(() => {
@@ -194,34 +145,5 @@ describe("construction exception cleanup (P2)", () => {
     // coordinator, so lease release is verified by the absence of a hang.
     const runtime = await createGameRuntime({ backend, saveStore: store });
     await runtime.dispose();
-  });
-
-  it("captures singleRealm once and does not re-read the getter during cleanup", async () => {
-    // P2: `singleRealm` is captured once before acquisition. The cleanup
-    // path (cleanupLateSuccessNewCity) uses the captured value, NOT a fresh
-    // getter read. This test verifies the getter is read exactly once.
-    const memoryStore = createMemorySaveStore();
-    let singleRealmReads = 0;
-    const store: SaveStore = {
-      ...memoryStore,
-      storageIdentity: "single-realm-read-count-test",
-      get singleRealm() {
-        singleRealmReads += 1;
-        return true;
-      },
-    };
-
-    const runtime = await createGameRuntime({
-      backend: createBackend(),
-      saveStore: store,
-    });
-
-    // The getter was read exactly once during construction.
-    expect(singleRealmReads).toBe(1);
-
-    await runtime.dispose();
-
-    // The getter was NOT re-read during disposal.
-    expect(singleRealmReads).toBe(1);
   });
 });

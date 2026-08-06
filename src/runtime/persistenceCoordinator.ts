@@ -1,14 +1,7 @@
 import type {
-  UntrustedSaveValue,
-  WritableSaveEnvelope,
-} from "../persistence/envelope";
-import type { SaveEnvelopeError } from "../persistence/envelopeInspection";
-import type {
   CitySummary,
-  SaveStore,
-  SaveStoreError,
-  SaveStoreResult,
-} from "../persistence/saveStore";
+  CitySaveStoreError,
+} from "../persistence/citySaveStore";
 import type { RuntimeSnapshot } from "./types";
 import type {
   PersistenceOperationError,
@@ -19,28 +12,15 @@ import type {
 export type PersistenceCoordinatorOperation =
   | "saveWorking"
   | "renameActiveCity"
-  | "createCheckpoint"
-  | "createAutosave"
-  | "loadWorking"
-  | "loadCheckpoint"
-  | "loadAutosave"
+  | "loadCity"
   | "activateNewCity"
   | "detachActiveCity";
 
-export type NoActiveCityOperation =
-  | "saveWorking"
-  | "renameActiveCity"
-  | "createCheckpoint"
-  | "createAutosave";
+export type NoActiveCityOperation = "saveWorking" | "renameActiveCity";
 
 export type PersistenceCoordinatorPreconditionError =
   | { code: "noActiveCity"; operation: NoActiveCityOperation }
-  | { code: "activeCityDeleteRequiresTransition"; cityId: string }
-  | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation }
-  | {
-      code: "multiRealmNewCityUnsupported";
-      cityId: string;
-    };
+  | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation };
 
 export type PersistenceCoordinatorBackendError =
   | PersistenceOperationError
@@ -52,8 +32,7 @@ export type PersistenceCoordinatorBackendError =
     };
 
 export type PersistenceCoordinatorError =
-  | { kind: "store"; error: SaveStoreError }
-  | { kind: "envelope"; error: SaveEnvelopeError }
+  | { kind: "store"; error: CitySaveStoreError }
   | { kind: "backend"; error: PersistenceCoordinatorBackendError }
   | { kind: "sandbox"; error: SandboxCreationError }
   | {
@@ -75,52 +54,10 @@ export interface RenameActiveCityValue {
   summary: CitySummary;
 }
 
-export type LoadSource =
-  | { kind: "working"; cityId: string }
-  | { kind: "checkpoint"; cityId: string; checkpointId: string }
-  | { kind: "autosave"; cityId: string; autosaveId: string };
-
-export interface LoadSourceRead {
-  coordinatorOperation: "loadWorking" | "loadCheckpoint" | "loadAutosave";
-  storeOperation: "readWorkingSave" | "readCheckpoint" | "readAutosave";
-  read(store: SaveStore): Promise<SaveStoreResult<UntrustedSaveValue>>;
-}
-
-export function readForLoadSource(source: LoadSource): LoadSourceRead {
-  switch (source.kind) {
-    case "working":
-      return {
-        coordinatorOperation: "loadWorking",
-        storeOperation: "readWorkingSave",
-        read: (store) => store.readWorkingSave(source.cityId),
-      };
-    case "checkpoint":
-      return {
-        coordinatorOperation: "loadCheckpoint",
-        storeOperation: "readCheckpoint",
-        read: (store) =>
-          store.readCheckpoint(source.cityId, source.checkpointId),
-      };
-    case "autosave":
-      return {
-        coordinatorOperation: "loadAutosave",
-        storeOperation: "readAutosave",
-        read: (store) => store.readAutosave(source.cityId, source.autosaveId),
-      };
-  }
-}
-
 export interface LoadCityValue {
   snapshot: RuntimeSnapshot;
-  source: LoadSource;
+  cityId: string;
 }
-
-export interface GenerationWriteValue<TSummary> {
-  summary: TSummary;
-}
-
-export type GenerationWriteKind = "checkpoint" | "autosave";
-export type GameplayWriteKind = "working" | GenerationWriteKind;
 
 export interface ActiveCityIdentity {
   id: string;
@@ -130,25 +67,17 @@ export interface ActiveCityIdentity {
 
 export type NewCityIdentity = ActiveCityIdentity;
 
-export interface GameplayWriteRequest<TSummary> {
-  kind: GenerationWriteKind;
-  write(capture: {
-    city: ActiveCityIdentity;
-    envelope: WritableSaveEnvelope;
-  }): Promise<SaveStoreResult<TSummary>>;
-}
-
 export type RuntimeSaveStatus =
   | { state: "idle" }
   | {
       state: "queued" | "capturing" | "writing";
-      kind: GameplayWriteKind;
+      kind: "working";
       cityId: string;
     };
 
 export type RuntimeLoadStatus =
   | { state: "idle" }
-  | { state: "reading" | "restoring"; source: LoadSource };
+  | { state: "reading" | "restoring"; cityId: string };
 
 export type RuntimeLifecycleStatus =
   | { state: "idle" }
@@ -169,28 +98,21 @@ export interface RuntimePersistenceController {
   renameActiveCity(
     name: string,
   ): Promise<PersistenceOperationResult<RenameActiveCityValue>>;
-  load(source: LoadSource): Promise<PersistenceOperationResult<LoadCityValue>>;
+  load(cityId: string): Promise<PersistenceOperationResult<LoadCityValue>>;
   detachActiveCity(): Promise<PersistenceOperationResult<RuntimeSnapshot>>;
   activateNewCity(
     request: SandboxCreationRequest,
     identity: NewCityIdentity,
   ): Promise<PersistenceOperationResult<LoadCityValue>>;
-  runGameplayWrite<TSummary>(
-    request: GameplayWriteRequest<TSummary>,
-  ): Promise<PersistenceOperationResult<GenerationWriteValue<TSummary>>>;
 }
 
 // Per-city persistence FIFO. Each `createGameRuntime` instance owns its own
 // queue set via `createCityPersistenceQueues`; there is NO module-global
-// `cityTails`. This is the single-runtime-per-store invariant: one runtime
-// owns one `SaveStore`, and its queues, fences, lifecycle ownership, and
-// session/load tokens are all closure-local. A second live runtime in the
-// same realm MUST use a separate store — sharing one store across runtimes is
-// unsupported and would let their independent queues/fences interleave writes
-// at the storage layer. Keeping the FIFO instance-local (not module-global)
-// is what prevents the cross-city-load lock cycle: a cross-city load that
-// awaits the former city's drain while holding the target city's FIFO cannot
-// deadlock, because no other runtime can hold the former city's FIFO.
+// `cityTails`. Queues, fences, lifecycle ownership, and session/load tokens
+// are all closure-local. Keeping the FIFO instance-local prevents the
+// cross-city-load lock cycle: a cross-city load that awaits the former city's
+// drain while holding the target city's FIFO cannot deadlock because no other
+// runtime can hold the former city's FIFO.
 export interface CityPersistenceQueues {
   enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T>;
   drain(cityId: string): Promise<void>;
@@ -255,9 +177,8 @@ export function createCityPersistenceQueues(): CityPersistenceQueues {
 // publish successful results.
 //
 // If an uncancellable store or backend operation never settles,
-// `drainAll()` never resolves and the lease is never released: within the
-// coordinator, safe rebootstrap cannot proceed until pending operations
-// settle.
+// `drainAll()` never resolves and the lease is never released until that
+// operation settles.
 
 /**
  * Error thrown when an operation is attempted on a closed lease. This is a
@@ -481,48 +402,8 @@ export function noActiveCity(
   return preconditionFailure({ code: "noActiveCity", operation });
 }
 
-export function activeCityDeleteRequiresTransition(
-  cityId: string,
-): PersistenceOperationResult<never> {
-  return preconditionFailure({
-    code: "activeCityDeleteRequiresTransition",
-    cityId,
-  });
-}
-
-export function guardActiveCityDelete(
-  activeCity: ActiveCityIdentity | null,
-  cityId: string,
-): PersistenceOperationResult<never> | null {
-  return activeCity?.id === cityId
-    ? activeCityDeleteRequiresTransition(cityId)
-    : null;
-}
-
 export function runtimeUnavailable(
   operation: PersistenceCoordinatorOperation,
 ): PersistenceOperationResult<never> {
   return preconditionFailure({ code: "runtimeUnavailable", operation });
-}
-
-/**
- * New City admission is rejected up front for adapters that do not declare
- * `singleRealm: true`. A multi-realm store may be shared across independent
- * realms/processes (multiple browser tabs, Tauri windows, workers), and an
- * ambiguous create/finalize failure on such a store leaves a pending record
- * that this process cannot safely delete or finalize — it may belong to a
- * live New City transaction in another realm. Rather than create a durable
- * state the current application cannot repair, admission is refused before
- * any storage mutation. The runtime stays alive and usable; the typed
- * precondition error is surfaced through `persistenceError`. Durable
- * cross-process ownership (HPA-539) is the long-term fix that will lift
- * this restriction.
- */
-export function multiRealmNewCityUnsupported(
-  cityId: string,
-): PersistenceOperationResult<never> {
-  return preconditionFailure({
-    code: "multiRealmNewCityUnsupported",
-    cityId,
-  });
 }
