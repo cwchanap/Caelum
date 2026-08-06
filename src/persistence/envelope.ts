@@ -21,7 +21,7 @@ export interface SaveEnvelope<TSnapshot = unknown> {
   format: typeof CAELUM_SAVE_FORMAT;
   envelopeVersion: typeof SAVE_ENVELOPE_VERSION;
   city: { id: string; name: string };
-  cityCreatedAt: string;
+  createdAt: string;
   savedAt: string;
   appVersion: string;
   snapshotSchemaVersion: number;
@@ -35,7 +35,7 @@ export type UntrustedSaveValue = unknown;
 
 export function buildSaveEnvelope({
   city,
-  cityCreatedAt,
+  createdAt,
   savedAt,
   appVersion,
   snapshot,
@@ -47,7 +47,7 @@ export function buildSaveEnvelope({
     format: CAELUM_SAVE_FORMAT,
     envelopeVersion: SAVE_ENVELOPE_VERSION,
     city,
-    cityCreatedAt,
+    createdAt,
     savedAt,
     appVersion,
     snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,

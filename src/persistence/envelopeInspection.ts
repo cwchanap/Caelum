@@ -43,7 +43,7 @@ const ENVELOPE_KEYS = [
   "format",
   "envelopeVersion",
   "city",
-  "cityCreatedAt",
+  "createdAt",
   "savedAt",
   "appVersion",
   "snapshotSchemaVersion",
@@ -159,7 +159,7 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
     }
 
     const city = value.city;
-    const cityCreatedAt = value.cityCreatedAt;
+    const createdAt = value.createdAt;
     const savedAt = value.savedAt;
     const appVersion = value.appVersion;
     const summary = value.summary;
@@ -168,7 +168,7 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
     if (
       !isPlainObject(city) ||
       !hasExactKeys(city, ["id", "name"]) ||
-      typeof cityCreatedAt !== "string" ||
+      typeof createdAt !== "string" ||
       typeof savedAt !== "string" ||
       typeof appVersion !== "string" ||
       !isPlainObject(summary) ||
@@ -216,7 +216,7 @@ export function inspectSaveEnvelope(value: unknown): InspectSaveEnvelopeResult {
       format,
       envelopeVersion,
       city: { id: cityId, name: cityName },
-      cityCreatedAt,
+      createdAt,
       savedAt,
       appVersion,
       snapshotSchemaVersion,

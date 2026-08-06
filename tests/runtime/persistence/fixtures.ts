@@ -23,7 +23,7 @@ export function makeEnvelope(
   return {
     ...buildSaveEnvelope({
       city: { id: "city-1", name: "Test City" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot,
@@ -40,7 +40,7 @@ export function makeCitySummary(
   return {
     cityId: envelope.city.id,
     name: envelope.city.name,
-    cityCreatedAt: envelope.cityCreatedAt,
+    createdAt: envelope.createdAt,
     savedAt: envelope.savedAt,
     appVersion: envelope.appVersion,
     snapshotSchemaVersion: envelope.snapshotSchemaVersion,

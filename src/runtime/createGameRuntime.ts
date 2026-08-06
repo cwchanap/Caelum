@@ -1486,7 +1486,7 @@ export async function createGameRuntime(
       activeCity = {
         id: envelope.city.id,
         name: envelope.city.name,
-        cityCreatedAt: envelope.cityCreatedAt,
+        createdAt: envelope.createdAt,
       };
       sessionToken += 1;
       currentRevision = source.kind === "working" ? 0 : 1;
@@ -1770,7 +1770,7 @@ export async function createGameRuntime(
           savedAt = now();
           envelope = buildSaveEnvelope({
             city: { id: city.id, name: city.name },
-            cityCreatedAt: city.cityCreatedAt,
+            createdAt: city.createdAt,
             savedAt,
             appVersion,
             snapshot: capture.snapshot,
@@ -1983,7 +1983,7 @@ export async function createGameRuntime(
         try {
           envelope = buildSaveEnvelope({
             city: { id: city.id, name: city.name },
-            cityCreatedAt: city.cityCreatedAt,
+            createdAt: city.createdAt,
             savedAt: now(),
             appVersion,
             snapshot: capture.snapshot,
@@ -3236,7 +3236,7 @@ export async function createGameRuntime(
           savedAt = now();
           envelope = buildSaveEnvelope({
             city: { id: identity.id, name: identity.name },
-            cityCreatedAt: identity.cityCreatedAt,
+            createdAt: identity.createdAt,
             savedAt,
             appVersion,
             snapshot: candidateCapture.snapshot,
