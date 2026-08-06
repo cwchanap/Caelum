@@ -8,15 +8,15 @@
 
 ## Outcome
 
-Caelum keeps both current gameplay hosts while removing the ownership, parity, and forensic validation machinery that makes them expensive to maintain.
+Caelum keeps both current gameplay hosts while removing the ownership, parity, and forensic-validation machinery that makes them expensive to maintain.
 
 - `caelum-core` remains the only gameplay implementation.
 - Tauri/native Rust remains the intended desktop release host.
-- WASM/browser remains the fast Vite, Playwright, and lightweight demo host.
+- WASM/browser remains the fast Vite, Playwright, and lightweight-demo host.
 - Both expose one small TypeScript `GameBackend` used by the shared Svelte runtime.
-- Tauri session details remain private to the Tauri adapter.
+- Tauri epoch/session details remain private to the Tauri adapter.
 - Snapshot restore remains candidate-first, so a failed load never partially replaces active gameplay.
-- New City can build a sandbox candidate without mutating the active engine.
+- New City builds a sandbox candidate without mutating the active engine.
 - Production and test code show material net deletion.
 
 This is a simplification project, not a host migration. Removing the native host would discard the intended product architecture. Removing WASM would slow the established development loop without evidence that its wrapper cost exceeds its value.
@@ -27,16 +27,16 @@ HPA-340 and HPA-341 established a safe persistence boundary, but the implementat
 
 The resulting maintenance surface includes:
 
-- a public `beginRuntime` and `RuntimeSession` contract shared by hosts that do not share the same lifecycle needs;
-- `runtimeIdentity`, a module-level backend ownership registry, and object/`WeakMap` fallback coordination;
+- public `beginRuntime` and `RuntimeSession` concepts shared by hosts with different lifecycle needs;
+- `runtimeIdentity`, a module-level backend ownership registry, and an object/`WeakMap` fallback;
 - a public `validateSnapshot` operation even though candidate-first restore already validates before activation;
 - prepared save/restore tokens and encode-before-commit rules maintained mainly for exact host parity;
 - a large Rust persistence field/reason taxonomy mirrored through WASM, Tauri, TypeScript, fixtures, and tests;
 - exact-shape JavaScript guards for values produced by the same local application;
 - generated fixtures, benchmarks, and cross-product test matrices that make ordinary gameplay schema changes expensive;
-- `DispatchResult.context`, including full-map impact calculation, even though production TypeScript does not consume it.
+- `DispatchResult.context` on the host wire even though production TypeScript ignores it.
 
-The shared Rust core already prevents gameplay-rule duplication. The remaining cost comes from making host transport and snapshot diagnostics behave like a public platform contract.
+The shared Rust core already prevents gameplay-rule duplication. The remaining cost comes from treating host transport and snapshot diagnostics as a public platform contract.
 
 ## Scope
 
@@ -48,7 +48,7 @@ HPA-547 owns one atomic breaking change across the gameplay host boundary:
 4. reduce the TypeScript `GameBackend` contract;
 5. remove JavaScript backend ownership coordination;
 6. minimally adapt runtime Save, Load, and New City call sites;
-7. remove unused dispatch impact data;
+7. remove unused dispatch impact from the public dispatch wire while preserving internal apply behavior and preview impact;
 8. delete tests, fixtures, benchmarks, and documentation that specify removed behavior.
 
 These changes land together. Temporary dual APIs, deprecated aliases, compatibility adapters, and old fixtures are explicitly rejected.
@@ -72,7 +72,7 @@ HPA-547 may remove New City backend rollback that becomes unnecessary after sand
 5. **Normalize known derived values.** Recompute cheap deterministic values instead of rejecting same-app saves for forensic mismatches.
 6. **Protect construction, not every corruption theory.** Retain checks needed to prevent panic, unsafe indexing, impossible topology, or immediate unusable state.
 7. **Breaking changes are preferred.** Development saves are disposable; old contracts are deleted in the same change.
-8. **Tests follow player behavior.** Happy path plus one representative failure per operation; no parity cross product.
+8. **Tests follow retained behavior.** Cover each distinct construction-safety class once, plus the player/host operations. Do not rebuild a field/reason matrix.
 9. **Net deletion is a requirement.** Replacing removed machinery with a new abstraction fails the design.
 
 ## Public TypeScript Contract
@@ -80,19 +80,29 @@ HPA-547 may remove New City backend rollback that becomes unnecessary after sand
 `src/runtime/backend/types.ts` owns the small runtime contract and raw Rust wire types.
 
 ```ts
+export type SnapshotOperation = "snapshotForSave" | "restoreSnapshot";
+
 export type SnapshotErrorCode =
   | "unsupportedSchema"
   | "invalidSnapshot"
   | "hostFailure";
 
 export interface SnapshotError {
+  operation: SnapshotOperation;
   code: SnapshotErrorCode;
+  // Development logging only. Host text may differ and the UI must not parse it.
   diagnostic?: string;
 }
 
 export type SnapshotResult =
   | { ok: true; snapshot: RustGameSnapshot }
   | { ok: false; error: SnapshotError };
+
+export interface SandboxHostError {
+  operation: "buildSandboxSnapshot";
+  code: "hostFailure";
+  diagnostic?: string;
+}
 
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
@@ -111,73 +121,48 @@ export interface GameBackend {
 }
 ```
 
-Exact type names may follow existing repository conventions. The resulting surface must preserve these semantics.
+Rules:
 
-### Contract rules
+- Do not keep the `{ snapshot }` request wrapper.
+- Do not expose standalone `validateSnapshot`.
+- Keep sandbox form errors separate because the New City form consumes field-level feedback.
+- `buildSandboxSnapshot` may reject only for an unexpected host/transport failure. The runtime catches that rejection and maps it to `SandboxHostError`.
+- `diagnostic` is for logs only. UI behavior branches on `code`.
+- Do not add capabilities, plugins, registries, factories, dependency-injection containers, or code generation.
 
-- Remove `runtimeIdentity`, `RuntimeIdentity`, `RuntimeSession`, and public `beginRuntime`.
-- Remove public `validateSnapshot`.
-- Pass the snapshot directly to `restoreSnapshot`; do not keep a `{ snapshot }` wrapper unless a current call site proves useful.
-- Keep sandbox form errors separate because New City currently benefits from field-level validation feedback.
-- `diagnostic` is optional developer information. It is not a parity contract and may differ by host.
-- Production UI branches only on `unsupportedSchema`, `invalidSnapshot`, and `hostFailure`.
-- Do not add capabilities, factories, registries, dependency-injection containers, generated interfaces, or host plugin infrastructure.
+## Runtime Consumer Error Seam
 
-## Snapshot Error Mapping
+HPA-547 must update the existing persistence coordinator as a consumer of the new host contract, without redesigning the coordinator.
 
-### `unsupportedSchema`
-
-Return when a schema probe identifies a version other than the current development schema. Missing or unreadable schema identity may also map here when the host cannot identify a supported current snapshot.
-
-The UI may offer clear/reset behavior. No migration path is provided.
-
-### `invalidSnapshot`
-
-Return when the value has the current schema but cannot deserialize into a usable `GameSnapshot`, violates a construction-safety requirement, or cannot compile into a usable engine.
-
-The UI does not display the detailed Rust reason. A development diagnostic may be logged.
-
-### `hostFailure`
-
-Return for transport, serializer, managed-state, mutex, or unexpected adapter failures outside candidate validity.
-
-Host diagnostics may differ. Exact error serialization parity is not required.
-
-## `caelum-core` Save and Restore Policy
-
-### Save capture
-
-`GameEngine::snapshot_for_save` returns a cloned, persistence-ready snapshot and does not validate the active engine against the removed forensic catalogue.
-
-Conceptually:
-
-```rust
-pub fn snapshot_for_save(&self) -> GameSnapshot {
-    let mut snapshot = self.snapshot();
-    normalize_for_persistence(&mut snapshot);
-    snapshot
-}
+```ts
+export type PersistenceCoordinatorBackendError =
+  | SnapshotError
+  | SandboxHostError;
 ```
 
-The normalization is direct and bounded:
+The existing outer shape remains:
 
-- set `paused = true`;
-- recompute `day` and `clock_minutes` from authoritative simulation time;
-- apply an existing cheap canonical ordering helper only where one already exists and avoids downstream instability.
+```ts
+export type PersistenceCoordinatorError =
+  | { kind: "store"; error: SaveStoreError }
+  | { kind: "envelope"; error: SaveEnvelopeError }
+  | { kind: "backend"; error: PersistenceCoordinatorBackendError }
+  | { kind: "sandbox"; error: SandboxCreationError }
+  | { kind: "precondition"; error: PersistenceCoordinatorPreconditionError };
+```
 
-The live engine is unchanged.
+This is a direct type replacement, not a compatibility wrapper:
 
-### Candidate construction
+- Save and Load propagate `SnapshotError`.
+- An unexpected rejection from `buildSandboxSnapshot` becomes `SandboxHostError`.
+- Expected sandbox request failures remain `{ kind: "sandbox", error: SandboxCreationError }`.
+- Delete `PersistenceOperationError` and do not retain a three-code version of the old taxonomy.
 
-`GameEngine::from_snapshot` remains the single typed construction boundary. It:
+## Core Snapshot Construction
 
-1. receives a fully deserialized current-schema `GameSnapshot`;
-2. applies the same direct persistence normalization;
-3. checks only structural and reference properties required for safe engine use;
-4. rebuilds non-serialized `RoadTopology` and other required caches;
-5. returns a complete candidate engine.
+### Target Rust surface
 
-Conceptually:
+Exact names may follow existing Rust conventions, but the public behavior is equivalent to:
 
 ```rust
 pub enum SnapshotLoadError {
@@ -186,6 +171,8 @@ pub enum SnapshotLoadError {
 }
 
 impl GameEngine {
+    pub fn snapshot_for_save(&self) -> GameSnapshot;
+
     pub fn from_snapshot(
         snapshot: GameSnapshot,
     ) -> Result<Self, SnapshotLoadError>;
@@ -197,313 +184,415 @@ impl GameEngine {
 }
 ```
 
-`restore_snapshot` constructs the candidate first and assigns `self` only after construction succeeds. A failed restore leaves the active engine unchanged.
+`SnapshotLoadError` is not serialized as a detailed public reason tree. Hosts map it to the three TypeScript categories.
 
-### Retained checks
+### Save capture
 
-Keep checks that prevent one of the following:
+`snapshot_for_save`:
 
-- unsupported schema interpretation;
-- invalid fixed map dimensions or tile count;
-- out-of-bounds tile/entity access;
-- duplicate identities where indexes require uniqueness;
-- missing required references used immediately by the engine;
-- invalid route, trip, vehicle, or platform indexes that would panic or immediately dereference invalid data;
-- impossible topology compilation;
-- non-finite or out-of-range values that would break immediate simulation arithmetic;
-- engine construction that would produce an immediately unusable state.
+1. clones the authoritative engine snapshot;
+2. sets `paused = true` on the clone;
+3. normalizes direct deterministic derived fields;
+4. returns the clone without validating the active engine against the import corruption catalogue;
+5. does not mutate live gameplay.
 
-The exact implementation may reuse small parts of the current validator. It must not preserve the public error taxonomy merely because a check remains.
+`SaveSnapshotCapture` is removed.
 
-### Normalized instead of rejected
+### Restore
 
-Normalize a value only when it has one obvious, existing derivation:
+Restore remains candidate-first:
 
-- `day` and `clock_minutes` from `time`;
-- paused persistence state;
-- non-serialized topology and caches;
-- cheap deterministic ordering through an existing helper.
+1. probe schema before full decode;
+2. deserialize the current `GameSnapshot`;
+3. normalize direct deterministic derived values;
+4. run retained construction-safety checks;
+5. compile `RoadTopology` and construct a complete candidate engine;
+6. replace the active engine only after all prior steps succeed.
 
-Do not add a repair registry, migration pipeline, warning list, or partial recovery model.
+`PreparedEngineRestore` and encode-before-commit parity ceremony are removed. A host response-encoding failure is a `hostFailure`; it does not require a second prepared-token transaction.
 
-### Removed validation policy
+## Validator Retain / Normalize / Delete Matrix
 
-Delete checks whose primary purpose is explaining exactly how a same-app snapshot differs from the current in-memory catalogue, including:
+The existing entry points are:
 
-- canonical ID string formatting when uniqueness and references are sufficient;
-- exact serialized collection ordering that can be normalized or is irrelevant to construction;
-- route oracle equality and idempotence;
-- exact route-leg cache equality;
-- exact trip position and derived trip state matching;
-- trip sequence and derived counter forensics that do not protect indexing;
-- metrics relationship and rolling outcome-window catalogues;
-- objective/loss-state forensic matching;
-- active-engine validation during save capture.
+- `persistence::map::validate_shell_rules_map_and_compile`;
+- `persistence::entities::validate_entities`;
+- `persistence::trips::validate_trips`.
+
+Implementation must prune these functions deliberately. Deleting their tests without deleting their forensic checks is not sufficient, and deleting a construction-safety check to achieve net LOC reduction is not acceptable.
+
+### `map.rs`: shell, map, and topology
+
+| Current validation class | Action | Reason |
+| --- | --- | --- |
+| schema version | **Retain** and map to `UnsupportedSchema` | Required breaking-schema boundary |
+| finite/non-negative simulation time and bounded conversion to day index | **Retain** | Prevent invalid arithmetic and conversion behavior |
+| `day` and `clock_minutes` equality with `clock::day_index` / `clock::clock_minutes` | **Normalize** from `time` | Cheap direct derivation |
+| paused persistence mode | **Normalize** to `true` for save and load | Working saves always activate paused |
+| supported speed values | **Retain** | Immediate engine behavior depends on the closed speed set |
+| fixed map width/height and exact tile count | **Retain** | Prevent invalid indexing and topology assumptions |
+| tile coordinates within the fixed row-major grid | **Retain** | Required for safe indexed map access |
+| tile kind/infrastructure combinations required by topology compilation | **Retain** | Prevent impossible topology construction |
+| road connection bounds, target-road existence, and reciprocal connectivity | **Retain** where not already guaranteed by `RoadTopology::compile` | Required construction safety; avoid duplicate checks when compile already proves the same invariant |
+| `RoadTopology::compile` success | **Retain** | Required non-serialized engine state |
+| unique/non-overlapping road-structure footprint required for compile/access | **Retain** | Prevent ambiguous ownership and unsafe lookup |
+| canonical tile ID text | **Delete** | Uniqueness/coordinates are sufficient for current construction |
+| canonical road-connection ordering | **Normalize** with the existing heading ordering helper or delete if ordering is not consumed | Do not reject a safely sortable collection |
+| exact serialized roundabout/automatic-junction canonical reconstruction beyond compile safety | **Delete** | Forensic equality, not current player behavior |
+| sandbox/campaign objective, growth-wave, metric-terminal consistency catalogues | **Delete** unless a specific condition is required for immediate safe engine use | Campaign/growth is not a current player workflow and same-app saves are disposable |
+| exact growth-wave ordering/application history checks | **Delete** | Forensic consistency; not construction safety |
+
+### `entities.rs`: indexes and references
+
+| Current validation class | Action | Reason |
+| --- | --- | --- |
+| non-empty entity IDs | **Retain** | Required stable index keys |
+| global duplicate entity IDs across kinds | **Retain** | Prevent ambiguous lookup |
+| duplicate keys within route/platform/vehicle indexes | **Retain** | Prevent overwrite/ambiguous ownership |
+| required references exist (sim, node, platform, route, vehicle, passenger) | **Retain** | Prevent immediate invalid engine access |
+| point/footprint bounds used for occupancy/indexing | **Retain** | Prevent out-of-bounds access |
+| route waypoint and platform indexes in range | **Retain** | Prevent unsafe indexing |
+| vehicle itinerary/path indexes in range | **Retain** | Prevent unsafe indexing |
+| canonical numbered ID string shape (`route-001`, `trip-day-*`, platform suffix formatting) | **Delete** | Key uniqueness and required references are sufficient |
+| exact platform ordering/labels | **Delete** unless runtime indexing consumes the serialized order directly | Presentation/canonical forensics |
+| exact ownership reciprocity and cached reverse-list equality | **Delete** when indexes can be rebuilt from authoritative forward references | Rebuild instead of reject |
+| route-leg/path equality with a fresh routing oracle | **Delete** | Expensive forensic parity |
+| route revision/value ranges required by direct indexing or arithmetic | **Retain** only where immediate use requires it | Safety, not history forensics |
+
+### `trips.rs`: active trips and derived metrics
+
+| Current validation class | Action | Reason |
+| --- | --- | --- |
+| required sim/vehicle/route references | **Retain** | Prevent invalid lookup |
+| world points and itinerary/path indexes within bounds | **Retain** | Prevent invalid access |
+| finite deadline/patience/position values used immediately by tick | **Retain** | Prevent invalid arithmetic |
+| duplicate active-trip IDs/index keys | **Retain** through entity indexing | Prevent ambiguous lookup |
+| trip ID canonical text and sequence formatting | **Delete** | Uniqueness is sufficient |
+| exact worker profile/shift derivation from ID | **Delete** | Forensic deterministic catalogue |
+| exact trip endpoint/state relationship | **Delete** unless a mismatch would panic on the next tick | Gameplay history forensics |
+| exact trip position equality with sim position | **Delete** | Forensic derived-state equality |
+| exact route-plan equality with current router output | **Delete** | Expensive oracle equality |
+| trip counter and next-sequence equality with existing trips | **Normalize** only if there is one cheap authoritative derivation; otherwise retain the minimum monotonic bound needed to avoid collision | Avoid a repair framework |
+| metrics counter relationships, rolling outcome window, objective state, and loss-reason equality | **Delete** | UI diagnostics/history forensics |
+| collection ordering | **Normalize** only with existing helpers and only when runtime behavior depends on deterministic order | No new generic normalization pipeline |
+
+### Error policy
+
+All retained non-schema failures map to `invalidSnapshot`. Internal Rust diagnostics may name the failed condition, but TypeScript and UI do not mirror it.
+
+### Test policy for the retained surface
+
+Retain one focused test for each distinct construction-safety class:
+
+1. unsupported schema;
+2. wrong map size or tile count;
+3. duplicate entity ID used as an index key;
+4. missing required reference or out-of-bounds index;
+5. topology compile failure;
+6. failed restore preserves the active engine;
+7. save capture is paused while the live engine is unchanged;
+8. one deterministic round-trip of an engine-minted save.
+
+These are not a field/reason cross product. They are the minimum regression set for materially different panic/construction classes.
+
+## Pure Sandbox Candidate
+
+The core already exposes:
+
+```rust
+pub fn create_sandbox_snapshot(
+    request: SandboxCreationRequest,
+) -> Result<GameSnapshot, SandboxCreationError>;
+```
+
+Both hosts reuse this function.
+
+- WASM exposes a thin static/free bridge that returns the snapshot.
+- Tauri exposes `game_build_sandbox_snapshot` and does not lock or mutate managed engine state.
+- TypeScript calls this through `buildSandboxSnapshot`.
+- `GameEngine::from_sandbox_request` remains for code that actually needs a live engine.
+- Do not construct a temporary engine merely to call `.snapshot()` when the pure function already exists.
 
 ## WASM Host
 
-`WasmGameEngine` remains instance-local. No epoch or ownership coordination is required.
-
-### `buildSandboxSnapshot`
-
-Construct a temporary `WasmGameEngine` or core candidate from the request and return its snapshot. Do not assign it to the active WASM engine.
-
-### `restore_snapshot`
-
-- probe schema;
-- deserialize the value;
-- call candidate-first core construction;
-- assign `inner` only on success;
-- return the accepted snapshot.
-
-### Error boundary
-
-The Rust/WASM bridge may return compact internal failures. `wasmBackend.ts` maps them to the three TypeScript categories. It does not validate a mirrored exhaustive reason tree.
-
-### Removed WASM machinery
-
-- exported `validate_snapshot`;
-- `PersistenceBridgeError` exact-shape encoding;
-- prepared restore encoding helpers;
-- synthetic exact encode-before-commit tests;
-- exhaustive bridge-error variant tests.
-
-## Tauri Host
-
-Tauri remains the native desktop product path with one managed `GameEngine`.
-
-A small `src-tauri/src/game_host.rs` extraction is allowed and recommended because `src-tauri/src/lib.rs` currently mixes application bootstrap, gameplay commands, bridge errors, and a large test module. This is a responsibility split, not a framework.
-
-### Private epoch
+`WasmGameEngine` remains instance-local.
 
 Keep:
 
-```rust
-struct OwnedEngine {
-    engine: GameEngine,
-    runtime_epoch: u64,
-}
-```
+- ordinary `snapshot`, `dispatch`, `tick`, `reset`, and previews;
+- `snapshot_for_save`;
+- candidate-first `restore_snapshot`;
+- a thin bridge to `create_sandbox_snapshot`.
 
-Keep an internal `game_begin_runtime` command that increments the epoch and returns the epoch plus current snapshot atomically.
+Remove:
 
-`createTauriBackend()` calls `game_begin_runtime` before returning. It closes over the epoch and sends it with mutating commands and `snapshotForSave`. The returned `GameBackend` exposes neither `beginRuntime` nor the epoch.
+- `validate_snapshot`;
+- exact `PersistenceBridgeError` serialization;
+- prepared-token encoding helpers;
+- encode-failure transaction tests;
+- exact error-shape and host-parity matrices.
 
-This retains stale-webview protection while removing host-specific lifecycle policy from the shared runtime.
+The TypeScript WASM adapter maps:
 
-### Native commands
+- schema probe mismatch to `unsupportedSchema`;
+- deserialization or retained construction failure to `invalidSnapshot`;
+- unexpected bridge/transport failures to `hostFailure`.
 
-Keep transport-only commands for snapshot, dispatch, tick, save capture, restore, reset, route preview, and road preview.
+## Tauri Host
 
-Replace mutating sandbox creation with pure candidate construction:
+### Private epoch
 
-```text
-game_build_sandbox_snapshot(request) -> snapshot
-```
+Retain `OwnedEngine { engine, runtime_epoch }` and internal `game_begin_runtime`.
 
-The command does not lock or replace the managed engine.
+`createTauriBackend()` invokes `game_begin_runtime` before returning and closes over the epoch. The returned `GameBackend` exposes neither the epoch nor `beginRuntime`.
+
+Mutating commands and `snapshotForSave` carry the private epoch. One focused native test proves that a stale epoch cannot mutate after a newer backend session starts.
+
+### Commands
+
+Keep thin commands for:
+
+- snapshot;
+- begin runtime (private adapter bootstrap);
+- dispatch;
+- tick;
+- reset;
+- save snapshot;
+- restore snapshot;
+- route preview;
+- road preview.
+
+Replace mutating `game_create_sandbox` with pure `game_build_sandbox_snapshot`.
 
 Delete `game_validate_snapshot`.
 
-Restore performs decode and candidate construction before taking the managed-engine lock. Immediately before assignment it verifies the private epoch. A stale epoch or failed candidate leaves managed state unchanged.
+Native diagnostics may remain strings. The frontend receives only the three snapshot error categories.
 
-Exact encode-before-commit response parity is removed. A response serialization failure is a host failure, not a reason to preserve a prepared-token protocol.
+A small `src-tauri/src/game_host.rs` extraction is permitted because `lib.rs` currently mixes app bootstrap, host transport, error-wire machinery, and a large test module. Do not add a trait, host registry, or framework.
 
-## Shared Runtime Integration
+## Dispatch Impact Boundary
 
-HPA-547 changes only the host-facing seams necessary to consume the new contract.
+The design removes dispatch impact from the public host wire only. It must not remove internal information required to apply gameplay mutations.
+
+### Layer 1: public `DispatchResult`
+
+Change the serialized/public result to:
+
+```rust
+pub struct DispatchResult {
+    pub snapshot: GameSnapshot,
+    pub applied: bool,
+    pub rejection: Option<GameplayRejection>,
+}
+```
+
+TypeScript mirrors the same shape. `normalizeDispatchResult` continues to normalize nullable rejection but has no context branch.
+
+### Layer 2: private core apply machinery
+
+Keep or simplify private data needed by mutation application, including:
+
+- changed/skipped tiles used while normalizing road mutation results;
+- route lifecycle recomputation inputs;
+- affected-route calculation required to commit a valid candidate;
+- cost or footprint data required by mutation helpers.
+
+`DispatchContext` may remain as a private/internal struct, be split into smaller private structs, or be replaced by local values. It must not be exported or serialized merely for tests.
+
+Existing tests that assert `result.context.*` must be rewritten to assert observable snapshot/rejection behavior, unless the asserted value belongs to a preview response.
+
+### Layer 3: preview responses
+
+Route and road preview impact stays unchanged because the UI consumes it:
+
+- changed/skipped tiles;
+- cost;
+- warnings;
+- route impacts;
+- generated structures;
+- rejection context.
+
+Before deletion, the implementation must classify every `DispatchContext`/`.context` match into public wire, private apply, or preview. Only the public-wire bucket is required to disappear.
+
+## Runtime Integration
 
 ### Initialization
 
-- remove backend ownership coordinator acquisition and release;
-- remove `beginRuntime` fallback;
-- initialize from `await backend.snapshot()`.
-
-The existing persistence lease/coordinator remains until HPA-543.
-
-### Load
-
-- read the stored snapshot through the current store/envelope path;
-- call `restoreSnapshot(snapshot)` once;
-- publish new active gameplay identity only after success;
-- preserve current gameplay and identity on failure.
-
-There is no separate validation call.
+- Delete backend ownership acquisition/release.
+- Delete `runtimeIdentity`, registry reset hooks, and `WeakMap` fallback.
+- Initialize from `await backend.snapshot()`.
+- Leave the existing persistence lease/coordinator intact for HPA-543.
 
 ### Save
 
-Use `snapshotForSave()` and map the small error result into the current runtime persistence error surface. Do not redesign save queues, revisions, envelopes, or stores in this issue.
+- Call `snapshotForSave`.
+- Propagate `SnapshotError` through `PersistenceCoordinatorBackendError`.
+- Do not change queues, revisions, envelopes, or store behavior.
 
-### New City
+### Load
 
-The current implementation mutates the backend before storage and then requires rollback, orphan cleanup, and recovery branches. Pure sandbox construction removes that need.
+- Remove the separate validation call.
+- Call `restoreSnapshot(snapshot)` once.
+- Publish active city identity and runtime state only after restore succeeds.
+- Failed restore leaves current gameplay and active identity unchanged.
 
-The minimal sequence is:
+### New City sequence
 
-1. use the existing admission/drain mechanism;
-2. capture prior public/UI state required to restore the view before activation;
-3. call `buildSandboxSnapshot(request)` without changing active gameplay;
-4. persist and finalize through the current store contract;
-5. activate through candidate-first `restoreSnapshot(candidate)`;
-6. publish the new city only after activation succeeds.
+1. Admit/drain through the existing runtime mechanisms.
+2. Preserve only prior public/UI state needed to resume the current view on failure.
+3. Call pure `buildSandboxSnapshot`; the active backend remains unchanged.
+4. Persist/finalize the candidate through the existing store contract.
+5. Activate through candidate-first `restoreSnapshot`.
+6. Publish the new runtime and active city only after activation succeeds.
 
-If activation unexpectedly fails after storage succeeds, leave the city record available for retry and report a retryable load/host failure. Do not delete the record and do not restore a backend that was never changed.
+Backend snapshot capture and backend rollback are removed from this sequence.
 
-Remove backend rollback and cleanup branches that exist only because `createSandbox` mutated active state. Do not broadly rewrite pending/finalize recovery; HPA-543 and HPA-548 own that deletion.
+### New City post-conditions
 
-## Dispatch Result Reduction
+| Failure point | Backend state | Store state | Active city/public runtime |
+| --- | --- | --- | --- |
+| sandbox request rejected | unchanged | no write | unchanged; field-level sandbox error |
+| sandbox host/transport failure | unchanged | no write | unchanged; `SandboxHostError` |
+| disposal after pure build but before persistence | unchanged | no write | disposed; no publication |
+| definite create/finalize failure before commit | unchanged | no active record | unchanged; existing store error |
+| ambiguous create/finalize failure | unchanged | existing coordinator reconciliation decides pending/active/unknown | unchanged unless current reconciliation proves the record active; do not add new recovery behavior |
+| persistence succeeds, restore fails | unchanged because restore is candidate-first | active record remains available | unchanged; retryable backend/load error |
+| disposal after persistence succeeds but before restore/publication | unchanged | active record remains available | disposed; no publication |
+| restore succeeds | candidate active | active record exists | new city identity and snapshot published together |
 
-Production TypeScript does not consume `DispatchResult.context`. Remove it from the apply path and stop calculating full-map dispatch impact solely for the unused result.
+The shorthand “persist failure means no record” is only valid for definite non-commit failures. HPA-547 retains the current pending/finalize reconciliation for ambiguous failures until HPA-543/HPA-548 remove it.
 
-Keep impact data in route and road preview responses because the current UI consumes it before applying a mutation.
+Required focused runtime tests:
 
-This change must not alter gameplay application, rejection, cost policy, snapshot publication, or preview behavior.
+1. sandbox build rejection leaves backend/store/identity unchanged;
+2. definite persist failure leaves backend and active identity unchanged;
+3. successful persist followed by restore failure leaves the stored record and current gameplay/identity unchanged;
+4. disposal after pure build writes nothing;
+5. success publishes candidate snapshot and city identity only after restore.
 
-## Modules and File Boundaries
+Do not introduce a new retry controller or recovery state. The retained record is loadable through the later city workflow.
 
-Target shape:
-
-```text
-crates/caelum-core/
-  authoritative gameplay, snapshot construction, restore safety
-
-crates/caelum-wasm/
-  thin WASM serialization and instance-local engine wrapper
-
-src-tauri/src/game_host.rs
-  optional focused native gameplay command/state module
-
-src-tauri/src/lib.rs
-  Tauri application bootstrap and command registration
-
-src/runtime/backend/types.ts
-  minimal GameBackend and wire types
-
-src/runtime/backend/wasmBackend.ts
-src/runtime/backend/tauriBackend.ts
-  direct adapters with no gameplay rules
-```
-
-The following are removed or substantially collapsed:
-
-```text
-src/runtime/backendOwnership.ts
-src/runtime/backend/persistenceContract.ts
-src/runtime/backend/persistence.ts
-crates/caelum-core/src/persistence_bridge.rs
-```
-
-Keep a small helper module only when both adapters actually share compact error mapping or wire normalization. Do not retain the current exhaustive taxonomy under a different name.
-
-## Testing Strategy
+## Test Strategy
 
 ### Core
 
-Keep focused tests for:
+Use the eight retained construction tests listed in the validator section. Keep ordinary domain gameplay tests where they already live.
 
-- save capture pauses a clone without mutating live state;
-- valid candidate construction;
-- unsupported schema;
-- one representative structurally invalid candidate;
-- failed restore preserves active state;
-- one deterministic save/restore behavior proof if it catches a meaningful regression.
+Delete:
 
-### WASM
+- error-wire catalogue tests;
+- per-field/per-reason branch and coverage files;
+- hostile-corruption matrices;
+- prepared-token/encode-failure tests;
+- persistence performance benchmarks created to justify the removed parity design.
 
-Keep focused tests for:
+### WASM and Tauri
 
-- pure sandbox candidate construction;
-- dispatch and tick;
+For each host retain:
+
+- pure sandbox candidate;
+- dispatch/tick;
 - save snapshot;
 - valid restore;
 - invalid restore preserving active state.
 
-### Tauri
+Tauri additionally retains one stale-epoch test.
 
-Keep focused tests for:
+No complete native/WASM cross-product parity matrix.
 
-- pure sandbox candidate construction;
-- dispatch and tick;
-- save snapshot;
-- valid restore;
-- invalid restore preserving active state;
-- one private stale-session check.
+### Runtime
 
-### TypeScript/runtime
+Retain:
 
-Keep focused tests for:
+- direct backend initialization;
+- save error propagation through `SnapshotError`;
+- load success and failed-load preservation;
+- New City post-condition tests;
+- disposal behavior affected by the pure candidate change.
 
-- `GameBackend` contains only current methods;
-- three-category snapshot mapping;
-- initialization uses `snapshot` directly;
-- load performs one candidate-first restore;
-- New City does not mutate gameplay before persistence;
-- activation failure leaves the persisted record and current gameplay intact;
-- removed ownership registry no longer participates in construction/disposal.
+Ownership-only construction/disposal tests are deleted with `backendOwnership`.
 
-### Delete
+## Implementation Strategy
 
-Delete tests and fixtures that exist only for:
+The public contract cannot move through independently green host/runtime commits without temporary aliases. Implementation therefore uses one **contract cut**:
 
-- exact native/WASM error-shape parity;
-- exhaustive Rust field/reason branches;
-- hostile JavaScript prototype/sparse-array/exact-key guards;
-- prepared-token and encode-before-commit parity;
-- complete host cross-product matrices;
-- backend ownership registry semantics;
-- persistence benchmark evidence for the removed validation pipeline;
-- generated giant corruption fixtures.
+1. add/adjust the focused tests against the final contract;
+2. change core save/restore and construction validation;
+3. change the TypeScript contract and coordinator consumer seam;
+4. update both hosts;
+5. update runtime call sites and remove public dispatch context;
+6. run focused host/runtime checks, then full repository checks;
+7. commit the contract cut only after the final interface is consistent.
 
-Coverage percentage is not a reason to retain deleted behavior.
+During steps 2–5, partial targets may be intentionally uncompilable. Do not add temporary old/new methods to make intermediate commits green.
+
+After the contract cut:
+
+- delete obsolete fixtures, benchmarks, matrices, and old documentation;
+- run final net-deletion and scope audits;
+- update architecture documentation.
+
+## Clean Module Target
+
+- `crates/caelum-core` — gameplay and candidate construction only.
+- `crates/caelum-wasm` — thin WASM serialization/transport.
+- `src-tauri/src/game_host.rs` or existing `lib.rs` — thin native command/state wrapper.
+- `src/runtime/backend/types.ts` — small runtime contract and wire mirrors.
+- `src/runtime/backend/wasmBackend.ts` — direct WASM implementation.
+- `src/runtime/backend/tauriBackend.ts` — direct Tauri implementation with private epoch.
+- `src/runtime/persistenceCoordinator.ts` — existing coordinator with only its backend error type adapted; no lifecycle redesign.
+
+Do not introduce abstract factories, adapter registries, generators, DI containers, host plugins, repair registries, or formal Clean Architecture layers.
 
 ## Security and Compatibility
 
-The current input boundary is same-application local development saves. Retain candidate construction, structural safety, narrow Tauri commands, and generic errors.
+Current snapshots come from the same local application.
+
+Keep:
+
+- schema probing;
+- Rust deserialization;
+- construction-safety bounds and required references;
+- candidate-first restore;
+- narrow native commands;
+- generic actionable errors.
 
 Do not add:
 
-- encryption, signing, checksums, or HMAC;
-- import limits or public file hardening;
+- encryption, signing, checksums, HMAC;
 - fuzz/security matrices;
+- import size limits;
 - forensic repair;
-- migration or fallback formats;
-- compatibility aliases;
-- multi-process or multi-window coordination.
+- migrations or legacy readers;
+- multi-process locking.
 
-This is a breaking development change. Update both hosts, runtime call sites, current fixtures, and documentation together. Increment the development schema if the serialized snapshot changes and clear old saves.
-
-## Documentation Updates
-
-Update `docs/architecture.md` and `CLAUDE.md` only where they describe the current public session, validation, parity, or dispatch-context behavior.
-
-Retire or mark superseded the earlier HPA-340/HPA-341 documents only where needed to prevent future implementers from treating their exhaustive parity requirements as current architecture. Git history remains the detailed archive.
-
-Do not broadly rewrite unrelated architecture documentation.
+There is no backward compatibility for development saves. Increment the snapshot schema if the retained serialized shape changes, clear old saves, and delete old readers, aliases, fixtures, and tests in the same implementation PR.
 
 ## Acceptance Criteria
 
-- [ ] Native Tauri gameplay remains the desktop release path.
+- [ ] Native Tauri remains the desktop release path.
 - [ ] Browser/WASM remains functional for development and tests.
 - [ ] All gameplay rules live only in `caelum-core`.
-- [ ] `GameBackend` contains only methods the current runtime calls.
-- [ ] Runtime identity, public sessions, JavaScript ownership coordination, and host registries are removed.
-- [ ] Tauri epoch handling is private to `createTauriBackend` and the native host.
+- [ ] `GameBackend` contains only methods the runtime currently calls.
+- [ ] Runtime identity, public sessions, JavaScript backend ownership, and host registries are removed.
+- [ ] Tauri epoch details are private to the Tauri adapter.
+- [ ] Both hosts call the existing pure `create_sandbox_snapshot` path.
 - [ ] Both hosts build a sandbox candidate without mutating active gameplay.
-- [ ] Restore is candidate-first and exposes only the small UI error contract.
-- [ ] `snapshotForSave` does not run the active engine through the exhaustive corruption validator.
-- [ ] The detailed field/reason taxonomy is no longer a frontend or cross-host parity contract.
+- [ ] Restore is candidate-first and exposes only three UI snapshot categories.
+- [ ] `PersistenceCoordinatorBackendError` is concretely replaced by `SnapshotError | SandboxHostError`.
+- [ ] Validator pruning follows the retain/normalize/delete matrix.
+- [ ] Each retained construction-safety class has one focused regression test.
+- [ ] Public `DispatchResult.context` is removed while private apply data and preview impact remain.
+- [ ] New City follows the documented post-condition table.
 - [ ] Exact error parity, giant fixtures, persistence benchmarks, and exhaustive host matrices are removed.
-- [ ] `DispatchResult.context` is removed while preview impact remains.
-- [ ] HPA-548 and HPA-543 responsibilities are not implemented prematurely.
 - [ ] Production and test code show material net deletion.
+- [ ] No HPA-543 or HPA-548 architecture is implemented early.
 
 ## Non-goals
 
 - Replacing native gameplay with WASM.
 - Removing the browser target without measured evidence.
-- Rewriting `createGameRuntime.ts` outside the affected host call sites.
-- Replacing the current save store or envelope.
-- Removing persistence coordination beyond backend ownership and New City backend rollback.
 - Native performance optimization without profiling.
-- Public import/export, migrations, cloud sync, accounts, mods, networking, autosave, checkpoints, or recovery.
-- Formal Clean Architecture layers or a host plugin platform.
+- Rewriting the SaveStore or persistence coordinator.
+- Public import/export, migrations, cloud sync, accounts, mods, networking, or recovery UI.
+- Formal architecture frameworks.
