@@ -50,13 +50,14 @@ fn validate_and_compile(mut snapshot: GameSnapshot) -> PersistenceResult<Prepare
     }
     map::normalize_shell(&mut snapshot);
     let topology = map::validate_shell_rules_map_and_compile(&snapshot)?;
-    let indexes = entities::validate_entities(&snapshot, &topology)?;
-    trips::validate_trips(&snapshot, &indexes)?;
-    // Validate all references and ownership before normalization. Lifecycle
-    // derivation may traverse route/platform relationships; it must only see
-    // the same checked indexes accepted by the candidate validator.
+    // Validate only the references and ownership that normalization traverses.
+    // The complete entity/trip checks run again below, after derived fields have
+    // been rebuilt, so stale serialized caches do not decide loadability.
+    entities::validate_entities_for_normalization(&snapshot, &topology)?;
     trips::normalize_direct_fields(&mut snapshot);
     entities::normalize_direct_fields(&mut snapshot, &topology);
+    let indexes = entities::validate_entities(&snapshot, &topology)?;
+    trips::validate_trips(&snapshot, &indexes)?;
     Ok(PreparedSnapshot {
         snapshot,
         road_topology: topology,

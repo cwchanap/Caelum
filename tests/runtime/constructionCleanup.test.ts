@@ -74,12 +74,9 @@ describe("construction exception cleanup (P2)", () => {
     previewCoordinatorFactory.create.mockClear();
   });
 
-  it("releases the persistence lease when a post-lease construction dependency throws", async () => {
-    // P2: A genuine failure AFTER the persistence lease is held.
-    // `createPreviewCoordinator` runs after the lease is acquired and
-    // bootstrap reconciliation completes. If it throws, the outer catch must
-    // release the lease so a replacement runtime using the SAME backend and
-    // storage identities can proceed — proving the lease did not leak.
+  it("releases the lease when a post-lease construction dependency throws", async () => {
+    // A genuine failure after the persistence lease is held. The outer catch
+    // must release the lease so a replacement runtime can proceed.
     const backend = createBackend();
     const store = createMemoryCitySaveStore();
 
@@ -92,8 +89,7 @@ describe("construction exception cleanup (P2)", () => {
       constructionError,
     );
 
-    // A replacement runtime using the SAME backend object and storage
-    // identity must succeed, proving the persistence lease was released.
+    // A replacement runtime using the same backend and store must succeed.
     const runtime = await createGameRuntime({ backend, saveStore: store });
     await runtime.dispose();
   });
