@@ -663,10 +663,11 @@ export async function createGameRuntime(
       // Close the lease, drain all pending gameplay and persistence work
       // (in-flight backend operations, enqueued FIFO writes, and admitted
       // foreground lifecycle operations), then release the lease and backend
-      // ownership so a replacement runtime against the same storage identity
-      // and backend engine can acquire them. Unlike `failBackend`
-      // (fire-and-forget), `dispose` awaits the drain so the caller knows
-      // both have been released.
+      // ownership. The persistence lease is per-runtime, so releasing it
+      // only settles this runtime's own work; backend ownership is the
+      // capability a replacement runtime against the same backend engine
+      // acquires. Unlike `failBackend` (fire-and-forget), `dispose` awaits
+      // the drain so the caller knows both have been released.
       await startDrainAndRelease();
     };
 

@@ -5,8 +5,10 @@ import type { GameBackend, RuntimeIdentity } from "./backend/types";
 // identity
 // ---------------------------------------------------------------------------
 //
-// The persistence coordinator serializes runtime lifetimes by durable storage
-// identity, but a mutable backend engine is a separate ownership domain:
+// Each runtime constructs its own persistence coordinator, so the
+// persistence lease coordinates and drains work only WITHIN one runtime —
+// it does not serialize replacement runtimes. A mutable backend engine is
+// a separate ownership domain that DOES need cross-runtime serialization:
 //
 // - a runtime may have no city save store (no persistence lease at all);
 // - two stores may address one Tauri engine; and
@@ -18,8 +20,7 @@ import type { GameBackend, RuntimeIdentity } from "./backend/types";
 // the old runtime's backend operations (`dispatch`, `tick`,
 // `restoreSnapshot`, `createSandbox`) have settled can observe a stale or
 // mid-mutation snapshot. The persistence lease alone cannot prevent this
-// because the cases above have no shared persistence coordinator (or a
-// different one per store).
+// because it is per-runtime and never shared across runtime lifetimes.
 //
 // `BackendOwnershipCoordinator` provides a simple exclusive lock keyed by
 // `RuntimeIdentity`. `createGameRuntime` acquires ownership before the

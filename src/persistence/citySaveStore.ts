@@ -43,6 +43,17 @@ export type CitySaveStoreResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: CitySaveStoreError };
 
+/**
+ * Atomicity guarantee: a mutation that returns an error (or rejects) must not
+ * have committed the mutation. Specifically:
+ * - a failed `createCity` commits nothing — `readCity(id)` remains `notFound`;
+ * - a failed `updateCity`/`renameCity` leaves the complete prior record intact.
+ * The runtime relies on this: `rollbackNewCity` restores the prior backend
+ * without reading or deleting the city, and `saveWorking` publishes an update
+ * failure without re-reading or repairing the record. Adapters must build the
+ * candidate before the failure seam and commit (`records.set` / write) only on
+ * the success path.
+ */
 export interface CitySaveStore {
   listCities(): Promise<CitySaveStoreResult<CitySummary[]>>;
   readCity(id: string): Promise<CitySaveStoreResult<CitySaveRecord>>;
