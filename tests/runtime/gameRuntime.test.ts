@@ -22,7 +22,6 @@ import type {
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { ActiveCityIdentity } from "../../src/runtime/persistenceCoordinator";
-import { resetPersistenceCoordinatorRegistry } from "../../src/runtime/persistenceCoordinator";
 import type {
   RuntimeController,
   RuntimeSnapshot,
@@ -6865,11 +6864,6 @@ describe("terminal snapshot subscriber delivery", () => {
     const callCountAfter = listener.mock.calls.length;
     runtime.setTool("busStop");
     expect(listener.mock.calls.length).toBe(callCountAfter);
-
-    // The lease is permanently pinned (recoveryRequired). Reset the
-    // coordinator registry so the pinned coordinator does not leak into
-    // subsequent tests.
-    resetPersistenceCoordinatorRegistry();
   });
 });
 
@@ -6961,8 +6955,7 @@ function realmStore(
   storageIdentity: string,
   singleRealm: boolean | undefined = false,
 ): SaveStore {
-  const { singleRealm: _delegateSingleRealm, ...withoutCapability } =
-    delegate;
+  const { singleRealm: _delegateSingleRealm, ...withoutCapability } = delegate;
   return {
     ...withoutCapability,
     storageIdentity,
@@ -6983,11 +6976,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     });
     await memoryStore.createWorkingSave(envelope);
 
-    const multiRealm = realmStore(
-      memoryStore,
-      "multi-realm-shared-db",
-      false,
-    );
+    const multiRealm = realmStore(memoryStore, "multi-realm-shared-db", false);
 
     // createGameRuntime rejects — the multi-realm adapter must not auto-delete
     // a pending record that may belong to a live transaction in another realm.
@@ -7604,14 +7593,13 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     expect(result.status).toBe("failed");
     await runtime.dispose();
 
-    // Simulate a fresh process: reset the in-memory coordinator registry
-    // while retaining the durable storage, then bootstrap a replacement
-    // runtime against the same store. Because no pending record was ever
-    // created, bootstrap does not enter the bootstrapReconciliationFailed
-    // loop — the application reaches a usable state rather than an endless
-    // trap. (This is the actionable repair state Option A guarantees:
-    // prevention rather than an unrecoverable orphan.)
-    resetPersistenceCoordinatorRegistry();
+    // Bootstrap a replacement runtime against the same store. Because no
+    // pending record was ever created, bootstrap does not enter the
+    // bootstrapReconciliationFailed loop — the application reaches a usable
+    // state rather than an endless trap. (This is the actionable repair
+    // state Option A guarantees: prevention rather than an unrecoverable
+    // orphan.) Each runtime constructs its own persistence coordinator, so
+    // no in-memory registry reset is needed to model a fresh process.
     const replacement = await createGameRuntime({
       backend: transactionalBackend(backendSpy()),
       ...baseOpts(multiRealm),
@@ -7738,9 +7726,5 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
       expect(found).toBeDefined();
       expect(found!.pending).toBe(true);
     }
-
-    // The registry holds a pinned coordinator (lease stuck). Reset so the
-    // leaked coordinator does not affect subsequent tests.
-    resetPersistenceCoordinatorRegistry();
   });
 });

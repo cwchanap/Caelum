@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DispatchResult,
   GameBackend,
@@ -10,7 +10,6 @@ import {
   createMemorySaveStoreFailureControls,
 } from "../../src/persistence/memorySaveStore";
 import type { SaveStore } from "../../src/persistence/saveStore";
-import { resetPersistenceCoordinatorRegistry } from "../../src/runtime/persistenceCoordinator";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import { createDelayedSaveStore } from "./delayedSaveStore";
 import {
@@ -81,10 +80,6 @@ describe("runtime recovery publication during disposal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canvasHost.isRunning.mockReturnValue(false);
-  });
-
-  afterEach(() => {
-    resetPersistenceCoordinatorRegistry();
   });
 
   it("does not render or notify subscribers when cleanup fails after disposal begins", async () => {

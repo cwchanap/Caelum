@@ -71,7 +71,6 @@ import {
   multiRealmNewCityUnsupported,
   noActiveCity,
   readForLoadSource,
-  resolvePersistenceCoordinator,
   resolvePersistenceSessionCompletion,
   resolveWorkingSaveCompletion,
   runtimeUnavailable,
@@ -91,7 +90,6 @@ import {
   type RuntimeSaveStatus,
   type RenameActiveCityValue,
   type SaveWorkingValue,
-  type SharedPersistenceCoordinator,
 } from "./persistenceCoordinator";
 import type {
   BootstrapRecoveryError,
@@ -247,13 +245,12 @@ export async function createGameRuntime(
 ): Promise<RuntimeController & RuntimeTestSeam> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
   // P2: Capture adapter metadata exactly once BEFORE acquiring any capability.
-  // A throwing `storageIdentity` or `singleRealm` getter after backend
-  // ownership or the persistence lease is acquired would leak both
-  // capabilities — the construction error propagates without releasing them,
-  // and a replacement runtime's `acquire()` / `acquireLease()` hangs forever.
-  // Capturing here ensures the getters are invoked at most once, before any
-  // lock is held; a throwing getter fails fast before any cleanup is needed.
-  const storageIdentity = saveStore?.storageIdentity;
+  // A throwing `singleRealm` getter after backend ownership or the
+  // persistence lease is acquired would leak both capabilities — the
+  // construction error propagates without releasing them, and a replacement
+  // runtime's `acquire()` / `acquireLease()` hangs forever. Capturing here
+  // ensures the getter is invoked at most once, before any lock is held; a
+  // throwing getter fails fast before any cleanup is needed.
   const singleRealm = saveStore?.singleRealm === true;
   // Acquire exclusive backend ownership BEFORE the initial snapshot. The
   // Tauri backend is process-global (one `Mutex<GameEngine>` shared by every
@@ -302,24 +299,12 @@ export async function createGameRuntime(
       ? await backend.beginRuntime()
       : { runtimeEpoch: 0, snapshot: await backend.snapshot() };
     state = normalizeRustSnapshot(session.snapshot);
-    // Resolve the shared persistence coordinator for this store and acquire
-    // the exclusive ownership lease. If another runtime still holds the lease
-    // for the same storage identity, this waits for its pending writes to
-    // drain and the lease to be released. This prevents a replacement runtime
-    // from racing an old runtime's pending storage mutations. When no
-    // saveStore is configured, a local (unregistered) coordinator is used —
-    // persistence operations are all no-ops, so no cross-runtime coordination
-    // is needed, but the lease is still acquired for uniform lifecycle code.
-    //
-    // P2: The pre-captured `storageIdentity` is passed to
-    // `resolvePersistenceCoordinator` so the store's getter is NOT re-read
-    // here — a stateful or throwing getter after acquisition would leak both
-    // capabilities. The resolver's second argument is required, so the
-    // captured `undefined` (no identity exposed) is distinguishable from an
-    // omitted argument and uses object identity without re-reading.
-    const coordinator: SharedPersistenceCoordinator = saveStore
-      ? resolvePersistenceCoordinator(saveStore, storageIdentity)
-      : createSharedPersistenceCoordinator();
+    // Construct this runtime's persistence coordinator and acquire the
+    // exclusive ownership lease. Each runtime owns its own coordinator —
+    // coordination is per-runtime, not shared across stores or runtime
+    // lifetimes — so the lease serializes this runtime's own persistence
+    // workflows (foreground lifecycle operations and per-city FIFO writes).
+    const coordinator = createSharedPersistenceCoordinator();
     lease = await coordinator.acquireLease();
     // Durable bootstrap reconciliation (pending-then-finalize): after acquiring
     // the exclusive lease, delete any leftover pending city records from New

@@ -6,10 +6,7 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import {
-  resetPersistenceCoordinatorRegistry,
-  type ActiveCityIdentity,
-} from "../../src/runtime/persistenceCoordinator";
+import { type ActiveCityIdentity } from "../../src/runtime/persistenceCoordinator";
 import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
 import {
   createMemorySaveStore,
@@ -250,7 +247,6 @@ describe("backend ownership coordination", () => {
   });
 
   afterEach(() => {
-    resetPersistenceCoordinatorRegistry();
     resetBackendOwnershipRegistry();
   });
 
