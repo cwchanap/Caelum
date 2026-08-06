@@ -2,28 +2,32 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep native Tauri and browser/WASM gameplay paths while deleting public host-session ownership, exhaustive persistence parity, and unused dispatch impact around the shared `caelum-core` engine.
+**Goal:** Keep native Tauri and browser/WASM gameplay paths while deleting public host-session ownership, exhaustive persistence parity, and unused dispatch wire impact around the shared `caelum-core` engine.
 
-**Architecture:** `caelum-core` remains the only gameplay authority and performs direct persistence normalization plus candidate-first engine construction. `caelum-wasm` and the Tauri command host become thin serialization/state wrappers behind a minimal TypeScript `GameBackend`; Tauri retains one private epoch acquired inside `createTauriBackend()`. The existing save-store and persistence coordinator remain except for call-site changes made directly necessary by pure sandbox candidates and the smaller backend contract.
+**Architecture:** `caelum-core` remains the only gameplay authority and performs direct persistence normalization plus candidate-first engine construction. `caelum-wasm` and the Tauri command host become thin serialization/state wrappers behind a minimal TypeScript `GameBackend`; Tauri retains one private epoch acquired inside `createTauriBackend()`. The existing save-store and persistence coordinator remain except for the concrete backend-error type and call-site changes required by the smaller host contract and pure sandbox candidates.
 
 **Tech Stack:** Rust 2021, Serde/serde_json, wasm-bindgen, serde-wasm-bindgen, Tauri 2, TypeScript 5.8, Svelte 5, Bun, Vitest, Playwright.
 
-**Companion design:** `docs/superpowers/specs/2026-08-05-thin-dual-gameplay-hosts-design.md` is the normative contract. Amend and re-review that document before introducing a public method, error category, compatibility path, or validation responsibility not defined there.
+**Companion design:** `docs/superpowers/specs/2026-08-05-thin-dual-gameplay-hosts-design.md` is the normative contract. Amend and re-review it before introducing a public method, error category, compatibility path, validation responsibility, or New City recovery behavior not defined there.
 
 ## Global Constraints
 
 - Keep Tauri/native Rust as the intended desktop release host.
 - Keep WASM/browser as the fast Vite, Playwright, and demo host.
 - Keep all gameplay rules and engine construction in `caelum-core`.
-- Implement as one atomic breaking-change PR; do not introduce temporary dual contracts.
+- Implement the host contract as one atomic cut; do not introduce temporary old/new methods or aliases.
 - Remove public `runtimeIdentity`, `RuntimeSession`, `beginRuntime`, and `validateSnapshot`.
 - Keep the Tauri epoch private to `createTauriBackend()` and native commands.
 - Expose only `unsupportedSchema`, `invalidSnapshot`, and `hostFailure` to frontend snapshot consumers.
+- Include `operation` on `SnapshotError`; UI still branches only on `code`.
 - Keep sandbox form errors separate from snapshot errors.
+- Reuse the existing core `create_sandbox_snapshot` function.
 - Build sandbox snapshots without mutating the active engine.
 - Restore through complete candidate construction before assignment.
-- Keep only structural checks required for safe construction and immediate engine use.
-- Normalize directly derivable state; do not introduce migration, repair, warning, or normalization frameworks.
+- Follow the design’s validator retain/normalize/delete matrix.
+- Keep private apply data needed by gameplay; remove only public `DispatchResult.context`.
+- Keep preview impact unchanged.
+- Replace `PersistenceCoordinatorBackendError` concretely with `SnapshotError | SandboxHostError`.
 - Do not implement the HPA-548 six-operation city store in this PR.
 - Do not implement the HPA-543 active-city/busy/dirty runtime replacement in this PR.
 - Remove obsolete tests and fixtures with the behavior they specify.
@@ -33,30 +37,70 @@
 
 ## Baseline Gate
 
-- [ ] **Step 1: Confirm the branch starts from current `main` and contains the approved design**
+- [ ] **Step 1: Confirm the implementation branch starts from the approved documentation branch**
 
 ```sh
+git fetch origin
 git status --short --branch
 git merge-base --is-ancestor origin/main HEAD
 test -f docs/superpowers/specs/2026-08-05-thin-dual-gameplay-hosts-design.md
+test -f docs/superpowers/plans/2026-08-05-thin-dual-gameplay-hosts.md
 ```
 
-Expected: clean branch state, `origin/main` is an ancestor, and the design file exists.
+Expected: clean branch, `origin/main` is an ancestor, and both HPA-547 documents exist.
 
-- [ ] **Step 2: Record the current public and parity machinery before deleting it**
+- [ ] **Step 2: Record the public host/session surface**
 
 ```sh
 rg -n 'runtimeIdentity|RuntimeSession|beginRuntime|validateSnapshot|BackendOwnership' \
   src src-tauri crates tests
-rg -n 'PersistenceBridgeError|PreparedEngineRestore|SaveSnapshotCapture' \
-  crates src-tauri tests
-rg -n 'DispatchResult\.context|result\.context|context\.affectedRouteIds' \
-  src crates tests
 ```
 
-Expected: matches in the current backend types/adapters, ownership module, core persistence bridge, native host, and parity tests.
+Expected: matches in backend types/adapters, `backendOwnership.ts`, runtime construction/disposal, and ownership/session tests.
 
-- [ ] **Step 3: Run the focused pre-change baseline**
+- [ ] **Step 3: Record the detailed persistence/parity surface**
+
+```sh
+rg -n 'PersistenceBridgeError|PersistenceOperationError|PreparedEngineRestore|SaveSnapshotCapture' \
+  crates src src-tauri tests scripts
+rg -n 'PERSISTENCE_VALIDATION_CODES|PERSISTENCE_SNAPSHOT_FIELDS|PERSISTENCE_REASON_KINDS' \
+  src tests
+```
+
+Expected: matches in core bridge/error modules, both hosts, TypeScript persistence guards, fixtures, and parity tests.
+
+- [ ] **Step 4: Classify dispatch impact before editing**
+
+```sh
+rg -n 'DispatchContext|\.context|affected_route_ids|affectedRouteIds' \
+  crates/caelum-core src src-tauri tests
+```
+
+Create a scratch checklist with three buckets:
+
+```text
+PUBLIC WIRE
+- DispatchResult.context definition/constructors
+- TypeScript DispatchResult.context
+- shared.ts dispatch normalization
+- tests asserting applied-result context only
+
+PRIVATE APPLY
+- dispatch_context
+- NetworkCandidate.context
+- commit_result_for_tiles / commit_network_mutation
+- changed/skipped tile normalization
+- route lifecycle recomputation inputs
+
+PREVIEW
+- RoadMutationPreviewResponse impact
+- RoutePreviewResponse warnings/rejection context
+- preview tests/UI consumers
+```
+
+Expected: every match is assigned before deletion. Only the public-wire bucket must disappear.
+
+- [ ] **Step 5: Run the focused pre-change baseline**
 
 ```sh
 cargo test -p caelum-core --test persistence_snapshot
@@ -64,12 +108,13 @@ cargo test -p caelum-core --test persistence_atomicity
 cargo test -p caelum --lib
 bunx vitest run --project runtime \
   tests/runtime/backendContract.test.ts \
+  tests/runtime/persistenceContract.test.ts \
   tests/runtime/wasmBackend.test.ts \
   tests/runtime/tauriBackend.test.ts \
   tests/runtime/gameRuntime.test.ts
 ```
 
-Expected: all listed targets pass. Record unrelated baseline failures in the PR rather than weakening the new focused assertions.
+Expected: all listed targets pass before edits. Record unrelated failures; do not weaken assertions.
 
 ---
 
@@ -77,22 +122,21 @@ Expected: all listed targets pass. Record unrelated baseline failures in the PR 
 
 ### Create
 
-- `src-tauri/src/game_host.rs` if extracting native gameplay state/commands keeps `lib.rs` focused.
+- `crates/caelum-core/tests/persistence_construction.rs`
+- Optional responsibility split: `src-tauri/src/game_host.rs`
 
 ### Modify
 
 - `crates/caelum-core/src/engine.rs`
-- `crates/caelum-core/src/lib.rs`
 - `crates/caelum-core/src/intent.rs`
+- `crates/caelum-core/src/lib.rs`
 - `crates/caelum-core/src/persistence/mod.rs`
 - `crates/caelum-core/src/persistence/map.rs`
 - `crates/caelum-core/src/persistence/entities.rs`
 - `crates/caelum-core/src/persistence/trips.rs`
-- `crates/caelum-core/tests/persistence_snapshot.rs`
-- `crates/caelum-core/tests/persistence_atomicity.rs`
-- `crates/caelum-core/tests/persistence_determinism.rs`
-- `crates/caelum-wasm/Cargo.toml`
+- `crates/caelum-core/src/sandbox.rs` only if a small export adjustment is required
 - `crates/caelum-wasm/src/lib.rs`
+- `crates/caelum-wasm/Cargo.toml`
 - `src-tauri/src/lib.rs`
 - `src/runtime/backend/types.ts`
 - `src/runtime/backend/persistenceContract.ts`
@@ -101,6 +145,7 @@ Expected: all listed targets pass. Record unrelated baseline failures in the PR 
 - `src/runtime/backend/index.ts`
 - `src/runtime/backend/wasmBackend.ts`
 - `src/runtime/backend/tauriBackend.ts`
+- `src/runtime/persistenceCoordinator.ts`
 - `src/runtime/createGameRuntime.ts`
 - `tests/runtime/backendContract.test.ts`
 - `tests/runtime/persistenceContract.test.ts`
@@ -110,436 +155,78 @@ Expected: all listed targets pass. Record unrelated baseline failures in the PR 
 - `tests/runtime/gameRuntime.test.ts`
 - `tests/runtime/constructionCleanup.test.ts`
 - `tests/runtime/postDisposalBackendFailure.test.ts`
-- `tests/fixtures/rustSnapshot.ts`
+- `tests/fixtures/rustSnapshot.ts` only where the removed dispatch field changes fixture shape
+- `package.json`
+- `codecov.yml`
+- `vite.config.ts`
 - `docs/architecture.md`
 - `CLAUDE.md`
-- `package.json`
-- `codecov.yml` only if deleted coverage-only files are explicitly listed there.
 
-### Delete when no remaining consumer exists
+### Delete
 
+- `crates/caelum-core/src/persistence/error.rs`
 - `crates/caelum-core/src/persistence_bridge.rs`
-- `crates/caelum-core/src/persistence/error.rs` or replace it with one compact private/load error module if construction code still benefits from a dedicated file.
 - `src/runtime/backendOwnership.ts`
 - `tests/runtime/backendOwnership.test.ts`
-- exhaustive persistence branch/coverage/error-wire tests under `crates/caelum-core/tests/`.
-- giant persistence fixtures under `tests/fixtures/persistence/` that specify removed error details.
-- `scripts/benchmark-persistence-wasm.ts`.
+- `scripts/benchmark-persistence-wasm.ts`
+- `crates/caelum-core/tests/persistence_error_wire.rs`
+- `crates/caelum-core/tests/persistence_corruption.rs`
+- `crates/caelum-core/tests/persistence_map_coverage.rs`
+- `crates/caelum-core/tests/persistence_map_branches.rs`
+- `crates/caelum-core/tests/persistence_entities_coverage.rs`
+- `crates/caelum-core/tests/persistence_entities_validation.rs`
+- `crates/caelum-core/tests/persistence_trips_coverage.rs`
+- `crates/caelum-core/tests/persistence_trips_branches.rs`
+- `crates/caelum-core/tests/persistence_trips_validation.rs`
+- `crates/caelum-core/tests/persistence_routing_validation.rs`
+- `crates/caelum-core/tests/persistence_map_validation.rs`
+- `crates/caelum-core/tests/persistence_engine_validation.rs`
+- persistence JSON fixtures under `tests/fixtures/persistence/` after retained tests use inline/programmatic candidates
+- implemented historical specs/plans that prescribe the removed exhaustive validator/parity contract:
+  - `docs/superpowers/specs/2026-07-27-rust-persistence-validation-design.md`
+  - `docs/superpowers/plans/2026-07-27-rust-persistence-validation.md`
+  - `docs/superpowers/specs/2026-07-30-persistence-host-parity-design.md`
+  - `docs/superpowers/plans/2026-07-30-persistence-host-parity.md`
+
+### Reduce or replace
+
+- `crates/caelum-core/tests/persistence_snapshot.rs`
+- `crates/caelum-core/tests/persistence_atomicity.rs`
+- `crates/caelum-core/tests/persistence_determinism.rs`
+- `crates/caelum-core/tests/common/persistence_fixtures.rs`
+- `tests/runtime/persistenceContract.test.ts`
+- `tests/runtime/constructionCleanup.test.ts`
+
+Do not delete `tests/fixtures/rustSnapshot.ts` or shared fixture helpers merely because HPA-341 touched them; retain any data still used by non-persistence runtime/UI tests.
 
 ---
 
-### Task 1: Collapse Core Persistence to Candidate Construction
+# Task 1: Atomic Host Contract Cut
 
-**Files:**
+This task is one review/commit unit. Steps deliberately cross core, TypeScript, WASM, Tauri, and runtime because no intermediate public contract can remain repository-green without forbidden compatibility aliases.
 
-- Modify: `crates/caelum-core/src/engine.rs`
-- Modify: `crates/caelum-core/src/lib.rs`
-- Modify: `crates/caelum-core/src/persistence/mod.rs`
-- Modify: `crates/caelum-core/src/persistence/map.rs`
-- Modify: `crates/caelum-core/src/persistence/entities.rs`
-- Modify: `crates/caelum-core/src/persistence/trips.rs`
-- Test: `crates/caelum-core/tests/persistence_snapshot.rs`
-- Test: `crates/caelum-core/tests/persistence_atomicity.rs`
+During Steps 1–12:
 
-**Interfaces:**
+- focused targets may be run for feedback;
+- the full workspace may be red while callers are being converted;
+- do not commit;
+- do not add old/new method aliases;
+- do not claim repository-wide green until Step 13.
 
-- Consumes: current `GameSnapshot`, `RoadTopology`, clock derivation helpers, and existing entity/index construction.
-- Produces:
+**Files:** all production and focused test files in the Create/Modify lists above, excluding cleanup-only fixtures/docs handled by Task 2.
 
-```rust
-#[derive(Debug)]
-pub enum SnapshotLoadError {
-    UnsupportedSchema { expected: u16, actual: u16 },
-    InvalidSnapshot(String),
-}
-
-impl GameEngine {
-    pub fn snapshot_for_save(&self) -> GameSnapshot;
-
-    pub fn from_snapshot(
-        snapshot: GameSnapshot,
-    ) -> Result<Self, SnapshotLoadError>;
-
-    pub fn restore_snapshot(
-        &mut self,
-        snapshot: GameSnapshot,
-    ) -> Result<GameSnapshot, SnapshotLoadError>;
-}
-```
-
-Exact names may follow current Rust conventions; the public result must not expose the old field/reason taxonomy.
-
-- [ ] **Step 1: Replace core persistence tests with the five required behaviors**
-
-Add focused tests named equivalently to:
-
-```rust
-#[test]
-fn snapshot_for_save_pauses_clone_without_mutating_live_engine() { /* ... */ }
-
-#[test]
-fn current_schema_snapshot_constructs_candidate_engine() { /* ... */ }
-
-#[test]
-fn unsupported_schema_is_reported_separately() { /* ... */ }
-
-#[test]
-fn structurally_invalid_snapshot_is_rejected() { /* ... */ }
-
-#[test]
-fn failed_restore_preserves_active_engine() { /* ... */ }
-```
-
-Use one representative structural failure that protects real construction, such as invalid fixed tile count or a required reference pointing outside the candidate indexes.
-
-- [ ] **Step 2: Run the new focused tests and verify they fail against the old contract**
-
-```sh
-cargo test -p caelum-core --test persistence_snapshot
-cargo test -p caelum-core --test persistence_atomicity
-```
-
-Expected: compile or assertion failures because `snapshot_for_save` still returns the old result and detailed validation remains.
-
-- [ ] **Step 3: Add one direct persistence normalization helper**
-
-Implement one private helper near candidate construction:
-
-```rust
-fn normalize_persistence_snapshot(snapshot: &mut GameSnapshot) {
-    snapshot.paused = true;
-    snapshot.day = clock::day_index(snapshot.time);
-    snapshot.clock_minutes = clock::clock_minutes(snapshot.time);
-}
-```
-
-Use existing clock helper names from the repository. Add no registry, warning list, or repair result.
-
-- [ ] **Step 4: Make `snapshot_for_save` clone and normalize without validating the active engine**
-
-Replace capture/token preparation with:
-
-```rust
-pub fn snapshot_for_save(&self) -> GameSnapshot {
-    let mut snapshot = self.snapshot();
-    normalize_persistence_snapshot(&mut snapshot);
-    snapshot
-}
-```
-
-Delete `SaveSnapshotCapture` when no host still consumes it.
-
-- [ ] **Step 5: Reduce candidate preparation to construction safety**
-
-Refactor the current `prepare_snapshot` path so it:
-
-1. rejects unsupported schema;
-2. normalizes direct derived fields;
-3. validates fixed map shape, required indexes/references, and immediate numeric/index safety;
-4. compiles `RoadTopology`;
-5. returns a complete candidate engine.
-
-Remove checks for exact canonical ID strings, exact ordering, route oracle equality, derived cache equality, metrics relationships, objective/loss forensics, and other diagnostics that do not protect immediate construction.
-
-- [ ] **Step 6: Replace detailed public persistence errors with compact load errors**
-
-Map every remaining current-schema construction failure to `InvalidSnapshot(diagnostic)`. Preserve `UnsupportedSchema { expected, actual }` as the only separately matched core category.
-
-Delete re-exports of the old field/reason enum tree.
-
-- [ ] **Step 7: Remove prepared restore tokens**
-
-Implement candidate-first assignment directly:
-
-```rust
-pub fn restore_snapshot(
-    &mut self,
-    snapshot: GameSnapshot,
-) -> Result<GameSnapshot, SnapshotLoadError> {
-    let candidate = Self::from_snapshot(snapshot)?;
-    let restored = candidate.snapshot();
-    *self = candidate;
-    Ok(restored)
-}
-```
-
-Delete `PreparedEngineRestore` after both hosts migrate.
-
-- [ ] **Step 8: Run core checks**
-
-```sh
-cargo test -p caelum-core
-cargo clippy -p caelum-core --all-targets -- -D warnings
-cargo fmt --all --check
-```
-
-Expected: PASS.
-
-- [ ] **Step 9: Commit the core simplification**
-
-```sh
-git add crates/caelum-core
-git commit -m "refactor: simplify core snapshot construction"
-```
-
----
-
-### Task 2: Thin the WASM Host and Add Pure Sandbox Candidates
-
-**Files:**
-
-- Modify: `crates/caelum-wasm/src/lib.rs`
-- Modify: `crates/caelum-wasm/Cargo.toml`
-- Modify: `src/runtime/backend/wasmBackend.ts`
-- Test: `tests/runtime/wasmBackend.test.ts`
-- Test: `tests/runtime/wasmArtifact.smoke.test.ts`
-
-**Interfaces:**
-
-- Consumes: compact core save/load result and existing `SandboxCreationRequest`.
-- Produces: instance-local WASM methods for snapshot, save snapshot, pure sandbox snapshot, candidate-first restore, dispatch, tick, reset, and previews.
-
-- [ ] **Step 1: Replace WASM parity tests with focused behavior tests**
-
-Keep or add tests equivalent to:
+**Produces:**
 
 ```ts
-it("builds a sandbox candidate without replacing the active engine", async () => {});
-it("dispatches and ticks through the active engine", async () => {});
-it("captures a paused save snapshot", async () => {});
-it("restores a valid snapshot", async () => {});
-it("preserves active state when restore rejects an invalid snapshot", async () => {});
-```
+export type SnapshotOperation = "snapshotForSave" | "restoreSnapshot";
 
-In the artifact smoke test, keep one real-WASM save/restore round trip and one invalid restore preservation proof.
-
-- [ ] **Step 2: Run the focused WASM tests and verify the pure-candidate test fails**
-
-```sh
-bunx vitest run --project runtime \
-  tests/runtime/wasmBackend.test.ts \
-  tests/runtime/wasmArtifact.smoke.test.ts
-```
-
-Expected: candidate purity fails because current `createSandbox` replaces the active engine.
-
-- [ ] **Step 3: Remove the exported standalone validator and bridge taxonomy**
-
-Delete WASM exports and helpers for:
-
-- `validate_snapshot`;
-- exact `PersistenceBridgeError` serialization;
-- operation/source/phase tagging;
-- prepared restore encoding;
-- synthetic encode failure behavior.
-
-Keep only compact conversion from core load failure to a small JS value that `wasmBackend.ts` can map.
-
-- [ ] **Step 4: Implement pure sandbox candidate construction**
-
-Expose a method equivalent to:
-
-```rust
-pub fn build_sandbox_snapshot(request: JsValue) -> Result<JsValue, JsValue> {
-    let request: SandboxCreationRequest = serde_wasm_bindgen::from_value(request)
-        .map_err(to_js_error)?;
-    let candidate = GameEngine::from_sandbox_request(request)
-        .map_err(encode_sandbox_error)?;
-    serde_wasm_bindgen::to_value(&candidate.snapshot()).map_err(to_js_error)
-}
-```
-
-It must not borrow or mutate `self.inner`.
-
-- [ ] **Step 5: Implement candidate-first WASM restore**
-
-Decode into `GameSnapshot`, construct a candidate through `GameEngine::from_snapshot`, serialize the accepted snapshot, then replace `self.inner`. A decode or construction failure leaves `self.inner` unchanged.
-
-- [ ] **Step 6: Map WASM adapter failures to the three snapshot categories**
-
-In `wasmBackend.ts`, return:
-
-```ts
-{ ok: false, error: { code: "unsupportedSchema", diagnostic } }
-{ ok: false, error: { code: "invalidSnapshot", diagnostic } }
-{ ok: false, error: { code: "hostFailure", diagnostic } }
-```
-
-Do not inspect a mirrored field/reason tree.
-
-- [ ] **Step 7: Remove bridge-only Rust dependencies and dead TypeScript helpers**
-
-Run:
-
-```sh
-cargo machete 2>/dev/null || true
-cargo check -p caelum-wasm
-```
-
-Remove only dependencies confirmed unused by the compiler or manifest inspection.
-
-- [ ] **Step 8: Rebuild and test WASM**
-
-```sh
-bun run wasm:build
-bunx vitest run --project runtime \
-  tests/runtime/wasmBackend.test.ts \
-  tests/runtime/wasmArtifact.smoke.test.ts
-cargo clippy -p caelum-wasm --all-targets -- -D warnings
-```
-
-Expected: PASS.
-
-- [ ] **Step 9: Commit the WASM adapter simplification**
-
-```sh
-git add crates/caelum-wasm src/runtime/backend/wasmBackend.ts \
-  tests/runtime/wasmBackend.test.ts tests/runtime/wasmArtifact.smoke.test.ts
-git commit -m "refactor: thin the wasm gameplay host"
-```
-
----
-
-### Task 3: Make Tauri Session Handling Private
-
-**Files:**
-
-- Create: `src-tauri/src/game_host.rs` if extracting the current gameplay host.
-- Modify: `src-tauri/src/lib.rs`
-- Modify: `src/runtime/backend/tauriBackend.ts`
-- Test: `tests/runtime/tauriBackend.test.ts`
-- Test: native `#[cfg(test)]` module colocated with `game_host.rs` or `lib.rs`.
-
-**Interfaces:**
-
-- Consumes: compact core candidate construction and current Tauri managed state.
-- Produces: `createTauriBackend()` that acquires a private epoch before returning a minimal `GameBackend`.
-
-- [ ] **Step 1: Add focused native command tests**
-
-Keep exactly the behavior categories below:
-
-```rust
-#[test]
-fn build_sandbox_snapshot_does_not_replace_managed_engine() { /* ... */ }
-
-#[test]
-fn valid_restore_replaces_managed_engine() { /* ... */ }
-
-#[test]
-fn invalid_restore_preserves_managed_engine() { /* ... */ }
-
-#[test]
-fn stale_epoch_cannot_mutate_after_new_session_begins() { /* ... */ }
-```
-
-Retain one dispatch/tick and one save snapshot test. Delete exact JSON error-shape cases.
-
-- [ ] **Step 2: Add a TypeScript test that backend creation acquires the session internally**
-
-Mock Tauri `invoke` and assert:
-
-```ts
-const backend = await createTauriBackend();
-expect(invoke).toHaveBeenNthCalledWith(1, "game_begin_runtime");
-await backend.dispatch(intent);
-expect(invoke).toHaveBeenLastCalledWith("game_dispatch", {
-  intent,
-  runtimeEpoch: acquiredEpoch,
-});
-```
-
-Assert the returned object has no `beginRuntime` or `runtimeIdentity` property.
-
-- [ ] **Step 3: Extract `game_host.rs` only if it reduces mixed responsibility**
-
-Move `OwnedEngine`, epoch helpers, gameplay commands, and focused tests into `src-tauri/src/game_host.rs`. Keep `lib.rs` responsible for builder setup, managed-state registration, and command registration.
-
-Do not add a trait, command registry abstraction, service object, or dependency-injection layer.
-
-- [ ] **Step 4: Replace mutating sandbox creation with a pure command**
-
-Implement:
-
-```rust
-#[tauri::command]
-fn game_build_sandbox_snapshot(
-    request: SandboxCreationRequest,
-) -> Result<GameSnapshot, SandboxCreationError> {
-    GameEngine::from_sandbox_request(request).map(|engine| engine.snapshot())
-}
-```
-
-The command does not access `State<EngineState>`.
-
-- [ ] **Step 5: Delete the public validation command and exact bridge encoding**
-
-Remove `game_validate_snapshot`, `EncodedPersistenceBridgeError`, operation/source/phase wrappers, and encode-before-commit helpers.
-
-Keep compact command errors that distinguish unsupported schema, invalid candidate, and host failure for the TypeScript adapter.
-
-- [ ] **Step 6: Keep one private epoch path**
-
-Retain `game_begin_runtime`. In `createTauriBackend()`:
-
-```ts
-const { runtimeEpoch } = await invoke<{
-  runtimeEpoch: number;
-  snapshot: RustGameSnapshot;
-}>("game_begin_runtime");
-```
-
-Close over `runtimeEpoch`. Do not return the initial snapshot separately from backend creation; runtime initialization will call `backend.snapshot()` through the shared contract.
-
-- [ ] **Step 7: Simplify candidate-first native restore**
-
-Decode and construct the candidate before locking managed state. Lock, verify epoch, assign candidate, and return its snapshot. A stale epoch or failed construction leaves managed state unchanged.
-
-- [ ] **Step 8: Run Tauri host checks**
-
-```sh
-cargo test -p caelum --lib
-cargo clippy -p caelum --all-targets -- -D warnings
-bunx vitest run --project runtime tests/runtime/tauriBackend.test.ts
-```
-
-Expected: PASS.
-
-- [ ] **Step 9: Commit the private native session**
-
-```sh
-git add src-tauri src/runtime/backend/tauriBackend.ts \
-  tests/runtime/tauriBackend.test.ts
-git commit -m "refactor: hide tauri gameplay sessions"
-```
-
----
-
-### Task 4: Reduce the TypeScript Backend Contract
-
-**Files:**
-
-- Modify: `src/runtime/backend/types.ts`
-- Replace or reduce: `src/runtime/backend/persistenceContract.ts`
-- Replace or reduce: `src/runtime/backend/persistence.ts`
-- Modify: `src/runtime/backend/shared.ts`
-- Modify: `src/runtime/backend/index.ts`
-- Delete: `src/runtime/backendOwnership.ts`
-- Test: `tests/runtime/backendContract.test.ts`
-- Test: `tests/runtime/persistenceContract.test.ts`
-- Delete: `tests/runtime/backendOwnership.test.ts`
-
-**Interfaces:**
-
-- Produces:
-
-```ts
 export type SnapshotErrorCode =
   | "unsupportedSchema"
   | "invalidSnapshot"
   | "hostFailure";
 
 export interface SnapshotError {
+  operation: SnapshotOperation;
   code: SnapshotErrorCode;
   diagnostic?: string;
 }
@@ -548,6 +235,18 @@ export type SnapshotResult =
   | { ok: true; snapshot: RustGameSnapshot }
   | { ok: false; error: SnapshotError };
 
+export interface SandboxHostError {
+  operation: "buildSandboxSnapshot";
+  code: "hostFailure";
+  diagnostic?: string;
+}
+
+export type PersistenceCoordinatorBackendError =
+  | SnapshotError
+  | SandboxHostError;
+```
+
+```ts
 export interface GameBackend {
   snapshot(): Promise<RustGameSnapshot>;
   snapshotForSave(): Promise<SnapshotResult>;
@@ -565,12 +264,61 @@ export interface GameBackend {
 }
 ```
 
-- [ ] **Step 1: Rewrite backend contract tests to assert the minimal method set**
+```rust
+pub enum SnapshotLoadError {
+    UnsupportedSchema { expected: u16, actual: u16 },
+    InvalidSnapshot(String),
+}
+```
 
-Test a representative backend object against exactly:
+## 1A. Write final-contract tests first
+
+- [ ] **Step 1: Add the focused core construction test file**
+
+Create `crates/caelum-core/tests/persistence_construction.rs` with these exact behaviors:
+
+```rust
+#[test]
+fn unsupported_schema_is_rejected_before_activation() { /* schema mismatch */ }
+
+#[test]
+fn wrong_tile_count_is_invalid_snapshot() { /* remove one map tile */ }
+
+#[test]
+fn duplicate_entity_id_is_invalid_snapshot() { /* duplicate a stop/building id */ }
+
+#[test]
+fn missing_required_reference_is_invalid_snapshot() { /* route references missing node */ }
+
+#[test]
+fn topology_compile_failure_is_invalid_snapshot() { /* impossible road connectivity */ }
+
+#[test]
+fn failed_restore_preserves_active_engine() { /* compare snapshot before/after */ }
+
+#[test]
+fn save_snapshot_is_paused_without_mutating_live_engine() { /* live pause unchanged */ }
+
+#[test]
+fn engine_minted_save_round_trips_deterministically() { /* save -> from_snapshot -> save */ }
+```
+
+Use programmatically mutated `GameEngine::new().snapshot()` values. Do not use the giant persistence JSON fixture catalogue.
+
+- [ ] **Step 2: Run the new core tests and confirm they fail against the old API/behavior**
+
+```sh
+cargo test -p caelum-core --test persistence_construction
+```
+
+Expected: compile/test failures because `SnapshotLoadError` and the simplified save/restore behavior do not exist yet.
+
+- [ ] **Step 3: Rewrite the TypeScript backend contract tests for the final method set**
+
+In `tests/runtime/backendContract.test.ts`, assert:
 
 ```ts
-[
+const methods = [
   "snapshot",
   "snapshotForSave",
   "buildSandboxSnapshot",
@@ -580,463 +328,771 @@ Test a representative backend object against exactly:
   "reset",
   "previewRoute",
   "previewRoadMutation",
-]
+] as const;
 ```
 
-Assert `beginRuntime`, `runtimeIdentity`, and `validateSnapshot` are absent.
+Also assert the backend has no own/public:
 
-- [ ] **Step 2: Replace exhaustive persistence taxonomy tests with three-category mapping tests**
+```ts
+expect("runtimeIdentity" in backend).toBe(false);
+expect("beginRuntime" in backend).toBe(false);
+expect("validateSnapshot" in backend).toBe(false);
+expect("createSandbox" in backend).toBe(false);
+```
 
-Keep one test per category and one malformed host failure. Delete arrays of field names, entity kinds, reason kinds, exact-key guards, prototype guards, and sparse-array fixtures.
+- [ ] **Step 4: Replace persistence taxonomy tests with three-code mapping tests**
 
-- [ ] **Step 3: Replace public persistence types**
+Rewrite `tests/runtime/persistenceContract.test.ts` to cover only:
 
-Remove:
+```ts
+it("maps schema mismatch to unsupportedSchema", () => { /* ... */ });
+it("maps decode/construction rejection to invalidSnapshot", () => { /* ... */ });
+it("maps unexpected adapter failure to hostFailure", () => { /* ... */ });
+it("preserves operation without requiring equal diagnostics", () => { /* ... */ });
+```
 
-- `PersistenceOperation`;
-- `PersistenceValidationSource`;
-- `PersistenceSerializationPhase`;
-- `PersistenceHostErrorCode` variants beyond the three public categories;
-- the complete field/reason/type taxonomy;
-- `PersistenceValidationResult`;
-- `{ snapshot }` request wrappers if no remaining caller uses them.
+Delete tests for exact keys, prototypes, sparse arrays, every field/reason enum, and exact native/WASM diagnostic parity.
 
-Define the compact snapshot result alongside `GameBackend` or in one small helper file used by both adapters.
+- [ ] **Step 5: Add pure sandbox and failed-restore host tests**
 
-- [ ] **Step 4: Delete backend ownership coordination**
+Update `tests/runtime/wasmBackend.test.ts` and `tests/runtime/tauriBackend.test.ts` with the same behavioral cases:
 
-Delete `src/runtime/backendOwnership.ts`, its `Map`, `WeakMap`, reset hook, coordinator types, and tests. Remove exports from barrel modules.
+```ts
+it("builds a sandbox snapshot without changing the active engine", async () => {
+  const before = await backend.snapshot();
+  const built = await backend.buildSandboxSnapshot(validRequest);
+  expect(built.ok).toBe(true);
+  expect(await backend.snapshot()).toEqual(before);
+});
 
-- [ ] **Step 5: Keep only current wire normalization**
+it("preserves active gameplay when restore rejects the candidate", async () => {
+  const before = await backend.snapshot();
+  const restored = await backend.restoreSnapshot(invalidCandidate);
+  expect(restored).toMatchObject({
+    ok: false,
+    error: { operation: "restoreSnapshot", code: "invalidSnapshot" },
+  });
+  expect(await backend.snapshot()).toEqual(before);
+});
+```
 
-Retain null/undefined normalization for Rust `Option` fields consumed by the runtime and preview responses.
+For Tauri, retain one stale-epoch native test. Do not test a public epoch method.
 
-Do not preserve `DispatchResult.context` normalization; Task 6 removes that field.
+- [ ] **Step 6: Add New City post-condition tests**
 
-- [ ] **Step 6: Run focused TypeScript tests and checks**
+In `tests/runtime/gameRuntime.test.ts`, add or rewrite exact cases:
+
+```ts
+it("leaves backend, store, and identity unchanged when sandbox build rejects", async () => { /* ... */ });
+
+it("leaves backend and active identity unchanged on definite persist failure", async () => { /* ... */ });
+
+it("keeps the stored city but preserves current gameplay when activation restore fails", async () => { /* ... */ });
+
+it("writes nothing when disposed after pure build and before persistence", async () => { /* ... */ });
+
+it("publishes candidate snapshot and city identity only after restore succeeds", async () => { /* ... */ });
+```
+
+Mocks must implement the final `GameBackend`; do not retain `createSandbox`, `beginRuntime`, or `validateSnapshot`.
+
+- [ ] **Step 7: Run the final-contract tests and confirm they fail**
 
 ```sh
 bunx vitest run --project runtime \
   tests/runtime/backendContract.test.ts \
   tests/runtime/persistenceContract.test.ts \
   tests/runtime/wasmBackend.test.ts \
-  tests/runtime/tauriBackend.test.ts
-bun run check
+  tests/runtime/tauriBackend.test.ts \
+  tests/runtime/gameRuntime.test.ts
 ```
 
-Expected: PASS.
+Expected: failures from missing final methods/types and old mutating New City behavior.
 
-- [ ] **Step 7: Commit the public contract deletion**
+## 1B. Simplify core save/restore and validation
 
-```sh
-git add src/runtime/backend tests/runtime/backendContract.test.ts \
-  tests/runtime/persistenceContract.test.ts tests/runtime/backendOwnership.test.ts
-git commit -m "refactor: reduce the gameplay backend contract"
-```
+- [ ] **Step 8: Collapse the public Rust persistence error**
 
----
-
-### Task 5: Adapt Runtime Initialization, Save, Load, and New City
-
-**Files:**
-
-- Modify: `src/runtime/createGameRuntime.ts`
-- Modify: `tests/runtime/gameRuntime.test.ts`
-- Modify: `tests/runtime/constructionCleanup.test.ts`
-- Modify: `tests/runtime/postDisposalBackendFailure.test.ts`
-
-**Interfaces:**
-
-- Consumes: the minimal `GameBackend` from Task 4.
-- Preserves: the current `SaveStore`, envelope, persistence coordinator, leases, queues, revision tracking, pending/finalize behavior, and public runtime controller until HPA-543/HPA-548.
-
-- [ ] **Step 1: Add an initialization test without backend ownership or `beginRuntime`**
-
-Create a backend mock exposing only the new interface. Assert `createGameRuntime` initializes from one `snapshot()` call and does not require registry reset hooks.
-
-- [ ] **Step 2: Add a load test proving one candidate-first restore call**
-
-Arrange a stored snapshot and assert:
-
-```ts
-expect(backend.restoreSnapshot).toHaveBeenCalledTimes(1);
-expect(backend.restoreSnapshot).toHaveBeenCalledWith(storedSnapshot);
-expect(backend.validateSnapshot).toBeUndefined();
-```
-
-A failed restore must preserve the previous runtime state and active city identity.
-
-- [ ] **Step 3: Add New City tests for candidate purity and activation failure**
-
-Test both:
-
-1. storage receives the sandbox candidate while the backend still exposes the prior active snapshot;
-2. storage succeeds but activation fails, leaving the city record available and current gameplay unchanged.
-
-Do not assert backend rollback or record deletion.
-
-- [ ] **Step 4: Remove backend ownership acquisition and release**
-
-Delete imports and construction/disposal code for `resolveBackendOwnershipCoordinator`, `BackendOwnership`, and registry cleanup.
-
-Initialize state with:
-
-```ts
-state = normalizeRustSnapshot(await backend.snapshot());
-```
-
-Keep persistence lease acquisition and disposal unchanged.
-
-- [ ] **Step 5: Replace validate-then-restore load flow**
-
-Delete the public validation call. Pass the stored `unknown` snapshot directly to `restoreSnapshot`. Convert the three error codes into the current runtime persistence error representation without introducing a new error hierarchy.
-
-- [ ] **Step 6: Adapt save capture to the compact result**
-
-Handle `snapshotForSave()` success or the three snapshot failures. Leave current queue, revision, envelope, and write ordering unchanged.
-
-- [ ] **Step 7: Replace mutating New City sandbox creation**
-
-Call:
-
-```ts
-const built = await backend.buildSandboxSnapshot(request);
-```
-
-The candidate must remain local until storage succeeds.
-
-Remove prior backend snapshot capture and rollback branches whose only purpose was undoing mutating `createSandbox`.
-
-- [ ] **Step 8: Activate the stored candidate after persistence**
-
-Call `restoreSnapshot(built.snapshot)` after the current store/finalize sequence. Publish the new city only after restore success.
-
-On activation failure:
-
-- leave the persisted record intact;
-- restore prior public/UI state if it was temporarily suspended;
-- return a retryable load/host failure;
-- do not delete the record;
-- do not restore a backend that was never changed.
-
-- [ ] **Step 9: Remove ownership-only cleanup tests and retain disposal behavior still used by persistence**
-
-Delete construction cases that test backend lock queues, identities, or double release. Keep tests that protect disposal from publishing after an in-flight backend or persistence operation.
-
-- [ ] **Step 10: Run runtime tests**
-
-```sh
-bunx vitest run --project runtime \
-  tests/runtime/gameRuntime.test.ts \
-  tests/runtime/constructionCleanup.test.ts \
-  tests/runtime/postDisposalBackendFailure.test.ts
-bun run check
-```
-
-Expected: PASS.
-
-- [ ] **Step 11: Commit the runtime call-site adaptation**
-
-```sh
-git add src/runtime/createGameRuntime.ts \
-  tests/runtime/gameRuntime.test.ts \
-  tests/runtime/constructionCleanup.test.ts \
-  tests/runtime/postDisposalBackendFailure.test.ts
-git commit -m "refactor: consume pure backend candidates"
-```
-
----
-
-### Task 6: Remove Unused `DispatchResult.context`
-
-**Files:**
-
-- Modify: `crates/caelum-core/src/intent.rs`
-- Modify: `crates/caelum-core/src/engine.rs`
-- Modify direct intent handlers that construct dispatch context.
-- Modify: `src/runtime/backend/types.ts`
-- Modify: `src/runtime/backend/shared.ts`
-- Modify affected tests under `crates/caelum-core/tests/` and `tests/runtime/`.
-
-**Interfaces:**
-
-- Produces:
+Replace the exported detailed tree with:
 
 ```rust
-pub struct DispatchResult {
-    pub snapshot: GameSnapshot,
-    pub applied: bool,
-    pub rejection: Option<GameplayRejection>,
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotLoadError {
+    #[error("unsupported snapshot schema: expected {expected}, got {actual}")]
+    UnsupportedSchema { expected: u16, actual: u16 },
+
+    #[error("invalid snapshot: {0}")]
+    InvalidSnapshot(String),
 }
 ```
 
-TypeScript mirrors the same three fields.
+If `thiserror` is not already a direct core dependency, implement `Display`/`Error` manually rather than adding a dependency solely for two variants.
 
-- [ ] **Step 1: Search all production consumers before deletion**
+Keep `SnapshotSchemaProbe` and schema probing before full decode.
 
-```sh
-rg -n 'DispatchContext|DispatchResult.*context|\.context\.cost|changed_tiles|skipped_tiles|affected_route_ids' \
-  crates src src-tauri tests
+- [ ] **Step 9: Implement direct save normalization**
+
+Change `GameEngine::snapshot_for_save` to:
+
+```rust
+pub fn snapshot_for_save(&self) -> GameSnapshot {
+    let mut snapshot = self.snapshot();
+    snapshot.paused = true;
+    snapshot.day = clock::day_index(snapshot.time);
+    snapshot.clock_minutes = clock::clock_minutes(snapshot.time);
+    snapshot
+}
 ```
 
-Classify matches as dispatch result, gameplay rejection context, or route/road preview impact. Only dispatch-result impact is removed.
+Before calculating clock fields on import, retain finite/range validation for `time`.
 
-- [ ] **Step 2: Add or retain tests proving apply behavior without dispatch impact**
+Delete `SaveSnapshotCapture` and active-engine whole-validator calls.
 
-Assert representative dispatches still return the correct snapshot, `applied`, and `rejection`. Preview tests must continue asserting cost, changed tiles, skipped tiles, and route impacts.
+- [ ] **Step 10: Implement candidate preparation according to the matrix**
 
-- [ ] **Step 3: Remove `DispatchContext` from core result construction**
+Refactor `persistence/mod.rs`, `map.rs`, `entities.rs`, and `trips.rs` so candidate preparation performs this sequence:
 
-Stop calculating changed/skipped/full-map affected route data solely for the applied result. Keep calculations already required to apply the mutation or produce a preview.
+```rust
+fn prepare_snapshot(
+    mut snapshot: GameSnapshot,
+) -> Result<PreparedSnapshot, SnapshotLoadError> {
+    check_schema_version(snapshot.schema_version)?;
+    validate_time_for_clock_derivation(snapshot.time)?;
+    snapshot.paused = true;
+    snapshot.day = clock::day_index(snapshot.time);
+    snapshot.clock_minutes = clock::clock_minutes(snapshot.time);
 
-- [ ] **Step 4: Remove TypeScript context typing and normalization**
+    let topology = validate_map_and_compile(&mut snapshot)?;
+    let indexes = validate_entity_indexes(&mut snapshot, &topology)?;
+    validate_trip_access_safety(&mut snapshot, &indexes)?;
 
-Delete `DispatchContext`, the `context` field, and `normalizeDispatchResult` context handling. Keep rejection and preview normalization.
+    Ok(PreparedSnapshot {
+        snapshot,
+        road_topology: topology,
+    })
+}
+```
 
-- [ ] **Step 5: Run core and runtime behavior tests**
+The helper names may follow the existing module style, but the actions must match the design matrix:
+
+- retain schema, map dimensions/count, bounds, unique keys, required refs, safe indexes, finite values used by tick, and topology compile;
+- normalize clock/paused and only cheap existing deterministic orderings required by runtime behavior;
+- delete canonical ID formatting, exact ordering forensics, route oracle equality, exact trip-state/position derivations, metrics/outcome/objective catalogues.
+
+Do not introduce a warning list, repair registry, or generic normalization framework.
+
+- [ ] **Step 11: Remove prepared restore tokens**
+
+Implement:
+
+```rust
+pub fn from_snapshot(
+    snapshot: GameSnapshot,
+) -> Result<Self, SnapshotLoadError> {
+    let prepared = prepare_snapshot(snapshot)?;
+    Ok(Self {
+        snapshot: prepared.snapshot,
+        road_topology: prepared.road_topology,
+    })
+}
+
+pub fn restore_snapshot(
+    &mut self,
+    snapshot: GameSnapshot,
+) -> Result<GameSnapshot, SnapshotLoadError> {
+    let candidate = Self::from_snapshot(snapshot)?;
+    let restored = candidate.snapshot();
+    *self = candidate;
+    Ok(restored)
+}
+```
+
+Delete `PreparedEngineRestore`.
+
+- [ ] **Step 12: Run focused core tests**
 
 ```sh
+cargo test -p caelum-core --test persistence_construction
+cargo test -p caelum-core --test persistence_snapshot
+cargo test -p caelum-core --test persistence_determinism
+```
+
+Expected: focused core targets pass. The whole workspace may still fail because hosts have not been converted; do not add compatibility APIs.
+
+## 1C. Cut the TypeScript contract and coordinator seam
+
+- [ ] **Step 13: Replace backend persistence types**
+
+In `src/runtime/backend/types.ts`, define exactly the `SnapshotOperation`, `SnapshotErrorCode`, `SnapshotError`, `SnapshotResult`, `SandboxHostError`, and final `GameBackend` interfaces from the design.
+
+Remove:
+
+- `RuntimeIdentity`;
+- `RuntimeSession`;
+- `runtimeIdentity`;
+- `beginRuntime`;
+- `validateSnapshot`;
+- `PersistenceSnapshotRequest`;
+- `PersistenceValidationResult`;
+- public `DispatchContext`;
+- `DispatchResult.context`.
+
+- [ ] **Step 14: Collapse persistence mapping helpers**
+
+Reduce `src/runtime/backend/persistenceContract.ts` to the small types only if `types.ts` would become unwieldy; otherwise delete it and export the types from `types.ts`.
+
+Reduce `src/runtime/backend/persistence.ts` to small functions equivalent to:
+
+```ts
+export function snapshotError(
+  operation: SnapshotOperation,
+  code: SnapshotErrorCode,
+  error?: unknown,
+): SnapshotError {
+  return {
+    operation,
+    code,
+    diagnostic:
+      error instanceof Error ? error.message : error === undefined ? undefined : String(error),
+  };
+}
+```
+
+Keep only schema-code recognition needed to distinguish `unsupportedSchema` from `invalidSnapshot`. Do not validate exact error object keys.
+
+- [ ] **Step 15: Replace the coordinator backend error type explicitly**
+
+In `src/runtime/persistenceCoordinator.ts`:
+
+```ts
+import type {
+  SandboxCreationError,
+  SandboxCreationRequest,
+  SandboxHostError,
+  SnapshotError,
+} from "./backend";
+
+export type PersistenceCoordinatorBackendError =
+  | SnapshotError
+  | SandboxHostError;
+```
+
+Delete `PersistenceOperationError` imports and the old `createSandbox` host-error shape.
+
+## 1D. Thin both hosts against the final interface
+
+- [ ] **Step 16: Reuse core pure sandbox construction in WASM**
+
+In `crates/caelum-wasm/src/lib.rs`, expose a thin bridge backed by `create_sandbox_snapshot`:
+
+```rust
+#[wasm_bindgen]
+pub fn build_sandbox_snapshot(request: JsValue) -> Result<JsValue, JsValue> {
+    let request: SandboxCreationRequest =
+        serde_wasm_bindgen::from_value(request).map_err(to_js_error)?;
+    let snapshot = create_sandbox_snapshot(request)
+        .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
+    serde_wasm_bindgen::to_value(&snapshot).map_err(to_js_error)
+}
+```
+
+Keep `GameEngine::from_sandbox_request` only for live-engine construction elsewhere.
+
+Delete WASM `validate_snapshot`, bridge-error serialization, prepared-token encoding helpers, and exact encode-failure tests.
+
+- [ ] **Step 17: Implement the final WASM TypeScript adapter**
+
+In `src/runtime/backend/wasmBackend.ts`:
+
+- remove `beginRuntime`;
+- remove `validateSnapshot`;
+- rename/replace `createSandbox` with pure `buildSandboxSnapshot`;
+- map save/restore failures to `SnapshotError`;
+- preserve active engine on failed restore;
+- keep Option/null normalization for snapshots/previews currently consumed by the runtime.
+
+- [ ] **Step 18: Make the Tauri epoch private**
+
+In `src/runtime/backend/tauriBackend.ts`, acquire the epoch before returning:
+
+```ts
+export async function createTauriBackend(): Promise<GameBackend> {
+  const { runtimeEpoch } = await invoke<{
+    runtimeEpoch: number;
+    snapshot: RustGameSnapshot;
+  }>("game_begin_runtime");
+
+  return {
+    async snapshot() {
+      return invoke<RustGameSnapshot>("game_snapshot");
+    },
+    // mutating calls close over runtimeEpoch
+  };
+}
+```
+
+Do not return the begin-runtime snapshot through a public session API. The extra later `snapshot()` IPC is accepted; do not optimize it in this issue.
+
+- [ ] **Step 19: Replace Tauri sandbox and validation commands**
+
+In the native host:
+
+```rust
+#[tauri::command]
+fn game_build_sandbox_snapshot(
+    request: SandboxCreationRequest,
+) -> Result<GameSnapshot, SandboxCreationError> {
+    create_sandbox_snapshot(request)
+}
+```
+
+Delete `game_validate_snapshot`.
+
+Keep `game_begin_runtime` internal to adapter bootstrap and keep stale-epoch checks on mutating/save/restore commands.
+
+Simplify persistence command errors to schema/invalid/host mapping. Diagnostics may differ from WASM.
+
+## 1E. Adapt runtime and dispatch wire
+
+- [ ] **Step 20: Delete JavaScript backend ownership**
+
+Delete `src/runtime/backendOwnership.ts` and `tests/runtime/backendOwnership.test.ts`.
+
+In `createGameRuntime.ts`:
+
+- remove coordinator resolution/acquisition;
+- initialize with `await backend.snapshot()`;
+- remove ownership release/drain behavior;
+- retain the existing persistence lease/coordinator for HPA-543.
+
+Update construction cleanup tests to remove ownership-only cases while retaining actual resource cleanup cases.
+
+- [ ] **Step 21: Convert Save and Load**
+
+Save:
+
+```ts
+const captured = await backend.snapshotForSave();
+if (!captured.ok) {
+  return { status: "failed", error: { kind: "backend", error: captured.error } };
+}
+```
+
+Load:
+
+```ts
+const restored = await backend.restoreSnapshot(untrustedSnapshot);
+if (!restored.ok) {
+  return { status: "failed", error: { kind: "backend", error: restored.error } };
+}
+// publish only here
+```
+
+Delete separate validation calls.
+
+- [ ] **Step 22: Convert New City to pure build → persist → restore**
+
+Replace the mutate/capture/rollback sequence with:
+
+```ts
+let built: SandboxCreationResult;
+try {
+  built = await backend.buildSandboxSnapshot(request);
+} catch (error: unknown) {
+  return restorePriorRuntimeAfterNewCityFailure(prior, {
+    kind: "backend",
+    error: {
+      operation: "buildSandboxSnapshot",
+      code: "hostFailure",
+      diagnostic: error instanceof Error ? error.message : String(error),
+    },
+  });
+}
+
+if (!built.ok) {
+  return restorePriorRuntimeAfterNewCityFailure(prior, {
+    kind: "sandbox",
+    error: built.error,
+  });
+}
+
+const candidateSnapshot = built.snapshot;
+// existing store create/finalize flow uses candidateSnapshot
+// no backend rollback path exists because the backend is unchanged
+const activated = await backend.restoreSnapshot(candidateSnapshot);
+```
+
+Post-conditions:
+
+- build failure: no store write, backend/identity unchanged;
+- definite persist failure: backend/identity unchanged;
+- ambiguous persist failure: use existing reconciliation without new recovery behavior;
+- restore failure after persistence: leave record, backend/identity unchanged;
+- success: publish candidate and identity together.
+
+Delete prior backend snapshot capture, candidate snapshot recapture, rollback restore, and orphan deletion branches that exist only because `createSandbox` mutated the engine.
+
+Do not delete pending/finalize reconciliation that belongs to HPA-543/HPA-548.
+
+- [ ] **Step 23: Remove dispatch context from the public wire only**
+
+In `crates/caelum-core/src/intent.rs`, remove `context` from serialized `DispatchResult`.
+
+Keep private apply information:
+
+- `dispatch_context` or a renamed private helper;
+- changed/skipped tiles needed for road mutation normalization;
+- `NetworkCandidate` apply metadata;
+- route lifecycle recomputation inputs.
+
+Change result construction to return only snapshot/applied/rejection.
+
+Rewrite tests that asserted `result.context.cost` or changed tiles to assert:
+
+- budget delta/snapshot state;
+- route state after apply;
+- rejection;
+- preview response impact when impact is the behavior under test.
+
+Do not remove preview impact fields.
+
+- [ ] **Step 24: Run the focused contract-cut verification**
+
+```sh
+cargo test -p caelum-core --test persistence_construction
 cargo test -p caelum-core
+cargo test -p caelum --lib
 bunx vitest run --project runtime \
   tests/runtime/backendContract.test.ts \
+  tests/runtime/persistenceContract.test.ts \
+  tests/runtime/wasmBackend.test.ts \
+  tests/runtime/tauriBackend.test.ts \
+  tests/runtime/wasmArtifact.smoke.test.ts \
   tests/runtime/gameRuntime.test.ts \
-  tests/runtime/previewCoordinator.test.ts
+  tests/runtime/constructionCleanup.test.ts \
+  tests/runtime/postDisposalBackendFailure.test.ts
+bun run check
 ```
 
-Expected: PASS.
+Expected: all commands pass against the final interface.
 
-- [ ] **Step 6: Commit dispatch result reduction**
+- [ ] **Step 25: Verify the forbidden public surface is gone**
 
 ```sh
-git add crates/caelum-core src/runtime/backend tests
-git commit -m "refactor: remove unused dispatch impact"
+rg -n 'runtimeIdentity|RuntimeSession|beginRuntime\??\(|validateSnapshot|BackendOwnership' \
+  src tests
+rg -n 'PersistenceOperationError|PERSISTENCE_VALIDATION_CODES|PERSISTENCE_REASON_KINDS' \
+  src tests
+rg -n 'pub context: DispatchContext|context: DispatchContext' \
+  crates/caelum-core/src/intent.rs src/runtime/backend/types.ts
 ```
+
+Expected:
+
+- no public runtime/session/ownership matches;
+- no exhaustive TypeScript taxonomy;
+- no public dispatch context field;
+- private native `game_begin_runtime` and private core apply helpers may still match their specific names.
+
+- [ ] **Step 26: Commit the atomic contract cut**
+
+```sh
+git add \
+  crates/caelum-core \
+  crates/caelum-wasm \
+  src-tauri/src \
+  src/runtime \
+  tests/runtime \
+  tests/fixtures/rustSnapshot.ts
+git commit -m "refactor: simplify dual gameplay host contract"
+```
+
+Do not split this commit by host or layer.
 
 ---
 
-### Task 7: Delete Parity Infrastructure, Fixtures, and Benchmarks
+# Task 2: Delete Parity and Validator Maintenance Tax
 
-**Files:**
+**Files:** cleanup-only delete/reduce files from the File Map.
 
-- Delete or reduce Rust persistence branch/coverage/error-wire test files.
-- Delete or reduce `tests/fixtures/persistence/*`.
-- Delete: `scripts/benchmark-persistence-wasm.ts`.
-- Modify: `package.json`.
-- Modify: `codecov.yml` if it names removed files.
-- Modify: `tests/fixtures/rustSnapshot.ts` only for the current compact wire shape.
+**Consumes:** final contract from Task 1.
 
-- [ ] **Step 1: List every file that exists only for the removed contract**
+**Produces:** focused retained tests and no obsolete parity/coverage/benchmark infrastructure.
 
-```sh
-find crates/caelum-core/tests -maxdepth 1 -type f | sort | rg 'persistence|coverage|branches|error_wire|fixture'
-find tests/fixtures/persistence -maxdepth 1 -type f -print | sort
-rg -n 'benchmark:persistence|benchmark-persistence-wasm|persistence-errors|late-derived-corruption' \
-  package.json codecov.yml scripts tests docs
-```
+- [ ] **Step 1: Move the eight retained core assertions into `persistence_construction.rs`**
 
-- [ ] **Step 2: Keep only fixtures required by focused behavior tests**
+Ensure no retained safety assertion exists only in a file about error-wire vocabulary, branch coverage, or forensic corruption.
 
-Retain at most:
-
-- one valid current-schema snapshot;
-- one unsupported-schema value;
-- one representative current-schema invalid value.
-
-Prefer constructing small invalid snapshots in Rust/TypeScript tests instead of maintaining giant generated JSON.
-
-- [ ] **Step 3: Delete branch and coverage matrices for removed diagnostics**
-
-Delete tests whose only assertion is that every old field/reason variant is reachable or serialized exactly. Keep deterministic gameplay invariants in their domain-specific test files.
-
-- [ ] **Step 4: Remove the persistence benchmark command and script**
-
-Delete `benchmark:persistence:wasm` from `package.json` and remove the script. No player-facing performance decision depends on the removed exhaustive validator benchmark.
-
-- [ ] **Step 5: Verify no removed vocabulary remains**
+Run:
 
 ```sh
-rg -n 'PersistenceBridgeError|PersistenceValidationSource|PersistenceSerializationPhase|PERSISTENCE_SNAPSHOT_FIELDS|PERSISTENCE_REASON_KINDS|PreparedEngineRestore|SaveSnapshotCapture' \
-  crates src src-tauri tests scripts package.json
+cargo test -p caelum-core --test persistence_construction
 ```
 
-Expected: no production matches; a historical document may mention the old names only when clearly marked superseded.
+Expected: 8 focused tests pass.
 
-- [ ] **Step 6: Run all Rust and unit tests after deletion**
+- [ ] **Step 2: Delete the detailed Rust error and bridge modules**
+
+Delete:
+
+```text
+crates/caelum-core/src/persistence/error.rs
+crates/caelum-core/src/persistence_bridge.rs
+```
+
+Remove their exports from `crates/caelum-core/src/lib.rs`.
+
+Run:
+
+```sh
+rg -n 'PersistenceBridgeError|PersistenceHostErrorCode|PersistenceOperation|PersistenceValidationSource|SnapshotField|DerivedStateError' \
+  crates src-tauri src tests
+```
+
+Expected: no production dependency on the deleted public taxonomy. Any remaining private diagnostic enum must be small and construction-local, not exported/serialized.
+
+- [ ] **Step 3: Delete validator matrix tests**
+
+Delete the exact files listed in the File Map for:
+
+- corruption catalogues;
+- error wire;
+- map/entity/trip branch and coverage suites;
+- routing/engine persistence validation matrices.
+
+Run:
+
+```sh
+find crates/caelum-core/tests -maxdepth 1 -type f -name 'persistence*' -print | sort
+```
+
+Expected: only focused construction/snapshot/determinism tests that still cover retained behavior remain.
+
+- [ ] **Step 4: Delete persistence JSON fixture catalogue**
+
+Delete `tests/fixtures/persistence/` after verifying no retained test imports it:
+
+```sh
+rg -n 'fixtures/persistence|valid-paused|unsupported-schema|late-derived-corruption|persistence-errors' \
+  crates src src-tauri tests scripts
+```
+
+Expected before deletion: only obsolete tests/benchmark/docs reference it.
+
+Expected after deletion: no matches.
+
+- [ ] **Step 5: Delete the WASM persistence benchmark**
+
+Delete:
+
+```text
+scripts/benchmark-persistence-wasm.ts
+```
+
+Remove:
+
+```json
+"benchmark:persistence:wasm": "..."
+```
+
+from `package.json`, plus its coverage ignore entry.
+
+Run:
+
+```sh
+rg -n 'benchmark:persistence:wasm|benchmark-persistence-wasm' .
+```
+
+Expected: no matches.
+
+- [ ] **Step 6: Reduce shared fixtures rather than deleting unrelated data**
+
+Inspect:
+
+```sh
+rg -n 'persistence_fixtures|host_parity_fixture|rich_fixture' \
+  crates tests
+rg -n 'rustSnapshot' tests src
+```
+
+Actions:
+
+- delete `host_parity_fixture` and export-only helpers used solely by removed matrices;
+- retain `rich_fixture` only if ordinary gameplay tests still consume it;
+- retain `tests/fixtures/rustSnapshot.ts` fields used by runtime/UI tests, updating only the removed dispatch result shape.
+
+- [ ] **Step 7: Delete obsolete implemented design/plan documents**
+
+Delete the four historical documents listed in the File Map because they prescribe the removed exhaustive contract.
+
+Update links in `docs/architecture.md`, `CLAUDE.md`, and remaining plans to point to HPA-547 where current behavior is described.
+
+- [ ] **Step 8: Run focused and full test suites after deletion**
 
 ```sh
 cargo test --workspace
 bun run test:unit
+bun run check
 ```
 
-Expected: PASS.
+Expected: all pass with the deleted files absent.
 
-- [ ] **Step 7: Commit parity-infrastructure deletion**
+- [ ] **Step 9: Commit cleanup**
 
 ```sh
-git add -A crates/caelum-core/tests tests/fixtures scripts package.json codecov.yml
-git commit -m "test: delete exhaustive host parity matrices"
+git add -A
+git commit -m "test: remove obsolete host parity machinery"
 ```
 
 ---
 
-### Task 8: Update Current Architecture Documentation
+# Task 3: Final Architecture and Scope Audit
 
 **Files:**
 
 - Modify: `docs/architecture.md`
 - Modify: `CLAUDE.md`
-- Optionally annotate earlier HPA-340/HPA-341 specs/plans as superseded where they otherwise appear normative.
+- Modify only if needed: HPA-547 spec/plan to reflect implementation evidence
 
-- [ ] **Step 1: Update the backend architecture description**
+**Produces:** documentation matching the implemented thin-host boundary and evidence that the PR is a simplification rather than a replacement platform.
+
+- [ ] **Step 1: Update architecture documentation**
 
 Document:
 
 - both hosts remain;
-- `GameBackend` is minimal;
+- `GameBackend` method list;
 - Tauri epoch is private;
-- sandbox construction is pure;
-- restore is candidate-first;
-- frontend snapshot errors use three categories;
-- exact host error parity is not an architecture requirement.
+- pure `create_sandbox_snapshot` path;
+- candidate-first restore;
+- three snapshot errors;
+- public dispatch context removed;
+- private apply/preview impact retained;
+- HPA-543/HPA-548 remain future work.
 
-- [ ] **Step 2: Update persistence-validation guidance**
+Remove descriptions of:
 
-State that current local saves retain schema probing, deserialization, construction safety, and topology rebuild. Remove guidance requiring the exhaustive field/reason catalogue, exact-shape JavaScript guards, or active-engine self-validation.
+- public sessions/identity;
+- standalone validation;
+- detailed error parity;
+- prepared tokens;
+- persistence benchmark requirements.
 
-- [ ] **Step 3: Update dispatch result documentation**
-
-Remove references to post-apply `DispatchResult.context`. Preserve route/road preview impact documentation.
-
-- [ ] **Step 4: Mark historical parity docs as superseded without rewriting their history**
-
-Add a concise header to the old HPA-341 design/plan when necessary:
-
-```md
-> **Superseded by HPA-547 for current architecture.** This document records the earlier exhaustive parity design and remains historical implementation context.
-```
-
-Do not edit historical details beyond preventing normative ambiguity.
-
-- [ ] **Step 5: Run documentation formatting**
+- [ ] **Step 2: Run contract/scope greps**
 
 ```sh
-bunx prettier --check CLAUDE.md docs/architecture.md \
-  docs/superpowers/specs/2026-08-05-thin-dual-gameplay-hosts-design.md \
-  docs/superpowers/plans/2026-08-05-thin-dual-gameplay-hosts.md
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit documentation updates**
-
-```sh
-git add CLAUDE.md docs
-git commit -m "docs: describe thin dual gameplay hosts"
-```
-
----
-
-### Task 9: Final Verification and Scope Audit
-
-- [ ] **Step 1: Run formatting and static checks**
-
-```sh
-bun run format:check
-bun run check
-bun run lint
-```
-
-Expected: PASS.
-
-- [ ] **Step 2: Run complete Rust and TypeScript test suites**
-
-```sh
-cargo test --workspace
-bun run test
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Run representative browser end-to-end coverage**
-
-```sh
-bun run test:e2e
-```
-
-Expected: PASS, including startup, one gameplay mutation, and existing route/road preview behavior.
-
-- [ ] **Step 4: Build both hosts**
-
-```sh
-bun run build
-cargo check -p caelum
-```
-
-Expected: browser production build and native Rust host compile successfully.
-
-- [ ] **Step 5: Audit public surface and scope boundaries**
-
-```sh
-rg -n 'runtimeIdentity|RuntimeSession|beginRuntime|validateSnapshot|BackendOwnership|PersistenceBridgeError|PreparedEngineRestore|SaveSnapshotCapture' \
-  crates src src-tauri tests
-rg -n 'SharedPersistenceCoordinator|PersistenceLease|pending|finalize|revision' \
-  src/runtime/createGameRuntime.ts src/runtime/persistenceCoordinator.ts
-rg -n 'listCities|readCity|createCity|updateCity|renameCity|deleteCity' \
-  src/persistence src/runtime
+rg -n 'runtimeIdentity|RuntimeSession|validateSnapshot|BackendOwnership|PreparedEngineRestore|SaveSnapshotCapture' \
+  crates src src-tauri tests docs CLAUDE.md
+rg -n 'PersistenceBridgeError|PersistenceOperationError|PERSISTENCE_REASON_KINDS' \
+  crates src src-tauri tests docs
+rg -n 'buildSandboxSnapshot|create_sandbox_snapshot|game_build_sandbox_snapshot' \
+  crates src src-tauri tests docs
 ```
 
 Expected:
 
-- removed backend/session/parity symbols are absent from current production code;
-- the existing persistence coordinator still exists for HPA-543;
-- the current store/envelope remains for HPA-548 rather than being partially replaced.
+- removed terms appear only in HPA-547 historical/problem statements when explaining deletion;
+- pure sandbox terms appear in core and both adapters;
+- no compatibility aliases remain.
 
-- [ ] **Step 6: Confirm material net deletion**
+- [ ] **Step 3: Verify dispatch impact boundaries**
+
+```sh
+rg -n 'DispatchContext|affected_route_ids|affectedRouteIds|routeImpacts|changedTiles|skippedTiles' \
+  crates/caelum-core src tests
+```
+
+Manually verify:
+
+- no serialized/public `DispatchResult.context`;
+- private apply data remains only where mutation commit needs it;
+- preview response impact and consumers remain.
+
+- [ ] **Step 4: Verify New City post-conditions through tests**
+
+```sh
+bunx vitest run --project runtime tests/runtime/gameRuntime.test.ts \
+  -t 'sandbox build rejects|definite persist failure|activation restore fails|disposed after pure build|publishes candidate'
+```
+
+Expected: all five focused cases pass.
+
+- [ ] **Step 5: Run full repository verification**
+
+```sh
+bun run format:check
+bun run lint
+bun run check
+bun run build
+bun run test
+cargo test --workspace
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Check net deletion**
 
 ```sh
 git diff --stat origin/main...HEAD
-git diff --numstat origin/main...HEAD | awk '{ add += $1; del += $2 } END { print "added", add, "deleted", del, "net", add-del }'
+git diff --numstat origin/main...HEAD | \
+  awk '{ add += $1; del += $2 } END { print "added", add, "deleted", del, "net", add-del }'
 ```
 
-Expected: deletions materially exceed additions after excluding the design and plan documents. If production code grows, review for replacement abstractions or accidentally retained compatibility paths before proceeding.
+Review gate:
 
-- [ ] **Step 7: Review acceptance criteria against the diff**
+- production plus test code must show material net deletion;
+- documentation additions do not excuse production/test growth;
+- reject the implementation if removed taxonomy/coordination is replaced by a new generic abstraction.
 
-Confirm every item in the companion design has a corresponding implementation or test. Specifically verify native release behavior, browser functionality, pure candidates, private epoch, small errors, candidate-first restore, `DispatchResult.context` deletion, and HPA-543/HPA-548 scope preservation.
-
-- [ ] **Step 8: Commit final generated or formatting changes**
+- [ ] **Step 7: Confirm HPA-543/HPA-548 boundaries remain intact**
 
 ```sh
-git status --short
-git add -A
-git commit -m "chore: finalize HPA-547 verification"
+rg -n 'SharedPersistenceCoordinator|PersistenceLease|cityQueues|pending|finalizeWorkingSave' \
+  src/runtime src/persistence tests/runtime
+rg -n 'interface SaveStore|createWorkingSave|finalizeWorkingSave|createCheckpoint|createAutosave' \
+  src/persistence src/runtime tests
 ```
 
-Skip the commit when the working tree is already clean.
+Expected: current coordinator/store machinery still exists except for direct host-contract consumer changes. Its removal belongs to HPA-543/HPA-548.
 
-## Suggested Commit Sequence
+- [ ] **Step 8: Commit documentation alignment**
 
-1. `refactor: simplify core snapshot construction`
-2. `refactor: thin the wasm gameplay host`
-3. `refactor: hide tauri gameplay sessions`
-4. `refactor: reduce the gameplay backend contract`
-5. `refactor: consume pure backend candidates`
-6. `refactor: remove unused dispatch impact`
-7. `test: delete exhaustive host parity matrices`
-8. `docs: describe thin dual gameplay hosts`
-9. `chore: finalize HPA-547 verification` when needed
+```sh
+git add docs/architecture.md CLAUDE.md \
+  docs/superpowers/specs/2026-08-05-thin-dual-gameplay-hosts-design.md \
+  docs/superpowers/plans/2026-08-05-thin-dual-gameplay-hosts.md
+git commit -m "docs: align architecture with thin gameplay hosts"
+```
 
-## Review Gates
+---
 
-A reviewer should reject the implementation if it:
+## Final Review Checklist
 
-- removes either justified gameplay host;
-- moves gameplay validation or business rules into TypeScript;
-- exposes Tauri epoch/session details through `GameBackend`;
-- retains the old exhaustive error taxonomy as a compatibility layer;
-- adds factories, registries, traits, dependency injection, generated host contracts, or a plugin framework;
-- implements the HPA-543 runtime rewrite or HPA-548 store rewrite early;
-- preserves New City backend rollback after sandbox construction is pure;
-- removes route/road preview impact used by the UI;
-- weakens candidate-first restore or structural construction safety;
-- produces no material net deletion.
+- [ ] Both native and WASM hosts remain functional.
+- [ ] Both hosts use the existing `create_sandbox_snapshot`.
+- [ ] `GameBackend` has only the nine final methods.
+- [ ] `runtimeIdentity`, public sessions, ownership registries, and standalone validation are gone.
+- [ ] Tauri stale-webview protection remains private.
+- [ ] Snapshot errors are exactly three categories with operation and optional diagnostic.
+- [ ] Coordinator backend error is exactly `SnapshotError | SandboxHostError`.
+- [ ] Validator pruning matches the retain/normalize/delete matrix.
+- [ ] Eight retained construction-safety tests pass.
+- [ ] Save capture does not validate or mutate the live engine.
+- [ ] Restore is candidate-first and preserves active state on failure.
+- [ ] New City follows pure build → persist → restore.
+- [ ] Persist failure and restore-after-persist failure post-conditions are tested.
+- [ ] Public `DispatchResult.context` is gone.
+- [ ] Private apply data and preview impact still work.
+- [ ] Detailed parity taxonomy, fixtures, matrices, and benchmark are deleted.
+- [ ] No temporary aliases or compatibility adapters remain.
+- [ ] HPA-543/HPA-548 machinery is not redesigned early.
+- [ ] Full format/lint/check/build/test verification passes.
+- [ ] Production/test code shows material net deletion.
+
+## Commit Sequence
+
+1. `refactor: simplify dual gameplay host contract`
+2. `test: remove obsolete host parity machinery`
+3. `docs: align architecture with thin gameplay hosts`
+
+Do not create separate core/WASM/Tauri/TypeScript contract commits. That split would require an inconsistent public boundary or temporary compatibility methods.
