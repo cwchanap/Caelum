@@ -10,12 +10,10 @@ import {
 } from "../../../src/persistence/citySaveStore";
 
 /**
- * Minimal harness for running the shared city-save-store contract against a
- * concrete adapter. Mirrors the define-once/run-per-adapter pattern of the
- * legacy `saveStoreContract.ts`, but with only the surface the new
- * six-operation store exposes. `failNext` is optional; the single
- * failure-injection test requires it and will surface a clear error if an
- * adapter that declares failure injection does not provide it.
+ * Shared harness for running the city-save-store contract against a concrete
+ * adapter. `failNext` is optional; the failure-injection test requires it and
+ * reports a clear error if an adapter that declares failure injection does not
+ * provide it.
  */
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;

@@ -1,10 +1,4 @@
-/**
- * Minimal six-operation city save store contract.
- *
- * This is the small save boundary consumed by the runtime. It replaces the
- * legacy 19-method {@link SaveStore} surface. The legacy store remains in
- * place for the remaining storage-adapter cutover; do not extend it.
- */
+/** The six-operation city save store contract consumed by the runtime. */
 
 export interface CitySaveRecord {
   city: {
@@ -66,14 +60,6 @@ export interface CitySaveStore {
 
 /**
  * Order city summaries by `savedAt` descending, then by `id` ascending.
- *
- * Ported verbatim from `saveStore.ts`'s `sortCitySummaries` (which sorts by
- * `savedAt` desc then `cityId` asc). The only adjustments are the field rename
- * `cityId` → `id` and the timestamp parameter type changing from
- * `string | null` to `string` (timestamps are now required). The NaN-handling
- * for invalid date strings is preserved so the ordering semantics for any given
- * input string are identical to the legacy comparator.
- *
  * Returns a copied array; the input is not mutated.
  */
 export function sortCitySummaries(
