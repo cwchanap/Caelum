@@ -284,12 +284,16 @@ Use the existing define-once/run-per-adapter pattern with a minimal harness:
 ```ts
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;
-  failNext?: (
+  failNext: (
     operation: CitySaveStoreOperation,
     code: CitySaveStoreErrorCode,
   ) => void;
 }
 ```
+
+`failNext` is mandatory: every adapter must expose a deterministic failure
+seam so the atomicity guarantees the runtime depends on are exercised by the
+shared contract.
 
 Cover exactly:
 
@@ -300,6 +304,7 @@ it("updates savedAt and snapshot", async () => {});
 it("returns notFound when updating a missing city", async () => {});
 it("preserves identity metadata during update", async () => {});
 it("does not revert a committed rename during update", async () => {});
+it("does not create a record after failed create", async () => {});
 it("preserves the complete prior record after failed update", async () => {});
 it("renames only the city name", async () => {});
 it("deletes a city and reports notFound afterward", async () => {});

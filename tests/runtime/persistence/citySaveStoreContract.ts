@@ -11,12 +11,14 @@ import {
 
 /**
  * Shared harness for running the city-save-store contract against a concrete
- * adapter. `failNext` is optional; the failure-injection test is skipped for
- * adapters that do not provide it.
+ * adapter. `failNext` is mandatory: every adapter must expose a deterministic
+ * failure seam so the atomicity guarantees the runtime depends on (a failed
+ * create commits nothing; a failed update leaves the prior record intact) are
+ * exercised by the shared contract, not just by adapter-specific tests.
  */
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;
-  failNext?: (
+  failNext: (
     operation: CitySaveStoreOperation,
     code: CitySaveStoreErrorCode,
   ) => void;
@@ -193,33 +195,46 @@ export function defineCitySaveStoreContract(
       expect(read.city.createdAt).toBe(originalCreatedAt);
     });
 
-    // Adapters without failure injection skip this case rather than failing.
-    const supportsFailureInjection =
-      typeof createHarness().failNext === "function";
-    (supportsFailureInjection ? it : it.skip)(
-      "preserves the complete prior record after failed update",
-      async () => {
-        const { store, failNext } = createHarness();
-        if (!failNext) return;
-        const record = makeRecord("city-1", "First", {
-          savedAt: "2026-08-01T10:00:00.000Z",
-          snapshot: { budget: 120_000 },
-        });
-        await expectOk(store.createCity(record));
-        failNext("updateCity", "failed");
+    // Atomicity: a failed create must commit nothing. The runtime's
+    // `rollbackNewCity` restores the prior backend without reading or deleting
+    // the city, so it relies on this guarantee.
+    it("does not create a record after failed create", async () => {
+      const { store, failNext } = createHarness();
+      failNext("createCity", "failed");
 
-        await expectError(
-          store.updateCity("city-1", {
-            savedAt: "2026-08-02T11:00:00.000Z",
-            snapshot: { budget: 90_000 },
-          }),
-          "failed",
-        );
+      await expectError(
+        store.createCity(makeRecord("city-1", "First")),
+        "failed",
+      );
 
-        // The full prior record — identity, savedAt, and snapshot — is intact.
-        expect(await expectOk(store.readCity("city-1"))).toEqual(record);
-      },
-    );
+      // No partial record was committed.
+      await expectError(store.readCity("city-1"), "notFound");
+      expect(await expectOk(store.listCities())).toEqual([]);
+    });
+
+    // Atomicity: a failed update must leave the complete prior record intact.
+    // The runtime's `saveWorking` publishes the failure without re-reading or
+    // repairing the record, so it relies on this guarantee.
+    it("preserves the complete prior record after failed update", async () => {
+      const { store, failNext } = createHarness();
+      const record = makeRecord("city-1", "First", {
+        savedAt: "2026-08-01T10:00:00.000Z",
+        snapshot: { budget: 120_000 },
+      });
+      await expectOk(store.createCity(record));
+      failNext("updateCity", "failed");
+
+      await expectError(
+        store.updateCity("city-1", {
+          savedAt: "2026-08-02T11:00:00.000Z",
+          snapshot: { budget: 90_000 },
+        }),
+        "failed",
+      );
+
+      // The full prior record — identity, savedAt, and snapshot — is intact.
+      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
+    });
 
     it("renames only the city name", async () => {
       const { store } = createHarness();
