@@ -205,84 +205,11 @@ export interface RuntimeSnapshot {
   // Auto-clears on the next successful dispatch.
   rejection: GameplayRejection | null;
   sandboxResetError: SandboxResetError | null;
-  // Terminal persistence-recovery state. When `state === "recoveryRequired"`,
-  // the runtime is dead: the lease is permanently pinned and no further
-  // gameplay, saves, or controller calls reach the backend or store. The
-  // application MUST render a recovery/error screen and NOT attempt to start
-  // a replacement `createGameRuntime` against the same storage identity
-  // (it would hang indefinitely because the lease is never released). The
-  // user must reconcile the durable storage out of band before retrying.
-  // Reload alone is not a repair for a retained multi-realm pending record:
-  // it creates a new coordinator registry and repeats the same ownership
-  // uncertainty.
-  //
-  // Present in the initial snapshot so App can detect a bootstrap-born
-  // terminal runtime before calling `start()`. Also set when a live
-  // runtime's late-success cleanup or ambiguous-failure reconciliation
-  // enters the terminal persistence-recovery state.
-  recovery: RuntimeRecoveryState;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
 
 export type RuntimeListener = (snapshot: RuntimeSnapshot) => void;
-
-/**
- * Shared reason/city mapping for the terminal persistence-recovery state.
- * Both {@link RuntimeRecoveryState} and {@link RuntimeDisposeResult} build
- * their recovery-required variants from this shape so adding a new reason
- * keeps both contracts aligned.
- */
-export type RecoveryRequiredDetails =
-  | { reason: "lateSuccessCleanupFailed"; cityId: string }
-  | { reason: "bootstrapReconciliationFailed"; cityId: string | null }
-  | { reason: "multiRealmAmbiguousCleanup"; cityId: string };
-
-/**
- * Terminal persistence-recovery state surfaced through {@link RuntimeSnapshot.recovery}
- * and {@link RuntimeDisposeResult}. When `state === "recoveryRequired"`, the
- * runtime is dead and the lease and backend ownership are permanently
- * pinned.
- */
-export type RuntimeRecoveryState =
-  | { state: "ok" }
-  | ({ state: "recoveryRequired" } & RecoveryRequiredDetails);
-
-/**
- * Typed error thrown by {@link createGameRuntime} when bootstrap reconciliation
- * fails (a leftover pending city record could not be deleted, or `listCities`
- * itself failed). On a multi-realm adapter, conservative non-deletion of a
- * retained pending record is intentional because the in-memory lease cannot
- * prove ownership. The runtime is NOT created — the application should
- * render a recovery/error screen and NOT attempt to create a replacement
- * runtime against the same storage identity (the lease is permanently
- * pinned). Reload alone only retries the same reconciliation.
- */
-export interface BootstrapRecoveryError {
-  reason: "bootstrapReconciliationFailed";
-  cityId: string | null;
-}
-
-/**
- * The outcome of {@link RuntimeController.dispose}. Distinguishes a normal
- * release (the lease and backend ownership were released and a replacement
- * runtime can acquire them) from a fatal persistence-recovery state (both
- * are permanently pinned and a replacement runtime against the same storage
- * identity or backend engine cannot acquire them).
- *
- * Application code that does `await oldRuntime.dispose()` followed by
- * `await createGameRuntime(options)` MUST check the outcome: if
- * `status === "recoveryRequired"`, the second call hangs indefinitely
- * because the lease and backend ownership are never released. The
- * application must reconcile the orphan storage out of band before
- * retrying. Reload only retries bootstrap; it does not repair a retained
- * multi-realm pending record. An owner-authorized or manual durable-storage
- * repair is required when the record cannot be safely deleted by the
- * current policy.
- */
-export type RuntimeDisposeResult =
-  | { status: "released" }
-  | ({ status: "recoveryRequired" } & RecoveryRequiredDetails);
 
 export interface RuntimeController {
   persistence: RuntimePersistenceController;
@@ -290,65 +217,8 @@ export interface RuntimeController {
   subscribe: (listener: RuntimeListener) => () => void;
   start: () => void;
   stop: () => void;
-  /**
-   * Gracefully shut down the runtime: reject new persistence operations,
-   * stop animation/preview, drain all pending gameplay and persistence
-   * work (in-flight backend operations, city persistence FIFOs, and
-   * admitted foreground lifecycle operations), and release both the
-   * shared coordinator lease and the backend ownership so a replacement
-   * runtime against the same durable storage and backend engine can
-   * acquire them.
-   *
-   * The returned promise resolves after all pending gameplay and storage
-   * operations have settled. The {@link RuntimeDisposeResult} outcome
-   * reports whether the lease was released:
-   *
-   * - `{ status: "released" }` — the lease was released. A replacement
-   *   `createGameRuntime` against the same `SaveStore` (or a different
-   *   adapter object with the same `storageIdentity`) that was started
-   *   before this `dispose` resolves will have been waiting for the lease;
-   *   it acquires the lease and proceeds only after this runtime's writes
-   *   have drained.
-   *
-   * - `{ status: "recoveryRequired", reason: "lateSuccessCleanupFailed",
-   *   cityId }` — late-success cleanup of a New City write could not undo
-   *   the orphan storage mutation (the store returned a typed error or threw
-   *   an adapter exception). The lease is permanently pinned so a
-   *   replacement runtime against the same storage identity cannot acquire
-   *   it. The application MUST reconcile the orphan storage for `cityId` out
-   *   of band before retrying `createGameRuntime`. Reload only retries the
-   *   failed cleanup and may reproduce the same result. Calling
-   *   `createGameRuntime` against the same storage identity after this
-   *   outcome hangs indefinitely.
-   *
-   * - `{ status: "recoveryRequired", reason: "bootstrapReconciliationFailed",
-   *   cityId }` — bootstrap reconciliation could not delete a leftover
-   *   pending city record (from a prior crashed New City transaction) or
-   *   could not list cities to find pending orphans. `cityId` is the pending
-   *   record's ID when known, or `null` when `listCities` itself failed. The
-   *   lease is permanently pinned; the application MUST reconcile the
-   *   durable storage out of band before retrying `createGameRuntime`. Reload
-   *   only retries the reconciliation and may reproduce the same failure.
-   *
-   * - `{ status: "recoveryRequired", reason: "multiRealmAmbiguousCleanup",
-   *   cityId }` — a New City transaction on a multi-realm adapter (one that
-   *   does not declare `singleRealm: true`) reached ambiguous cleanup and the
-   *   runtime could not safely delete the record because it may belong to a
-   *   live transaction in another realm. Current admission rejects new
-   *   multi-realm New City transactions before mutation; this reason remains
-   *   as a defense-in-depth state for legacy, mixed-version, or bypassed
-   *   workflows. The record is preserved for owner-authorized/manual
-   *   reconciliation. The lease is permanently pinned; Reload alone cannot
-   *   repair it.
-   *
-   * If an uncancellable store operation never settles, this promise never
-   * resolves — safe rebootstrap cannot proceed until pending storage I/O
-   * settles.
-   *
-   * Idempotent: calling `dispose` after a fatal backend failure awaits the
-   * drain-and-release that `failBackend` started.
-   */
-  dispose: () => Promise<RuntimeDisposeResult>;
+  /** Gracefully stop, drain admitted work, and release runtime ownership. */
+  dispose: () => Promise<void>;
   isRunning: () => boolean;
   tick: (deltaSeconds: number) => RuntimeCommandResult;
   reset: () => RuntimeCommandResult;

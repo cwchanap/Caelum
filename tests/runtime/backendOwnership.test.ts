@@ -8,12 +8,8 @@ import type {
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import { type ActiveCityIdentity } from "../../src/runtime/persistenceCoordinator";
 import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
-import {
-  createMemorySaveStore,
-  type MemorySaveStore,
-} from "../../src/persistence/memorySaveStore";
-import { buildSaveEnvelope } from "../../src/persistence/envelope";
-import type { SaveStore } from "../../src/persistence/saveStore";
+import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
+import type { CitySaveStore } from "../../src/persistence/citySaveStore";
 import {
   createRustSnapshot,
   previewBackendStubs,
@@ -225,19 +221,17 @@ function cityIdentity(id = "city-001"): ActiveCityIdentity {
   };
 }
 
-function seedCity(
-  store: MemorySaveStore,
+async function seedCity(
+  store: CitySaveStore,
   city: ActiveCityIdentity,
   snapshot: RustGameSnapshot,
-): void {
-  const envelope = buildSaveEnvelope({
-    city: { id: city.id, name: city.name },
-    createdAt: city.createdAt,
+): Promise<void> {
+  const result = await store.createCity({
+    city,
     savedAt: "2026-08-01T10:00:00.000Z",
-    appVersion: "0.1.0",
     snapshot,
   });
-  store.seedRawWorking(city.id, envelope);
+  if (!result.ok) throw new Error(`Failed to seed city: ${result.error.code}`);
 }
 
 describe("backend ownership coordination", () => {
@@ -254,19 +248,14 @@ describe("backend ownership coordination", () => {
     const backend = createSharedBlockingBackend({
       identity: "test-engine-load-replace",
     });
-    const memoryStore = createMemorySaveStore();
-    const store: SaveStore = {
-      ...memoryStore,
-      storageIdentity: "test-store-load-replace",
-      singleRealm: true,
-    };
+    const store = createMemoryCitySaveStore();
 
     const loadedCity = cityIdentity("city-loaded");
     const loadedSnapshot = createRustSnapshot({
       paused: true,
       budget: 77_000,
     });
-    seedCity(memoryStore, loadedCity, loadedSnapshot);
+    await seedCity(store, loadedCity, loadedSnapshot);
 
     // Runtime A starts with no active city and a different budget.
     const runtimeA = await createGameRuntime({
@@ -274,7 +263,6 @@ describe("backend ownership coordination", () => {
       saveStore: store,
       initialCity: null,
       now: () => "2026-08-01T10:00:00.000Z",
-      appVersion: "0.1.0",
     });
 
     // Block the next restoreSnapshot so the load hangs mid-operation.
@@ -282,10 +270,7 @@ describe("backend ownership coordination", () => {
 
     // Start loading the seeded city. This enters the gameplay queue and
     // calls backend.restoreSnapshot, which blocks.
-    const loadPromise = runtimeA.persistence.load({
-      kind: "working",
-      cityId: loadedCity.id,
-    });
+    const loadPromise = runtimeA.persistence.load(loadedCity.id);
 
     // Wait until the restore is actually blocked inside the gameplay queue.
     await restoreBlocked;
@@ -297,7 +282,6 @@ describe("backend ownership coordination", () => {
       saveStore: store,
       initialCity: null,
       now: () => "2026-08-01T10:00:00.000Z",
-      appVersion: "0.1.0",
     });
 
     // Assert B has not resolved yet (backend ownership is still held by A).
@@ -319,8 +303,7 @@ describe("backend ownership coordination", () => {
     // Dispose A. This drains the gameplay queue (already empty) and the
     // persistence lease, then releases both. B can now acquire backend
     // ownership and read the snapshot.
-    const disposeResult = await runtimeA.dispose();
-    expect(disposeResult.status).toBe("released");
+    await runtimeA.dispose();
 
     // B resolves and its state reflects the loaded city's snapshot.
     const runtimeB = await runtimeBPromise;
@@ -391,8 +374,7 @@ describe("backend ownership coordination", () => {
       // dead-runtime dispatch may throw — that's fine.
     }
 
-    const disposeResult = await disposePromise;
-    expect(disposeResult.status).toBe("released");
+    await disposePromise;
 
     // B resolves and its state reflects the post-dispatch backend state.
     const runtimeB = await runtimeBPromise;
@@ -404,7 +386,7 @@ describe("backend ownership coordination", () => {
       identity: "test-engine-no-store",
     });
 
-    // No SaveStore — backend ownership is the sole serialization point.
+    // No city save store — backend ownership is the sole serialization point.
     const runtimeA = await createGameRuntime({
       backend,
       initialCity: null,

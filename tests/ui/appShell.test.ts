@@ -54,20 +54,9 @@ const persistenceView: RuntimePersistenceView = {
 const persistenceController: RuntimePersistenceController = {
   saveWorking: async () => runtimeUnavailable("saveWorking"),
   renameActiveCity: async () => runtimeUnavailable("renameActiveCity"),
-  load: async (source) =>
-    runtimeUnavailable(
-      source.kind === "working"
-        ? "loadWorking"
-        : source.kind === "checkpoint"
-          ? "loadCheckpoint"
-          : "loadAutosave",
-    ),
+  load: async () => runtimeUnavailable("loadCity"),
   detachActiveCity: async () => runtimeUnavailable("detachActiveCity"),
   activateNewCity: async () => runtimeUnavailable("activateNewCity"),
-  runGameplayWrite: async (request) =>
-    runtimeUnavailable(
-      request.kind === "checkpoint" ? "createCheckpoint" : "createAutosave",
-    ),
 };
 
 async function openCategory(name: string): Promise<void> {
@@ -135,7 +124,6 @@ function createRuntimeHarness(
     backendError,
     rejection,
     sandboxResetError: null,
-    recovery: { state: "ok" as const },
   });
 
   const publish = (): RuntimeSnapshot => {
@@ -160,7 +148,7 @@ function createRuntimeHarness(
     }),
     start: vi.fn(),
     stop: vi.fn(),
-    dispose: vi.fn(() => Promise.resolve({ status: "released" } as const)),
+    dispose: vi.fn(() => Promise.resolve()),
     isRunning: vi.fn(() => false),
     tick: vi.fn((_deltaSeconds: number) => publish()),
     reset: vi.fn(() => {
@@ -511,7 +499,6 @@ describe("App shell bootstrap", () => {
       backendError: null,
       rejection: null,
       sandboxResetError: null,
-      recovery: { state: "ok" },
     });
 
     await waitFor(() =>
@@ -858,24 +845,6 @@ describe("App shell bootstrap", () => {
     expect(screen.queryByTestId("bottom-hud")).toBeNull();
   });
 
-  it("explains that bootstrap recovery needs storage repair before retrying", () => {
-    render(App, {
-      props: {
-        runtime: null,
-        error: {
-          reason: "bootstrapReconciliationFailed",
-          cityId: "city-pending",
-        },
-      },
-    });
-
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(
-      "Close other realms and use owner-authorized or manual storage repair",
-    );
-    expect(alert).toHaveTextContent("Reload alone only retries reconciliation");
-  });
-
   it("surfaces backendError from resolved runtime commands", async () => {
     const { runtime } = createRuntimeHarness();
     const deferred = deferredRuntimeResult();
@@ -893,35 +862,6 @@ describe("App shell bootstrap", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Rust backend failed");
-    expect(runtime.stop).toHaveBeenCalled();
-  });
-
-  it("surfaces persistence recovery state from resolved runtime commands", async () => {
-    const { runtime } = createRuntimeHarness();
-    const deferred = deferredRuntimeResult();
-    runtime.togglePause = vi.fn((): RuntimeCommandResult => deferred.promise);
-
-    render(App, { props: { runtime } });
-    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
-
-    const current = runtime.getSnapshot();
-    deferred.resolve({
-      ...current,
-      rejection: null,
-      recovery: {
-        state: "recoveryRequired",
-        reason: "lateSuccessCleanupFailed",
-        cityId: "city-orphan",
-      },
-    });
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Persistence recovery required");
-    expect(alert).toHaveTextContent("lateSuccessCleanupFailed");
-    expect(alert).toHaveTextContent("city-orphan");
-    expect(alert).toHaveTextContent(
-      "Reload alone may repeat the cleanup failure",
-    );
     expect(runtime.stop).toHaveBeenCalled();
   });
 

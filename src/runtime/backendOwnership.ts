@@ -8,7 +8,7 @@ import type { GameBackend, RuntimeIdentity } from "./backend/types";
 // The persistence coordinator serializes runtime lifetimes by durable storage
 // identity, but a mutable backend engine is a separate ownership domain:
 //
-// - a runtime may have no `SaveStore` (no persistence lease at all);
+// - a runtime may have no city save store (no persistence lease at all);
 // - two stores may address one Tauri engine; and
 // - separate `createTauriBackend()` facade objects still address the same
 //   process-global `Mutex<GameEngine>` in the Rust host.

@@ -1,10 +1,9 @@
 /**
  * Minimal six-operation city save store contract.
  *
- * This is the small save boundary the runtime will consume once Tasks 4/5 wire
- * it in. It replaces the legacy 19-method {@link SaveStore} surface. The legacy
- * store remains in place alongside this one until the runtime cutover; do not
- * extend the legacy surface.
+ * This is the small save boundary consumed by the runtime. It replaces the
+ * legacy 19-method {@link SaveStore} surface. The legacy store remains in
+ * place for the remaining storage-adapter cutover; do not extend it.
  */
 
 export interface CitySaveRecord {

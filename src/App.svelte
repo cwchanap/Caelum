@@ -7,11 +7,9 @@
   import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
   import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
-    BootstrapRecoveryError,
     RouteDraft,
     RuntimeCommandResult,
     RuntimeController,
-    RuntimeRecoveryState,
     RuntimeSnapshot,
   } from "./runtime/types";
   import { rejectionMessage } from "./runtime/rejectionMessages";
@@ -23,52 +21,17 @@
 
   interface Props {
     runtime: RuntimeController | null;
-    error?: string | BootstrapRecoveryError | null;
+    error?: string | null;
   }
 
   let { runtime, error = null }: Props = $props();
   let shellError = $state<string | null>(null);
   let snapshot = $state<RuntimeSnapshot | null>(null);
 
-  type RecoveryRequiredState = Extract<
-    RuntimeRecoveryState,
-    { state: "recoveryRequired" }
-  >;
-
-  function persistenceRecoveryMessage(
-    reason: RecoveryRequiredState["reason"],
-    cityId: string | null,
-  ): string {
-    const city = cityId === null ? "" : ` (city: ${cityId})`;
-    switch (reason) {
-      case "lateSuccessCleanupFailed":
-        return `Persistence recovery required: ${reason}${city}. Repair the orphan durable record before retrying; Reload alone may repeat the cleanup failure.`;
-      case "bootstrapReconciliationFailed":
-        return `Persistence recovery required: ${reason}${city}. Close other realms and use owner-authorized or manual storage repair before retrying; Reload alone only retries reconciliation.`;
-      case "multiRealmAmbiguousCleanup":
-        return `Persistence recovery required: ${reason}${city}. The retained record may belong to another realm; close other realms and use owner-authorized or manual storage repair. Reload alone will not repair it.`;
-    }
-  }
-
-  function shellErrorMessage(error: string | BootstrapRecoveryError): string {
-    return typeof error === "string"
-      ? error
-      : persistenceRecoveryMessage(
-          "bootstrapReconciliationFailed",
-          error.cityId,
-        );
-  }
-
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
     if (nextSnapshot.backendError !== null) {
       shellError = nextSnapshot.backendError;
-    }
-    if (nextSnapshot.recovery.state === "recoveryRequired") {
-      shellError = persistenceRecoveryMessage(
-        nextSnapshot.recovery.reason,
-        nextSnapshot.recovery.cityId,
-      );
     }
   }
 
@@ -409,7 +372,7 @@
 
   $effect(() => {
     if (error !== null) {
-      shellError = shellErrorMessage(error);
+      shellError = error;
     }
   });
 
@@ -436,25 +399,7 @@
         // `start()` and all UI methods become no-ops, and the shared
         // coordinator lease is released for a replacement runtime.
         //
-        // If the runtime entered a terminal persistence-recovery state
-        // (late-success cleanup failed or bootstrap reconciliation failed),
-        // dispose() resolves with `recoveryRequired` and the lease is
-        // permanently pinned. A replacement `createGameRuntime` against the
-        // same storage identity would hang indefinitely. The application
-        // must NOT blindly start a replacement runtime after disposal —
-        // check the dispose result and surface the recovery requirement.
-        void runtime.dispose().then((result) => {
-          if (result.status === "recoveryRequired") {
-            // The lease is permanently pinned. A replacement runtime
-            // cannot acquire it. Surface the actual repair limitation; a
-            // reload only retries bootstrap and does not repair retained
-            // multi-realm storage.
-            shellError = persistenceRecoveryMessage(
-              result.reason,
-              result.cityId,
-            );
-          }
-        });
+        void runtime.dispose();
       };
     }
   });

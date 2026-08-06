@@ -555,9 +555,9 @@ describe("createTauriBackend", () => {
     // would match the host's initial epoch and be accepted. Rejecting all
     // mutating commands while the epoch is null closes that gap.
     const backend = await createTauriBackend();
-    await expect(backend.dispatch({ type: "setPaused", paused: false })).rejects.toThrow(
-      "before beginRuntime completed",
-    );
+    await expect(
+      backend.dispatch({ type: "setPaused", paused: false }),
+    ).rejects.toThrow("before beginRuntime completed");
     await expect(backend.tick(0.1)).rejects.toThrow(
       "before beginRuntime completed",
     );
@@ -603,9 +603,9 @@ describe("createTauriBackend", () => {
     const beginRuntimePromise = backend.beginRuntime!();
     // Intentionally not awaited: keep the IPC request unresolved.
 
-    await expect(backend.dispatch({ type: "setPaused", paused: false })).rejects.toThrow(
-      "before beginRuntime completed",
-    );
+    await expect(
+      backend.dispatch({ type: "setPaused", paused: false }),
+    ).rejects.toThrow("before beginRuntime completed");
     await expect(backend.tick(0.1)).rejects.toThrow(
       "before beginRuntime completed",
     );
