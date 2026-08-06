@@ -77,13 +77,6 @@ function createSharedBlockingBackend(options: {
     dispatchStartedResolve = resolve;
   });
 
-  const noOpContext = {
-    changedTiles: [],
-    skippedTiles: [],
-    affectedRouteIds: [],
-    cost: 0,
-  };
-
   const backend: SharedBlockingBackend = {
     ...(options.identity !== undefined
       ? { runtimeIdentity: options.identity }
@@ -191,7 +184,6 @@ function createSharedBlockingBackend(options: {
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: noOpContext,
       };
     },
     async tick(): Promise<DispatchResult> {
@@ -199,7 +191,6 @@ function createSharedBlockingBackend(options: {
         snapshot,
         applied: false,
         rejection: null,
-        context: noOpContext,
       };
     },
     async reset() {

@@ -424,7 +424,6 @@ fn compact_and_standard_charge_rust_authoritative_flat_costs() {
         let result = engine.dispatch(GameIntent::PlaceRoundabout { origin, size });
         assert!(result.applied, "{result:?}");
         assert_eq!(result.snapshot.budget, before.budget - expected);
-        assert_eq!(result.context.cost, expected);
     }
 }
 

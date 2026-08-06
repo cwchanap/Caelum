@@ -63,8 +63,8 @@ pub(crate) fn create_route_costed(
         vehicle_id,
     )?;
     candidate.transit.vehicles.push(vehicle);
-    let cost = authorized.apply_to(&mut candidate.budget)?;
-    Ok(CostedMutation::new(candidate, cost))
+    authorized.apply_to(&mut candidate.budget)?;
+    Ok(CostedMutation::new(candidate))
 }
 
 pub fn update_route(

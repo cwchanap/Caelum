@@ -285,7 +285,6 @@ describe("real WASM artifact smoke", () => {
     });
 
     expect(result.applied).toBe(true);
-    expect(result.context.cost).toBe(100);
     expect(result.snapshot.budget).toBe(0);
     expect(result.snapshot.rules.economyPreset).toBe("creative");
     expect(
@@ -679,7 +678,7 @@ describe("real WASM artifact smoke", () => {
     await expect(backend.snapshot()).resolves.toEqual(created.snapshot);
   });
 
-  it("resets to the exact successful request after a nominal-cost map mutation", async () => {
+  it("resets to the exact successful request after a map mutation", async () => {
     const backend = await createWasmBackend();
     const created = await backend.createSandbox({
       templateId: "blankGrid",
@@ -698,7 +697,6 @@ describe("real WASM artifact smoke", () => {
     });
     expect(mapMutation.applied).toBe(true);
     expect(mapMutation.rejection).toBeNull();
-    expect(mapMutation.context.cost).toBe(1_000);
     expect(mapMutation.snapshot.budget).toBe(created.snapshot.budget);
     expect(mapMutation.snapshot.map.roadStructures).toHaveLength(
       created.snapshot.map.roadStructures.length + 1,

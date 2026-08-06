@@ -52,12 +52,6 @@ function createBackend(): GameBackend {
         snapshot,
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async tick() {
@@ -66,12 +60,6 @@ function createBackend(): GameBackend {
         snapshot,
         applied: false,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async reset() {

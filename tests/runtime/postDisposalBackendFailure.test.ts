@@ -50,13 +50,6 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
     dispatchStartedResolve = resolve;
   });
 
-  const noOpContext = {
-    changedTiles: [],
-    skippedTiles: [],
-    affectedRouteIds: [],
-    cost: 0,
-  };
-
   return {
     async snapshot() {
       return snapshot;
@@ -109,7 +102,6 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: noOpContext,
       };
     },
     async tick(): Promise<DispatchResult> {
@@ -117,7 +109,6 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
         snapshot,
         applied: false,
         rejection: null,
-        context: noOpContext,
       };
     },
     async reset() {

@@ -34,8 +34,14 @@ function assertLoadSnapshotRemoved(backend: GameBackend): void {
 }
 void assertLoadSnapshotRemoved;
 
+function assertDispatchImpactRemoved(result: DispatchResult): void {
+  // @ts-expect-error DispatchResult exposes only snapshot, applied, and rejection
+  void result.context;
+}
+void assertDispatchImpactRemoved;
+
 describe("Rust backend contract", () => {
-  it("uses structured gameplay rejections and success context", () => {
+  it("uses structured gameplay rejections", () => {
     const insufficientBudget: GameplayRejection = {
       code: "insufficientBudget",
       context: {
@@ -496,23 +502,11 @@ describe("Rust backend contract", () => {
         },
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       }),
       tick: async () => ({
         snapshot,
         applied: false,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       }),
       reset: async () => ({ ok: true, snapshot }),
     };

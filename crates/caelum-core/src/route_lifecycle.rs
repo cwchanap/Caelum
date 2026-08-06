@@ -1058,61 +1058,6 @@ fn compare_projection(left: &PathProjection, right: &PathProjection) -> Ordering
         .then_with(|| left.step_progress.total_cmp(&right.step_progress))
 }
 
-pub fn structurally_changed_route_ids(
-    previous: &GameSnapshot,
-    candidate: &GameSnapshot,
-) -> Vec<String> {
-    let mut affected = Vec::new();
-
-    for route in &previous.transit.routes {
-        if candidate
-            .transit
-            .routes
-            .iter()
-            .find(|candidate| candidate.id == route.id)
-            != Some(route)
-        {
-            affected.push(route.id.clone());
-        }
-    }
-    for route in &candidate.transit.routes {
-        if !previous
-            .transit
-            .routes
-            .iter()
-            .any(|previous| previous.id == route.id)
-        {
-            affected.push(route.id.clone());
-        }
-    }
-
-    for line in &previous.transit.metro_lines {
-        if candidate
-            .transit
-            .metro_lines
-            .iter()
-            .find(|candidate| candidate.id == line.id)
-            != Some(line)
-        {
-            affected.push(line.id.clone());
-        }
-    }
-    for line in &candidate.transit.metro_lines {
-        if !previous
-            .transit
-            .metro_lines
-            .iter()
-            .any(|previous| previous.id == line.id)
-        {
-            affected.push(line.id.clone());
-        }
-    }
-
-    affected.sort();
-    affected.dedup();
-    affected
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

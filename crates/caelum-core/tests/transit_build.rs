@@ -2376,8 +2376,9 @@ fn lay_road_line_over_building_occupied_tiles_is_unchanged() {
 }
 
 #[test]
-fn road_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+fn road_stroke_applies_valid_tiles_and_deducts_budget() {
     let mut engine = GameEngine::new();
+    let before = engine.snapshot();
     let changed = Point { x: 2, y: 2 };
     let skipped = Point { x: 14, y: 8 };
 
@@ -2387,15 +2388,15 @@ fn road_stroke_dispatch_context_reports_changed_skipped_and_cost() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.changed_tiles, vec![changed]);
-    assert_eq!(result.context.skipped_tiles, vec![skipped]);
-    assert_eq!(result.context.cost, 100);
-    assert!(result.context.affected_route_ids.is_empty());
+    assert_eq!(result.snapshot.map.tile(changed).unwrap().kind, "road");
+    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
+    assert_eq!(result.snapshot.budget, before.budget - 100);
 }
 
 #[test]
-fn track_stroke_dispatch_context_reports_changed_skipped_and_cost() {
+fn track_stroke_applies_valid_tiles_and_deducts_budget() {
     let mut engine = GameEngine::new();
+    let before = engine.snapshot();
     let changed = Point { x: 2, y: 2 };
     let skipped = Point { x: 1_000, y: 1_000 };
 
@@ -2404,10 +2405,9 @@ fn track_stroke_dispatch_context_reports_changed_skipped_and_cost() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.changed_tiles, vec![changed]);
-    assert_eq!(result.context.skipped_tiles, vec![skipped]);
-    assert_eq!(result.context.cost, 500);
-    assert!(result.context.affected_route_ids.is_empty());
+    assert!(result.snapshot.map.tile(changed).unwrap().has_track);
+    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
+    assert_eq!(result.snapshot.budget, before.budget - 500);
 }
 
 fn policy_engine(snapshot: GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
@@ -2422,6 +2422,8 @@ fn track_stroke_charges_each_unique_new_tile_and_creative_ignores_budget() {
     let base = GameEngine::new().snapshot();
     let mut standard = policy_engine(base.clone(), EconomyPreset::Standard, transit::TRACK_COST);
     let mut creative = policy_engine(base, EconomyPreset::Creative, 0);
+    let standard_before = standard.snapshot();
+    let creative_before = creative.snapshot();
     let points = vec![point(2, 2), point(2, 2), point(3, 2)];
 
     let standard_result = standard.dispatch(GameIntent::LayTrackLine {
@@ -2430,17 +2432,45 @@ fn track_stroke_charges_each_unique_new_tile_and_creative_ignores_budget() {
     let creative_result = creative.dispatch(GameIntent::LayTrackLine { points });
 
     assert!(standard_result.applied, "{standard_result:?}");
-    assert_eq!(standard_result.context.cost, transit::TRACK_COST);
-    assert_eq!(standard_result.context.changed_tiles, vec![point(2, 2)]);
-    assert_eq!(standard_result.context.skipped_tiles, vec![point(3, 2)]);
-    assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.context.cost, 2 * transit::TRACK_COST);
-    assert_eq!(creative_result.snapshot.budget, 0);
     assert_eq!(
-        creative_result.context.changed_tiles,
-        vec![point(2, 2), point(3, 2)]
+        standard_result.snapshot.budget,
+        standard_before.budget - transit::TRACK_COST
     );
-    assert_eq!(creative_result.context.skipped_tiles, Vec::<Point>::new());
+    assert!(
+        standard_result
+            .snapshot
+            .map
+            .tile(point(2, 2))
+            .unwrap()
+            .has_track
+    );
+    assert_eq!(
+        standard_result
+            .snapshot
+            .map
+            .tile(point(3, 2))
+            .unwrap()
+            .has_track,
+        standard_before.map.tile(point(3, 2)).unwrap().has_track
+    );
+    assert!(creative_result.applied, "{creative_result:?}");
+    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
+    assert!(
+        creative_result
+            .snapshot
+            .map
+            .tile(point(2, 2))
+            .unwrap()
+            .has_track
+    );
+    assert!(
+        creative_result
+            .snapshot
+            .map
+            .tile(point(3, 2))
+            .unwrap()
+            .has_track
+    );
 }
 
 #[test]
@@ -2540,19 +2570,28 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
 fn track_stroke_continues_after_invalid_points_against_the_running_candidate() {
     let base = GameEngine::new().snapshot();
     let mut standard = policy_engine(base, EconomyPreset::Standard, 2 * transit::TRACK_COST);
+    let before = standard.snapshot();
     let result = standard.dispatch(GameIntent::LayTrackLine {
         points: vec![point(999, 999), point(2, 2), point(3, 2)],
     });
 
     assert!(result.applied, "{result:?}");
-    assert_eq!(result.context.cost, 2 * transit::TRACK_COST);
-    assert_eq!(result.context.changed_tiles, vec![point(2, 2), point(3, 2)]);
-    assert_eq!(result.context.skipped_tiles, vec![point(999, 999)]);
+    assert_eq!(
+        result.snapshot.budget,
+        before.budget - 2 * transit::TRACK_COST
+    );
+    assert!(result.snapshot.map.tile(point(2, 2)).unwrap().has_track);
+    assert!(result.snapshot.map.tile(point(3, 2)).unwrap().has_track);
+    assert_eq!(
+        result.snapshot.map.tile(point(999, 999)),
+        before.map.tile(point(999, 999))
+    );
 }
 
 #[test]
-fn area_stroke_dispatch_context_reports_changed_and_skipped_tiles() {
+fn area_stroke_applies_only_empty_tiles() {
     let mut engine = GameEngine::new();
+    let before = engine.snapshot();
     let changed = Point { x: 13, y: 10 };
     let skipped = vec![
         Point { x: 13, y: 9 },
@@ -2567,14 +2606,17 @@ fn area_stroke_dispatch_context_reports_changed_and_skipped_tiles() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.changed_tiles, vec![changed]);
-    assert_eq!(result.context.skipped_tiles, skipped);
-    assert_eq!(result.context.cost, 0);
-    assert!(result.context.affected_route_ids.is_empty());
+    assert_eq!(
+        result.snapshot.map.tile(changed).unwrap().area.as_deref(),
+        Some("residential")
+    );
+    for point in skipped {
+        assert_eq!(result.snapshot.map.tile(point), before.map.tile(point));
+    }
 }
 
 #[test]
-fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
+fn removal_stroke_applies_partial_result_and_breaks_affected_route() {
     let mut engine = GameEngine::new();
     for x in 2..=4 {
         assert!(
@@ -2611,18 +2653,14 @@ fn removal_stroke_dispatch_context_reports_partial_result_and_affected_route() {
 
     let changed = Point { x: 3, y: 3 };
     let skipped = Point { x: 10, y: 10 };
+    let before = engine.snapshot();
     let result = engine.dispatch(GameIntent::RemoveAtTiles {
         points: vec![changed, skipped],
     });
 
     assert!(result.applied);
-    assert_eq!(
-        result.context.changed_tiles,
-        vec![changed, Point { x: 2, y: 3 }, Point { x: 4, y: 3 }]
-    );
-    assert_eq!(result.context.skipped_tiles, vec![skipped]);
-    assert_eq!(result.context.cost, 0);
-    assert_eq!(result.context.affected_route_ids, vec!["route-001"]);
+    assert_ne!(result.snapshot.map.tile(changed).unwrap().kind, "road");
+    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
     assert!(result.snapshot.transit.routes[0].path_broken);
 }
 

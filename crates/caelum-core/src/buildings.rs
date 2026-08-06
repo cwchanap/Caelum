@@ -227,8 +227,8 @@ pub(crate) fn place_building_costed(
         .quote(definition.cost, state.budget)
         .authorize()?;
     let mut next = place_building_core(state, building_type, origin, rotation)?;
-    let cost = authorized.apply_to(&mut next.budget)?;
-    Ok(CostedMutation::new(next, cost))
+    authorized.apply_to(&mut next.budget)?;
+    Ok(CostedMutation::new(next))
 }
 
 pub fn place_building_core(

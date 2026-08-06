@@ -326,6 +326,8 @@ fn mutation_preview_reports_applied_subset_cost_and_route_impacts() {
 #[test]
 fn roundabout_preview_matches_commit_footprint_cost_structure_and_route_impact() {
     let mut engine = existing_route_engine();
+    let before_budget = engine.snapshot().budget;
+    let before_structure_count = engine.snapshot().map.road_structures.len();
     let request = RoadMutationPreviewRequest {
         mutation: RoadMutation::PlaceRoundabout {
             origin: point(5, 4),
@@ -350,21 +352,21 @@ fn roundabout_preview_matches_commit_footprint_cost_structure_and_route_impact()
             kind: RouteImpactKind::Rerouted,
         }]
     );
+    let before_route = newest_route(&engine.snapshot()).clone();
 
     let committed = engine.dispatch(GameIntent::PlaceRoundabout {
         origin: point(5, 4),
         size: RoundaboutSize::Standard3x3,
     });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
-    assert_eq!(committed.context.cost, preview.cost);
+    assert_eq!(committed.snapshot.budget, before_budget - preview.cost);
     assert_eq!(
-        committed.context.affected_route_ids,
-        preview
-            .route_impacts
-            .iter()
-            .map(|impact| impact.route_id.clone())
-            .collect::<Vec<_>>()
+        committed.snapshot.map.road_structures.len(),
+        before_structure_count + preview.generated_structures.len()
+    );
+    assert_eq!(
+        newest_route(&committed.snapshot).revision,
+        before_route.revision + 1
     );
 }
 
@@ -421,10 +423,6 @@ fn already_broken_route_still_reports_a_changed_connected_leg_with_commit_parity
         size: RoundaboutSize::Standard3x3,
     });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(
-        committed.context.affected_route_ids,
-        vec![before.id.clone()]
-    );
     let after = newest_route(&committed.snapshot);
     assert_eq!(after.revision, before.revision + 1);
     assert!(after.path_broken);
@@ -489,7 +487,6 @@ fn unrelated_road_preview_does_not_reroute_already_broken_route() {
         point: point(3, 12),
     });
     assert!(committed.applied, "{committed:?}");
-    assert!(committed.context.affected_route_ids.is_empty());
     let after = newest_route(&committed.snapshot);
     assert_eq!(after.legs, before.legs);
     assert_eq!(after.revision, before.revision);
@@ -522,11 +519,6 @@ fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
 
     let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
-    assert_eq!(
-        committed.context.affected_route_ids,
-        vec![before.id.clone()]
-    );
     let after = newest_route(&committed.snapshot);
     assert_eq!(after.revision, before.revision + 1);
     assert!(after.path_broken);
@@ -974,7 +966,20 @@ fn endpoint_connection_preview_and_commit_include_the_reciprocal_neighbor() {
 
     let committed = engine.dispatch(GameIntent::LayRoad { point: point(4, 2) });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
+    assert_eq!(
+        committed
+            .snapshot
+            .map
+            .tile(point(3, 2))
+            .unwrap()
+            .road_connections,
+        preview
+            .authored_tiles
+            .iter()
+            .find(|tile| tile.point == point(3, 2))
+            .expect("preview includes reciprocal neighbor")
+            .road_connections
+    );
 }
 
 #[test]
@@ -999,7 +1004,6 @@ fn roundabout_removal_preview_and_commit_include_reciprocal_port_neighbors() {
 
     let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(committed.context.changed_tiles, preview.changed_tiles);
     for point in &preview.changed_tiles {
         let authored = preview
             .authored_tiles

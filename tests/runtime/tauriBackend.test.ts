@@ -83,12 +83,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
-      },
     };
     const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
@@ -114,12 +108,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: undefined,
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
-      },
     } as unknown as DispatchResult;
     const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
@@ -137,12 +125,6 @@ describe("createTauriBackend", () => {
       rejection: {
         code: "invalidSpeed",
         context: { affectedRouteIds: [] },
-      },
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
       },
     };
     const backend = await createStartedBackend();
@@ -171,12 +153,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
-      },
     };
     const backend = await createStartedBackend();
     invokeMock.mockResolvedValueOnce(raw);
@@ -523,12 +499,6 @@ describe("createTauriBackend", () => {
         snapshot: createRustSnapshot({ paused: false }),
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       });
 
     const backend = await createTauriBackend();
@@ -668,12 +638,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
-      },
     });
     await backend.dispatch({ type: "setPaused", paused: false });
     expect(invokeMock).toHaveBeenNthCalledWith(3, "game_dispatch", {
@@ -736,12 +700,6 @@ describe("createTauriBackend", () => {
       snapshot,
       applied: true,
       rejection: null,
-      context: {
-        changedTiles: [],
-        skippedTiles: [],
-        affectedRouteIds: [],
-        cost: 0,
-      },
     });
     await backend.tick(0.1);
     expect(invokeMock).toHaveBeenLastCalledWith("game_tick", {

@@ -12,8 +12,8 @@ fn dispatch(engine: &mut GameEngine, intent: GameIntent) {
     let result = engine.dispatch(intent);
     assert!(
         result.applied,
-        "fixture dispatch should apply: rejection={:?}, context={:?}",
-        result.rejection, result.context
+        "fixture dispatch should apply: rejection={:?}",
+        result.rejection
     );
 }
 
