@@ -1,6 +1,6 @@
 # HPA-547: Thin Dual Gameplay Hosts Around `caelum-core`
 
-**Status:** Proposed for implementation
+**Status:** Implemented by HPA-547
 
 **Linear:** [HPA-547](https://linear.app/cwchanap/issue/HPA-547/foundation-minimize-nativewasm-host-duplication-around-caelum-core)
 
@@ -642,24 +642,24 @@ There is no backward compatibility for development saves. Increment the snapshot
 
 ## Acceptance Criteria
 
-- [ ] Native Tauri remains the desktop release path.
-- [ ] Browser/WASM remains functional for development and tests.
-- [ ] All gameplay rules live only in `caelum-core`.
-- [ ] `GameBackend` contains only methods the runtime currently calls.
-- [ ] Runtime identity, public sessions, JavaScript backend ownership, and host registries are removed.
-- [ ] Tauri epoch details are private to the Tauri adapter.
-- [ ] Both hosts call the existing pure `create_sandbox_snapshot` path.
-- [ ] Both hosts build a sandbox candidate without mutating active gameplay.
-- [ ] Restore is candidate-first and exposes only three UI snapshot categories.
-- [ ] `PersistenceCoordinatorBackendError` is concretely replaced by `SnapshotError | SandboxHostError`, without an operation field.
-- [ ] Validator pruning follows the resolved retain/normalize/delete matrix and construction order.
-- [ ] All nine retained construction-safety classes have focused regression tests, including separate reciprocity and genuine structure-compile failures.
-- [ ] Public `DispatchResult.context` is removed while private apply data and preview impact remain.
-- [ ] Load and New City roll back the prior canonical snapshot on thrown restore and enter fatal coherence state if rollback fails.
-- [ ] HPA-547 adds no new tests for pending/finalize reconciliation that HPA-543/HPA-548 will delete.
-- [ ] Exact error parity, giant fixtures, persistence benchmarks, and exhaustive host matrices are removed.
-- [ ] Production and test code show material net deletion.
-- [ ] No HPA-543 or HPA-548 architecture is implemented early.
+- [x] Native Tauri remains the desktop release path.
+- [x] Browser/WASM remains functional for development and tests.
+- [x] All gameplay rules live only in `caelum-core`.
+- [x] `GameBackend` contains only methods the runtime currently calls.
+- [x] Runtime identity, public sessions, JavaScript backend ownership, and host registries are removed.
+- [x] Tauri epoch details are private to the Tauri adapter.
+- [x] Both hosts call the existing pure `create_sandbox_snapshot` path.
+- [x] Both hosts build a sandbox candidate without mutating active gameplay.
+- [x] Restore is candidate-first and exposes only three UI snapshot categories.
+- [x] `PersistenceCoordinatorBackendError` is concretely replaced by `SnapshotError | SandboxHostError`, without an operation field.
+- [x] Validator pruning follows the resolved retain/normalize/delete matrix and construction order.
+- [x] All nine retained construction-safety classes have focused regression tests, including separate reciprocity and genuine structure-compile failures.
+- [x] Public `DispatchResult.context` is removed while private apply data and preview impact remain.
+- [x] Load and New City roll back the prior canonical snapshot on thrown restore and enter fatal coherence state if rollback fails.
+- [x] HPA-547 adds no new tests for pending/finalize reconciliation that HPA-543/HPA-548 will delete.
+- [x] Exact error parity, giant fixtures, persistence benchmarks, and exhaustive host matrices are removed.
+- [x] Production and test code show material net deletion.
+- [x] No HPA-543 or HPA-548 architecture is implemented early.
 
 ## Non-goals
 

@@ -47,6 +47,13 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
+The two host adapters implement exactly the nine-method `GameBackend` contract:
+`snapshot`, `snapshotForSave`, `buildSandboxSnapshot`, `restoreSnapshot`,
+`dispatch`, `tick`, `reset`, `previewRoute`, and `previewRoadMutation`. The
+contract is deliberately a shared runtime seam, not a plugin or host-platform
+API. Neither adapter exposes a runtime identity, session object, validation
+operation, or mutating sandbox operation.
+
 The host contract is `SNAPSHOT_SCHEMA_VERSION = 4`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
@@ -65,33 +72,42 @@ Linear road, track, remove, and area strokes may partially apply in authored ord
 
 ### Persistence host boundary
 
-Both hosts expose the same `GameBackend` persistence operations:
-`snapshotForSave`, `validateSnapshot`, and `restoreSnapshot`. Expected failures
-resolve through the shared typed result contract and always identify their
-operation. Rust remains the only layer that accepts gameplay state.
+`snapshotForSave` returns an infallible, paused, normalized clone of the live
+snapshot without mutating the engine. `restoreSnapshot(snapshot)` is
+candidate-first: each host decodes the candidate, constructs a complete
+`GameEngine` with `from_snapshot`, and replaces the active engine only after
+construction succeeds. A definitive `{ ok: false }` therefore leaves active
+gameplay unchanged.
 
-Save capture is provenance-enforced. While holding authoritative state, only a
-`GameEngine` can mint the opaque `SaveSnapshotCapture` for its committed
-snapshot. Preparing that capture pauses only the returned snapshot and runs the
-complete core validator without changing the live engine. Tauri holds its
-managed-engine mutex only long enough to mint the capture; preparation and
-response encoding happen after the lock is released.
+Snapshot failures cross the TypeScript host boundary through exactly three
+categories: `unsupportedSchema`, `invalidSnapshot`, and `hostFailure`. The
+optional `diagnostic` is for development logging; these errors have no
+`operation` field because the direct caller already knows whether it is saving or
+restoring. Sandbox form failures remain separate field-level
+`SandboxCreationError` values, while an unexpected sandbox adapter rejection is a
+`SandboxHostError` with `hostFailure`. The runtime-facing backend error is the
+small union `SnapshotError | SandboxHostError`.
 
-Candidate validation is pure. Each host probes the schema, deserializes the
-complete candidate, and calls the core validator without reading or mutating
-the active engine. Restoration creates a must-use `PreparedEngineRestore`
-containing the validated candidate engine and its compiled road topology.
-Dropping this token has no effect. WASM and Tauri both encode the token's exact
-accepted snapshot before consuming the token and replacing host state, so a
-validation, topology, response-encoding, or Tauri lock failure cannot partially
-commit a restore.
+An adapter-thrown or rejected restore is ambiguous: the host may have committed a
+candidate before delivery failed. Load and New City capture the canonical prior
+snapshot immediately before activation, roll it back on a thrown restore, and
+enter the existing fatal coherence path if rollback also fails. They do not roll
+back a definitive `{ ok: false }`, because candidate-first construction proves
+that no replacement occurred. Save capture is non-mutating, so a thrown save
+operation reports `hostFailure` without rollback.
 
-Tauri also closes the error-response boundary before returning to the framework.
-Command bodies produce a private typed bridge error, then a private generic encoder
-converts it to an already-formed JSON value. If that structured encoding fails, the
-command returns an opaque string instead; the TypeScript adapter normalizes it to
-`host/invokeFailed`. Because restore failures reach this encoder without consuming the
-prepared token, even an error-encoding failure leaves managed engine state unchanged.
+Tauri's runtime epoch is private to `createTauriBackend()` and the native
+commands. The adapter calls the private `game_begin_runtime` bootstrap before it
+returns, closes over the returned epoch, and exposes no epoch or session method.
+Mutating commands, save capture, and restore carry the private epoch and retain
+stale-epoch checks; pure snapshot, sandbox-build, and preview operations do not
+become public lifecycle APIs.
+
+The public `DispatchResult` contains only the snapshot, `applied`, and optional
+rejection. Private apply data still supports mutation commits, route lifecycle
+work, and cost/footprint handling, while route and road preview responses retain
+the impact data consumed by the UI. Dispatch impact was removed from the public
+host wire, not from the internal mutation or preview paths.
 
 Persistence responses use a JSON-compatible serializer only on the persistence
 path. Ordinary `snapshot`, `dispatch`, and `tick` retain their existing host
@@ -101,13 +117,13 @@ uses `normalizeRustSnapshot` to recursively turn host-specific
 `undefined`/`null` option representations into the equal read-only `GameState`
 view consumed by UI and rendering.
 
-Runtime persistence (HPA-543) owns active-city identity, one `persistenceBusy`
-gate, one dirty boolean, and publication of a normalized successful restore. It
-serializes persistence work with gameplay mutations: Save Now waits for the
-in-flight backend mutation to settle, then blocks new ticks and dispatches until
-the store operation finishes. Because gameplay is blocked for that whole window,
-no revision baseline, operation token, or late-completion reconciliation is
-needed.
+The current runtime persistence machinery remains the pre-HPA-543
+`SharedPersistenceCoordinator`: it still owns leases, per-city queues/fences,
+revisions, pending/finalize reconciliation, and supersession handling. HPA-547
+intentionally leaves that coordinator unchanged. HPA-543 is the remaining work to
+replace it with active-city identity, one `persistenceBusy` gate, and one dirty
+boolean. HPA-548 separately owns the future six-operation multi-city save
+boundary; the current `SaveStore`/envelope contract is not redesigned here.
 
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
@@ -125,6 +141,14 @@ is exactly Crossroads, Standard economy, `$120,000` starting capital, demand
 multiplier `1`, and paused move-in. `GameEngine::new()` delegates to that
 request, so the browser and Tauri defaults share the factory rather than
 maintaining separate startup snapshots.
+
+Both host adapters use the pure factory for New City candidates:
+`WasmGameEngine.build_sandbox_snapshot()` calls `create_sandbox_snapshot`
+without touching its active engine, while Tauri's
+`game_build_sandbox_snapshot` command calls the same function without locking or
+mutating managed engine state. TypeScript exposes this as
+`buildSandboxSnapshot`; candidate persistence and later candidate-first restore
+are separate steps.
 
 Both templates use the shared 28×18 map:
 

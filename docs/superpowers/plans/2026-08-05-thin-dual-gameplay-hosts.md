@@ -47,7 +47,7 @@ Pending/finalize reconciliation still exists. Preserve it and its current tests;
 
 ## Baseline Gate
 
-- [ ] **Step 1: Confirm branch and documents**
+- [x] **Step 1: Confirm branch and documents**
 
 ```sh
 git fetch origin
@@ -59,7 +59,7 @@ test -f docs/superpowers/plans/2026-08-05-thin-dual-gameplay-hosts.md
 
 Expected: clean branch; `origin/main` is an ancestor; both documents exist.
 
-- [ ] **Step 2: Record the removal surfaces**
+- [x] **Step 2: Record the removal surfaces**
 
 ```sh
 rg -n 'runtimeIdentity|RuntimeSession|beginRuntime|validateSnapshot|BackendOwnership' \
@@ -72,7 +72,7 @@ rg -n 'DispatchContext|\.context|affected_route_ids|affectedRouteIds' \
 
 Expected: matches in the current backend, ownership module, persistence bridge/taxonomy, and dispatch wire/tests.
 
-- [ ] **Step 3: Run the focused baseline**
+- [x] **Step 3: Run the focused baseline**
 
 ```sh
 cargo test -p caelum-core --test persistence_snapshot
@@ -112,7 +112,6 @@ Expected: all pass before edits. Record unrelated failures; do not weaken assert
 
 - `src/runtime/backendOwnership.ts`
 - `tests/runtime/backendOwnership.test.ts`
-- `crates/caelum-core/src/persistence/error.rs`
 - `crates/caelum-core/src/persistence_bridge.rs`
 - `crates/caelum-core/tests/persistence_error_wire.rs`
 - `crates/caelum-core/tests/persistence_corruption.rs`
@@ -131,7 +130,7 @@ Expected: all pass before edits. Record unrelated failures; do not weaken assert
 
 **Files:** `crates/caelum-core/src/intent.rs`, `engine.rs`, backend types/shared normalization, affected fixtures/tests.
 
-- [ ] **Step 1: Classify every impact match**
+- [x] **Step 1: Classify every impact match**
 
 ```sh
 rg -n 'DispatchContext|\.context|affected_route_ids|affectedRouteIds' \
@@ -152,7 +151,7 @@ KEEP — PREVIEW
 Road/route preview impact, warnings, routeImpacts, changedTiles, skippedTiles
 ```
 
-- [ ] **Step 2: Change the public result**
+- [x] **Step 2: Change the public result**
 
 ```rust
 pub struct DispatchResult {
@@ -169,7 +168,7 @@ Remove the TypeScript `context` field and dispatch-context normalization. Keep p
 - affected routes → resulting route/path state;
 - preview impact → continue asserting preview responses.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```sh
 cargo test -p caelum-core
@@ -192,13 +191,13 @@ Expected: every command exits 0; public context is gone; apply/preview behavior 
 
 **Files:** delete ownership module/test; modify backend types/Tauri adapter/runtime construction and ownership-only cleanup tests.
 
-- [ ] **Step 1: Remove ownership and identity**
+- [x] **Step 1: Remove ownership and identity**
 
 Delete the coordinator, module `Map`, `WeakMap`, reset hook, lease handle, and tests. Remove `runtimeIdentity` from `GameBackend`/Tauri. Remove runtime acquisition/release and ownership-specific cleanup comments.
 
 Do not change persistence leases, queues, tokens, pending/finalize, or public `beginRuntime` here.
 
-- [ ] **Step 2: Verify and commit**
+- [x] **Step 2: Verify and commit**
 
 ```sh
 rg -n 'runtimeIdentity|BackendOwnership|backendOwnershipRegistry|objectIdentityBackendOwnership' \
@@ -251,7 +250,7 @@ export type PersistenceCoordinatorBackendError =
 
 ## 3A. Final-contract tests
 
-- [ ] **Step 1: Add nine core construction tests**
+- [x] **Step 1: Add nine core construction tests**
 
 Create `persistence_construction.rs`:
 
@@ -269,7 +268,7 @@ Create `persistence_construction.rs`:
 
 Use programmatic candidates, not persistence JSON fixtures.
 
-- [ ] **Step 2: Rewrite backend/error tests**
+- [x] **Step 2: Rewrite backend/error tests**
 
 Backend contract tests require the nine final methods and absence of `beginRuntime`, `validateSnapshot`, `createSandbox`, and `runtimeIdentity`.
 
@@ -282,7 +281,7 @@ Persistence mapping tests cover only:
 
 Do not test an operation field.
 
-- [ ] **Step 3: Add host/runtime behavior tests**
+- [x] **Step 3: Add host/runtime behavior tests**
 
 Both host suites cover pure sandbox construction, dispatch/tick, save, valid restore, and definitive invalid restore preserving active state. Tauri also keeps one stale-epoch test.
 
@@ -299,7 +298,7 @@ Runtime tests cover:
 
 Do not add pending/finalize ambiguity tests.
 
-- [ ] **Step 4: Verify tests fail against the old contract**
+- [x] **Step 4: Verify tests fail against the old contract**
 
 ```sh
 cargo test -p caelum-core --test persistence_construction
@@ -315,7 +314,7 @@ Expected: failures from missing final types/methods and old mutating New City be
 
 ## 3B. Core save/restore and validation
 
-- [ ] **Step 5: Collapse errors and save capture**
+- [x] **Step 5: Collapse errors and save capture**
 
 ```rust
 pub enum SnapshotLoadError {
@@ -326,7 +325,7 @@ pub enum SnapshotLoadError {
 
 Make `snapshot_for_save` return an infallible paused normalized clone. Remove `SaveSnapshotCapture`.
 
-- [ ] **Step 6: Prune/normalize `map.rs`**
+- [x] **Step 6: Prune/normalize `map.rs`**
 
 Retain schema, finite tick arithmetic, speed, dimensions/count/coordinates, tile/infrastructure safety, duplicate/bounds/target/reciprocal road checks, basic structure ownership/ports, growth values reached by tick, and structure compilation.
 
@@ -337,7 +336,7 @@ cargo test -p caelum-core --test persistence_construction
 cargo test -p caelum-core
 ```
 
-- [ ] **Step 7: Prune/normalize `entities.rs`**
+- [x] **Step 7: Prune/normalize `entities.rs`**
 
 Retain ID uniqueness, bounds, building/node ownership, platform identity/assignment, waypoint/reference integrity, route↔vehicle agreement, indexes/progress, and passenger compatibility.
 
@@ -348,7 +347,7 @@ cargo test -p caelum-core --test persistence_construction
 cargo test -p caelum-core
 ```
 
-- [ ] **Step 8: Prune/normalize `trips.rs`**
+- [x] **Step 8: Prune/normalize `trips.rs`**
 
 Retain point/reference/index bounds and finite tick arithmetic. Normalize worker/shift and trip sequence counters. Delete endpoint-history, sim/trip equality, router-oracle equality, metrics relationship/window/objective/loss forensics, and ordering validation.
 
@@ -357,13 +356,13 @@ cargo test -p caelum-core --test persistence_construction
 cargo test -p caelum-core
 ```
 
-- [ ] **Step 9: Remove prepared restore token**
+- [x] **Step 9: Remove prepared restore token**
 
 Construct a candidate with `GameEngine::from_snapshot`; `restore_snapshot` assigns only after construction succeeds. Remove `PreparedEngineRestore` and detailed bridge exports.
 
 ## 3C. TypeScript and hosts
 
-- [ ] **Step 10: Replace backend persistence types**
+- [x] **Step 10: Replace backend persistence types**
 
 Define the small types above. Delete `PersistenceOperationError`, request wrapper, validation result, `RuntimeSession`, `beginRuntime`, and `validateSnapshot`.
 
@@ -388,7 +387,7 @@ export function snapshotError(
 
 Keep only enough schema recognition to distinguish `unsupportedSchema`.
 
-- [ ] **Step 11: Replace coordinator consumer type**
+- [x] **Step 11: Replace coordinator consumer type**
 
 ```ts
 export type PersistenceCoordinatorBackendError =
@@ -398,11 +397,11 @@ export type PersistenceCoordinatorBackendError =
 
 Delete old operation/error taxonomy imports. Keep the outer coordinator/store model unchanged.
 
-- [ ] **Step 12: Thin WASM**
+- [x] **Step 12: Thin WASM**
 
 Expose a bridge backed by existing `create_sandbox_snapshot`; do not construct and assign a temporary engine. Remove standalone validation, exact bridge serialization, prepared-token helpers, and encode-failure matrix tests. The adapter implements the final methods and maps only the three codes.
 
-- [ ] **Step 13: Thin Tauri and privatize epoch**
+- [x] **Step 13: Thin Tauri and privatize epoch**
 
 `createTauriBackend()` calls private `game_begin_runtime` before returning and closes over the epoch. Replace `game_create_sandbox` with non-mutating `game_build_sandbox_snapshot` using `create_sandbox_snapshot`. Delete `game_validate_snapshot`. Keep stale-epoch checks on mutating/save/restore commands.
 
@@ -410,7 +409,7 @@ A small `game_host.rs` extraction is allowed; no trait/framework.
 
 ## 3D. Runtime integration
 
-- [ ] **Step 14: Convert Save and Load**
+- [x] **Step 14: Convert Save and Load**
 
 Save uses `snapshotForSave`; thrown save capture is non-mutating `hostFailure`.
 
@@ -425,7 +424,7 @@ Load:
 
 Delete separate validation. Do not re-read/publish arbitrary backend state.
 
-- [ ] **Step 15: Convert New City**
+- [x] **Step 15: Convert New City**
 
 Pure build → existing persist/finalize → capture prior immediately before activation → restore → publish.
 
@@ -433,7 +432,7 @@ Delete the early prior capture, mutating sandbox call, candidate recapture, and 
 
 Keep current pending/finalize reconciliation/tests. Activation `{ ok: false }` leaves record/prior gameplay. Thrown activation rolls back prior; rollback failure is fatal.
 
-- [ ] **Step 16: Verify preparatory deletions remain**
+- [x] **Step 16: Verify preparatory deletions remain**
 
 ```sh
 rg -n 'runtimeIdentity|BackendOwnership|backendOwnershipRegistry' src tests
@@ -443,7 +442,7 @@ rg -n 'pub context: DispatchContext|context: DispatchContext' \
 
 Expected: no public ownership or dispatch context.
 
-- [ ] **Step 17: Full verification before snapshot commit**
+- [x] **Step 17: Full verification before snapshot commit**
 
 ```sh
 cargo test -p caelum-core --test persistence_construction
@@ -468,7 +467,7 @@ bun run test:e2e
 
 Expected: every command exits 0.
 
-- [ ] **Step 18: Commit atomic snapshot cut**
+- [x] **Step 18: Commit atomic snapshot cut**
 
 ```sh
 git add crates/caelum-core crates/caelum-wasm src-tauri/src \
@@ -482,7 +481,7 @@ Do not split this commit by host/layer.
 
 # Task 4: Delete Parity and Validator Maintenance Tax
 
-- [ ] **Step 1: Delete detailed modules and suites**
+- [x] **Step 1: Delete detailed modules and suites**
 
 Delete the files in the File Map, including the previously omitted:
 
@@ -491,21 +490,19 @@ Delete the files in the File Map, including the previously omitted:
 
 Move the nine retained safety assertions into `persistence_construction.rs`. Remove detailed exports from `lib.rs`.
 
-- [ ] **Step 2: Delete fixtures/benchmark safely**
+- [x] **Step 2: Delete fixtures/benchmark safely**
 
 Delete the persistence JSON catalogue/README and export generator after confirming no non-persistence test consumes them. Delete the obsolete WASM benchmark wiring and its package/coverage entries.
 
-Retain `rich_fixture` or `rustSnapshot.ts` data still used by ordinary gameplay/UI tests.
+Retain `tests/fixtures/rustSnapshot.ts` data still used by ordinary gameplay/UI tests.
 
-- [ ] **Step 3: Retire superseded documents**
+- [x] **Step 3: Retire superseded documents**
 
 Delete the implemented HPA-340/HPA-341 validation/parity specs/plans that prescribe the removed contract. Update remaining links to HPA-547.
 
-- [ ] **Step 4: Verify and commit cleanup**
+- [x] **Step 4: Verify and commit cleanup**
 
 ```sh
-rg -n 'PersistenceBridgeError|PersistenceOperationError|SnapshotField|DerivedStateError' \
-  crates src-tauri src tests
 rg -n 'PersistenceBridgeError|PersistenceOperationError' crates src-tauri src tests
 cargo test --workspace
 bun run format:check
@@ -517,17 +514,21 @@ git add -A
 git commit -m "test: remove obsolete host parity machinery"
 ```
 
-Expected: removed vocabulary appears only in HPA-547 historical/problem prose; all commands exit 0.
+Expected: public bridge taxonomy appears only in HPA-547 historical/problem prose.
+Internal validator plumbing in `crates/caelum-core/src/persistence/error.rs`
+(`PersistenceError`, `SnapshotField`, `DerivedStateError`, and related types)
+remains `pub(crate)` and is mapped to the small public snapshot-error boundary;
+all commands exit 0.
 
 ---
 
 # Task 5: Architecture and Scope Audit
 
-- [ ] **Step 1: Update current architecture docs**
+- [x] **Step 1: Update current architecture docs**
 
 Document both hosts, nine-method backend, private epoch, pure sandbox, candidate-first restore, thrown-restore rollback, three errors without operation, public dispatch-context removal, retained private/preview impact, and HPA-543/HPA-548 boundaries.
 
-- [ ] **Step 2: Run contract and scope greps**
+- [x] **Step 2: Run contract and scope greps**
 
 ```sh
 rg -n 'runtimeIdentity|RuntimeSession|validateSnapshot|BackendOwnership|PreparedEngineRestore|SaveSnapshotCapture' \
@@ -542,7 +543,7 @@ rg -n 'SharedPersistenceCoordinator|PersistenceLease|cityQueues|pending|finalize
 
 Expected: removed terms only in historical explanation; pure sandbox exists in both adapters; current HPA-543/HPA-548 machinery remains.
 
-- [ ] **Step 3: Final verification and net deletion**
+- [x] **Step 3: Final verification and net deletion**
 
 ```sh
 bun run format:check
@@ -559,7 +560,7 @@ git diff --numstat origin/main...HEAD | \
 
 Review gate: production/test code shows material net deletion; documentation additions do not excuse growth; no replacement platform appears.
 
-- [ ] **Step 4: Commit docs**
+- [x] **Step 4: Commit docs**
 
 ```sh
 git add docs/architecture.md CLAUDE.md \
@@ -572,20 +573,20 @@ git commit -m "docs: align architecture with thin gameplay hosts"
 
 ## Final Checklist
 
-- [ ] Both hosts remain functional and use `create_sandbox_snapshot`.
-- [ ] `GameBackend` has nine methods; session/identity/validation are gone.
-- [ ] Tauri epoch is private and stale-epoch test remains.
-- [ ] Errors are three categories with optional diagnostic and no operation field.
-- [ ] Matrix decisions and candidate order are implemented.
-- [ ] Nine construction tests pass, including separate reciprocity/compiler failures.
-- [ ] Save capture is paused/infallible and does not mutate live state.
-- [ ] Definitive restore rejection preserves state.
-- [ ] Thrown Load/New City restore rolls back; rollback failure is fatal.
-- [ ] No new pending/finalize reconciliation tests were added.
-- [ ] Public dispatch context is gone; private apply/preview impact remains.
-- [ ] Detailed taxonomy, fixtures, matrices, benchmark, and missing delete-list files are gone.
-- [ ] Full format/lint/check/build/unit/e2e/Rust verification passes.
-- [ ] Production/test code is materially smaller.
+- [x] Both hosts remain functional and use `create_sandbox_snapshot`.
+- [x] `GameBackend` has nine methods; session/identity/validation are gone.
+- [x] Tauri epoch is private and stale-epoch test remains.
+- [x] Errors are three categories with optional diagnostic and no operation field.
+- [x] Matrix decisions and candidate order are implemented.
+- [x] Nine construction tests pass, including separate reciprocity/compiler failures.
+- [x] Save capture is paused/infallible and does not mutate live state.
+- [x] Definitive restore rejection preserves state.
+- [x] Thrown Load/New City restore rolls back; rollback failure is fatal.
+- [x] No new pending/finalize reconciliation tests were added.
+- [x] Public dispatch context is gone; private apply/preview impact remains.
+- [x] Detailed taxonomy, fixtures, matrices, benchmark, and missing delete-list files are gone.
+- [x] Full format/lint/check/build/unit/e2e/Rust verification passes.
+- [x] Production/test code is materially smaller.
 
 ## Commit Sequence
 
