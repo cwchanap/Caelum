@@ -9,15 +9,15 @@
 mod common;
 
 use caelum_core::model::{
-    self, BusStopKind, Point, Sim, Station, Stop, StopRoadAccess, TransitMode, TransitNodeStatus,
-    TripPosition, WorkerProfile,
+    self, BusStopKind, Point, Sim, Station, Stop, TransitMode, TransitNodeStatus, TripPosition,
+    WorkerProfile,
 };
 use caelum_core::{
     validate_snapshot, AssignmentError, EntityError, EntityKind, NumericError, OwnershipError,
     PersistenceError, SnapshotField,
 };
 use common::persistence_fixtures::{
-    entity_ref, fixture_with_bus_route, paused_snapshot, rich_fixture, road_with_structure,
+    entity_ref, fixture_with_bus_route, paused_snapshot, rich_fixture,
 };
 
 // ===========================================================================
@@ -46,58 +46,6 @@ fn empty_entity_id_is_rejected() {
             entity: entity_ref(EntityKind::Sim, ""),
             field: SnapshotField::EntityId,
             reason: EntityError::EmptyId,
-        }
-    );
-}
-
-#[test]
-fn non_canonical_entity_id_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    snapshot.sims = vec![Sim {
-        id: "sim-bad".to_string(),
-        home: Point { x: 2, y: 3 },
-        position: Point { x: 2, y: 3 },
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: None,
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
-    }];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidEntity {
-            entity: entity_ref(EntityKind::Sim, "sim-bad"),
-            field: SnapshotField::EntityId,
-            reason: EntityError::NonCanonicalId,
-        }
-    );
-}
-
-#[test]
-fn non_canonical_trip_id_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    snapshot.active_trips = vec![caelum_core::model::ActiveTrip {
-        id: "trip-bad".to_string(),
-        sim_id: "sim-001".to_string(),
-        purpose: caelum_core::model::TripPurpose::CommuteOutbound,
-        origin: Point { x: 2, y: 3 },
-        destination: Point { x: 4, y: 3 },
-        position: TripPosition::from(Point { x: 2, y: 3 }),
-        status: caelum_core::model::TripStatus::Idle,
-        deadline: 900.0,
-        route_plan: None,
-        current_leg_index: 0,
-        patience_remaining: 240.0,
-    }];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidEntity {
-            entity: entity_ref(EntityKind::ActiveTrip, "trip-bad"),
-            field: SnapshotField::EntityId,
-            reason: EntityError::NonCanonicalId,
         }
     );
 }
@@ -144,29 +92,6 @@ fn building_with_invalid_rotation_is_rejected() {
             entity: entity_ref(EntityKind::Building, "building-001"),
             field: SnapshotField::BuildingRotation,
             reason: EntityError::InvalidStaticShape,
-        }
-    );
-}
-
-#[test]
-fn building_footprint_mismatch_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    snapshot.map.tiles[0].area = Some("residential".to_string());
-    snapshot.map.tiles[1].area = Some("residential".to_string());
-    snapshot.buildings = vec![model::PlacedBuilding {
-        id: "building-001".to_string(),
-        building_type: "smallHouse".to_string(),
-        origin: Point { x: 0, y: 0 },
-        rotation: 0,
-        occupied_tiles: vec![Point { x: 0, y: 0 }],
-        transit_node_id: None,
-    }];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidOwnership {
-            owner: entity_ref(EntityKind::Building, "building-001"),
-            owned: entity_ref(EntityKind::Building, "building-001"),
-            reason: OwnershipError::FootprintMismatch,
         }
     );
 }
@@ -295,37 +220,6 @@ fn missing_transit_node_not_referenced_by_any_route_is_rejected() {
             reason: OwnershipError::MissingOwner,
         }
     );
-}
-
-#[test]
-fn transit_node_anchor_on_structure_tile_is_rejected() {
-    let mut snapshot = road_with_structure();
-    // The roundabout center occupies (6,5); place a stop there.
-    snapshot.transit.stops = vec![Stop {
-        id: "stop-001".to_string(),
-        kind: BusStopKind::BusStop,
-        status: TransitNodeStatus::Present,
-        position: Point { x: 6, y: 5 },
-        platforms: vec![model::Platform {
-            id: "stop-001-p0".to_string(),
-            label: "A".to_string(),
-            capacity: 1,
-            route_ids: vec![],
-        }],
-        road_access: Some(StopRoadAccess {
-            road_point: Point { x: 6, y: 5 },
-            preferred_heading: None,
-        }),
-    }];
-    let err = validate_snapshot(&snapshot).unwrap_err();
-    assert!(matches!(
-        err,
-        PersistenceError::InvalidEntity {
-            field: SnapshotField::NodeAnchor,
-            reason: EntityError::InvalidStaticShape,
-            ..
-        }
-    ));
 }
 
 #[test]
@@ -502,21 +396,6 @@ fn vehicle_missing_from_line_vehicle_list_is_rejected() {
         err,
         PersistenceError::InvalidAssignment {
             reason: AssignmentError::VehicleMissingFromLine,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn vehicle_with_wrong_capacity_is_rejected() {
-    let mut snapshot = fixture_with_bus_route();
-    snapshot.transit.vehicles[0].capacity = 99;
-    let err = validate_snapshot(&snapshot).unwrap_err();
-    assert!(matches!(
-        err,
-        PersistenceError::InvalidEntity {
-            field: SnapshotField::VehicleCapacity,
-            reason: EntityError::InvalidStaticShape,
             ..
         }
     ));

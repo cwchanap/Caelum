@@ -6,7 +6,7 @@ mod trips;
 pub use error::{
     AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
     NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
-    RoadTopologyError, ScenarioError, SnapshotField, TileError,
+    RoadTopologyError, ScenarioError, SnapshotField, SnapshotLoadError, TileError,
 };
 
 use crate::model::{GameSnapshot, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};
@@ -39,11 +39,23 @@ pub(super) fn finite_non_negative(
     Ok(())
 }
 
-fn validate_and_compile(snapshot: &GameSnapshot) -> PersistenceResult<RoadTopology> {
-    let topology = map::validate_shell_rules_map_and_compile(snapshot)?;
-    let indexes = entities::validate_entities(snapshot, &topology)?;
-    trips::validate_trips(snapshot, &indexes)?;
-    Ok(topology)
+fn validate_and_compile(mut snapshot: GameSnapshot) -> PersistenceResult<PreparedSnapshot> {
+    if snapshot.schema_version != SNAPSHOT_SCHEMA_VERSION {
+        return Err(PersistenceError::UnsupportedSchema {
+            expected: SNAPSHOT_SCHEMA_VERSION,
+            actual: snapshot.schema_version,
+        });
+    }
+    map::normalize_shell(&mut snapshot);
+    let topology = map::validate_shell_rules_map_and_compile(&snapshot)?;
+    trips::normalize_direct_fields(&mut snapshot);
+    entities::normalize_direct_fields(&mut snapshot, &topology);
+    let indexes = entities::validate_entities(&snapshot, &topology)?;
+    trips::validate_trips(&snapshot, &indexes)?;
+    Ok(PreparedSnapshot {
+        snapshot,
+        road_topology: topology,
+    })
 }
 
 pub(crate) struct PreparedSnapshot {
@@ -52,15 +64,17 @@ pub(crate) struct PreparedSnapshot {
 }
 
 pub(crate) fn prepare_snapshot(snapshot: GameSnapshot) -> PersistenceResult<PreparedSnapshot> {
-    let road_topology = validate_and_compile(&snapshot)?;
-    Ok(PreparedSnapshot {
-        snapshot,
-        road_topology,
-    })
+    validate_and_compile(snapshot)
+}
+
+pub(crate) fn normalize_snapshot_for_save(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
+    map::normalize_shell(snapshot);
+    entities::normalize_direct_fields(snapshot, topology);
+    trips::normalize_direct_fields(snapshot);
 }
 
 pub fn validate_snapshot(snapshot: &GameSnapshot) -> PersistenceResult<()> {
-    validate_and_compile(snapshot).map(drop)
+    validate_and_compile(snapshot.clone()).map(drop)
 }
 
 /// Check a probed schema version against the current

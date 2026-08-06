@@ -1,1065 +1,134 @@
 import { SNAPSHOT_SCHEMA_VERSION } from "../../domain/types";
-import type { Heading, Point } from "../../domain/types";
-import type {
-  PersistenceAssignmentError,
-  PersistenceDerivedStateError,
-  PersistenceEntityError,
-  PersistenceEntityKind,
-  PersistenceEntityRef,
-  PersistenceHostErrorCode,
-  PersistenceMapSize,
-  PersistenceModeError,
-  PersistenceNumericError,
-  PersistenceOperation,
-  PersistenceOperationError,
-  PersistenceOwnershipError,
-  PersistenceRoadStructureError,
-  PersistenceRoadTopologyError,
-  PersistenceScenarioError,
-  PersistenceSnapshotField,
-  PersistenceSnapshotResultOf,
-  PersistenceTileError,
-  PersistenceValidationError,
-  PersistenceValidationResult,
-} from "./persistenceContract";
 import type { RustGameSnapshot } from "./types";
+import type {
+  SnapshotError,
+  SnapshotErrorCode,
+  SnapshotResult,
+} from "./persistenceContract";
 
-type PlainObject = Record<string, unknown>;
-
-export const PERSISTENCE_VALIDATION_CODES = [
-  "unsupportedSchema",
-  "invalidNumericValue",
-  "invalidModeSettings",
-  "invalidScenario",
-  "invalidMapDimensions",
-  "invalidTile",
-  "invalidRoadStructure",
-  "duplicateEntityId",
-  "invalidEntity",
-  "danglingReference",
-  "invalidOwnership",
-  "invalidAssignment",
-  "invalidDerivedState",
-  "invalidRoadTopology",
-] as const satisfies readonly PersistenceValidationError["code"][];
-
-export const PERSISTENCE_SNAPSHOT_FIELDS = [
-  "time",
-  "day",
-  "clockMinutes",
-  "speed",
-  "paused",
-  "budget",
-  "gameMode",
-  "economyPreset",
-  "sandboxTemplateId",
-  "startingCapital",
-  "demandMultiplier",
-  "scenarioObjectives",
-  "scenarioGrowthWaves",
-  "objectiveThresholds",
-  "growthWaveId",
-  "growthWaveTriggerTime",
-  "growthWaveActions",
-  "mapWidth",
-  "mapHeight",
-  "tileCount",
-  "tileCoordinates",
-  "tileId",
-  "tileKind",
-  "tileArea",
-  "tileRoadConnections",
-  "tileOneWay",
-  "tileRoadStructureId",
-  "entityId",
-  "buildingOrigin",
-  "buildingRotation",
-  "buildingOccupiedTiles",
-  "buildingTransitNodeId",
-  "nodeKind",
-  "nodeStatus",
-  "nodeAnchor",
-  "nodeRoadAccess",
-  "platformLabel",
-  "platformCapacity",
-  "platformCount",
-  "platformOrder",
-  "platformRouteIds",
-  "routePattern",
-  "routeWaypointIds",
-  "routeLegs",
-  "routeEstimatedSeconds",
-  "routePathBroken",
-  "routeRevision",
-  "routeVehicleIds",
-  "vehicleMode",
-  "vehicleLineId",
-  "vehicleCapacity",
-  "vehiclePassengerIds",
-  "vehicleItineraryIndex",
-  "vehiclePathStepIndex",
-  "vehicleStepProgress",
-  "vehicleParkedPosition",
-  "simHome",
-  "simPosition",
-  "simWorkerProfile",
-  "simShiftTemplate",
-  "simWorkplace",
-  "simCommuteDay",
-  "simDailyFlags",
-  "tripServiceDay",
-  "tripPurpose",
-  "tripStatus",
-  "tripOrigin",
-  "tripDestination",
-  "tripPosition",
-  "tripDeadline",
-  "tripPatience",
-  "tripRoutePlan",
-  "tripEstimatedSeconds",
-  "tripCurrentLegIndex",
-  "tripSequenceDay",
-  "nextTripSequence",
-  "metricsCounters",
-  "metricsWaits",
-  "metricsTripOutcomes",
-  "outcomeWaitSeconds",
-  "outcomeTimestamp",
-  "metricsState",
-  "metricsLossReason",
-] as const satisfies readonly PersistenceSnapshotField[];
-
-export const PERSISTENCE_ENTITY_KINDS = [
-  "building",
-  "sim",
-  "activeTrip",
-  "stop",
-  "station",
-  "platform",
-  "busRoute",
-  "metroLine",
-  "vehicle",
-] as const satisfies readonly PersistenceEntityKind[];
-
-export const PERSISTENCE_HEADINGS = [
-  "north",
-  "east",
-  "south",
-  "west",
-] as const satisfies readonly Heading[];
-
-export const PERSISTENCE_REASON_KINDS = {
-  numeric: ["notFinite", "negative", "outOfRange", "overflow"],
-  mode: [
-    "persistenceRequiresPaused",
-    "unsupportedSpeed",
-    "invalidEconomyForMode",
-    "sandboxObjectivesPresent",
-    "sandboxGrowthWavesPresent",
-    "sandboxTerminalState",
-    "campaignTerminalWithoutObjectives",
-  ],
-  scenario: [
-    "duplicateGrowthWaveId",
-    "triggerTimesOutOfOrder",
-    "appliedAfterUnapplied",
-    "actionOutOfBounds",
-    "unknownBuildingType",
-    "invalidBuildingRotation",
-  ],
-  tile: [
-    "wrongRowMajorCoordinate",
-    "countMismatch",
-    "nonCanonicalId",
-    "unsupportedKind",
-    "unsupportedArea",
-    "nonRoadHasRoadState",
-    "duplicateRoadConnection",
-    "nonCanonicalRoadConnectionOrder",
-    "connectionOutOfBounds",
-    "connectionToNonRoad",
-    "nonReciprocalConnection",
-    "invalidOneWayAxis",
-    "invalidInfrastructureCoexistence",
-  ],
-  roadStructure: [
-    "nonCanonicalId",
-    "emptyFootprint",
-    "duplicateFootprintPoint",
-    "overlappingFootprint",
-    "nonRoadFootprintTile",
-    "tileOwnerMismatch",
-    "danglingTileOwner",
-    "duplicatePortId",
-    "duplicatePortPointEdge",
-    "invalidBoundaryPort",
-    "nonCanonicalFootprint",
-    "nonCanonicalLaneFacts",
-    "nonCanonicalMovementFacts",
-    "automaticJunctionMismatch",
-  ],
-  entity: ["emptyId", "nonCanonicalId", "invalidStaticShape"],
-  ownership: [
-    "missingOwner",
-    "multipleOwners",
-    "ownerTypeMismatch",
-    "footprintMismatch",
-    "anchorMismatch",
-    "reciprocalLinkMissing",
-    "spatialOverlap",
-  ],
-  assignment: [
-    "duplicateAssignment",
-    "modeMismatch",
-    "waypointMissing",
-    "platformMismatch",
-    "vehicleMissingFromLine",
-    "vehicleListedByMultipleLines",
-    "passengerNotRiding",
-    "passengerInMultipleVehicles",
-    "itineraryIndexOutOfBounds",
-    "pathStepIndexOutOfBounds",
-    "progressOutOfRange",
-  ],
-  derivedState: [
-    "clockMismatch",
-    "stopAccessMismatch",
-    "routeLegMismatch",
-    "routePathBrokenMismatch",
-    "routeOracleNotIdempotent",
-    "tripStateMismatch",
-    "tripPositionMismatch",
-    "tripCounterMismatch",
-    "metricsRelationshipMismatch",
-    "outcomeWindowMismatch",
-    "objectiveStateMismatch",
-    "lossReasonMismatch",
-  ],
-  roadTopology: ["unsafeRoundaboutPortMapping"],
-} as const satisfies {
-  numeric: readonly PersistenceNumericError["kind"][];
-  mode: readonly PersistenceModeError["kind"][];
-  scenario: readonly PersistenceScenarioError["kind"][];
-  tile: readonly PersistenceTileError["kind"][];
-  roadStructure: readonly PersistenceRoadStructureError["kind"][];
-  entity: readonly PersistenceEntityError["kind"][];
-  ownership: readonly PersistenceOwnershipError["kind"][];
-  assignment: readonly PersistenceAssignmentError["kind"][];
-  derivedState: readonly PersistenceDerivedStateError["kind"][];
-  roadTopology: readonly PersistenceRoadTopologyError["kind"][];
-};
-
-const VALIDATION_CODES = new Set<PersistenceValidationError["code"]>(
-  PERSISTENCE_VALIDATION_CODES,
-);
-const SNAPSHOT_FIELDS = new Set<PersistenceSnapshotField>(
-  PERSISTENCE_SNAPSHOT_FIELDS,
-);
-const ENTITY_KINDS = new Set<PersistenceEntityKind>(PERSISTENCE_ENTITY_KINDS);
-const HEADINGS = new Set<Heading>(PERSISTENCE_HEADINGS);
-const REASON_KINDS = {
-  numeric: new Set<string>(PERSISTENCE_REASON_KINDS.numeric),
-  mode: new Set<string>(PERSISTENCE_REASON_KINDS.mode),
-  scenario: new Set<string>(PERSISTENCE_REASON_KINDS.scenario),
-  tile: new Set<string>(PERSISTENCE_REASON_KINDS.tile),
-  roadStructure: new Set<string>(PERSISTENCE_REASON_KINDS.roadStructure),
-  entity: new Set<string>(PERSISTENCE_REASON_KINDS.entity),
-  ownership: new Set<string>(PERSISTENCE_REASON_KINDS.ownership),
-  assignment: new Set<string>(PERSISTENCE_REASON_KINDS.assignment),
-  derivedState: new Set<string>(PERSISTENCE_REASON_KINDS.derivedState),
-  roadTopology: new Set<string>(PERSISTENCE_REASON_KINDS.roadTopology),
-};
-
-function isPlainObject(value: unknown): value is PlainObject {
-  try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return false;
-    }
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-  } catch {
-    return false;
-  }
+function diagnosticFor(error: unknown): string | undefined {
+  return error instanceof Error
+    ? error.message
+    : error === undefined
+      ? undefined
+      : String(error);
 }
 
-function hasExactKeys(
-  value: PlainObject,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  try {
-    const allowed = new Set([...required, ...optional]);
-    return (
-      required.every((key) =>
-        Object.prototype.hasOwnProperty.call(value, key),
-      ) &&
-      Reflect.ownKeys(value).every(
-        (key) => typeof key === "string" && allowed.has(key),
-      )
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isPoint(value: unknown): value is Point {
-  return (
-    isPlainObject(value) &&
-    hasExactKeys(value, ["x", "y"]) &&
-    isFiniteNumber(value.x) &&
-    isFiniteNumber(value.y)
-  );
-}
-
-function isHeading(value: unknown): value is Heading {
-  return typeof value === "string" && HEADINGS.has(value as Heading);
-}
-
-function isEntityKind(value: unknown): value is PersistenceEntityKind {
-  return (
-    typeof value === "string" &&
-    ENTITY_KINDS.has(value as PersistenceEntityKind)
-  );
-}
-
-function isSnapshotField(value: unknown): value is PersistenceSnapshotField {
-  return (
-    typeof value === "string" &&
-    SNAPSHOT_FIELDS.has(value as PersistenceSnapshotField)
-  );
-}
-
-function isPersistenceEntityRef(value: unknown): value is PersistenceEntityRef {
-  return (
-    isPlainObject(value) &&
-    hasExactKeys(value, ["kind", "id"]) &&
-    isEntityKind(value.kind) &&
-    typeof value.id === "string"
-  );
-}
-
-function isPersistenceMapSize(value: unknown): value is PersistenceMapSize {
-  return (
-    isPlainObject(value) &&
-    hasExactKeys(value, ["width", "height"]) &&
-    isFiniteNumber(value.width) &&
-    isFiniteNumber(value.height)
-  );
-}
-
-function isPointArray(value: unknown): value is Point[] {
-  // Array.prototype.every skips holes and ignores non-index own properties,
-  // so it would accept sparse arrays (new Array(3)) and arrays carrying
-  // extra string/symbol keys — shapes Rust/JSON can never emit. Require every
-  // index 0..length-1 to be an own property (no holes), reject any extra own
-  // key (symbol or non-index string) by checking the own-key count, then
-  // verify every element is a Point.
-  if (!Array.isArray(value)) return false;
-  const len = value.length;
-  for (let i = 0; i < len; i++) {
-    if (!Object.prototype.hasOwnProperty.call(value, i)) return false;
-  }
-  // After verifying all indices are own properties, the own-key count must be
-  // exactly len + 1 (indices + "length"). Any extra key (symbol or non-index
-  // string) makes the count exceed len + 1.
-  if (Reflect.ownKeys(value).length !== len + 1) return false;
-  for (let i = 0; i < len; i++) {
-    if (!isPoint(value[i])) return false;
-  }
-  return true;
-}
-
-function isExactDetails(
-  value: unknown,
-  required: readonly string[],
-  checks: Record<string, (value: unknown) => boolean>,
-): boolean {
-  return (
-    isPlainObject(value) &&
-    hasExactKeys(value, required) &&
-    required.every((key) => checks[key]?.(value[key]) === true)
-  );
-}
-
-function isUnitReason(value: PlainObject): boolean {
-  return hasExactKeys(value, ["kind"]);
-}
-
-function isStructuredReason(
-  value: PlainObject,
-  keys: readonly string[],
-  checks: Record<string, (value: unknown) => boolean>,
-): boolean {
-  return (
-    hasExactKeys(value, ["kind", "details"]) &&
-    isExactDetails(value.details, keys, checks)
-  );
-}
-
-function isPersistenceNumericError(
-  value: unknown,
-): value is PersistenceNumericError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.numeric.has(value.kind)
-  )
-    return false;
-  const kind = value.kind as PersistenceNumericError["kind"];
-  switch (kind) {
-    case "outOfRange":
-      return isStructuredReason(value, ["minimum", "maximum", "actual"], {
-        minimum: isFiniteNumber,
-        maximum: isFiniteNumber,
-        actual: isFiniteNumber,
-      });
-    case "notFinite":
-    case "negative":
-    case "overflow":
-      return isUnitReason(value);
-  }
-}
-
-function isPersistenceModeError(value: unknown): value is PersistenceModeError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.mode.has(value.kind)
-  )
-    return false;
-  return isUnitReason(value);
-}
-
-function isPersistenceScenarioError(
-  value: unknown,
-): value is PersistenceScenarioError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.scenario.has(value.kind)
-  )
-    return false;
-  const kind = value.kind as PersistenceScenarioError["kind"];
-  switch (kind) {
-    case "duplicateGrowthWaveId":
-      return isStructuredReason(value, ["waveId"], { waveId: isString });
-    case "triggerTimesOutOfOrder":
-      return isStructuredReason(value, ["previousWaveId", "waveId"], {
-        previousWaveId: isString,
-        waveId: isString,
-      });
-    case "appliedAfterUnapplied":
-      return isStructuredReason(
-        value,
-        ["firstUnappliedWaveId", "laterAppliedWaveId"],
-        { firstUnappliedWaveId: isString, laterAppliedWaveId: isString },
-      );
-    case "actionOutOfBounds":
-      return isStructuredReason(value, ["waveId", "actionIndex", "point"], {
-        waveId: isString,
-        actionIndex: isFiniteNumber,
-        point: isPoint,
-      });
-    case "unknownBuildingType":
-    case "invalidBuildingRotation":
-      return isStructuredReason(value, ["waveId", "actionIndex"], {
-        waveId: isString,
-        actionIndex: isFiniteNumber,
-      });
-  }
-}
-
-function isPersistenceTileError(value: unknown): value is PersistenceTileError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.tile.has(value.kind)
-  )
-    return false;
-  const kind = value.kind as PersistenceTileError["kind"];
-  switch (kind) {
-    case "wrongRowMajorCoordinate":
-      return isStructuredReason(value, ["expected", "actual"], {
-        expected: isPoint,
-        actual: isPoint,
-      });
-    case "countMismatch":
-      return isStructuredReason(value, ["expected", "actual"], {
-        expected: isFiniteNumber,
-        actual: isFiniteNumber,
-      });
-    case "nonCanonicalId":
-      return isStructuredReason(value, ["expected"], { expected: isString });
-    case "connectionOutOfBounds":
-      return isStructuredReason(value, ["heading"], { heading: isHeading });
-    case "connectionToNonRoad":
-    case "nonReciprocalConnection":
-      return isStructuredReason(value, ["neighbor"], { neighbor: isPoint });
-    case "unsupportedKind":
-    case "unsupportedArea":
-    case "nonRoadHasRoadState":
-    case "duplicateRoadConnection":
-    case "nonCanonicalRoadConnectionOrder":
-    case "invalidOneWayAxis":
-    case "invalidInfrastructureCoexistence":
-      return isUnitReason(value);
-  }
-}
-
-function isPersistenceRoadStructureError(
-  value: unknown,
-): value is PersistenceRoadStructureError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.roadStructure.has(value.kind)
-  )
-    return false;
-  return isUnitReason(value);
-}
-
-function isPersistenceEntityError(
-  value: unknown,
-): value is PersistenceEntityError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.entity.has(value.kind)
-  )
-    return false;
-  return isUnitReason(value);
-}
-
-function isPersistenceOwnershipError(
-  value: unknown,
-): value is PersistenceOwnershipError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.ownership.has(value.kind)
-  )
-    return false;
-  return isUnitReason(value);
-}
-
-function isPersistenceAssignmentError(
-  value: unknown,
-): value is PersistenceAssignmentError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.assignment.has(value.kind)
-  )
-    return false;
-  return isUnitReason(value);
-}
-
-function isPersistenceDerivedStateError(
-  value: unknown,
-): value is PersistenceDerivedStateError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.kind !== "string" ||
-    !REASON_KINDS.derivedState.has(value.kind)
-  )
-    return false;
-  const kind = value.kind as PersistenceDerivedStateError["kind"];
-  switch (kind) {
-    case "stopAccessMismatch":
-      return isStructuredReason(value, ["node"], {
-        node: isPersistenceEntityRef,
-      });
-    case "routeLegMismatch":
-    case "routePathBrokenMismatch":
-    case "routeOracleNotIdempotent":
-      return isStructuredReason(value, ["route"], {
-        route: isPersistenceEntityRef,
-      });
-    case "tripStateMismatch":
-    case "tripPositionMismatch":
-      return isStructuredReason(value, ["trip"], {
-        trip: isPersistenceEntityRef,
-      });
-    case "clockMismatch":
-    case "tripCounterMismatch":
-    case "metricsRelationshipMismatch":
-    case "outcomeWindowMismatch":
-    case "objectiveStateMismatch":
-    case "lossReasonMismatch":
-      return isUnitReason(value);
-  }
-}
-
-function isPersistenceRoadTopologyError(
-  value: unknown,
-): value is PersistenceRoadTopologyError {
-  return (
-    isPlainObject(value) &&
-    typeof value.kind === "string" &&
-    REASON_KINDS.roadTopology.has(value.kind) &&
-    value.kind === "unsafeRoundaboutPortMapping" &&
-    isStructuredReason(value, ["structureId", "footprint"], {
-      structureId: isString,
-      footprint: isPointArray,
-    })
-  );
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
-function isPersistenceValidationErrorUnchecked(
-  value: unknown,
-): value is PersistenceValidationError {
-  if (
-    !isPlainObject(value) ||
-    typeof value.code !== "string" ||
-    !VALIDATION_CODES.has(value.code as PersistenceValidationError["code"]) ||
-    !isPlainObject(value.context) ||
-    !hasExactKeys(value, ["code", "context"])
-  )
-    return false;
-  const context = value.context;
-  const code = value.code as PersistenceValidationError["code"];
-  switch (code) {
-    case "unsupportedSchema":
-      return (
-        hasExactKeys(context, ["expected", "actual"]) &&
-        isFiniteNumber(context.expected) &&
-        isFiniteNumber(context.actual)
-      );
-    case "invalidNumericValue":
-      return (
-        hasExactKeys(context, ["field", "reason"], ["entity"]) &&
-        isSnapshotField(context.field) &&
-        isPersistenceNumericError(context.reason) &&
-        (!Object.hasOwn(context, "entity") ||
-          isPersistenceEntityRef(context.entity))
-      );
-    case "invalidModeSettings":
-      return (
-        hasExactKeys(context, ["field", "reason"]) &&
-        isSnapshotField(context.field) &&
-        isPersistenceModeError(context.reason)
-      );
-    case "invalidScenario":
-      return (
-        hasExactKeys(context, ["field", "reason"]) &&
-        isSnapshotField(context.field) &&
-        isPersistenceScenarioError(context.reason)
-      );
-    case "invalidMapDimensions":
-      return (
-        hasExactKeys(context, ["expected", "actual"]) &&
-        isPersistenceMapSize(context.expected) &&
-        isPersistenceMapSize(context.actual)
-      );
-    case "invalidTile":
-      return (
-        hasExactKeys(context, ["tileId", "reason"]) &&
-        isString(context.tileId) &&
-        isPersistenceTileError(context.reason)
-      );
-    case "invalidRoadStructure":
-      return (
-        hasExactKeys(context, ["structureId", "reason"]) &&
-        isString(context.structureId) &&
-        isPersistenceRoadStructureError(context.reason)
-      );
-    case "duplicateEntityId":
-      return (
-        hasExactKeys(context, ["id", "firstKind", "secondKind"]) &&
-        isString(context.id) &&
-        isEntityKind(context.firstKind) &&
-        isEntityKind(context.secondKind)
-      );
-    case "invalidEntity":
-      return (
-        hasExactKeys(context, ["entity", "field", "reason"]) &&
-        isPersistenceEntityRef(context.entity) &&
-        isSnapshotField(context.field) &&
-        isPersistenceEntityError(context.reason)
-      );
-    case "danglingReference":
-      return (
-        hasExactKeys(context, ["source", "field", "target"]) &&
-        isPersistenceEntityRef(context.source) &&
-        isSnapshotField(context.field) &&
-        isPersistenceEntityRef(context.target)
-      );
-    case "invalidOwnership":
-      return (
-        hasExactKeys(context, ["owner", "owned", "reason"]) &&
-        isPersistenceEntityRef(context.owner) &&
-        isPersistenceEntityRef(context.owned) &&
-        isPersistenceOwnershipError(context.reason)
-      );
-    case "invalidAssignment":
-      return (
-        hasExactKeys(context, ["entity", "reason"]) &&
-        isPersistenceEntityRef(context.entity) &&
-        isPersistenceAssignmentError(context.reason)
-      );
-    case "invalidDerivedState":
-      return (
-        hasExactKeys(context, ["field", "reason"]) &&
-        isSnapshotField(context.field) &&
-        isPersistenceDerivedStateError(context.reason)
-      );
-    case "invalidRoadTopology":
-      return (
-        hasExactKeys(context, ["reason"]) &&
-        isPersistenceRoadTopologyError(context.reason)
-      );
-  }
-}
-
-export function isPersistenceValidationError(
-  value: unknown,
-): value is PersistenceValidationError {
-  try {
-    return isPersistenceValidationErrorUnchecked(value);
-  } catch {
-    return false;
-  }
-}
-
-function isPersistenceOperationErrorUnchecked(
-  value: unknown,
-): value is PersistenceOperationError {
-  if (!isPlainObject(value) || typeof value.kind !== "string") return false;
-  switch (value.kind) {
-    case "validation":
-      return (
-        hasExactKeys(value, ["kind", "operation", "source", "error"]) &&
-        isPersistenceOperation(value.operation) &&
-        (value.source === "activeEngine" || value.source === "candidate") &&
-        isPersistenceValidationError(value.error)
-      );
-    case "serialization":
-      return (
-        hasExactKeys(value, ["kind", "operation", "phase", "diagnostic"]) &&
-        isPersistenceOperation(value.operation) &&
-        (value.phase === "snapshotDecode" ||
-          value.phase === "snapshotEncode") &&
-        isString(value.diagnostic)
-      );
-    case "host":
-      return (
-        hasExactKeys(value, ["kind", "operation", "code", "diagnostic"]) &&
-        isPersistenceOperation(value.operation) &&
-        isPersistenceHostErrorCode(value.code) &&
-        isString(value.diagnostic)
-      );
-    default:
-      return false;
-  }
-}
-
-export function isPersistenceOperationError(
-  value: unknown,
-): value is PersistenceOperationError {
-  try {
-    return isPersistenceOperationErrorUnchecked(value);
-  } catch {
-    return false;
-  }
-}
-
-function isPersistenceOperation(value: unknown): value is PersistenceOperation {
-  return (
-    value === "snapshotForSave" ||
-    value === "validateSnapshot" ||
-    value === "restoreSnapshot"
-  );
-}
-
-function isPersistenceHostErrorCode(
-  value: unknown,
-): value is PersistenceHostErrorCode {
-  return (
-    value === "stateUnavailable" ||
-    value === "invokeFailed" ||
-    value === "malformedSuccess" ||
-    value === "malformedError" ||
-    value === "staleRuntimeEpoch"
-  );
-}
-
-function safeDiagnostic(value: unknown): string {
-  try {
-    if (value instanceof Error) {
-      const name = value.name || "Error";
-      const message = value.message;
-      return message ? `${name}: ${message}` : name;
-    }
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return "[unserializable diagnostic]";
-  }
-}
-
-function hostError(
-  operation: PersistenceOperation,
-  code: PersistenceHostErrorCode,
-  value: unknown,
-): PersistenceOperationError {
-  return hostErrorWithDiagnostic(operation, code, safeDiagnostic(value));
-}
-
-function hostErrorWithDiagnostic(
-  operation: PersistenceOperation,
-  code: PersistenceHostErrorCode,
-  diagnostic: string,
-): PersistenceOperationError {
-  return { kind: "host", operation, code, diagnostic };
-}
-
-type PersistenceFailureSnapshot =
-  | {
-      kind: "recognized";
-      error: PersistenceOperationError;
-      diagnostic: string;
-    }
-  | { kind: "unrecognized"; plain: boolean; diagnostic: string }
-  | { kind: "unreadable"; diagnostic: string };
-
-function snapshotPersistenceFailure(
-  value: unknown,
-): PersistenceFailureSnapshot {
-  // A non-plain top-level value (Error, Date, class instance, revoked proxy,
-  // function, primitive) cannot be a recognized operation error. Classify it
-  // directly without detaching so §9.3 maps it to invokeFailed and the
-  // diagnostic describes the original value.
-  if (!isPlainObject(value)) {
-    return {
-      kind: "unrecognized",
-      plain: false,
-      diagnostic: safeDiagnostic(value),
-    };
-  }
-  // Materialize a detached copy that preserves the original own-key shape —
-  // including undefined-valued and symbol-keyed properties — and does NOT
-  // honor toJSON, so the closed-shape guard (hasExactKeys) sees the real key
-  // set rather than a JSON-sanitized one. Accessors and Proxy get-traps are
-  // invoked exactly once during materialization; the returned error
-  // references this detached plain-data copy, never the untrusted input, so
-  // hostile getters/proxies and post-validation mutations cannot escape.
-  let detached: unknown;
-  try {
-    detached = detachPersistenceFailure(value);
-  } catch {
-    return {
-      kind: "unreadable",
-      diagnostic: "[unreadable persistence failure]",
-    };
-  }
-  try {
-    if (isPersistenceOperationErrorUnchecked(detached)) {
-      const error = detached as PersistenceOperationError;
-      return { kind: "recognized", error, diagnostic: safeDiagnostic(error) };
-    }
-    return {
-      kind: "unrecognized",
-      // value is a plain object (checked above), so §9.3 maps a non-recognized
-      // shape to malformedError. The diagnostic describes the original.
-      plain: true,
-      diagnostic: safeDiagnostic(value),
-    };
-  } catch {
-    return {
-      kind: "unreadable",
-      diagnostic: "[unreadable persistence failure]",
-    };
-  }
-}
-
-// Deep-clones a plain-object rejection into a detached plain-data copy for
-// validation and return. Unlike JSON.parse(JSON.stringify(...)), this:
-//   - preserves undefined-valued own properties (JSON.stringify drops them),
-//   - preserves symbol-keyed own properties (JSON.stringify drops them),
-//   - does NOT honor toJSON() (JSON.stringify invokes it, allowing a hostile
-//     object to forge a valid closed shape),
-//   - materializes accessors/Proxy get-traps exactly once via property access.
-// Non-plain objects (Error, Date, class instances, proxies with a non-Object
-// prototype) are replaced with a DetachedNonPlainMarker sentinel rather than
-// retained by reference: a stateful getPrototypeOf proxy can appear plain on
-// the initial isPlainObject check but non-plain during detachment, then plain
-// again during validation, which would let the original proxy escape as a
-// recognized error. The sentinel's prototype is neither Object.prototype nor
-// null, so isPlainObject always returns false and the enclosing candidate is
-// permanently invalid. Functions and symbols-as-values are returned as-is;
-// they can never satisfy a closed-shape validator, so the candidate is
-// discarded and the reference is not retained in any returned error.
-function detachPersistenceFailure(value: PlainObject): unknown {
-  return detachValue(value, new WeakMap<object, unknown>());
-}
-
-class DetachedNonPlainMarker {
-  // Replaces non-plain object references during detachment so a stateful
-  // getPrototypeOf proxy cannot reappear as plain during validation and
-  // escape as a recognized error. Instances carry a non-Object, non-null
-  // prototype so isPlainObject always returns false.
-}
-
-function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
-  if (value === null) return null;
-  if (typeof value !== "object") {
-    // Primitives (string, number, boolean, bigint, undefined, symbol) and
-    // functions are returned as-is. Functions/symbols-as-values can never
-    // satisfy a closed-shape validator, so the enclosing candidate is
-    // discarded; the reference is not retained in any returned error.
-    return value;
-  }
-  if (seen.has(value)) return seen.get(value);
-  if (Array.isArray(value)) {
-    // Capture the source length once. A Proxy get-trap can report a shorter
-    // length than the indices its ownKeys exposes (e.g. length === 1 while
-    // ownKeys yields "0" and "1"); calling value.length repeatedly could also
-    // return inconsistent values across reads. Capture once and reuse.
-    const sourceLength = value.length;
-    // Initialize with new Array(sourceLength) instead of [] so the clone
-    // preserves the original length. Starting from [] and skipping the
-    // "length" key would drop trailing holes: a sparse new Array(3) would
-    // become [], a different value than the input. Preserving length keeps
-    // the detached copy faithful so isPointArray can reject sparse arrays.
-    const clone: unknown[] = new Array(sourceLength);
-    seen.set(value, clone);
-    for (const key of Reflect.ownKeys(value)) {
-      if (key === "length") continue;
-      // Use defineProperty instead of assignment so an own "__proto__" key
-      // is preserved as a data property rather than invoking the inherited
-      // prototype setter (which would silently drop the key and could let a
-      // malformed shape pass the closed-shape guard).
-      Object.defineProperty(clone, key, {
-        value: detachValue(value[key as never], seen),
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-    }
-    // A Proxy can report length === 1 while exposing index "1" via ownKeys;
-    // Object.defineProperty on a canonical index >= the clone's current
-    // length silently grows the clone, laundering the inconsistent shape
-    // into a valid dense array that isPointArray would accept. If defining
-    // the exposed indices changed the clone's length, the input was lying
-    // about its shape — replace the clone with the non-plain sentinel so the
-    // enclosing candidate fails isPlainObject and is discarded as
-    // malformedError rather than escaping as a recognized error.
-    if (clone.length !== sourceLength) {
-      const sentinel = new DetachedNonPlainMarker();
-      seen.set(value, sentinel);
-      return sentinel;
-    }
-    return clone;
-  }
-  if (!isPlainObject(value)) {
-    // Non-plain objects (Error, Date, Map, class instances, proxies with a
-    // non-Object prototype) — replace with a sentinel so a stateful
-    // getPrototypeOf proxy cannot toggle back to plain during validation
-    // and escape as a recognized error. The sentinel always fails
-    // isPlainObject, so the enclosing candidate is permanently invalid.
-    return new DetachedNonPlainMarker();
-  }
-  const clone: Record<PropertyKey, unknown> = {};
-  seen.set(value, clone);
-  for (const key of Reflect.ownKeys(value)) {
-    // Access via value[key] to materialize accessors and Proxy get-traps
-    // exactly once. This does NOT invoke toJSON (toJSON is only called by
-    // JSON.stringify, not by direct property access).
-    // Use defineProperty instead of assignment so an own "__proto__" key
-    // is preserved as a data property rather than invoking the inherited
-    // prototype setter (which would silently drop the key and could let a
-    // malformed shape pass the closed-shape guard).
-    Object.defineProperty(clone, key, {
-      value: detachValue(value[key as keyof PlainObject], seen),
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-  }
-  return clone;
-}
-
-function normalizePersistenceFailure(
-  operation: PersistenceOperation,
-  value: unknown,
-): { ok: false; error: PersistenceOperationError } {
-  const snapshot = snapshotPersistenceFailure(value);
-  if (
-    snapshot.kind === "recognized" &&
-    snapshot.error.operation === operation
-  ) {
-    return { ok: false, error: snapshot.error };
-  }
-  if (snapshot.kind === "unreadable") {
-    return {
-      ok: false,
-      error: hostErrorWithDiagnostic(
-        operation,
-        "invokeFailed",
-        snapshot.diagnostic,
-      ),
-    };
-  }
+export function snapshotError(
+  code: SnapshotErrorCode,
+  error?: unknown,
+): SnapshotError {
   return {
-    ok: false,
-    error: hostErrorWithDiagnostic(
-      operation,
-      snapshot.kind === "recognized" || snapshot.plain
-        ? "malformedError"
-        : "invokeFailed",
-      snapshot.diagnostic,
-    ),
+    code,
+    diagnostic: diagnosticFor(error),
   };
 }
 
-function isSnapshotSuccess(value: unknown): value is RustGameSnapshot {
+function isSnapshotErrorCode(value: unknown): value is SnapshotErrorCode {
+  return (
+    value === "unsupportedSchema" ||
+    value === "invalidSnapshot" ||
+    value === "hostFailure"
+  );
+}
+
+function isDefinitiveRestoreErrorCode(
+  value: unknown,
+): value is Exclude<SnapshotErrorCode, "hostFailure"> {
+  return value === "unsupportedSchema" || value === "invalidSnapshot";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function embeddedError(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
+  if (typeof value !== "string") return null;
   try {
-    return (
-      isPlainObject(value) &&
-      Object.hasOwn(value, "schemaVersion") &&
-      value.schemaVersion === SNAPSHOT_SCHEMA_VERSION
-    );
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-export async function runPersistenceSnapshotOperation(
-  operation: "snapshotForSave" | "restoreSnapshot",
+function snapshotFailureCode(error: unknown): SnapshotErrorCode {
+  const embedded = embeddedError(error);
+  if (isSnapshotErrorCode(embedded?.code)) return embedded.code;
+
+  if (
+    typeof error === "string" &&
+    (error.includes("unsupportedSchema") || error.includes("UnsupportedSchema"))
+  ) {
+    return "unsupportedSchema";
+  }
+
+  return "hostFailure";
+}
+
+function definitiveRestoreFailureCode(
+  error: unknown,
+): Exclude<SnapshotErrorCode, "hostFailure"> | undefined {
+  const embedded = embeddedError(error);
+  return isDefinitiveRestoreErrorCode(embedded?.code)
+    ? embedded.code
+    : undefined;
+}
+
+function isSnapshot(value: unknown): value is RustGameSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.schemaVersion === "number" &&
+    Number.isFinite(value.schemaVersion)
+  );
+}
+
+export async function runSnapshotOperation(
   invoke: () => Promise<unknown> | unknown,
-): Promise<PersistenceSnapshotResultOf<RustGameSnapshot>> {
+): Promise<SnapshotResult> {
   try {
     const value = await invoke();
-    if (isSnapshotSuccess(value)) return { ok: true, snapshot: value };
-    return {
-      ok: false,
-      error: hostError(operation, "malformedSuccess", value),
-    };
+    if (!isSnapshot(value)) {
+      return snapshotFailure(
+        "hostFailure",
+        "host returned an invalid snapshot",
+      );
+    }
+    if (value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
+      return snapshotFailure("unsupportedSchema", value.schemaVersion);
+    }
+    return { ok: true, snapshot: value };
   } catch (error) {
-    return normalizePersistenceFailure(operation, error);
+    return snapshotFailure(snapshotFailureCode(error), error);
   }
 }
 
-export async function runPersistenceValidationOperation(
-  successMarker: null | undefined,
+/**
+ * Restore is the one snapshot operation where a rejected host call is
+ * ambiguous: the native/WASM engine may have committed before response
+ * delivery failed. Only a structured domain rejection proves that candidate
+ * construction stopped before commit and may be converted to `{ ok: false }`.
+ */
+export async function runRestoreOperation(
   invoke: () => Promise<unknown> | unknown,
-): Promise<PersistenceValidationResult> {
+): Promise<SnapshotResult> {
   try {
     const value = await invoke();
-    if (value === successMarker) return { ok: true };
-    return {
-      ok: false,
-      error: hostError("validateSnapshot", "malformedSuccess", value),
-    };
+    if (!isSnapshot(value) || value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
+      throw new Error("host returned an invalid restore snapshot");
+    }
+    return { ok: true, snapshot: value };
   } catch (error) {
-    return normalizePersistenceFailure("validateSnapshot", error);
+    const code = definitiveRestoreFailureCode(error);
+    if (code !== undefined) return snapshotFailure(code, error);
+    throw error;
   }
+}
+
+function snapshotFailure(
+  code: SnapshotErrorCode,
+  error?: unknown,
+): SnapshotResult {
+  return { ok: false, error: snapshotError(code, error) };
 }

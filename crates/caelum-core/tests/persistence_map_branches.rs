@@ -169,25 +169,13 @@ fn duplicate_road_connection_is_rejected() {
     let mut snapshot = paused_snapshot();
     snapshot.map.tiles[0].kind = "road".to_string();
     snapshot.map.tiles[0].road_connections = vec![Heading::East, Heading::East];
+    snapshot.map.tiles[1].kind = "road".to_string();
+    snapshot.map.tiles[1].road_connections = vec![Heading::West];
     assert_eq!(
         validate_snapshot(&snapshot).unwrap_err(),
         PersistenceError::InvalidTile {
             tile_id: "tile-0-0".to_string(),
             reason: TileError::DuplicateRoadConnection,
-        }
-    );
-}
-
-#[test]
-fn non_canonical_road_connection_order_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    snapshot.map.tiles[0].kind = "road".to_string();
-    snapshot.map.tiles[0].road_connections = vec![Heading::West, Heading::East];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidTile {
-            tile_id: "tile-0-0".to_string(),
-            reason: TileError::NonCanonicalRoadConnectionOrder,
         }
     );
 }

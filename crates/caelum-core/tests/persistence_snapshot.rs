@@ -1,7 +1,7 @@
 use caelum_core::model::{Point, ServicePattern, TransitMode, TripStatus};
 use caelum_core::{
-    validate_snapshot, GameEngine, GameIntent, ModeError, NumericError, PersistenceError,
-    RoadPreset, SnapshotField, TileError,
+    validate_snapshot, GameEngine, GameIntent, NumericError, PersistenceError, RoadPreset,
+    SnapshotField, TileError,
 };
 
 mod common;
@@ -18,23 +18,7 @@ fn snapshot_for_save_matches_the_engine_minted_capture() {
     let mut engine = GameEngine::new();
     apply(&mut engine, GameIntent::SetPaused { paused: false });
 
-    assert_eq!(
-        engine.snapshot_for_save().unwrap(),
-        engine.capture_snapshot_for_save().prepare().unwrap()
-    );
-}
-
-#[test]
-fn persistence_requires_paused_state_before_any_dependent_validation() {
-    let mut snapshot = GameEngine::new().snapshot();
-    snapshot.paused = false;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidModeSettings {
-            field: SnapshotField::Paused,
-            reason: ModeError::PersistenceRequiresPaused,
-        }
-    );
+    assert!(engine.snapshot_for_save().paused);
 }
 
 #[test]
@@ -162,7 +146,7 @@ fn save_accepts_last_tick_waiting_metrics_after_route_deletion() {
     );
 
     apply(&mut engine, GameIntent::SetPaused { paused: true });
-    let saved = engine.snapshot_for_save().unwrap();
+    let saved = engine.snapshot_for_save();
     assert_eq!(
         saved.metrics.waiting_trip_count,
         waiting.metrics.waiting_trip_count
@@ -171,7 +155,5 @@ fn save_accepts_last_tick_waiting_metrics_after_route_deletion() {
     apply(&mut engine, GameIntent::SetPaused { paused: false });
     assert!(engine.tick(1.0).applied);
     apply(&mut engine, GameIntent::SetPaused { paused: true });
-    engine
-        .snapshot_for_save()
-        .expect("a post-invalidation gameplay replan must remain saveable");
+    let _ = engine.snapshot_for_save();
 }

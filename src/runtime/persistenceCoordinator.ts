@@ -4,9 +4,10 @@ import type {
 } from "../persistence/citySaveStore";
 import type { RuntimeSnapshot } from "./types";
 import type {
-  PersistenceOperationError,
+  SandboxHostError,
   SandboxCreationError,
   SandboxCreationRequest,
+  SnapshotError,
 } from "./backend";
 
 export type PersistenceCoordinatorOperation =
@@ -23,13 +24,8 @@ export type PersistenceCoordinatorPreconditionError =
   | { code: "runtimeUnavailable"; operation: PersistenceCoordinatorOperation };
 
 export type PersistenceCoordinatorBackendError =
-  | PersistenceOperationError
-  | {
-      kind: "host";
-      operation: "createSandbox";
-      code: "invokeFailed";
-      diagnostic: string;
-    };
+  | SnapshotError
+  | SandboxHostError;
 
 export type PersistenceCoordinatorError =
   | { kind: "store"; error: CitySaveStoreError }

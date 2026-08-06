@@ -4,10 +4,9 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use caelum_core::model::TripStatus;
 use caelum_core::{
-    check_snapshot_schema, validate_snapshot, DerivedStateError, GameSnapshot, ModeError,
-    PersistenceError, SnapshotField, SNAPSHOT_SCHEMA_VERSION,
+    check_snapshot_schema, validate_snapshot, GameEngine, GameSnapshot, PersistenceError,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -17,12 +16,11 @@ const PERSISTENCE_FIXTURES_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/persistence",
 );
-const SNAPSHOT_FIXTURE_NAMES: [&str; 5] = [
+const SNAPSHOT_FIXTURE_NAMES: [&str; 4] = [
     "valid-paused.json",
     "unsupported-schema.json",
     "unpaused.json",
     "malformed-current-schema.json",
-    "late-derived-corruption.json",
 ];
 
 fn read_json(name: &str) -> Value {
@@ -94,32 +92,10 @@ fn export_snapshot_fixtures_from_authoritative_rust_state() {
     let mut malformed = valid.clone();
     malformed["map"]["tiles"] = json!("not-an-array");
 
-    let nonterminal_trip_count = snapshot
-        .active_trips
-        .iter()
-        .filter(|trip| {
-            matches!(
-                trip.status,
-                TripStatus::Idle | TripStatus::Walking | TripStatus::Waiting | TripStatus::Riding
-            )
-        })
-        .count();
-    let mut late_corruption = valid.clone();
-    late_corruption["metrics"]["waitingTripCount"] = json!(nonterminal_trip_count + 1);
-    let late_snapshot: GameSnapshot = serde_json::from_value(late_corruption.clone()).unwrap();
-    assert_eq!(
-        validate_snapshot(&late_snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsCounters,
-            reason: DerivedStateError::MetricsRelationshipMismatch,
-        }
-    );
-
     write_json("valid-paused.json", &valid);
     write_json("unsupported-schema.json", &unsupported);
     write_json("unpaused.json", &unpaused);
     write_json("malformed-current-schema.json", &malformed);
-    write_json("late-derived-corruption.json", &late_corruption);
     format_snapshot_fixtures();
 }
 
@@ -155,28 +131,13 @@ fn checked_in_snapshot_fixtures_preserve_the_persistence_contract() {
 
     let unpaused: GameSnapshot =
         serde_json::from_value(read_json("unpaused.json")).expect("unpaused fixture must decode");
-    assert_eq!(
-        validate_snapshot(&unpaused).unwrap_err(),
-        PersistenceError::InvalidModeSettings {
-            field: SnapshotField::Paused,
-            reason: ModeError::PersistenceRequiresPaused,
-        }
-    );
+    let restored = GameEngine::from_snapshot(unpaused).expect("unpaused fixture must normalize");
+    assert!(restored.snapshot().paused);
 
     let malformed = read_json("malformed-current-schema.json");
     check_snapshot_schema(&malformed).unwrap();
     assert!(
         serde_json::from_value::<GameSnapshot>(malformed).is_err(),
         "malformed current-schema fixture must fail full decode"
-    );
-
-    let late: GameSnapshot = serde_json::from_value(read_json("late-derived-corruption.json"))
-        .expect("late-corruption fixture must fully decode");
-    assert_eq!(
-        validate_snapshot(&late).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsCounters,
-            reason: DerivedStateError::MetricsRelationshipMismatch,
-        }
     );
 }

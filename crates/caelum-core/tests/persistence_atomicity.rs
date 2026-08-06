@@ -11,7 +11,7 @@ fn save_capture_prepares_only_an_engine_minted_snapshot() {
     );
     let before = engine.snapshot();
 
-    let saved = engine.capture_snapshot_for_save().prepare().unwrap();
+    let saved = engine.snapshot_for_save();
 
     let mut expected = before.clone();
     expected.paused = true;
@@ -20,32 +20,16 @@ fn save_capture_prepares_only_an_engine_minted_snapshot() {
 }
 
 #[test]
-fn dropping_a_prepared_restore_does_not_mutate_an_existing_engine() {
-    let source = GameEngine::new();
-    let candidate = source.snapshot_for_save().unwrap();
-    let target = GameEngine::new();
-    let before = target.snapshot();
-
-    let prepared = GameEngine::prepare_restore(candidate).unwrap();
-    drop(prepared);
-
-    assert_eq!(target.snapshot(), before);
-}
-
-#[test]
-fn prepared_restore_retains_the_supplied_snapshot_and_compiled_topology() {
+fn construction_retains_the_supplied_snapshot_and_compiles_topology() {
     let mut source = GameEngine::new();
     let laid = source.dispatch(GameIntent::LayRoad {
         point: Point { x: 3, y: 3 },
     });
     assert!(laid.applied, "fixture road should apply: {laid:?}");
-    let candidate = source.snapshot_for_save().unwrap();
+    let candidate = source.snapshot_for_save();
     let expected_topology = source.road_topology_for_test().clone();
 
-    let prepared = GameEngine::prepare_restore(candidate.clone()).unwrap();
-
-    assert_eq!(prepared.snapshot(), &candidate);
-    let restored = prepared.into_engine();
+    let restored = GameEngine::from_snapshot(candidate.clone()).unwrap();
     assert_eq!(restored.snapshot(), candidate);
     assert_eq!(restored.road_topology_for_test(), &expected_topology);
 }
@@ -57,7 +41,7 @@ fn save_changes_only_paused_on_a_validated_clone() {
     assert!(resumed.applied);
     let before = engine.snapshot();
 
-    let saved = engine.snapshot_for_save().unwrap();
+    let saved = engine.snapshot_for_save();
 
     assert!(saved.paused);
     assert_eq!(engine.snapshot(), before);
@@ -67,17 +51,9 @@ fn save_changes_only_paused_on_a_validated_clone() {
 }
 
 #[test]
-fn invalid_live_state_cannot_be_handed_out_for_save() {
-    let mut engine = GameEngine::new();
-    engine.set_budget_for_test(-1);
-
-    assert!(engine.snapshot_for_save().is_err());
-}
-
-#[test]
 fn strict_construction_preserves_the_snapshot_and_rebuilds_equal_topology() {
     let source = GameEngine::new();
-    let expected_snapshot = source.snapshot_for_save().unwrap();
+    let expected_snapshot = source.snapshot_for_save();
     let expected_topology = source.road_topology_for_test().clone();
 
     let restored = GameEngine::from_snapshot(expected_snapshot.clone()).unwrap();
@@ -113,7 +89,7 @@ fn valid_restore_swaps_snapshot_and_topology_together() {
     assert!(laid.applied, "fixture road should apply: {laid:?}");
     let changed = source.dispatch(GameIntent::SetSpeed { speed: 2 });
     assert!(changed.applied);
-    let expected_snapshot = source.snapshot_for_save().unwrap();
+    let expected_snapshot = source.snapshot_for_save();
     let expected_topology = source.road_topology_for_test().clone();
 
     let mut target = GameEngine::new();

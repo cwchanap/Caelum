@@ -3,42 +3,12 @@ import type { GameBackend } from "./types";
 import { createWasmBackend } from "./wasmBackend";
 
 export { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
-export {
-  isPersistenceOperationError,
-  isPersistenceValidationError,
-} from "./persistence";
-export type {
-  PersistenceAssignmentError,
-  PersistenceDerivedStateError,
-  PersistenceEntityError,
-  PersistenceEntityKind,
-  PersistenceEntityRef,
-  PersistenceHostErrorCode,
-  PersistenceMapSize,
-  PersistenceModeError,
-  PersistenceNumericError,
-  PersistenceOperation,
-  PersistenceOperationError,
-  PersistenceOwnershipError,
-  PersistenceRoadStructureError,
-  PersistenceRoadTopologyError,
-  PersistenceScenarioError,
-  PersistenceSerializationPhase,
-  PersistenceSnapshotField,
-  PersistenceSnapshotRequest,
-  PersistenceSnapshotResultOf,
-  PersistenceTileError,
-  PersistenceValidationError,
-  PersistenceValidationResult,
-  PersistenceValidationSource,
-} from "./persistenceContract";
 export type {
   AuthoredRoadTilePreview,
   DispatchResult,
   GameBackend,
   GameplayWarning,
   GameIntent,
-  PersistenceSnapshotResult,
   RoadMutation,
   RoadMutationPreviewRequest,
   RoadMutationPreviewResponse,
@@ -50,7 +20,6 @@ export type {
   RustGameSnapshot,
   RustMetrics,
   RustTripOutcome,
-  RuntimeSession,
   SandboxCreationError,
   SandboxCreationErrorCode,
   SandboxCreationRequest,
@@ -61,6 +30,12 @@ export type {
   TurnSummary,
   WarningCode,
 } from "./types";
+export type {
+  SandboxHostError,
+  SnapshotError,
+  SnapshotErrorCode,
+  SnapshotResult,
+} from "./persistenceContract";
 
 type TauriRuntimeSource = {
   __TAURI_INTERNALS__?: unknown;

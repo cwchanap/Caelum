@@ -29,12 +29,7 @@ import type {
   TransitNetwork,
   Vehicle,
 } from "../../domain/types";
-import type {
-  PersistenceSnapshotRequest,
-  PersistenceSnapshotResultOf,
-  PersistenceValidationResult,
-} from "./persistenceContract";
-
+import type { SnapshotResult } from "./persistenceContract";
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
 
 export interface RustTripOutcome {
@@ -332,51 +327,13 @@ export type SandboxResetResult =
   | { ok: true; snapshot: RustGameSnapshot }
   | { ok: false; error: SandboxResetError };
 
-export type PersistenceSnapshotResult =
-  PersistenceSnapshotResultOf<RustGameSnapshot>;
-
-/**
- * The result of beginning a runtime session: the authoritative runtime epoch
- * plus the initial snapshot from the same critical section.
- *
- * The Tauri backend's `beginRuntime()` calls `game_begin_runtime` which
- * atomically increments the process-global epoch and returns the snapshot
- * from the same mutex hold. The epoch is then carried on every subsequent
- * mutating command (`dispatch`, `tick`, `restoreSnapshot`, `createSandbox`,
- * `reset`, `snapshotForSave`) so the Rust host can reject stale commands from
- * a previous webview realm after a soft reload.
- *
- * The WASM backend's `beginRuntime()` returns `runtimeEpoch: 0` — the WASM
- * engine is instance-local with no cross-realm authority, so no epoch
- * verification is needed.
- */
-export interface RuntimeSession {
-  runtimeEpoch: number;
-  snapshot: RustGameSnapshot;
-}
-
 export interface GameBackend {
-  /**
-   * Begin a runtime session: atomically acquire the authoritative runtime
-   * epoch and the initial snapshot. The Tauri backend stores the epoch
-   * internally and passes it on all subsequent mutating commands. The WASM
-   * backend returns epoch 0 (instance-local, no cross-realm authority).
-   *
-   * When omitted (e.g. test mocks), the runtime falls back to `snapshot()`
-   * with epoch 0 — no epoch verification occurs.
-   */
-  beginRuntime?(): Promise<RuntimeSession>;
   snapshot(): Promise<RustGameSnapshot>;
-  snapshotForSave(): Promise<PersistenceSnapshotResult>;
-  validateSnapshot(
-    request: PersistenceSnapshotRequest,
-  ): Promise<PersistenceValidationResult>;
-  restoreSnapshot(
-    request: PersistenceSnapshotRequest,
-  ): Promise<PersistenceSnapshotResult>;
-  createSandbox(
+  snapshotForSave(): Promise<SnapshotResult>;
+  buildSandboxSnapshot(
     request: SandboxCreationRequest,
   ): Promise<SandboxCreationResult>;
+  restoreSnapshot(snapshot: unknown): Promise<SnapshotResult>;
   dispatch(intent: GameIntent): Promise<DispatchResult>;
   tick(deltaSeconds: number): Promise<DispatchResult>;
   reset(): Promise<SandboxResetResult>;

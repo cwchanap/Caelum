@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::building_catalog::building_definition;
 use crate::engine::RoutingContext;
-use crate::ids::entity_id;
 use crate::model::{
     ActiveTrip, GameSnapshot, MetroLine, PathGeometry, Platform, Point, Route, RouteLegPath, Sim,
     Station, Stop, TransitMode, TransitNodeStatus, TransitPath, TripPosition, TripStatus, Vehicle,
@@ -15,8 +14,8 @@ use crate::stop_access;
 use crate::transit::vehicle_capacity;
 
 use super::{
-    AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, NumericError,
-    OwnershipError, PersistenceError, PersistenceResult, SnapshotField,
+    AssignmentError, EntityError, EntityKind, EntityRef, NumericError, OwnershipError,
+    PersistenceError, PersistenceResult, SnapshotField,
 };
 
 pub(super) struct EntityIndexes<'a> {
@@ -77,8 +76,26 @@ impl EntityIndexes<'_> {
 
 pub(super) fn validate_entities<'a>(
     snapshot: &'a GameSnapshot,
-    topology: &RoadTopology,
+    _topology: &RoadTopology,
 ) -> PersistenceResult<EntityIndexes<'a>> {
+    let indexes = build_indexes(snapshot)?;
+    validate_route_references(snapshot, &indexes)?;
+    let building_footprint = validate_buildings(snapshot, &indexes)?;
+    validate_nodes_and_platforms(snapshot, &indexes, &building_footprint)?;
+    validate_routes(snapshot, &indexes)?;
+    validate_vehicles(snapshot, &indexes)?;
+    Ok(indexes)
+}
+
+pub(super) fn normalize_direct_fields(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
+    let _ = normalize_building_footprints(snapshot);
+    *snapshot = stop_access::normalize_snapshot_stops(snapshot.clone());
+    normalize_platform_values(snapshot);
+    normalize_vehicle_capacities(snapshot);
+    normalize_route_states(snapshot, topology);
+}
+
+fn build_indexes<'a>(snapshot: &'a GameSnapshot) -> PersistenceResult<EntityIndexes<'a>> {
     let mut indexes = EntityIndexes {
         kinds: BTreeMap::new(),
         sims: BTreeMap::new(),
@@ -93,10 +110,10 @@ pub(super) fn validate_entities<'a>(
         trip_vehicles: BTreeMap::new(),
     };
     for building in &snapshot.buildings {
-        register(&mut indexes, EntityKind::Building, &building.id, "building")?;
+        register(&mut indexes, EntityKind::Building, &building.id)?;
     }
     for sim in &snapshot.sims {
-        register(&mut indexes, EntityKind::Sim, &sim.id, "sim")?;
+        register(&mut indexes, EntityKind::Sim, &sim.id)?;
         indexes.sims.insert(&sim.id, sim);
     }
     for trip in &snapshot.active_trips {
@@ -104,7 +121,7 @@ pub(super) fn validate_entities<'a>(
         indexes.trips.insert(&trip.id, trip);
     }
     for stop in &snapshot.transit.stops {
-        register(&mut indexes, EntityKind::Stop, &stop.id, "stop")?;
+        register(&mut indexes, EntityKind::Stop, &stop.id)?;
         indexes.stops.insert(&stop.id, stop);
         for platform in &stop.platforms {
             register_platform(&mut indexes, platform, &stop.id)?;
@@ -112,7 +129,7 @@ pub(super) fn validate_entities<'a>(
         }
     }
     for station in &snapshot.transit.stations {
-        register(&mut indexes, EntityKind::Station, &station.id, "station")?;
+        register(&mut indexes, EntityKind::Station, &station.id)?;
         indexes.stations.insert(&station.id, station);
         for platform in &station.platforms {
             register_platform(&mut indexes, platform, &station.id)?;
@@ -120,7 +137,7 @@ pub(super) fn validate_entities<'a>(
         }
     }
     for route in &snapshot.transit.routes {
-        register(&mut indexes, EntityKind::BusRoute, &route.id, "route")?;
+        register(&mut indexes, EntityKind::BusRoute, &route.id)?;
         indexes.routes.insert(&route.id, route);
         for stop_id in &route.stop_ids {
             indexes
@@ -131,7 +148,7 @@ pub(super) fn validate_entities<'a>(
         }
     }
     for line in &snapshot.transit.metro_lines {
-        register(&mut indexes, EntityKind::MetroLine, &line.id, "metro")?;
+        register(&mut indexes, EntityKind::MetroLine, &line.id)?;
         indexes.metro_lines.insert(&line.id, line);
         for station_id in &line.station_ids {
             indexes
@@ -142,7 +159,7 @@ pub(super) fn validate_entities<'a>(
         }
     }
     for vehicle in &snapshot.transit.vehicles {
-        register(&mut indexes, EntityKind::Vehicle, &vehicle.id, "vehicle")?;
+        register(&mut indexes, EntityKind::Vehicle, &vehicle.id)?;
         indexes.vehicles.insert(&vehicle.id, vehicle);
         for passenger_id in &vehicle.passenger_ids {
             indexes
@@ -153,10 +170,6 @@ pub(super) fn validate_entities<'a>(
         }
     }
 
-    let building_footprint = validate_buildings(snapshot, &indexes)?;
-    validate_nodes_and_platforms(snapshot, &indexes, &building_footprint)?;
-    validate_routes(snapshot, &indexes, topology)?;
-    validate_vehicles(snapshot, &indexes)?;
     Ok(indexes)
 }
 
@@ -167,17 +180,221 @@ pub(super) struct BuildingOccupant<'a> {
     pub transit_node_id: Option<&'a str>,
 }
 
+fn normalize_building_footprints(snapshot: &mut GameSnapshot) -> PersistenceResult<()> {
+    for building in &mut snapshot.buildings {
+        let entity = entity_ref(EntityKind::Building, &building.id);
+        let Some(definition) = building_definition(&building.building_type) else {
+            return Err(PersistenceError::InvalidEntity {
+                entity,
+                field: SnapshotField::BuildingOccupiedTiles,
+                reason: EntityError::InvalidStaticShape,
+            });
+        };
+        if !matches!(building.rotation, 0 | 90 | 180 | 270) {
+            return Err(PersistenceError::InvalidEntity {
+                entity,
+                field: SnapshotField::BuildingRotation,
+                reason: EntityError::InvalidStaticShape,
+            });
+        }
+        let Some(footprint) =
+            crate::buildings::footprint(definition, &building.origin, building.rotation)
+        else {
+            return Err(PersistenceError::InvalidEntity {
+                entity,
+                field: SnapshotField::BuildingOrigin,
+                reason: EntityError::InvalidStaticShape,
+            });
+        };
+        building.occupied_tiles = footprint;
+    }
+    Ok(())
+}
+
+fn normalize_platform_values(snapshot: &mut GameSnapshot) {
+    for stop in &mut snapshot.transit.stops {
+        let expected = platforms::bus_platforms(&stop.id, stop.kind);
+        for (stored, canonical) in stop.platforms.iter_mut().zip(expected) {
+            stored.label = canonical.label;
+            stored.capacity = canonical.capacity;
+        }
+    }
+    for station in &mut snapshot.transit.stations {
+        let expected = platforms::metro_platforms(&station.id);
+        for (stored, canonical) in station.platforms.iter_mut().zip(expected) {
+            stored.label = canonical.label;
+            stored.capacity = canonical.capacity;
+        }
+    }
+}
+
+fn normalize_vehicle_capacities(snapshot: &mut GameSnapshot) {
+    for vehicle in &mut snapshot.transit.vehicles {
+        vehicle.capacity = vehicle_capacity(vehicle.mode);
+    }
+}
+
+fn normalize_route_states(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
+    let derived = derive_route_states(
+        snapshot,
+        RoutingContext {
+            road_topology: topology,
+        },
+    );
+    for state in derived {
+        match state.mode {
+            TransitMode::Bus => {
+                if let Some(route) = snapshot
+                    .transit
+                    .routes
+                    .iter_mut()
+                    .find(|route| route.id == state.route_id)
+                {
+                    route.legs = state.legs;
+                    route.path_broken = state.path_broken;
+                }
+            }
+            TransitMode::Metro => {
+                if let Some(line) = snapshot
+                    .transit
+                    .metro_lines
+                    .iter_mut()
+                    .find(|line| line.id == state.route_id)
+                {
+                    line.legs = state.legs;
+                    line.path_broken = state.path_broken;
+                }
+            }
+            TransitMode::Walk => {}
+        }
+    }
+}
+
+fn validate_route_references(
+    snapshot: &GameSnapshot,
+    indexes: &EntityIndexes<'_>,
+) -> PersistenceResult<()> {
+    for route in &snapshot.transit.routes {
+        validate_route_waypoint_references(
+            indexes,
+            EntityKind::BusRoute,
+            &route.id,
+            TransitMode::Bus,
+            &route.stop_ids,
+        )?;
+        validate_route_vehicle_references(
+            indexes,
+            EntityKind::BusRoute,
+            &route.id,
+            TransitMode::Bus,
+            &route.vehicle_ids,
+        )?;
+    }
+    for line in &snapshot.transit.metro_lines {
+        validate_route_waypoint_references(
+            indexes,
+            EntityKind::MetroLine,
+            &line.id,
+            TransitMode::Metro,
+            &line.station_ids,
+        )?;
+        validate_route_vehicle_references(
+            indexes,
+            EntityKind::MetroLine,
+            &line.id,
+            TransitMode::Metro,
+            &line.vehicle_ids,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_route_waypoint_references(
+    indexes: &EntityIndexes<'_>,
+    kind: EntityKind,
+    route_id: &str,
+    mode: TransitMode,
+    waypoint_ids: &[String],
+) -> PersistenceResult<()> {
+    let route = entity_ref(kind, route_id);
+    if waypoint_ids.len() < 2 {
+        return Err(PersistenceError::InvalidEntity {
+            entity: route,
+            field: SnapshotField::RouteWaypointIds,
+            reason: EntityError::InvalidStaticShape,
+        });
+    }
+    let mut waypoints = BTreeSet::new();
+    for waypoint_id in waypoint_ids {
+        if !waypoints.insert(waypoint_id.as_str()) {
+            return Err(PersistenceError::InvalidAssignment {
+                entity: route.clone(),
+                reason: AssignmentError::DuplicateAssignment,
+            });
+        }
+        let exists = match mode {
+            TransitMode::Bus => indexes.stop(waypoint_id).is_some(),
+            TransitMode::Metro => indexes.station(waypoint_id).is_some(),
+            TransitMode::Walk => false,
+        };
+        if !exists {
+            return Err(PersistenceError::DanglingReference {
+                source: route.clone(),
+                field: SnapshotField::RouteWaypointIds,
+                target: entity_ref(
+                    if mode == TransitMode::Bus {
+                        EntityKind::Stop
+                    } else {
+                        EntityKind::Station
+                    },
+                    waypoint_id,
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_route_vehicle_references(
+    indexes: &EntityIndexes<'_>,
+    kind: EntityKind,
+    route_id: &str,
+    mode: TransitMode,
+    vehicle_ids: &[String],
+) -> PersistenceResult<()> {
+    let route = entity_ref(kind, route_id);
+    let mut vehicles = BTreeSet::new();
+    for vehicle_id in vehicle_ids {
+        if !vehicles.insert(vehicle_id.as_str()) {
+            return Err(PersistenceError::InvalidAssignment {
+                entity: route.clone(),
+                reason: AssignmentError::DuplicateAssignment,
+            });
+        }
+        let Some(vehicle) = indexes.vehicle(vehicle_id) else {
+            return Err(PersistenceError::DanglingReference {
+                source: route.clone(),
+                field: SnapshotField::RouteVehicleIds,
+                target: entity_ref(EntityKind::Vehicle, vehicle_id),
+            });
+        };
+        if vehicle.mode != mode || vehicle.line_id != route_id {
+            return Err(PersistenceError::InvalidAssignment {
+                entity: route.clone(),
+                reason: AssignmentError::ModeMismatch,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn register<'a>(
     indexes: &mut EntityIndexes<'a>,
     kind: EntityKind,
     id: &'a str,
-    prefix: &str,
 ) -> PersistenceResult<()> {
     if id.is_empty() {
         return Err(invalid_entity(kind, id, EntityError::EmptyId));
-    }
-    if !canonical_numbered_id(id, prefix) {
-        return Err(invalid_entity(kind, id, EntityError::NonCanonicalId));
     }
     register_unique(indexes, kind, id)
 }
@@ -190,39 +407,19 @@ fn register_trip<'a>(indexes: &mut EntityIndexes<'a>, id: &'a str) -> Persistenc
             EntityError::EmptyId,
         ));
     }
-    if parse_trip_id(id).is_none() {
-        return Err(invalid_entity(
-            EntityKind::ActiveTrip,
-            id,
-            EntityError::NonCanonicalId,
-        ));
-    }
     register_unique(indexes, EntityKind::ActiveTrip, id)
 }
 
 fn register_platform<'a>(
     indexes: &mut EntityIndexes<'a>,
     platform: &'a Platform,
-    node_id: &str,
+    _node_id: &str,
 ) -> PersistenceResult<()> {
     if platform.id.is_empty() {
         return Err(invalid_entity(
             EntityKind::Platform,
             &platform.id,
             EntityError::EmptyId,
-        ));
-    }
-    let canonical = platform
-        .id
-        .strip_prefix(node_id)
-        .and_then(|suffix| suffix.strip_prefix("-p"))
-        .and_then(|suffix| suffix.parse::<usize>().ok())
-        .is_some_and(|index| platform.id == format!("{node_id}-p{index}"));
-    if !canonical {
-        return Err(invalid_entity(
-            EntityKind::Platform,
-            &platform.id,
-            EntityError::NonCanonicalId,
         ));
     }
     register_unique(indexes, EntityKind::Platform, &platform.id)
@@ -241,12 +438,6 @@ fn register_unique<'a>(
         });
     }
     Ok(())
-}
-
-fn canonical_numbered_id(id: &str, prefix: &str) -> bool {
-    id.strip_prefix(&format!("{prefix}-"))
-        .and_then(|suffix| suffix.parse::<usize>().ok())
-        .is_some_and(|number| number > 0 && entity_id(prefix, number) == id)
 }
 
 pub(super) fn parse_trip_id(id: &str) -> Option<(u32, u32)> {
@@ -428,14 +619,6 @@ fn validate_nodes_and_platforms(
             &mut anchors,
             building_footprint,
         )?;
-        if stop.status == TransitNodeStatus::Present
-            && stop.road_access != stop_access::resolve_stop_access(snapshot, &stop.id)
-        {
-            return Err(PersistenceError::InvalidDerivedState {
-                field: SnapshotField::NodeRoadAccess,
-                reason: DerivedStateError::StopAccessMismatch { node },
-            });
-        }
         validate_platform_shape(
             &node,
             &stop.platforms,
@@ -560,20 +743,6 @@ fn validate_platform_shape(
                 reason: EntityError::InvalidStaticShape,
             });
         }
-        if stored.label != canonical.label {
-            return Err(PersistenceError::InvalidEntity {
-                entity: entity_ref(EntityKind::Platform, &stored.id),
-                field: SnapshotField::PlatformLabel,
-                reason: EntityError::InvalidStaticShape,
-            });
-        }
-        if stored.capacity != canonical.capacity {
-            return Err(PersistenceError::InvalidEntity {
-                entity: entity_ref(EntityKind::Platform, &stored.id),
-                field: SnapshotField::PlatformCapacity,
-                reason: EntityError::InvalidStaticShape,
-            });
-        }
     }
     Ok(())
 }
@@ -627,11 +796,7 @@ fn validate_platform_assignments(
     Ok(())
 }
 
-fn validate_routes(
-    snapshot: &GameSnapshot,
-    indexes: &EntityIndexes<'_>,
-    topology: &RoadTopology,
-) -> PersistenceResult<()> {
+fn validate_routes(snapshot: &GameSnapshot, indexes: &EntityIndexes<'_>) -> PersistenceResult<()> {
     for route in &snapshot.transit.routes {
         validate_route_shape(
             snapshot,
@@ -657,104 +822,6 @@ fn validate_routes(
         )?;
     }
 
-    let context = RoutingContext {
-        road_topology: topology,
-    };
-    let derived = derive_route_states(snapshot, context);
-    let mut fixed_point = snapshot.clone();
-    for state in &derived {
-        match state.mode {
-            TransitMode::Bus => {
-                let route = fixed_point
-                    .transit
-                    .routes
-                    .iter_mut()
-                    .find(|route| route.id == state.route_id)
-                    .ok_or_else(|| PersistenceError::DanglingReference {
-                        source: entity_ref(EntityKind::BusRoute, &state.route_id),
-                        field: SnapshotField::RouteLegs,
-                        target: entity_ref(EntityKind::BusRoute, &state.route_id),
-                    })?;
-                route.legs.clone_from(&state.legs);
-                route.path_broken = state.path_broken;
-            }
-            TransitMode::Metro => {
-                let line = fixed_point
-                    .transit
-                    .metro_lines
-                    .iter_mut()
-                    .find(|line| line.id == state.route_id)
-                    .ok_or_else(|| PersistenceError::DanglingReference {
-                        source: entity_ref(EntityKind::MetroLine, &state.route_id),
-                        field: SnapshotField::RouteLegs,
-                        target: entity_ref(EntityKind::MetroLine, &state.route_id),
-                    })?;
-                line.legs.clone_from(&state.legs);
-                line.path_broken = state.path_broken;
-            }
-            TransitMode::Walk => unreachable!("walk is not a persisted service"),
-        }
-    }
-    let second = derive_route_states(&fixed_point, context);
-    if derived != second {
-        let route = derived
-            .first()
-            .map(|state| {
-                entity_ref(
-                    if state.mode == TransitMode::Bus {
-                        EntityKind::BusRoute
-                    } else {
-                        EntityKind::MetroLine
-                    },
-                    &state.route_id,
-                )
-            })
-            .unwrap_or_else(|| entity_ref(EntityKind::BusRoute, ""));
-        return Err(PersistenceError::InvalidDerivedState {
-            field: SnapshotField::RouteLegs,
-            reason: DerivedStateError::RouteOracleNotIdempotent { route },
-        });
-    }
-    for state in derived {
-        let kind = if state.mode == TransitMode::Bus {
-            EntityKind::BusRoute
-        } else {
-            EntityKind::MetroLine
-        };
-        let (kind, legs, path_broken) = match state.mode {
-            TransitMode::Bus => snapshot
-                .transit
-                .routes
-                .iter()
-                .find(|route| route.id == state.route_id)
-                .map(|route| (EntityKind::BusRoute, &route.legs, route.path_broken)),
-            TransitMode::Metro => snapshot
-                .transit
-                .metro_lines
-                .iter()
-                .find(|line| line.id == state.route_id)
-                .map(|line| (EntityKind::MetroLine, &line.legs, line.path_broken)),
-            TransitMode::Walk => None,
-        }
-        .ok_or_else(|| PersistenceError::DanglingReference {
-            source: entity_ref(kind, &state.route_id),
-            field: SnapshotField::RouteLegs,
-            target: entity_ref(kind, &state.route_id),
-        })?;
-        let route_ref = entity_ref(kind, &state.route_id);
-        if legs != &state.legs {
-            return Err(PersistenceError::InvalidDerivedState {
-                field: SnapshotField::RouteLegs,
-                reason: DerivedStateError::RouteLegMismatch { route: route_ref },
-            });
-        }
-        if path_broken != state.path_broken {
-            return Err(PersistenceError::InvalidDerivedState {
-                field: SnapshotField::RoutePathBroken,
-                reason: DerivedStateError::RoutePathBrokenMismatch { route: route_ref },
-            });
-        }
-    }
     Ok(())
 }
 
