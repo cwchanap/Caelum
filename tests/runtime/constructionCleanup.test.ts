@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameBackend } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
 import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import {
   createRustSnapshot,
@@ -22,9 +21,9 @@ vi.mock("../../src/runtime/createCanvasHost", () => ({
 }));
 
 // Hoisted mock for `createPreviewCoordinator` so a test can inject a
-// post-lease construction failure (the call site runs after both backend
-// ownership and the persistence lease are acquired). By default it returns
-// a no-op coordinator so existing tests are unaffected.
+// post-lease construction failure (the call site runs after the persistence
+// lease is acquired). By default it returns a no-op coordinator so existing
+// tests are unaffected.
 const previewCoordinatorFactory = vi.hoisted(() => ({
   create: vi.fn((_backend: unknown) => ({
     requestRoute: vi.fn().mockResolvedValue(null),
@@ -70,51 +69,17 @@ function createBackend(): GameBackend {
 
 describe("construction exception cleanup (P2)", () => {
   beforeEach(() => {
-    resetBackendOwnershipRegistry();
     canvasHost.mount.mockClear();
     canvasHost.render.mockClear();
     previewCoordinatorFactory.create.mockClear();
   });
 
-  afterEach(() => {
-    resetBackendOwnershipRegistry();
-  });
-
-  it("releases backend ownership when beginRuntime throws — same backend retries", async () => {
-    // P1/P2: beginRuntime() is called after backend ownership is acquired.
-    // If it throws, the outer catch must release backend ownership so a
-    // replacement runtime can initialize against the same engine. Reusing
-    // the SAME backend object proves the ownership coordinator (object
-    // identity when runtimeIdentity is absent) was released — a different
-    // backend object would use a different coordinator and not demonstrate
-    // the release.
-    const backend = createBackend();
-    const beginRuntimeError = new Error("beginRuntime exploded");
-    (backend as GameBackend).beginRuntime = vi.fn(async () => {
-      throw beginRuntimeError;
-    });
-
-    await expect(createGameRuntime({ backend })).rejects.toBe(
-      beginRuntimeError,
-    );
-
-    // The same backend object, with beginRuntime now succeeding, must
-    // acquire ownership — proving the failed construction released it.
-    (backend as GameBackend).beginRuntime = vi.fn(async () => ({
-      runtimeEpoch: 0,
-      snapshot: createRustSnapshot(),
-    }));
-    const runtime = await createGameRuntime({ backend });
-    await runtime.dispose();
-  });
-
-  it("releases both backend ownership and lease when a post-lease construction dependency throws", async () => {
-    // P2: A genuine failure AFTER both capabilities (backend ownership and
-    // the persistence lease) are held. `createPreviewCoordinator` runs
-    // after the lease is acquired and bootstrap reconciliation completes.
-    // If it throws, the outer catch must release BOTH capabilities so a
-    // replacement runtime using the SAME backend can proceed — proving
-    // neither capability leaked.
+  it("releases the persistence lease when a post-lease construction dependency throws", async () => {
+    // P2: A genuine failure AFTER the persistence lease is held.
+    // `createPreviewCoordinator` runs after the lease is acquired and
+    // bootstrap reconciliation completes. If it throws, the outer catch must
+    // release the lease so a replacement runtime using the SAME backend and
+    // storage identities can proceed — proving the lease did not leak.
     const backend = createBackend();
     const store = createMemoryCitySaveStore();
 
@@ -127,10 +92,8 @@ describe("construction exception cleanup (P2)", () => {
       constructionError,
     );
 
-    // A replacement runtime using the SAME backend object must succeed.
-    // This verifies backend-ownership release only: each runtime constructs
-    // its own persistence coordinator, so there is no shared lease whose
-    // release this test could exercise.
+    // A replacement runtime using the SAME backend object and storage
+    // identity must succeed, proving the persistence lease was released.
     const runtime = await createGameRuntime({ backend, saveStore: store });
     await runtime.dispose();
   });

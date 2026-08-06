@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DispatchResult,
   GameBackend,
@@ -6,7 +6,6 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { resetBackendOwnershipRegistry } from "../../src/runtime/backendOwnership";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   createRustSnapshot,
@@ -124,10 +123,6 @@ describe("post-disposal backend failure publication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canvasHost.isRunning.mockReturnValue(false);
-  });
-
-  afterEach(() => {
-    resetBackendOwnershipRegistry();
   });
 
   it("does not notify subscribers or render when a backend operation rejects after disposal", async () => {
