@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  runRestoreOperation,
   runSnapshotOperation,
   snapshotError,
 } from "../../src/runtime/backend/persistence";
@@ -45,6 +46,12 @@ describe("snapshot persistence mapping", () => {
       ok: false,
       error: snapshotError("hostFailure", "IPC unavailable"),
     });
+  });
+
+  it("rejects an ambiguous restore transport failure", async () => {
+    await expect(
+      runRestoreOperation(() => Promise.reject(new Error("IPC unavailable"))),
+    ).rejects.toThrow("IPC unavailable");
   });
 
   it("accepts a current-schema snapshot", async () => {
