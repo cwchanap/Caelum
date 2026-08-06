@@ -31,7 +31,7 @@ export interface SaveHeaderSummary {
 export interface CitySummary extends SaveHeaderSummary {
   cityId: string;
   name: string | null;
-  cityCreatedAt: string | null;
+  createdAt: string | null;
   savedAt: string | null;
   /**
    * Whether the city's working-save record is in the pending state created by
@@ -256,7 +256,7 @@ export interface SaveStore {
     identity: {
       cityId: string;
       name: string;
-      cityCreatedAt: string;
+      createdAt: string;
       savedAt: string;
       appVersion: string;
     },

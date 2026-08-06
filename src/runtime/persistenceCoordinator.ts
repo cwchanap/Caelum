@@ -126,7 +126,7 @@ export type GameplayWriteKind = "working" | GenerationWriteKind;
 export interface ActiveCityIdentity {
   id: string;
   name: string;
-  cityCreatedAt: string;
+  createdAt: string;
 }
 
 export type NewCityIdentity = ActiveCityIdentity;

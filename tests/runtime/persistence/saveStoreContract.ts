@@ -356,7 +356,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("city-1", {
               cityId: "city-2",
               name: "Duplicate",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -394,7 +394,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("city-1", {
               cityId: "city-2",
               name: "Duplicate",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -427,7 +427,7 @@ export function defineSaveStoreContract(
         expect(summary).toMatchObject({
           cityId: "city-1",
           name: "North Loop",
-          cityCreatedAt: original.cityCreatedAt,
+          createdAt: original.createdAt,
           savedAt: original.savedAt,
           appVersion: original.appVersion,
           snapshotSchemaVersion: original.snapshotSchemaVersion,
@@ -478,7 +478,7 @@ export function defineSaveStoreContract(
             {
               cityId: "",
               name: null,
-              cityCreatedAt: null,
+              createdAt: null,
               savedAt: null,
               appVersion: null,
               snapshotSchemaVersion: null,
@@ -492,7 +492,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("", {
               cityId: "city-copy",
               name: "Copy",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -519,7 +519,7 @@ export function defineSaveStoreContract(
             {
               cityId: "city-1",
               name: null,
-              cityCreatedAt: null,
+              createdAt: null,
               savedAt: null,
               appVersion: null,
               snapshotSchemaVersion: null,
@@ -537,7 +537,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("city-1", {
               cityId: "city-copy",
               name: "Copy",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -564,7 +564,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: "Replacement",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -671,7 +671,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: "Replacement",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -715,7 +715,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: "Replacement",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -753,7 +753,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: "Replacement",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -800,7 +800,7 @@ export function defineSaveStoreContract(
         const identity = Object.defineProperty(
           {
             name: "Duplicate",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           },
@@ -822,13 +822,13 @@ export function defineSaveStoreContract(
         expect(await expectOk(store.readWorkingSave("city-detached"))).toEqual({
           ...source,
           city: { id: "city-detached", name: "Duplicate" },
-          cityCreatedAt: "2026-08-01T12:00:00.000Z",
+          createdAt: "2026-08-01T12:00:00.000Z",
           savedAt: "2026-08-01T12:05:00.000Z",
           appVersion: "0.2.0",
         });
       });
 
-      it.each(["name", "cityCreatedAt", "savedAt", "appVersion"] as const)(
+      it.each(["name", "createdAt", "savedAt", "appVersion"] as const)(
         "rejects a detached non-string duplicate %s",
         async (field) => {
           const { store } = createHarness();
@@ -843,7 +843,7 @@ export function defineSaveStoreContract(
           const identity = {
             cityId: "city-target",
             name: "Duplicate",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
             [field]: hostileValue,
@@ -1020,7 +1020,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: valueThatThrowsWhileCloning() as never,
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -2443,7 +2443,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("city-missing", {
               cityId: "city-copy",
               name: "Copy",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -2656,7 +2656,7 @@ export function defineSaveStoreContract(
             store.duplicateCity("city-source", {
               cityId: "city-target",
               name: "Copy",
-              cityCreatedAt: "2026-08-01T12:00:00.000Z",
+              createdAt: "2026-08-01T12:00:00.000Z",
               savedAt: "2026-08-01T12:05:00.000Z",
               appVersion: "0.2.0",
             }),
@@ -2852,7 +2852,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-source", {
             cityId: "city-target",
             name: "Duplicate",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),
@@ -2869,7 +2869,7 @@ export function defineSaveStoreContract(
         expect(await expectOk(store.readWorkingSave("city-target"))).toEqual({
           ...source,
           city: { id: "city-target", name: "Changed Duplicate" },
-          cityCreatedAt: "2026-08-01T12:00:00.000Z",
+          createdAt: "2026-08-01T12:00:00.000Z",
           savedAt: "2026-08-01T12:05:00.000Z",
           appVersion: "0.2.0",
         });
@@ -2900,7 +2900,7 @@ export function defineSaveStoreContract(
           store.duplicateCity("city-1", {
             cityId: "city-copy",
             name: "Copy",
-            cityCreatedAt: "2026-08-01T12:00:00.000Z",
+            createdAt: "2026-08-01T12:00:00.000Z",
             savedAt: "2026-08-01T12:05:00.000Z",
             appVersion: "0.2.0",
           }),

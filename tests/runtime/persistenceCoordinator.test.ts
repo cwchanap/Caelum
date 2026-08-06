@@ -73,7 +73,7 @@ function cityIdentity(id = "city-001"): ActiveCityIdentity {
   return {
     id,
     name: "Test City",
-    cityCreatedAt: "2026-08-01T09:00:00.000Z",
+    createdAt: "2026-08-01T09:00:00.000Z",
   };
 }
 
@@ -91,7 +91,7 @@ function newCityIdentity(): NewCityIdentity {
   return {
     id: "city-002",
     name: "New City",
-    cityCreatedAt: "2026-08-01T10:00:00.000Z",
+    createdAt: "2026-08-01T10:00:00.000Z",
   };
 }
 
@@ -256,7 +256,7 @@ function loadEnvelope(input: {
   const city = input.city ?? cityIdentity("city-load");
   return buildSaveEnvelope({
     city: { id: city.id, name: city.name },
-    cityCreatedAt: city.cityCreatedAt,
+    createdAt: city.createdAt,
     savedAt: input.savedAt ?? "2026-08-01T11:00:00.000Z",
     appVersion: "0.1.0",
     snapshot:
@@ -485,7 +485,7 @@ describe("runtime persistence coordinator contracts", () => {
           {
             id: "city-002",
             name: "New City",
-            cityCreatedAt: "2026-08-01T10:00:00.000Z",
+            createdAt: "2026-08-01T10:00:00.000Z",
           },
         ),
         "createWorkingSave",
@@ -1777,7 +1777,7 @@ describe("runtime persistence coordinator contracts", () => {
       activeCity: {
         id: source.cityId,
         name: "Loaded City",
-        cityCreatedAt: "2026-08-01T09:00:00.000Z",
+        createdAt: "2026-08-01T09:00:00.000Z",
       },
       dirty: false,
       saveStatus: { state: "idle" },
@@ -2860,7 +2860,7 @@ describe("runtime persistence coordinator contracts", () => {
     const identity = newCityIdentity();
     const olderEnvelope = buildSaveEnvelope({
       city: { id: identity.id, name: identity.name },
-      cityCreatedAt: identity.cityCreatedAt,
+      createdAt: identity.createdAt,
       savedAt: "2026-08-01T09:45:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
@@ -3120,7 +3120,7 @@ describe("runtime persistence coordinator contracts", () => {
     const snapshot = createRustSnapshot();
     const envelope = buildSaveEnvelope({
       city: { id: cityIdentity().id, name: cityIdentity().name },
-      cityCreatedAt: cityIdentity().cityCreatedAt,
+      createdAt: cityIdentity().createdAt,
       savedAt: "2026-08-01T10:00:00.000Z",
       appVersion: "0.1.0",
       snapshot,
@@ -3462,7 +3462,7 @@ describe("runtime persistence coordinator contracts", () => {
         // city id would chain onto this held tail and hang.
         const olderEnvelope = buildSaveEnvelope({
           city: { id: sharedCityId, name: "Test City" },
-          cityCreatedAt: "2026-08-01T09:00:00.000Z",
+          createdAt: "2026-08-01T09:00:00.000Z",
           savedAt: "2026-08-01T09:45:00.000Z",
           appVersion: "0.1.0",
           snapshot: createRustSnapshot({ paused: true, budget: 33_000 }),
@@ -4611,7 +4611,7 @@ describe("runtime persistence coordinator contracts", () => {
       const priorCollisionCity: ActiveCityIdentity = {
         id: collisionId,
         name: "Old City",
-        cityCreatedAt: "2026-07-01T00:00:00.000Z",
+        createdAt: "2026-07-01T00:00:00.000Z",
       };
       const priorCollisionEnvelope = loadEnvelope({
         city: priorCollisionCity,
@@ -4906,7 +4906,7 @@ describe("runtime persistence coordinator contracts", () => {
       const city: ActiveCityIdentity = {
         id: cityId,
         name: "Old City",
-        cityCreatedAt: "2026-07-01T00:00:00.000Z",
+        createdAt: "2026-07-01T00:00:00.000Z",
       };
       const priorEnvelope = loadEnvelope({
         city,
@@ -4926,7 +4926,7 @@ describe("runtime persistence coordinator contracts", () => {
 
       const envelope = buildSaveEnvelope({
         city: { id: cityId, name: "New City" },
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
         appVersion: "0.1.0",
         snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),
@@ -4953,7 +4953,7 @@ describe("runtime persistence coordinator contracts", () => {
       const city: ActiveCityIdentity = {
         id: cityId,
         name: "Old City",
-        cityCreatedAt: "2026-07-01T00:00:00.000Z",
+        createdAt: "2026-07-01T00:00:00.000Z",
       };
       const priorEnvelope = loadEnvelope({
         city,
@@ -4973,7 +4973,7 @@ describe("runtime persistence coordinator contracts", () => {
 
       const envelope = buildSaveEnvelope({
         city: { id: cityId, name: "New City" },
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
         appVersion: "0.1.0",
         snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),
@@ -4995,7 +4995,7 @@ describe("runtime persistence coordinator contracts", () => {
       const cityId = newCityIdentity().id;
       const envelope = buildSaveEnvelope({
         city: { id: cityId, name: "New City" },
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
         appVersion: "0.1.0",
         snapshot: createRustSnapshot({ paused: true, budget: 120_000 }),

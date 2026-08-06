@@ -54,7 +54,7 @@ function cityIdentity(id = "city-001"): ActiveCityIdentity {
   return {
     id,
     name: "Test City",
-    cityCreatedAt: "2026-08-01T09:00:00.000Z",
+    createdAt: "2026-08-01T09:00:00.000Z",
   };
 }
 
@@ -1152,7 +1152,7 @@ describe("Game Runtime", () => {
         city.id,
         buildSaveEnvelope({
           city: { id: city.id, name: city.name },
-          cityCreatedAt: city.cityCreatedAt,
+          createdAt: city.createdAt,
           savedAt: "2026-08-01T11:00:00.000Z",
           appVersion: "0.1.0",
           snapshot: raw,
@@ -1203,7 +1203,7 @@ describe("Game Runtime", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       const dropped = runtime.debugSetBudget(80_000);
@@ -1277,7 +1277,7 @@ describe("Game Runtime", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
 
@@ -1348,7 +1348,7 @@ describe("Game Runtime", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       let releasedDrain = false;
@@ -1454,7 +1454,7 @@ describe("Game Runtime", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       return {
@@ -1581,7 +1581,7 @@ describe("Game Runtime", () => {
           {
             id: "city-002",
             name: "New City",
-            cityCreatedAt: "2026-08-01T10:00:00.000Z",
+            createdAt: "2026-08-01T10:00:00.000Z",
           },
         ),
       ).resolves.toMatchObject({ status: "failed" });
@@ -1637,7 +1637,7 @@ describe("Game Runtime", () => {
           {
             id: "city-002",
             name: "New City",
-            cityCreatedAt: "2026-08-01T10:00:00.000Z",
+            createdAt: "2026-08-01T10:00:00.000Z",
           },
         ),
       ).resolves.toMatchObject({ status: "failed" });
@@ -2298,7 +2298,7 @@ describe("Game Runtime", () => {
     const identity = {
       id: "city-reset",
       name: "Reset City",
-      cityCreatedAt: "2026-08-01T09:00:00.000Z",
+      createdAt: "2026-08-01T09:00:00.000Z",
     };
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
@@ -5272,7 +5272,7 @@ describe("persistence error path coverage", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
@@ -5364,7 +5364,7 @@ describe("persistence error path coverage", () => {
     ): {
       kind: "checkpoint";
       write: (input: {
-        city: { id: string; name: string; cityCreatedAt: string };
+        city: { id: string; name: string; createdAt: string };
         envelope: Parameters<SaveStore["writeCheckpoint"]>[0]["envelope"];
       }) => Promise<SaveStoreResult<CheckpointSummary>>;
     } => ({
@@ -5542,7 +5542,7 @@ describe("persistence error path coverage", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       await expect(
@@ -5615,7 +5615,7 @@ describe("persistence error path coverage", () => {
         {
           id: "city-002",
           name: "New City",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       );
       await expect(
@@ -5634,7 +5634,7 @@ describe("persistence error path coverage", () => {
         city.id,
         buildSaveEnvelope({
           city: { id: city.id, name: city.name },
-          cityCreatedAt: city.cityCreatedAt,
+          createdAt: city.createdAt,
           savedAt: "2026-08-01T11:00:00.000Z",
           appVersion: "0.1.0",
           snapshot: fullRustSnapshot(),
@@ -5669,7 +5669,7 @@ describe("persistence error path coverage", () => {
         city.id,
         buildSaveEnvelope({
           city: { id: city.id, name: city.name },
-          cityCreatedAt: city.cityCreatedAt,
+          createdAt: city.createdAt,
           savedAt: "2026-08-01T11:00:00.000Z",
           appVersion: "0.1.0",
           snapshot: fullRustSnapshot(),
@@ -5707,7 +5707,7 @@ describe("persistence error path coverage", () => {
         city.id,
         buildSaveEnvelope({
           city: { id: city.id, name: city.name },
-          cityCreatedAt: city.cityCreatedAt,
+          createdAt: city.createdAt,
           savedAt: "2026-08-01T11:00:00.000Z",
           appVersion: "0.1.0",
           snapshot: fullRustSnapshot(),
@@ -5743,7 +5743,7 @@ describe("persistence error path coverage", () => {
         city.id,
         buildSaveEnvelope({
           city: { id: city.id, name: city.name },
-          cityCreatedAt: city.cityCreatedAt,
+          createdAt: city.createdAt,
           savedAt: "2026-08-01T11:00:00.000Z",
           appVersion: "0.1.0",
           snapshot: fullRustSnapshot({ budget: 90_000 }),
@@ -5797,7 +5797,7 @@ describe("persistence error path coverage", () => {
     const newCityIdentity = () => ({
       id: "city-new-err",
       name: "New City",
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
     });
 
     it("fails with serializationFailed when now/appVersion are not configured", async () => {
@@ -6038,7 +6038,7 @@ describe("terminal-aware controller (dispose makes runtime dead)", () => {
         {
           id: "city-new",
           name: "New",
-          cityCreatedAt: "2026-08-01T10:00:00.000Z",
+          createdAt: "2026-08-01T10:00:00.000Z",
         },
       ),
     ).resolves.toMatchObject({
@@ -6086,7 +6086,7 @@ describe("pending-then-finalize and bootstrap reconciliation", () => {
       {
         id: "city-pending-1",
         name: "Pending City",
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
       },
     );
     expect(result.status).toBe("completed");
@@ -6108,7 +6108,7 @@ describe("pending-then-finalize and bootstrap reconciliation", () => {
     // pending record, then never finalize it.
     const envelope = buildSaveEnvelope({
       city: { id: "city-orphan", name: "Orphan" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -6162,7 +6162,7 @@ describe("pending-then-finalize and bootstrap reconciliation", () => {
       {
         id: "city-orphan",
         name: "Recreated",
-        cityCreatedAt: "2026-08-01T11:00:00.000Z",
+        createdAt: "2026-08-01T11:00:00.000Z",
       },
     );
     expect(result.status).toBe("completed");
@@ -6175,7 +6175,7 @@ describe("pending-then-finalize and bootstrap reconciliation", () => {
     // Seed a pending orphan.
     const envelope = buildSaveEnvelope({
       city: { id: "city-stuck", name: "Stuck" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -6236,7 +6236,7 @@ describe("ambiguous createWorkingSave failure reconciliation", () => {
       {
         id: "city-throw-1",
         name: "Throw City",
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
       },
     );
     expect(result.status).toBe("failed");
@@ -6278,7 +6278,7 @@ describe("ambiguous createWorkingSave failure reconciliation", () => {
       {
         id: "city-typed-fail",
         name: "Typed Fail",
-        cityCreatedAt: "2026-08-01T10:00:00.000Z",
+        createdAt: "2026-08-01T10:00:00.000Z",
       },
     );
     expect(result.status).toBe("failed");
@@ -6346,7 +6346,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-pending-throw",
       name: "Pending Throw",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The result is the original typed store failure (ioFailure), not
@@ -6396,7 +6396,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-finalize-typed",
       name: "Finalize Typed",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The result is the original typed finalize failure, not runtimeUnavailable.
@@ -6440,7 +6440,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-finalize-throw",
       name: "Finalize Throw",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The result is the original typed finalize failure (ioFailure from
@@ -6496,7 +6496,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-read-fail",
       name: "Read Fail",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The runtime is terminal: result is runtimeUnavailable.
@@ -6555,7 +6555,7 @@ describe("live ambiguous failure reconciliation (no disposal during activation)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-list-fail",
       name: "List Fail",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The runtime is terminal: result is runtimeUnavailable.
@@ -6585,7 +6585,7 @@ describe("bootstrap recovery surfacing", () => {
     // Seed a pending orphan.
     const envelope = buildSaveEnvelope({
       city: { id: "city-boot-fail", name: "Boot Fail" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -6680,7 +6680,7 @@ describe("terminal snapshot subscriber delivery", () => {
     await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-subscriber-recovery",
       name: "Subscriber Recovery",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The terminal transition publishes exactly one snapshot with the
@@ -6802,7 +6802,7 @@ describe("terminal snapshot subscriber delivery", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-dispose-cleanup-fail",
       name: "Dispose Cleanup Fail",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // Wait for createWorkingSave to be active (blocked on the gate).
@@ -6922,7 +6922,7 @@ describe("finalize notFound live rollback result contract", () => {
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-finalize-notfound",
       name: "Finalize Not Found",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The result is the ORIGINAL finalize store failure (notFound), not
@@ -6976,7 +6976,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     // Seed a pending orphan directly.
     const envelope = buildSaveEnvelope({
       city: { id: "city-multi-realm", name: "Multi Realm" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -7015,7 +7015,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     const memoryStore = createMemorySaveStore();
     const envelope = buildSaveEnvelope({
       city: { id: "city-single-realm", name: "Single Realm" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -7064,7 +7064,7 @@ describe("multi-realm bootstrap deletion safety", () => {
     // createWorkingSave step of a New City transaction).
     const envelope = buildSaveEnvelope({
       city: { id: "city-shared-live", name: "Shared Live" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -7141,7 +7141,7 @@ describe("disposal-time create/finalize failure reconciliation", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-disposal-typed",
       name: "Disposal Typed",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // Wait for createWorkingSave to be active (blocked on the gate).
@@ -7214,7 +7214,7 @@ describe("disposal-time create/finalize failure reconciliation", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-disposal-pending",
       name: "Disposal Pending",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     await vi.waitFor(() => {
@@ -7281,7 +7281,7 @@ describe("disposal-time create/finalize failure reconciliation", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-disposal-finalize-typed",
       name: "Disposal Finalize Typed",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     await vi.waitFor(() => {
@@ -7343,7 +7343,7 @@ describe("disposal-time create/finalize failure reconciliation", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-disposal-finalize-active",
       name: "Disposal Finalize Active",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     await vi.waitFor(() => {
@@ -7411,7 +7411,7 @@ describe("disposal-time create/finalize failure reconciliation", () => {
     const activation = runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-disposal-inspect",
       name: "Disposal Inspect",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // The create throws after committing, triggering reconciliation.
@@ -7506,7 +7506,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-multi-realm-admit",
       name: "Multi Realm Admit",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     // Typed precondition error identifying the unsupported capability.
@@ -7568,7 +7568,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-multi-realm-omitted",
       name: "Multi Realm Omitted",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
 
     expect(result.status).toBe("failed");
@@ -7599,7 +7599,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     const result = await runtime.persistence.activateNewCity(newCityRequest, {
       id: "city-multi-realm-restart",
       name: "Multi Realm Restart",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
     expect(result.status).toBe("failed");
     await runtime.dispose();
@@ -7627,7 +7627,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     // storage (e.g. created by a single-realm tool or a prior session).
     const realmBEnvelope = buildSaveEnvelope({
       city: { id: "city-realm-b-existing", name: "Realm B City" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),
@@ -7658,7 +7658,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     const result = await realmA.persistence.activateNewCity(newCityRequest, {
       id: "city-realm-a-new",
       name: "Realm A New",
-      cityCreatedAt: "2026-08-01T11:00:00.000Z",
+      createdAt: "2026-08-01T11:00:00.000Z",
     });
     expect(result.status).toBe("failed");
     expect(deleteCityCalled).toBe(false);
@@ -7697,7 +7697,7 @@ describe("multi-realm New City admission policy (HPA-539 temporary restriction)"
     // transaction or a legacy/mixed-version orphan).
     const envelope = buildSaveEnvelope({
       city: { id: "city-external-pending", name: "External Pending" },
-      cityCreatedAt: "2026-08-01T10:00:00.000Z",
+      createdAt: "2026-08-01T10:00:00.000Z",
       savedAt: "2026-08-01T10:05:00.000Z",
       appVersion: "0.1.0",
       snapshot: createRustSnapshot(),

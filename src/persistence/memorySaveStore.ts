@@ -204,7 +204,7 @@ function corruptSummary(
   return {
     cityId,
     name: null,
-    cityCreatedAt: null,
+    createdAt: null,
     savedAt: null,
     appVersion: null,
     snapshotSchemaVersion: null,
@@ -230,7 +230,7 @@ function citySummary(
   return {
     cityId,
     name: envelope.city.name,
-    cityCreatedAt: envelope.cityCreatedAt,
+    createdAt: envelope.createdAt,
     savedAt: envelope.savedAt,
     appVersion: envelope.appVersion,
     snapshotSchemaVersion: envelope.snapshotSchemaVersion,
@@ -553,7 +553,7 @@ export function createMemorySaveStore(options?: {
       !isNonEmptyString(input.value.sourceCityId) ||
       !isNonEmptyString(input.value.identity.cityId) ||
       typeof input.value.identity.name !== "string" ||
-      typeof input.value.identity.cityCreatedAt !== "string" ||
+      typeof input.value.identity.createdAt !== "string" ||
       typeof input.value.identity.savedAt !== "string" ||
       typeof input.value.identity.appVersion !== "string"
     ) {
@@ -589,7 +589,7 @@ export function createMemorySaveStore(options?: {
         id: targetCityId,
         name: input.value.identity.name,
       },
-      cityCreatedAt: input.value.identity.cityCreatedAt,
+      createdAt: input.value.identity.createdAt,
       savedAt: input.value.identity.savedAt,
       appVersion: input.value.identity.appVersion,
     };

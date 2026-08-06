@@ -224,7 +224,7 @@ function cityIdentity(id = "city-001"): ActiveCityIdentity {
   return {
     id,
     name: "Test City",
-    cityCreatedAt: "2026-08-01T09:00:00.000Z",
+    createdAt: "2026-08-01T09:00:00.000Z",
   };
 }
 
@@ -235,7 +235,7 @@ function seedCity(
 ): void {
   const envelope = buildSaveEnvelope({
     city: { id: city.id, name: city.name },
-    cityCreatedAt: city.cityCreatedAt,
+    createdAt: city.createdAt,
     savedAt: "2026-08-01T10:00:00.000Z",
     appVersion: "0.1.0",
     snapshot,

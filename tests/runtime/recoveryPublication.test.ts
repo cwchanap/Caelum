@@ -109,7 +109,7 @@ describe("runtime recovery publication during disposal", () => {
       initialCity: {
         id: "city-001",
         name: "Test City",
-        cityCreatedAt: "2026-08-01T09:00:00.000Z",
+        createdAt: "2026-08-01T09:00:00.000Z",
       },
       now: () => "2026-08-01T10:00:00.000Z",
       appVersion: "0.1.0",
@@ -129,7 +129,7 @@ describe("runtime recovery publication during disposal", () => {
       {
         id: "city-disposal-render-fail",
         name: "Disposal Render Fail",
-        cityCreatedAt: "2026-08-01T11:00:00.000Z",
+        createdAt: "2026-08-01T11:00:00.000Z",
       },
     );
 
@@ -178,7 +178,7 @@ describe("runtime recovery publication during disposal", () => {
       initialCity: {
         id: "city-001",
         name: "Test City",
-        cityCreatedAt: "2026-08-01T09:00:00.000Z",
+        createdAt: "2026-08-01T09:00:00.000Z",
       },
       now: () => "2026-08-01T10:00:00.000Z",
       appVersion: "0.1.0",
@@ -198,7 +198,7 @@ describe("runtime recovery publication during disposal", () => {
       {
         id: "city-multi-realm-admission",
         name: "Multi Realm Admission",
-        cityCreatedAt: "2026-08-01T11:00:00.000Z",
+        createdAt: "2026-08-01T11:00:00.000Z",
       },
     );
 
