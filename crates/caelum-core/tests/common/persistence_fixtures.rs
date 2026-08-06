@@ -135,7 +135,7 @@ pub fn rich_fixture() -> GameSnapshot {
         }
     }
     apply(&mut engine, GameIntent::SetPaused { paused: true });
-    let snapshot = engine.snapshot_for_save().expect("rich fixture must save");
+    let snapshot = engine.snapshot_for_save();
     // Verify the riding trip is associated with its vehicle: some vehicle must
     // list the riding trip among its passenger_ids.
     let riding = snapshot
@@ -171,9 +171,7 @@ pub fn host_parity_fixture() -> GameSnapshot {
         },
     );
 
-    let snapshot = engine
-        .snapshot_for_save()
-        .expect("host-parity fixture must save");
+    let snapshot = engine.snapshot_for_save();
     assert!(snapshot.paused, "host-parity fixture must be paused");
     caelum_core::validate_snapshot(&snapshot).expect("host-parity fixture must validate");
     assert!(
@@ -269,7 +267,7 @@ pub fn road_with_structure() -> GameSnapshot {
         },
     );
     // Engine starts paused; snapshot_for_save enforces paused state.
-    engine.snapshot_for_save().expect("fixture must save")
+    engine.snapshot_for_save()
 }
 
 /// A paused snapshot with a single bus route (two stops + one vehicle), for
@@ -295,7 +293,7 @@ pub fn fixture_with_bus_route() -> GameSnapshot {
         },
     );
     // Engine starts paused; snapshot_for_save enforces paused state.
-    engine.snapshot_for_save().expect("fixture must save")
+    engine.snapshot_for_save()
 }
 
 /// Build an `EntityRef` for use in expected `PersistenceError` assertions.

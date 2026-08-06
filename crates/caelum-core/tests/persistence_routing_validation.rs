@@ -6,10 +6,8 @@
 
 mod common;
 
-use caelum_core::model::{self, Point, TripStatus};
-use caelum_core::{
-    validate_snapshot, AssignmentError, PersistenceError, RoadTopologyError, SnapshotField,
-};
+use caelum_core::model::{Point, TripStatus};
+use caelum_core::{validate_snapshot, PersistenceError, RoadTopologyError};
 use common::persistence_fixtures::{fixture_with_bus_route, trip_fixture, walking_plan};
 
 // ===========================================================================
@@ -53,35 +51,6 @@ fn derive_route_states_matches_stored_legs_on_a_valid_fixture() {
     // The fixture has exactly one bus route with derived legs.
     assert_eq!(snapshot.transit.routes.len(), 1);
     assert!(!snapshot.transit.routes[0].legs.is_empty());
-}
-
-#[test]
-fn derive_route_states_detects_a_corrupted_leg_path() {
-    let mut snapshot = fixture_with_bus_route();
-    // Corrupt one leg's path to a Track variant (wrong mode for a bus route).
-    if let Some(leg) = snapshot.transit.routes[0].legs.first_mut() {
-        if let Some(model::TransitPath::Road {
-            total_travel_seconds,
-            ..
-        }) = leg.current_path.as_ref()
-        {
-            leg.current_path = Some(model::TransitPath::Track {
-                total_travel_seconds: *total_travel_seconds,
-                steps: vec![],
-            });
-        }
-    }
-    let err = validate_snapshot(&snapshot).unwrap_err();
-    assert!(matches!(
-        err,
-        PersistenceError::InvalidAssignment {
-            reason: AssignmentError::ModeMismatch,
-            ..
-        } | PersistenceError::InvalidDerivedState {
-            field: SnapshotField::RouteLegs,
-            ..
-        }
-    ));
 }
 
 // ===========================================================================

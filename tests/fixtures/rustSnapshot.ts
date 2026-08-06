@@ -111,15 +111,14 @@ export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
 
 export function previewBackendStubs(): Pick<
   GameBackend,
-  | "createSandbox"
   | "snapshotForSave"
-  | "validateSnapshot"
+  | "buildSandboxSnapshot"
   | "restoreSnapshot"
   | "previewRoute"
   | "previewRoadMutation"
 > {
   return {
-    async createSandbox(request) {
+    async buildSandboxSnapshot(request) {
       const snapshot = createRustSnapshot({
         budget: request.startingCapital,
         rules: {
@@ -140,13 +139,10 @@ export function previewBackendStubs(): Pick<
     async snapshotForSave() {
       return { ok: true, snapshot: createRustSnapshot({ paused: true }) };
     },
-    async validateSnapshot() {
-      return { ok: true };
-    },
-    async restoreSnapshot(request) {
+    async restoreSnapshot(snapshot) {
       return {
         ok: true,
-        snapshot: request.snapshot as RustGameSnapshot,
+        snapshot: snapshot as RustGameSnapshot,
       };
     },
     async previewRoute(request) {
@@ -193,9 +189,8 @@ export interface PersistenceBackendCounters {
 export function persistenceBackendStubs(): {
   backend: Pick<
     GameBackend,
-    | "createSandbox"
+    | "buildSandboxSnapshot"
     | "snapshotForSave"
-    | "validateSnapshot"
     | "restoreSnapshot"
     | "previewRoute"
     | "previewRoadMutation"
@@ -217,9 +212,9 @@ export function persistenceBackendStubs(): {
         counters.snapshotForSaveCalls += 1;
         return backend.snapshotForSave();
       },
-      async restoreSnapshot(request) {
+      async restoreSnapshot(snapshot) {
         counters.restoreSnapshotCalls += 1;
-        return backend.restoreSnapshot(request);
+        return backend.restoreSnapshot(snapshot);
       },
       async tick() {
         counters.tickCalls += 1;

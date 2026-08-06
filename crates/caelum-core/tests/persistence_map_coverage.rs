@@ -9,15 +9,13 @@
 
 mod common;
 
-use caelum_core::model::{
-    GrowthAction, GrowthWave, Point, RoadPort, RoadStructure, RoundaboutSize,
-};
+use caelum_core::model::{GrowthAction, GrowthWave, Point, RoadPort, RoadStructure};
 use caelum_core::{
-    create_sandbox_snapshot, validate_snapshot, GameEngine, GameIntent, PersistenceError,
-    RoadPreset, RoadStructureError, SandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
+    create_sandbox_snapshot, validate_snapshot, PersistenceError, RoadStructureError,
+    SandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
 };
 use common::persistence_fixtures::{
-    apply, campaign_snapshot, road_with_structure, roundabout_id, tile_index,
+    campaign_snapshot, road_with_structure, roundabout_id, tile_index,
 };
 
 // ===========================================================================
@@ -68,164 +66,6 @@ fn blank_grid_with_no_junctions_validates() {
     .expect("blank grid request must create a snapshot");
     snapshot.paused = true;
     assert!(validate_snapshot(&snapshot).is_ok());
-}
-
-// ===========================================================================
-// validate_roundabout_canonical — movement-facts kind mismatch
-// ===========================================================================
-
-/// Build a paused snapshot containing a Standard 3x3 roundabout (which has a
-/// protected island tile expected to be "empty"). Forging that tile's kind to
-/// "road" passes the per-point structure checks (roundabout tiles may be road
-/// or empty) and `validate_map` (a road tile with no connections is valid), but
-/// fails the canonical movement-facts kind check in
-/// `validate_roundabout_canonical` (lines 582-585).
-fn standard_roundabout_snapshot() -> caelum_core::GameSnapshot {
-    let mut engine = GameEngine::new();
-    apply(
-        &mut engine,
-        GameIntent::LayRoadLine {
-            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
-            preset: RoadPreset::TwoWay,
-        },
-    );
-    apply(
-        &mut engine,
-        GameIntent::PlaceRoundabout {
-            origin: Point { x: 6, y: 5 },
-            size: RoundaboutSize::Standard3x3,
-        },
-    );
-    engine.snapshot_for_save().expect("fixture must save")
-}
-
-#[test]
-fn roundabout_protected_island_wrong_kind_is_rejected() {
-    let mut snapshot = standard_roundabout_snapshot();
-    // The 3x3 roundabout at origin (6, 5) has its protected island at (7, 6)
-    // (offset (1, 1)), which the canonical template expects to be "empty".
-    let index = tile_index(&snapshot, 7, 6);
-    assert_eq!(snapshot.map.tiles[index].kind, "empty");
-    snapshot.map.tiles[index].kind = "road".to_string();
-    // Find the roundabout structure id for the expected error.
-    let id = roundabout_id(&snapshot);
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidRoadStructure {
-            structure_id: id,
-            reason: RoadStructureError::NonCanonicalMovementFacts,
-        }
-    );
-}
-
-// ===========================================================================
-// validate_automatic_junction_reconstruction — count mismatch
-// ===========================================================================
-
-/// Build a paused snapshot containing a real automatic junction (a road
-/// crossroads), used to exercise the reconstruction comparison.
-fn crossroads_snapshot() -> caelum_core::GameSnapshot {
-    let mut engine = GameEngine::new();
-    apply(
-        &mut engine,
-        GameIntent::LayRoadLine {
-            points: (2..=12).map(|x| Point { x, y: 5 }).collect(),
-            preset: RoadPreset::TwoWay,
-        },
-    );
-    apply(
-        &mut engine,
-        GameIntent::LayRoadLine {
-            points: (2..=12).map(|y| Point { x: 7, y }).collect(),
-            preset: RoadPreset::TwoWay,
-        },
-    );
-    engine.snapshot_for_save().expect("fixture must save")
-}
-
-#[test]
-fn extra_automatic_junction_count_mismatch_is_rejected() {
-    let mut snapshot = crossroads_snapshot();
-    // Pick a bare straight-road tile far from the real crossing to host a fake
-    // automatic junction. Tile (2, 5) is part of the horizontal road but is a
-    // straight segment (only East/West connections), so reconstruction will not
-    // create a junction there.
-    let fake_point = Point { x: 2, y: 5 };
-    let fake_index = tile_index(&snapshot, 2, 5);
-    assert_eq!(snapshot.map.tiles[fake_index].kind, "road");
-    let fake_id = "fake-junction-001".to_string();
-    snapshot.map.tiles[fake_index].road_structure_id = Some(fake_id.clone());
-    snapshot
-        .map
-        .road_structures
-        .push(RoadStructure::AutomaticJunction {
-            id: fake_id.clone(),
-            footprint: vec![fake_point],
-            ports: vec![RoadPort {
-                id: "fake-port".to_string(),
-                point: fake_point,
-                edge: caelum_core::model::Heading::East,
-                direction: None,
-            }],
-        });
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidRoadStructure {
-            structure_id: String::new(),
-            reason: RoadStructureError::AutomaticJunctionMismatch,
-        }
-    );
-}
-
-// ===========================================================================
-// validate_automatic_junction_reconstruction — stripped junctions must be
-// rejected even when the serialized junction list is empty
-// ===========================================================================
-
-/// Starting from a valid crossroads snapshot, remove every AutomaticJunction
-/// structure and clear the corresponding `road_structure_id` fields while
-/// keeping the reciprocal road connections intact. The early return on empty
-/// serialized junctions would skip reconstruction, letting the crossing
-/// compile as ordinary roads. With the early return removed, reconstruction
-/// produces a junction that has no serialized counterpart, so the count
-/// mismatch rejects the forged snapshot.
-#[test]
-fn crossroads_with_all_junctions_stripped_is_rejected() {
-    let mut snapshot = crossroads_snapshot();
-    // Collect automatic-junction IDs before stripping.
-    let automatic_ids: Vec<String> = snapshot
-        .map
-        .road_structures
-        .iter()
-        .filter(|structure| structure.is_automatic_junction())
-        .map(|structure| structure.id().to_string())
-        .collect();
-    assert!(
-        !automatic_ids.is_empty(),
-        "crossroads fixture must contain automatic junctions"
-    );
-    // Clear ownership on every tile that belonged to an automatic junction.
-    for tile in &mut snapshot.map.tiles {
-        if tile
-            .road_structure_id
-            .as_ref()
-            .is_some_and(|id| automatic_ids.contains(id))
-        {
-            tile.road_structure_id = None;
-        }
-    }
-    // Remove all automatic-junction structures.
-    snapshot
-        .map
-        .road_structures
-        .retain(|structure| !structure.is_automatic_junction());
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidRoadStructure {
-            structure_id: String::new(),
-            reason: RoadStructureError::AutomaticJunctionMismatch,
-        }
-    );
 }
 
 // ===========================================================================

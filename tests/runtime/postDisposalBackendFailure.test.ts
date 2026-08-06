@@ -56,15 +56,12 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
     snapshotForSave() {
       return stubs.snapshotForSave();
     },
-    validateSnapshot(request) {
-      return stubs.validateSnapshot(request);
-    },
-    async restoreSnapshot(request) {
-      snapshot = request.snapshot as RustGameSnapshot;
+    async restoreSnapshot(candidate) {
+      snapshot = candidate as RustGameSnapshot;
       return { ok: true, snapshot };
     },
-    async createSandbox(request) {
-      const result = await stubs.createSandbox(request);
+    async buildSandboxSnapshot(request) {
+      const result = await stubs.buildSandboxSnapshot(request);
       if (result.ok) snapshot = result.snapshot;
       return result;
     },

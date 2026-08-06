@@ -6,7 +6,7 @@ use caelum_core::{
     objectives,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
     state::create_initial_snapshot,
-    GameEngine, GameIntent, ModeError, PersistenceError, SnapshotField,
+    GameEngine, GameIntent,
 };
 
 mod common;
@@ -305,18 +305,5 @@ fn sandbox_and_objective_less_campaign_use_default_retention() {
     assert_eq!(
         objectives::effective_rolling_window_seconds(&sandbox),
         objectives::ROLLING_WINDOW_SECONDS
-    );
-}
-
-#[test]
-fn terminal_sandbox_snapshot_is_rejected_by_persistence() {
-    let mut snapshot = create_initial_snapshot();
-    snapshot.metrics.state = MetricsState::Won;
-    assert_eq!(
-        GameEngine::from_snapshot(snapshot).err().unwrap(),
-        PersistenceError::InvalidModeSettings {
-            field: SnapshotField::MetricsState,
-            reason: ModeError::SandboxTerminalState,
-        }
     );
 }

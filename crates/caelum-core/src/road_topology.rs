@@ -335,6 +335,20 @@ fn compile_structure_transitions(
                 footprint,
                 ports,
             } => {
+                let width = match size {
+                    crate::model::RoundaboutSize::Compact2x2 => 2,
+                    crate::model::RoundaboutSize::Standard3x3 => 3,
+                };
+                if origin.x < 0
+                    || origin.y < 0
+                    || origin.x.checked_add(width).is_none()
+                    || origin.y.checked_add(width).is_none()
+                {
+                    return Err(RoadTopologyCompileError::UnsafeRoundaboutPortMapping {
+                        structure_id: id.clone(),
+                        footprint: footprint.clone(),
+                    });
+                }
                 // Captured ports snapshot the neighboring boundary road's
                 // reciprocal connection and one-way direction at placement
                 // time. If that neighbor is later demolished or its one-way

@@ -225,34 +225,14 @@ export async function createGameRuntime(
   options: CreateGameRuntimeOptions,
 ): Promise<RuntimeController & RuntimeTestSeam> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
-  // P1: The Tauri backend's `beginRuntime()` atomically increments the Rust
-  // host's runtime epoch and returns the authoritative snapshot from the same
-  // critical section. The epoch is the cross-reload authority: a webview
-  // reload destroys this JavaScript realm but leaves the Rust process and
-  // `OwnedEngine` alive. A stale command from the previous realm carries an
-  // outdated epoch and is rejected by the Rust host before it can mutate the
-  // engine. The Rust epoch is the cross-reload/process-host correctness
-  // boundary.
-  // P2: Protect the entire post-acquisition construction phase with one
-  // cleanup scope so construction failures release the persistence lease so a
-  // replacement runtime can initialize. An intentional
-  // `BootstrapRecoveryError` (leaseStuck) sets `pinRecovery = true` before
-  // throwing so the generic catch skips release — the lease is permanently
-  // pinned and `startDrainAndRelease` handles the drain.
+  // Protect the post-snapshot construction phase with one cleanup scope so
+  // construction failures release the persistence lease.
   let lease: PersistenceLease | null = null;
   let state: ReturnType<typeof normalizeRustSnapshot>;
   try {
-    // P1: Use `beginRuntime()` for the atomic epoch + initial snapshot. When
-    // the backend does not expose `beginRuntime` (e.g. test mocks), fall back
-    // to `snapshot()` with epoch 0 — no epoch verification occurs.
-    const session = backend.beginRuntime
-      ? await backend.beginRuntime()
-      : { runtimeEpoch: 0, snapshot: await backend.snapshot() };
-    state = normalizeRustSnapshot(session.snapshot);
-    // Construct this runtime's persistence coordinator and acquire the
-    // exclusive persistence lease. Each runtime owns its own coordinator —
-    // coordination is per-runtime, not shared across stores or runtime
-    // lifetimes — so the lease serializes this runtime's own persistence
+    state = normalizeRustSnapshot(await backend.snapshot());
+    // Construct this runtime's persistence coordinator and acquire its
+    // exclusive lease. The coordinator serializes this runtime's persistence
     // workflows (foreground lifecycle operations and per-city FIFO writes).
     const coordinator = createSharedPersistenceCoordinator();
     lease = await coordinator.acquireLease();
@@ -602,9 +582,9 @@ export async function createGameRuntime(
       };
       // Fire-and-forget: drain this runtime's pending gameplay and persistence
       // work (in-flight backend operations, enqueued FIFO writes, and admitted
-      // foreground lifecycle operations), then release the persistence lease.
-      // If an uncancellable store or backend operation never settles, teardown
-      // remains pending.
+      // foreground lifecycle operations), then release its runtime-local
+      // persistence lease and backend ownership. If an uncancellable store or
+      // backend operation never settles, teardown remains pending.
       void startDrainAndRelease();
       // Install the cleared UI. When disposal has been explicitly requested,
       // a late backend failure must NOT publish a terminal snapshot: disposal
@@ -639,9 +619,12 @@ export async function createGameRuntime(
       stopRuntime();
       // Close the lease, drain all pending gameplay and persistence work
       // (in-flight backend operations, enqueued FIFO writes, and admitted
-      // foreground lifecycle operations), then release the persistence lease.
-      // Unlike `failBackend` (fire-and-forget), `dispose` awaits the drain so
-      // the caller knows the lease has been released.
+      // foreground lifecycle operations), then release the lease and backend
+      // ownership. The persistence lease is per-runtime, so releasing it
+      // only settles this runtime's own work; backend ownership is the
+      // capability a replacement runtime against the same backend engine
+      // acquires. Unlike `failBackend` (fire-and-forget), `dispose` awaits
+      // the drain so the caller knows both have been released.
       await startDrainAndRelease();
     };
 
@@ -1520,9 +1503,7 @@ export async function createGameRuntime(
             error: {
               kind: "backend",
               error: {
-                kind: "host",
-                operation: "snapshotForSave",
-                code: "invokeFailed",
+                code: "hostFailure",
                 diagnostic:
                   error instanceof Error ? error.message : String(error),
               },
@@ -1721,14 +1702,11 @@ export async function createGameRuntime(
     };
 
     const persistenceHostFailure = (
-      operation: "snapshotForSave" | "restoreSnapshot",
       error: unknown,
     ): PersistenceCoordinatorError => ({
       kind: "backend",
       error: {
-        kind: "host",
-        operation,
-        code: "invokeFailed",
+        code: "hostFailure",
         diagnostic: error instanceof Error ? error.message : String(error),
       },
     });
@@ -1762,9 +1740,7 @@ export async function createGameRuntime(
     ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
       let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
       try {
-        restored = await backend.restoreSnapshot({
-          snapshot: canonicalSnapshot,
-        });
+        restored = await backend.restoreSnapshot(canonicalSnapshot);
       } catch (error: unknown) {
         return { ok: false, error };
       }
@@ -1929,7 +1905,7 @@ export async function createGameRuntime(
                 }
                 return publishLoadFailure(
                   requestToken,
-                  persistenceHostFailure("snapshotForSave", error),
+                  persistenceHostFailure(error),
                 );
               }
               if (!priorCapture.ok) {
@@ -1947,9 +1923,7 @@ export async function createGameRuntime(
 
               let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
               try {
-                restored = await backend.restoreSnapshot({
-                  snapshot: record.snapshot,
-                });
+                restored = await backend.restoreSnapshot(record.snapshot);
               } catch (error: unknown) {
                 // A host exception cannot prove whether restoration mutated the
                 // backend, so restore the captured canonical state before
@@ -1967,7 +1941,7 @@ export async function createGameRuntime(
                 }
                 return publishLoadFailure(
                   requestToken,
-                  persistenceHostFailure("restoreSnapshot", error),
+                  persistenceHostFailure(error),
                 );
               }
               if (!restored.ok) {
@@ -2002,9 +1976,7 @@ export async function createGameRuntime(
               publishLoadFailure(requestToken, {
                 kind: "backend",
                 error: {
-                  kind: "host",
-                  operation: "restoreSnapshot",
-                  code: "invokeFailed",
+                  code: "hostFailure",
                   diagnostic:
                     error instanceof Error ? error.message : String(error),
                 },
@@ -2208,59 +2180,6 @@ export async function createGameRuntime(
       return { status: "failed", error: failure };
     };
 
-    // Disposal-time late-success cleanup: an atomic city create succeeded
-    // after disposal began. Restore the prior canonical backend state, make
-    // one direct deleteCity attempt for the orphaned city record, and keep the
-    // runtime terminal. Return a concise cleanup failure when cleanup fails;
-    // otherwise return runtimeUnavailable.
-    const cleanupLateSuccessNewCity = async (
-      priorPaused: boolean,
-      priorCanonicalSnapshot: RustGameSnapshot,
-      identity: NewCityIdentity,
-    ): Promise<PersistenceOperationResult<LoadCityValue>> => {
-      const restored = await restoreCanonicalBackendState(
-        priorCanonicalSnapshot,
-        priorPaused,
-      );
-
-      let deleted: CitySaveStoreResult<void>;
-      try {
-        deleted = await saveStore!.deleteCity(identity.id);
-      } catch (error: unknown) {
-        deleted = {
-          ok: false,
-          error: {
-            operation: "deleteCity",
-            code: "failed",
-            cityId: identity.id,
-            diagnostic: error instanceof Error ? error.message : String(error),
-          },
-        };
-      }
-      if (!restored.ok) {
-        return {
-          status: "failed",
-          error: {
-            kind: "backend",
-            error: {
-              kind: "host",
-              operation: "restoreSnapshot",
-              code: "invokeFailed",
-              diagnostic: String(restored.error),
-            },
-          },
-        };
-      }
-      if (!deleted.ok) {
-        return {
-          status: "failed",
-          error: { kind: "store", error: deleted.error },
-        };
-      }
-
-      return runtimeUnavailable("activateNewCity");
-    };
-
     const activateNewCity = async (
       requestedSandbox: SandboxCreationRequest,
       requestedIdentity: NewCityIdentity,
@@ -2308,7 +2227,7 @@ export async function createGameRuntime(
       // Register as a foreground lifecycle operation so `drainAll` during
       // disposal waits for this entire workflow — not only its eventual store
       // enqueue. Without this, dispose() could drain zero outstanding FIFO
-      // work while New City is blocked in createSandbox, release the lease,
+      // work while New City is blocked in sandbox construction, release the lease,
       // and let a replacement runtime acquire it before this workflow
       // enqueues its write. If the lease is already closing (disposal
       // started), bail out without admitting.
@@ -2333,39 +2252,14 @@ export async function createGameRuntime(
           priorLifecycleStatus,
         );
 
-        let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+        let created: Awaited<ReturnType<GameBackend["buildSandboxSnapshot"]>>;
         try {
-          priorCapture = await backend.snapshotForSave();
+          created = await backend.buildSandboxSnapshot(request);
         } catch (error: unknown) {
-          return restorePriorRuntimeAfterNewCityFailure(
-            prior,
-            persistenceHostFailure("snapshotForSave", error),
-          );
-        }
-        if (!priorCapture.ok) {
           return restorePriorRuntimeAfterNewCityFailure(prior, {
             kind: "backend",
-            error: priorCapture.error,
-          });
-        }
-        // Dead check after prior capture: the backend still holds the prior
-        // state (createSandbox has not run), so no backend rollback is
-        // needed. A disposed runtime must remain terminal — do not restore
-        // the prior public runtime, restart the canvas, or publish.
-        if (dead) {
-          return runtimeUnavailable("activateNewCity");
-        }
-
-        let created: Awaited<ReturnType<GameBackend["createSandbox"]>>;
-        try {
-          created = await backend.createSandbox(request);
-        } catch (error: unknown) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "backend",
             error: {
-              kind: "host",
-              operation: "createSandbox",
-              code: "invokeFailed",
+              code: "hostFailure",
               diagnostic:
                 error instanceof Error ? error.message : String(error),
             },
@@ -2377,49 +2271,18 @@ export async function createGameRuntime(
             error: created.error,
           });
         }
-        // Dead check after createSandbox: the backend now holds the candidate
-        // sandbox. Rollback to the prior canonical snapshot so the disposed
-        // backend is not left in the candidate state, and no save is written.
+        // Building is pure: the active backend still holds the prior state, so
+        // a build failure or disposal before persistence needs no rollback and
+        // must not write a city record.
         if (dead) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "precondition",
-            error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-          });
-        }
-
-        let candidateCapture: Awaited<
-          ReturnType<GameBackend["snapshotForSave"]>
-        >;
-        try {
-          candidateCapture = await backend.snapshotForSave();
-        } catch (error: unknown) {
-          return await rollbackNewCity(
-            prior,
-            priorCapture.snapshot,
-            persistenceHostFailure("snapshotForSave", error),
-          );
-        }
-        if (!candidateCapture.ok) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "backend",
-            error: candidateCapture.error,
-          });
-        }
-        // Dead check after candidate capture: the candidate is installed.
-        // Rollback and return — no save is written, no successful result is
-        // published.
-        if (dead) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "precondition",
-            error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-          });
+          return runtimeUnavailable("activateNewCity");
         }
 
         let savedAt: string;
         try {
           savedAt = now();
         } catch (error: unknown) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
+          return restorePriorRuntimeAfterNewCityFailure(prior, {
             kind: "store",
             error: {
               operation: "createCity",
@@ -2433,12 +2296,9 @@ export async function createGameRuntime(
 
         // Dead check immediately before the store enqueue: if disposal
         // occurred while building the CitySaveRecord (synchronous, but defense
-        // in depth), do not write. The candidate is installed, so rollback.
+        // in depth), do not write. The backend is still unchanged.
         if (dead) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
-            kind: "precondition",
-            error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-          });
+          return runtimeUnavailable("activateNewCity");
         }
 
         const record: CitySaveRecord = {
@@ -2448,7 +2308,7 @@ export async function createGameRuntime(
             createdAt: identity.createdAt,
           },
           savedAt,
-          snapshot: candidateCapture.snapshot,
+          snapshot: created.snapshot,
         };
         let stored: CitySaveStoreResult<CitySummary>;
         try {
@@ -2468,20 +2328,67 @@ export async function createGameRuntime(
           };
         }
         if (!stored.ok) {
-          return await rollbackNewCity(prior, priorCapture.snapshot, {
+          return restorePriorRuntimeAfterNewCityFailure(prior, {
             kind: "store",
             error: stored.error,
           });
         }
-        // A create that completes after disposal began must be rolled back and
-        // deleted once. The runtime remains terminal and does not publish the
-        // candidate.
+        // Storage is committed before activation. If disposal began after the
+        // create completed, leave the durable city available for a later load;
+        // the active backend remains the prior city because construction was
+        // pure.
         if (dead) {
-          return await cleanupLateSuccessNewCity(
-            prior.paused,
-            priorCapture.snapshot,
-            identity,
+          return runtimeUnavailable("activateNewCity");
+        }
+
+        // Capture the prior canonical backend state immediately before the
+        // candidate restore. A thrown restore is ambiguous, so roll back to
+        // this snapshot before reporting the host failure.
+        let priorCapture: Awaited<ReturnType<GameBackend["snapshotForSave"]>>;
+        try {
+          priorCapture = await backend.snapshotForSave();
+        } catch (error: unknown) {
+          return restorePriorRuntimeAfterNewCityFailure(
+            prior,
+            persistenceHostFailure(error),
           );
+        }
+        if (!priorCapture.ok) {
+          return restorePriorRuntimeAfterNewCityFailure(prior, {
+            kind: "backend",
+            error: priorCapture.error,
+          });
+        }
+        if (dead) {
+          return runtimeUnavailable("activateNewCity");
+        }
+
+        let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+        try {
+          restored = await backend.restoreSnapshot(created.snapshot);
+        } catch (error: unknown) {
+          return await rollbackNewCity(prior, priorCapture.snapshot, {
+            kind: "backend",
+            error: {
+              code: "hostFailure",
+              diagnostic:
+                error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+        if (!restored.ok) {
+          // A definitive `{ ok: false }` restore did not mutate the backend;
+          // the committed city remains in storage for a later retry.
+          return restorePriorRuntimeAfterNewCityFailure(prior, {
+            kind: "backend",
+            error: restored.error,
+          });
+        }
+        if (dead) {
+          return await rollbackNewCity(prior, priorCapture.snapshot, {
+            kind: "precondition",
+            error: { code: "runtimeUnavailable", operation: "activateNewCity" },
+          });
         }
 
         clearHoverPreviewTimer();
@@ -2490,7 +2397,7 @@ export async function createGameRuntime(
         invalidateRoadPreview();
         activeRouteSaveTokens.clear();
         nextRouteDraftInstanceId = 1;
-        state = normalizeRustSnapshot(candidateCapture.snapshot);
+        state = normalizeRustSnapshot(restored.snapshot);
         ui = createUiState();
         backendError = null;
         rejection = null;

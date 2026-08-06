@@ -1,8 +1,5 @@
 use caelum_core::model::{Point, SNAPSHOT_SCHEMA_VERSION};
-use caelum_core::{
-    check_snapshot_schema, DerivedStateError, EntityKind, EntityRef, GameEngine, GameIntent,
-    PersistenceError, RoadPreset, SnapshotField,
-};
+use caelum_core::{check_snapshot_schema, GameEngine, GameIntent, RoadPreset, SnapshotLoadError};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -16,23 +13,11 @@ fn engine_with_stop() -> GameEngine {
 }
 
 #[test]
-fn legacy_missing_stop_access_is_rejected_instead_of_repaired() {
+fn missing_stop_access_is_normalized_during_construction() {
     let mut snapshot = engine_with_stop().snapshot();
-    let stop_id = snapshot.transit.stops[0].id.clone();
     snapshot.transit.stops[0].road_access = None;
 
-    assert_eq!(
-        GameEngine::from_snapshot(snapshot).err().unwrap(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::NodeRoadAccess,
-            reason: DerivedStateError::StopAccessMismatch {
-                node: EntityRef {
-                    kind: EntityKind::Stop,
-                    id: stop_id,
-                },
-            },
-        }
-    );
+    assert!(GameEngine::from_snapshot(snapshot).is_ok());
 }
 
 #[test]
@@ -41,18 +26,13 @@ fn from_snapshot_rejects_unsupported_schema_before_semantic_validation() {
     snapshot.schema_version = SNAPSHOT_SCHEMA_VERSION - 1;
     snapshot.transit.stops[0].road_access = None;
 
-    let error = GameEngine::from_snapshot(snapshot).err().unwrap();
-    let wire = serde_json::to_value(error).expect("persistence error serializes");
-
-    assert_eq!(wire["code"], serde_json::json!("unsupportedSchema"));
-    assert_eq!(
-        wire["context"]["expected"],
-        serde_json::json!(SNAPSHOT_SCHEMA_VERSION)
-    );
-    assert_eq!(
-        wire["context"]["actual"],
-        serde_json::json!(SNAPSHOT_SCHEMA_VERSION - 1)
-    );
+    assert!(matches!(
+        GameEngine::from_snapshot(snapshot),
+        Err(SnapshotLoadError::UnsupportedSchema {
+            expected: SNAPSHOT_SCHEMA_VERSION,
+            actual,
+        }) if actual == SNAPSHOT_SCHEMA_VERSION - 1
+    ));
 }
 
 #[test]

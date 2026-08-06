@@ -1,9 +1,6 @@
 import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
 import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
-import {
-  runPersistenceSnapshotOperation,
-  runPersistenceValidationOperation,
-} from "./persistence";
+import { runRestoreOperation, runSnapshotOperation } from "./persistence";
 import {
   normalizeDispatchResult,
   normalizeRoadMutationPreviewResponse,
@@ -17,7 +14,6 @@ import type {
   RoadMutationPreviewResponse,
   RoutePreviewRequest,
   RoutePreviewResponse,
-  RuntimeSession,
   RustGameSnapshot,
   SandboxCreationRequest,
 } from "./types";
@@ -55,39 +51,21 @@ async function initWithRuntimeWasmSource(): Promise<unknown> {
 export async function createWasmBackend(): Promise<GameBackend> {
   await initWasm();
 
-  let engine = new WasmGameEngine();
+  const engine = new WasmGameEngine();
 
   return {
-    async beginRuntime(): Promise<RuntimeSession> {
-      // The WASM engine is instance-local — no cross-realm authority is
-      // needed. Return epoch 0 so the runtime's beginRuntime path is
-      // uniform across backends; mutating WASM calls do not carry epoch.
-      const snapshot = engine.snapshot() as RustGameSnapshot;
-      return { runtimeEpoch: 0, snapshot };
-    },
     async snapshot() {
       return engine.snapshot() as RustGameSnapshot;
     },
     snapshotForSave() {
-      return runPersistenceSnapshotOperation("snapshotForSave", () =>
-        engine.snapshot_for_save(),
-      );
+      return runSnapshotOperation(() => engine.snapshot_for_save());
     },
-    validateSnapshot(request) {
-      return runPersistenceValidationOperation(undefined, () =>
-        engine.validate_snapshot(request.snapshot),
-      );
+    restoreSnapshot(snapshot) {
+      return runRestoreOperation(() => engine.restore_snapshot(snapshot));
     },
-    restoreSnapshot(request) {
-      return runPersistenceSnapshotOperation("restoreSnapshot", () =>
-        engine.restore_snapshot(request.snapshot),
-      );
-    },
-    async createSandbox(request: SandboxCreationRequest) {
+    async buildSandboxSnapshot(request: SandboxCreationRequest) {
       try {
-        const candidate = WasmGameEngine.from_sandbox_request(request);
-        const snapshot = candidate.snapshot() as RustGameSnapshot;
-        engine = candidate;
+        const snapshot = WasmGameEngine.build_sandbox_snapshot(request);
         return { ok: true, snapshot } as const;
       } catch (error: unknown) {
         if (isSandboxCreationError(error)) {

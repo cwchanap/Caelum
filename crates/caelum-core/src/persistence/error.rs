@@ -5,6 +5,29 @@ use crate::road_topology::RoadTopologyCompileError;
 
 pub type PersistenceResult<T> = Result<T, PersistenceError>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "code",
+    content = "context",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SnapshotLoadError {
+    UnsupportedSchema { expected: u16, actual: u16 },
+    InvalidSnapshot(String),
+}
+
+impl From<PersistenceError> for SnapshotLoadError {
+    fn from(error: PersistenceError) -> Self {
+        match error {
+            PersistenceError::UnsupportedSchema { expected, actual } => {
+                Self::UnsupportedSchema { expected, actual }
+            }
+            error => Self::InvalidSnapshot(format!("{error:?}")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "code",

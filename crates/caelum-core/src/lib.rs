@@ -35,7 +35,7 @@ pub mod model;
 pub mod network;
 pub mod objectives;
 pub(crate) mod persistence;
-pub mod persistence_bridge;
+mod persistence_bridge;
 pub mod platforms;
 pub mod preview;
 pub mod rejection;
@@ -54,7 +54,7 @@ pub mod transit;
 pub mod transit_nodes;
 pub mod trips;
 
-pub use engine::{GameEngine, PreparedEngineRestore, RoutingContext, SaveSnapshotCapture};
+pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchResult, GameIntent, RoadPreset};
 pub use model::{
     GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StartingCapital, StopRoadAccess,
@@ -64,11 +64,7 @@ pub use persistence::{
     check_schema_version, check_snapshot_schema, validate_snapshot, AssignmentError,
     DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError, NumericError,
     OwnershipError, PersistenceError, PersistenceResult, RoadStructureError, RoadTopologyError,
-    ScenarioError, SnapshotField, TileError,
-};
-pub use persistence_bridge::{
-    PersistenceBridgeError, PersistenceHostErrorCode, PersistenceOperation,
-    PersistenceSerializationPhase, PersistenceValidationSource,
+    ScenarioError, SnapshotField, SnapshotLoadError, TileError,
 };
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,

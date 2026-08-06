@@ -1,16 +1,11 @@
-use std::collections::BTreeSet;
-
 use crate::commute;
-use crate::model::{
-    ActiveTrip, GameMode, GameSnapshot, MetricsState, Point, TransitMode, TripOutcomeKind,
-    TripPurpose, TripStatus, WorkerProfile,
-};
-use crate::{objectives, router, trips};
+use crate::model::{ActiveTrip, GameSnapshot, Point, TransitMode, TripStatus};
+use crate::trips;
 
 use super::entities::{parse_trip_id, EntityIndexes};
 use super::{
-    DerivedStateError, EntityError, EntityKind, EntityRef, ModeError, NumericError,
-    PersistenceError, PersistenceResult, SnapshotField,
+    DerivedStateError, EntityError, EntityKind, EntityRef, NumericError, PersistenceError,
+    PersistenceResult, SnapshotField,
 };
 
 pub(super) fn validate_trips(
@@ -19,48 +14,31 @@ pub(super) fn validate_trips(
 ) -> PersistenceResult<()> {
     validate_sims(snapshot)?;
 
-    let services = router::active_services(snapshot);
-    let mut trip_keys = BTreeSet::new();
-    let mut max_current_day_sequence = 0;
+    let mut trip_keys = std::collections::BTreeSet::new();
     for trip in &snapshot.active_trips {
         let entity = entity_ref(EntityKind::ActiveTrip, &trip.id);
-        let Some(sim) = indexes.sim(&trip.sim_id) else {
+        if indexes.sim(&trip.sim_id).is_none() {
             return Err(PersistenceError::DanglingReference {
                 source: entity.clone(),
                 field: SnapshotField::EntityId,
                 target: entity_ref(EntityKind::Sim, &trip.sim_id),
             });
-        };
-        let (service_day, sequence) =
-            parse_trip_id(&trip.id).ok_or_else(|| PersistenceError::InvalidEntity {
-                entity: entity.clone(),
-                field: SnapshotField::EntityId,
-                reason: EntityError::NonCanonicalId,
-            })?;
-        if service_day > snapshot.day {
-            return Err(PersistenceError::InvalidEntity {
-                entity: entity.clone(),
-                field: SnapshotField::TripServiceDay,
-                reason: EntityError::InvalidStaticShape,
-            });
-        }
-        if service_day == snapshot.day {
-            max_current_day_sequence = max_current_day_sequence.max(sequence);
-        }
-        if !trip_keys.insert((
-            trip.sim_id.as_str(),
-            service_day,
-            purpose_order(trip.purpose),
-        )) {
-            return Err(PersistenceError::InvalidDerivedState {
-                field: SnapshotField::TripPurpose,
-                reason: DerivedStateError::TripStateMismatch {
-                    trip: entity.clone(),
-                },
-            });
         }
 
-        validate_trip_endpoints(snapshot, trip, sim)?;
+        // A duplicate generated key would cause the next tick to address two
+        // trips as the same commute.  Arbitrary user-authored IDs remain valid;
+        // only parseable generated IDs participate in this safety index.
+        if let Some((service_day, sequence)) = parse_trip_id(&trip.id) {
+            if !trip_keys.insert((trip.sim_id.as_str(), service_day, sequence)) {
+                return Err(PersistenceError::InvalidEntity {
+                    entity: entity.clone(),
+                    field: SnapshotField::EntityId,
+                    reason: EntityError::InvalidStaticShape,
+                });
+            }
+        }
+
+        validate_trip_endpoints(snapshot, trip)?;
         super::finite_non_negative(
             Some(entity.clone()),
             SnapshotField::TripDeadline,
@@ -74,12 +52,28 @@ pub(super) fn validate_trips(
             trips::WAIT_PATIENCE_SECONDS,
         )?;
         validate_world_position(snapshot, trip, entity.clone())?;
-        validate_route_plan(snapshot, &services, trip, entity.clone())?;
+        validate_route_plan(snapshot, trip, entity.clone())?;
         validate_vehicle_membership(indexes, trip, entity)?;
     }
 
-    validate_trip_counters(snapshot, max_current_day_sequence)?;
     validate_metrics(snapshot)
+}
+
+pub(super) fn normalize_direct_fields(snapshot: &mut GameSnapshot) {
+    for sim in &mut snapshot.sims {
+        sim.worker_profile = commute::worker_profile_for_id(&sim.id);
+        sim.shift_template = commute::shift_template_for_id(&sim.id).map(str::to_string);
+    }
+
+    let max_current_day_sequence = snapshot
+        .active_trips
+        .iter()
+        .filter_map(|trip| parse_trip_id(&trip.id))
+        .filter_map(|(day, sequence)| (day == snapshot.day).then_some(sequence))
+        .max()
+        .unwrap_or(0);
+    snapshot.trip_sequence_day = snapshot.day;
+    snapshot.next_trip_sequence = max_current_day_sequence.saturating_add(1).max(1);
 }
 
 fn validate_sims(snapshot: &GameSnapshot) -> PersistenceResult<()> {
@@ -90,52 +84,11 @@ fn validate_sims(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         if let Some(workplace) = sim.workplace {
             validate_point(snapshot, &entity, SnapshotField::SimWorkplace, workplace)?;
         }
-
-        let expected_profile = commute::worker_profile_for_id(&sim.id);
-        if sim.worker_profile != expected_profile {
-            return Err(invalid_entity_field(
-                entity,
-                SnapshotField::SimWorkerProfile,
-            ));
-        }
-        let expected_shift = commute::shift_template_for_id(&sim.id);
-        if sim.shift_template.as_deref() != expected_shift {
-            return Err(invalid_entity_field(
-                entity,
-                SnapshotField::SimShiftTemplate,
-            ));
-        }
-        if sim.worker_profile == WorkerProfile::NonWorker
-            && (sim.shift_template.is_some() || sim.workplace.is_some())
-        {
-            return Err(invalid_entity_field(
-                entity,
-                SnapshotField::SimWorkerProfile,
-            ));
-        }
-        if sim.commute_day > snapshot.day {
-            return Err(invalid_entity_field(entity, SnapshotField::SimCommuteDay));
-        }
-        let invalid_flags = [
-            sim.outbound_arrived_today && !sim.outbound_resolved_today,
-            sim.returned_home_today && !sim.return_resolved_today,
-            (sim.return_resolved_today || sim.returned_home_today)
-                && (!sim.outbound_resolved_today || !sim.outbound_arrived_today),
-        ]
-        .into_iter()
-        .any(std::convert::identity);
-        if invalid_flags {
-            return Err(invalid_entity_field(entity, SnapshotField::SimDailyFlags));
-        }
     }
     Ok(())
 }
 
-fn validate_trip_endpoints(
-    snapshot: &GameSnapshot,
-    trip: &ActiveTrip,
-    sim: &crate::model::Sim,
-) -> PersistenceResult<()> {
+fn validate_trip_endpoints(snapshot: &GameSnapshot, trip: &ActiveTrip) -> PersistenceResult<()> {
     let entity = entity_ref(EntityKind::ActiveTrip, &trip.id);
     validate_point(snapshot, &entity, SnapshotField::TripOrigin, trip.origin)?;
     validate_point(
@@ -144,28 +97,6 @@ fn validate_trip_endpoints(
         SnapshotField::TripDestination,
         trip.destination,
     )?;
-    if sim.position != trip.origin {
-        return Err(PersistenceError::InvalidDerivedState {
-            field: SnapshotField::TripPosition,
-            reason: DerivedStateError::TripPositionMismatch { trip: entity },
-        });
-    }
-    let valid = match trip.purpose {
-        TripPurpose::CommuteOutbound => {
-            trip.origin == sim.home
-                && (trip.destination == sim.home || sim.workplace == Some(trip.destination))
-        }
-        TripPurpose::CommuteReturn => trip.destination == sim.home,
-    };
-    if !valid {
-        return Err(PersistenceError::InvalidDerivedState {
-            field: match trip.purpose {
-                TripPurpose::CommuteOutbound => SnapshotField::TripOrigin,
-                TripPurpose::CommuteReturn => SnapshotField::TripDestination,
-            },
-            reason: DerivedStateError::TripStateMismatch { trip: entity },
-        });
-    }
     Ok(())
 }
 
@@ -201,7 +132,6 @@ fn validate_world_position(
 
 fn validate_route_plan(
     snapshot: &GameSnapshot,
-    services: &[router::TransitService],
     trip: &ActiveTrip,
     entity: EntityRef,
 ) -> PersistenceResult<()> {
@@ -219,10 +149,6 @@ fn validate_route_plan(
         SnapshotField::TripEstimatedSeconds,
         plan.estimated_seconds,
     )?;
-    // `trip.origin` remains the sim's settled departure point. When a route
-    // mutation invalidates a trip mid-journey, the next tick legitimately
-    // replans from the trip's snapped world position without rewriting that
-    // historical origin, so the first leg cannot be required to equal it.
     if plan.legs.is_empty()
         || trip.current_leg_index >= plan.legs.len()
         || plan.legs.last().map(|leg| leg.to) != Some(trip.destination)
@@ -233,9 +159,12 @@ fn validate_route_plan(
     for leg in &plan.legs {
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.from)?;
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.to)?;
-    }
-    if router::route_plan_estimated_seconds(services, plan) != Some(plan.estimated_seconds) {
-        return Err(trip_state_error(SnapshotField::TripRoutePlan, entity));
+        if leg.mode != TransitMode::Walk && leg.line_id.as_deref().map_or(true, str::is_empty) {
+            return Err(trip_state_error(
+                SnapshotField::TripRoutePlan,
+                entity.clone(),
+            ));
+        }
     }
 
     let current_mode = plan.legs[trip.current_leg_index].mode;
@@ -275,24 +204,6 @@ fn validate_vehicle_membership(
     Ok(())
 }
 
-fn validate_trip_counters(
-    snapshot: &GameSnapshot,
-    max_current_day_sequence: u32,
-) -> PersistenceResult<()> {
-    let valid = snapshot.trip_sequence_day <= snapshot.day
-        && snapshot.next_trip_sequence >= 1
-        && snapshot.next_trip_sequence.checked_add(1).is_some()
-        && (snapshot.trip_sequence_day != snapshot.day
-            || snapshot.next_trip_sequence > max_current_day_sequence);
-    if !valid {
-        return Err(PersistenceError::InvalidDerivedState {
-            field: SnapshotField::NextTripSequence,
-            reason: DerivedStateError::TripCounterMismatch,
-        });
-    }
-    Ok(())
-}
-
 fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     super::finite_non_negative(
         None,
@@ -304,30 +215,6 @@ fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         SnapshotField::MetricsWaits,
         snapshot.metrics.average_wait_seconds,
     )?;
-
-    let nonterminal_count = snapshot
-        .active_trips
-        .iter()
-        .filter(|trip| {
-            matches!(
-                trip.status,
-                TripStatus::Idle | TripStatus::Walking | TripStatus::Waiting | TripStatus::Riding
-            )
-        })
-        .count();
-    if snapshot.metrics.late_trips > snapshot.metrics.completed_trips
-        || (snapshot.metrics.waiting_trip_count == 0
-            && snapshot.metrics.average_wait_seconds != 0.0)
-        || usize::try_from(snapshot.metrics.waiting_trip_count)
-            .map_or(true, |waiting| waiting > nonterminal_count)
-    {
-        return Err(metrics_relationship_error());
-    }
-
-    let mut retained_completed = 0_u32;
-    let mut retained_late = 0_u32;
-    let mut retained_unserved = 0_u32;
-    let mut previous_time = None;
     for outcome in &snapshot.metrics.trip_outcomes {
         super::finite_non_negative(
             None,
@@ -335,90 +222,6 @@ fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             outcome.wait_seconds,
         )?;
         super::finite_non_negative(None, SnapshotField::OutcomeTimestamp, outcome.time)?;
-        if outcome.time > snapshot.time
-            || previous_time.is_some_and(|previous| outcome.time < previous)
-        {
-            return Err(outcome_window_error());
-        }
-        previous_time = Some(outcome.time);
-        match outcome.outcome {
-            TripOutcomeKind::Arrived => retained_completed = retained_completed.saturating_add(1),
-            TripOutcomeKind::Late => {
-                retained_completed = retained_completed.saturating_add(1);
-                retained_late = retained_late.saturating_add(1);
-            }
-            TripOutcomeKind::Unserved => {
-                retained_unserved = retained_unserved.saturating_add(1);
-            }
-        }
-    }
-    if snapshot.metrics.completed_trips < retained_completed
-        || snapshot.metrics.late_trips < retained_late
-        || snapshot.metrics.unserved_trips < retained_unserved
-    {
-        return Err(metrics_relationship_error());
-    }
-
-    let mut expected = snapshot.metrics.trip_outcomes.clone();
-    objectives::prune_trip_outcomes(
-        &mut expected,
-        snapshot.time,
-        objectives::effective_rolling_window_seconds(snapshot),
-    );
-    if expected != snapshot.metrics.trip_outcomes {
-        return Err(outcome_window_error());
-    }
-    validate_objective_state(snapshot)
-}
-
-fn validate_objective_state(snapshot: &GameSnapshot) -> PersistenceResult<()> {
-    if snapshot.rules.game_mode == GameMode::Sandbox {
-        return Ok(());
-    }
-    if snapshot.scenario.objectives.is_none() {
-        if snapshot.metrics.state == MetricsState::Running && snapshot.metrics.loss_reason.is_none()
-        {
-            return Ok(());
-        }
-        return Err(PersistenceError::InvalidModeSettings {
-            field: SnapshotField::MetricsState,
-            reason: ModeError::CampaignTerminalWithoutObjectives,
-        });
-    }
-    match snapshot.metrics.state {
-        MetricsState::Running => {
-            if snapshot.metrics.loss_reason.is_some()
-                || objectives::evaluate_objectives_opt(snapshot).is_some()
-            {
-                return Err(objective_state_error());
-            }
-        }
-        MetricsState::Won | MetricsState::Lost => {
-            let mut running = snapshot.clone();
-            running.metrics.state = MetricsState::Running;
-            running.metrics.loss_reason = None;
-            let Some(expected) = objectives::evaluate_objectives_opt(&running) else {
-                return Err(objective_state_error());
-            };
-
-            let expected_state = expected.metrics.state;
-            let expected_reason = expected.metrics.loss_reason.clone();
-            let mut unchanged = expected;
-            unchanged.metrics.state = MetricsState::Running;
-            unchanged.metrics.loss_reason = None;
-            if unchanged != running {
-                return Err(objective_state_error());
-            }
-            if expected_state != snapshot.metrics.state {
-                return Err(objective_state_error());
-            }
-            if expected_reason != snapshot.metrics.loss_reason {
-                return Err(PersistenceError::InvalidDerivedState {
-                    field: SnapshotField::MetricsLossReason,
-                    reason: DerivedStateError::LossReasonMismatch,
-                });
-            }
-        }
     }
     Ok(())
 }
@@ -461,13 +264,6 @@ fn finite_range(
     Ok(())
 }
 
-fn purpose_order(purpose: TripPurpose) -> u8 {
-    match purpose {
-        TripPurpose::CommuteOutbound => 0,
-        TripPurpose::CommuteReturn => 1,
-    }
-}
-
 fn invalid_entity_field(entity: EntityRef, field: SnapshotField) -> PersistenceError {
     PersistenceError::InvalidEntity {
         entity,
@@ -480,27 +276,6 @@ fn trip_state_error(field: SnapshotField, trip: EntityRef) -> PersistenceError {
     PersistenceError::InvalidDerivedState {
         field,
         reason: DerivedStateError::TripStateMismatch { trip },
-    }
-}
-
-fn metrics_relationship_error() -> PersistenceError {
-    PersistenceError::InvalidDerivedState {
-        field: SnapshotField::MetricsCounters,
-        reason: DerivedStateError::MetricsRelationshipMismatch,
-    }
-}
-
-fn outcome_window_error() -> PersistenceError {
-    PersistenceError::InvalidDerivedState {
-        field: SnapshotField::MetricsTripOutcomes,
-        reason: DerivedStateError::OutcomeWindowMismatch,
-    }
-}
-
-fn objective_state_error() -> PersistenceError {
-    PersistenceError::InvalidDerivedState {
-        field: SnapshotField::MetricsState,
-        reason: DerivedStateError::ObjectiveStateMismatch,
     }
 }
 

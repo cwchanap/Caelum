@@ -11,42 +11,19 @@
 mod common;
 
 use caelum_core::model::{
-    ActiveTrip, MetricsState, Point, RouteLeg, RoutePlan, TripOutcome, TripOutcomeKind,
-    TripPosition, TripStatus, WorkerProfile,
+    ActiveTrip, Point, RouteLeg, RoutePlan, TripOutcome, TripOutcomeKind, TripPosition, TripStatus,
 };
 use caelum_core::{
     clock, validate_snapshot, DerivedStateError, EntityError, EntityKind, NumericError,
     PersistenceError, SnapshotField,
 };
 use common::persistence_fixtures::{
-    campaign_snapshot, entity_ref, fixture_with_bus_route, paused_snapshot, trip_fixture,
-    worker_sim,
+    entity_ref, fixture_with_bus_route, paused_snapshot, trip_fixture, worker_sim,
 };
 
 // ===========================================================================
 // sim validation — profile mismatch (trips.rs:90-94)
 // ===========================================================================
-
-#[test]
-fn sim_worker_profile_mismatch_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    // "sim-001" maps to Worker (suffix 1 % 10 != 0). Set NonWorker with no
-    // shift/workplace so the NonWorker+workplace guard (103-109) does not fire;
-    // the profile-mismatch branch (90-94) fires first.
-    let mut sim = worker_sim("sim-001", Point { x: 2, y: 3 }, None);
-    sim.worker_profile = WorkerProfile::NonWorker;
-    sim.shift_template = None;
-    sim.workplace = None;
-    snapshot.sims = vec![sim];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidEntity {
-            entity: entity_ref(EntityKind::Sim, "sim-001"),
-            field: SnapshotField::SimWorkerProfile,
-            reason: EntityError::InvalidStaticShape,
-        }
-    );
-}
 
 // ===========================================================================
 // trip reference & key validation (trips.rs:27-31, 50-55)
@@ -62,27 +39,6 @@ fn trip_with_dangling_sim_id_is_rejected() {
             source: entity_ref(EntityKind::ActiveTrip, "trip-day-0-trip-001"),
             field: SnapshotField::EntityId,
             target: entity_ref(EntityKind::Sim, "sim-999"),
-        }
-    );
-}
-
-#[test]
-fn duplicate_trip_key_is_rejected() {
-    let mut snapshot = trip_fixture();
-    let first = snapshot.active_trips[0].clone();
-    let mut second = first.clone();
-    second.id = "trip-day-0-trip-002".to_string();
-    snapshot.active_trips.push(second);
-    // Bump the counter so the duplicate check (inside the loop) is the branch
-    // that fires, not the post-loop counter check.
-    snapshot.next_trip_sequence = 3;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::TripPurpose,
-            reason: DerivedStateError::TripStateMismatch {
-                trip: entity_ref(EntityKind::ActiveTrip, "trip-day-0-trip-002"),
-            },
         }
     );
 }
@@ -192,30 +148,6 @@ fn route_plan_leg_point_out_of_bounds_is_rejected() {
             entity: entity_ref(EntityKind::ActiveTrip, "trip-day-0-trip-001"),
             field: SnapshotField::TripRoutePlan,
             reason: EntityError::InvalidStaticShape,
-        }
-    );
-}
-
-#[test]
-fn route_plan_estimated_seconds_mismatch_is_rejected() {
-    let mut snapshot = trip_fixture();
-    let home = snapshot.active_trips[0].origin;
-    let dest = snapshot.active_trips[0].destination;
-    // Build a walking plan whose estimated_seconds matches the router's
-    // formula (manhattan distance * 20.0), then bump it by +1.0 so it no
-    // longer equals router::route_plan_estimated_seconds (232).
-    let correct_seconds = f64::from((home.x - dest.x).abs() + (home.y - dest.y).abs()) * 20.0;
-    let plan = walk_plan_with_seconds(home, dest, correct_seconds + 1.0);
-    snapshot.active_trips[0].route_plan = Some(plan);
-    snapshot.active_trips[0].status = TripStatus::Walking;
-    snapshot.active_trips[0].current_leg_index = 0;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::TripRoutePlan,
-            reason: DerivedStateError::TripStateMismatch {
-                trip: entity_ref(EntityKind::ActiveTrip, "trip-day-0-trip-001"),
-            },
         }
     );
 }
@@ -338,21 +270,6 @@ fn trip_riding_but_not_on_any_vehicle_is_rejected() {
 // trip counters (trips.rs:283-287)
 // ===========================================================================
 
-#[test]
-fn trip_counters_next_sequence_not_greater_than_max_is_rejected() {
-    let mut snapshot = trip_fixture();
-    // trip-day-0-trip-001 → max_current_day_sequence = 1.
-    // next_trip_sequence = 1 is not > 1 → TripCounterMismatch.
-    snapshot.next_trip_sequence = 1;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::NextTripSequence,
-            reason: DerivedStateError::TripCounterMismatch,
-        }
-    );
-}
-
 // ===========================================================================
 // metrics numerics & relationships (trips.rs:298-320)
 // ===========================================================================
@@ -367,20 +284,6 @@ fn metrics_average_wait_seconds_not_finite_is_rejected() {
             entity: None,
             field: SnapshotField::MetricsWaits,
             reason: NumericError::NotFinite,
-        }
-    );
-}
-
-#[test]
-fn metrics_waiting_count_exceeds_nonterminal_count_is_rejected() {
-    let mut snapshot = paused_snapshot();
-    // No active trips → nonterminal_count = 0. waiting_trip_count = 5 > 0.
-    snapshot.metrics.waiting_trip_count = 5;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsCounters,
-            reason: DerivedStateError::MetricsRelationshipMismatch,
         }
     );
 }
@@ -433,77 +336,6 @@ fn outcome_time_negative_is_rejected() {
     );
 }
 
-#[test]
-fn outcome_window_not_pruned_is_rejected() {
-    let mut snapshot = campaign_snapshot();
-    snapshot.time = 1_000.0;
-    snapshot.day = clock::day_index(snapshot.time);
-    snapshot.clock_minutes = clock::clock_minutes(snapshot.time);
-    snapshot.metrics.completed_trips = 2;
-    // Rolling window is 300s → window_start = 700. The first outcome (t=100)
-    // is outside the window and should have been pruned, but we retain it.
-    snapshot.metrics.trip_outcomes = vec![
-        TripOutcome {
-            outcome: TripOutcomeKind::Arrived,
-            wait_seconds: 0.0,
-            time: 100.0,
-        },
-        TripOutcome {
-            outcome: TripOutcomeKind::Arrived,
-            wait_seconds: 0.0,
-            time: 800.0,
-        },
-    ];
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsTripOutcomes,
-            reason: DerivedStateError::OutcomeWindowMismatch,
-        }
-    );
-}
-
 // ===========================================================================
 // objective state — Won/Lost arms (trips.rs:392-415)
 // ===========================================================================
-
-#[test]
-fn campaign_won_state_with_lost_metrics_is_rejected() {
-    let mut snapshot = campaign_snapshot();
-    // Trigger the win gate: time >= survival_time (1200s) and completed_trips
-    // > 0. With state=Running, evaluate_objectives_opt returns Won. Set
-    // metrics.state = Lost (wrong) → expected_state != snapshot state (408).
-    snapshot.time = 1_200.0;
-    snapshot.day = clock::day_index(snapshot.time);
-    snapshot.clock_minutes = clock::clock_minutes(snapshot.time);
-    snapshot.metrics.completed_trips = 1;
-    snapshot.metrics.state = MetricsState::Lost;
-    snapshot.metrics.loss_reason = Some("Too many unserved citizens".to_string());
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsState,
-            reason: DerivedStateError::ObjectiveStateMismatch,
-        }
-    );
-}
-
-#[test]
-fn campaign_lost_state_with_wrong_loss_reason_is_rejected() {
-    let mut snapshot = campaign_snapshot();
-    // Trigger the unserved loss gate: total_trips >= 10 and unserved ratio >
-    // 0.20. With state=Running, evaluate_objectives_opt returns Lost with
-    // reason "Too many unserved citizens". Set a different loss_reason →
-    // LossReasonMismatch (411-415).
-    snapshot.metrics.completed_trips = 8;
-    snapshot.metrics.unserved_trips = 3; // total = 11, 3/11 ≈ 0.27 > 0.20
-    snapshot.metrics.state = MetricsState::Lost;
-    snapshot.metrics.loss_reason = Some("wrong reason".to_string());
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidDerivedState {
-            field: SnapshotField::MetricsLossReason,
-            reason: DerivedStateError::LossReasonMismatch,
-        }
-    );
-}
