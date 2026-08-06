@@ -71,19 +71,42 @@ There are no released users. **Breaking changes are the default when they simpli
 - Git history is the archive; production code supports only the current contract.
 - Compatibility begins only when a public release makes an explicit save-preservation promise — and then only from an actually released version, not every internal schema.
 
+## Delivered host reduction
+
+HPA-547 delivered the gameplay-host simplification without removing either
+current host. Browser/WASM and native Tauri still wrap the one
+`caelum-core::GameEngine`; both now implement exactly the nine methods of the
+small `GameBackend` contract (`snapshot`, `snapshotForSave`,
+`buildSandboxSnapshot`, `restoreSnapshot`, `dispatch`, `tick`, `reset`,
+`previewRoute`, and `previewRoadMutation`). The Tauri runtime epoch is private to
+its adapter and native commands. Both adapters build sandbox candidates through
+the pure `create_sandbox_snapshot` path, restore candidates before swapping live
+state, and retain runtime rollback only for ambiguous thrown restores. Snapshot
+errors are `unsupportedSchema`, `invalidSnapshot`, or `hostFailure`, with an
+optional diagnostic and no operation field. Public dispatch context is gone;
+private apply data and UI-facing preview impact remain.
+
 ## In-flight reductions
 
-Several subsystems below are documented as they exist **today** but are scheduled for deletion. Do not extend them, build on them, or preserve their invariants in new code. If a task touches one, prefer moving toward the target shape.
+The remaining subsystems below are documented as they exist **today** but are
+scheduled for deletion. Do not extend them, build on them, or preserve their
+invariants in new code. If a task touches one, prefer moving toward the target
+shape.
 
-| Area                | Today                                                                                            | Target                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| Gameplay host       | `wasmBackend` + native `tauriBackend`, exhaustive host parity, `runtimeIdentity`, runtime epochs | **Both hosts kept**, reduced to thin wrappers over one minimal `GameBackend`; epochs private to Tauri |
-| Save contract       | 19-method `SaveStore`, `SaveEnvelope`, checkpoints/autosaves/generations                         | Six ops: `list`/`read`/`create`/`update`/`rename`/`delete` over `CitySaveRecord`                      |
-| Runtime persistence | `SharedPersistenceCoordinator`, leases, per-city FIFOs, city fences, revisions, pending/finalize | Active city id + one `persistenceBusy` gate + one dirty boolean                                       |
-| Durable storage     | None — `MemorySaveStore` only, not wired into `src/main.ts`                                      | Two thin adapters: browser IndexedDB, native Tauri application-data files                             |
-| Campaign/growth     | `GameMode`, `ScenarioConfig`, objectives, growth waves in the snapshot and tick path             | Removed, once it measurably slows sandbox work                                                        |
+| Area                | Today                                                                                            | Target                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Save contract       | 19-method `SaveStore`, `SaveEnvelope`, checkpoints/autosaves/generations                         | Six ops: `list`/`read`/`create`/`update`/`rename`/`delete` over `CitySaveRecord` |
+| Runtime persistence | `SharedPersistenceCoordinator`, leases, per-city FIFOs, city fences, revisions, pending/finalize | Active city id + one `persistenceBusy` gate + one dirty boolean                  |
+| Durable storage     | None — `MemorySaveStore` only, not wired into `src/main.ts`                                      | Two thin adapters: browser IndexedDB, native Tauri application-data files        |
+| Campaign/growth     | `GameMode`, `ScenarioConfig`, objectives, growth waves in the snapshot and tick path             | Removed, once it measurably slows sandbox work                                   |
 
 Nothing in the persistence stack is reachable from the running application yet: `src/main.ts` constructs no store and no UI calls a save operation.
+
+HPA-543 owns the runtime persistence replacement, including the transition away
+from the current coordinator, queues, revisions, and pending/finalize recovery.
+HPA-548 owns the six-operation save contract and the browser IndexedDB/native
+Tauri application-data adapters. Neither boundary is implemented early by the
+HPA-547 host reduction.
 
 ## Commands
 
@@ -134,7 +157,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 - `domain/` — `types.ts` is the shared data model (`GameState`, `Citizen`, `TransitNetwork`, `Tool`, etc.); `ids.ts` generates stable IDs (`tileId`, zero-padded `entityId`, `nextEntityId`).
 - `scenario/sandbox.ts` — shared sandbox dimension constants (`MAP_WIDTH`/`MAP_HEIGHT`) mirroring `crates/caelum-core/src/sandbox.rs`, exported so render/e2e helpers reference the source of truth. The authoritative Blank Grid and Crossroads maps, sandbox factory, scenario data, objectives, and clock all live in `crates/caelum-core` (see `docs/architecture.md`).
 - `runtime/` — `createGameRuntime.ts` (the owner), `runtimeSelectors.ts` (derives the display-ready `ShellState` from state+ui), `types.ts` (`RuntimeController`/`RuntimeSnapshot`), `snapshotView.ts` (read-only views over a snapshot).
-- `runtime/backend/` — the host boundary. `createBackend()` (`index.ts`) picks `wasmBackend.ts` or `tauriBackend.ts` via `isTauriRuntime()` (presence of `__TAURI_INTERNALS__`); both implement the `GameBackend` interface (`types.ts`) and forward ticks/intents to the Rust `GameEngine`. Wire types (`RustGameSnapshot`, `GameIntent`, `DispatchResult`) live here. _(In-flight: both hosts stay, but `GameBackend` shrinks to the methods the runtime actually consumes — `runtimeIdentity`, `beginRuntime`, `RuntimeSession`, and JS backend-ownership go away, and Tauri's epoch handling becomes private to its adapter. Add no new host-parity surface.)_
+- `runtime/backend/` — the host boundary. `createBackend()` (`index.ts`) picks `wasmBackend.ts` or `tauriBackend.ts` via `isTauriRuntime()` (presence of `__TAURI_INTERNALS__`); both implement the nine-method `GameBackend` interface (`types.ts`) and forward ticks/intents to the Rust `GameEngine`. Wire types (`RustGameSnapshot`, `GameIntent`, `DispatchResult`) live here. Both adapters use pure `create_sandbox_snapshot` construction, candidate-first restore, and the three snapshot error categories; Tauri keeps its epoch private to the adapter. Public dispatch context is absent, while private apply data and preview impact remain. Add no new host-parity surface.
 - `ui/` — `actions.ts` (local UI click handling), `routeDraft.ts` (ordered-ID draft reducers), and `uiState.ts` (`UiState` + factory). Production TypeScript has no route pathfinder.
 - `domain/catalog/` — read-only TypeScript catalogs shared by UI and render code.
 - `render/` — imperative canvas drawing. `canvas.ts` owns board sizing, tile↔pixel mapping (`tileSize = 32`), and the render pass; it composes per-concern renderers (map/buildings/transit/citizens/overlays). The runtime creates the real `<canvas>` and attaches it to `GameCanvas.svelte`'s host element.
@@ -142,7 +165,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 
 **Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, sandbox factory/reset, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
 
-**Tauri host (`src-tauri/`)** exposes gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`. This is the intended desktop release path and stays. _(In-flight: it reduces to a thin transport wrapper — no gameplay rules, session/epoch details private to the adapter — and gains a narrow application-data city-save adapter.)_
+**Tauri host (`src-tauri/`)** exposes thin gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`. This is the intended desktop release path and stays. Its epoch is private to the adapter/native command boundary, sandbox construction is pure, and no gameplay rules live in Tauri. The future narrow application-data city-save adapter remains HPA-548 work.
 
 ### Authored roads and cached topology
 
@@ -162,9 +185,9 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 
 > **Do not build on this section.** The machinery it describes is scheduled for removal and no player-facing feature depends on it. New persistence work should target one busy gate, not extend the coordinator.
 
-`persistenceCoordinator.ts` currently implements a `SharedPersistenceCoordinator` (exclusive leases, per-city FIFOs, reference-counted city fences, storage identity with a `WeakMap` fallback, session/load/revision tokens) so that a replacement runtime cannot race an old runtime's pending writes. It defends against a multi-runtime scenario that production does not create — `src/main.ts` mounts exactly one runtime — and it introduced a hang: if an uncancellable store operation never settles, the lease is never released and the replacement `createGameRuntime` never resolves.
+`persistenceCoordinator.ts` currently implements a `SharedPersistenceCoordinator` (exclusive leases, per-city FIFOs, reference-counted city fences, storage identity with a `WeakMap` fallback, session/load/revision tokens) so that a replacement runtime cannot race an old runtime's pending writes. This machinery remains intentionally unchanged after HPA-547 and is owned by HPA-543 for deletion. It defends against a multi-runtime scenario that production does not create — `src/main.ts` mounts exactly one runtime — and it introduced a hang: if an uncancellable store operation never settles, the lease is never released and the replacement `createGameRuntime` never resolves.
 
-The target is active-city identity plus one `persistenceBusy` gate and one dirty boolean. Save Now blocks new mutations and waits for the in-flight backend mutation to settle before capturing, so revision baselines and late-completion reconciliation are unnecessary.
+The HPA-543 target is active-city identity plus one `persistenceBusy` gate and one dirty boolean. Save Now will block new mutations and wait for the in-flight backend mutation to settle before capturing, so revision baselines and late-completion reconciliation become unnecessary. HPA-548 separately replaces the current `SaveStore`/envelope surface; neither change is part of HPA-547.
 
 **Candidate-first is the load-bearing idea.** New City and Load ask the backend for a snapshot built _without touching the active engine_, then swap only after success — so a failure leaves current gameplay untouched and rollback, leases, sessions, and supersession are unnecessary rather than merely removed. New City is also storage-first: create the record, then activate. If activation fails afterwards the record simply stays in the city list for a retry, which is why no compensation or orphan-cleanup machinery is needed.
 
