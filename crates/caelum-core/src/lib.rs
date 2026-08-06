@@ -55,7 +55,7 @@ pub mod transit_nodes;
 pub mod trips;
 
 pub use engine::{GameEngine, PreparedEngineRestore, RoutingContext, SaveSnapshotCapture};
-pub use intent::{DispatchContext, DispatchResult, GameIntent, RoadPreset};
+pub use intent::{DispatchResult, GameIntent, RoadPreset};
 pub use model::{
     GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StartingCapital, StopRoadAccess,
     SNAPSHOT_SCHEMA_VERSION,

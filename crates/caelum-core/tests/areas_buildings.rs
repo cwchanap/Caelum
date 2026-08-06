@@ -620,6 +620,7 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
     let base = prepared.snapshot();
     let mut standard = policy_engine(base.clone(), EconomyPreset::Standard, 0);
     let mut creative = policy_engine(base, EconomyPreset::Creative, 0);
+    let creative_before = creative.snapshot();
     let intent = GameIntent::PlaceBuilding {
         building_type: "smallHouse".to_string(),
         origin: (2, 3).into(),
@@ -635,8 +636,7 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
     );
     assert_eq!(standard_result.snapshot, standard_before);
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, 0);
-    assert_eq!(creative_result.context.cost, 4_000);
+    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
 
     let mut terminal_fixture = GameEngine::new();
     assert!(
@@ -649,14 +649,14 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
     );
     let mut creative_terminal =
         policy_engine(terminal_fixture.snapshot(), EconomyPreset::Creative, 0);
+    let terminal_before = creative_terminal.snapshot();
     let terminal_result = creative_terminal.dispatch(GameIntent::PlaceBuilding {
         building_type: "busTerminal".to_string(),
         origin: (2, 3).into(),
         rotation: 0,
     });
     assert!(terminal_result.applied, "{terminal_result:?}");
-    assert_eq!(terminal_result.snapshot.budget, 0);
-    assert_eq!(terminal_result.context.cost, 12_000);
+    assert_eq!(terminal_result.snapshot.budget, terminal_before.budget);
 
     let invalid_base = GameEngine::new().snapshot();
     let mut invalid_standard = policy_engine(invalid_base.clone(), EconomyPreset::Standard, 0);

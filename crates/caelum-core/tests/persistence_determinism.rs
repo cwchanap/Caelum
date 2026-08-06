@@ -4,7 +4,6 @@ use caelum_core::model::{
     ActiveTrip, EconomyPreset, Point, ServicePattern, Sim, TransitMode, TripPosition, TripPurpose,
     TripStatus,
 };
-use caelum_core::transit::ROAD_COST;
 use caelum_core::{
     commute, validate_snapshot, GameEngine, GameIntent, RoadPreset, SandboxCreationRequest,
 };
@@ -191,7 +190,6 @@ fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_dedu
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.cost, ROAD_COST);
     assert_eq!(result.snapshot.budget, restored_before.budget);
     assert_eq!(
         result.snapshot.rules.economy_preset,

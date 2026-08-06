@@ -116,16 +116,13 @@ pub struct DispatchResult {
     pub snapshot: GameSnapshot,
     pub applied: bool,
     pub rejection: Option<GameplayRejection>,
-    pub context: DispatchContext,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DispatchContext {
-    pub changed_tiles: Vec<Point>,
-    pub skipped_tiles: Vec<Point>,
-    pub affected_route_ids: Vec<String>,
-    pub cost: i32,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DispatchContext {
+    pub(crate) changed_tiles: Vec<Point>,
+    pub(crate) skipped_tiles: Vec<Point>,
+    pub(crate) cost: i32,
 }
 
 impl DispatchResult {
@@ -134,16 +131,6 @@ impl DispatchResult {
             snapshot,
             applied: true,
             rejection: None,
-            context: DispatchContext::default(),
-        }
-    }
-
-    pub fn applied_with_context(snapshot: GameSnapshot, context: DispatchContext) -> Self {
-        Self {
-            snapshot,
-            applied: true,
-            rejection: None,
-            context,
         }
     }
 
@@ -152,7 +139,6 @@ impl DispatchResult {
             snapshot,
             applied: false,
             rejection: None,
-            context: DispatchContext::default(),
         }
     }
 
@@ -161,7 +147,6 @@ impl DispatchResult {
             snapshot,
             applied: false,
             rejection: Some(rejection),
-            context: DispatchContext::default(),
         }
     }
 }

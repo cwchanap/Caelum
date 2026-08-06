@@ -620,8 +620,7 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert!(actual.applied);
-        assert_eq!(actual.context.cost, 100);
-        assert_eq!(actual.snapshot.budget, 0);
+        assert_eq!(actual.snapshot.budget, snapshot.budget);
         assert_eq!(
             actual.snapshot.rules.economy_preset,
             caelum_core::model::EconomyPreset::Creative

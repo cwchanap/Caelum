@@ -137,12 +137,6 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       return {
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
         snapshot: this.snapshot(),
       };
     }
@@ -150,12 +144,6 @@ vi.mock("../../src/generated/caelum_wasm/caelum_wasm", () => {
       return {
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
         snapshot: this.snapshot(),
       };
     }

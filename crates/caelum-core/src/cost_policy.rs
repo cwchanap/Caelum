@@ -26,7 +26,6 @@ pub(crate) struct AuthorizedCost {
 #[derive(Debug, PartialEq)]
 pub(crate) struct CostedMutation {
     snapshot: GameSnapshot,
-    cost: i32,
 }
 
 impl CostPolicy {
@@ -95,20 +94,16 @@ impl AuthorizedCost {
 }
 
 impl CostedMutation {
-    pub(crate) fn new(snapshot: GameSnapshot, cost: i32) -> Self {
-        Self { snapshot, cost }
+    pub(crate) fn new(snapshot: GameSnapshot) -> Self {
+        Self { snapshot }
     }
 
     pub(crate) fn free(snapshot: GameSnapshot) -> Self {
-        Self::new(snapshot, 0)
+        Self::new(snapshot)
     }
 
     pub(crate) fn into_snapshot(self) -> GameSnapshot {
         self.snapshot
-    }
-
-    pub(crate) fn into_parts(self) -> (GameSnapshot, i32) {
-        (self.snapshot, self.cost)
     }
 }
 

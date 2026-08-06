@@ -86,6 +86,7 @@ fn rejected_direction_change_mutates_neither_snapshot_nor_cache() {
 fn partial_stroke_commits_one_topology_for_the_applied_subset() {
     let mut engine = GameEngine::new();
     block_partial_stroke_tail(&mut engine);
+    let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![point(2, 2), point(3, 2), point(4, 2)],
@@ -93,8 +94,12 @@ fn partial_stroke_commits_one_topology_for_the_applied_subset() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.context.changed_tiles, vec![point(2, 2), point(3, 2)]);
-    assert_eq!(result.context.skipped_tiles, vec![point(4, 2)]);
+    assert_eq!(result.snapshot.map.tile(point(2, 2)).unwrap().kind, "road");
+    assert_eq!(result.snapshot.map.tile(point(3, 2)).unwrap().kind, "road");
+    assert_eq!(
+        result.snapshot.map.tile(point(4, 2)),
+        before.map.tile(point(4, 2))
+    );
     assert_eq!(
         engine.road_topology_for_test(),
         &RoadTopology::compile(&result.snapshot.map).unwrap()

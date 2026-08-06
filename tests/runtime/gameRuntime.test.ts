@@ -707,12 +707,6 @@ function deferredDispatchBackend(
           snapshot,
           applied: false,
           rejection,
-          context: {
-            changedTiles: [],
-            skippedTiles: [],
-            affectedRouteIds: [],
-            cost: 0,
-          },
         };
       }
       snapshot = applyIntent(snapshot, intent);
@@ -720,12 +714,6 @@ function deferredDispatchBackend(
         snapshot,
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
@@ -741,12 +729,6 @@ function deferredDispatchBackend(
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async reset() {
@@ -798,12 +780,6 @@ function backendSpy(
           snapshot,
           applied: false,
           rejection: TEST_REJECTION,
-          context: {
-            changedTiles: [],
-            skippedTiles: [],
-            affectedRouteIds: [],
-            cost: 0,
-          },
         };
       }
       if (noopNext) {
@@ -812,12 +788,6 @@ function backendSpy(
           snapshot,
           applied: false,
           rejection: null,
-          context: {
-            changedTiles: [],
-            skippedTiles: [],
-            affectedRouteIds: [],
-            cost: 0,
-          },
         };
       }
       snapshot = applyIntent(snapshot, intent);
@@ -825,12 +795,6 @@ function backendSpy(
         snapshot,
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async tick(deltaSeconds): Promise<DispatchResult> {
@@ -846,12 +810,6 @@ function backendSpy(
         snapshot,
         applied: snapshot !== before,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     },
     async reset() {
@@ -1973,12 +1931,6 @@ describe("Game Runtime", () => {
         snapshot: await backend.snapshot(),
         applied: true,
         rejection: null,
-        context: {
-          changedTiles: [],
-          skippedTiles: [],
-          affectedRouteIds: [],
-          cost: 0,
-        },
       };
     });
     const baseDispatch = backend.dispatch;
@@ -2980,12 +2932,6 @@ describe("route creation and management", () => {
               code: outcome.code,
               context: { affectedRouteIds: ["route-001"] },
             },
-            context: {
-              changedTiles: [],
-              skippedTiles: [],
-              affectedRouteIds: [],
-              cost: 0,
-            },
           };
         },
       };
@@ -3162,12 +3108,6 @@ describe("route creation and management", () => {
               affectedRouteIds: ["route-001"],
             },
           },
-          context: {
-            changedTiles: [],
-            skippedTiles: [],
-            affectedRouteIds: [],
-            cost: 0,
-          },
         };
       },
     };
@@ -3233,12 +3173,6 @@ describe("route creation and management", () => {
               actualRevision: 9,
               affectedRouteIds: ["route-001"],
             },
-          },
-          context: {
-            changedTiles: [],
-            skippedTiles: [],
-            affectedRouteIds: [],
-            cost: 0,
           },
         };
       },
@@ -3620,12 +3554,6 @@ describe("route creation and management", () => {
             snapshot: await base.snapshot(),
             applied: true,
             rejection: null,
-            context: {
-              changedTiles: [],
-              skippedTiles: [],
-              affectedRouteIds: [],
-              cost: 0,
-            },
           };
         }
         return base.dispatch(intent);

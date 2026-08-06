@@ -79,9 +79,9 @@ pub(crate) fn lay_track_costed(
     }
 
     let mut next = state.clone();
-    let cost = authorized.apply_to(&mut next.budget)?;
+    authorized.apply_to(&mut next.budget)?;
     set_tile_track(&mut next.map, point, true);
-    Ok(CostedMutation::new(next, cost))
+    Ok(CostedMutation::new(next))
 }
 
 pub fn lay_road_line(
@@ -114,7 +114,6 @@ pub(crate) fn lay_track_line_costed(
     let mut next = state.clone();
     let policy = CostPolicy::from_snapshot(state);
     let mut changed = false;
-    let mut cost = 0;
     for point in points {
         if !is_valid_track_placement(&next, point) {
             continue;
@@ -123,8 +122,7 @@ pub(crate) fn lay_track_line_costed(
         if !quote.affordable() {
             continue;
         }
-        let nominal_cost = quote.authorize()?.apply_to(&mut next.budget)?;
-        cost += nominal_cost;
+        quote.authorize()?.apply_to(&mut next.budget)?;
         set_tile_track(&mut next.map, point, true);
         changed = true;
     }
@@ -135,7 +133,7 @@ pub(crate) fn lay_track_line_costed(
             points[0],
         ));
     }
-    Ok(CostedMutation::new(next, cost))
+    Ok(CostedMutation::new(next))
 }
 
 pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {
@@ -290,9 +288,9 @@ pub(crate) fn add_bus_stop_costed(
     {
         stop.road_access = Some(access);
     }
-    let cost = authorized.apply_to(&mut next.budget)?;
+    authorized.apply_to(&mut next.budget)?;
 
-    Ok(CostedMutation::new(next, cost))
+    Ok(CostedMutation::new(next))
 }
 
 pub fn add_metro_station(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
@@ -349,9 +347,9 @@ pub(crate) fn add_metro_station_costed(
             });
             Ok(allocated)
         })?;
-    let cost = authorized.apply_to(&mut next.budget)?;
+    authorized.apply_to(&mut next.budget)?;
 
-    Ok(CostedMutation::new(next, cost))
+    Ok(CostedMutation::new(next))
 }
 
 pub fn assign_vehicle(
@@ -421,8 +419,8 @@ pub(crate) fn assign_vehicle_costed(
     }
 
     next.transit.vehicles.push(vehicle);
-    let cost = authorized.apply_to(&mut next.budget)?;
-    Ok(CostedMutation::new(next, cost))
+    authorized.apply_to(&mut next.budget)?;
+    Ok(CostedMutation::new(next))
 }
 
 pub fn vehicle_cost(mode: TransitMode) -> i32 {

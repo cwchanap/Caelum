@@ -155,7 +155,6 @@ pub(crate) fn dispatch_context(
     DispatchContext {
         changed_tiles,
         skipped_tiles,
-        affected_route_ids: route_lifecycle::structurally_changed_route_ids(before, after),
         cost,
     }
 }
@@ -179,28 +178,16 @@ pub struct RoutingContext<'a> {
 
 pub struct NetworkCandidate {
     pub snapshot: GameSnapshot,
-    pub context: DispatchContext,
 }
 
 impl NetworkCandidate {
     pub fn plain(snapshot: GameSnapshot) -> Self {
-        Self {
-            snapshot,
-            context: DispatchContext::default(),
-        }
+        Self { snapshot }
     }
 
-    pub fn from_road(before: &GameSnapshot, result: RoadMutationResult) -> Self {
-        let result = normalize_road_mutation_result(before, result);
-        let context = DispatchContext {
-            changed_tiles: result.changed_tiles.clone(),
-            skipped_tiles: result.skipped_tiles.clone(),
-            affected_route_ids: Vec::new(),
-            cost: result.cost,
-        };
+    pub fn from_road(result: RoadMutationResult) -> Self {
         Self {
             snapshot: result.snapshot,
-            context,
         }
     }
 }
@@ -433,69 +420,59 @@ impl GameEngine {
             ),
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })
-                    .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
+                    .map(NetworkCandidate::from_road),
             ),
             GameIntent::LayRoadLine { points, preset } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::LayRoadLine { points, preset },
                 )
-                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
+                .map(NetworkCandidate::from_road),
             ),
             GameIntent::CycleRoadDirection { point } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::CycleRoadDirection { point },
                 )
-                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
+                .map(NetworkCandidate::from_road),
             ),
             GameIntent::PlaceRoundabout { origin, size } => self.commit_network_mutation(
                 road::apply_road_mutation(
                     &self.snapshot,
                     &RoadMutation::PlaceRoundabout { origin, size },
                 )
-                .map(|result| NetworkCandidate::from_road(&self.snapshot, result)),
+                .map(NetworkCandidate::from_road),
             ),
             GameIntent::LayTrack { point } => {
-                let candidate = self.network_candidate_for_tiles(
-                    transit::lay_track_costed(&self.snapshot, &point),
-                    &[point],
-                );
+                let candidate =
+                    self.network_candidate(transit::lay_track_costed(&self.snapshot, &point));
                 self.commit_network_mutation(candidate)
             }
             GameIntent::LayTrackLine { points } => {
-                let candidate = self.network_candidate_for_tiles(
-                    transit::lay_track_line_costed(&self.snapshot, &points),
-                    &points,
-                );
+                let candidate =
+                    self.network_candidate(transit::lay_track_line_costed(&self.snapshot, &points));
                 self.commit_network_mutation(candidate)
             }
             GameIntent::RemoveAtTile { point } => {
-                let candidate = self.network_candidate_for_tiles(
+                let candidate = self.network_candidate(
                     transit::remove_at_tile(&self.snapshot, &point).map(CostedMutation::free),
-                    &[point],
                 );
                 self.commit_network_mutation(candidate)
             }
             GameIntent::RemoveAtTiles { points } => {
-                let candidate = self.network_candidate_for_tiles(
+                let candidate = self.network_candidate(
                     transit::remove_at_tiles(&self.snapshot, &points).map(CostedMutation::free),
-                    &points,
                 );
                 self.commit_network_mutation(candidate)
             }
             GameIntent::AddBusStop { point } => {
-                let candidate = self.network_candidate_for_tiles(
-                    transit::add_bus_stop_costed(&self.snapshot, &point),
-                    &[point],
-                );
+                let candidate =
+                    self.network_candidate(transit::add_bus_stop_costed(&self.snapshot, &point));
                 self.commit_network_mutation(candidate)
             }
             GameIntent::AddMetroStation { point } => {
-                let candidate = self.network_candidate_for_tiles(
-                    transit::add_metro_station_costed(&self.snapshot, &point),
-                    &[point],
-                );
+                let candidate = self
+                    .network_candidate(transit::add_metro_station_costed(&self.snapshot, &point));
                 self.commit_network_mutation(candidate)
             }
             GameIntent::CreateRoute {
@@ -554,33 +531,21 @@ impl GameEngine {
                 )
                 .map(CostedMutation::free),
             ),
-            GameIntent::PaintAreaRectangle { area, start, end } => {
-                let points = areas::rectangle_points(
-                    &start,
-                    &end,
-                    self.snapshot.map.width,
-                    self.snapshot.map.height,
-                );
-                self.commit_result_for_tiles(
-                    areas::paint_area_rectangle(&self.snapshot, &area, &start, &end)
-                        .map(CostedMutation::free),
-                    &points,
-                )
-            }
+            GameIntent::PaintAreaRectangle { area, start, end } => self.commit_result(
+                areas::paint_area_rectangle(&self.snapshot, &area, &start, &end)
+                    .map(CostedMutation::free),
+            ),
             GameIntent::PlaceBuilding {
                 building_type,
                 origin,
                 rotation,
             } => {
-                let candidate = self.network_candidate_for_tiles(
-                    buildings::place_building_costed(
-                        &self.snapshot,
-                        &building_type,
-                        &origin,
-                        rotation,
-                    ),
-                    &[origin],
-                );
+                let candidate = self.network_candidate(buildings::place_building_costed(
+                    &self.snapshot,
+                    &building_type,
+                    &origin,
+                    rotation,
+                ));
                 self.commit_network_mutation(candidate)
             }
             // Debug/test-only: production release builds ignore this intent so a
@@ -598,21 +563,24 @@ impl GameEngine {
     }
 
     fn commit_result(&mut self, result: GameplayResult<CostedMutation>) -> DispatchResult {
-        self.commit_result_for_tiles(result, &[])
+        match result {
+            Ok(mutation) => {
+                let next = mutation.into_snapshot();
+                if next == self.snapshot {
+                    return DispatchResult::unchanged(self.snapshot());
+                }
+                self.snapshot = next;
+                DispatchResult::applied(self.snapshot())
+            }
+            Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
+        }
     }
 
-    fn network_candidate_for_tiles(
+    fn network_candidate(
         &self,
         result: GameplayResult<CostedMutation>,
-        requested_tiles: &[Point],
     ) -> GameplayResult<NetworkCandidate> {
-        result.map(|mutation| {
-            let (snapshot, cost) = mutation.into_parts();
-            let context = dispatch_context(&self.snapshot, &snapshot, requested_tiles, cost);
-            let mut candidate = NetworkCandidate::plain(snapshot);
-            candidate.context = context;
-            candidate
-        })
+        result.map(|mutation| NetworkCandidate::plain(mutation.into_snapshot()))
     }
 
     fn commit_network_mutation(
@@ -657,41 +625,19 @@ impl GameEngine {
                 road_topology: &topology,
             },
         );
-        network_candidate.context.affected_route_ids =
-            route_lifecycle::structurally_changed_route_ids(&self.snapshot, &candidate);
-        self.commit_snapshot_and_topology(candidate, topology, network_candidate.context)
+        self.commit_snapshot_and_topology(candidate, topology)
     }
 
     fn commit_snapshot_and_topology(
         &mut self,
         snapshot: GameSnapshot,
         road_topology: RoadTopology,
-        context: DispatchContext,
     ) -> DispatchResult {
         if snapshot == self.snapshot {
             return DispatchResult::unchanged(self.snapshot());
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;
-        DispatchResult::applied_with_context(self.snapshot(), context)
-    }
-
-    fn commit_result_for_tiles(
-        &mut self,
-        result: GameplayResult<CostedMutation>,
-        requested_tiles: &[Point],
-    ) -> DispatchResult {
-        match result {
-            Ok(mutation) => {
-                let (next, cost) = mutation.into_parts();
-                if next == self.snapshot {
-                    return DispatchResult::unchanged(self.snapshot());
-                }
-                let context = dispatch_context(&self.snapshot, &next, requested_tiles, cost);
-                self.snapshot = next;
-                DispatchResult::applied_with_context(self.snapshot(), context)
-            }
-            Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
-        }
+        DispatchResult::applied(self.snapshot())
     }
 }

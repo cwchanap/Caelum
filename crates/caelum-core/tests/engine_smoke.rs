@@ -339,14 +339,3 @@ fn set_budget_intent_is_debug_only() {
         assert_eq!(result.snapshot.budget, before);
     }
 }
-
-#[cfg(debug_assertions)]
-#[test]
-fn set_budget_debug_intent_reports_zero_purchase_cost() {
-    let mut engine = GameEngine::new();
-    let result = engine.dispatch(GameIntent::SetBudget { budget: 7 });
-
-    assert!(result.applied);
-    assert_eq!(result.snapshot.budget, 7);
-    assert_eq!(result.context.cost, 0);
-}

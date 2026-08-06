@@ -227,7 +227,6 @@ export function persistenceBackendStubs(): {
           snapshot: createRustSnapshot(),
           applied: false,
           rejection: null,
-          context: { changedTiles: [], skippedTiles: [], cost: 0 },
         };
       },
     },

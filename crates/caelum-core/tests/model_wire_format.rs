@@ -1244,22 +1244,15 @@ fn dispatch_result_round_trips_through_serde_json() {
         value["rejection"],
         json!({ "code": "invalidSpeed", "context": {} })
     );
-    assert_eq!(
-        value["context"],
-        json!({
-            "changedTiles": [],
-            "skippedTiles": [],
-            "affectedRouteIds": [],
-            "cost": 0
-        })
-    );
+    assert!(value.get("context").is_none());
     let back: DispatchResult =
         serde_json::from_value(value.clone()).expect("rejected result should deserialize back");
     assert_eq!(back, rejected);
 
     // Cross-check: the serialized JSON shape matches what the TS `DispatchResult`
-    // interface expects (`{ snapshot, applied, rejection, context }`), so a Tauri IPC
+    // interface expects (`{ snapshot, applied, rejection }`), so a Tauri IPC
     // response is structurally identical to a WASM `engine.dispatch()` return.
+    assert!(value.get("context").is_none());
     let keys: std::collections::HashSet<String> = value
         .as_object()
         .expect("serialized result is a JSON object")
@@ -1268,7 +1261,7 @@ fn dispatch_result_round_trips_through_serde_json() {
         .collect();
     assert_eq!(
         keys,
-        ["snapshot", "applied", "rejection", "context"]
+        ["snapshot", "applied", "rejection"]
             .into_iter()
             .map(String::from)
             .collect(),

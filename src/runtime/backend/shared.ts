@@ -54,10 +54,6 @@ export function normalizeDispatchResult(
   return {
     ...result,
     rejection: normalizeGameplayRejection(result.rejection),
-    context: {
-      ...result.context,
-      affectedRouteIds: result.context.affectedRouteIds ?? [],
-    },
   };
 }
 
