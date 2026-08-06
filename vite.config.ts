@@ -23,7 +23,6 @@ export default defineConfig({
       // consistent with the Codecov patch status.
       exclude: [
         "scripts/ensure-wasm.mjs",
-        "scripts/benchmark-persistence-wasm.ts",
         "src/main.ts",
         "src-tauri/**",
         "crates/**",

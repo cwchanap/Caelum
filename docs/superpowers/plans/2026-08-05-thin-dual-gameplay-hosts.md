@@ -114,7 +114,6 @@ Expected: all pass before edits. Record unrelated failures; do not weaken assert
 - `tests/runtime/backendOwnership.test.ts`
 - `crates/caelum-core/src/persistence/error.rs`
 - `crates/caelum-core/src/persistence_bridge.rs`
-- `scripts/benchmark-persistence-wasm.ts`
 - `crates/caelum-core/tests/persistence_error_wire.rs`
 - `crates/caelum-core/tests/persistence_corruption.rs`
 - `crates/caelum-core/tests/persistence_map_{coverage,branches,validation}.rs`
@@ -494,7 +493,7 @@ Move the nine retained safety assertions into `persistence_construction.rs`. Rem
 
 - [ ] **Step 2: Delete fixtures/benchmark safely**
 
-Delete the persistence JSON catalogue/README and export generator after confirming no non-persistence test consumes them. Delete the WASM benchmark and `benchmark:persistence:wasm` package script/coverage ignore.
+Delete the persistence JSON catalogue/README and export generator after confirming no non-persistence test consumes them. Delete the obsolete WASM benchmark wiring and its package/coverage entries.
 
 Retain `rich_fixture` or `rustSnapshot.ts` data still used by ordinary gameplay/UI tests.
 
@@ -507,7 +506,7 @@ Delete the implemented HPA-340/HPA-341 validation/parity specs/plans that prescr
 ```sh
 rg -n 'PersistenceBridgeError|PersistenceOperationError|SnapshotField|DerivedStateError' \
   crates src-tauri src tests
-rg -n 'benchmark:persistence:wasm|benchmark-persistence-wasm' .
+rg -n 'PersistenceBridgeError|PersistenceOperationError' crates src-tauri src tests
 cargo test --workspace
 bun run format:check
 bun run lint
