@@ -2,29 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace `SaveEnvelope` and the 19-operation `SaveStore` platform with a six-operation `CitySaveStore`, a one-map memory implementation, and a compile-safe runtime cutover with no phantom generation/recovery API.
+**Goal:** Replace the generalized `SaveEnvelope` and 19-operation `SaveStore` platform with a six-operation `CitySaveStore`, a one-map memory implementation, and the minimum runtime cutover required for current multi-city working saves.
 
-**Architecture:** Store one detached `CitySaveRecord` per city. Rust remains the only snapshot validator. HPA-548 removes store-specific pending, recovery, realm, and controller residue while retaining the existing runtime-local queues, lease, session tokens, and revision tracking for HPA-543.
+**Architecture:** Store one detached `CitySaveRecord` per city. `createCity` establishes identity, `renameCity` owns the display name, and `updateCity(id, { savedAt, snapshot })` updates only working-save data. Rust remains the sole gameplay validator. HPA-548 removes store registries and recovery residue but deliberately leaves the coordinator core and ownership suite unchanged for HPA-543.
 
-**Tech Stack:** TypeScript 5.8, Vitest, Svelte 5, Bun, Rust-backed `GameBackend`, Cargo.
+**Tech Stack:** TypeScript 5.8, Vitest, Svelte 5, Rust-backed `GameBackend`, Bun, Playwright, Cargo.
 
-## Global constraints
+## Global Constraints
 
-- Breaking change only: no migration, compatibility adapter, aliases, dual format, or deprecated methods.
-- Exactly six store operations: `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, `deleteCity`.
-- The record contains only city ID/name/creation time, save time, and opaque snapshot.
-- Rust is the only gameplay snapshot validator.
-- Save Now is update-only. Setup/New City creates records explicitly.
-- Delete checkpoint/autosave/generation/envelope/multi-realm/recovery controller surface in the same cutover.
-- Remove persistence recovery and lease pinning because their pending/finalize triggers are removed.
-- Keep backend ownership unchanged for HPA-547.
-- Keep the temporary runtime-local queue/lease/session/revision implementation for HPA-543.
-- No repository/service/manager framework, generic transaction layer, adapter registry, or repair framework.
-- Each task commit ends at a green verification gate. Do not commit knowingly broken intermediate states.
+- Breaking change only: no migration, legacy reader, alias export, compatibility adapter, dual format, or deprecated method.
+- Exactly six public operations: `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, `deleteCity`.
+- `updateCity` accepts only `savedAt` and `snapshot`; it cannot rewrite ID, name, or creation time.
+- Store errors are only `notFound`, `conflict`, and `failed`.
+- Rust remains the only gameplay snapshot validator.
+- Do not absorb HPA-543's busy-gate rewrite or HPA-547's pure candidate work.
+- Do not rewrite the core `createSharedPersistenceCoordinator` ownership suite. Delete only store-registry/cross-lifetime tests owned by HPA-548.
+- Delete obsolete tests with the implementation they covered. Do not preserve counts or capability matrices.
+- Every task below ends in a green repository state.
 
 ---
 
-## File map
+## File Map
 
 ### Create
 
@@ -45,112 +43,173 @@
 - `tests/runtime/persistence/saveStoreContract.ts`
 - `tests/runtime/persistence/memorySaveStore.test.ts`
 - `tests/runtime/delayedSaveStore.ts`
+- `tests/runtime/recoveryPublication.test.ts` when its remaining cases are all recovery-only
 
 ### Known direct consumers
 
+- `src/main.ts`
+- `src/App.svelte`
 - `src/runtime/createGameRuntime.ts`
 - `src/runtime/persistenceCoordinator.ts`
 - `src/runtime/types.ts`
-- `src/App.svelte`
-- `tests/runtime/persistence/fixtures.ts`
-- `tests/runtime/persistence/storeTestUtils.ts`
 - `tests/runtime/persistenceCoordinator.test.ts`
 - `tests/runtime/gameRuntime.test.ts`
 - `tests/runtime/constructionCleanup.test.ts`
-- `tests/runtime/recoveryPublication.test.ts`
 - `tests/runtime/backendOwnership.test.ts`
 - `tests/runtime/postDisposalBackendFailure.test.ts`
 - `tests/ui/appShell.test.ts`
-- every additional file returned by the pre-cutover symbol inventory.
+- persistence fixtures, helpers, and wrappers
 
-`tests/ui/pointerEvents.test.ts` is a compile-verification consumer, not a mandatory edit: it imports `createGameRuntime` but currently does not use save-store or active-city options.
+`tests/ui/pointerEvents.test.ts` imports `createGameRuntime` but currently has no persistence/active-city configuration. Do not edit it unless the compiler or tests identify a real dependency.
 
 ---
 
-## Task 1: Add the minimal store and memory implementation side-by-side
+## Task 1: Rename Active City Creation Metadata
+
+This is a mechanical green change independent of the store migration.
+
+**Files:**
+- Modify: every production/test file returned by the search below
+
+**Interfaces:**
+- Produces: `ActiveCityIdentity.createdAt`
+- Removes: `ActiveCityIdentity.cityCreatedAt`
+
+- [ ] **Step 1: Find every active-city field consumer**
+
+```bash
+rg -l "cityCreatedAt" src tests
+```
+
+- [ ] **Step 2: Rename the public field**
+
+Use exactly:
+
+```ts
+export interface ActiveCityIdentity {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+```
+
+Change object literals, fixtures, assertions, clone helpers, and comments. Do not keep an alias.
+
+- [ ] **Step 3: Verify absence**
+
+```bash
+rg -n "cityCreatedAt" src tests
+```
+
+Expected: zero relevant matches.
+
+- [ ] **Step 4: Run the green gate**
+
+```bash
+bun run test:unit
+bun run check
+```
+
+Expected: both commands pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src tests
+git commit -m "refactor: rename active city creation time"
+```
+
+---
+
+## Task 2: Remove the Store Coordinator Registry Only
+
+Keep the coordinator implementation and its core ownership tests intact. This task removes only store-specific cross-runtime registration.
+
+**Files:**
+- Modify: `src/runtime/createGameRuntime.ts`
+- Modify: `src/runtime/persistenceCoordinator.ts`
+- Modify: tests importing `resetPersistenceCoordinatorRegistry`
+- Modify/Delete: registry-specific blocks in `tests/runtime/persistenceCoordinator.test.ts` and `tests/runtime/constructionCleanup.test.ts`
+
+**Interfaces:**
+- Keeps: `createSharedPersistenceCoordinator`, `PersistenceLease`, FIFO/fence behavior
+- Removes: `resolvePersistenceCoordinator`, identity/object registries, registry reset helper
+
+- [ ] **Step 1: Locate registry-only symbols**
+
+```bash
+rg -n "resolvePersistenceCoordinator|resetPersistenceCoordinatorRegistry|coordinatorRegistry|objectIdentityCoordinators|storageIdentity" src tests
+```
+
+- [ ] **Step 2: Construct the temporary coordinator per runtime**
+
+Replace registry resolution with:
+
+```ts
+const coordinator = createSharedPersistenceCoordinator();
+const lease = await coordinator.acquireLease();
+```
+
+Do not change the internals of `createSharedPersistenceCoordinator`.
+
+The old `SaveStore.storageIdentity` property may remain temporarily until Task 4/5 removes the old contract. It must no longer affect runtime construction.
+
+- [ ] **Step 3: Delete module-global store registries**
+
+Remove:
+
+- identity-keyed `Map`;
+- object-keyed `WeakMap`;
+- `resolvePersistenceCoordinator`;
+- `resetPersistenceCoordinatorRegistry`;
+- comments documenting cross-runtime store-identity handoff.
+
+- [ ] **Step 4: Delete only registry/cross-lifetime tests**
+
+Delete tests whose subject is:
+
+- two adapters sharing one `storageIdentity`;
+- object-identity fallback;
+- registry reset;
+- FIFO/fence state surviving runtime recreation through store identity.
+
+Keep the core lease, queue, fence, foreground-admission, drain, closing, and release tests unchanged except import cleanup. Do not rewrite them around a new abstraction.
+
+- [ ] **Step 5: Run the green gate**
+
+```bash
+bun run test tests/runtime/persistenceCoordinator.test.ts \
+  tests/runtime/constructionCleanup.test.ts \
+  tests/runtime/backendOwnership.test.ts
+bun run test:unit
+bun run check
+```
+
+Expected: all commands pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/runtime tests/runtime
+git commit -m "refactor: remove save store coordinator registry"
+```
+
+---
+
+## Task 3: Add the Minimal Store Beside the Legacy Store
+
+This task adds a complete green implementation without changing runtime consumers. The legacy store remains until Task 4/5.
 
 **Files:**
 - Create: `src/persistence/citySaveStore.ts`
 - Create: `src/persistence/memoryCitySaveStore.ts`
 - Create: `tests/runtime/persistence/citySaveStoreContract.ts`
 - Create: `tests/runtime/persistence/memoryCitySaveStore.test.ts`
-- Modify additively: `tests/runtime/persistence/fixtures.ts`
-- Modify additively: `tests/runtime/persistence/storeTestUtils.ts`
 
 **Interfaces:**
-- Produces: `CitySaveRecord`, `CitySummary`, `CitySaveStore*`, `sortCitySummaries`, `createMemoryCitySaveStore`, and failure controls.
-- Consumed by: Task 2.
-- The old store remains temporarily so existing consumers continue compiling at this task boundary.
+- Produces: `CitySaveRecord`, `CitySummary`, `CitySaveUpdate`, `CitySaveStore`, result/error types, `sortCitySummaries`, memory implementation and failure controls
 
-- [ ] **Step 1: Add a minimal record fixture without deleting old fixtures**
-
-```ts
-import type { CitySaveRecord } from "../../../src/persistence/citySaveStore";
-import { makeRustSnapshot } from "../../fixtures/rustSnapshot";
-
-export function makeCitySaveRecord(
-  overrides: Partial<CitySaveRecord> = {},
-): CitySaveRecord {
-  return {
-    city: {
-      id: "city-1",
-      name: "Test City",
-      createdAt: "2026-08-01T09:00:00.000Z",
-      ...overrides.city,
-    },
-    savedAt: "2026-08-01T10:00:00.000Z",
-    snapshot: makeRustSnapshot(),
-    ...overrides,
-  };
-}
-```
-
-Keep old envelope fixtures until Task 3 deletes their consumers.
-
-- [ ] **Step 2: Write the failing memory contract harness**
-
-Create `memoryCitySaveStore.test.ts` before the implementation:
-
-```ts
-import { defineCitySaveStoreContract } from "./citySaveStoreContract";
-import {
-  createMemoryCitySaveStore,
-  createMemoryCitySaveStoreFailureControls,
-} from "../../../src/persistence/memoryCitySaveStore";
-
-defineCitySaveStoreContract("MemoryCitySaveStore", () => {
-  const failures = createMemoryCitySaveStoreFailureControls();
-  return {
-    store: createMemoryCitySaveStore({ failures }),
-    failNext: failures.failNext,
-  };
-});
-```
-
-The contract suite covers only:
-
-```ts
-it("creates, lists, and reads a city", async () => {});
-it("rejects a duplicate city ID", async () => {});
-it("updates an existing city", async () => {});
-it("returns notFound when updating a missing city", async () => {});
-it("preserves the previous record after a failed update", async () => {});
-it("renames only the city name", async () => {});
-it("deletes a city and reports notFound afterward", async () => {});
-it("sorts by saved time then ID without mutating inputs", async () => {});
-it("detaches committed inputs and returned values", async () => {});
-it("returns records whose city ID matches the requested key", async () => {});
-```
-
-- [ ] **Step 3: Run the red test**
-
-```bash
-bun run test tests/runtime/persistence/memoryCitySaveStore.test.ts
-```
-
-Expected: FAIL because `citySaveStore.ts` or `memoryCitySaveStore.ts` does not exist.
-
-- [ ] **Step 4: Implement the public contract**
+- [ ] **Step 1: Implement the public types**
 
 ```ts
 export interface CitySaveRecord {
@@ -170,6 +229,11 @@ export interface CitySummary {
   savedAt: string;
 }
 
+export interface CitySaveUpdate {
+  savedAt: string;
+  snapshot: unknown;
+}
+
 export type CitySaveStoreOperation =
   | "listCities"
   | "readCity"
@@ -181,7 +245,6 @@ export type CitySaveStoreOperation =
 export type CitySaveStoreErrorCode =
   | "notFound"
   | "conflict"
-  | "unavailable"
   | "failed";
 
 export interface CitySaveStoreError {
@@ -199,24 +262,59 @@ export interface CitySaveStore {
   listCities(): Promise<CitySaveStoreResult<CitySummary[]>>;
   readCity(id: string): Promise<CitySaveStoreResult<CitySaveRecord>>;
   createCity(record: CitySaveRecord): Promise<CitySaveStoreResult<CitySummary>>;
-  updateCity(record: CitySaveRecord): Promise<CitySaveStoreResult<CitySummary>>;
+  updateCity(
+    id: string,
+    update: CitySaveUpdate,
+  ): Promise<CitySaveStoreResult<CitySummary>>;
   renameCity(id: string, name: string): Promise<CitySaveStoreResult<CitySummary>>;
   deleteCity(id: string): Promise<CitySaveStoreResult<void>>;
 }
 ```
 
-`readCity(id)` must never return a record with a different `city.id`.
+- [ ] **Step 2: Port existing sorting behavior**
 
-- [ ] **Step 5: Move the existing city sort behavior**
+Move the current ID comparator and timestamp-descending behavior from `saveStore.ts`. Adjust only `cityId` to `id` and nullable to required timestamps. Return a copied array.
 
-Port the existing `compareIds`, descending timestamp comparator, and `sortCitySummaries` from `src/persistence/saveStore.ts`. Adapt only:
+Do not create a generic sorter or new ordering policy.
 
-- `cityId` to `id`;
-- nullable `savedAt` to required `savedAt`.
+- [ ] **Step 3: Write the shared contract suite**
 
-Do not redesign the comparator. Return a copied array.
+Use the existing define-once/run-per-adapter pattern with a minimal harness:
 
-- [ ] **Step 6: Implement the one-map memory store**
+```ts
+export interface CitySaveStoreContractHarness {
+  store: CitySaveStore;
+  failNext?: (
+    operation: CitySaveStoreOperation,
+    code: CitySaveStoreErrorCode,
+  ) => void;
+}
+```
+
+Cover exactly:
+
+```ts
+it("creates, lists, and reads a city", async () => {});
+it("rejects a duplicate city ID", async () => {});
+it("updates savedAt and snapshot", async () => {});
+it("returns notFound when updating a missing city", async () => {});
+it("preserves identity metadata during update", async () => {});
+it("does not revert a committed rename during update", async () => {});
+it("preserves the complete prior record after failed update", async () => {});
+it("renames only the city name", async () => {});
+it("deletes a city and reports notFound afterward", async () => {});
+it("sorts by saved time then ID without mutating inputs", async () => {});
+it("detaches committed inputs and returned values", async () => {});
+```
+
+For the rename/update regression:
+
+1. `createCity` with name `Original`;
+2. `renameCity` to `Renamed`;
+3. `updateCity(id, { savedAt, snapshot })`;
+4. assert the stored name remains `Renamed` and `createdAt` is unchanged.
+
+- [ ] **Step 4: Implement the one-map memory store**
 
 Use:
 
@@ -227,62 +325,63 @@ type FailureQueues = Map<CitySaveStoreOperation, CitySaveStoreErrorCode[]>;
 
 Rules:
 
-- clone a full record before create/update commit;
-- create returns `conflict` when present;
-- update returns `notFound` when absent;
-- apply injected update failure after preparing the detached replacement but before `records.set`;
-- read/list/rename results are detached;
-- rename replaces the record and changes only `city.name`;
-- no raw seeds, checkpoints, autosaves, generations, pending state, storage identity, realm flags, or capability matrix.
+- `createCity`: clone full record, reject duplicate, apply failure, commit;
+- `updateCity`: require existing record, clone update snapshot, construct a complete replacement preserving stored `city`, apply failure, commit;
+- `renameCity`: construct a replacement preserving every non-name field;
+- all reads/results are detached;
+- no raw seeds, envelope inspection, pending sets, generations, capability flags, or storage identity.
 
-- [ ] **Step 7: Run the green store gate**
+- [ ] **Step 5: Run the green gate**
 
 ```bash
 bun run test tests/runtime/persistence/memoryCitySaveStore.test.ts
+bun run test:unit
 bun run check
 ```
 
-Expected: both commands pass because this task is additive and old consumers still use the old modules.
+Expected: all commands pass while the old store still serves current runtime code.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/persistence/citySaveStore.ts \
   src/persistence/memoryCitySaveStore.ts \
   tests/runtime/persistence/citySaveStoreContract.ts \
-  tests/runtime/persistence/memoryCitySaveStore.test.ts \
-  tests/runtime/persistence/fixtures.ts \
-  tests/runtime/persistence/storeTestUtils.ts
+  tests/runtime/persistence/memoryCitySaveStore.test.ts
 git commit -m "refactor: add minimal city save store"
 ```
 
 ---
 
-## Task 2: Cut the runtime and all direct consumers to CitySaveStore
+## Task 4: Cut Runtime and Direct Consumers to CitySaveStore
 
-This is one compile-safe task. The controller collapse, Save/Load/Rename migration, New City change, recovery deletion, registry deletion, UI cleanup, and affected runtime-test rewrite must land together.
+This is the only large coupled task. It changes the store-facing runtime API, removes pending/recovery concepts, and updates bootstrap/UI consumers together. Keep the coordinator core and ownership suite untouched.
 
 **Files:**
-- Modify: all known direct consumers from the file map
+- Modify: `src/main.ts`
+- Modify: `src/App.svelte`
+- Modify: `src/runtime/createGameRuntime.ts`
+- Modify: `src/runtime/persistenceCoordinator.ts`
+- Modify: `src/runtime/types.ts`
 - Create: `tests/runtime/delayedCitySaveStore.ts`
-- Delete when no longer referenced: `tests/runtime/recoveryPublication.test.ts` if all of its behavior is recovery-only
-- Keep old persistence source/test modules until Task 3
+- Modify: known direct tests from the file map
+- Delete: `tests/runtime/recoveryPublication.test.ts` when no independent behavior remains
 
 **Interfaces:**
-- Consumes: the Task 1 store.
-- Produces: a runtime that uses only the six operations and exposes no deleted persistence concepts.
+- Consumes: `CitySaveStore`, `CitySaveRecord`, `CitySaveUpdate`, `CitySummary`
+- Produces: working-city-only Save/Load/Rename/New City/Detach controller
 
-- [ ] **Step 1: Capture the real blast radius before editing**
+- [ ] **Step 1: Capture the real blast radius**
 
 ```bash
 rg -l \
-  "SaveStore|SaveEnvelope|SaveCompatibility|inspectSaveEnvelope|buildSaveEnvelope|readWorkingSave|writeWorkingSave|createWorkingSave|finalizeWorkingSave|inspectWorkingSaveState|runGameplayWrite|GenerationWrite|LoadSource|storageIdentity|singleRealm|RuntimeRecoveryState|BootstrapRecoveryError|cityCreatedAt|resetPersistenceCoordinatorRegistry" \
+  "SaveStore|SaveEnvelope|SaveCompatibility|inspectSaveEnvelope|buildSaveEnvelope|readWorkingSave|writeWorkingSave|createWorkingSave|finalizeWorkingSave|inspectWorkingSaveState|runGameplayWrite|GenerationWrite|LoadSource|singleRealm|RuntimeRecoveryState|BootstrapRecoveryError|activeCityDeleteRequiresTransition|guardActiveCityDelete" \
   src tests
 ```
 
-Save this output in the implementation notes and update every production/test consumer. Do not rely only on the hand-written file list.
+Use this output in addition to the hand-written file map.
 
-- [ ] **Step 2: Collapse the runtime persistence types**
+- [ ] **Step 2: Collapse store-facing runtime types**
 
 Use:
 
@@ -297,12 +396,6 @@ export type PersistenceCoordinatorOperation =
 export type NoActiveCityOperation =
   | "saveWorking"
   | "renameActiveCity";
-
-export interface ActiveCityIdentity {
-  id: string;
-  name: string;
-  createdAt: string;
-}
 
 export interface LoadCityValue {
   snapshot: RuntimeSnapshot;
@@ -325,61 +418,35 @@ export interface RuntimePersistenceController {
 
 Delete:
 
-- `LoadSource`, `LoadSourceRead`, and `readForLoadSource`;
-- `GameplayWriteRequest`, `GenerationWriteKind`, `GenerationWriteValue`, and `runGameplayWrite`;
-- checkpoint/autosave operation/status/no-active-city variants;
-- envelope errors and `kind: "envelope"`;
-- `multiRealmNewCityUnsupported`;
-- generation save-status kinds.
+- `LoadSource`, `LoadSourceRead`, `readForLoadSource`;
+- generation/checkpoint/autosave operations, statuses, and no-active-city variants;
+- `GameplayWriteRequest`, `GenerationWrite*`, `runGameplayWrite`;
+- envelope error variants;
+- realm-admission variants;
+- `activeCityDeleteRequiresTransition` and `guardActiveCityDelete`.
 
-`RuntimeLoadStatus` contains only `{ state: "reading" | "restoring"; cityId: string }`. `RuntimeSaveStatus` represents only working-save progress.
-
-- [ ] **Step 3: Rename active metadata repository-wide**
-
-Change `cityCreatedAt` to `createdAt` in production types, fixtures, and assertions. Keep no alias.
-
-Run after edits:
-
-```bash
-rg -n "cityCreatedAt" src tests
-```
-
-Expected: zero relevant production/test matches.
-
-- [ ] **Step 4: Migrate Save Now from upsert to update-only**
-
-Build:
-
-```ts
-const record: CitySaveRecord = {
-  city: {
-    id: activeCity.id,
-    name: activeCity.name,
-    createdAt: activeCity.createdAt,
-  },
-  savedAt,
-  snapshot: capture.snapshot,
-};
-```
+- [ ] **Step 3: Migrate Save Now to update-only**
 
 Call:
 
 ```ts
-await saveStore.updateCity(record);
+const stored = await saveStore.updateCity(activeCity.id, {
+  savedAt,
+  snapshot: capture.snapshot,
+});
 ```
 
 Rules:
 
-- Save Now never calls `createCity`;
-- successful Save keeps current stale-session/revision behavior and updates `lastSavedAt`;
-- `notFound` is surfaced as a store failure;
-- failed Save leaves dirty state and the previous record.
+- never call `createCity` from Save Now;
+- `notFound` is a normal store failure;
+- successful current completion updates `lastSavedAt` and persistence baseline;
+- failure preserves dirty state and prior storage;
+- do not publish identity metadata from Save.
 
-Replace every test setup that used `writeWorkingSave` as an upsert with one explicit `createCity` seed. Later saves exercise `updateCity`.
+Replace every old upsert-based test setup with one explicit `createCity` seed.
 
-- [ ] **Step 5: Migrate Load and identity publication**
-
-Replace source dispatch with:
+- [ ] **Step 4: Migrate Load**
 
 ```ts
 const read = await saveStore.readCity(cityId);
@@ -397,23 +464,17 @@ activeCity = { ...read.value.city };
 lastSavedAt = read.value.savedAt;
 ```
 
-Also apply the existing working-load clean revision/session transition.
+Apply the existing working-load clean revision/session transition.
 
-Do not:
+Do not inspect snapshot keys, envelope metadata, schema version, compatibility, or record ID again. Failed read/restore preserves gameplay, UI, identity, save time, and dirty state.
 
-- inspect envelope/schema keys;
-- compare `read.value.city.id` again in the runtime;
-- retain compatibility errors.
+- [ ] **Step 5: Migrate Rename**
 
-The store contract owns key/record identity. Backend failures remain backend errors. Failed read/restore preserves gameplay, UI, identity, save time, and dirty bookkeeping.
+Call `renameCity(activeCity.id, name)` through the current city queue. Publish only the returned name.
 
-- [ ] **Step 6: Migrate Rename**
+- [ ] **Step 6: Replace New City pending/finalize with one create**
 
-Call `renameCity(activeCity.id, name)` through the existing current-city queue. Publish only the returned name and preserve gameplay state.
-
-- [ ] **Step 7: Replace New City pending/finalize with one create**
-
-After current mutating sandbox creation and candidate capture:
+After current backend-first sandbox creation and candidate capture:
 
 ```ts
 const record: CitySaveRecord = {
@@ -433,15 +494,15 @@ const created = await cityQueues.enqueue(identity.id, () =>
 
 Behavior:
 
-- conflict or definite failure: rollback the backend and return the store failure;
-- success while alive: publish the candidate and active identity;
-- success after disposal begins: do not publish; attempt one `deleteCity(identity.id)` cleanup;
-- cleanup success: return runtime unavailable for the disposed operation;
-- cleanup failure: return that concise store failure from the New City operation.
+- conflict/definite failure: rollback backend and return store failure;
+- success while alive: publish candidate and identity;
+- success after disposal begins: do not publish, attempt one `deleteCity(id)` cleanup;
+- cleanup failure: return its concise store failure from the New City operation;
+- disposal still drains and releases; no pin or repair state.
 
-Delete finalize, pending state, read-back classification, bootstrap reconciliation, and realm admission. Do not inspect storage after failure and do not add a repair flow.
+Delete finalize, pending state, read-back classification, bootstrap reconciliation, and realm admission.
 
-- [ ] **Step 8: Delete persistence recovery and lease pinning completely**
+- [ ] **Step 7: Delete persistence recovery from runtime, bootstrap, and App**
 
 Remove:
 
@@ -449,44 +510,24 @@ Remove:
 - `RecoveryRequiredDetails`;
 - `RuntimeRecoveryState`;
 - `BootstrapRecoveryError`;
-- recovery variants and long pinning documentation from `RuntimeDisposeResult`;
-- `enterLateSuccessCleanupFailure`, `pinRecovery`, and recovery publication;
-- recovery-only App UI and tests.
+- recovery variants of `RuntimeDisposeResult`;
+- `pinRecovery`, terminal persistence recovery, and recovery publication;
+- `src/main.ts` recovery error classification;
+- App recovery screen/branch and recovery-only tests.
 
-Change:
+Use:
 
 ```ts
 dispose: () => Promise<void>;
 ```
 
-Disposal still:
+Keep normal bootstrap error rendering for ordinary thrown errors.
 
-1. stops new admission;
-2. waits for admitted gameplay/store/New City work;
-3. releases the runtime-local persistence lease;
-4. releases backend ownership.
+- [ ] **Step 8: Remove remaining old store capabilities**
 
-A concurrent New City cleanup failure is returned by that operation promise. It does not prevent release or recreation.
+Delete `storageIdentity`, `singleRealm`, their types/getters/comments, and any remaining realm-policy code from runtime/store-facing consumers. Task 2 already removed the coordinator registry.
 
-- [ ] **Step 9: Delete store capability registries**
-
-Remove:
-
-- `StorageIdentity`;
-- `storageIdentity` and `singleRealm` reads;
-- identity `Map`, object `WeakMap`, and reset helpers;
-- `resolvePersistenceCoordinator`.
-
-Construct directly:
-
-```ts
-const coordinator = createSharedPersistenceCoordinator();
-const lease = await coordinator.acquireLease();
-```
-
-Keep the coordinator internals unchanged otherwise. Rewrite/delete tests that assume FIFO/fence state survives disposal and recreation through store identity. Keep backend ownership tests that protect the backend engine handoff.
-
-- [ ] **Step 10: Replace delayed wrappers and test fixtures**
+- [ ] **Step 9: Replace delayed wrapper and fixtures**
 
 `DelayedCitySaveStore` forwards six methods and records only:
 
@@ -499,11 +540,11 @@ const MUTATION_OPERATIONS = new Set<CitySaveStoreOperation>([
 ]);
 ```
 
-Update known tests, including `postDisposalBackendFailure.test.ts`, to remove persistence-registry resets and old active-city field names.
+Update `postDisposalBackendFailure.test.ts` to remove persistence-registry reset calls. Update `App.svelte`, `appShell.test.ts`, and `main.ts` together.
 
-Update `App.svelte` and `appShell.test.ts` to remove the persistence recovery screen/branch. Do not redesign unrelated UI.
+Do not rewrite the core coordinator ownership test block. Only adapt imports/types required by the controller surface.
 
-- [ ] **Step 11: Keep focused runtime tests**
+- [ ] **Step 10: Keep focused runtime tests**
 
 Retain or add:
 
@@ -511,7 +552,7 @@ Retain or add:
 it("saves an existing city with updateCity", async () => {});
 it("does not create a missing city during Save Now", async () => {});
 it("preserves dirty state and storage after failed Save", async () => {});
-it("loads record snapshot and publishes record identity and savedAt", async () => {});
+it("loads snapshot and publishes record identity and savedAt", async () => {});
 it("preserves current runtime after failed read", async () => {});
 it("preserves current runtime after failed restore", async () => {});
 it("renames only active city metadata", async () => {});
@@ -519,12 +560,12 @@ it("creates and activates a new city", async () => {});
 it("rolls back after create conflict", async () => {});
 it("rolls back after definite create failure", async () => {});
 it("does not publish a create that completes after disposal", async () => {});
-it("releases disposal even when late-create cleanup fails", async () => {});
+it("releases disposal when late-create cleanup fails", async () => {});
 ```
 
-Delete tests for checkpoint/autosave generation writes, multi-kind loads, envelope errors, pending/finalize, ambiguous read-back, bootstrap repair, realm policy, shared store registries, and recovery UI.
+Delete generation, multi-kind load, envelope, pending/finalize, bootstrap, realm, recovery, and active-delete-guard tests.
 
-- [ ] **Step 12: Run the green runtime-cutover gate**
+- [ ] **Step 11: Run the green cutover gate**
 
 ```bash
 bun run test tests/runtime/persistenceCoordinator.test.ts \
@@ -533,14 +574,14 @@ bun run test tests/runtime/persistenceCoordinator.test.ts \
   tests/runtime/backendOwnership.test.ts \
   tests/runtime/postDisposalBackendFailure.test.ts \
   tests/ui/appShell.test.ts
-
 bun run test:unit
 bun run check
+bun run test:e2e
 ```
 
-Expected: all pass. `pointerEvents.test.ts` is covered by `test:unit` and changes only if a real failure requires it.
+Expected: all commands pass. `pointerEvents.test.ts` runs through `test:unit`; edit it only if this gate reports a failure.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add src tests
@@ -549,14 +590,14 @@ git commit -m "refactor: cut runtime to city save store"
 
 ---
 
-## Task 3: Delete the legacy persistence platform and prove singularity
+## Task 5: Delete the Legacy Persistence Platform
 
 **Files:**
-- Delete: old source/test files from the file map
-- Modify: remaining fixtures/helpers/imports returned by searches
+- Delete all old envelope/generalized-store files listed above
+- Modify remaining imports, fixtures, helpers, and tests found by scans
 
 **Interfaces:**
-- Produces: one public store, one memory implementation, and no old API aliases.
+- Produces: one public store and one memory implementation with no compatibility layer
 
 - [ ] **Step 1: Delete old source files**
 
@@ -567,7 +608,7 @@ git rm src/persistence/envelope.ts \
   src/persistence/memorySaveStore.ts
 ```
 
-- [ ] **Step 2: Delete old tests and wrapper**
+- [ ] **Step 2: Delete obsolete persistence tests/wrapper**
 
 ```bash
 git rm tests/runtime/persistence/envelope.test.ts \
@@ -577,38 +618,31 @@ git rm tests/runtime/persistence/envelope.test.ts \
   tests/runtime/delayedSaveStore.ts
 ```
 
-Delete `recoveryPublication.test.ts` here if it was not already removed in Task 2 and contains no independent non-recovery behavior.
+Delete `tests/runtime/recoveryPublication.test.ts` when Task 4 confirms it has no independent non-recovery cases.
 
-- [ ] **Step 3: Remove obsolete fixtures and helpers**
+- [ ] **Step 3: Remove obsolete fixtures and comments**
 
-Delete:
+Delete envelope builders, compatibility helpers, raw corruption seeds, checkpoint/autosave/generation fixtures, capability flags, pending-state comments, and repair instructions.
 
-- envelope builders and compatibility helpers;
-- raw working/checkpoint/autosave seeds;
-- generation builders/high-water controls;
-- old store failure capabilities;
-- registry reset helpers and related test setup;
-- comments describing deleted behavior.
-
-- [ ] **Step 4: Run focused removed-symbol scans**
+- [ ] **Step 4: Run absence scans**
 
 ```bash
 rg -n \
-  "SaveEnvelope|SaveCompatibility|inspectSaveEnvelope|buildSaveEnvelope|readWorkingSave|writeWorkingSave|createWorkingSave|finalizeWorkingSave|inspectWorkingSaveState|duplicateCity|runGameplayWrite|GameplayWriteRequest|GenerationWrite|loadCheckpoint|loadAutosave|createCheckpoint|createAutosave|storageIdentity|singleRealm|multiRealmNewCityUnsupported|RuntimeRecoveryState|BootstrapRecoveryError|cityCreatedAt|resetPersistenceCoordinatorRegistry" \
+  "SaveEnvelope|SaveCompatibility|inspectSaveEnvelope|buildSaveEnvelope|SaveStore\\b|readWorkingSave|writeWorkingSave|createWorkingSave|finalizeWorkingSave|inspectWorkingSaveState|duplicateCity|generationHighWater|storageIdentity|singleRealm|multiRealmNewCityUnsupported|RuntimeRecoveryState|BootstrapRecoveryError|activeCityDeleteRequiresTransition|guardActiveCityDelete|runGameplayWrite|GenerationWrite|LoadSource" \
   src tests
 ```
 
 Expected: zero relevant production/test matches.
 
-Do **not** scan generic `Checkpoint`, because unrelated route-draft checkpoint types are valid gameplay/UI concepts.
+Do not scan generic words such as `Checkpoint` or `Autosave` alone because unrelated gameplay/test concepts may use them.
 
-- [ ] **Step 5: Confirm the new surface is singular**
+- [ ] **Step 5: Confirm the singular new surface**
 
 ```bash
-rg -n "interface CitySaveStore|createMemoryCitySaveStore|CitySaveRecord" src tests
+rg -n "interface CitySaveStore|createMemoryCitySaveStore|CitySaveRecord|CitySaveUpdate" src tests
 ```
 
-Expected: one public contract, one memory implementation, and direct consumers/tests.
+Expected: one contract, one memory implementation, and direct consumers/tests.
 
 - [ ] **Step 6: Run the green deletion gate**
 
@@ -617,7 +651,7 @@ bun run test:unit
 bun run check
 ```
 
-Expected: both pass.
+Expected: both commands pass.
 
 - [ ] **Step 7: Commit**
 
@@ -628,15 +662,13 @@ git commit -m "refactor: delete legacy save platform"
 
 ---
 
-## Task 4: Full verification and scope review
+## Task 6: Final Verification and Scope Review
 
-**Files:**
-- Modify only files requiring formatting or verified corrections.
-
-- [ ] **Step 1: Run the complete repository verification**
+- [ ] **Step 1: Run the complete repository gates**
 
 ```bash
 bun run test
+bun run test:e2e
 bun run check
 bun run lint:svelte
 bun run format:check
@@ -644,90 +676,72 @@ bun run build
 cargo test --workspace
 ```
 
-Record exact failures rather than expanding scope for unrelated pre-existing problems.
+Expected: all commands pass. If a failure is confirmed pre-existing and unrelated, record the exact command/output in the implementation PR rather than expanding HPA-548.
 
-- [ ] **Step 2: Re-run the symbol gates**
+- [ ] **Step 2: Review for accidental architecture growth**
 
-Run the Task 3 scans again after formatting and test fixes.
+Confirm there is:
 
-- [ ] **Step 3: Review production architecture**
+- no busy-gate/runtime rewrite from HPA-543;
+- no rewritten coordinator ownership suite;
+- no manager/service/repository base class;
+- no adapter registry or generic transaction layer;
+- no envelope/compatibility/gameplay-summary metadata;
+- no migration or fallback reader;
+- no checkpoint/autosave placeholder;
+- no recovery or repair taxonomy;
+- no Save path capable of modifying identity metadata.
 
-Confirm:
+- [ ] **Step 3: Review the test diff**
 
-- exactly six store methods;
-- no alias or compatibility adapter;
-- no TypeScript snapshot inspection;
-- no checkpoint/autosave/generation controller residue;
-- no persistence recovery/pinning residue;
-- no store identity registry;
-- no generic transaction/repository/service framework;
-- backend ownership unchanged;
-- remaining queue/lease/session/revision code is runtime-local and isolated for HPA-543.
+Keep tests for player operations and store guarantees. Ensure the core coordinator ownership suite is unchanged except import/type cleanup and registry-specific deletion.
 
-- [ ] **Step 4: Review Save/Load/New City semantics**
-
-Confirm:
-
-- all setup creation uses `createCity`;
-- Save Now uses only `updateCity`;
-- Load publishes record identity and `savedAt` only after restore;
-- failed load preserves the active runtime;
-- New City uses one create;
-- late-create cleanup failure does not pin disposal.
-
-- [ ] **Step 5: Confirm material net deletion**
+- [ ] **Step 4: Confirm material net reduction**
 
 ```bash
 git diff --stat main...HEAD
 git diff --numstat main...HEAD
 ```
 
-Require material net reduction in:
+Production and test code must both decrease materially.
 
-- `src/persistence`;
-- runtime persistence/controller code;
-- related runtime persistence tests.
+- [ ] **Step 5: Verify downstream handoff**
 
-Do not add tests merely to preserve old counts.
+HPA-543 must be able to delete `createSharedPersistenceCoordinator`, queues, leases, fences, tokens, revisions, and its preserved ownership suite without another store-shape migration.
 
-- [ ] **Step 6: Verify the HPA-543 handoff**
-
-HPA-543 must be able to remove the remaining runtime-local queue, lease, tokens, and revision baseline without another store or public controller migration.
-
-- [ ] **Step 7: Commit verification-only changes when necessary**
+- [ ] **Step 6: Commit verification-only changes when needed**
 
 ```bash
 git add -A
 git commit -m "chore: verify city save store simplification"
 ```
 
-Skip this commit when verification changes no files.
+Skip when verification changes no files.
 
 ---
 
-## Acceptance mapping
+## Acceptance Mapping
 
-- **Exactly six operations:** Tasks 1 and 3.
-- **Minimal record and Rust authority:** Task 1.
-- **Existing sort reused:** Task 1.
-- **Save is update-only:** Task 2.
-- **Load identity/save-time mapping:** Task 2.
-- **No hollow generation/load/error surface:** Task 2.
-- **No pending/finalize or recovery pinning:** Task 2.
-- **No store capability registry:** Task 2.
-- **No old platform or aliases:** Task 3.
-- **Complete consumer inventory:** Task 2 symbol scan plus Task 3 zero-match gate.
-- **Material net reduction and full checks:** Task 4.
+- **Exactly six operations:** Tasks 3 and 5.
+- **Identity-safe updates:** Task 3 contract tests and Task 4 Save migration.
+- **Three error codes:** Task 3 and absence scans.
+- **Minimal record and Rust authority:** Tasks 3–5.
+- **No generations/pending/recovery/registry APIs:** Tasks 2, 4, and 5.
+- **No hollow active-delete guard:** Task 4.
+- **Bootstrap/App compile-safe cleanup:** Task 4 includes `src/main.ts` and e2e.
+- **Coordinator boundary respected:** Task 2 and Task 6 preserve the core suite for HPA-543.
+- **Green intermediate commits:** every task gate.
+- **Material net deletion:** Task 6.
 
-## Implementation review focus
+## Implementation Review Focus
 
 Reject the implementation if it:
 
-- creates an adapter between old and new APIs;
-- keeps an old method or union under another name;
-- validates snapshot keys/schema in TypeScript;
-- makes Save Now upsert;
-- retains recovery/pinning after deleting its triggers;
-- keeps shared store-identity coordination;
-- adds future adapter scaffolding or repair taxonomy;
-- broadens into HPA-543/HPA-547 beyond the explicit bridge.
+- folds HPA-543 into HPA-548;
+- rewrites the coordinator ownership suite instead of preserving it;
+- lets `updateCity` rewrite name or creation time;
+- creates a compatibility adapter or retains old methods under aliases;
+- inspects snapshot schema/keys in TypeScript;
+- adds future metadata, generic frameworks, registries, or repair systems;
+- omits `src/main.ts` or leaves recovery UI/types behind;
+- skips Playwright after changing bootstrap/App behavior.
