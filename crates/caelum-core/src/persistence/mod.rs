@@ -48,10 +48,13 @@ fn validate_and_compile(mut snapshot: GameSnapshot) -> PersistenceResult<Prepare
     }
     map::normalize_shell(&mut snapshot);
     let topology = map::validate_shell_rules_map_and_compile(&snapshot)?;
-    trips::normalize_direct_fields(&mut snapshot);
-    entities::normalize_direct_fields(&mut snapshot, &topology);
     let indexes = entities::validate_entities(&snapshot, &topology)?;
     trips::validate_trips(&snapshot, &indexes)?;
+    // Validate all references and ownership before normalization. Lifecycle
+    // derivation may traverse route/platform relationships; it must only see
+    // the same checked indexes accepted by the candidate validator.
+    trips::normalize_direct_fields(&mut snapshot);
+    entities::normalize_direct_fields(&mut snapshot, &topology);
     Ok(PreparedSnapshot {
         snapshot,
         road_topology: topology,
