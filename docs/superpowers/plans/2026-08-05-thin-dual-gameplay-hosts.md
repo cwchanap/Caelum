@@ -275,35 +275,39 @@ pub enum SnapshotLoadError {
 
 - [ ] **Step 1: Add the focused core construction test file**
 
-Create `crates/caelum-core/tests/persistence_construction.rs` with these exact behaviors:
+Create `crates/caelum-core/tests/persistence_construction.rs` with these exact test names and mutations:
+
+| Test | Arrange | Act | Assert |
+| --- | --- | --- | --- |
+| `unsupported_schema_is_rejected_before_activation` | Set `schema_version` to `SNAPSHOT_SCHEMA_VERSION - 1` | Call `restore_snapshot` on a target engine | Returns `SnapshotLoadError::UnsupportedSchema`; target snapshot is unchanged |
+| `wrong_tile_count_is_invalid_snapshot` | Remove the final map tile | Call `GameEngine::from_snapshot` | Returns `SnapshotLoadError::InvalidSnapshot` |
+| `duplicate_entity_id_is_invalid_snapshot` | Start from the existing rich public-gameplay fixture and assign one station the first stop ID | Call `GameEngine::from_snapshot` | Returns `InvalidSnapshot` |
+| `missing_required_reference_is_invalid_snapshot` | Replace one route waypoint ID with `"missing-node"` | Call `GameEngine::from_snapshot` | Returns `InvalidSnapshot` |
+| `topology_compile_failure_is_invalid_snapshot` | Remove the reciprocal road connection from one connected neighbour pair | Call `GameEngine::from_snapshot` | Returns `InvalidSnapshot` |
+| `failed_restore_preserves_active_engine` | Capture the target snapshot and prepare the invalid tile-count candidate | Call `restore_snapshot` | Returns `InvalidSnapshot`; target snapshot equals the captured value |
+| `save_snapshot_is_paused_without_mutating_live_engine` | Start an unpaused engine | Call `snapshot_for_save` | returned snapshot is paused; live engine remains unpaused |
+| `engine_minted_save_round_trips_deterministically` | Capture `saved = engine.snapshot_for_save()` | Construct `GameEngine::from_snapshot(saved.clone())` and save again | second save equals `saved` |
+
+Use programmatically mutated snapshots. The rich fixture may be reused only as convenient gameplay setup; do not load the persistence JSON fixture catalogue.
+
+Representative preservation test:
 
 ```rust
 #[test]
-fn unsupported_schema_is_rejected_before_activation() { /* schema mismatch */ }
+fn failed_restore_preserves_active_engine() {
+    let mut target = GameEngine::new();
+    let before = target.snapshot();
+    let mut invalid = before.clone();
+    invalid.map.tiles.pop();
 
-#[test]
-fn wrong_tile_count_is_invalid_snapshot() { /* remove one map tile */ }
+    let error = target
+        .restore_snapshot(invalid)
+        .expect_err("wrong tile count must be rejected");
 
-#[test]
-fn duplicate_entity_id_is_invalid_snapshot() { /* duplicate a stop/building id */ }
-
-#[test]
-fn missing_required_reference_is_invalid_snapshot() { /* route references missing node */ }
-
-#[test]
-fn topology_compile_failure_is_invalid_snapshot() { /* impossible road connectivity */ }
-
-#[test]
-fn failed_restore_preserves_active_engine() { /* compare snapshot before/after */ }
-
-#[test]
-fn save_snapshot_is_paused_without_mutating_live_engine() { /* live pause unchanged */ }
-
-#[test]
-fn engine_minted_save_round_trips_deterministically() { /* save -> from_snapshot -> save */ }
+    assert!(matches!(error, SnapshotLoadError::InvalidSnapshot(_)));
+    assert_eq!(target.snapshot(), before);
+}
 ```
-
-Use programmatically mutated `GameEngine::new().snapshot()` values. Do not use the giant persistence JSON fixture catalogue.
 
 - [ ] **Step 2: Run the new core tests and confirm they fail against the old API/behavior**
 
@@ -344,12 +348,14 @@ expect("createSandbox" in backend).toBe(false);
 
 Rewrite `tests/runtime/persistenceContract.test.ts` to cover only:
 
-```ts
-it("maps schema mismatch to unsupportedSchema", () => { /* ... */ });
-it("maps decode/construction rejection to invalidSnapshot", () => { /* ... */ });
-it("maps unexpected adapter failure to hostFailure", () => { /* ... */ });
-it("preserves operation without requiring equal diagnostics", () => { /* ... */ });
-```
+| Test | Input | Expected |
+| --- | --- | --- |
+| `maps schema mismatch to unsupportedSchema` | `{ code: "unsupportedSchema", context: { expected: 5, actual: 4 } }` from the host bridge | `{ operation: "restoreSnapshot", code: "unsupportedSchema" }` |
+| `maps decode or construction rejection to invalidSnapshot` | any non-schema core rejection | `{ operation: "restoreSnapshot", code: "invalidSnapshot" }` |
+| `maps unexpected adapter failure to hostFailure` | `new Error("invoke failed")` | `{ operation: "snapshotForSave", code: "hostFailure", diagnostic: "invoke failed" }` |
+| `preserves operation without requiring equal diagnostics` | native and WASM failures with different messages | equal `operation` and `code`; diagnostics may differ |
+
+The tests must call the real small mapping helper exported by `src/runtime/backend/persistence.ts`, not duplicate mapping logic inside the test.
 
 Delete tests for exact keys, prototypes, sparse arrays, every field/reason enum, and exact native/WASM diagnostic parity.
 
@@ -380,19 +386,15 @@ For Tauri, retain one stale-epoch native test. Do not test a public epoch method
 
 - [ ] **Step 6: Add New City post-condition tests**
 
-In `tests/runtime/gameRuntime.test.ts`, add or rewrite exact cases:
+In `tests/runtime/gameRuntime.test.ts`, add or rewrite these exact cases:
 
-```ts
-it("leaves backend, store, and identity unchanged when sandbox build rejects", async () => { /* ... */ });
-
-it("leaves backend and active identity unchanged on definite persist failure", async () => { /* ... */ });
-
-it("keeps the stored city but preserves current gameplay when activation restore fails", async () => { /* ... */ });
-
-it("writes nothing when disposed after pure build and before persistence", async () => { /* ... */ });
-
-it("publishes candidate snapshot and city identity only after restore succeeds", async () => { /* ... */ });
-```
+| Test | Backend/store setup | Required assertions |
+| --- | --- | --- |
+| `leaves backend, store, and identity unchanged when sandbox build rejects` | `buildSandboxSnapshot` resolves with a field-level `SandboxCreationError` | no store method called; backend snapshot unchanged; active city unchanged; runtime reports `kind: "sandbox"` |
+| `leaves backend and active identity unchanged on definite persist failure` | pure build succeeds; `createWorkingSave` returns a definite conflict/non-commit failure | `restoreSnapshot` not called; backend snapshot unchanged; active city unchanged |
+| `keeps the stored city but preserves current gameplay when activation restore fails` | create/finalize succeed; `restoreSnapshot` resolves `invalidSnapshot` | stored active record remains; backend snapshot and active city remain the prior values; runtime reports backend failure |
+| `writes nothing when disposed after pure build and before persistence` | hold the pure build promise, dispose the runtime, then resolve the candidate | no create/finalize/restore call; no publication after disposal |
+| `publishes candidate snapshot and city identity only after restore succeeds` | pure build, create/finalize, and restore all succeed | publication occurs after restore; published state equals candidate; active city equals requested identity |
 
 Mocks must implement the final `GameBackend`; do not retain `createSandbox`, `beginRuntime`, or `validateSnapshot`.
 
@@ -889,13 +891,7 @@ Delete:
 scripts/benchmark-persistence-wasm.ts
 ```
 
-Remove:
-
-```json
-"benchmark:persistence:wasm": "..."
-```
-
-from `package.json`, plus its coverage ignore entry.
+Remove the `benchmark:persistence:wasm` key from `package.json`, plus the matching coverage ignore entry.
 
 Run:
 
