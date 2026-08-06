@@ -55,13 +55,11 @@
 
 **Modify**
 
-- `crates/caelum-core/tests/persistence_fixture_export.rs`
-
 **Read/Reuse**
 
 - `src/domain/types.ts`
 - `src/runtime/backend/types.ts`
-- `tests/fixtures/persistence/valid-paused.json`
+- `tests/fixtures/rustSnapshot.ts`
 - `vite.config.ts`
 
 ## Test Utility Contract
@@ -252,7 +250,6 @@ git commit -m "feat: define save envelope contract"
 **Files:**
 - Create: `src/persistence/envelopeInspection.ts`
 - Modify: `tests/runtime/persistence/envelope.test.ts`
-- Modify: `crates/caelum-core/tests/persistence_fixture_export.rs`
 
 **Interfaces:**
 - Produces: `SaveEnvelopeError`, `SaveCompatibility`, `InspectSaveEnvelopeResult`, `inspectSaveEnvelope`, `compatibilityToEnvelopeError`.
@@ -297,32 +294,23 @@ Use plain-object and exact-key helpers modeled after `src/runtime/backend/persis
 
 - [ ] **Step 4: Add exact Rust fixture parity**
 
-Import `SNAPSHOT_SCHEMA_VERSION` in `crates/caelum-core/tests/persistence_fixture_export.rs` and add:
-
-```rust
-let valid = read_json("valid-paused.json");
-assert_eq!(
-    valid["schemaVersion"].as_u64(),
-    Some(u64::from(SNAPSHOT_SCHEMA_VERSION)),
-    "checked-in fixture schema must match Rust",
-);
-```
-
-The TypeScript test loads the same fixture and compares it to the TypeScript constant. It must not parse Rust source.
+Use the programmatic `tests/fixtures/rustSnapshot.ts` fixture for envelope metadata
+tests. The former generated JSON parity fixture and exporter were retired by HPA-547;
+the TypeScript fixture must continue to use the shared `SNAPSHOT_SCHEMA_VERSION`
+constant rather than parsing Rust source.
 
 - [ ] **Step 5: Run tests**
 
 ```bash
-cargo test -p caelum-core --test persistence_fixture_export
 bunx vitest run --project runtime tests/runtime/persistence/envelope.test.ts
 ```
 
-Expected: both commands exit 0.
+Expected: the command exits 0.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/persistence/envelopeInspection.ts tests/runtime/persistence/envelope.test.ts crates/caelum-core/tests/persistence_fixture_export.rs
+git add src/persistence/envelopeInspection.ts tests/runtime/persistence/envelope.test.ts
 git commit -m "feat: inspect save envelope headers strictly"
 ```
 
@@ -607,7 +595,7 @@ Expected: no production clock/ID generation, Local Storage use, or snapshot norm
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/persistence tests/runtime/persistence crates/caelum-core/tests/persistence_fixture_export.rs
+git add src/persistence tests/runtime/persistence
 git commit -m "test: define SaveStore adapter contract"
 ```
 
@@ -615,7 +603,7 @@ git commit -m "test: define SaveStore adapter contract"
 
 ## HPA-498 Completion Gate
 
-- [ ] Envelope uses shared domain types and fixture-backed schema parity.
+- [ ] Envelope uses shared domain types and programmatic fixture schema parity.
 - [ ] Header inspection is exception-safe, exact, and gameplay-opaque.
 - [ ] Rename/duplicate inspect sources internally with closed outcomes.
 - [ ] Memory reads/writes are detached and failure-atomic.

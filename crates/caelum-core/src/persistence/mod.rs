@@ -3,10 +3,12 @@ mod error;
 mod map;
 mod trips;
 
-pub use error::{
+pub(crate) use error::{
     AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
-    NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
-    RoadTopologyError, ScenarioError, SnapshotField, SnapshotLoadError, TileError,
+    OwnershipError, RoadStructureError, ScenarioError,
+};
+pub use error::{
+    NumericError, PersistenceError, PersistenceResult, SnapshotField, SnapshotLoadError, TileError,
 };
 
 use crate::model::{GameSnapshot, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};

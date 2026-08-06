@@ -39,7 +39,4 @@ ignore:
   # Build/entry side-effect modules: not unit-testable without contorting mocks
   # around process spawns and Svelte mounting; covered by the dev/build/e2e flow.
   - "scripts/ensure-wasm.mjs"
-  # Standalone benchmark runner that boots a real WASM backend; not unit-testable
-  # without mocking the wasm artifact, exercised via `benchmark:persistence:wasm`.
-  - "scripts/benchmark-persistence-wasm.ts"
   - "src/main.ts"
