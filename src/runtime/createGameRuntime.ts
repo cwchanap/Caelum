@@ -620,27 +620,20 @@ export async function createGameRuntime(
             ? ui.routeDraft
             : { ...ui.routeDraft, previewPending: false },
       };
-      // Fire-and-forget: close the lease, drain all pending gameplay and
-      // persistence work (in-flight backend operations, enqueued FIFO writes,
-      // and admitted foreground lifecycle operations), then release the lease
-      // and backend ownership so a replacement runtime against the same
-      // storage identity and backend engine can acquire them. Neither is
-      // released until every in-flight operation has settled, preventing a
-      // late write, backend mutation, or foreground result from mutating
-      // storage or the backend after a replacement runtime takes over. If an
-      // uncancellable store or backend operation never settles, neither is
-      // released and a replacement runtime's `createGameRuntime` never
-      // resolves — safe rebootstrap cannot proceed.
+      // Fire-and-forget: drain this runtime's pending gameplay and persistence
+      // work (in-flight backend operations, enqueued FIFO writes, and admitted
+      // foreground lifecycle operations), then release its runtime-local
+      // persistence lease and backend ownership. If an uncancellable store or
+      // backend operation never settles, teardown remains pending.
       void startDrainAndRelease();
       // Install the cleared UI. When disposal has been explicitly requested,
-      // a late backend failure must NOT publish a terminal snapshot: the
-      // typed `RuntimeDisposeResult` is the lifecycle owner's channel during
-      // teardown, not a stale UI update. The runtime remains terminal (dead,
-      // backendError recorded), ownership draining proceeds, but no render,
-      // animation sync, or subscriber notification occurs. A LIVE runtime
-      // (no disposal requested) still publishes exactly once so App's
-      // `setSnapshot` observes `backendError` and renders the shell error
-      // screen.
+      // a late backend failure must NOT publish a terminal snapshot: disposal
+      // is the lifecycle owner's channel during teardown, not a stale UI
+      // update. The runtime remains terminal (dead, backendError recorded),
+      // ownership draining proceeds, but no render, animation sync, or
+      // subscriber notification occurs. A LIVE runtime (no disposal
+      // requested) still publishes exactly once so App's `setSnapshot` observes
+      // `backendError` and renders the shell error screen.
       ui = clearedUi;
       return disposalRequested ? getSnapshot() : publishTerminalSnapshot();
     };
@@ -2231,49 +2224,19 @@ export async function createGameRuntime(
       return { status: "failed", error: failure };
     };
 
-    // Late-success cleanup: the atomic city create succeeded AFTER disposal
-    // began, so the candidate city record is committed even though New City
-    // never completed or published success. Roll back the backend to the
-    // prior canonical state and undo the city record.
-    //
-    // This function is called from two distinct contexts that require
-    // different public-runtime handling:
-    //
-    // 1. Disposal-time cleanup (the `if (dead)` branch in `activateNewCity`):
-    //    the runtime is already disposed. Roll back the backend and delete the
-    //    orphan for coherence, but do NOT restore the prior public runtime,
-    //    restart the canvas, publish, or resume previews. Return
-    //    `runtimeUnavailable`.
-    //
-    // Disposal may begin during the async cleanup operations (backend rollback
-    // or storage delete). After cleanup succeeds, a `dead` check gates the
-    // public-runtime restoration: if disposal began during cleanup, remain
-    // terminal and return `runtimeUnavailable` — mirroring `rollbackNewCity`'s
-    // terminal discipline.
-    //
-    // Serialization: this runs inside the admitted foreground operation, so
-    // `drainAll` waits for it before the lease can be released. The cleanup
-    // store call is issued DIRECTLY (not through `lease.enqueue`, which rejects
-    // on the now-closing lease) — this is safe because the lease is still
-    // exclusively held and the successful city FIFO write has already settled.
-    //
-    // Identity safety: `createCity` is an atomic create-only operation that
-    // returns `conflict` when storage already exists for the city ID. A
-    // successful create proves no prior storage existed, so cleanup can
-    // safely `deleteCity` the newly created city without restoring a prior
-    // record. There is no ID-collision overwrite path — the create would have
-    // been rejected with `conflict` before committing.
-    //
-    // Cleanup failures are returned as the concise backend/store failure while
-    // disposal continues draining and releasing the runtime capabilities.
+    // Disposal-time late-success cleanup: an atomic city create succeeded
+    // after disposal began. Restore the prior canonical backend state, make
+    // one direct deleteCity attempt for the orphaned city record, and keep the
+    // runtime terminal. Return a concise cleanup failure when cleanup fails;
+    // otherwise return runtimeUnavailable.
     const cleanupLateSuccessNewCity = async (
-      prior: NewCityPriorRuntime,
+      priorPaused: boolean,
       priorCanonicalSnapshot: RustGameSnapshot,
       identity: NewCityIdentity,
     ): Promise<PersistenceOperationResult<LoadCityValue>> => {
       const restored = await restoreCanonicalBackendState(
         priorCanonicalSnapshot,
-        prior.paused,
+        priorPaused,
       );
 
       let deleted: CitySaveStoreResult<void>;
@@ -2311,20 +2274,7 @@ export async function createGameRuntime(
         };
       }
 
-      if (dead) return runtimeUnavailable("activateNewCity");
-      previewRuntimeEpoch += 1;
-      previewCoordinator.invalidateRoute();
-      previewCoordinator.invalidateRoadMutation();
-      restoreNewCityPriorRuntime(prior);
-      publish();
-      resumeNewCityPriorPreviews(prior);
-      return {
-        status: "failed",
-        error: {
-          kind: "precondition",
-          error: { code: "runtimeUnavailable", operation: "activateNewCity" },
-        },
-      };
+      return runtimeUnavailable("activateNewCity");
     };
 
     const activateNewCity = async (
@@ -2498,8 +2448,8 @@ export async function createGameRuntime(
         }
 
         // Dead check immediately before the store enqueue: if disposal
-        // occurred during envelope construction (synchronous, but defense in
-        // depth), do not write. The candidate is installed, so rollback.
+        // occurred while building the CitySaveRecord (synchronous, but defense
+        // in depth), do not write. The candidate is installed, so rollback.
         if (dead) {
           return await rollbackNewCity(prior, priorCapture.snapshot, {
             kind: "precondition",
@@ -2544,7 +2494,7 @@ export async function createGameRuntime(
         // candidate.
         if (dead) {
           return await cleanupLateSuccessNewCity(
-            prior,
+            prior.paused,
             priorCapture.snapshot,
             identity,
           );
