@@ -106,13 +106,15 @@ export interface RuntimePersistenceController {
   ): Promise<PersistenceOperationResult<LoadCityValue>>;
 }
 
-// Per-city persistence FIFO. Each `createGameRuntime` instance owns its own
-// queue set via `createCityPersistenceQueues`; there is NO module-global
+// Per-city persistence FIFO. In the runtime, FIFO tails live on the
+// coordinator's lease and are reached through `PersistenceLease.enqueue`/
+// `drain`; `createCityPersistenceQueues` below is a test-only standalone
+// implementation of the same FIFO semantics. There is NO module-global
 // `cityTails`. Queues, fences, lifecycle ownership, and session/load tokens
-// are all closure-local. Keeping the FIFO instance-local prevents the
-// cross-city-load lock cycle: a cross-city load that awaits the former city's
-// drain while holding the target city's FIFO cannot deadlock because no other
-// runtime can hold the former city's FIFO.
+// are all closure-local to each runtime's coordinator. Keeping the FIFO
+// instance-local prevents the cross-city-load lock cycle: a cross-city load
+// that awaits the former city's drain while holding the target city's FIFO
+// cannot deadlock because no other runtime can hold the former city's FIFO.
 export interface CityPersistenceQueues {
   enqueue<T>(cityId: string, work: () => Promise<T>): Promise<T>;
   drain(cityId: string): Promise<void>;
