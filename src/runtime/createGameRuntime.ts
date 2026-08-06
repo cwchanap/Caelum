@@ -53,10 +53,6 @@ import type {
 } from "../persistence/citySaveStore";
 import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
-import {
-  resolveBackendOwnershipCoordinator,
-  type BackendOwnership,
-} from "./backendOwnership";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { normalizeRustSnapshot } from "./snapshotView";
@@ -229,37 +225,20 @@ export async function createGameRuntime(
   options: CreateGameRuntimeOptions,
 ): Promise<RuntimeController & RuntimeTestSeam> {
   const { backend, hoverPreviewDebounceMs = 50, saveStore } = options;
-  // Acquire exclusive backend ownership BEFORE the initial snapshot. The
-  // Tauri backend is process-global (one `Mutex<GameEngine>` shared by every
-  // facade), and a replacement runtime that reads `backend.snapshot()` before
-  // the old runtime's backend operations have settled can observe a stale or
-  // mid-mutation snapshot. The persistence lease alone cannot prevent this
-  // because a runtime may have no city save store, two stores may address one
-  // engine, and separate facades share one engine. Backend ownership
-  // serializes runtime lifetimes by engine identity, guaranteeing that by the
-  // time a replacement runtime can read the backend, the old runtime's
-  // gameplay operations have drained.
-  //
-  // Lock acquisition order is deterministic: backend ownership is acquired
-  // BEFORE the persistence lease, and released AFTER the persistence lease.
-  // This prevents lock cycles because no other runtime can hold backend
-  // ownership while the old runtime holds it.
-  //
   // P1: The Tauri backend's `beginRuntime()` atomically increments the Rust
-  // host's runtime epoch and returns the authoritative snapshot from the
-  // same critical section. The epoch is the cross-reload ownership authority:
-  // a webview reload destroys this JavaScript registry but leaves the Rust
-  // process and `OwnedEngine` alive. A stale command from the previous realm
-  // carries an outdated epoch and is rejected by the Rust host before it can
-  // mutate the engine. The JavaScript coordinator remains as the efficient
-  // same-realm lifecycle/draining mechanism; the Rust epoch is the
-  // cross-reload/process-host correctness boundary.
-  const backendOwnershipCoordinator =
-    resolveBackendOwnershipCoordinator(backend);
-  const backendOwnership: BackendOwnership =
-    await backendOwnershipCoordinator.acquire();
-  // Protect the entire post-acquisition construction phase with one cleanup
-  // scope so construction failures release both capabilities.
+  // host's runtime epoch and returns the authoritative snapshot from the same
+  // critical section. The epoch is the cross-reload authority: a webview
+  // reload destroys this JavaScript realm but leaves the Rust process and
+  // `OwnedEngine` alive. A stale command from the previous realm carries an
+  // outdated epoch and is rejected by the Rust host before it can mutate the
+  // engine. The Rust epoch is the cross-reload/process-host correctness
+  // boundary.
+  // P2: Protect the entire post-acquisition construction phase with one
+  // cleanup scope so construction failures release the persistence lease so a
+  // replacement runtime can initialize. An intentional
+  // `BootstrapRecoveryError` (leaseStuck) sets `pinRecovery = true` before
+  // throwing so the generic catch skips release — the lease is permanently
+  // pinned and `startDrainAndRelease` handles the drain.
   let lease: PersistenceLease | null = null;
   let state: ReturnType<typeof normalizeRustSnapshot>;
   try {
@@ -271,7 +250,7 @@ export async function createGameRuntime(
       : { runtimeEpoch: 0, snapshot: await backend.snapshot() };
     state = normalizeRustSnapshot(session.snapshot);
     // Construct this runtime's persistence coordinator and acquire the
-    // exclusive ownership lease. Each runtime owns its own coordinator —
+    // exclusive persistence lease. Each runtime owns its own coordinator —
     // coordination is per-runtime, not shared across stores or runtime
     // lifetimes — so the lease serializes this runtime's own persistence
     // workflows (foreground lifecycle operations and per-city FIFO writes).
@@ -308,10 +287,8 @@ export async function createGameRuntime(
         .drain()
         .then(() => lease!.drainAll())
         .then(() => lease!.release())
-        .then(() => backendOwnership.release())
         .catch(() => {
           lease!.release();
-          backendOwnership.release();
         });
       return drainAndReleasePromise;
     };
@@ -625,9 +602,9 @@ export async function createGameRuntime(
       };
       // Fire-and-forget: drain this runtime's pending gameplay and persistence
       // work (in-flight backend operations, enqueued FIFO writes, and admitted
-      // foreground lifecycle operations), then release its runtime-local
-      // persistence lease and backend ownership. If an uncancellable store or
-      // backend operation never settles, teardown remains pending.
+      // foreground lifecycle operations), then release the persistence lease.
+      // If an uncancellable store or backend operation never settles, teardown
+      // remains pending.
       void startDrainAndRelease();
       // Install the cleared UI. When disposal has been explicitly requested,
       // a late backend failure must NOT publish a terminal snapshot: disposal
@@ -662,12 +639,9 @@ export async function createGameRuntime(
       stopRuntime();
       // Close the lease, drain all pending gameplay and persistence work
       // (in-flight backend operations, enqueued FIFO writes, and admitted
-      // foreground lifecycle operations), then release the lease and backend
-      // ownership. The persistence lease is per-runtime, so releasing it
-      // only settles this runtime's own work; backend ownership is the
-      // capability a replacement runtime against the same backend engine
-      // acquires. Unlike `failBackend` (fire-and-forget), `dispose` awaits
-      // the drain so the caller knows both have been released.
+      // foreground lifecycle operations), then release the persistence lease.
+      // Unlike `failBackend` (fire-and-forget), `dispose` awaits the drain so
+      // the caller knows the lease has been released.
       await startDrainAndRelease();
     };
 
@@ -3244,7 +3218,6 @@ export async function createGameRuntime(
         // diagnostic; a release failure must not mask it.
       }
     }
-    backendOwnership.release();
     throw error;
   }
 }

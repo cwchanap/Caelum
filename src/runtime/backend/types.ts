@@ -336,26 +336,6 @@ export type PersistenceSnapshotResult =
   PersistenceSnapshotResultOf<RustGameSnapshot>;
 
 /**
- * Stable identity for the mutable backend engine a `GameBackend` addresses.
- *
- * The Tauri backend is process-global: every `createTauriBackend()` facade
- * invokes commands against one `Mutex<GameEngine>` in the Rust host. Two
- * separate facade objects therefore share one mutable engine, and a
- * replacement runtime that reads `backend.snapshot()` before the old
- * runtime's backend operations have settled can observe a stale or
- * mid-mutation snapshot.
- *
- * `runtimeIdentity` lets a shared backend ownership coordinator serialize
- * runtime lifetimes by engine identity rather than by facade object
- * identity. When present, all facades addressing the same engine MUST
- * expose the same identity so the coordinator gives them one exclusive
- * lease. When absent, the coordinator falls back to object identity —
- * safe for single-facade usage (e.g. a WASM backend whose engine is
- * instance-local) but without cross-facade protection.
- */
-export type RuntimeIdentity = string;
-
-/**
  * The result of beginning a runtime session: the authoritative runtime epoch
  * plus the initial snapshot from the same critical section.
  *
@@ -376,12 +356,6 @@ export interface RuntimeSession {
 }
 
 export interface GameBackend {
-  /**
-   * Stable identity for the mutable backend engine this facade addresses.
-   * See {@link RuntimeIdentity}. When omitted, backend ownership
-   * coordination falls back to object identity.
-   */
-  readonly runtimeIdentity?: RuntimeIdentity;
   /**
    * Begin a runtime session: atomically acquire the authoritative runtime
    * epoch and the initial snapshot. The Tauri backend stores the epoch

@@ -46,12 +46,6 @@ export async function createTauriBackend(): Promise<GameBackend> {
     return runtimeEpoch;
   };
   return {
-    // The Tauri backend is process-global: every facade invokes commands
-    // against one `Mutex<GameEngine>` in the Rust host. All facades share
-    // one stable identity so the backend ownership coordinator gives them
-    // one exclusive lease, serializing runtime lifetimes across separate
-    // facade objects that address the same engine.
-    runtimeIdentity: "tauri:process-engine",
     async beginRuntime(): Promise<RuntimeSession> {
       const response = await invoke<{
         runtimeEpoch: number;

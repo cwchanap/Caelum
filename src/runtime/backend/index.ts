@@ -50,7 +50,6 @@ export type {
   RustGameSnapshot,
   RustMetrics,
   RustTripOutcome,
-  RuntimeIdentity,
   RuntimeSession,
   SandboxCreationError,
   SandboxCreationErrorCode,
