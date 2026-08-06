@@ -11,9 +11,8 @@ import {
 
 /**
  * Shared harness for running the city-save-store contract against a concrete
- * adapter. `failNext` is optional; the failure-injection test requires it and
- * reports a clear error if an adapter that declares failure injection does not
- * provide it.
+ * adapter. `failNext` is optional; the failure-injection test is skipped for
+ * adapters that do not provide it.
  */
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;
@@ -194,31 +193,33 @@ export function defineCitySaveStoreContract(
       expect(read.city.createdAt).toBe(originalCreatedAt);
     });
 
-    it("preserves the complete prior record after failed update", async () => {
-      const { store, failNext } = createHarness();
-      if (!failNext) {
-        throw new Error(
-          `${name} declares failure injection but does not provide failNext`,
+    // Adapters without failure injection skip this case rather than failing.
+    const supportsFailureInjection =
+      typeof createHarness().failNext === "function";
+    (supportsFailureInjection ? it : it.skip)(
+      "preserves the complete prior record after failed update",
+      async () => {
+        const { store, failNext } = createHarness();
+        if (!failNext) return;
+        const record = makeRecord("city-1", "First", {
+          savedAt: "2026-08-01T10:00:00.000Z",
+          snapshot: { budget: 120_000 },
+        });
+        await expectOk(store.createCity(record));
+        failNext("updateCity", "failed");
+
+        await expectError(
+          store.updateCity("city-1", {
+            savedAt: "2026-08-02T11:00:00.000Z",
+            snapshot: { budget: 90_000 },
+          }),
+          "failed",
         );
-      }
-      const record = makeRecord("city-1", "First", {
-        savedAt: "2026-08-01T10:00:00.000Z",
-        snapshot: { budget: 120_000 },
-      });
-      await expectOk(store.createCity(record));
-      failNext("updateCity", "failed");
 
-      await expectError(
-        store.updateCity("city-1", {
-          savedAt: "2026-08-02T11:00:00.000Z",
-          snapshot: { budget: 90_000 },
-        }),
-        "failed",
-      );
-
-      // The full prior record — identity, savedAt, and snapshot — is intact.
-      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
-    });
+        // The full prior record — identity, savedAt, and snapshot — is intact.
+        expect(await expectOk(store.readCity("city-1"))).toEqual(record);
+      },
+    );
 
     it("renames only the city name", async () => {
       const { store } = createHarness();

@@ -106,6 +106,31 @@ describe("shared coordinator ownership model", () => {
     await lease.drainAll();
     lease.release();
   });
+
+  it("drainAll stays pending while outstanding foreground work is in flight and resolves once released", async () => {
+    const coordinator = createSharedPersistenceCoordinator();
+    const lease = await coordinator.acquireLease();
+    expect(lease.admitForeground()).toBe(true);
+
+    const drained = lease.drainAll();
+    let resolved = false;
+    drained.then(() => {
+      resolved = true;
+    });
+
+    // Yield microtasks: drainAll must not have resolved while the foreground
+    // operation is still outstanding.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    lease.releaseForeground();
+    await expect(drained).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+
+    lease.beginClosing();
+    await lease.drainAll();
+    lease.release();
+  });
 });
 
 describe("createCityPersistenceQueues", () => {

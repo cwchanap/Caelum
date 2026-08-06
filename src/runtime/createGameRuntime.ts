@@ -389,9 +389,10 @@ export async function createGameRuntime(
     // acquires exactly one lease for its prior city and releases exactly that one
     // lease in its finally; the fence persists until the last lease is released.
     //
-    // Fences are owned by the shared coordinator (keyed by storage identity) so
-    // they persist across runtime lifetimes. Because the lease is exclusive,
-    // only this runtime can modify fences during its lifetime.
+    // Fences live on this runtime's own coordinator (constructed per
+    // `createGameRuntime` instance); they do not persist across runtime
+    // lifetimes and are not keyed by storage identity. Because the lease is
+    // exclusive, only this runtime can modify fences during its lifetime.
     const acquireCityFence = (cityId: string): void => {
       lease!.acquireCityFence(cityId);
     };
@@ -406,10 +407,12 @@ export async function createGameRuntime(
     // leaves its protected backend window.
     let stopRequestedDuringReservation = false;
     const gameplayQueue = createSerializedQueue(() => dead);
-    // Per-city persistence FIFOs are owned by the shared coordinator (keyed by
-    // storage identity) so they persist across runtime lifetimes. Because the
-    // lease is exclusive, only this runtime can enqueue work during its
-    // lifetime. See `SharedPersistenceCoordinator` for the ownership model.
+    // Per-city persistence FIFOs live on this runtime's own coordinator
+    // (constructed per `createGameRuntime` instance) and are reached through
+    // the lease's `enqueue`/`drain`. They do not persist across runtime
+    // lifetimes and are not keyed by storage identity. Because the lease is
+    // exclusive, only this runtime can enqueue work during its lifetime.
+    // See `SharedPersistenceCoordinator` for the ownership model.
     const cityQueues = lease;
     const listeners = new Set<RuntimeListener>();
 
@@ -1915,6 +1918,12 @@ export async function createGameRuntime(
             });
           }
 
+          // Capture the narrowed successful record so the serialized restore
+          // closure below reads a `const` `CitySaveRecord` instead of the
+          // `let` `stored` (whose `ok` narrowing does not propagate into the
+          // nested async closure).
+          const record = stored.value;
+
           publishLoadTransition(
             requestToken,
             { state: "restoring", cityId },
@@ -1964,7 +1973,7 @@ export async function createGameRuntime(
               let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
               try {
                 restored = await backend.restoreSnapshot({
-                  snapshot: stored.value.snapshot,
+                  snapshot: record.snapshot,
                 });
               } catch (error: unknown) {
                 // A host exception cannot prove whether restoration mutated the
@@ -2008,8 +2017,8 @@ export async function createGameRuntime(
               }
               const snapshot = commitLoadedSnapshot(
                 restored.snapshot,
-                stored.value.city,
-                stored.value.savedAt,
+                record.city,
+                record.savedAt,
               );
               return { status: "completed", value: { snapshot, cityId } };
             },

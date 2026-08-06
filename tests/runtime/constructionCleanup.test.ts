@@ -140,9 +140,9 @@ describe("construction exception cleanup (P2)", () => {
     );
 
     // A replacement runtime using the SAME backend object must succeed.
-    // This proves backend ownership was released (same object-identity
-    // coordinator). Each runtime constructs its own persistence
-    // coordinator, so lease release is verified by the absence of a hang.
+    // This verifies backend-ownership release only: each runtime constructs
+    // its own persistence coordinator, so there is no shared lease whose
+    // release this test could exercise.
     const runtime = await createGameRuntime({ backend, saveStore: store });
     await runtime.dispose();
   });
