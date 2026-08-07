@@ -99,7 +99,7 @@ describe("Tauri backend", () => {
       ok: false,
       error: {
         code: "invalidSnapshot",
-        diagnostic: "[object Object]",
+        diagnostic: '{"code":"invalidSnapshot","context":"bad candidate"}',
       },
     });
   });

@@ -20,7 +20,8 @@ describe("snapshot persistence mapping", () => {
       ok: false,
       error: {
         code: "unsupportedSchema",
-        diagnostic: "[object Object]",
+        diagnostic:
+          '{"code":"unsupportedSchema","context":{"expected":4,"actual":3}}',
       },
     });
   });
@@ -34,7 +35,7 @@ describe("snapshot persistence mapping", () => {
       ok: false,
       error: {
         code: "invalidSnapshot",
-        diagnostic: "[object Object]",
+        diagnostic: '{"code":"invalidSnapshot","context":"bad tile count"}',
       },
     });
   });
@@ -52,6 +53,28 @@ describe("snapshot persistence mapping", () => {
     await expect(
       runRestoreOperation(() => Promise.reject(new Error("IPC unavailable"))),
     ).rejects.toThrow("IPC unavailable");
+  });
+
+  it("resolves a successful restore as the returned snapshot", async () => {
+    const snapshot = createRustSnapshot();
+    await expect(runRestoreOperation(() => snapshot)).resolves.toEqual({
+      ok: true,
+      snapshot,
+    });
+  });
+
+  it("resolves a definitive restore rejection without rethrowing", async () => {
+    await expect(
+      runRestoreOperation(() =>
+        Promise.reject({ code: "invalidSnapshot", context: "bad candidate" }),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "invalidSnapshot",
+        diagnostic: '{"code":"invalidSnapshot","context":"bad candidate"}',
+      },
+    });
   });
 
   it("accepts a current-schema snapshot", async () => {

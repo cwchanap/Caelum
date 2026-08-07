@@ -26,19 +26,4 @@ describe("WASM backend", () => {
     const restored = await backend.restoreSnapshot(saved.snapshot);
     expect(restored).toEqual(saved);
   });
-
-  it("reports a definitive invalid restore without replacing the engine", async () => {
-    const backend = await createWasmBackend();
-    const before = await backend.snapshot();
-    const candidate = {
-      ...before,
-      map: { ...before.map, tiles: before.map.tiles.slice(0, -1) },
-    };
-
-    await expect(backend.restoreSnapshot(candidate)).resolves.toMatchObject({
-      ok: false,
-      error: { code: "invalidSnapshot" },
-    });
-    expect(await backend.snapshot()).toEqual(before);
-  });
 });

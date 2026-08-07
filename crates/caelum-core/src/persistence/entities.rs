@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::building_catalog::building_definition;
+use crate::building_catalog::{building_definition, BuildingDefinition};
 use crate::engine::RoutingContext;
 use crate::model::{
-    ActiveTrip, GameSnapshot, MetroLine, PathGeometry, Platform, Point, Route, RouteLegPath, Sim,
-    Station, Stop, TransitMode, TransitNodeStatus, TransitPath, TripPosition, TripStatus, Vehicle,
+    ActiveTrip, GameSnapshot, MetroLine, PathGeometry, PlacedBuilding, Platform, Point, Route,
+    RouteLegPath, Sim, Station, Stop, TransitMode, TransitNodeStatus, TransitPath, TripPosition,
+    TripStatus, Vehicle,
 };
 use crate::platforms;
 use crate::road_topology::RoadTopology;
@@ -195,32 +196,41 @@ pub(super) struct BuildingOccupant<'a> {
     pub transit_node_id: Option<&'a str>,
 }
 
+/// Look up the building definition, validate its rotation, and derive the
+/// canonical footprint. Shared by normalization (which writes the result into
+/// `occupied_tiles`) and validation (which compares against the footprint and
+/// reads further fields from the definition), so the two paths cannot drift on
+/// what a building resolves to.
+fn expected_footprint(
+    building: &PlacedBuilding,
+) -> PersistenceResult<(&'static BuildingDefinition, Vec<Point>)> {
+    let entity = entity_ref(EntityKind::Building, &building.id);
+    let Some(definition) = building_definition(&building.building_type) else {
+        return Err(PersistenceError::InvalidEntity {
+            entity,
+            field: SnapshotField::BuildingOccupiedTiles,
+            reason: EntityError::InvalidStaticShape,
+        });
+    };
+    if !matches!(building.rotation, 0 | 90 | 180 | 270) {
+        return Err(PersistenceError::InvalidEntity {
+            entity,
+            field: SnapshotField::BuildingRotation,
+            reason: EntityError::InvalidStaticShape,
+        });
+    }
+    let footprint = crate::buildings::footprint(definition, &building.origin, building.rotation)
+        .ok_or(PersistenceError::InvalidEntity {
+            entity,
+            field: SnapshotField::BuildingOrigin,
+            reason: EntityError::InvalidStaticShape,
+        })?;
+    Ok((definition, footprint))
+}
+
 fn normalize_building_footprints(snapshot: &mut GameSnapshot) -> PersistenceResult<()> {
     for building in &mut snapshot.buildings {
-        let entity = entity_ref(EntityKind::Building, &building.id);
-        let Some(definition) = building_definition(&building.building_type) else {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingOccupiedTiles,
-                reason: EntityError::InvalidStaticShape,
-            });
-        };
-        if !matches!(building.rotation, 0 | 90 | 180 | 270) {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingRotation,
-                reason: EntityError::InvalidStaticShape,
-            });
-        }
-        let Some(footprint) =
-            crate::buildings::footprint(definition, &building.origin, building.rotation)
-        else {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingOrigin,
-                reason: EntityError::InvalidStaticShape,
-            });
-        };
+        let (_, footprint) = expected_footprint(building)?;
         building.occupied_tiles = footprint;
     }
     Ok(())
@@ -485,29 +495,7 @@ fn validate_buildings<'a>(
     let mut claimed_nodes = BTreeSet::new();
     for building in &snapshot.buildings {
         let entity = entity_ref(EntityKind::Building, &building.id);
-        let Some(definition) = building_definition(&building.building_type) else {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingOccupiedTiles,
-                reason: EntityError::InvalidStaticShape,
-            });
-        };
-        if !matches!(building.rotation, 0 | 90 | 180 | 270) {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingRotation,
-                reason: EntityError::InvalidStaticShape,
-            });
-        }
-        let Some(expected) =
-            crate::buildings::footprint(definition, &building.origin, building.rotation)
-        else {
-            return Err(PersistenceError::InvalidEntity {
-                entity,
-                field: SnapshotField::BuildingOrigin,
-                reason: EntityError::InvalidStaticShape,
-            });
-        };
+        let (definition, expected) = expected_footprint(building)?;
         for point in &expected {
             let Some(tile) = snapshot.map.tile(*point) else {
                 return Err(PersistenceError::InvalidEntity {
@@ -844,64 +832,9 @@ fn validate_route_shape(
     vehicle_ids: &[String],
     legs: &[RouteLegPath],
 ) -> PersistenceResult<()> {
+    validate_route_waypoint_references(indexes, kind, route_id, mode, waypoint_ids)?;
+    validate_route_vehicle_references(indexes, kind, route_id, mode, vehicle_ids)?;
     let route = entity_ref(kind, route_id);
-    if waypoint_ids.len() < 2 {
-        return Err(PersistenceError::InvalidEntity {
-            entity: route.clone(),
-            field: SnapshotField::RouteWaypointIds,
-            reason: EntityError::InvalidStaticShape,
-        });
-    }
-    let mut waypoints = BTreeSet::new();
-    for waypoint_id in waypoint_ids {
-        if !waypoints.insert(waypoint_id.as_str()) {
-            return Err(PersistenceError::InvalidAssignment {
-                entity: route.clone(),
-                reason: AssignmentError::DuplicateAssignment,
-            });
-        }
-        let exists = match mode {
-            TransitMode::Bus => indexes.stop(waypoint_id).is_some(),
-            TransitMode::Metro => indexes.station(waypoint_id).is_some(),
-            TransitMode::Walk => false,
-        };
-        if !exists {
-            return Err(PersistenceError::DanglingReference {
-                source: route.clone(),
-                field: SnapshotField::RouteWaypointIds,
-                target: entity_ref(
-                    if mode == TransitMode::Bus {
-                        EntityKind::Stop
-                    } else {
-                        EntityKind::Station
-                    },
-                    waypoint_id,
-                ),
-            });
-        }
-    }
-    let mut vehicles = BTreeSet::new();
-    for vehicle_id in vehicle_ids {
-        if !vehicles.insert(vehicle_id.as_str()) {
-            return Err(PersistenceError::InvalidAssignment {
-                entity: route.clone(),
-                reason: AssignmentError::DuplicateAssignment,
-            });
-        }
-        let Some(vehicle) = indexes.vehicle(vehicle_id) else {
-            return Err(PersistenceError::DanglingReference {
-                source: route.clone(),
-                field: SnapshotField::RouteVehicleIds,
-                target: entity_ref(EntityKind::Vehicle, vehicle_id),
-            });
-        };
-        if vehicle.mode != mode || vehicle.line_id != route_id {
-            return Err(PersistenceError::InvalidAssignment {
-                entity: route.clone(),
-                reason: AssignmentError::ModeMismatch,
-            });
-        }
-    }
     for leg in legs {
         validate_route_leg(snapshot, route.clone(), mode, leg)?;
     }

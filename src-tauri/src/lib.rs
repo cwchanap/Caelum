@@ -94,6 +94,22 @@ impl From<SnapshotLoadError> for SnapshotCommandError {
     }
 }
 
+/// Reject a snapshot command whose issuing runtime has been superseded. Shared
+/// by `game_snapshot_for_save` and `restore_snapshot_with`; both classify a
+/// stale epoch as `HostFailure` (the engine is unchanged, so the outcome is
+/// ambiguous rather than a definitive load failure).
+fn ensure_snapshot_runtime_epoch(
+    owned_epoch: u64,
+    runtime_epoch: u64,
+) -> Result<(), SnapshotCommandError> {
+    if owned_epoch != runtime_epoch {
+        return Err(SnapshotCommandError::HostFailure(format!(
+            "stale runtime epoch: expected {owned_epoch}, actual {runtime_epoch}"
+        )));
+    }
+    Ok(())
+}
+
 fn decode_snapshot(value: serde_json::Value) -> Result<GameSnapshot, SnapshotCommandError> {
     check_snapshot_schema(&value)
         .map_err(|error| SnapshotCommandError::from(SnapshotLoadError::from(error)))?;
@@ -113,12 +129,7 @@ fn restore_snapshot_with(
     let mut owned = state
         .lock()
         .map_err(|error| SnapshotCommandError::HostFailure(error.to_string()))?;
-    if owned.runtime_epoch != runtime_epoch {
-        return Err(SnapshotCommandError::HostFailure(format!(
-            "stale runtime epoch: expected {}, actual {runtime_epoch}",
-            owned.runtime_epoch
-        )));
-    }
+    ensure_snapshot_runtime_epoch(owned.runtime_epoch, runtime_epoch)?;
     owned.engine = candidate;
     Ok(encoded)
 }
@@ -209,12 +220,7 @@ fn game_snapshot_for_save(
     let owned = state
         .lock()
         .map_err(|error| SnapshotCommandError::HostFailure(error.to_string()))?;
-    if owned.runtime_epoch != runtime_epoch {
-        return Err(SnapshotCommandError::HostFailure(format!(
-            "stale runtime epoch: expected {}, actual {runtime_epoch}",
-            owned.runtime_epoch
-        )));
-    }
+    ensure_snapshot_runtime_epoch(owned.runtime_epoch, runtime_epoch)?;
     serde_json::to_value(owned.engine.snapshot_for_save())
         .map_err(|error| SnapshotCommandError::HostFailure(error.to_string()))
 }

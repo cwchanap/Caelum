@@ -13,6 +13,7 @@ import type {
   GameBackend,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
+import type { SnapshotError } from "../../src/runtime/backend/persistenceContract";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
   createRustSnapshot,
@@ -85,9 +86,6 @@ function backend(
       current = createRustSnapshot({ paused: true });
       return { ok: true, snapshot: current };
     },
-    async buildSandboxSnapshot(request) {
-      return base.buildSandboxSnapshot(request);
-    },
     async snapshotForSave() {
       return { ok: true, snapshot: { ...current, paused: true } };
     },
@@ -96,7 +94,9 @@ function backend(
         const error = restoreFailure;
         restoreFailure = null;
         if (error instanceof Error) throw error;
-        return { ok: false, error } as never;
+        // The stub deliberately injects a non-conforming payload to exercise
+        // the runtime's backend-failure path; only the error field is asserted.
+        return { ok: false, error: error as SnapshotError };
       }
       current = snapshot as RustGameSnapshot;
       return { ok: true, snapshot: current };
