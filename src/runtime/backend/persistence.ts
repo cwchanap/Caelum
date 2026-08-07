@@ -7,11 +7,13 @@ import type {
 } from "./persistenceContract";
 
 function diagnosticFor(error: unknown): string | undefined {
-  return error instanceof Error
-    ? error.message
-    : error === undefined
-      ? undefined
-      : String(error);
+  if (error instanceof Error) return error.message;
+  if (error === undefined) return undefined;
+  // Structured host rejections (e.g. `{ code, context }`) carry useful detail
+  // that `String(...)` would flatten to "[object Object]"; serialize them so
+  // the diagnostic stays readable.
+  if (isRecord(error)) return JSON.stringify(error);
+  return String(error);
 }
 
 export function snapshotError(
@@ -56,14 +58,9 @@ function embeddedError(value: unknown): Record<string, unknown> | null {
 function snapshotFailureCode(error: unknown): SnapshotErrorCode {
   const embedded = embeddedError(error);
   if (isSnapshotErrorCode(embedded?.code)) return embedded.code;
-
-  if (
-    typeof error === "string" &&
-    (error.includes("unsupportedSchema") || error.includes("UnsupportedSchema"))
-  ) {
-    return "unsupportedSchema";
-  }
-
+  // A raw error with no recognizable structured code is a host failure; the
+  // contract exposes only unsupportedSchema/invalidSnapshot/hostFailure, and
+  // substring matching on free-form strings would paper over real host errors.
   return "hostFailure";
 }
 

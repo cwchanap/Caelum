@@ -28,7 +28,9 @@ pub(super) fn validate_shell_rules_map_and_compile(
 }
 
 /// Normalize direct scalar and ordering derivations before any validator reads
-/// them.  The caller has already checked that `time` is finite and in range.
+/// them. Callers may pass unchecked `time` values, including invalid ones that
+/// `validate_scalar_state` rejects immediately after this returns; this only
+/// rewrites `paused`, the clock derivations, and connection ordering.
 pub(super) fn normalize_shell(snapshot: &mut GameSnapshot) {
     snapshot.paused = true;
     snapshot.day = clock::day_index(snapshot.time);

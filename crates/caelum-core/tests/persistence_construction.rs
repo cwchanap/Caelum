@@ -203,18 +203,26 @@ fn accepts_stale_derived_building_footprint_and_vehicle_capacity() {
 }
 
 #[test]
-fn rejects_vehicle_path_index_against_the_normalized_route_path() {
+fn rejects_vehicle_path_step_index_outside_the_normalized_route_path() {
     let engine = engine_with_bus_route();
     let mut candidate = engine.snapshot();
-    let serialized_path = candidate.transit.routes[0].legs[0]
+    let step_count = candidate.transit.routes[0].legs[0]
         .current_path
         .as_ref()
-        .expect("fixture route has a serialized path");
-    assert!(serialized_path.step_count() > 1);
-    candidate.transit.vehicles[0].path_step_index = 1;
-    candidate.transit.stops[0].status = TransitNodeStatus::Missing;
+        .expect("fixture route has a serialized path")
+        .step_count();
+    assert!(step_count > 1);
+    // A path step equal to the leg's step count is out of bounds; this is the
+    // sole mutation, so the rejection is attributable only to it.
+    candidate.transit.vehicles[0].path_step_index = step_count;
 
-    invalid_snapshot(from_snapshot_error(candidate));
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(candidate) else {
+        panic!("expected an invalid snapshot error");
+    };
+    assert!(
+        diagnostic.contains("pathStepIndexOutOfBounds"),
+        "expected the path-step-index diagnostic, got: {diagnostic}"
+    );
 }
 
 #[test]

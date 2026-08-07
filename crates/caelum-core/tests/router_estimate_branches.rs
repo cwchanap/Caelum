@@ -64,3 +64,22 @@ fn bus_leg_plan_estimated_seconds_matches_router_and_is_valid() {
         "valid bus-leg route plan should pass validation"
     );
 }
+
+// ===========================================================================
+// Route-plan estimated_seconds rejection (trips.rs:147-151)
+// ===========================================================================
+
+#[test]
+fn tampered_plan_estimated_seconds_is_rejected() {
+    let mut snapshot = bus_leg_trip_fixture();
+    let plan = snapshot.active_trips[0]
+        .route_plan
+        .as_mut()
+        .expect("fixture trip has a route plan");
+    plan.estimated_seconds = -1.0;
+
+    assert!(
+        validate_snapshot(&snapshot).is_err(),
+        "a negative route-plan estimated_seconds must be rejected"
+    );
+}

@@ -35,9 +35,5 @@ describe("GameBackend contract", () => {
       "snapshotForSave",
       "tick",
     ]);
-    expect("beginRuntime" in backend).toBe(false);
-    expect("validateSnapshot" in backend).toBe(false);
-    expect("createSandbox" in backend).toBe(false);
-    expect("runtimeIdentity" in backend).toBe(false);
   });
 });

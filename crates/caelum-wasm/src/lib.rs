@@ -10,6 +10,13 @@ fn to_snapshot_js_value<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsV
     serde_wasm_bindgen::to_value(value).map_err(to_js_error)
 }
 
+/// Serialize a typed host error into a JS value, falling back to its `Display`
+/// string when serialization itself fails. Shared by the sandbox creation and
+/// reset paths so their error wire shape stays identical.
+fn error_js_value<E: Serialize>(error: &E) -> JsValue {
+    serde_wasm_bindgen::to_value(error).unwrap_or_else(to_js_error)
+}
+
 fn snapshot_js_error(error: SnapshotLoadError) -> JsValue {
     to_snapshot_js_value(&error)
         .unwrap_or_else(|_| JsValue::from_str("snapshot error serialization failed"))
@@ -48,8 +55,7 @@ impl WasmGameEngine {
     pub fn build_sandbox_snapshot(request: JsValue) -> Result<JsValue, JsValue> {
         let request: SandboxCreationRequest =
             serde_wasm_bindgen::from_value(request).map_err(to_js_error)?;
-        let snapshot = create_sandbox_snapshot(request)
-            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
+        let snapshot = create_sandbox_snapshot(request).map_err(|error| error_js_value(&error))?;
         to_snapshot_js_value(&snapshot)
     }
 
@@ -80,10 +86,7 @@ impl WasmGameEngine {
     }
 
     pub fn reset(&mut self) -> Result<JsValue, JsValue> {
-        let snapshot = self
-            .inner
-            .reset()
-            .map_err(|error| serde_wasm_bindgen::to_value(&error).unwrap_or_else(to_js_error))?;
+        let snapshot = self.inner.reset().map_err(|error| error_js_value(&error))?;
         to_snapshot_js_value(&snapshot)
     }
 

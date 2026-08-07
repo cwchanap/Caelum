@@ -14,10 +14,19 @@ fn engine_with_stop() -> GameEngine {
 
 #[test]
 fn missing_stop_access_is_normalized_during_construction() {
-    let mut snapshot = engine_with_stop().snapshot();
+    let engine = engine_with_stop();
+    let mut snapshot = engine.snapshot();
+    let expected_access = snapshot.transit.stops[0]
+        .road_access
+        .expect("fixture stop should have road access");
     snapshot.transit.stops[0].road_access = None;
 
-    assert!(GameEngine::from_snapshot(snapshot).is_ok());
+    let restored =
+        GameEngine::from_snapshot(snapshot).expect("construction normalizes stop access");
+    assert_eq!(
+        restored.snapshot().transit.stops[0].road_access,
+        Some(expected_access)
+    );
 }
 
 #[test]
