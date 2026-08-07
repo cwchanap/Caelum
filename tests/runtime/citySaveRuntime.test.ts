@@ -6,6 +6,7 @@ import {
 import type {
   CitySaveRecord,
   CitySaveStore,
+  CitySaveStoreOperation,
 } from "../../src/persistence/citySaveStore";
 import type {
   DispatchResult,
@@ -127,6 +128,88 @@ async function runtimeWithStore(
     now: options.now ?? (() => "2026-08-01T10:00:00.000Z"),
   });
 }
+
+// A runtime constructed with no CitySaveStore: every persistence mutation and
+// load must report a clean `store` failure instead of crashing or silently
+// no-op'ing. `now` is optional so the no-clock path can be exercised too.
+async function runtimeWithoutStore(options: { now?: () => string } = {}) {
+  return createGameRuntime({
+    backend: backend(),
+    initialCity: ACTIVE_CITY,
+    lastSavedAt: "2026-08-01T09:30:00.000Z",
+    ...(options.now ? { now: options.now } : {}),
+  });
+}
+
+// A runtime with a store but no save-clock (`now`). saveWorking and
+// activateNewCity both require a clock to stamp `savedAt`.
+async function runtimeWithoutClock(saveStore: CitySaveStore) {
+  return createGameRuntime({
+    backend: backend(),
+    saveStore,
+    initialCity: ACTIVE_CITY,
+    lastSavedAt: "2026-08-01T09:30:00.000Z",
+  });
+}
+
+// Wraps a delegate store so the next call to `throwOn` rejects with an Error,
+// exercising the runtime's catch-and-report path for a throwing adapter. All
+// other operations delegate unchanged.
+function throwingCitySaveStore(
+  throwOn: CitySaveStoreOperation,
+  delegate: CitySaveStore = createMemoryCitySaveStore(),
+): CitySaveStore {
+  const throwFor = (op: CitySaveStoreOperation): void => {
+    if (op === throwOn) throw new Error(`${op} threw`);
+  };
+  return {
+    listCities: async () => {
+      throwFor("listCities");
+      return delegate.listCities();
+    },
+    readCity: async (id) => {
+      throwFor("readCity");
+      return delegate.readCity(id);
+    },
+    createCity: async (rec) => {
+      throwFor("createCity");
+      return delegate.createCity(rec);
+    },
+    updateCity: async (id, update) => {
+      throwFor("updateCity");
+      return delegate.updateCity(id, update);
+    },
+    renameCity: async (id, name) => {
+      throwFor("renameCity");
+      return delegate.renameCity(id, name);
+    },
+    deleteCity: async (id) => {
+      throwFor("deleteCity");
+      return delegate.deleteCity(id);
+    },
+  };
+}
+
+// A backend whose `restoreSnapshot` always throws, used to drive the
+// rollback-coherence path where both the load restore and the rollback restore
+// fail.
+function backendWithAlwaysFailingRestore(): ReturnType<typeof backend> {
+  const b = backend();
+  Object.assign(b, {
+    restoreSnapshot: async () => {
+      throw new Error("restoreSnapshot always throws");
+    },
+  });
+  return b;
+}
+
+const SANDBOX_REQUEST = {
+  templateId: "blankGrid",
+  economyPreset: "standard",
+  startingCapital: 120_000,
+  demandMultiplier: 1,
+  moveInRate: "paused",
+} as const;
 
 describe("runtime city save store cutover", () => {
   it("saves an existing city with updateCity", async () => {
@@ -451,5 +534,349 @@ describe("runtime city save store cutover", () => {
       error: { kind: "store", error: { operation: "deleteCity" } },
     });
     await expect(dispose).resolves.toBeUndefined();
+  });
+});
+
+describe("runtime persistence error and cleanup paths", () => {
+  describe("no CitySaveStore configured", () => {
+    it("saveWorking reports a store failure with a no-store diagnostic", async () => {
+      const runtime = await runtimeWithoutStore();
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "updateCity",
+            code: "failed",
+            diagnostic: "No CitySaveStore is configured",
+          },
+        },
+      });
+    });
+
+    it("load reports a readCity store failure", async () => {
+      const runtime = await runtimeWithoutStore();
+
+      await expect(runtime.persistence.load("city-1")).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "readCity", code: "failed" },
+        },
+      });
+    });
+
+    it("activateNewCity reports a createCity store failure", async () => {
+      const runtime = await runtimeWithoutStore();
+
+      await expect(
+        runtime.persistence.activateNewCity(SANDBOX_REQUEST, NEW_CITY),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "createCity", code: "failed" },
+        },
+      });
+    });
+  });
+
+  describe("no save clock configured", () => {
+    it("saveWorking reports a store failure with a no-clock diagnostic", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithoutClock(saveStore);
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "updateCity",
+            code: "failed",
+            cityId: ACTIVE_CITY.id,
+            diagnostic: "Save clock is not configured",
+          },
+        },
+      });
+    });
+
+    it("activateNewCity reports a store failure with a no-clock diagnostic", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithoutClock(saveStore);
+
+      await expect(
+        runtime.persistence.activateNewCity(SANDBOX_REQUEST, NEW_CITY),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "createCity",
+            code: "failed",
+            cityId: NEW_CITY.id,
+            diagnostic: "Save clock is not configured",
+          },
+        },
+      });
+    });
+  });
+
+  describe("a throwing store adapter", () => {
+    it("saveWorking reports an updateCity failure when updateCity rejects", async () => {
+      const saveStore = throwingCitySaveStore("updateCity");
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore);
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "updateCity", code: "failed" },
+        },
+      });
+    });
+
+    it("renameActiveCity reports a renameCity failure when renameCity rejects", async () => {
+      const saveStore = throwingCitySaveStore("renameCity");
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore);
+
+      await expect(
+        runtime.persistence.renameActiveCity("Renamed"),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "renameCity", code: "failed" },
+        },
+      });
+    });
+
+    it("load reports a readCity failure when readCity rejects", async () => {
+      const saveStore = throwingCitySaveStore("readCity");
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore);
+
+      await expect(
+        runtime.persistence.load(ACTIVE_CITY.id),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "readCity", code: "failed" },
+        },
+      });
+    });
+
+    it("activateNewCity rolls back when createCity rejects", async () => {
+      const base = createMemoryCitySaveStore();
+      await base.createCity(record());
+      const saveStore = throwingCitySaveStore("createCity", base);
+      const runtime = await runtimeWithStore(saveStore);
+      const before = runtime.getSnapshot();
+
+      await expect(
+        runtime.persistence.activateNewCity(SANDBOX_REQUEST, NEW_CITY),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "createCity", code: "failed" },
+        },
+      });
+      // The prior active city is restored.
+      expect(runtime.getSnapshot().persistence.activeCity).toEqual(
+        before.persistence.activeCity,
+      );
+    });
+  });
+
+  describe("a throwing save clock", () => {
+    it("saveWorking reports a store failure when now() rejects", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore, {
+        now: () => {
+          throw new Error("clock threw");
+        },
+      });
+
+      await expect(runtime.persistence.saveWorking()).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "updateCity",
+            code: "failed",
+            diagnostic: "clock threw",
+          },
+        },
+      });
+    });
+
+    it("activateNewCity rolls back when now() rejects", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore, {
+        now: () => {
+          throw new Error("clock threw");
+        },
+      });
+      const before = runtime.getSnapshot();
+
+      await expect(
+        runtime.persistence.activateNewCity(SANDBOX_REQUEST, NEW_CITY),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: {
+            operation: "createCity",
+            code: "failed",
+            diagnostic: "clock threw",
+          },
+        },
+      });
+      expect(runtime.getSnapshot().persistence.activeCity).toEqual(
+        before.persistence.activeCity,
+      );
+    });
+  });
+
+  describe("disposal and dead-runtime paths", () => {
+    it("a second dispose awaits the drain and resolves", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore);
+
+      await runtime.dispose();
+      // A second dispose hits the already-dead branch and still resolves.
+      await expect(runtime.dispose()).resolves.toBeUndefined();
+    });
+
+    it("load after dispose reports runtimeUnavailable", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore);
+
+      await runtime.dispose();
+
+      await expect(
+        runtime.persistence.load(ACTIVE_CITY.id),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "loadCity" },
+        },
+      });
+    });
+
+    it("load resolves runtimeUnavailable when disposal completes during the read", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const delayed = createDelayedCitySaveStore(saveStore);
+      delayed.defer("readCity");
+      const runtime = await runtimeWithStore(delayed);
+
+      const loadPromise = runtime.persistence.load(ACTIVE_CITY.id);
+      await delayed.waitForActive("readCity");
+      const disposePromise = runtime.dispose();
+      delayed.releaseNext("readCity");
+
+      await expect(loadPromise).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "loadCity" },
+        },
+      });
+      await disposePromise;
+    });
+  });
+
+  describe("late-create cleanup after disposal", () => {
+    it("reports a backend failure when rollback restore fails", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const targetBackend = backend();
+      const delayed = createDelayedCitySaveStore(saveStore);
+      delayed.defer("createCity");
+      const runtime = await runtimeWithStore(delayed, {
+        backend: targetBackend,
+      });
+
+      const activation = runtime.persistence.activateNewCity(
+        SANDBOX_REQUEST,
+        NEW_CITY,
+      );
+      await delayed.waitForActive("createCity");
+      const dispose = runtime.dispose();
+      // The cleanup rollback restore fails (returns a validation error).
+      targetBackend.failRestoreWith({
+        kind: "validation",
+        operation: "restoreSnapshot",
+      });
+      delayed.releaseNext("createCity");
+
+      await expect(activation).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "backend",
+          error: { kind: "host", operation: "restoreSnapshot" },
+        },
+      });
+      await expect(dispose).resolves.toBeUndefined();
+    });
+
+    it("reports a store failure when cleanup deleteCity rejects", async () => {
+      const base = createMemoryCitySaveStore();
+      await base.createCity(record());
+      // deleteCity rejects (rather than returning an error result) during the
+      // late-success cleanup, exercising the catch-and-report path.
+      const throwing = throwingCitySaveStore("deleteCity", base);
+      const delayed = createDelayedCitySaveStore(throwing);
+      delayed.defer("createCity");
+      const runtime = await runtimeWithStore(delayed);
+
+      const activation = runtime.persistence.activateNewCity(
+        SANDBOX_REQUEST,
+        NEW_CITY,
+      );
+      await delayed.waitForActive("createCity");
+      const dispose = runtime.dispose();
+      delayed.releaseNext("createCity");
+
+      await expect(activation).resolves.toMatchObject({
+        status: "failed",
+        error: { kind: "store", error: { operation: "deleteCity" } },
+      });
+      await expect(dispose).resolves.toBeUndefined();
+    });
+  });
+
+  describe("load rollback coherence", () => {
+    it("goes terminal when the load restore and the rollback restore both throw", async () => {
+      const saveStore = createMemoryCitySaveStore();
+      await saveStore.createCity(record());
+      const runtime = await runtimeWithStore(saveStore, {
+        backend: backendWithAlwaysFailingRestore(),
+      });
+
+      await expect(
+        runtime.persistence.load(ACTIVE_CITY.id),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "precondition",
+          error: { code: "runtimeUnavailable", operation: "loadCity" },
+        },
+      });
+      // The runtime is terminal after a fatal rollback-coherence failure.
+      expect(runtime.getSnapshot().backendError).not.toBe(null);
+    });
   });
 });

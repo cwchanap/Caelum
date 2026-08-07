@@ -140,6 +140,11 @@ export function defineCitySaveStoreContract(
       );
     });
 
+    it("returns notFound when renaming a missing city", async () => {
+      const { store } = createHarness();
+      await expectError(store.renameCity("missing", "Renamed"), "notFound");
+    });
+
     it("preserves identity metadata during update", async () => {
       const { store } = createHarness();
       const record = makeRecord("city-1", "First", {
