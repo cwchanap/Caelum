@@ -580,6 +580,20 @@ describe("runtime persistence error and cleanup paths", () => {
         },
       });
     });
+
+    it("renameActiveCity reports a renameCity store failure", async () => {
+      const runtime = await runtimeWithoutStore();
+
+      await expect(
+        runtime.persistence.renameActiveCity("Renamed"),
+      ).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          kind: "store",
+          error: { operation: "renameCity", code: "failed" },
+        },
+      });
+    });
   });
 
   describe("no save clock configured", () => {

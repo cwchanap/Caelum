@@ -34,6 +34,17 @@ describe("sortCitySummaries", () => {
     ]);
   });
 
+  it("orders by savedAt descending regardless of id order", () => {
+    // The newer timestamp is on the city whose id would sort later, so a
+    // correct descending-timestamp order places it first.
+    const sorted = sortCitySummaries([
+      summary("city-a", "2026-08-01T10:00:00.000Z"),
+      summary("city-b", "2026-08-01T11:00:00.000Z"),
+    ]);
+
+    expect(sorted.map((item) => item.id)).toEqual(["city-b", "city-a"]);
+  });
+
   it("treats equal id and equal savedAt as equivalent (stable order)", () => {
     const tied = "2026-08-01T10:00:00.000Z";
     const a = summary("city-same", tied, { name: "A" });
