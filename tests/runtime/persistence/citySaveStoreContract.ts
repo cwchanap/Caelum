@@ -13,8 +13,9 @@ import {
  * Shared harness for running the city-save-store contract against a concrete
  * adapter. `failNext` is mandatory: every adapter must expose a deterministic
  * failure seam so the atomicity guarantees the runtime depends on (a failed
- * create commits nothing; a failed update leaves the prior record intact) are
- * exercised by the shared contract, not just by adapter-specific tests.
+ * create commits nothing; a failed update or rename leaves the prior record
+ * intact) are exercised by the shared contract, not just by adapter-specific
+ * tests.
  */
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;
@@ -233,6 +234,22 @@ export function defineCitySaveStoreContract(
       );
 
       // The full prior record — identity, savedAt, and snapshot — is intact.
+      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
+    });
+
+    // Atomicity: a failed rename must leave the complete prior record intact.
+    // The runtime's `renameActiveCity` reports the failure without re-reading
+    // or repairing the record, and a subsequent `updateCity` preserves the
+    // stored name, so a rename that committed before failing would diverge
+    // from runtime state and never be repaired.
+    it("preserves the complete prior record after failed rename", async () => {
+      const { store, failNext } = createHarness();
+      const record = makeRecord("city-1", "Original");
+      await expectOk(store.createCity(record));
+
+      failNext("renameCity", "failed");
+      await expectError(store.renameCity("city-1", "Renamed"), "failed");
+
       expect(await expectOk(store.readCity("city-1"))).toEqual(record);
     });
 
