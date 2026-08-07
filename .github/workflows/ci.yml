@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -15,6 +16,7 @@ concurrency:
 
 jobs:
   ts-build-lint:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: TS build and lint
     runs-on: ubuntu-latest
     steps:
@@ -50,6 +52,7 @@ jobs:
         run: bun run build
 
   ts-unit-test:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: TS unit test
     runs-on: ubuntu-latest
     permissions:
@@ -91,6 +94,7 @@ jobs:
           use_oidc: true
 
   playwright-test:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Playwright test
     runs-on: ubuntu-latest
     steps:
@@ -143,6 +147,7 @@ jobs:
         run: exit 1
 
   rust-build-lint:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Rust build and lint
     runs-on: ubuntu-latest
     steps:
@@ -176,6 +181,7 @@ jobs:
         run: cargo +stable build --workspace --all-targets --locked
 
   rust-unit-test:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Rust unit test
     runs-on: ubuntu-latest
     permissions:
@@ -222,6 +228,7 @@ jobs:
           use_oidc: true
 
   tauri-build:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Tauri build (${{ matrix.os-name }})
     strategy:
       fail-fast: false
