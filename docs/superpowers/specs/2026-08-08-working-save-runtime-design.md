@@ -16,7 +16,7 @@ Replace the generalized TypeScript persistence coordinator with one focused `wor
 - one current mutating-persistence error;
 - one read-only `listCities` pass-through;
 - Save, Load, New City, Rename, and Delete mutations;
-- the existing gameplay serialized queue only to drain already-admitted gameplay before a persistence mutation begins.
+- the existing gameplay serialized queue only to drain gameplay admitted before a persistence mutation begins.
 
 Delete leases, persistence FIFOs, city fences, session/load tokens, revision baselines, superseded outcomes, lifecycle reservation flags, rollback/reconciliation state, and coordinator ownership tests. Do not replace them with another manager, scheduler, mutex abstraction, command bus, state machine, registry, or service layer.
 
@@ -29,7 +29,7 @@ HPA-547 and HPA-548 are complete:
 - `GameBackend` exposes pure sandbox candidate construction and candidate-first restore through one small host contract;
 - `CitySaveStore` has only the six working-city operations required by Phase 1.
 
-The remaining runtime still carries the complexity introduced before those simplifications: `SharedPersistenceCoordinator`, lease handoff, per-city FIFO tails, city fences, current/persisted revisions, session and load tokens, supersession, foreground admission, and several lifecycle reservation flags.
+The remaining runtime still carries complexity introduced before those simplifications: `SharedPersistenceCoordinator`, lease handoff, per-city FIFO tails, city fences, current/persisted revisions, session/load tokens, supersession, foreground admission, and several lifecycle reservation flags.
 
 The real IndexedDB/native adapters and city-library UI have not landed yet. HPA-543 removes that coordination tax before downstream features depend on it.
 
@@ -42,8 +42,10 @@ The real IndexedDB/native adapters and city-library UI have not landed yet. HPA-
 - one synchronous busy admission gate for mutating persistence;
 - a read-only city-list path that stays behind the runtime boundary;
 - dirty tracking as a boolean;
-- runtime integration that blocks new gameplay mutations and new backend previews while persistence is busy;
+- runtime integration that blocks new gameplay mutations and backend previews while persistence is busy;
 - Save, Load, New City, Rename, and Delete semantics;
+- a small ambiguous-restore safety rule that detaches active identity instead of rolling back;
+- synchronous disposal that stops publication without waiting for uncancellable work;
 - removal of `persistenceCoordinator.ts` and its architecture-specific test suite;
 - removal of revision/session/supersession/fence/lease code and debug seams;
 - deletion of obsolete coordinator design/plan documents;
@@ -53,10 +55,11 @@ The real IndexedDB/native adapters and city-library UI have not landed yet. HPA-
 
 - IndexedDB persistence — HPA-343;
 - native Tauri application-data storage — HPA-344;
-- New City form/UI — HPA-345;
+- New City form/UI and no-city entry screen — HPA-345;
 - city list/Continue/delete-confirmation UI — HPA-346;
+- a “Save As current anonymous sandbox” workflow;
 - autosave, checkpoints, duplicate city, import/export, recovery, cloud sync, migrations, or multi-window ownership;
-- additional snapshot hardening for hypothetical transport failures — HPA-544 if an observed problem justifies it;
+- pre-release transport certification or repair — HPA-544 if observed failures justify it;
 - broad gameplay/runtime refactoring unrelated to persistence.
 
 ## 4. Target public state
@@ -95,7 +98,7 @@ Delete:
 - `persistedRevision`;
 - `sessionToken`;
 - `loadRequestToken`;
-- any published queued/capturing/writing/reading/restoring/rolling-back status.
+- any queued/capturing/writing/reading/restoring/rolling-back status.
 
 A caller that needs progress knows only that a mutating persistence operation is busy. That is sufficient to disable conflicting actions.
 
@@ -103,7 +106,7 @@ A caller that needs progress knows only that a mutating persistence operation is
 
 ## 5. Target controller
 
-Expose all six current save-boundary operations through the runtime so HPA-346 never needs direct store access or another controller API break:
+Expose the six current save-boundary operations through the runtime because they are already required by the known Phase 1 city-library workflow. This is not a compatibility hedge or generic future surface.
 
 ```ts
 export interface NewCityRequest {
@@ -136,15 +139,15 @@ export interface RuntimePersistenceController {
 }
 ```
 
-The error union remains small and reuses the already-reduced HPA-547 backend errors plus the HPA-548 store error. Do not create operation tokens, status objects, recovery errors, or an error-state machine.
+Keep `sandbox` required. HPA-345 already defines the no-city flow as “choose name + Standard/Creative + Blank Grid/Crossroads, build a pure candidate, persist, activate.” Do not add an unrequested second creation mode that adopts the currently running anonymous bootstrap engine.
+
+The error union remains small and reuses HPA-547 backend errors plus the HPA-548 store error. Do not create operation tokens, status objects, recovery errors, or an error-state machine.
 
 A `busy` result is an admission result only; it does not replace the currently displayed persistence error.
 
 ## 6. Module boundary
 
 `workingSaveRuntime.ts` is a closure-based helper, not a class or framework. It owns only persistence state and operations.
-
-Conceptual dependencies:
 
 ```ts
 export interface WorkingSaveRuntimeHost {
@@ -158,21 +161,17 @@ export interface WorkingSaveRuntimeHost {
   publish: () => void;
   isRuntimeDead: () => boolean;
 }
-```
 
-Conceptual returned surface:
-
-```ts
 export interface WorkingSaveRuntime {
   readonly controller: RuntimePersistenceController;
   getView(): RuntimePersistenceView;
   isBusy(): boolean;
   markDirty(): void;
-  dispose(): Promise<void>;
+  dispose(): void;
 }
 ```
 
-`installRestoredGameplay` mutates the runtime's gameplay/UI closure without publishing. The working-save module then updates active-city/dirty/error state and publishes one coherent snapshot.
+`installRestoredGameplay` mutates the runtime gameplay/UI closure without publishing. The working-save module then updates active-city/dirty/error state and publishes one coherent snapshot.
 
 The module does not import Svelte components, IndexedDB, Tauri commands, gameplay entity types, route-editor types, or rendering code.
 
@@ -180,12 +179,14 @@ The module does not import Svelte components, IndexedDB, Tauri commands, gamepla
 
 `listCities()` is a direct runtime-to-store read:
 
-1. if the runtime is dead/disposed or no store is configured, return `unavailable`;
+1. if the runtime is already dead/disposed or no store is configured, return `unavailable`;
 2. call `saveStore.listCities()`;
-3. map a store failure to `{ kind: "store" }`;
-4. return the summaries without changing `busy`, `dirty`, `activeCity`, or the shared mutating-persistence `error` field.
+3. map a store failure/throw to `{ kind: "store" }`;
+4. return the result without changing `busy`, `dirty`, `activeCity`, or the shared mutating-persistence `error` field.
 
-Do not put list behind the exclusive busy gate. A list read racing an atomic local write may observe either committed version; that is acceptable for the single-user city library and avoids inventing read coordination.
+Do not put list behind the exclusive busy gate. A list read racing an atomic local write may observe either committed version; that is acceptable for the single-user city library.
+
+Do not re-check liveness after the read. `listCities` never publishes or mutates shared runtime state, so converting a completed read into `unavailable` during teardown adds ceremony without protecting anything.
 
 The future city-library component still calls the runtime, never IndexedDB/Tauri/store adapters directly.
 
@@ -201,14 +202,14 @@ Every **mutating** persistence action goes through one local exclusive runner:
 6. Re-check live/disposed state.
 7. Perform the requested persistence workflow directly.
 8. Convert expected store/backend failures into `WorkingSaveResult` values.
-9. Catch any remaining throw at the exclusive-runner boundary and convert it to the existing generic `backend.hostFailure` shape so controller promises stay closed over `WorkingSaveResult`.
-10. Set final success/error state.
+9. Catch any remaining throw at the exclusive-runner boundary and map it to the existing `backend.hostFailure` shape.
+10. Set final success/error state only while the module is still live.
 11. Clear `busy` in `finally`.
 12. Publish final state only while the runtime is still live.
 
-No persistence queue is needed. JavaScript's synchronous assignment of `busy = true` closes mutation admission before the first `await`. Gameplay work admitted before that point drains; gameplay work attempted afterward is not admitted.
+No persistence queue is needed. JavaScript’s synchronous assignment of `busy = true` closes mutation admission before the first `await`. Gameplay work admitted before that point drains; gameplay work attempted afterward is not admitted.
 
-Store calls should still use a small local helper that catches a throwing adapter and maps it to that operation's existing `CitySaveStoreError { code: "failed" }`. The outer runner catch is last-line defense, not a substitute for correct store/backend mapping.
+Store calls use a small local helper that catches a throwing adapter and maps it to that operation’s existing `CitySaveStoreError { code: "failed" }`. The outer runner catch is defense in depth, not another taxonomy.
 
 ## 9. Gameplay and preview ordering
 
@@ -219,13 +220,15 @@ While mutating persistence is busy:
 - `queueBackend` does not admit new dispatch/tick/reset mutations;
 - do not start new route previews;
 - do not start new road-mutation previews;
-- preview-producing local UI actions must not transition the UI into a pending preview state that cannot run.
+- preview-producing local UI actions must not transition into a pending preview state that cannot run.
 
-Use `workingSave.isBusy()` directly at the existing admission/check sites. Do not preserve `previewAdmissionSuspended`, `backendAdmissionReserved`, or introduce a persistence-operation-kind flag merely to let previews run during Save/Rename/Delete. A brief preview freeze during any manual persistence action is the simpler active-development behavior.
+This intentionally freezes simulation mutations during **all manual persistence mutations**, including Save, Rename, and Delete. That is wider than today’s New-City-only reservation, but it is deliberate: manual persistence is short, single-user, and the simpler rule removes all race-specific coordination.
 
-Already-started preview work may settle while gameplay drains. Successful Load/New City performs the existing preview invalidation/epoch bump before installing the restored gameplay view, so a response from the old city cannot publish into the new city.
+Use `workingSave.isBusy()` directly at the existing admission/check sites. Do not preserve `previewAdmissionSuspended`, `backendAdmissionReserved`, or add a persistence-operation-kind flag merely to keep some previews alive.
 
-This preserves the real safety purpose of today's `previewAdmissionSuspended`/`previewRuntimeEpoch` behavior without keeping another lifecycle state machine.
+A frame callback can fire while busy, drop its tick, and leave no RAF scheduled because the frame clears its own ID before calling the runtime. The final live publication from the exclusive runner must therefore continue to call the existing `canvasHost.syncAnimationLoop()` path. Focused integration coverage must prove the animation loop is re-armed after a delayed Save finishes.
+
+Already-started preview work may settle while gameplay drains. Successful Load/New City bumps `previewRuntimeEpoch` and invalidates preview coordinators before installing the replacement gameplay view, so an old-city response cannot publish after the swap.
 
 ## 10. Dirty state
 
@@ -247,15 +250,31 @@ Rules:
 - successful Save: `dirty = false`;
 - failed Save: unchanged;
 - successful Load: `dirty = false`;
-- failed Load: unchanged;
+- definite failed Load: unchanged;
 - successful New City: `dirty = false`;
 - Rename: unchanged;
 - deleting the active city: active city becomes `null` and `dirty = false`;
-- deleting an inactive city: unchanged.
+- deleting an inactive city: unchanged;
+- ambiguous thrown restore: active city becomes `null` and `dirty = false` as a narrow overwrite-prevention measure.
 
 No revision arithmetic or monotonic persisted baseline remains.
 
-## 11. Save
+## 11. Anonymous bootstrap state
+
+Today `src/main.ts` creates a runtime without a store or active city, so the Rust default sandbox is playable during development.
+
+That anonymous sandbox is **not** a save-backed city contract. HPA-543 does not add “adopt current sandbox” or Save As semantics. When HPA-345 lands the real browser persistence entry flow, its existing `no-city startup` requirement owns the UX that asks the player to create a named Standard/Creative Blank Grid/Crossroads city before entering save-backed play.
+
+Until then:
+
+- anonymous gameplay remains disposable development state;
+- `dirty` stays false without an active city;
+- `save()` returns `noActiveCity`;
+- `createCity()` always creates the explicitly requested fresh sandbox candidate.
+
+This avoids adding a second creation path solely to preserve the temporary pre-persistence bootstrap experience.
+
+## 12. Save
 
 1. Enter the busy gate and drain gameplay.
 2. Require an active city and configured store.
@@ -275,12 +294,12 @@ saveStore.updateCity(activeCity.id, {
 
 Save never creates a missing city and never re-reads storage after a definite failure.
 
-## 12. Load
+## 13. Load
 
 1. Enter the busy gate and drain gameplay.
 2. Read `CitySaveRecord` with `saveStore.readCity(cityId)`.
 3. Pass `record.snapshot` directly to `backend.restoreSnapshot`.
-4. If restore returns `{ ok: false }`, leave the public gameplay snapshot and active city unchanged.
+4. If restore returns `{ ok: false }`, leave public gameplay and active identity unchanged.
 5. On success, invalidate old previews, install the restored gameplay snapshot without publishing, set:
 
 ```ts
@@ -295,9 +314,9 @@ dirty = false;
 
 There is no per-city FIFO or source-city fence. The busy gate prevents Save/Rename/Delete/New City from overlapping this Load.
 
-## 13. New City
+## 14. New City
 
-`createCity({ name, sandbox })` owns ID/time generation so the future UI submits only player choices.
+`createCity({ name, sandbox })` owns ID/time generation so the HPA-345 UI submits only player choices.
 
 1. Enter the busy gate and drain gameplay.
 2. Generate one opaque ID with `createCityId()`.
@@ -307,30 +326,37 @@ There is no per-city FIFO or source-city fence. The busy gate prevents Save/Rena
 6. If create returns conflict/failure, current gameplay remains untouched.
 7. Activate the already-persisted candidate with `backend.restoreSnapshot(candidate)`.
 8. On success, install the returned gameplay snapshot, publish the returned `CitySummary` as active, and clear dirty.
-9. If activation returns `{ ok: false }`, keep the previous public gameplay/active city and leave the created city record available for a later Load.
+9. If activation returns `{ ok: false }`, keep previous public gameplay/identity and leave the created city record available for later Load.
 
 Do not auto-delete the new record, finalize it, inspect it, repair it, or enter recovery.
 
-A create conflict is returned to the caller. The next New City attempt naturally receives a newly generated ID; do not add an automatic retry loop.
+A create conflict is returned to the caller. A later New City attempt naturally receives a new generated ID; do not add an automatic retry loop.
 
-## 14. Ambiguous thrown host failures
+## 15. Ambiguous thrown restore safety
 
-HPA-547 intentionally distinguishes a definite `{ ok: false }` restore from a thrown host/transport failure. The current runtime rolls back after a thrown restore because completion is ambiguous.
+HPA-547 distinguishes a definite `{ ok: false }` restore from a thrown host/transport failure. The current runtime performs canonical rollback because completion may be ambiguous. HPA-543 removes that rollback/reconciliation machinery, but it must not leave a stale city ID attached to an engine that may already have swapped.
 
-HPA-543 deliberately removes that rollback/reconciliation branch.
+For **Load and New City activation only**:
 
-For both Load and New City:
-
-- a returned `{ ok: false }` is treated as definite non-mutation and preserves current gameplay;
-- a thrown backend/IPC failure becomes the current concise `backend.hostFailure` result;
+- returned `{ ok: false }` means definite non-mutation and preserves current gameplay/identity;
+- a thrown `restoreSnapshot` maps to the concise `backend.hostFailure` result;
+- on that thrown path, set `activeCity = null` and `dirty = false` before final publication;
 - do not capture a prior canonical snapshot solely for rollback;
-- do not auto-restore, re-read storage, auto-delete, enter fatal recovery, or reconcile identities.
+- do not auto-restore, re-read storage, auto-delete, finalize, repair, or enter fatal recovery.
 
-The public TypeScript snapshot/active-city identity is not changed on the thrown path. The host's actual completion is not certified after a transport exception. If real testing shows this matters, HPA-544 may harden the observed failure mode. Do not retain a large active-development state machine for hypothetical transport ambiguity.
+Detaching identity is a narrow safety invariant, not a recovery state. If the host actually completed the swap, the next tick may expose target-city gameplay, but Save cannot overwrite the previous city because no city ID is active. If the host did not complete the swap, the player still needs to Load a city again before saving. Both outcomes prefer an explicit retry over silent cross-city overwrite.
 
-## 15. Rename
+Focused tests must prove:
 
-Expose `renameCity(cityId, name)`, not active-only rename.
+- thrown Load restore resolves `hostFailure` and leaves `activeCity === null`;
+- thrown New City activation leaves the newly created record available and `activeCity === null`;
+- a subsequent `save()` returns `noActiveCity` rather than updating the formerly active city.
+
+HPA-544 may harden an observed transport failure later. Do not retain the current rollback state machine for active development.
+
+## 16. Rename
+
+Expose `renameCity(cityId, name)` because HPA-346 already needs renaming from the city library.
 
 1. Enter the busy gate and drain gameplay.
 2. Call `saveStore.renameCity(cityId, name)`.
@@ -338,11 +364,9 @@ Expose `renameCity(cityId, name)`, not active-only rename.
 4. If inactive, leave current gameplay/persistence identity unchanged.
 5. Dirty is unchanged.
 
-This directly supports the later city library without another runtime API break.
+## 17. Delete
 
-## 16. Delete
-
-Expose `deleteCity(cityId)`.
+Expose `deleteCity(cityId)` because HPA-346 already needs deleting active and inactive cities.
 
 1. Enter the busy gate and drain gameplay.
 2. Call `saveStore.deleteCity(cityId)`.
@@ -350,13 +374,13 @@ Expose `deleteCity(cityId)`.
 4. If active, set `activeCity = null` and `dirty = false` only after storage success.
 5. Leave the in-memory engine snapshot untouched; the future city-library UI stops presenting it as an active city until another Load/New City succeeds.
 
-The one-confirmation UI belongs to HPA-346. HPA-543 implements only runtime semantics and busy exclusion.
+Delete confirmation belongs to HPA-346. HPA-543 implements only runtime semantics and busy exclusion.
 
 Remove `detachActiveCity`; Delete owns the current workflow that intentionally clears active identity without replacing gameplay.
 
-## 17. Runtime integration
+## 18. Runtime integration
 
-`createGameRuntime.ts` remains the gameplay/runtime composition root. Refactor today's `commitLoadedSnapshot` into one small no-publish installation helper:
+`createGameRuntime.ts` remains the gameplay/runtime composition root. Refactor today’s `commitLoadedSnapshot` into one no-publish installation helper:
 
 ```ts
 const installRestoredGameplay = (snapshot: RustGameSnapshot): void => {
@@ -374,9 +398,9 @@ const installRestoredGameplay = (snapshot: RustGameSnapshot): void => {
 };
 ```
 
-The exact body follows the current successful Load/New City cleanup that has a real UI consumer. Do not preserve active-city identity, revision/token resets, or exact transient rollback behavior inside this helper.
+The exact body follows current successful Load/New City cleanup that has a real UI consumer. Keep the `previewRuntimeEpoch` bump: current ordinary Load does not bump it, and the HPA-543 installation boundary should close that staleness gap rather than preserve it.
 
-Runtime construction provides defaults unless tests inject deterministic functions:
+Runtime construction provides simple defaults unless tests inject deterministic functions:
 
 ```ts
 const now = options.now ?? (() => new Date().toISOString());
@@ -386,42 +410,43 @@ const createCityId =
 
 No ID service or dependency-injection framework is introduced.
 
-## 18. Disposal and fatal runtime shutdown
+## 19. Disposal and fatal runtime shutdown
 
-The working-save runtime tracks at most one in-flight mutating persistence promise.
+Disposal is synchronous and intentionally does **not** wait for uncancellable gameplay/store/backend work.
 
-`dispose()`:
+`workingSave.dispose()`:
 
-- marks the working-save module disposed synchronously;
-- prevents new mutating persistence admission;
-- waits for the one in-flight mutation if present;
-- never publishes completion/error after disposal.
-
-A read-only `listCities()` may finish after disposal, but it never publishes shared runtime state. It re-checks liveness before returning a successful result and otherwise returns `unavailable`.
+- sets `disposed = true` synchronously;
+- prevents new persistence admission;
+- returns `void`;
+- does not track or await an in-flight mutation;
+- late completions may settle their own promises but cannot publish or commit persistence view state after disposal.
 
 `createGameRuntime.dispose()`:
 
-- marks gameplay runtime dead;
+- sets `dead = true` synchronously;
+- calls `workingSave.dispose()`;
 - stops canvas/preview work;
-- awaits gameplay drain and working-save disposal;
-- has no persistence lease to close or release.
+- returns `void`;
+- does not drain `gameplayQueue` or persistence work;
+- has no lease, ownership handoff, or replacement-runtime guarantee.
 
-If fatal gameplay backend failure begins while a persistence request is waiting for already-admitted gameplay to drain, the working-save operation observes dead/disposed after the drain and exits without starting the next store/backend persistence step.
+This matches the project’s explicit single-runtime scope. If a future supported workflow needs two runtimes to share one native engine safely, HPA-544 or a concrete feature can add the minimum observed handoff rule then.
 
-No outstanding counter, foreground admission registry, lease handoff, pinned state, or drain-all coordinator is retained.
+A late backend failure after disposal must still not render or notify subscribers. Architecture-only tests that assert disposal waits for work or that a replacement runtime immediately reuses the same backend are deleted.
 
-## 19. Error/throw discipline
+## 20. Error/throw discipline
 
 The public persistence controller resolves `WorkingSaveResult` for ordinary runtime/store/backend failures; it does not leak raw promise rejections from expected call sites.
 
 Use two levels only:
 
 1. narrow wrappers around `CitySaveStore` calls convert a throwing adapter to the matching `{ operation, code: "failed" }` store error;
-2. backend calls convert thrown transport/host errors to the existing `{ code: "hostFailure", diagnostic }` backend error.
+2. backend calls convert thrown transport/host errors to `{ code: "hostFailure", diagnostic }`.
 
-The exclusive-runner outer `catch` is defense in depth for any remaining throw from gameplay drain or a missed call site and maps it to the same generic backend host-failure result. Do not add another error taxonomy solely for this fallback.
+The exclusive-runner outer `catch` is defense in depth for a gameplay-drain throw or missed call site and maps it to the same generic host-failure result. Do not add another error taxonomy.
 
-## 20. Testing strategy
+## 21. Testing strategy
 
 Keep tests proportional to player-visible behavior.
 
@@ -429,30 +454,33 @@ Keep tests proportional to player-visible behavior.
 
 Cover:
 
-- list cities: empty/populated, store failure, and no-store unavailable;
+- list cities: empty/populated, store failure, no-store unavailable, and successful read result retained even if disposal happens while reading;
 - busy suppresses a second conflicting mutation while one store call is deferred;
-- applied gameplay marks dirty through runtime integration;
 - Save success clears dirty and updates saved time;
 - Save failure preserves dirty and the prior record;
 - Load success installs state and active summary;
 - failed read/definite restore preserves current public gameplay and identity;
-- thrown restore resolves a backend failure, clears busy, and does not reject the controller promise;
+- thrown Load restore resolves backend failure, clears active identity, and prevents a later Save from targeting the old ID;
 - New City success;
 - create conflict/failure leaves current gameplay unchanged;
 - definite activation failure leaves the created record available and current public gameplay/identity unchanged;
+- thrown New City activation leaves the created record available and clears active identity;
 - Rename active and inactive city;
 - Delete active and inactive city;
-- disposal during one delayed mutation produces no late publication.
+- synchronous disposal during a delayed mutation causes no late publication/state commit.
 
 ### Runtime integration tests
 
 Cover only wiring that the standalone module cannot prove:
 
 - busy blocks new gameplay mutation admission until persistence completes;
-- busy blocks new route/road preview admission without leaving a pending preview state;
+- manual Save/Rename/Delete freeze mutation admission by design;
+- a frame tick dropped while busy is followed by a re-armed animation loop after persistence completes;
+- busy blocks new route/road preview admission without leaving pending preview state;
 - a preview started before Load/New City cannot publish after successful engine swap;
 - applied dispatch/tick/reset marks dirty for an active city;
-- successful restore installs gameplay and persistence identity in one publication.
+- successful restore installs gameplay and persistence identity in one publication;
+- disposal is synchronous and suppresses post-disposal render/subscriber publication without waiting for blocked backend work.
 
 ### Delete architecture-only tests
 
@@ -466,35 +494,40 @@ Remove tests whose sole subject is:
 - session/load token supersession;
 - same-city/cross-city race matrices;
 - runtime recreation ownership;
+- disposal waiting for uncancellable work;
 - rollback/fatal-coherence after ambiguous host completion.
 
-Retain `delayedCitySaveStore.ts` only as a small test helper for focused busy/disposal cases. Remove unused mutation-order or multi-operation machinery if rewritten tests no longer need it.
+Retain `delayedCitySaveStore.ts` only as a small helper for focused busy/disposal tests. Remove unused mutation-order or multi-operation machinery if rewritten tests no longer need it.
 
-## 21. Documentation cleanup
+## 22. Documentation cleanup
 
-HPA-548's store contract remains authoritative for `CitySaveRecord`, `CitySummary`, six operations, atomicity, and error codes. Its old runtime-bridge section describes the temporary coordinator-era consumer and is superseded by this HPA-543 design.
+HPA-548’s store contract remains authoritative for `CitySaveRecord`, `CitySummary`, six operations, atomicity, and error codes. Its old runtime-bridge section describes the temporary coordinator-era consumer and is superseded by this HPA-543 design.
 
-The implementation must stamp that HPA-548 runtime section as superseded rather than letting HPA-343/HPA-345/HPA-346 copy the obsolete controller.
+The implementation stamps that HPA-548 runtime section as superseded rather than letting downstream work copy the obsolete controller.
 
-Delete the obsolete HPA-499 coordinator plan/design documents because their architecture is intentionally removed. Keep historical Git history as the archive.
+Delete the obsolete HPA-499 coordinator plan/design documents because their architecture is intentionally removed. Keep Git history as the archive.
 
-## 22. File impact
+## 23. File impact
 
 ### Create
 
-- `src/runtime/workingSaveRuntime.ts`
-- `tests/runtime/workingSaveRuntime.test.ts`
+- `src/runtime/workingSaveRuntime.ts`;
+- `tests/runtime/workingSaveRuntime.test.ts`.
 
 ### Modify
 
-- `src/runtime/createGameRuntime.ts`
-- `src/runtime/types.ts`
+- `src/runtime/createGameRuntime.ts`;
+- `src/runtime/types.ts`;
 - `src/persistence/citySaveStore.ts` — remove stale rollback-dependent contract comments only;
-- `src/App.svelte` — remove lease-oriented teardown comments only if still present;
-- direct runtime/UI test fixtures using persistence types;
+- `src/App.svelte` — replace lease/drain teardown commentary with synchronous terminal disposal;
+- `tests/runtime/citySaveRuntime.test.ts`;
+- `tests/runtime/gameRuntime.test.ts`;
+- `tests/runtime/postDisposalBackendFailure.test.ts` — retain only current live-failure/no-late-publication behavior and remove wait/replacement-runtime assertions;
+- `tests/runtime/persistence/citySaveStoreContract.ts` — remove stale `rollbackNewCity`/`saveWorking`/`renameActiveCity` prose while preserving store atomicity assertions;
+- `tests/ui/appShell.test.ts` and other direct persistence-type fixtures;
 - `tests/runtime/delayedCitySaveStore.ts` if its helper surface can shrink;
-- `docs/architecture.md` / `CLAUDE.md` where they describe the removed coordinator;
-- `docs/superpowers/specs/2026-08-05-six-operation-city-save-store-design.md` — mark runtime bridge superseded by HPA-543.
+- `docs/architecture.md` / `CLAUDE.md` where they describe the removed coordinator/rollback/disposal semantics;
+- `docs/superpowers/specs/2026-08-05-six-operation-city-save-store-design.md` — keep the existing supersession note for the runtime bridge.
 
 ### Delete
 
@@ -505,19 +538,24 @@ Delete the obsolete HPA-499 coordinator plan/design documents because their arch
 
 Do not delete store contract tests or host-backend tests that still protect the two current implementations.
 
-## 23. Acceptance criteria
+## 24. Acceptance criteria
 
 - `RuntimePersistenceController` exposes `listCities`, Save, Load, New City, Rename, and Delete; UI never needs direct `CitySaveStore` access.
+- The six methods are justified by current HPA-345/HPA-346 workflows, not future compatibility.
 - `RuntimePersistenceView` contains only active city, busy, dirty, and one mutating-persistence error.
 - Mutating persistence uses one busy gate, not a coordinator/queue framework.
-- `listCities` is read-only and does not add loading/busy lifecycle state.
-- New gameplay mutations and new backend previews are not admitted while persistence is busy.
+- `listCities` is read-only and does not add loading/busy lifecycle state or post-read liveness ceremony.
+- New gameplay mutations and backend previews are not admitted while persistence is busy.
+- Manual Save/Rename/Delete intentionally freeze simulation mutation admission and the animation loop resumes afterward.
 - Successful engine swap invalidates old preview epochs before publishing the new city.
 - Dirty is a literal boolean and no revision baseline remains.
+- The anonymous bootstrap sandbox remains disposable; HPA-345 owns named-city entry and no Save-As-current mode is added.
 - New City persists a pure candidate before activation and needs no rollback.
 - Definite failed Save/Load preserves prior committed/public state as applicable.
+- A thrown restore clears active identity before publication so a later Save cannot overwrite the wrong city.
 - Thrown host failures resolve through the small error union and do not trigger rollback/reconciliation.
-- Rename/Delete operate on any city ID.
+- Disposal is synchronous, never waits for uncancellable work, and suppresses late publication.
+- Rename/Delete operate on arbitrary city IDs because they are current HPA-346 operations.
 - No module-global ownership or storage registry remains.
 - No revision/session/supersession/pending/finalize/generation machinery remains.
 - Persistence orchestration is isolated in one small current-feature module.
@@ -525,25 +563,29 @@ Do not delete store contract tests or host-backend tests that still protect the 
 - Unrelated runtime code is not broadly refactored.
 - Production/test code shows material net deletion without removing multi-city behavior.
 
-## 24. Non-goals
+## 25. Non-goals
 
 - Checkpoints, autosave, background persistence, recovery, import/export, cloud sync, migrations, or multi-instance correctness.
+- Save As/adopt-current anonymous bootstrap gameplay.
 - Broad UI/runtime redesign.
 - Formal architecture frameworks.
 - Per-operation busy state solely to keep previews alive during some persistence mutations.
 - Pre-release certification of ambiguous native transport completion.
 
-## 25. Review guardrails
+## 26. Review guardrails
 
 Reject an implementation that:
 
 - replaces `SharedPersistenceCoordinator` with a differently named manager/lock/service framework;
 - lets Svelte call a save-store adapter directly for city listing;
 - adds a second persistence queue or operation-kind state machine;
+- makes `NewCityRequest.sandbox` optional to add an unrequested bootstrap-adoption mode;
 - preserves session/revision/supersession/fence machinery under new names;
 - lets previews enter the backend while a persistence mutation is active;
+- leaves a city ID active after a thrown ambiguous restore;
+- makes disposal wait for uncancellable work or preserves replacement-runtime ownership tests;
 - leaks ordinary backend/store throws past the `WorkingSaveResult` boundary;
-- reintroduces rollback/reconciliation for hypothetical host ambiguity;
+- reintroduces rollback/reconciliation for host ambiguity;
 - adds compatibility, migration, recovery, security, or multi-window work;
 - ports architecture-only race matrices into the new module;
 - broadens this ticket into IndexedDB/Tauri/UI implementation.
