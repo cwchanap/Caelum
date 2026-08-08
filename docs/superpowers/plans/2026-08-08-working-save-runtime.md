@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Delete the generalized persistence coordinator and replace it with one small working-save runtime that uses active city + busy + dirty for Save, Load, New City, Rename, and Delete.
+**Goal:** Delete the generalized persistence coordinator and replace it with one small working-save runtime that uses active city + busy + dirty for the six current city-save operations.
 
-**Architecture:** Keep the existing serialized gameplay queue because it has a current mutation-ordering purpose. Persistence uses no queue of its own: one synchronous `busy` gate blocks new gameplay mutation admission, drains already-admitted gameplay, and runs exactly one store/backend workflow. `workingSaveRuntime.ts` owns only `CitySummary | null`, `busy`, `dirty`, one error, and one in-flight promise for disposal. Successful Load/New City installs the Rust snapshot through a narrow callback back into `createGameRuntime`.
+**Architecture:** Keep the existing serialized gameplay queue because it has a current mutation-ordering purpose. Mutating persistence uses no queue of its own: one synchronous `busy` gate blocks new gameplay/backend-preview admission, drains already-admitted gameplay, and runs exactly one store/backend workflow. `listCities` is a read-only runtime-to-store pass-through and does not participate in the exclusive gate. `workingSaveRuntime.ts` owns only `CitySummary | null`, `busy`, `dirty`, one mutating-persistence error, and one in-flight mutation promise for disposal.
 
 **Tech Stack:** TypeScript 5.8, Svelte 5, Vitest 3, Bun, Rust-backed `GameBackend`, Playwright, Cargo.
 
@@ -13,10 +13,12 @@
 - Breaking change only: no old persistence controller aliases, compatibility adapter, migration, or dual API.
 - `RuntimePersistenceView` contains only `activeCity`, `busy`, `dirty`, and `error`.
 - Reuse `CitySummary` as the active-city shape; do not keep `ActiveCityIdentity` or `NewCityIdentity`.
-- Persistence controller exposes only `save`, `load`, `createCity`, `renameCity`, and `deleteCity`.
+- Persistence controller exposes exactly `listCities`, `save`, `load`, `createCity`, `renameCity`, and `deleteCity`.
+- `listCities` stays behind the runtime boundary but is not serialized behind mutating persistence.
 - Keep the existing gameplay `createSerializedQueue`; do not create a persistence queue, mutex service, scheduler, manager class, command bus, registry, or state machine.
+- While mutating persistence is busy, do not admit new gameplay mutations or new route/road backend previews.
 - New City persists the pure sandbox candidate before activation.
-- Returned `{ ok: false }` restore failures preserve the current public runtime; thrown host failures are surfaced without rollback/reconciliation.
+- Returned `{ ok: false }` restore failures preserve the current public runtime; thrown host failures resolve through `WorkingSaveResult` without rollback/reconciliation.
 - Delete leases, persistence FIFOs, city fences, revision/session/load tokens, superseded outcomes, lifecycle reservation flags, and rollback-coherence machinery.
 - Delete tests whose only purpose is proving removed architecture. Do not preserve test counts.
 - IndexedDB/Tauri adapters and city UI remain downstream work.
@@ -40,8 +42,9 @@
 - `tests/runtime/citySaveRuntime.test.ts`
 - `tests/runtime/gameRuntime.test.ts`
 - `tests/ui/appShell.test.ts`
-- `tests/runtime/delayedCitySaveStore.ts` only if focused busy/disposal tests still need the helper
+- `tests/runtime/delayedCitySaveStore.ts` if the focused busy/disposal tests can use a smaller helper
 - `docs/architecture.md` and/or `CLAUDE.md` only where they describe the removed persistence coordinator
+- `docs/superpowers/specs/2026-08-05-six-operation-city-save-store-design.md` to mark its runtime bridge superseded by HPA-543
 
 ### Delete
 
@@ -50,17 +53,17 @@
 - `docs/superpowers/plans/2026-08-01-runtime-persistence-coordinator.md`
 - `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md`
 
-### Search-only consumers
+### Initial search
 
 Run before editing:
 
 ```bash
 rg -n \
-  "persistenceCoordinator|SharedPersistenceCoordinator|PersistenceLease|ActiveCityIdentity|NewCityIdentity|saveWorking|renameActiveCity|detachActiveCity|currentRevision|persistedRevision|sessionToken|loadRequestToken|backendAdmissionReserved|lifecycleTransitionReserved|detachReserving|saveStatus|loadStatus|lifecycleStatus|lastSavedAt|debugEnqueueCityPersistence" \
+  "persistenceCoordinator|SharedPersistenceCoordinator|PersistenceLease|ActiveCityIdentity|NewCityIdentity|saveWorking|renameActiveCity|detachActiveCity|activateNewCity|PersistenceOperationResult|currentRevision|persistedRevision|sessionToken|loadRequestToken|backendAdmissionReserved|previewAdmissionSuspended|lifecycleTransitionReserved|detachReserving|saveStatus|loadStatus|lifecycleStatus|lastSavedAt|commitLoadedSnapshot|debugEnqueueCityPersistence" \
   src tests docs CLAUDE.md
 ```
 
-Change only direct HPA-543 consumers. Do not refactor unrelated files because a broad search mentions words such as `superseded` or `revision` for route editing.
+Change only direct HPA-543 consumers. Do not refactor unrelated `revision`/`superseded` concepts used by route editing or other gameplay features.
 
 ---
 
@@ -72,15 +75,15 @@ Build the complete new persistence module beside the current coordinator. Do not
 - Create: `src/runtime/workingSaveRuntime.ts`
 - Create: `tests/runtime/workingSaveRuntime.test.ts`
 - Reuse: `src/persistence/citySaveStore.ts`
-- Reuse: `tests/runtime/delayedCitySaveStore.ts`
+- Reuse/trim: `tests/runtime/delayedCitySaveStore.ts`
 
 **Interfaces:**
-- Consumes: `GameBackend`, `RustGameSnapshot`, `SandboxCreationRequest`, `SnapshotError`, `SandboxHostError`, `SandboxCreationError`, `CitySaveStore`, `CitySaveStoreError`, `CitySummary`
+- Consumes: `GameBackend`, `RustGameSnapshot`, `SandboxCreationRequest`, `SnapshotError`, `SandboxHostError`, `SandboxCreationError`, `CitySaveStore`, `CitySaveStoreError`, `CitySaveStoreOperation`, `CitySummary`
 - Produces: `RuntimePersistenceView`, `WorkingSaveError`, `WorkingSaveResult<T>`, `RuntimePersistenceController`, `WorkingSaveRuntime`, `createWorkingSaveRuntime(...)`
 
-- [ ] **Step 1: Write the target public contract and test fixture imports**
+- [ ] **Step 1: Add the target public types**
 
-Create the module with these exact public shapes:
+Create `src/runtime/workingSaveRuntime.ts` with these public shapes:
 
 ```ts
 export interface RuntimePersistenceView {
@@ -108,6 +111,7 @@ export type WorkingSaveResult<T> =
   | { ok: false; error: WorkingSaveError };
 
 export interface RuntimePersistenceController {
+  listCities(): Promise<WorkingSaveResult<CitySummary[]>>;
   save(): Promise<WorkingSaveResult<CitySummary>>;
   load(cityId: string): Promise<WorkingSaveResult<CitySummary>>;
   createCity(request: NewCityRequest): Promise<WorkingSaveResult<CitySummary>>;
@@ -117,11 +121,7 @@ export interface RuntimePersistenceController {
   ): Promise<WorkingSaveResult<CitySummary>>;
   deleteCity(cityId: string): Promise<WorkingSaveResult<void>>;
 }
-```
 
-Define the host boundary:
-
-```ts
 export interface WorkingSaveRuntimeHost {
   backend: GameBackend;
   saveStore?: CitySaveStore;
@@ -143,9 +143,11 @@ export interface WorkingSaveRuntime {
 }
 ```
 
-- [ ] **Step 2: Add failing tests for the minimal state model**
+- [ ] **Step 2: Add minimal state tests**
 
-In `tests/runtime/workingSaveRuntime.test.ts`, build a direct host fixture with a memory store and backend stub. Add these first assertions:
+In `tests/runtime/workingSaveRuntime.test.ts`, build a direct host fixture with a memory store and backend stub.
+
+First assertions:
 
 ```ts
 expect(runtime.getView()).toEqual({
@@ -164,14 +166,14 @@ Also prove `markDirty()` is a no-op when `initialCity` is `null`.
 Run:
 
 ```bash
-bun run test -- tests/runtime/workingSaveRuntime.test.ts
+bunx vitest run --project runtime tests/runtime/workingSaveRuntime.test.ts
 ```
 
-Expected: FAIL because `workingSaveRuntime.ts` is not implemented yet.
+Expected: FAIL until the module/state implementation exists.
 
-- [ ] **Step 3: Implement one local exclusive runner**
+- [ ] **Step 3: Implement closure-local state and liveness**
 
-Use closure-local state only:
+Use only:
 
 ```ts
 let activeCity = host.initialCity;
@@ -179,7 +181,7 @@ let busy = false;
 let dirty = false;
 let error: WorkingSaveError | null = null;
 let disposed = false;
-let inFlight: Promise<void> | null = null;
+let inFlightMutation: Promise<void> | null = null;
 
 const isLive = (): boolean => !disposed && !host.isRuntimeDead();
 
@@ -188,7 +190,57 @@ const publishIfLive = (): void => {
 };
 ```
 
-Implement the admission skeleton:
+`getView()` returns detached references as needed; `isBusy()` returns `busy`; `markDirty()` sets `dirty = true` only when `activeCity !== null`.
+
+- [ ] **Step 4: Add narrow store/backend throw mappers**
+
+Use one store helper so a throwing adapter stays a store failure:
+
+```ts
+const callStore = async <T>(
+  operation: CitySaveStoreOperation,
+  cityId: string | undefined,
+  call: () => Promise<CitySaveStoreResult<T>>,
+): Promise<WorkingSaveResult<T>> => {
+  try {
+    const result = await call();
+    return result.ok
+      ? { ok: true, value: result.value }
+      : { ok: false, error: { kind: "store", error: result.error } };
+  } catch (thrown: unknown) {
+    return {
+      ok: false,
+      error: {
+        kind: "store",
+        error: {
+          operation,
+          code: "failed",
+          ...(cityId === undefined ? {} : { cityId }),
+          diagnostic: thrown instanceof Error ? thrown.message : String(thrown),
+        },
+      },
+    };
+  }
+};
+```
+
+Use a backend-host-failure mapper for thrown backend/runtime calls:
+
+```ts
+const backendHostFailure = (thrown: unknown): WorkingSaveError => ({
+  kind: "backend",
+  error: {
+    code: "hostFailure",
+    diagnostic: thrown instanceof Error ? thrown.message : String(thrown),
+  },
+});
+```
+
+Do not add another error taxonomy.
+
+- [ ] **Step 5: Implement the mutating exclusive runner with an outer catch**
+
+The runner owns `busy`, gameplay drain, final publication, and closed result behavior:
 
 ```ts
 const runExclusive = <T>(
@@ -206,14 +258,21 @@ const runExclusive = <T>(
   publishIfLive();
 
   const operation = (async (): Promise<WorkingSaveResult<T>> => {
-    await host.awaitGameplayIdle();
-    if (!isLive()) {
-      return { ok: false, error: { kind: "unavailable" } };
+    try {
+      await host.awaitGameplayIdle();
+      if (!isLive()) {
+        return { ok: false, error: { kind: "unavailable" } };
+      }
+      return await work();
+    } catch (thrown: unknown) {
+      if (!isLive()) {
+        return { ok: false, error: { kind: "unavailable" } };
+      }
+      return { ok: false, error: backendHostFailure(thrown) };
     }
-    return work();
   })();
 
-  inFlight = operation.then(
+  inFlightMutation = operation.then(
     () => undefined,
     () => undefined,
   );
@@ -226,17 +285,60 @@ const runExclusive = <T>(
     })
     .finally(() => {
       busy = false;
-      inFlight = null;
+      inFlightMutation = null;
       publishIfLive();
     });
 };
 ```
 
-`getView()` returns the four fields. `markDirty()` sets `dirty = true` only when `activeCity !== null`. `dispose()` sets `disposed = true` synchronously and awaits the current `inFlight` promise if one exists.
+Add a regression test where a host callback throws and assert:
 
-- [ ] **Step 4: Add and implement Save behavior**
+```ts
+await expect(operation).resolves.toMatchObject({
+  ok: false,
+  error: { kind: "backend", error: { code: "hostFailure" } },
+});
+expect(runtime.getView().busy).toBe(false);
+```
 
-Add tests for:
+No public controller method may leak an ordinary expected rejection.
+
+- [ ] **Step 6: Add `listCities` outside the busy gate**
+
+Tests:
+
+- empty list;
+- populated list;
+- store `failed` result;
+- throwing store maps to store `failed`;
+- no store returns `unavailable`;
+- a deferred Save may be busy while `listCities()` still resolves.
+
+Implementation:
+
+```ts
+const listCities = async (): Promise<WorkingSaveResult<CitySummary[]>> => {
+  if (!isLive() || host.saveStore === undefined) {
+    return { ok: false, error: { kind: "unavailable" } };
+  }
+
+  const result = await callStore(
+    "listCities",
+    undefined,
+    () => host.saveStore!.listCities(),
+  );
+
+  return isLive()
+    ? result
+    : { ok: false, error: { kind: "unavailable" } };
+};
+```
+
+Do not set `busy` or shared `error` from this read path.
+
+- [ ] **Step 7: Add and implement Save behavior**
+
+Tests:
 
 ```ts
 runtime.markDirty();
@@ -246,7 +348,7 @@ expect(runtime.getView().dirty).toBe(false);
 expect(runtime.getView().activeCity?.savedAt).toBe(NEXT_SAVED_AT);
 ```
 
-and failure:
+Failure:
 
 ```ts
 runtime.markDirty();
@@ -258,71 +360,79 @@ await expect(runtime.controller.save()).resolves.toMatchObject({
 expect(runtime.getView().dirty).toBe(true);
 ```
 
-Implement Save exactly as:
+Implement inside `runExclusive`:
 
-1. reject `unavailable` when no store;
-2. reject `noActiveCity` when detached;
-3. `await backend.snapshotForSave()`;
-4. convert thrown backend errors to the existing `hostFailure` backend shape;
-5. generate `savedAt = host.now()`;
-6. call `saveStore.updateCity(activeCity.id, { savedAt, snapshot })`;
-7. on success assign the returned `CitySummary` to `activeCity` and `dirty = false`;
-8. on failure keep active city and dirty unchanged.
+1. require store + active city;
+2. call `backend.snapshotForSave()` with thrown backend -> `hostFailure`;
+3. generate `savedAt = host.now()`;
+4. `callStore("updateCity", activeCity.id, ...)`;
+5. on success assign returned summary and clear dirty;
+6. on failure leave active city/dirty unchanged.
 
-Do not create on `notFound` and do not re-read after failure.
+Save never creates on `notFound` and never re-reads after a definite failure.
 
-- [ ] **Step 5: Add and implement Load behavior**
+- [ ] **Step 8: Add and implement Load behavior**
 
-Add a success test that records the snapshot passed to `installRestoredGameplay` and verifies the returned summary becomes active and clean.
+Success test records the snapshot passed to `installRestoredGameplay` and verifies the record summary becomes active and clean.
 
-Add failure tests for `readCity` and returned `{ ok: false }` restore. In both cases assert the previous active city and installed gameplay remain unchanged.
+Failure tests:
 
-Implement:
+- `readCity` failure;
+- returned `{ ok: false }` restore;
+- thrown `restoreSnapshot` resolves `{ ok: false, error: { kind: "backend", ... } }` and does not reject.
+
+Implementation:
 
 ```ts
-const stored = await saveStore.readCity(cityId);
-if (!stored.ok) return storeFailure(stored.error);
+const stored = await callStore("readCity", cityId, () => saveStore.readCity(cityId));
+if (!stored.ok) return stored;
 
-const restored = await host.backend.restoreSnapshot(stored.value.snapshot);
-if (!restored.ok) return backendFailure(restored.error);
-if (!isLive()) return unavailable();
+let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+try {
+  restored = await host.backend.restoreSnapshot(stored.value.snapshot);
+} catch (thrown: unknown) {
+  return { ok: false, error: backendHostFailure(thrown) };
+}
+if (!restored.ok) {
+  return { ok: false, error: { kind: "backend", error: restored.error } };
+}
+if (!isLive()) return { ok: false, error: { kind: "unavailable" } };
 
 host.installRestoredGameplay(restored.snapshot);
-activeCity = {
-  ...stored.value.city,
-  savedAt: stored.value.savedAt,
-};
+activeCity = { ...stored.value.city, savedAt: stored.value.savedAt };
 dirty = false;
 return { ok: true, value: activeCity };
 ```
 
-A thrown restore becomes a backend host failure. Do not capture/restore a rollback snapshot.
+Do not capture/restore a rollback snapshot.
 
-- [ ] **Step 6: Add and implement New City behavior**
+- [ ] **Step 9: Add and implement New City behavior**
 
-Use deterministic fixture generators:
+Use deterministic generators:
 
 ```ts
 createCityId: () => "city-new",
 now: () => "2026-08-08T12:00:00.000Z",
 ```
 
-Success must prove the ordering:
+Success must prove ordering:
 
 ```text
 buildSandboxSnapshot -> createCity -> restoreSnapshot -> installRestoredGameplay
 ```
 
-The record uses the same generated timestamp for `createdAt` and initial `savedAt`.
+The record uses the same timestamp for `createdAt` and initial `savedAt`.
 
-Add tests for:
+Cover:
 
 - success;
-- `createCity` conflict;
-- pure sandbox candidate failure;
-- returned activation failure after create.
+- sandbox candidate failure;
+- create conflict;
+- definite create failure;
+- returned activation failure after create;
+- thrown activation failure resolves backend host failure.
 
-For activation failure, assert:
+For activation failure after create:
 
 ```ts
 expect(await store.readCity("city-new")).toMatchObject({ ok: true });
@@ -330,23 +440,24 @@ expect(runtime.getView().activeCity).toEqual(ACTIVE_CITY);
 expect(installedSnapshot).toBeNull();
 ```
 
-Do not delete the newly created record.
+Do not auto-delete the created record.
 
-- [ ] **Step 7: Add and implement generic Rename/Delete**
+- [ ] **Step 10: Add and implement generic Rename/Delete**
 
-Rename tests:
+Rename:
 
 - active city: returned summary replaces `activeCity`, dirty unchanged;
 - inactive city: store changes, active summary/dirty unchanged.
 
-Delete tests:
+Delete:
 
 - inactive city: active summary/dirty unchanged;
-- active city: only after successful store deletion set `activeCity = null` and `dirty = false`.
+- active city: only after successful store deletion set `activeCity = null` and `dirty = false`;
+- failed active delete keeps identity/dirty unchanged.
 
 No gameplay snapshot is cleared by Delete.
 
-- [ ] **Step 8: Prove one busy gate and disposal suppression**
+- [ ] **Step 11: Prove one busy gate and disposal suppression**
 
 Use `createDelayedCitySaveStore` to defer `updateCity`:
 
@@ -354,40 +465,49 @@ Use `createDelayedCitySaveStore` to defer `updateCity`:
 const saving = runtime.controller.save();
 await delayed.waitForActive("updateCity");
 expect(runtime.getView().busy).toBe(true);
-await expect(runtime.controller.renameCity(ACTIVE_CITY.id, "Other")).resolves.toEqual({
+
+await expect(
+  runtime.controller.renameCity(ACTIVE_CITY.id, "Other"),
+).resolves.toEqual({
   ok: false,
   error: { kind: "busy" },
 });
+
 delayed.releaseNext("updateCity");
 await saving;
 ```
 
-Add disposal coverage:
+Disposal:
 
 ```ts
 const saving = runtime.controller.save();
 await delayed.waitForActive("updateCity");
 const dispose = runtime.dispose();
 const publicationsBeforeRelease = publications;
+
 delayed.releaseNext("updateCity");
 await Promise.all([saving, dispose]);
+
 expect(publications).toBe(publicationsBeforeRelease);
 ```
 
-- [ ] **Step 9: Run Task 1 gate**
+- [ ] **Step 12: Run Task 1 gate**
 
 ```bash
-bun run test -- tests/runtime/workingSaveRuntime.test.ts
+bunx vitest run --project runtime tests/runtime/workingSaveRuntime.test.ts
 bun run check
 bun run format:check
 ```
 
 Expected: all pass.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
-git add src/runtime/workingSaveRuntime.ts tests/runtime/workingSaveRuntime.test.ts tests/runtime/delayedCitySaveStore.ts
+git add \
+  src/runtime/workingSaveRuntime.ts \
+  tests/runtime/workingSaveRuntime.test.ts \
+  tests/runtime/delayedCitySaveStore.ts
 git commit -m "refactor: add minimal working save runtime"
 ```
 
@@ -395,7 +515,7 @@ git commit -m "refactor: add minimal working save runtime"
 
 ## Task 2: Atomically Cut `createGameRuntime` to Busy + Dirty
 
-Replace the current inline coordinator workflows with the new module. This task changes runtime types and direct runtime tests together; do not keep compatibility aliases.
+Replace current inline coordinator workflows with the new module. Runtime types and direct tests change together; do not keep compatibility aliases.
 
 **Files:**
 - Modify: `src/runtime/createGameRuntime.ts`
@@ -403,16 +523,16 @@ Replace the current inline coordinator workflows with the new module. This task 
 - Modify: `tests/runtime/citySaveRuntime.test.ts`
 - Modify: `tests/runtime/gameRuntime.test.ts`
 - Modify: `tests/ui/appShell.test.ts`
-- Modify: any direct test fixture found by the initial search
+- Modify: any direct fixture found by the initial search
 
 **Interfaces:**
 - Consumes: `createWorkingSaveRuntime`, `RuntimePersistenceController`, `RuntimePersistenceView`
-- Produces: runtime controller with `persistence.save/load/createCity/renameCity/deleteCity`
-- Removes from runtime public/test API: `saveWorking`, `renameActiveCity`, `activateNewCity`, `detachActiveCity`, `debugEnqueueCityPersistence`
+- Produces: runtime controller with `persistence.listCities/save/load/createCity/renameCity/deleteCity`
+- Removes: `saveWorking`, `renameActiveCity`, `activateNewCity`, `detachActiveCity`, `debugEnqueueCityPersistence`
 
 - [ ] **Step 1: Update runtime construction options**
 
-Replace the current identity/save-time split:
+Replace the identity/save-time split:
 
 ```ts
 export interface CreateGameRuntimeOptions {
@@ -427,7 +547,7 @@ export interface CreateGameRuntimeOptions {
 
 Delete `lastSavedAt`.
 
-Resolve simple defaults inside `createGameRuntime`:
+Resolve defaults inside `createGameRuntime`:
 
 ```ts
 const now = options.now ?? (() => new Date().toISOString());
@@ -437,9 +557,18 @@ const createCityId =
 
 Tests inject both functions when deterministic values matter.
 
-- [ ] **Step 2: Remove coordinator acquisition from runtime construction**
+- [ ] **Step 2: Remove coordinator acquisition and lease cleanup**
 
-Replace the lease/try construction with direct initialization:
+Delete runtime construction of `SharedPersistenceCoordinator`/`PersistenceLease`, including:
+
+- `lease`;
+- `drainAndReleasePromise`;
+- `startDrainAndRelease`;
+- city fence wrappers;
+- `cityQueues`;
+- foreground admission/closing/release comments.
+
+Runtime initialization remains direct:
 
 ```ts
 let state = normalizeRustSnapshot(await backend.snapshot());
@@ -451,34 +580,19 @@ let dead = false;
 const gameplayQueue = createSerializedQueue(() => dead);
 ```
 
-Delete:
+- [ ] **Step 3: Refactor `commitLoadedSnapshot` into no-publish gameplay installation**
 
-- `PersistenceLease`;
-- `createSharedPersistenceCoordinator()`;
-- `acquireLease()`;
-- `startDrainAndRelease()`;
-- `cityQueues`;
-- fence helpers;
-- foreground admission;
-- all coordinator lifecycle comments.
-
-- [ ] **Step 3: Add one non-publishing restored-gameplay installer**
-
-Near the runtime state/preview variables, add:
+Create:
 
 ```ts
-const installRestoredGameplay = (snapshot: RustGameSnapshot): void => {
-  if (hoverPreviewTimer !== null) {
-    clearTimeout(hoverPreviewTimer);
-    hoverPreviewTimer = null;
-  }
+const installRestoredGameplay = (rawSnapshot: RustGameSnapshot): void => {
+  clearHoverPreviewTimer();
   previewRuntimeEpoch += 1;
   previewCoordinator.invalidateRoute();
-  previewCoordinator.invalidateRoadMutation();
-  activeRoadMutation = null;
+  invalidateRoadPreview();
   activeRouteSaveTokens.clear();
   nextRouteDraftInstanceId = 1;
-  state = normalizeRustSnapshot(snapshot);
+  state = normalizeRustSnapshot(rawSnapshot);
   ui = createUiState();
   backendError = null;
   rejection = null;
@@ -486,11 +600,11 @@ const installRestoredGameplay = (snapshot: RustGameSnapshot): void => {
 };
 ```
 
-Do not publish from this helper. The working-save operation publishes after it has also updated active-city/dirty/error state.
+Delete identity/session/revision/status publication from the old helper. The working-save module owns active city/dirty/error and performs the single final publication.
 
-- [ ] **Step 4: Construct the working-save runtime and publish its view**
+- [ ] **Step 4: Instantiate the working-save module**
 
-Replace `getPersistenceView()` and inline persistence variables with:
+After `publish`, gameplay queue, and install callback exist, construct:
 
 ```ts
 const workingSave = createWorkingSaveRuntime({
@@ -508,25 +622,21 @@ const workingSave = createWorkingSaveRuntime({
 });
 ```
 
-`getSnapshot()` becomes:
+`getSnapshot()` reads:
 
 ```ts
-const getSnapshot = (): RuntimeSnapshot => ({
-  state,
-  ui,
-  shell: selectShellState(state, ui, rejection),
-  persistence: workingSave.getView(),
-  backendError,
-  rejection,
-  sandboxResetError,
-});
+persistence: workingSave.getView(),
 ```
 
-It is acceptable for the `publish` callback to close over the later-declared `publish` function because no persistence action runs during construction. Do not add an event bus or callback registry to avoid this ordinary closure.
+The runtime exposes:
 
-- [ ] **Step 5: Mark dirty before applied gameplay publication**
+```ts
+persistence: workingSave.controller,
+```
 
-Replace revision arithmetic in `commitDispatchResult`:
+- [ ] **Step 5: Replace revision-based dirty tracking**
+
+In `commitDispatchResult`:
 
 ```ts
 if (result.applied) {
@@ -534,141 +644,74 @@ if (result.applied) {
 }
 ```
 
-Keep the existing normalization/commit behavior unchanged.
+Apply the same rule to successful reset if reset currently bypasses `commitDispatchResult`.
 
-For successful `reset()`, remove revision/session/status resets and call:
+Delete `currentRevision`, `persistedRevision`, and their updates/assertions.
 
-```ts
-workingSave.markDirty();
-```
+- [ ] **Step 6: Replace mutation admission flags with `workingSave.isBusy()`**
 
-before publishing the reset snapshot.
-
-Do not mark dirty for UI-only transitions or rejected/no-op dispatches.
-
-- [ ] **Step 6: Block new gameplay mutation admission while persistence is busy**
-
-Change `queueBackend` admission from the old New City reservation gate to:
+`queueBackend` must reject/no-op new gameplay mutation admission while persistence is busy:
 
 ```ts
 if (workingSave.isBusy()) return Promise.resolve(getSnapshot());
 ```
 
-Because `enqueueDispatch`, computed dispatch, tick, reset, route save, and other backend-mutating commands flow through `queueBackend`, this is the only general gameplay mutation gate.
+Delete `backendAdmissionReserved`, `lifecycleTransitionReserved`, `detachReserving`, `detachAdmissionLoadToken`, and their branches.
 
-Remove `backendAdmissionReserved` checks from UI-only methods. Read-only previews may continue. Successful Load/New City invalidates their epochs via `installRestoredGameplay`.
+Do not replace them with an operation-kind enum.
 
-- [ ] **Step 7: Delete inline persistence workflows from `createGameRuntime.ts`**
+- [ ] **Step 7: Block preview admission with the same busy boolean**
 
-Remove the complete current blocks for:
+Use `workingSave.isBusy()` at all existing backend preview-admission points:
 
-- `unavailableStoreResult`;
-- `isCurrentPersistenceSession`;
-- save capture/completion helpers;
-- `saveWorking`;
-- `renameActiveCity`;
-- load transition/token helpers;
-- `loadCity`;
-- rollback helpers and prior-state capture/restore helpers;
-- `activateNewCity`;
-- `detachActiveCity`;
-- city fence/drain logic;
-- `PersistenceOperationResult`/superseded logic.
+- `requestRoutePreview`;
+- `sendRoadMutationPreviewRequest`;
+- `requestRoadMutationPreview`;
+- `commitWithRoadPreview` / route-draft paths that would otherwise mark preview pending then call a blocked request.
 
-Set the public controller directly:
+Rule: while busy, a preview-producing public action either returns the current snapshot before creating pending preview UI, or clears pending state immediately. Do not leave a route/road preview stuck in a pending state with no request.
 
-```ts
-const persistence = workingSave.controller;
-```
+Delete `previewAdmissionSuspended` and `allowWhileSuspended` plumbing.
 
-- [ ] **Step 8: Simplify stop/fatal/dispose paths**
+Keep `previewRuntimeEpoch` plus invalidation on successful Load/New City installation; they still protect already-started preview responses from publishing into the replacement city.
 
-`stop()` becomes the ordinary canvas/preview stop again; remove reservation-specific deferred stop state.
+- [ ] **Step 8: Add runtime integration tests for preview safety**
 
-In `failBackend`, after setting `dead = true` and clearing preview UI, suppress late persistence publication with:
+Use a backend stub with delayed `restoreSnapshot`.
 
-```ts
-void workingSave.dispose();
-```
+Prove:
 
-Do not reset persistence tokens/statuses because they no longer exist.
+1. start Load/New City and wait until persistence is busy;
+2. attempt route/road preview-producing interaction;
+3. verify no new backend preview call is admitted and UI is not stranded in `previewPending`;
+4. release restore;
+5. verify an older preview response cannot publish into the post-load UI after `previewRuntimeEpoch` advances.
 
-Replace lease drain/release disposal with:
+Do not build a full concurrency matrix.
 
-```ts
-const dispose = async (): Promise<void> => {
-  disposalRequested = true;
-  if (!dead) dead = true;
-  stopRuntime();
-  await Promise.all([gameplayQueue.drain(), workingSave.dispose()]);
-};
-```
+- [ ] **Step 9: Update runtime persistence tests to the six operations**
 
-Retain the existing terminal-snapshot behavior for a live fatal backend failure. Do not broaden HPA-543 into a shell-error redesign.
+Rewrite `tests/runtime/citySaveRuntime.test.ts` around current player behavior:
 
-- [ ] **Step 9: Update runtime public/test types**
+- `listCities` empty/populated via runtime;
+- Save success/failure + dirty;
+- Load success/failure;
+- New City success/conflict/activation failure;
+- Rename active/inactive;
+- Delete active/inactive;
+- duplicate mutating action -> `busy`;
+- throwing restore -> resolved backend failure, no bare rejection;
+- disposal -> no late publication.
 
-In `src/runtime/types.ts` import the new persistence types from `workingSaveRuntime.ts`.
+Delete same-city/cross-city FIFO, fence, token, supersession, rollback-coherence, and detach precedence tests.
 
-Keep:
+- [ ] **Step 10: Update `RuntimeController` / test harnesses**
 
-```ts
-export interface RuntimeSnapshot {
-  state: GameState;
-  ui: UiState;
-  shell: ShellState;
-  persistence: RuntimePersistenceView;
-  backendError: string | null;
-  rejection: GameplayRejection | null;
-  sandboxResetError: SandboxResetError | null;
-}
-```
+In `src/runtime/types.ts` import persistence types from `workingSaveRuntime.ts`.
 
-Delete `debugEnqueueCityPersistence` from `RuntimeTestSeam`. Keep only debug seams with a current gameplay-test purpose such as `debugSetBudget`.
+Delete `RuntimeTestSeam.debugEnqueueCityPersistence`.
 
-- [ ] **Step 10: Rewrite direct runtime persistence tests to the new API**
-
-Update fixtures from:
-
-```ts
-initialCity: ACTIVE_CITY,
-lastSavedAt: "...",
-```
-
-to one `CitySummary`:
-
-```ts
-initialCity: {
-  ...ACTIVE_CITY,
-  savedAt: "2026-08-01T09:30:00.000Z",
-},
-createCityId: () => "city-002",
-now: () => "2026-08-01T10:00:00.000Z",
-```
-
-Rename calls:
-
-```ts
-runtime.persistence.save()
-runtime.persistence.load(cityId)
-runtime.persistence.createCity({ name: "New City", sandbox: SANDBOX_REQUEST })
-runtime.persistence.renameCity(cityId, "Renamed City")
-runtime.persistence.deleteCity(cityId)
-```
-
-Delete expectations for `{ status: "completed" | "failed" | "superseded" }`; assert `{ ok: true }` / `{ ok: false }`.
-
-Keep only integration cases that prove `createGameRuntime` wiring rather than duplicating Task 1's module tests:
-
-- applied `debugSetBudget` makes persistence dirty;
-- Save waits for an already-admitted gameplay mutation and captures the resulting state;
-- gameplay mutation attempted while delayed Save is busy does not reach the backend;
-- successful Load/New City resets stale UI/preview state and publishes the new active city;
-- active Delete clears active identity but leaves the engine snapshot untouched.
-
-- [ ] **Step 11: Update App/test harness persistence fixtures**
-
-Replace the old status-heavy harness view with:
+Update `tests/ui/appShell.test.ts` harness:
 
 ```ts
 const persistenceView: RuntimePersistenceView = {
@@ -679,38 +722,59 @@ const persistenceView: RuntimePersistenceView = {
 };
 ```
 
-Replace the harness controller with five direct methods returning `{ ok: false, error: { kind: "unavailable" } }`.
+Controller harness contains all six methods and returns `unavailable`/fixture results without importing the deleted coordinator.
 
-Remove the `debugEnqueueCityPersistence` stub.
+- [ ] **Step 11: Simplify disposal and fatal cleanup**
 
-- [ ] **Step 12: Run Task 2 gate**
+`dispose()`:
+
+```ts
+dead = true;
+stopRuntime();
+await gameplayQueue.drain();
+await workingSave.dispose();
+```
+
+Preserve existing terminal snapshot publication behavior for fatal backend failure, but remove session/load/status resets and lease release.
+
+If ordering needs to avoid a mutating persistence operation waiting on gameplay while disposal waits on persistence, mark `dead = true` first, then drain gameplay, then await `workingSave.dispose()` as specified in the design.
+
+- [ ] **Step 12: Run Task 2 focused gate**
 
 ```bash
-bun run test -- \
+bunx vitest run --project runtime \
   tests/runtime/workingSaveRuntime.test.ts \
   tests/runtime/citySaveRuntime.test.ts \
-  tests/runtime/gameRuntime.test.ts \
-  tests/ui/appShell.test.ts
+  tests/runtime/gameRuntime.test.ts
+bunx vitest run --project ui tests/ui/appShell.test.ts
 bun run check
-bun run lint:svelte
 bun run format:check
 ```
 
 Expected: all pass.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 13: Run the reservation/preview absence scan before commit**
+
+```bash
+rg -n \
+  "backendAdmissionReserved|previewAdmissionSuspended|lifecycleTransitionReserved|detachReserving|detachAdmissionLoadToken|commitLoadedSnapshot|PersistenceOperationResult|debugEnqueueCityPersistence" \
+  src tests
+```
+
+Expected: zero HPA-543-owned matches. If `commitLoadedSnapshot` remains, the cutover is incomplete; the target helper is `installRestoredGameplay`.
+
+- [ ] **Step 14: Commit**
 
 ```bash
 git add src/runtime src/App.svelte tests/runtime tests/ui
-
-git commit -m "refactor: cut runtime to one persistence busy gate"
+git commit -m "refactor: cut runtime persistence to busy and dirty"
 ```
 
 ---
 
-## Task 3: Delete the Coordinator Architecture and Stale Contracts
+## Task 3: Delete the Coordinator and Superseded Runtime Documentation
 
-With runtime consumers cut over, remove the dead framework and tests/docs that only describe it.
+Delete architecture that no longer has a current behavior to protect, and prevent HPA-548's historical runtime bridge from becoming downstream guidance.
 
 **Files:**
 - Delete: `src/runtime/persistenceCoordinator.ts`
@@ -719,118 +783,71 @@ With runtime consumers cut over, remove the dead framework and tests/docs that o
 - Delete: `docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md`
 - Modify: `src/persistence/citySaveStore.ts`
 - Modify: `src/App.svelte`
-- Modify: `tests/runtime/delayedCitySaveStore.ts` if unused helper surface remains
-- Modify: `docs/architecture.md` / `CLAUDE.md` only for current architecture statements
+- Modify: `docs/superpowers/specs/2026-08-05-six-operation-city-save-store-design.md`
+- Modify: `docs/architecture.md` / `CLAUDE.md` only where stale
 
-**Interfaces:**
-- Removes all coordinator/lease/fence/FIFO/session/supersession architecture
-- Keeps the six-operation `CitySaveStore` and gameplay serialized queue
-
-- [ ] **Step 1: Delete the coordinator source and ownership suite**
+- [ ] **Step 1: Delete coordinator source and architecture-only tests**
 
 ```bash
 rm src/runtime/persistenceCoordinator.ts
 rm tests/runtime/persistenceCoordinator.test.ts
-```
-
-Do not port lease, queue, fence, foreground-admission, or handoff tests to another module.
-
-- [ ] **Step 2: Delete superseded persistence design/plan docs**
-
-```bash
 rm docs/superpowers/plans/2026-08-01-runtime-persistence-coordinator.md
 rm docs/superpowers/specs/2026-07-31-save-envelope-store-runtime-persistence-design.md
 ```
 
-The new HPA-543 spec/plan plus the HPA-547/HPA-548 documents are the current architecture trail.
+Do not translate lease/fence/FIFO/handoff tests to `workingSaveRuntime`.
 
-- [ ] **Step 3: Remove stale rollback-specific store documentation**
+- [ ] **Step 2: Remove stale rollback-dependent store comments**
 
-In `src/persistence/citySaveStore.ts`, replace the paragraph that says the runtime relies on `rollbackNewCity` with a current statement:
+In `src/persistence/citySaveStore.ts`, retain only the storage atomicity contract:
 
-```ts
-/**
- * Atomicity guarantee: a mutation that returns an error (or rejects) must not
- * have committed that mutation. A failed create cannot overwrite/create a city;
- * a failed update or rename leaves the prior record intact. The working-save
- * runtime relies on this for retryable Save/New City failures and does not add
- * a repair or read-back layer.
- */
+- failed create commits nothing;
+- failed update/rename preserves the prior record;
+- no reference to `rollbackNewCity`, leases, or current runtime algorithms.
+
+Do not change the six-operation store API.
+
+- [ ] **Step 3: Mark the HPA-548 runtime bridge superseded**
+
+In `docs/superpowers/specs/2026-08-05-six-operation-city-save-store-design.md`, add immediately under `## 6. Runtime bridge`:
+
+```md
+> **Superseded by HPA-543 (2026-08-08).** Sections 3–5 remain the authoritative
+> `CitySaveStore` contract. The controller/coordinator workflow below describes
+> the temporary HPA-548 cutover state and must not be used for new runtime work.
+> See `2026-08-08-working-save-runtime-design.md` for the current runtime contract.
 ```
 
-Do not change the six-operation API in HPA-543.
+Do not rewrite HPA-548's store model or pretend its historical implementation sequence never existed.
 
-- [ ] **Step 4: Simplify App disposal commentary**
+- [ ] **Step 4: Clean App/architecture comments**
 
-Replace lease-specific teardown wording with the current behavior:
+Delete comments that say App disposal drains/releases a persistence lease.
 
-```ts
-// Dispose (not just stop) so an in-flight persistence operation can finish
-// without publishing after unmount and the gameplay queue drains cleanly.
-void runtime.dispose();
-```
+Update `docs/architecture.md` / `CLAUDE.md` only if they still describe the coordinator as current after HPA-543. Keep the working rules and two-host/six-store contracts intact.
 
-No UI behavior change belongs in this task.
-
-- [ ] **Step 5: Trim the delayed-store helper to actual test needs**
-
-Search:
-
-```bash
-rg -n "mutationOrder|activeCount|releaseAll|defer\(|waitForActive|releaseNext" tests/runtime
-```
-
-Keep only helper methods used by focused busy/disposal tests. If the rewritten suite uses only `defer`, `waitForActive`, and `releaseNext`, delete `mutationOrder`, `activeCount`, and `releaseAll` plus their bookkeeping.
-
-Do not replace this test helper with a production scheduler abstraction.
-
-- [ ] **Step 6: Update current architecture docs only**
-
-Search:
-
-```bash
-rg -n "SharedPersistenceCoordinator|PersistenceLease|per-city FIFO|city fence|persistedRevision|sessionToken|loadRequestToken|superseded|rollbackNewCity" docs/architecture.md CLAUDE.md
-```
-
-For current architecture statements, describe:
-
-- Rust `GameBackend` candidate-first restore;
-- six-operation `CitySaveStore`;
-- one `workingSaveRuntime` busy/dirty gate;
-- existing gameplay queue retained only for gameplay mutation serialization.
-
-Do not rewrite historical PR/spec prose outside the explicitly deleted obsolete documents.
-
-- [ ] **Step 7: Run absence scans**
+- [ ] **Step 5: Run the full HPA-543 absence scan**
 
 ```bash
 rg -n \
-  "SharedPersistenceCoordinator|PersistenceLease|createSharedPersistenceCoordinator|PersistenceLeaseClosedError|debugEnqueueCityPersistence|resolveWorkingSaveCompletion|resolvePersistenceSessionCompletion|detachActiveCity|saveWorking|renameActiveCity|backendAdmissionReserved|lifecycleTransitionReserved|detachReserving|currentRevision|persistedRevision|sessionToken|loadRequestToken|saveStatus|loadStatus|lifecycleStatus|lastSavedAt" \
-  src tests docs/architecture.md CLAUDE.md
+  "persistenceCoordinator|SharedPersistenceCoordinator|PersistenceLease|createCityPersistenceQueues|resolveWorkingSaveCompletion|resolvePersistenceSessionCompletion|ActiveCityIdentity|NewCityIdentity|saveWorking|renameActiveCity|detachActiveCity|activateNewCity|PersistenceOperationResult|currentRevision|persistedRevision|sessionToken|loadRequestToken|backendAdmissionReserved|previewAdmissionSuspended|lifecycleTransitionReserved|detachReserving|saveStatus|loadStatus|lifecycleStatus|lastSavedAt|commitLoadedSnapshot|debugEnqueueCityPersistence" \
+  src tests docs CLAUDE.md
 ```
 
-Expected: zero HPA-543 architecture matches. Investigate any residual match; do not blindly rename unrelated domain `revision` concepts.
+Expected: no production/test matches for deleted architecture. Historical HPA-548 prose is allowed only inside the explicitly superseded runtime-bridge section.
 
-Also verify the new boundary is not becoming another framework:
-
-```bash
-rg -n "PersistenceManager|PersistenceService|PersistenceScheduler|PersistenceMutex|command bus|event bus|lock manager" src/runtime
-```
-
-Expected: zero matches.
-
-- [ ] **Step 8: Run Task 3 gate**
+- [ ] **Step 6: Run Task 3 gate**
 
 ```bash
-bun run test:unit
+bunx vitest run --project runtime
+bunx vitest run --project ui
 bun run check
-bun run lint:svelte
 bun run format:check
 ```
 
 Expected: all pass.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A src tests docs CLAUDE.md
@@ -839,111 +856,116 @@ git commit -m "refactor: delete persistence coordinator machinery"
 
 ---
 
-## Task 4: Full Verification and Deletion Review
+## Task 4: Full Verification and Net-Deletion Review
 
-Do not add new behavior in this task. Fix only issues exposed by the full gate or stale references discovered by the final review.
+No new behavior belongs in this task. It proves the finished implementation is small, current, and green.
 
 **Files:**
-- Modify only files required by failing checks or stale HPA-543 references
+- Modify only if verification finds a real defect in Tasks 1–3
 
-**Interfaces:**
-- Confirms the final busy/dirty working-save boundary across frontend and Rust hosts
-
-- [ ] **Step 1: Run focused persistence/runtime tests**
-
-```bash
-bun run test -- \
-  tests/runtime/workingSaveRuntime.test.ts \
-  tests/runtime/citySaveRuntime.test.ts \
-  tests/runtime/gameRuntime.test.ts \
-  tests/ui/appShell.test.ts
-```
-
-Expected: all pass.
-
-- [ ] **Step 2: Run full frontend/unit verification**
+- [ ] **Step 1: Run frontend unit tests**
 
 ```bash
 bun run test:unit
+```
+
+Expected: PASS.
+
+- [ ] **Step 2: Run type/lint/format/build**
+
+```bash
 bun run check
-bun run lint:svelte
+bun run lint
 bun run format:check
 bun run build
 ```
 
 Expected: all pass.
 
-- [ ] **Step 3: Run end-to-end verification**
+- [ ] **Step 3: Run Playwright**
 
 ```bash
 bun run test:e2e
 ```
 
-Expected: all current Playwright tests pass. HPA-543 does not add city-library/New City UI e2e flows; those belong to HPA-345/HPA-346.
+Expected: all pass.
 
-- [ ] **Step 4: Run Rust verification**
+- [ ] **Step 4: Run Rust workspace tests**
 
 ```bash
 cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
 ```
 
-Expected: all pass. No Rust behavior change is expected, but both native/WASM host consumers still depend on the same Rust core.
+Expected: PASS. No Rust behavior should have changed, but this is part of the repository completion gate.
 
-- [ ] **Step 5: Review the diff for material deletion**
-
-```bash
-git diff --stat main...HEAD
-git diff --numstat main...HEAD
-```
-
-Verify the implementation is materially net-negative across production/test code after adding `workingSaveRuntime.ts` and its focused tests.
-
-Reject the branch if it recreated equivalent complexity under new names.
-
-- [ ] **Step 6: Final symbol scan**
+- [ ] **Step 5: Repeat the final architecture absence scan**
 
 ```bash
 rg -n \
-  "SharedPersistenceCoordinator|PersistenceLease|createSharedPersistenceCoordinator|PersistenceLeaseClosedError|debugEnqueueCityPersistence|resolveWorkingSaveCompletion|resolvePersistenceSessionCompletion|detachActiveCity|saveWorking|renameActiveCity|backendAdmissionReserved|lifecycleTransitionReserved|detachReserving|currentRevision|persistedRevision|sessionToken|loadRequestToken|saveStatus|loadStatus|lifecycleStatus|lastSavedAt" \
-  src tests docs/architecture.md CLAUDE.md
+  "SharedPersistenceCoordinator|PersistenceLease|createCityPersistenceQueues|resolveWorkingSaveCompletion|resolvePersistenceSessionCompletion|backendAdmissionReserved|previewAdmissionSuspended|lifecycleTransitionReserved|detachReserving|PersistenceOperationResult|debugEnqueueCityPersistence" \
+  src tests
 ```
 
-Expected: zero current-architecture matches.
+Expected: zero matches.
 
-- [ ] **Step 7: Commit verification-only fixes if needed**
-
-If the full gate required source/test/doc changes:
+Also confirm the new controller surface:
 
 ```bash
-git add -A
-git commit -m "test: finish HPA-543 verification"
+rg -n "listCities\(|save\(|load\(|createCity\(|renameCity\(|deleteCity\(" \
+  src/runtime/workingSaveRuntime.ts
 ```
 
-If no files changed, do not create an empty commit.
+- [ ] **Step 6: Review diff for YAGNI/KISS**
+
+```bash
+git diff --stat main...HEAD
+git diff --numstat main...HEAD -- src tests
+```
+
+Required review outcome:
+
+- production + test code is materially net-negative;
+- no new manager/service/scheduler/mutex/registry/state-machine abstraction appeared;
+- only one mutating persistence busy boolean exists;
+- `listCities` did not add read lifecycle state;
+- no operation-kind state was added solely for previews;
+- tests target player-visible behavior rather than rebuilding the removed race matrix.
+
+If the diff is net-positive because of new orchestration/test scaffolding, stop and simplify before finishing.
+
+- [ ] **Step 7: Review public behavior against HPA-543**
+
+Confirm manually from code/tests:
+
+- city listing stays behind the runtime boundary;
+- Save failure leaves dirty and prior record;
+- Load failure leaves public gameplay/identity;
+- New City persists before activation;
+- activation failure leaves the created record available;
+- active Delete clears identity only after store success;
+- mutating persistence blocks gameplay + backend preview admission;
+- old preview responses cannot publish after successful engine swap;
+- disposal suppresses late mutating-persistence publication;
+- thrown host/store failures resolve through `WorkingSaveResult`.
+
+- [ ] **Step 8: Commit verification-only fixes if needed**
+
+If verification required a real correction:
+
+```bash
+git add <corrected-files>
+git commit -m "fix: finish working save runtime cutover"
+```
+
+Do not create an empty verification commit.
 
 ---
 
-## Final Review Checklist
+## Execution Notes
 
-Before marking HPA-543 complete, verify all of these directly against the final tree:
-
-- [ ] `RuntimePersistenceView` has exactly active city, busy, dirty, error.
-- [ ] Active city is `CitySummary | null`; no duplicate identity type remains.
-- [ ] Controller has only Save, Load, Create, Rename, Delete.
-- [ ] New City ID/timestamp generation is runtime-owned and injectable for tests.
-- [ ] Persistence sets busy synchronously before its first await.
-- [ ] Persistence drains the existing gameplay queue and blocks new gameplay mutations until completion.
-- [ ] No persistence queue or lock framework exists.
-- [ ] Applied gameplay uses one dirty boolean.
-- [ ] Save failure preserves dirty and the prior record.
-- [ ] Load returned failure preserves current public gameplay/identity.
-- [ ] New City storage commits before activation; activation failure leaves the record available.
-- [ ] Thrown host restore does not trigger rollback/reconciliation machinery.
-- [ ] Rename/Delete work for inactive IDs and update active metadata only when IDs match.
-- [ ] Active Delete clears active identity only after storage success.
-- [ ] Disposal waits for at most one in-flight persistence action and suppresses late publication.
-- [ ] `persistenceCoordinator.ts` and its ownership suite are deleted.
-- [ ] Revision/session/load tokens, fences, leases, FIFOs, superseded results, reservation flags, and rollback helpers are absent.
-- [ ] The final code/test diff is materially smaller rather than an abstraction rename.
+- Prefer one implementation PR for Tasks 1–4. The public runtime API is intentionally breaking, so a compatibility branch adds no value.
+- Task 1 may coexist temporarily with the old coordinator only to keep an independently green commit. Task 2 must cut all runtime consumers atomically.
+- Task 3 deletes the old architecture instead of preserving tests for it.
+- HPA-343/HPA-344 implement store adapters only after this runtime contract is stable.
+- HPA-345/HPA-346 consume the six-operation runtime controller and never receive direct store access.
+- HPA-544 remains the only intended place for pre-release hardening of an observed ambiguous-host failure.
