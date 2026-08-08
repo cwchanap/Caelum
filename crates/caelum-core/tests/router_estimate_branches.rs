@@ -1,17 +1,16 @@
 //! Coverage for the `router::route_plan_estimated_seconds` branches (router.rs
-//! 91-126) that are exercised indirectly through `validate_snapshot` →
-//! `validate_route_plan` (trips.rs:231).
+//! 91-126) that are exercised indirectly through `GameEngine::from_snapshot` →
+//! `validate_and_compile` → `validate_route_plan` (trips.rs:231).
 //!
 //! `route_plan_estimated_seconds` is `pub(crate)` and cannot be called directly
 //! from integration tests. Instead, each test constructs a snapshot with a trip
-//! whose `route_plan` exercises the target branch, then calls
-//! `validate_snapshot` and asserts the resulting `PersistenceError` (or Ok for
+//! whose `route_plan` exercises the target branch, then constructs an engine
+//! via `from_snapshot` and asserts the resulting `SnapshotLoadError` (or Ok for
 //! the positive bus-arm case).
 
 mod common;
 
 use caelum_core::model::{ActiveTrip, Point, TransitMode, TripPosition, TripStatus};
-use caelum_core::validate_snapshot;
 use common::persistence_fixtures::{fixture_with_bus_route, worker_sim};
 
 // ===========================================================================
@@ -20,7 +19,7 @@ use common::persistence_fixtures::{fixture_with_bus_route, worker_sim};
 
 /// Build a snapshot with a bus route and an active trip whose route_plan
 /// contains a bus leg produced by `router::find_route_plan`. The trip is
-/// Walking at leg 0; `validate_snapshot` should pass, exercising the bus arm
+/// Walking at leg 0; `from_snapshot` should pass, exercising the bus arm
 /// of `route_plan_estimated_seconds` (line 231 iterates all legs including the
 /// bus leg).
 fn bus_leg_trip_fixture() -> caelum_core::GameSnapshot {
@@ -58,9 +57,9 @@ fn bus_leg_plan_estimated_seconds_matches_router_and_is_valid() {
     let snapshot = bus_leg_trip_fixture();
     // The plan's estimated_seconds was produced by find_route_plan, so
     // route_plan_estimated_seconds must agree. This exercises the Bus arm
-    // (router.rs:106-121) on the positive path — validate_snapshot passes.
+    // (router.rs:106-121) on the positive path — from_snapshot passes.
     assert!(
-        validate_snapshot(&snapshot).is_ok(),
+        caelum_core::GameEngine::from_snapshot(snapshot).is_ok(),
         "valid bus-leg route plan should pass validation"
     );
 }
@@ -79,7 +78,7 @@ fn tampered_plan_estimated_seconds_is_rejected() {
     plan.estimated_seconds = -1.0;
 
     assert!(
-        validate_snapshot(&snapshot).is_err(),
+        caelum_core::GameEngine::from_snapshot(snapshot).is_err(),
         "a negative route-plan estimated_seconds must be rejected"
     );
 }

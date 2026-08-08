@@ -111,8 +111,7 @@ fn ensure_snapshot_runtime_epoch(
 }
 
 fn decode_snapshot(value: serde_json::Value) -> Result<GameSnapshot, SnapshotCommandError> {
-    check_snapshot_schema(&value)
-        .map_err(|error| SnapshotCommandError::from(SnapshotLoadError::from(error)))?;
+    check_snapshot_schema(&value).map_err(SnapshotCommandError::from)?;
     serde_json::from_value(value)
         .map_err(|error| SnapshotCommandError::InvalidSnapshot(error.to_string()))
 }

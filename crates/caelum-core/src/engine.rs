@@ -233,9 +233,12 @@ impl GameEngine {
         })
     }
 
-    /// Construct an engine from an already-paused, persistence-valid schema-v4
-    /// snapshot. Serialized fields are retained exactly; only the topology cache
-    /// is rebuilt.
+    /// Construct an engine from a schema-v4 snapshot, normalizing
+    /// persistence-derived fields and rebuilding topology before validation.
+    /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
+    /// clock derivations, sorts road connections), rebuilds trip/entity derived
+    /// fields, compiles the road topology, and only then validates references
+    /// and ownership — so the supplied snapshot is not retained exactly.
     pub fn from_snapshot(snapshot: GameSnapshot) -> Result<Self, SnapshotLoadError> {
         let prepared = prepare_snapshot(snapshot).map_err(SnapshotLoadError::from)?;
         Ok(Self {
