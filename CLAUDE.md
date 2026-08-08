@@ -81,7 +81,10 @@ small `GameBackend` contract (`snapshot`, `snapshotForSave`,
 `previewRoute`, and `previewRoadMutation`). The Tauri runtime epoch is private to
 its adapter and native commands. Both adapters build sandbox candidates through
 the pure `create_sandbox_snapshot` path, restore candidates before swapping live
-state, and retain runtime rollback only for ambiguous thrown restores. Snapshot
+state, and retain runtime rollback for ambiguous thrown restores and for
+successful restores that a newer load supersedes before publication (both go
+away once HPA-543 replaces the current load coordination with one busy gate).
+Snapshot
 errors are `unsupportedSchema`, `invalidSnapshot`, or `hostFailure`, with an
 optional diagnostic and no operation field. Public dispatch context is gone;
 private apply data and UI-facing preview impact remain.

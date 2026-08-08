@@ -91,10 +91,12 @@ small union `SnapshotError | SandboxHostError`.
 An adapter-thrown or rejected restore is ambiguous: the host may have committed a
 candidate before delivery failed. Load and New City capture the canonical prior
 snapshot immediately before activation, roll it back on a thrown restore, and
-enter the existing fatal coherence path if rollback also fails. They do not roll
-back a definitive `{ ok: false }`, because candidate-first construction proves
-that no replacement occurred. Save capture is non-mutating, so a thrown save
-operation reports `hostFailure` without rollback.
+enter the existing fatal coherence path if rollback also fails. They also roll
+back a successful restore that a newer load supersedes before publication; both
+rollback cases remain until HPA-543 replaces the current load coordination with
+one busy gate. They do not roll back a definitive `{ ok: false }`, because
+candidate-first construction proves that no replacement occurred. Save capture is
+non-mutating, so a thrown save operation reports `hostFailure` without rollback.
 
 Tauri's runtime epoch is private to `createTauriBackend()` and the native
 commands. The adapter calls the private `game_begin_runtime` bootstrap before it
