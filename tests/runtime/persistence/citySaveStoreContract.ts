@@ -12,10 +12,9 @@ import {
 /**
  * Shared harness for running the city-save-store contract against a concrete
  * adapter. `failNext` is mandatory: every adapter must expose a deterministic
- * failure seam so the atomicity guarantees the runtime depends on (a failed
- * create commits nothing; a failed update or rename leaves the prior record
- * intact) are exercised by the shared contract, not just by adapter-specific
- * tests.
+ * failure seam so the shared contract exercises the atomicity guarantees: a
+ * failed create commits nothing, and a failed update or rename leaves the
+ * prior record intact.
  */
 export interface CitySaveStoreContractHarness {
   store: CitySaveStore;
@@ -201,9 +200,7 @@ export function defineCitySaveStoreContract(
       expect(read.city.createdAt).toBe(originalCreatedAt);
     });
 
-    // Atomicity: a failed create must commit nothing. The runtime's
-    // `rollbackNewCity` restores the prior backend without reading or deleting
-    // the city, so it relies on this guarantee.
+    // Atomicity: a failed create must commit nothing.
     it("does not create a record after failed create", async () => {
       const { store, failNext } = createHarness();
       failNext("createCity", "failed");
@@ -219,8 +216,6 @@ export function defineCitySaveStoreContract(
     });
 
     // Atomicity: a failed update must leave the complete prior record intact.
-    // The runtime's `saveWorking` publishes the failure without re-reading or
-    // repairing the record, so it relies on this guarantee.
     it("preserves the complete prior record after failed update", async () => {
       const { store, failNext } = createHarness();
       const record = makeRecord("city-1", "First", {
@@ -243,10 +238,6 @@ export function defineCitySaveStoreContract(
     });
 
     // Atomicity: a failed rename must leave the complete prior record intact.
-    // The runtime's `renameActiveCity` reports the failure without re-reading
-    // or repairing the record, and a subsequent `updateCity` preserves the
-    // stored name, so a rename that committed before failing would diverge
-    // from runtime state and never be repaired.
     it("preserves the complete prior record after failed rename", async () => {
       const { store, failNext } = createHarness();
       const record = makeRecord("city-1", "Original");
