@@ -3659,6 +3659,53 @@ describe("route creation and management", () => {
     expect(snapshot.shell.routeDraft?.canReload).toBe(true);
   });
 
+  it("does not strand a replacement draft pending while Rename is busy after a superseded route save", async () => {
+    const initial = routeSnapshotWithRoute();
+    const saves = deferredDispatchBackend(initial);
+    const delegate = createMemoryCitySaveStore();
+    const city = {
+      id: "city-route-draft",
+      name: "Route Draft City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    await delegate.createCity({
+      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      savedAt: city.savedAt,
+      snapshot: initial,
+    });
+    const store = createDelayedCitySaveStore(delegate);
+    store.defer("renameCity");
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: saves,
+      saveStore: store,
+      initialCity: city,
+    });
+
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    const firstSave = runtime.saveRouteDraft();
+    await Promise.resolve();
+
+    runtime.cancelRouteDraft();
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(false);
+
+    const rename = runtime.persistence.renameCity(city.id, "Renamed City");
+    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+
+    await saves.resolveNext();
+    await firstSave;
+    await store.waitForActive("renameCity");
+
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(false);
+
+    store.releaseNext("renameCity");
+    await rename;
+  });
+
   it("leaves queued finish validation to Rust after state changes", async () => {
     const backend = deferredDispatchBackend(routeSnapshot());
     const runtime = await createGameRuntime({

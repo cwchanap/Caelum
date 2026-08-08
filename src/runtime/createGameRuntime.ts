@@ -809,16 +809,17 @@ export async function createGameRuntime(
         if (result.applied && !tokenIsCurrent) {
           previewCoordinator.invalidateRoute();
           if (current !== null) {
+            const canRequestPreview = !workingSave.isBusy();
             const refreshedDraft: RouteDraft = {
               ...current,
               preview: null,
-              previewPending: true,
+              previewPending: canRequestPreview,
             };
             const supersededResult = commitDispatchResult(result, {
               ...ui,
               routeDraft: refreshedDraft,
             });
-            requestRoutePreview(refreshedDraft);
+            if (canRequestPreview) requestRoutePreview(refreshedDraft);
             return supersededResult;
           }
           return commitDispatchResult(result, ui);
