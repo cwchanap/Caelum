@@ -26,8 +26,7 @@ fn decode_snapshot(value: JsValue) -> Result<GameSnapshot, JsValue> {
     let actual = serde_wasm_bindgen::from_value::<SnapshotSchemaProbe>(value.clone())
         .map(|probe| probe.schema_version)
         .unwrap_or(0);
-    check_schema_version(actual)
-        .map_err(|error| snapshot_js_error(SnapshotLoadError::from(error)))?;
+    check_schema_version(actual).map_err(snapshot_js_error)?;
     serde_wasm_bindgen::from_value(value)
         .map_err(|error| snapshot_js_error(SnapshotLoadError::InvalidSnapshot(error.to_string())))
 }

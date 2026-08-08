@@ -4,9 +4,7 @@ use caelum_core::model::{
     ActiveTrip, EconomyPreset, Point, ServicePattern, Sim, TransitMode, TripPosition, TripPurpose,
     TripStatus,
 };
-use caelum_core::{
-    commute, validate_snapshot, GameEngine, GameIntent, RoadPreset, SandboxCreationRequest,
-};
+use caelum_core::{commute, GameEngine, GameIntent, RoadPreset, SandboxCreationRequest};
 
 fn apply(engine: &mut GameEngine, intent: GameIntent) {
     let result = engine.dispatch(intent);
@@ -284,7 +282,7 @@ fn large_validation_fixture() -> caelum_core::GameSnapshot {
         .collect();
     snapshot.trip_sequence_day = 0;
     snapshot.next_trip_sequence = 1_001;
-    validate_snapshot(&snapshot).unwrap();
+    GameEngine::from_snapshot(snapshot.clone()).unwrap();
     snapshot
 }
 
@@ -321,7 +319,7 @@ fn measure(label: &str, mut operation: impl FnMut()) {
 fn persistence_validation_benchmark() {
     let snapshot = large_validation_fixture();
     measure("native validate", || {
-        validate_snapshot(&snapshot).unwrap();
+        GameEngine::from_snapshot(snapshot.clone()).unwrap();
     });
     measure("native prepared restore", || {
         drop(GameEngine::from_snapshot(snapshot.clone()).unwrap());

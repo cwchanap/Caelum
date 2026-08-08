@@ -23,9 +23,13 @@ impl From<PersistenceError> for SnapshotLoadError {
             PersistenceError::UnsupportedSchema { expected, actual } => {
                 Self::UnsupportedSchema { expected, actual }
             }
-            // Serialize the structured error so hosts receive a machine-readable
-            // `{ code, context }` payload rather than a Rust `Debug` string; the
-            // Debug form is retained only as a fallback if serialization fails.
+            // JSON-encode the structured error into the opaque diagnostic string
+            // carried by `InvalidSnapshot`. Hosts receive this as a flat string
+            // (the TS boundary reduces host errors to three codes plus an optional
+            // diagnostic), not as structured `{ code, context }` fields they can
+            // introspect — so this is a diagnostic serialization, not a structured
+            // error channel. The Debug form is retained only as a fallback if
+            // serialization fails.
             error => {
                 let diagnostic =
                     serde_json::to_string(&error).unwrap_or_else(|_| format!("{error:?}"));

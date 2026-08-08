@@ -1,8 +1,5 @@
 use caelum_core::model::{Point, ServicePattern, TransitMode, TripStatus};
-use caelum_core::{
-    validate_snapshot, GameEngine, GameIntent, NumericError, PersistenceError, RoadPreset,
-    SnapshotField, TileError,
-};
+use caelum_core::{GameEngine, GameIntent, RoadPreset};
 
 mod common;
 
@@ -10,7 +7,7 @@ use common::persistence_fixtures::paused_snapshot;
 
 #[test]
 fn canonical_schema_v4_snapshot_is_persistence_valid() {
-    validate_snapshot(&paused_snapshot()).unwrap();
+    GameEngine::from_snapshot(paused_snapshot()).unwrap();
 }
 
 #[test]
@@ -19,36 +16,6 @@ fn snapshot_for_save_matches_the_engine_minted_capture() {
     apply(&mut engine, GameIntent::SetPaused { paused: false });
 
     assert!(engine.snapshot_for_save().paused);
-}
-
-#[test]
-fn nonfinite_time_is_rejected_without_copying_it_into_context() {
-    let mut snapshot = paused_snapshot();
-    snapshot.time = f64::NAN;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidNumericValue {
-            entity: None,
-            field: SnapshotField::Time,
-            reason: NumericError::NotFinite,
-        }
-    );
-}
-
-#[test]
-fn row_major_tile_drift_has_a_deterministic_first_error() {
-    let mut snapshot = paused_snapshot();
-    snapshot.map.tiles[0].x = 1;
-    assert_eq!(
-        validate_snapshot(&snapshot).unwrap_err(),
-        PersistenceError::InvalidTile {
-            tile_id: "tile-0-0".to_string(),
-            reason: TileError::WrongRowMajorCoordinate {
-                expected: caelum_core::model::Point { x: 0, y: 0 },
-                actual: caelum_core::model::Point { x: 1, y: 0 },
-            },
-        }
-    );
 }
 
 fn apply(engine: &mut GameEngine, intent: GameIntent) {

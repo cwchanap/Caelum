@@ -3,12 +3,11 @@ mod error;
 mod map;
 mod trips;
 
+pub use error::SnapshotLoadError;
 pub(crate) use error::{
     AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
-    OwnershipError, RoadStructureError, ScenarioError,
-};
-pub use error::{
-    NumericError, PersistenceError, PersistenceResult, SnapshotField, SnapshotLoadError, TileError,
+    NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
+    ScenarioError, SnapshotField, TileError,
 };
 
 use crate::model::{GameSnapshot, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};
@@ -85,20 +84,16 @@ fn normalize_derived_fields(snapshot: &mut GameSnapshot, topology: &RoadTopology
     entities::normalize_direct_fields(snapshot, topology);
 }
 
-pub fn validate_snapshot(snapshot: &GameSnapshot) -> PersistenceResult<()> {
-    validate_and_compile(snapshot.clone()).map(drop)
-}
-
 /// Check a probed schema version against the current
 /// [`SNAPSHOT_SCHEMA_VERSION`]. Returns `Ok(())` when it matches, or
-/// [`PersistenceError::UnsupportedSchema`] with `actual` set to the probed
+/// [`SnapshotLoadError::UnsupportedSchema`] with `actual` set to the probed
 /// version (or `0` when the probe could not read one). This is the single
 /// source of truth for the version-comparison step shared by the WASM and
 /// Tauri host bridges; each host performs its own backend-specific probe
 /// deserialization and then delegates the comparison here.
-pub fn check_schema_version(actual: u16) -> Result<(), PersistenceError> {
+pub fn check_schema_version(actual: u16) -> Result<(), SnapshotLoadError> {
     if actual != SNAPSHOT_SCHEMA_VERSION {
-        return Err(PersistenceError::UnsupportedSchema {
+        return Err(SnapshotLoadError::UnsupportedSchema {
             expected: SNAPSHOT_SCHEMA_VERSION,
             actual,
         });
@@ -113,9 +108,58 @@ pub fn check_schema_version(actual: u16) -> Result<(), PersistenceError> {
 /// `serde_json` (Tauri, core tests) call this directly; the WASM host probes
 /// via `serde_wasm_bindgen` and calls [`check_schema_version`] with the
 /// resulting version.
-pub fn check_snapshot_schema(value: &serde_json::Value) -> Result<(), PersistenceError> {
+pub fn check_snapshot_schema(value: &serde_json::Value) -> Result<(), SnapshotLoadError> {
     let actual = SnapshotSchemaProbe::deserialize(value.into_deserializer())
         .map(|probe| probe.schema_version)
         .unwrap_or(0);
     check_schema_version(actual)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_and_compile, NumericError, PersistenceError, SnapshotField, TileError};
+    use crate::engine::GameEngine;
+    use crate::model::Point;
+
+    fn paused_snapshot() -> crate::model::GameSnapshot {
+        let mut snapshot = GameEngine::new().snapshot();
+        snapshot.paused = true;
+        snapshot
+    }
+
+    #[test]
+    fn nonfinite_time_is_rejected_without_copying_it_into_context() {
+        let mut snapshot = paused_snapshot();
+        snapshot.time = f64::NAN;
+        match validate_and_compile(snapshot) {
+            Err(error) => assert_eq!(
+                error,
+                PersistenceError::InvalidNumericValue {
+                    entity: None,
+                    field: SnapshotField::Time,
+                    reason: NumericError::NotFinite,
+                }
+            ),
+            Ok(_) => panic!("nonfinite time should be rejected"),
+        }
+    }
+
+    #[test]
+    fn row_major_tile_drift_has_a_deterministic_first_error() {
+        let mut snapshot = paused_snapshot();
+        snapshot.map.tiles[0].x = 1;
+        match validate_and_compile(snapshot) {
+            Err(error) => assert_eq!(
+                error,
+                PersistenceError::InvalidTile {
+                    tile_id: "tile-0-0".to_string(),
+                    reason: TileError::WrongRowMajorCoordinate {
+                        expected: Point { x: 0, y: 0 },
+                        actual: Point { x: 1, y: 0 },
+                    },
+                }
+            ),
+            Ok(_) => panic!("row-major tile drift should be rejected"),
+        }
+    }
 }
