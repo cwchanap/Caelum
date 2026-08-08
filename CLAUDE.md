@@ -81,11 +81,10 @@ small `GameBackend` contract (`snapshot`, `snapshotForSave`,
 `previewRoute`, and `previewRoadMutation`). The Tauri runtime epoch is private to
 its adapter and native commands. Both adapters build sandbox candidates through
 the pure `create_sandbox_snapshot` path, restore candidates before swapping live
-state, and retain runtime rollback for ambiguous thrown restores and for
-successful restores that a newer load supersedes before publication (both go
-away once HPA-543 replaces the current load coordination with one busy gate).
-Snapshot
-errors are `unsupportedSchema`, `invalidSnapshot`, or `hostFailure`, with an
+state. A definitive restore failure preserves the active engine; an ambiguous
+thrown restore clears active-city identity rather than rolling back, so a later
+Save cannot target the wrong city. Snapshot errors are `unsupportedSchema`,
+`invalidSnapshot`, or `hostFailure`, with an
 optional diagnostic and no operation field. Public dispatch context is gone;
 private apply data and UI-facing preview impact remain.
 
@@ -96,20 +95,16 @@ scheduled for deletion. Do not extend them, build on them, or preserve their
 invariants in new code. If a task touches one, prefer moving toward the target
 shape.
 
-| Area                | Today                                                                                            | Target                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Save contract       | 19-method `SaveStore`, `SaveEnvelope`, checkpoints/autosaves/generations                         | Six ops: `list`/`read`/`create`/`update`/`rename`/`delete` over `CitySaveRecord` |
-| Runtime persistence | `SharedPersistenceCoordinator`, leases, per-city FIFOs, city fences, revisions, pending/finalize | Active city id + one `persistenceBusy` gate + one dirty boolean                  |
-| Durable storage     | None — `MemorySaveStore` only, not wired into `src/main.ts`                                      | Two thin adapters: browser IndexedDB, native Tauri application-data files        |
-| Campaign/growth     | `GameMode`, `ScenarioConfig`, objectives, growth waves in the snapshot and tick path             | Removed, once it measurably slows sandbox work                                   |
+| Area            | Today                                                                        | Target                                                            |
+| --------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Durable storage | No browser/native durable adapter is wired; `src/main.ts` provides no store. | Browser IndexedDB and native Tauri application-data-file adapters |
+| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path      | Removed, once it measurably slows sandbox work                    |
 
-Nothing in the persistence stack is reachable from the running application yet: `src/main.ts` constructs no store and no UI calls a save operation.
-
-HPA-543 owns the runtime persistence replacement, including the transition away
-from the current coordinator, queues, revisions, and pending/finalize recovery.
-HPA-548 owns the six-operation save contract and the browser IndexedDB/native
-Tauri application-data adapters. Neither boundary is implemented early by the
-HPA-547 host reduction.
+`CitySaveStore` is the six-operation save boundary: `list`, `read`, `create`,
+`update`, `rename`, and `delete` over `CitySaveRecord`. `workingSaveRuntime.ts`
+owns one active city, one busy gate, and one dirty boolean. The active-development
+scope supports one runtime from `src/main.ts`; multi-window ownership is not a
+supported workflow.
 
 ## Commands
 
@@ -184,15 +179,24 @@ Routes store Loop/Shuttle directional service legs with current and last-valid t
 
 Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement captures compatible boundary ports, may replace only fully contained bare roads/automatic junctions, preserves latent area, and removes as one structure.
 
-### Persistence coordination — being deleted
+### Working-save runtime
 
-> **Do not build on this section.** The machinery it describes is scheduled for removal and no player-facing feature depends on it. New persistence work should target one busy gate, not extend the coordinator.
+`workingSaveRuntime.ts` owns persistence orchestration: active-city identity, one
+busy gate, one dirty boolean, one current persistence error, and the
+six-operation `CitySaveStore` boundary. It blocks conflicting mutations while
+busy and drains gameplay admitted before the persistence action starts.
 
-`persistenceCoordinator.ts` currently implements a `SharedPersistenceCoordinator` (exclusive leases, per-city FIFOs, reference-counted city fences, storage identity with a `WeakMap` fallback, session/load/revision tokens) so that a replacement runtime cannot race an old runtime's pending writes. This machinery remains intentionally unchanged after HPA-547 and is owned by HPA-543 for deletion. It defends against a multi-runtime scenario that production does not create — `src/main.ts` mounts exactly one runtime — and it introduced a hang: if an uncancellable store operation never settles, the lease is never released and the replacement `createGameRuntime` never resolves.
+The active-development scope mounts one runtime from `src/main.ts` and has no
+supported multi-window workflow. Do not add ownership handoff, cross-runtime
+locking, queues, or repair machinery unless a selected feature creates that
+boundary.
 
-The HPA-543 target is active-city identity plus one `persistenceBusy` gate and one dirty boolean. Save Now will block new mutations and wait for the in-flight backend mutation to settle before capturing, so revision baselines and late-completion reconciliation become unnecessary. HPA-548 separately replaces the current `SaveStore`/envelope surface; neither change is part of HPA-547.
-
-**Candidate-first is the load-bearing idea.** New City and Load ask the backend for a snapshot built _without touching the active engine_, then swap only after success — so a failure leaves current gameplay untouched and rollback, leases, sessions, and supersession are unnecessary rather than merely removed. New City is also storage-first: create the record, then activate. If activation fails afterwards the record simply stays in the city list for a retry, which is why no compensation or orphan-cleanup machinery is needed.
+**Candidate-first is the load-bearing idea.** New City builds a snapshot without
+touching the active engine, persists that candidate first, then activates it.
+Load activates only a restored candidate. A definitive failed restore leaves the
+current gameplay and active identity in place. An adapter-thrown or rejected
+restore is ambiguous, so do not roll back: clear active-city identity before
+publishing the failure to prevent a later Save from targeting the wrong city.
 
 ## Conventions
 

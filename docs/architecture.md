@@ -89,14 +89,12 @@ restoring. Sandbox form failures remain separate field-level
 small union `SnapshotError | SandboxHostError`.
 
 An adapter-thrown or rejected restore is ambiguous: the host may have committed a
-candidate before delivery failed. Load and New City capture the canonical prior
-snapshot immediately before activation, roll it back on a thrown restore, and
-enter the existing fatal coherence path if rollback also fails. They also roll
-back a successful restore that a newer load supersedes before publication; both
-rollback cases remain until HPA-543 replaces the current load coordination with
-one busy gate. They do not roll back a definitive `{ ok: false }`, because
+candidate before delivery failed. The working-save runtime does not roll back or
+reconcile that ambiguity. It clears active-city identity before publishing the
+failure, so a later Save cannot overwrite the prior city's record. A definitive
+`{ ok: false }` leaves active gameplay and identity unchanged because
 candidate-first construction proves that no replacement occurred. Save capture is
-non-mutating, so a thrown save operation reports `hostFailure` without rollback.
+non-mutating, so a thrown save operation reports `hostFailure`.
 
 Tauri's runtime epoch is private to `createTauriBackend()` and the native
 commands. The adapter calls the private `game_begin_runtime` bootstrap before it
@@ -119,13 +117,11 @@ uses `normalizeRustSnapshot` to recursively turn host-specific
 `undefined`/`null` option representations into the equal read-only `GameState`
 view consumed by UI and rendering.
 
-The current runtime persistence machinery remains the pre-HPA-543
-`SharedPersistenceCoordinator`: it still owns leases, per-city queues/fences,
-revisions, pending/finalize reconciliation, and supersession handling. HPA-547
-intentionally leaves that coordinator unchanged. HPA-543 is the remaining work to
-replace it with active-city identity, one `persistenceBusy` gate, and one dirty
-boolean. HPA-548 separately owns the future six-operation multi-city save
-boundary; the current `SaveStore`/envelope contract is not redesigned here.
+`workingSaveRuntime.ts` owns runtime persistence: one active city, one busy gate,
+one dirty boolean, one current persistence error, and the six-operation
+`CitySaveStore` boundary. The active-development scope supports one runtime and
+no multi-window workflow, so persistence needs no ownership handoff or
+cross-runtime coordination.
 
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
