@@ -1,18 +1,28 @@
 use caelum_core::model::{EconomyPreset, Point, ServicePattern, TransitMode};
 use caelum_core::{GameEngine, GameIntent, RoadPreset, SandboxCreationRequest};
 
+fn assert_savable(engine: &GameEngine, label: &str) {
+    let saved = engine.snapshot_for_save();
+    GameEngine::from_snapshot(saved).unwrap_or_else(|error| {
+        panic!("{label} produced a state that cannot be restored: {error:?}")
+    });
+}
+
 fn apply(engine: &mut GameEngine, intent: GameIntent) {
+    let label = format!("dispatch {intent:?}");
     let result = engine.dispatch(intent);
     assert!(
         result.applied,
         "fixture intent was rejected or unchanged: {:?}",
         result.rejection
     );
+    assert_savable(engine, &label);
 }
 
 fn apply_tick(engine: &mut GameEngine, seconds: f64) {
     let result = engine.tick(seconds);
     assert!(result.applied, "tick {seconds} must apply");
+    assert_savable(engine, &format!("tick {seconds}"));
 }
 
 fn production_fixture() -> GameEngine {
@@ -138,6 +148,8 @@ fn restored_engine_has_identical_future_results_and_topology() {
             original.road_topology_for_test(),
             restored.road_topology_for_test()
         );
+        assert_savable(&original, "original continuation state");
+        assert_savable(&restored, "restored continuation state");
     }
 }
 
