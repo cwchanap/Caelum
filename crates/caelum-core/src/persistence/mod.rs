@@ -54,8 +54,7 @@ fn validate_and_compile(mut snapshot: GameSnapshot) -> PersistenceResult<Prepare
     // The complete entity/trip checks run again below, after derived fields have
     // been rebuilt, so stale serialized caches do not decide loadability.
     entities::validate_entities_for_normalization(&snapshot, &topology)?;
-    trips::normalize_direct_fields(&mut snapshot);
-    entities::normalize_direct_fields(&mut snapshot, &topology);
+    normalize_derived_fields(&mut snapshot, &topology);
     let indexes = entities::validate_entities(&snapshot, &topology)?;
     trips::validate_trips(&snapshot, &indexes)?;
     Ok(PreparedSnapshot {
@@ -75,8 +74,15 @@ pub(crate) fn prepare_snapshot(snapshot: GameSnapshot) -> PersistenceResult<Prep
 
 pub(crate) fn normalize_snapshot_for_save(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
     map::normalize_shell(snapshot);
-    entities::normalize_direct_fields(snapshot, topology);
+    normalize_derived_fields(snapshot, topology);
+}
+
+/// Rebuild the derived fields that both the save and load/compile paths share,
+/// in one fixed order (trips before entities) so a save→load round trip is
+/// deterministic regardless of which path produced the snapshot.
+fn normalize_derived_fields(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
     trips::normalize_direct_fields(snapshot);
+    entities::normalize_direct_fields(snapshot, topology);
 }
 
 pub fn validate_snapshot(snapshot: &GameSnapshot) -> PersistenceResult<()> {

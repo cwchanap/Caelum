@@ -80,7 +80,7 @@ pub(super) fn validate_entities<'a>(
     _topology: &RoadTopology,
 ) -> PersistenceResult<EntityIndexes<'a>> {
     let indexes = validate_entity_references(snapshot)?;
-    validate_routes(snapshot, &indexes)?;
+    validate_routes(snapshot)?;
     validate_vehicles(snapshot, &indexes)?;
     Ok(indexes)
 }
@@ -792,28 +792,22 @@ fn validate_platform_assignments(
     Ok(())
 }
 
-fn validate_routes(snapshot: &GameSnapshot, indexes: &EntityIndexes<'_>) -> PersistenceResult<()> {
+fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     for route in &snapshot.transit.routes {
         validate_route_shape(
             snapshot,
-            indexes,
             EntityKind::BusRoute,
             &route.id,
             TransitMode::Bus,
-            &route.stop_ids,
-            &route.vehicle_ids,
             &route.legs,
         )?;
     }
     for line in &snapshot.transit.metro_lines {
         validate_route_shape(
             snapshot,
-            indexes,
             EntityKind::MetroLine,
             &line.id,
             TransitMode::Metro,
-            &line.station_ids,
-            &line.vehicle_ids,
             &line.legs,
         )?;
     }
@@ -821,19 +815,16 @@ fn validate_routes(snapshot: &GameSnapshot, indexes: &EntityIndexes<'_>) -> Pers
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+// Waypoint and vehicle reference validation is owned by `validate_route_references`
+// (run via `validate_entity_references` before this), so route-shape validation
+// only needs to check the serialized leg geometry.
 fn validate_route_shape(
     snapshot: &GameSnapshot,
-    indexes: &EntityIndexes<'_>,
     kind: EntityKind,
     route_id: &str,
     mode: TransitMode,
-    waypoint_ids: &[String],
-    vehicle_ids: &[String],
     legs: &[RouteLegPath],
 ) -> PersistenceResult<()> {
-    validate_route_waypoint_references(indexes, kind, route_id, mode, waypoint_ids)?;
-    validate_route_vehicle_references(indexes, kind, route_id, mode, vehicle_ids)?;
     let route = entity_ref(kind, route_id);
     for leg in legs {
         validate_route_leg(snapshot, route.clone(), mode, leg)?;

@@ -4,7 +4,7 @@
 
 **Goal:** Keep native Tauri and browser/WASM gameplay paths while deleting public host-session ownership, exhaustive persistence parity, and unused dispatch wire impact around the shared `caelum-core` engine.
 
-**Architecture:** `caelum-core` remains the only gameplay authority. Public dispatch impact and JavaScript backend ownership are removed as independent green commits. The save/restore API then changes atomically across core, WASM, Tauri, TypeScript, the coordinator consumer type, and runtime call sites. Tauri retains a private epoch; Load and New City retain narrow prior-snapshot rollback only for ambiguous thrown restores.
+**Architecture:** `caelum-core` remains the only gameplay authority. Public dispatch impact and JavaScript backend ownership are removed as independent green commits. The save/restore API then changes atomically across core, WASM, Tauri, TypeScript, the coordinator consumer type, and runtime call sites. Tauri retains a private epoch; Load and New City retain narrow prior-snapshot rollback for ambiguous thrown restores and for successful restores superseded before publication (until HPA-543 replaces the current load coordination with one busy gate).
 
 **Tech Stack:** Rust 2021, Serde/serde_json, wasm-bindgen, serde-wasm-bindgen, Tauri 2, TypeScript 5.8, Svelte 5, Bun, Vitest, Playwright.
 
