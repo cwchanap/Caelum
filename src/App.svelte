@@ -392,13 +392,11 @@
 
       return () => {
         unsubscribe();
-        // Dispose (not just stop) so pending storage writes drain and this
-        // runtime's local persistence lease is released. A mere `stop()` leaves
-        // the runtime alive — the canvas loop can be restarted and pending
-        // writes can continue after teardown. Dispose makes the runtime
-        // terminal: `start()` and all UI methods become no-ops.
-        //
-        void runtime.dispose();
+        // Dispose (not just stop) so this runtime becomes terminal
+        // synchronously. A mere `stop()` leaves the runtime alive — the canvas
+        // loop can be restarted and pending work can still settle. After
+        // disposal, late work cannot render or publish.
+        runtime.dispose();
       };
     }
   });

@@ -35,28 +35,31 @@ import type {
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
-import {
-  runtimeUnavailable,
-  type RuntimePersistenceController,
-  type RuntimePersistenceView,
-} from "../../src/runtime/persistenceCoordinator";
+import type {
+  RuntimePersistenceController,
+  RuntimePersistenceView,
+} from "../../src/runtime/workingSaveRuntime";
 
 const persistenceView: RuntimePersistenceView = {
   activeCity: null,
+  busy: false,
   dirty: false,
-  saveStatus: { state: "idle" },
-  loadStatus: { state: "idle" },
-  lifecycleStatus: { state: "idle" },
-  lastSavedAt: null,
   error: null,
 };
 
+const unavailable = async () =>
+  ({ ok: false, error: { kind: "unavailable" } }) as const satisfies {
+    ok: false;
+    error: { kind: "unavailable" };
+  };
+
 const persistenceController: RuntimePersistenceController = {
-  saveWorking: async () => runtimeUnavailable("saveWorking"),
-  renameActiveCity: async () => runtimeUnavailable("renameActiveCity"),
-  load: async () => runtimeUnavailable("loadCity"),
-  detachActiveCity: async () => runtimeUnavailable("detachActiveCity"),
-  activateNewCity: async () => runtimeUnavailable("activateNewCity"),
+  listCities: unavailable,
+  save: unavailable,
+  load: unavailable,
+  createCity: unavailable,
+  renameCity: unavailable,
+  deleteCity: unavailable,
 };
 
 async function openCategory(name: string): Promise<void> {
@@ -148,7 +151,7 @@ function createRuntimeHarness(
     }),
     start: vi.fn(),
     stop: vi.fn(),
-    dispose: vi.fn(() => Promise.resolve()),
+    dispose: vi.fn(() => {}),
     isRunning: vi.fn(() => false),
     tick: vi.fn((_deltaSeconds: number) => publish()),
     reset: vi.fn(() => {
@@ -365,9 +368,6 @@ function createRuntimeHarness(
       return publish();
     }),
     debugSetBudget: vi.fn(() => publish()),
-    debugEnqueueCityPersistence: vi.fn(
-      <T>(_cityId: string, work: () => Promise<T>): Promise<T> => work(),
-    ) as unknown as <T>(cityId: string, work: () => Promise<T>) => Promise<T>,
     mountCanvas: vi.fn(() => () => {}),
   };
 
