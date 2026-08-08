@@ -25,7 +25,7 @@ import type {
 import type {
   RuntimePersistenceController,
   RuntimePersistenceView,
-} from "./persistenceCoordinator";
+} from "./workingSaveRuntime";
 
 export type {
   RouteDraft,
@@ -217,8 +217,8 @@ export interface RuntimeController {
   subscribe: (listener: RuntimeListener) => () => void;
   start: () => void;
   stop: () => void;
-  /** Gracefully stop, drain admitted work, and release runtime ownership. */
-  dispose: () => Promise<void>;
+  /** Terminally stop the runtime and suppress late work. */
+  dispose: () => void;
   isRunning: () => boolean;
   tick: (deltaSeconds: number) => RuntimeCommandResult;
   reset: () => RuntimeCommandResult;
@@ -290,12 +290,4 @@ export interface RuntimeController {
  */
 export interface RuntimeTestSeam {
   debugSetBudget: (budget: number) => RuntimeCommandResult;
-  // Test-only seam onto this runtime's per-city persistence FIFO. Lets a
-  // harness inject an "older write" for a city that the runtime's own
-  // candidate write must serialize behind, without exposing any module-global
-  // queue (there is none). Production code never calls this.
-  debugEnqueueCityPersistence: <T>(
-    cityId: string,
-    work: () => Promise<T>,
-  ) => Promise<T>;
 }

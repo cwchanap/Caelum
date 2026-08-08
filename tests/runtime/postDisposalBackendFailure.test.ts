@@ -137,19 +137,10 @@ describe("post-disposal backend failure publication", () => {
     // Record render count before disposal.
     const rendersBeforeDispose = canvasHost.render.mock.calls.length;
 
-    // Call dispose(). dead = true, startDrainAndRelease begins,
-    // gameplayQueue.drain() waits for the blocked dispatch.
-    const disposePromise = runtime.dispose();
-
-    // Assert disposal has not resolved (gameplay queue is still draining).
-    const settledDispose = await Promise.race([
-      disposePromise.then(
-        () => true,
-        () => true,
-      ),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
-    ]);
-    expect(settledDispose).toBe(false);
+    // Disposal is terminal immediately even though this dispatch is still in
+    // flight. It must suppress any later render or subscriber notification.
+    runtime.dispose();
+    expect(runtime.isRunning()).toBe(false);
 
     // Reject the blocked dispatch. failBackend runs, but disposalRequested
     // is true, so it must NOT publishTerminalSnapshot.
@@ -159,9 +150,6 @@ describe("post-disposal backend failure publication", () => {
     await Promise.resolve(dispatchPromise).catch(() => {
       // failBackend may cause the dispatch to reject — that's fine.
     });
-
-    // Disposal settles only after the backend operation settles.
-    await disposePromise;
 
     // No subscriber notification after disposal.
     expect(listener).not.toHaveBeenCalled();
@@ -219,38 +207,5 @@ describe("post-disposal backend failure publication", () => {
     // The runtime is already dead; a second dispatch short-circuits.
     await runtime.debugSetBudget(99_000);
     expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("replacement runtime sees coherent backend state after post-disposal backend failure", async () => {
-    const backend = createDelayedDispatchBackend();
-    const runtime = await createGameRuntime({
-      backend,
-      initialCity: null,
-    });
-
-    // Start a dispatch that blocks and will be rejected after disposal.
-    const dispatchBlocked = backend.blockNextDispatch();
-    const dispatchPromise = runtime.debugSetBudget(55_000);
-    await dispatchBlocked;
-
-    const disposePromise = runtime.dispose();
-
-    // Reject the dispatch after disposal.
-    backend.rejectDispatch(new Error("post-disposal failure"));
-    await Promise.resolve(dispatchPromise).catch(() => {
-      // expected
-    });
-
-    await disposePromise;
-
-    // A replacement runtime can initialize against the same backend.
-    // The backend state is coherent (the dispatch was rejected before
-    // mutating, so the backend retains its pre-dispatch state).
-    const replacement = await createGameRuntime({
-      backend,
-      initialCity: null,
-    });
-    expect(replacement.getSnapshot().state.budget).toBe(120_000);
-    expect(replacement.getSnapshot().backendError).toBeNull();
   });
 });

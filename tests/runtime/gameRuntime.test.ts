@@ -21,6 +21,7 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import type {
   RuntimeController,
   RuntimeSnapshot,
@@ -30,6 +31,7 @@ import {
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 import { createTestGameState } from "../helpers/gameState";
+import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
 
 const TEST_REJECTION: GameplayRejection = {
   code: "blockedTile",
@@ -1152,6 +1154,93 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
   });
 
+  it("blocks route and road previews while load is busy and drops a pre-load response", async () => {
+    const initial = fullRustSnapshot({
+      transit: {
+        stops: [createStop("stop-0001", { x: 1, y: 1 })],
+        stations: [],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const previews = deferredPreviewBackend(initial);
+    let releaseRestore!: () => void;
+    const restoreStarted = new Promise<void>((resolve) => {
+      const release = resolve;
+      releaseRestore = () => release();
+    });
+    let signalRestoreStarted!: () => void;
+    const restoreBegan = new Promise<void>((resolve) => {
+      signalRestoreStarted = resolve;
+    });
+    const backend: GameBackend = {
+      ...previews.backend,
+      async restoreSnapshot(snapshot) {
+        signalRestoreStarted();
+        await restoreStarted;
+        return { ok: true, snapshot: snapshot as RustGameSnapshot };
+      },
+    };
+    const store = createMemoryCitySaveStore();
+    const loadedCity = {
+      id: "city-loaded",
+      name: "Loaded City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T10:00:00.000Z",
+    };
+    const loadedSnapshot = fullRustSnapshot({ budget: 99_000 });
+    await store.createCity({
+      city: {
+        id: loadedCity.id,
+        name: loadedCity.name,
+        createdAt: loadedCity.createdAt,
+      },
+      savedAt: loadedCity.savedAt,
+      snapshot: loadedSnapshot,
+    });
+    const routePreviewSpy = vi.spyOn(backend, "previewRoute");
+    const roadPreviewSpy = vi.spyOn(backend, "previewRoadMutation");
+    const runtime = await createGameRuntime({
+      backend,
+      saveStore: store,
+      initialCity: null,
+      hoverPreviewDebounceMs: 0,
+    });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+
+    runtime.setTool("busRoute");
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 5, y: 5 } });
+    expect(roadPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(routePreviewSpy).not.toHaveBeenCalled();
+
+    const load = runtime.persistence.load(loadedCity.id);
+    await restoreBegan;
+    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+    const beforeBlockedPreview = runtime.getSnapshot();
+
+    await runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 6, y: 5 } });
+
+    expect(routePreviewSpy).not.toHaveBeenCalled();
+    expect(roadPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(runtime.getSnapshot().ui.routeDraft).toEqual(
+      beforeBlockedPreview.ui.routeDraft,
+    );
+    expect(runtime.getSnapshot().ui.routeDraft?.previewPending).toBe(false);
+
+    releaseRestore();
+    await expect(load).resolves.toEqual({ ok: true, value: loadedCity });
+    listener.mockClear();
+
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("arms a click tool and never starts a drag gesture", async () => {
     const base = backendSpy();
     const previewRoadMutation = vi.fn(base.previewRoadMutation.bind(base));
@@ -1538,12 +1627,12 @@ describe("Game Runtime", () => {
       id: "city-reset",
       name: "Reset City",
       createdAt: "2026-08-01T09:00:00.000Z",
+      savedAt: "2026-08-01T09:30:00.000Z",
     };
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend,
       initialCity: identity,
-      lastSavedAt: "2026-08-01T09:30:00.000Z",
     });
 
     runtime.setTool("busRoute");
@@ -1559,11 +1648,8 @@ describe("Game Runtime", () => {
     expect(snapshot.sandboxResetError).toBeNull();
     expect(snapshot.persistence).toMatchObject({
       activeCity: identity,
+      busy: false,
       dirty: true,
-      saveStatus: { state: "idle" },
-      loadStatus: { state: "idle" },
-      lifecycleStatus: { state: "idle" },
-      lastSavedAt: "2026-08-01T09:30:00.000Z",
       error: null,
     });
   });
@@ -1712,6 +1798,65 @@ describe("Game Runtime", () => {
 
     runtime.stop();
     expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("re-arms animation after a busy Save drops a frame", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        scheduledFrame = callback;
+        return 1;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const initial = fullRustSnapshot({ paused: false });
+    const delegate = createMemoryCitySaveStore();
+    const city = {
+      id: "city-raf",
+      name: "RAF City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    await delegate.createCity({
+      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      savedAt: city.savedAt,
+      snapshot: initial,
+    });
+    const store = createDelayedCitySaveStore(delegate);
+    store.defer("updateCity");
+    const runtime = await createGameRuntime({
+      backend: backendSpy(initial),
+      saveStore: store,
+      initialCity: city,
+      now: () => "2026-08-08T10:00:00.000Z",
+    });
+
+    runtime.start();
+    const firstFrame = scheduledFrame as FrameRequestCallback | null;
+    if (firstFrame === null)
+      throw new Error("runtime did not schedule a frame");
+    scheduledFrame = null;
+    firstFrame(0);
+    const busyFrame = scheduledFrame as FrameRequestCallback | null;
+    if (busyFrame === null)
+      throw new Error("runtime did not reschedule a frame");
+
+    const save = runtime.persistence.save();
+    await store.waitForActive("updateCity");
+    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+
+    scheduledFrame = null;
+    busyFrame(16);
+    await Promise.resolve();
+    expect(scheduledFrame).toBeNull();
+
+    store.releaseNext("updateCity");
+    await save;
+    expect(scheduledFrame).not.toBeNull();
 
     vi.unstubAllGlobals();
   });
