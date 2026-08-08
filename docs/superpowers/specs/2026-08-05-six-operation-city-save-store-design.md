@@ -189,6 +189,11 @@ The memory store is one `Map<string, CitySaveRecord>` plus a small operation-fai
 
 ## 6. Runtime bridge
 
+> **Superseded by HPA-543 (2026-08-08).** Sections 3–5 remain the authoritative
+> `CitySaveStore` contract. The controller/coordinator workflow below describes
+> the temporary HPA-548 cutover state and must not be used for new runtime work.
+> See `2026-08-08-working-save-runtime-design.md` for the current runtime contract.
+
 ### 6.1 Controller surface after HPA-548
 
 ```ts
