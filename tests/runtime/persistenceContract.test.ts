@@ -84,4 +84,15 @@ describe("snapshot persistence mapping", () => {
       snapshot,
     });
   });
+
+  it("does not throw when the rejected error has a circular reference", async () => {
+    const circular: Record<string, unknown> = { code: "hostFailure" };
+    circular.self = circular;
+    const result = await runSnapshotOperation(() => Promise.reject(circular));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("hostFailure");
+      expect(result.error.diagnostic).toBe(String(circular));
+    }
+  });
 });
