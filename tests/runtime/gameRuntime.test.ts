@@ -3900,12 +3900,15 @@ describe("route creation and management", () => {
     await flushPromises();
 
     // The draft moves on (new instance) before the second attempt resolves,
-    // so its token is no longer current when the success arrives.
-    runtime.cancelRouteDraft();
+    // so its token is no longer current when the success arrives. Cancel
+    // clears the mirrored rejection before that superseded save completes.
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.rejection).toBeNull();
+    expect(cancelled.shell.actionFeedback).toBeNull();
     runtime.setTool("busRoute");
     await runtime.handleTileClick({ x: 14, y: 7 });
     await runtime.handleTileClick({ x: 14, y: 8 });
-    expect(runtime.getSnapshot().rejection).toEqual(TEST_REJECTION);
+    expect(runtime.getSnapshot().rejection).toBeNull();
 
     await backend.resolveNext();
     await secondAttempt;
@@ -3918,6 +3921,57 @@ describe("route creation and management", () => {
       "stop-001",
       "stop-002",
     ]);
+  });
+
+  it("does not resurrect a superseded Save rejection after Cancel", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    backend.rejectNextDispatchWith(TEST_REJECTION);
+    const firstAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+    await backend.resolveNext();
+    await firstAttempt;
+
+    const secondAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.rejection).toBeNull();
+    expect(cancelled.shell.actionFeedback).toBeNull();
+
+    backend.rejectNextDispatchWith(TEST_REJECTION);
+    await backend.resolveNext();
+    await secondAttempt;
+
+    const finished = runtime.getSnapshot();
+    expect(finished.rejection).toBeNull();
+    expect(finished.shell.actionFeedback).toBeNull();
+  });
+
+  it("does not resurrect a superseded Save host failure after Cancel", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    backend.rejectNextDispatchWith(TEST_REJECTION);
+    const firstAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+    await backend.resolveNext();
+    await firstAttempt;
+
+    const secondAttempt = runtime.saveRouteDraft();
+    await flushPromises();
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.rejection).toBeNull();
+    expect(cancelled.shell.actionFeedback).toBeNull();
+
+    backend.failNextDispatch(new Error("superseded save unavailable"));
+    await backend.resolveNext();
+    await secondAttempt;
+
+    const finished = runtime.getSnapshot();
+    expect(finished.rejection).toBeNull();
+    expect(finished.shell.actionFeedback).toBeNull();
+    expect(finished.backendError).toBeNull();
   });
 
   it("invalidates and re-requests the current draft preview when a superseded save bumps the revision", async () => {
