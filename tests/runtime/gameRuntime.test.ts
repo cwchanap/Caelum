@@ -3821,6 +3821,41 @@ describe("route creation and management", () => {
     expect(snapshot.rejection).toEqual(TEST_REJECTION);
     expect(snapshot.ui.routePreviewError).toEqual(TEST_REJECTION);
     expect(snapshot.shell.routeDraft?.previewStatus).not.toBe("connected");
+    expect(snapshot.shell.actionFeedback).toBeNull();
+  });
+
+  it("Cancel clears a current create-route Save rejection owned by the editor", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const { runtime } = await withTwoStops(backend);
+
+    backend.rejectNextDispatch();
+    await runtime.saveRouteDraft();
+
+    const rejected = runtime.getSnapshot();
+    expect(rejected.rejection).toBe(TEST_REJECTION);
+    expect(rejected.ui.routePreviewError).toBe(TEST_REJECTION);
+
+    const cancelled = runtime.cancelRouteDraft();
+
+    expect(cancelled.rejection).toBeNull();
+    expect(cancelled.ui.routePreviewError).toBeNull();
+  });
+
+  it("Cancel preserves an unrelated earlier rejection", async () => {
+    const backend = backendSpy(routeSnapshot());
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    backend.rejectNextDispatch();
+    await runtime.setSpeed(2);
+    expect(runtime.getSnapshot().rejection).toBe(TEST_REJECTION);
+
+    runtime.setTool("busRoute");
+    const cancelled = runtime.cancelRouteDraft();
+
+    expect(cancelled.rejection).toBe(TEST_REJECTION);
   });
 
   it("does not let a slow route finish clear a newer draft", async () => {

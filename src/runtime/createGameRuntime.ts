@@ -857,10 +857,23 @@ export async function createGameRuntime(
     const draft = ui.routeDraft;
     previewCoordinator.invalidateRoute();
     const cancelledUi = cancelDraftRoute(ui);
+    const draftSaveTokenKey =
+      draft === null
+        ? null
+        : `${draft.instanceId}:${draft.generation}:${
+            draft.source.kind === "create"
+              ? "create"
+              : `edit:${draft.source.routeId}:${draft.source.expectedRevision}`
+          }`;
+    const draftSavePending =
+      draftSaveTokenKey !== null &&
+      activeRouteSaveTokens.has(draftSaveTokenKey);
     const editorOwnsRejection =
-      draft?.source.kind === "edit" &&
-      rejection?.code === "routeChangedWhileEditing" &&
-      rejection.context.routeId === draft.source.routeId;
+      rejection !== null &&
+      ((ui.routePreviewError === rejection && !draftSavePending) ||
+        (draft?.source.kind === "edit" &&
+          rejection.code === "routeChangedWhileEditing" &&
+          rejection.context.routeId === draft.source.routeId));
     if (editorOwnsRejection) rejection = null;
     if (
       cancelledUi === ui &&
