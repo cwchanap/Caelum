@@ -739,6 +739,37 @@ describe("working save runtime loads", () => {
     });
     expect(updates).toBe(0);
   });
+
+  it("does not restore after disposal when a read resolves late", async () => {
+    const loadedCity: CitySummary = {
+      id: "city-loaded",
+      name: "Loaded City",
+      createdAt: "2026-08-08T08:00:00.000Z",
+      savedAt: "2026-08-08T11:30:00.000Z",
+    };
+    const loadedSnapshot = createRustSnapshot({ budget: 321_000 });
+    const delegate = createMemoryCitySaveStore();
+    await seed(delegate, record(loadedCity, loadedSnapshot));
+    const delayed = createDelayedCitySaveStore(delegate);
+    delayed.defer("readCity");
+    const fixture = createRuntimeFixture({ saveStore: delayed });
+    fixture.runtime.markDirty();
+
+    const loading = fixture.runtime.controller.load(loadedCity.id);
+    await delayed.waitForActive("readCity");
+    const publicationsBeforeDispose = fixture.publications;
+
+    fixture.runtime.dispose();
+    delayed.releaseNext("readCity");
+
+    await expect(loading).resolves.toEqual({
+      ok: false,
+      error: { kind: "unavailable" },
+    });
+    expect(fixture.backend.calls).not.toContain("restoreSnapshot");
+    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.publications).toBe(publicationsBeforeDispose);
+  });
 });
 
 describe("working save runtime new cities", () => {

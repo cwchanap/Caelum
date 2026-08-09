@@ -158,6 +158,9 @@ export function createWorkingSaveRuntime(
   const restoreAndInstall = async (
     snapshot: unknown,
   ): Promise<WorkingSaveResult<RustGameSnapshot>> => {
+    if (!isLive()) {
+      return { ok: false, error: { kind: "unavailable" } };
+    }
     let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
     try {
       restored = await host.backend.restoreSnapshot(snapshot);
