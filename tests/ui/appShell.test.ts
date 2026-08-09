@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
-import { addTestBusStop, createTestGameState } from "../helpers/gameState";
+import {
+  addTestBusRoute,
+  addTestBusStop,
+  createTestGameState,
+} from "../helpers/gameState";
 import { withRoads } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createUiState } from "../../src/ui/uiState";
@@ -182,6 +186,83 @@ describe("App command shell", () => {
       "data",
     );
     expect(screen.queryByTestId("command-panel-build")).toBeNull();
+  });
+
+  it("invokes contextual Inspect reassignment controls", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    const { runtime } = createRuntimeHarness({
+      state,
+      ui: {
+        ...createUiState(),
+        selectedId: "7,7",
+        selectedNodeKind: "stop",
+      },
+    });
+    render(App, { props: { runtime } });
+
+    const move = screen.getByRole("button", {
+      name: "Move Bus 1 to Platform B",
+    });
+    await fireEvent.click(move);
+
+    expect(runtime.assignRouteToPlatform).toHaveBeenCalledWith(
+      stopId,
+      "route-001",
+      `${stopId}-p1`,
+    );
+  });
+
+  it("keeps route-draft gate IDs unique and scopes shelf descriptions", () => {
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        activeCommandDestination: "lines",
+        routeDraft: createDraft("bus", 1),
+      },
+    });
+    render(App, { props: { runtime } });
+
+    const gates = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[data-testid^="route-draft-"][data-testid$="gate"]',
+      ),
+    );
+    expect(gates.map((gate) => gate.id)).toEqual([
+      "route-draft-panel-gate",
+      "route-draft-shelf-gate",
+    ]);
+    for (const control of screen
+      .getByTestId("command-shelf")
+      .querySelectorAll("button")) {
+      expect(control).toHaveAttribute(
+        "aria-describedby",
+        "route-draft-shelf-gate",
+      );
+    }
+  });
+
+  it("renders a fatal shell error without game chrome", async () => {
+    const { runtime } = createRuntimeHarness();
+    runtime.togglePause = vi.fn(async () => ({
+      ...runtime.getSnapshot(),
+      backendError: "Rust backend failed",
+      rejection: null,
+    }));
+    render(App, { props: { runtime } });
+    await fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Rust backend failed",
+    );
+    expect(screen.queryByTestId("topbar")).toBeNull();
+    expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+    expect(screen.queryByTestId("command-shelf")).toBeNull();
+    expect(runtime.stop).toHaveBeenCalled();
   });
 
   it("renders Data's four overlays, empty hint, and metrics", async () => {
