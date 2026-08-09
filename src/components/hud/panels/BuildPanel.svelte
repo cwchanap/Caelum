@@ -99,6 +99,7 @@
           type="button"
           class="build-back"
           data-action="build-back"
+          data-testid="build-back"
           aria-label="Back to build categories"
           onclick={() => onSetBuildGroup(null)}
         >
@@ -120,6 +121,7 @@
               <button
                 type="button"
                 data-build-item={item.id}
+                data-testid={`build-item-${item.id}`}
                 data-building={item.action.kind === "building"
                   ? item.action.building
                   : undefined}

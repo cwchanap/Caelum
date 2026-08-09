@@ -3,14 +3,15 @@ import type { MovementKind, RouteLegPath } from "../../src/domain/types";
 import { tileSize } from "../../src/render/canvas";
 import { colors } from "../../src/render/colors";
 import {
-  buildItem,
+  selectBuildLeaf,
   clickMapTile,
   debugSetBudget,
   dragMapTiles,
-  openHudCategory,
+  openCommandDestination,
   rebuildRoadTile,
   removeMapTile,
   runtimeSnapshot,
+  selectTool,
 } from "./helpers";
 
 const TURN_ROUTE_STOPS = [
@@ -212,15 +213,15 @@ async function seedRouteWithPrimaryAndAlternateRoad(
   page: import("@playwright/test").Page,
 ): Promise<void> {
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 13, y: 4 });
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 6 }, { x: 13, y: 6 });
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 3, y: 6 });
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 13, y: 4 }, { x: 13, y: 6 });
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   for (const stop of DAMAGE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
@@ -231,12 +232,12 @@ async function createDamageRoute(
   page: import("@playwright/test").Page,
 ): Promise<void> {
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of DAMAGE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
   await page.getByRole("button", { name: "Save route" }).click();
 }
@@ -312,29 +313,25 @@ async function readRuntimeTransit(
 test("create, manage, and delete a bus route", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("game-shell")).toBeVisible();
-  const topbar = page.getByTestId("topbar");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
   // Lay a two-way road and place three roadside bus stops beside it.
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
 
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   for (const stop of SIMPLE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
   await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
 
   // Draft a route: add three stops, remove the middle one, then finish.
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of SIMPLE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
-  // Selecting the Bus Route tool auto-hides the drawer; reopen it to manage
-  // the in-progress draft (stop list + finish/cancel actions).
-  await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByTestId("route-waypoint-1").click();
   await page
@@ -344,15 +341,20 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await page.getByRole("button", { name: "Save route" }).click();
 
   // The route now appears in the management panel.
-  await openHudCategory(page, "manage");
-  await expect(page.getByTestId("routes-panel")).toBeVisible();
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("panel-lines")).toBeVisible();
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
-  const avgWaitReadout = topbar.locator(".readout", { hasText: "Avg Wait" });
-  const unservedReadout = topbar.locator(".readout", { hasText: "Unserved" });
-  const lateReadout = topbar.locator(".readout", { hasText: "Late" });
-  await expect(avgWaitReadout.locator(".readout-value")).toHaveText(/^\d+s$/);
-  await expect(unservedReadout.locator(".readout-value")).toHaveText(/^\d+$/);
-  await expect(lateReadout.locator(".readout-value")).toHaveText(/^\d+$/);
+  await openCommandDestination(page, "data");
+  const metrics = page.getByTestId("panel-data").getByRole("region", {
+    name: "Metrics",
+  });
+  const avgWaitReadout = metrics.getByText("Avg Wait").locator("..");
+  const unservedReadout = metrics.getByText("Unserved").locator("..");
+  const lateReadout = metrics.getByText("Late").locator("..");
+  await expect(avgWaitReadout.locator("dd")).toHaveText(/^\d+s$/);
+  await expect(unservedReadout.locator("dd")).toHaveText(/^\d+$/);
+  await expect(lateReadout.locator("dd")).toHaveText(/^\d+$/);
+  await openCommandDestination(page, "lines");
 
   // Toggle inactive, then delete (two clicks for confirm).
   await page.getByTestId("route-toggle-route-001").click();
@@ -379,20 +381,20 @@ test("undoes and redoes a roadside route draft while preview is pending", async 
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   for (const stop of DRAFT_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
   await expectRoadsideStopAnchors(page, DRAFT_ROUTE_STOPS);
 
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of DRAFT_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   const draft = page.getByTestId("route-draft");
   const previewStatus = page.getByTestId("route-preview-status");
   const save = page.locator("button.route-save");
@@ -462,28 +464,26 @@ test("create a metro line on laid track", async ({ page }) => {
   await expect(canvas).toBeVisible();
 
   // Lay a 5-tile track run on empty ground.
-  await buildItem(page, "Rail", "Track");
+  await selectBuildLeaf(page, "transit", "track");
   for (let x = 8; x <= 12; x += 1) {
     await clickMapTile(canvas, { x, y: 2 });
   }
 
   // Stations on the track ends (Metro Station building requires track).
-  await buildItem(page, "Metro", "Metro Station");
+  await selectBuildLeaf(page, "transit", "metroStation");
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
 
   // Connect them with a metro line.
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Metro Line" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Metro" }).click();
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
-  // The Metro Line tool auto-hides the drawer; reopen it to finish the draft.
-  await openHudCategory(page, "routes");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByRole("button", { name: "Save route" }).click();
 
-  await openHudCategory(page, "manage");
-  await expect(page.getByTestId("routes-panel")).toBeVisible();
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("panel-lines")).toBeVisible();
   await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
 });
 
@@ -497,22 +497,22 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await expect(canvas).toBeVisible();
 
   // Road + three roadside bus stops beside it.
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
 
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   for (const stop of SIMPLE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
   await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
 
   // Draft + finish a route over all three stops.
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of SIMPLE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByRole("button", { name: "Save route" }).click();
 
@@ -520,7 +520,7 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   // This is the regression guard for the dropped `assignVehicle` step: without
   // it the route would have `vehicleIds: []` forever and transit could never
   // move a single citizen.
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
 
   // Poll for the vehicle assignment — the Save-route dispatch is async and
@@ -548,7 +548,7 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   // now part of the running simulation, not a dead route-creation artifact.
   await page.getByRole("button", { name: "Resume" }).click();
   const clockValue = topbar
-    .locator(".readout", { hasText: "Clock" })
+    .locator(".readout", { hasText: "Time" })
     .locator(".readout-value");
   await expect
     .poll(async () => (await clockValue.textContent())?.trim() ?? "")
@@ -560,17 +560,17 @@ test("turns between paired roads and edits the committed route", async ({
 }) => {
   await page.goto("/");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 13, y: 4 });
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 8, y: 2 }, { x: 8, y: 10 });
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   for (const stop of [...TURN_ROUTE_STOPS, EXTRA_TURN_STOP]) {
     await clickMapTile(canvas, stop);
   }
   await expectRoadsideStopAnchors(page, [...TURN_ROUTE_STOPS, EXTRA_TURN_STOP]);
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of TURN_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
@@ -583,7 +583,7 @@ test("turns between paired roads and edits the committed route", async ({
       };
     })
     .toEqual({ pending: false, rejection: null });
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
   await page.getByRole("button", { name: "Save route" }).click();
 
@@ -595,7 +595,7 @@ test("turns between paired roads and edits the committed route", async ({
     })
     .toBe(true);
 
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: /Edit Bus 1/ }).click();
   await page.getByTestId("route-waypoint-0").click();
   await page.getByRole("button", { name: "Insert after" }).click();
@@ -635,16 +635,16 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const first = { x: 16, y: 2 };
   const second = { x: 20, y: 2 };
-  await buildItem(page, "Rail", "Track");
+  await selectBuildLeaf(page, "transit", "track");
   await dragMapTiles(page, canvas, first, second);
-  await buildItem(page, "Metro", "Metro Station");
+  await selectBuildLeaf(page, "transit", "metroStation");
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Metro Line" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Metro" }).click();
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "Save route" }).click();
   // Poll until the metro line is committed — the Save dispatch is async.
   await expect
@@ -655,9 +655,9 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
     .toBe(true);
   const line = (await runtimeSnapshot(page)).state.transit.metroLines.at(-1)!;
 
-  await page.getByTestId("hud-tool-remove").click();
+  await selectTool(page, "demolish");
   await clickMapTile(canvas, first);
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await expect(page.getByText(/Missing Metro Station/)).toHaveCount(2);
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
     "Broken",
@@ -668,9 +668,9 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   // for the 25k station rebuild.
   await debugSetBudget(page, 120_000);
 
-  await buildItem(page, "Metro", "Metro Station");
+  await selectBuildLeaf(page, "transit", "metroStation");
   await clickMapTile(canvas, first);
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
     "Running",
   );
@@ -711,12 +711,12 @@ test("reroutes when possible, then preserves a dotted last-valid leg until repai
   expect(broken.pathBroken).toBe(true);
   expect(broken.legs[0].currentPath).toBeNull();
   expect(broken.legs[0].lastValidPath).toEqual(rerouted.legs[0].lastValidPath);
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
     "Broken",
   );
   await rebuildRoadTile(page, canvas, ALTERNATE_ROAD_TILE);
-  await openHudCategory(page, "manage");
+  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
     "Running",
   );

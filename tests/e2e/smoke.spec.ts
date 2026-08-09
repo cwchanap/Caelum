@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
-  buildItem,
+  selectBuildLeaf,
   clickMapTile,
   dragMapTiles,
-  openHudCategory,
+  openCommandDestination,
 } from "./helpers";
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
@@ -13,51 +13,57 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
-  const clockReadout = topbar.locator(".readout", {
-    hasText: "Clock",
+  const timeReadout = topbar.locator(".readout", {
+    hasText: "Time",
   });
   const populationReadout = topbar.locator(".readout", {
     hasText: "Population",
   });
   await expect(topbar).toBeVisible();
   await expect(topbar.getByText("$120,000")).toBeVisible();
-  await expect(clockReadout.getByText("Day 1 00:00")).toBeVisible();
+  await expect(timeReadout.getByText("Day 1 00:00")).toBeVisible();
   await expect(populationReadout.getByText("0")).toBeVisible();
-  await expect(page.getByText("Standard Sandbox")).toBeVisible();
-  await expect(page.getByText("Template · Crossroads")).toBeVisible();
+  await openCommandDestination(page, "city");
+  const city = page.getByTestId("panel-city");
+  await expect(
+    city.getByRole("heading", { name: "Standard Sandbox" }),
+  ).toBeVisible();
+  await expect(city.getByText("Crossroads")).toBeVisible();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
-  await openHudCategory(page, "area");
-  await page.getByRole("button", { name: "Residential" }).click();
+  await selectBuildLeaf(page, "zones", "residential");
   await dragMapTiles(page, canvas, { x: 1, y: 1 }, { x: 3, y: 2 });
 
-  await openHudCategory(page, "area");
-  await page.getByRole("button", { name: "Commercial" }).click();
+  await selectBuildLeaf(page, "zones", "commercial");
   await dragMapTiles(page, canvas, { x: 5, y: 1 }, { x: 7, y: 3 });
 
-  await buildItem(page, "Commercial", "Supermarket");
+  await selectBuildLeaf(page, "buildings", "supermarket");
   await clickMapTile(canvas, { x: 5, y: 1 });
   await expect(topbar.getByText("$112,000")).toBeVisible();
 
-  await buildItem(page, "Residential", "Small House");
+  await selectBuildLeaf(page, "buildings", "smallHouse");
   await clickMapTile(canvas, { x: 1, y: 1 });
 
   await expect(topbar.getByText("$108,000")).toBeVisible();
   await expect(populationReadout.getByText("4")).toBeVisible();
 
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 1, y: 0 }, { x: 3, y: 0 });
   await expect(topbar.getByText("$107,700")).toBeVisible();
 
-  await buildItem(page, "Bus", "Bus Terminal");
+  await selectBuildLeaf(page, "transit", "busTerminal");
   await page.keyboard.press("r");
-  await expect(page.getByTestId("hud-tool-chip")).toHaveText("BUS TERMINAL 90");
+  await expect(
+    page
+      .getByTestId("command-active-mode")
+      .locator(".command-shelf__mode-value"),
+  ).toHaveText("BUS TERMINAL 90");
 
   await page.getByRole("button", { name: "Resume" }).click();
-  const clockValue = clockReadout.locator(".readout-value");
+  const clockValue = timeReadout.locator(".readout-value");
   // Poll for a real advance: the value must match the clock format AND must not
   // be the initial "Day 1 00:00" (the `(?!00:00$)` lookahead). Without the
   // lookahead an empty/transient text or the initial value could satisfy a
