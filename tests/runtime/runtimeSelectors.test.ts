@@ -1353,5 +1353,11 @@ describe("ShellCommandState and ShellCityState", () => {
       lineCount: "0",
       networkSummary: "4 late · 2 unserved",
     });
+
+    expect(selectShellState(state, createUiState()).topbar).toMatchObject({
+      late: "4",
+      unserved: "2",
+      networkSummary: "4 late · 2 unserved",
+    });
   });
 });

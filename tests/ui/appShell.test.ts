@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
 import {
@@ -109,7 +110,14 @@ function createRuntimeHarness(
       ui = { ...ui, activeOverlay: overlay };
       return publish();
     }),
-    handleEscape: vi.fn(() => publish()),
+    handleEscape: vi.fn(() => {
+      ui = {
+        ...ui,
+        activeCommandDestination:
+          ui.routeDraft === null ? null : ui.activeCommandDestination,
+      };
+      return publish();
+    }),
     togglePause: vi.fn(() => publish()),
     setSpeed: vi.fn(() => publish()),
     assignRouteToPlatform: vi.fn(() => publish()),
@@ -192,6 +200,79 @@ describe("App command shell", () => {
       "data",
     );
     expect(screen.queryByTestId("command-panel-build")).toBeNull();
+  });
+
+  it("returns focus to the canvas after selecting a Build leaf", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    await fireEvent.click(screen.getByRole("button", { name: "2-Lane" }));
+    await tick();
+
+    expect(screen.getByTestId("game-canvas-host")).toHaveFocus();
+  });
+
+  it("returns focus to the Data shelf button after Escape closes Data", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const dataButton = screen.getByTestId("command-destination-data");
+    await fireEvent.click(dataButton);
+    await fireEvent.keyDown(window, { key: "Escape" });
+    await tick();
+
+    expect(dataButton).toHaveFocus();
+  });
+
+  it("returns focus to the City shelf button after closing City", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const cityButton = screen.getByTestId("command-destination-city");
+    await fireEvent.click(cityButton);
+    await fireEvent.click(screen.getByRole("button", { name: "Close City" }));
+    await tick();
+
+    expect(cityButton).toHaveFocus();
+  });
+
+  it("returns focus to the Lines list when a route draft is cancelled", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await tick();
+
+    expect(screen.getByTestId("lines-list")).toHaveFocus();
+    expect(screen.getByTestId("command-destination-lines")).not.toHaveFocus();
+  });
+
+  it("renders the compact Signal Console topbar contract", () => {
+    const baseState = createTestGameState();
+    const state = {
+      ...baseState,
+      paused: false,
+      metrics: { ...baseState.metrics, lateTrips: 4, unservedTrips: 2 },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    expect(screen.getByText("Money")).toBeVisible();
+    expect(screen.getByText("Time")).toBeVisible();
+    expect(screen.getByText("Network")).toBeVisible();
+    expect(screen.getByText("Population")).toBeVisible();
+    expect(screen.getByText("Avg Wait")).toBeVisible();
+    expect(screen.getByText("4 late · 2 unserved")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "1x" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "2x" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "4x" })).toBeVisible();
+    expect(screen.queryByText("Live")).toBeNull();
+    expect(screen.queryByText("Hold")).toBeNull();
   });
 
   it("invokes contextual Inspect reassignment controls", async () => {

@@ -612,11 +612,11 @@ export function selectShellState(
   return {
     topbar: {
       budget: formatBudget(state.budget),
-      signalState: state.paused ? "Hold" : "Live",
       time: formatSnapshotClock(state),
       population: `${state.sims?.length ?? 0}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
+      networkSummary,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
     },
     command,
