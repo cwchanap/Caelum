@@ -1316,6 +1316,18 @@ body {
   );
   margin-inline: auto;
   overflow: hidden;
+  pointer-events: none;
+}
+
+.command-panel button,
+.command-panel input,
+.command-panel select,
+.command-panel span {
+  pointer-events: auto;
+}
+
+.command-panel button:disabled {
+  pointer-events: none;
 }
 
 .command-panel[data-command-panel="build"] {

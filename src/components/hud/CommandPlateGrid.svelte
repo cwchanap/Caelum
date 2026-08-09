@@ -41,12 +41,13 @@
       type="button"
       class="command-plate"
       data-testid={`command-plate-${plate.id}`}
+      data-build-group={plate.id}
       onclick={() => onSelect(plate.id)}
       onkeydown={(event) => handleKeydown(index, event)}
       bind:this={buttons[index]}
     >
       <img src={plate.image} alt="" aria-hidden="true" />
-      <span>{plate.label}</span>
+      <span data-testid={`build-group-${plate.id}`}>{plate.label}</span>
     </button>
   {/each}
 </div>

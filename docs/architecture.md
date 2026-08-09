@@ -246,9 +246,12 @@ The shell is fully Svelte-owned:
 
 - `App.svelte` composes the runtime-backed shell and handles visible shell errors.
 - `Topbar.svelte` renders live metrics and pause/speed controls from derived runtime state.
-- `BottomHud.svelte` keeps the Build, Area, Routes, Manage, Data, and Brief categories docked at the bottom.
-- `HudDrawer.svelte` hosts the corresponding focused panels plus contextual Inspect content; the panel components render tools, route editing/management, overlays, and scenario data from runtime selectors.
-- `GameCanvas.svelte` provides the Svelte host for the imperative canvas while leaving drawing inside the existing render modules.
+- `CommandShelf.svelte` owns four permanent desktop destinations plus Select and Demolish.
+- `CommandPanel.svelte` hosts one non-modal Build, Lines, Data, or City workspace; a route draft pins Lines until Save or Cancel.
+- `BuildPanel.svelte` uses four checked-in presentation-only command plates and existing runtime arming paths.
+- Contextual Inspect and `ActionFeedback.svelte` are independent of destination navigation.
+- `GameCanvas.svelte` provides the imperative canvas host and DOM focus handoff while rendering stays in `src/render`.
+- Opening a destination moves focus into its panel. Escape closes a closable panel and returns focus to its shelf trigger; saving or canceling a route draft returns focus to the Lines list, while Escape in a route-name input only cancels that input edit.
 
 Svelte consumes derived runtime snapshots and never becomes a second source of truth for gameplay state.
 

@@ -2,10 +2,10 @@ import { expect, test } from "@playwright/test";
 import type { Route, RouteLegPath } from "../../src/domain/types";
 import { MAP_WIDTH } from "../../src/scenario/sandbox";
 import {
-  buildItem,
+  selectBuildLeaf,
   clickMapTile,
   dragMapTiles,
-  openHudCategory,
+  openCommandDestination,
   removeMapTile,
   runtimeSnapshot,
 } from "./helpers";
@@ -32,8 +32,7 @@ async function paintLatentRoundaboutArea(
 ): Promise<void> {
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const width = size === "compact2x2" ? 2 : 3;
-  await openHudCategory(page, "area");
-  await page.getByRole("button", { name: "Residential" }).click();
+  await selectBuildLeaf(page, "zones", "residential");
   await dragMapTiles(page, canvas, origin, {
     x: origin.x + width - 1,
     y: origin.y + width - 1,
@@ -63,21 +62,21 @@ async function seedRoundaboutApproaches(
   const width = size === "compact2x2" ? 2 : 3;
   const bottom = origin.y + width - 1;
   const right = Math.min(origin.x + width + 4, MAP_WIDTH - 1);
-  await buildItem(page, "Road", "1-Lane One-Way");
+  await selectBuildLeaf(page, "roads", "road-oneWay");
   await dragMapTiles(
     page,
     canvas,
     { x: origin.x - 5, y: bottom },
     { x: right, y: bottom },
   );
-  await buildItem(page, "Road", "1-Lane One-Way");
+  await selectBuildLeaf(page, "roads", "road-oneWay");
   await dragMapTiles(
     page,
     canvas,
     { x: right, y: origin.y },
     { x: origin.x - 5, y: origin.y },
   );
-  await buildItem(page, "Road", "2-Lane");
+  await selectBuildLeaf(page, "roads", "road-dual");
   await dragMapTiles(
     page,
     canvas,
@@ -105,7 +104,7 @@ async function createRoundaboutShuttleRoute(
   // their adjacent road points unchanged for roundabout routing.
   const first = { x: origin.x - 3, y: origin.y + height };
   const second = { x: origin.x - 2, y: origin.y - 1 };
-  await buildItem(page, "Bus", "Bus Stop");
+  await selectBuildLeaf(page, "transit", "busStop");
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
   await expect
@@ -128,8 +127,8 @@ async function createRoundaboutShuttleRoute(
   const secondId = stopIdAt(second);
   expect(firstId).toBeDefined();
   expect(secondId).toBeDefined();
-  await openHudCategory(page, "routes");
-  await page.getByRole("button", { name: "Bus Route" }).click();
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
   await expect
@@ -140,7 +139,7 @@ async function createRoundaboutShuttleRoute(
     .toBe(false);
   const preview = (await runtimeSnapshot(page)).ui.routeDraft?.preview;
   expect(preview?.rejection?.code ?? null).toBeNull();
-  await openHudCategory(page, "routes");
+  await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Shuttle" }).check();
   await expect
     .poll(async () => {
@@ -185,7 +184,13 @@ for (const fixture of [
     const canvas = page.locator("canvas[data-runtime-canvas='true']");
     await paintLatentRoundaboutArea(page, fixture.origin, fixture.size);
     await seedRoundaboutApproaches(page, fixture.origin, fixture.size);
-    await buildItem(page, "Road", fixture.label);
+    await selectBuildLeaf(
+      page,
+      "roads",
+      fixture.size === "compact2x2"
+        ? "compactRoundabout"
+        : "standardRoundabout",
+    );
     await clickMapTile(canvas, fixture.origin);
 
     await expect

@@ -1,8 +1,9 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { createServer, type ViteDevServer } from "vite";
 import { tileSize } from "../../src/render/canvas";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
+import type { BuildGroup } from "../../src/domain/catalog/buildGroups";
+import type { CommandDestination } from "../../src/ui/uiState";
 
 export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
   return page.evaluate(() => {
@@ -18,84 +19,43 @@ export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
   });
 }
 
-export async function openHudCategory(
+export async function openCommandDestination(
   page: Page,
-  category:
-    | "build"
-    | "area"
-    | "routes"
-    | "manage"
-    | "data"
-    | "brief"
-    | "inspect",
+  destination: CommandDestination,
 ): Promise<void> {
-  const trigger = page.getByTestId(`hud-cat-${category}`);
+  const trigger = page.getByTestId(`command-destination-${destination}`);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("command-panel")).toHaveAttribute(
+    "data-command-panel",
+    destination,
+  );
+}
+
+export async function selectBuildLeaf(
+  page: Page,
+  group: BuildGroup,
+  item: string,
+): Promise<void> {
+  await openCommandDestination(page, "build");
+  const back = page.getByTestId("build-back");
+  if (await back.isVisible()) await back.click();
+  await page.getByTestId(`build-group-${group}`).click();
+  await page.getByTestId(`build-item-${item}`).click();
+  await expect(page.getByTestId("command-panel")).toHaveCount(0);
+}
+
+export async function selectTool(
+  page: Page,
+  tool: "select" | "demolish",
+): Promise<void> {
+  const trigger = page.getByTestId(`command-tool-${tool}`);
   if ((await trigger.getAttribute("aria-pressed")) !== "true") {
     await trigger.click();
   }
   await expect(trigger).toHaveAttribute("aria-pressed", "true");
-}
-
-/**
- * Open the Build drawer, drill into a category, then select an item —
- * mirroring the category → item drill-down (BuildPanel.svelte).
- *
- * `hud-cat-build` is a toggle, so this helper must not click it when the
- * Build drawer is already open (that would close it). It also returns to the
- * Build root first if a previous call left it drilled into a sub-category,
- * so the category buttons are always reachable regardless of prior state.
- */
-export async function buildItem(
-  page: Page,
-  category: string,
-  item: string,
-): Promise<void> {
-  const back = page.getByTestId("build-back");
-  if (await back.isVisible()) {
-    await back.click();
-  }
-  const buildCat = page.getByTestId("hud-cat-build");
-  if ((await buildCat.getAttribute("aria-pressed")) !== "true") {
-    await buildCat.click();
-  }
-  await page.getByRole("button", { name: category, exact: true }).click();
-  await page.getByRole("button", { name: item, exact: true }).click();
-}
-
-export interface AppServer {
-  server: ViteDevServer;
-  url: string;
-}
-
-/**
- * Start a Vite dev server on an ephemeral port for e2e tests, and pre-warm it.
- *
- * Vite lazily pre-bundles dependencies (it logs "Forced re-optimization of
- * dependencies") and transforms modules on the first request. On a cold CI
- * runner this can take longer than Playwright's default 5s `expect` timeout, so
- * the very first `page.goto` occasionally fails its initial `game-shell`
- * assertion before the app has hydrated. Hitting the root page and the entry
- * module here forces that work to finish up front, so every browser navigation
- * — including the first — lands on a warm server.
- */
-export async function startAppServer(): Promise<AppServer> {
-  const server = await createServer({
-    configFile: "vite.config.ts",
-    server: { host: "127.0.0.1", port: 0 },
-  });
-  await server.listen();
-  const resolved = server.resolvedUrls?.local[0];
-  if (!resolved) {
-    throw new Error("Vite dev server did not expose a local URL");
-  }
-  // The root page triggers dependency pre-bundling; the entry module primes the
-  // on-demand transform cache. A failure here is non-fatal — it only means the
-  // first browser load pays the warm-up cost instead.
-  await Promise.all([
-    fetch(resolved).then((r) => r.text()),
-    fetch(new URL("/src/main.ts", resolved).toString()).then((r) => r.text()),
-  ]).catch(() => {});
-  return { server, url: resolved };
 }
 
 // Shared sandbox dimensions keep the e2e board transform aligned with both
@@ -160,6 +120,24 @@ export async function clickMapTile(
   });
 }
 
+export async function hoverMapTile(
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<void> {
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
+
+  const { scale, offsetX, offsetY } = boardTransform(box);
+  await canvas.hover({
+    position: {
+      x: offsetX + (tile.x + 0.5) * tileSize * scale,
+      y: offsetY + (tile.y + 0.5) * tileSize * scale,
+    },
+  });
+}
+
 /** Press-drag from one map tile to another on the runtime canvas. */
 export async function dragMapTiles(
   page: Page,
@@ -201,11 +179,7 @@ export async function removeMapTile(
   canvas: Locator,
   tile: { x: number; y: number },
 ): Promise<void> {
-  const remove = page.getByTestId("hud-tool-remove");
-  if ((await remove.getAttribute("aria-pressed")) !== "true") {
-    await remove.click();
-  }
-  await expect(remove).toHaveAttribute("aria-pressed", "true");
+  await selectTool(page, "demolish");
   await clickMapTile(canvas, tile);
 }
 
@@ -214,7 +188,7 @@ export async function rebuildRoadTile(
   canvas: Locator,
   tile: { x: number; y: number },
 ): Promise<void> {
-  await buildItem(page, "Road", "1-Lane");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await clickMapTile(canvas, tile);
 }
 
