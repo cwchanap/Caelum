@@ -375,7 +375,7 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   const afterTile = after.state.map.tiles.find(
     (tile) => tile.id === targetTile,
   );
-  expect(afterTile?.kind).toBe(beforeTile?.kind);
+  expect(afterTile).toEqual(beforeTile);
   await expect(page.getByTestId("panel-data")).toBeVisible();
 });
 
