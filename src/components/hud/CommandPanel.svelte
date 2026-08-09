@@ -21,30 +21,40 @@
   });
 </script>
 
-<section
-  bind:this={region}
-  id={`command-panel-${destination}`}
-  class="command-panel"
-  data-testid="command-panel"
-  data-command-panel={destination}
-  aria-labelledby={`command-panel-title-${destination}`}
-  tabindex="-1"
->
-  <header class="command-panel__header">
-    <h2 id={`command-panel-title-${destination}`}>{title}</h2>
-    <button
-      type="button"
-      disabled={!canClose}
-      onclick={onClose}
-      aria-label={`Close ${title}`}>×</button
-    >
-  </header>
-  <div class="command-panel__body">
-    {#if children}{@render children()}{/if}
-  </div>
-</section>
+<div class="command-panel-overlay">
+  <section
+    bind:this={region}
+    id={`command-panel-${destination}`}
+    class="command-panel"
+    class:command-panel--pinned={!canClose}
+    data-testid="command-panel"
+    data-command-panel={destination}
+    aria-labelledby={`command-panel-title-${destination}`}
+    tabindex="-1"
+  >
+    <header class="command-panel__header">
+      <h2 id={`command-panel-title-${destination}`}>{title}</h2>
+      <button
+        type="button"
+        disabled={!canClose}
+        onclick={onClose}
+        aria-label={`Close ${title}`}>×</button
+      >
+    </header>
+    <div class="command-panel__body">
+      {#if children}{@render children()}{/if}
+    </div>
+  </section>
+</div>
 
 <style>
+  .command-panel-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
+  }
+
   .command-panel {
     --panel-surface: var(--surface, #0d161a);
     --panel-line: var(--line-strong, rgba(255, 255, 255, 0.16));
@@ -57,6 +67,7 @@
     border: 1px solid var(--panel-line);
     border-radius: 8px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+    pointer-events: auto;
   }
 
   .command-panel:focus-visible {
