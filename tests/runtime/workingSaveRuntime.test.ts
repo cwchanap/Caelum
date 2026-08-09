@@ -197,7 +197,11 @@ function createRuntimeFixture(
         events.push("awaitGameplayIdle");
       }),
     installRestoredGameplay(snapshot) {
-      if (installError) throw installError;
+      if (installError) {
+        const error = installError;
+        installError = null;
+        throw error;
+      }
       installedSnapshot = snapshot;
       events.push("installRestoredGameplay");
     },
