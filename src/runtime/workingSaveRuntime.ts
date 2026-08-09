@@ -155,25 +155,58 @@ export function createWorkingSaveRuntime(
     }
   };
 
+  const restoreAndInstall = async (
+    snapshot: unknown,
+  ): Promise<WorkingSaveResult<RustGameSnapshot>> => {
+    let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
+    try {
+      restored = await host.backend.restoreSnapshot(snapshot);
+    } catch (thrown: unknown) {
+      if (isLive()) {
+        activeCity = null;
+        dirty = false;
+      }
+      return { ok: false, error: backendHostFailure(thrown) };
+    }
+
+    if (!restored.ok) {
+      return { ok: false, error: { kind: "backend", error: restored.error } };
+    }
+    if (!isLive()) {
+      return { ok: false, error: { kind: "unavailable" } };
+    }
+
+    try {
+      host.installRestoredGameplay(restored.snapshot);
+    } catch (thrown: unknown) {
+      if (isLive()) {
+        activeCity = null;
+        dirty = false;
+      }
+      return { ok: false, error: backendHostFailure(thrown) };
+    }
+
+    return { ok: true, value: restored.snapshot };
+  };
+
   const listCities = async (): Promise<WorkingSaveResult<CitySummary[]>> => {
     if (!isLive() || host.saveStore === undefined) {
       return { ok: false, error: { kind: "unavailable" } };
     }
 
-    return callStore("listCities", undefined, () =>
-      host.saveStore!.listCities(),
-    );
+    const store = host.saveStore;
+    return callStore("listCities", undefined, () => store.listCities());
   };
 
   const save = (): Promise<WorkingSaveResult<CitySummary>> =>
     runExclusive(async () => {
-      const saveStore = host.saveStore;
       const city = activeCity;
-      if (saveStore === undefined) {
-        return { ok: false, error: { kind: "unavailable" } };
-      }
       if (city === null) {
         return { ok: false, error: { kind: "noActiveCity" } };
+      }
+      const saveStore = host.saveStore;
+      if (saveStore === undefined) {
+        return { ok: false, error: { kind: "unavailable" } };
       }
 
       const captured = await host.backend.snapshotForSave();
@@ -207,25 +240,9 @@ export function createWorkingSaveRuntime(
       );
       if (!stored.ok) return stored;
 
-      let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
-      try {
-        restored = await host.backend.restoreSnapshot(stored.value.snapshot);
-      } catch (thrown: unknown) {
-        if (isLive()) {
-          activeCity = null;
-          dirty = false;
-        }
-        return { ok: false, error: backendHostFailure(thrown) };
-      }
+      const installed = await restoreAndInstall(stored.value.snapshot);
+      if (!installed.ok) return installed;
 
-      if (!restored.ok) {
-        return { ok: false, error: { kind: "backend", error: restored.error } };
-      }
-      if (!isLive()) {
-        return { ok: false, error: { kind: "unavailable" } };
-      }
-
-      host.installRestoredGameplay(restored.snapshot);
       activeCity = { ...stored.value.city, savedAt: stored.value.savedAt };
       dirty = false;
       return { ok: true, value: activeCity };
@@ -261,25 +278,9 @@ export function createWorkingSaveRuntime(
       );
       if (!created.ok) return created;
 
-      let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
-      try {
-        restored = await host.backend.restoreSnapshot(candidate.snapshot);
-      } catch (thrown: unknown) {
-        if (isLive()) {
-          activeCity = null;
-          dirty = false;
-        }
-        return { ok: false, error: backendHostFailure(thrown) };
-      }
+      const installed = await restoreAndInstall(candidate.snapshot);
+      if (!installed.ok) return installed;
 
-      if (!restored.ok) {
-        return { ok: false, error: { kind: "backend", error: restored.error } };
-      }
-      if (!isLive()) {
-        return { ok: false, error: { kind: "unavailable" } };
-      }
-
-      host.installRestoredGameplay(restored.snapshot);
       activeCity = created.value;
       dirty = false;
       return created;

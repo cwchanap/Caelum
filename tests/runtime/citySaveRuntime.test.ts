@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  CitySaveRecord,
   CitySaveStore,
   CitySummary,
 } from "../../src/persistence/citySaveStore";
@@ -20,6 +19,7 @@ import {
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
+import { record, seed } from "../fixtures/citySave";
 
 const ACTIVE_CITY: CitySummary = {
   id: "city-001",
@@ -49,17 +49,6 @@ const SANDBOX_REQUEST = {
   demandMultiplier: 1,
   moveInRate: "paused",
 } as const;
-
-function record(
-  city: CitySummary = ACTIVE_CITY,
-  snapshot: RustGameSnapshot = createRustSnapshot({ paused: true }),
-): CitySaveRecord {
-  return {
-    city: { id: city.id, name: city.name, createdAt: city.createdAt },
-    savedAt: city.savedAt,
-    snapshot,
-  };
-}
 
 interface TestBackend extends GameBackend {
   setRestoreOutcome(outcome: SnapshotResult | Error | null): void;
@@ -129,14 +118,6 @@ async function runtimeWithStore(
   });
 }
 
-async function seed(
-  store: CitySaveStore,
-  value: CitySaveRecord,
-): Promise<void> {
-  const result = await store.createCity(value);
-  if (!result.ok) throw new Error("test fixture city record failed to seed");
-}
-
 describe("runtime working-save integration", () => {
   it("lists empty and populated city libraries through the runtime", async () => {
     const emptyStore = createMemoryCitySaveStore();
@@ -160,7 +141,7 @@ describe("runtime working-save integration", () => {
 
   it("blocks road preview admission while Save is busy", async () => {
     const baseStore = createMemoryCitySaveStore();
-    await seed(baseStore, record());
+    await seed(baseStore, record(ACTIVE_CITY));
     const saveStore = createDelayedCitySaveStore(baseStore);
     saveStore.defer("updateCity");
     const targetBackend = backend();
@@ -184,7 +165,7 @@ describe("runtime working-save integration", () => {
 
   it("saves a dirty active city and clears dirty only after the update", async () => {
     const store = createMemoryCitySaveStore();
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const runtime = await runtimeWithStore(store);
 
     await runtime.debugSetBudget(90_000);
@@ -200,7 +181,7 @@ describe("runtime working-save integration", () => {
   it("keeps a city dirty after a failed save", async () => {
     const failures = createMemoryCitySaveStoreFailureControls();
     const store = createMemoryCitySaveStore({ failures });
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const runtime = await runtimeWithStore(store);
     await runtime.debugSetBudget(90_000);
     failures.failNext("updateCity", "failed");
@@ -266,7 +247,7 @@ describe("runtime working-save integration", () => {
 
   it("creates and activates a city storage-first", async () => {
     const store = createMemoryCitySaveStore();
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const runtime = await runtimeWithStore(store);
 
     await expect(
@@ -294,7 +275,7 @@ describe("runtime working-save integration", () => {
 
   it("keeps the current city after a create conflict or definite activation failure", async () => {
     const conflictStore = createMemoryCitySaveStore();
-    await seed(conflictStore, record());
+    await seed(conflictStore, record(ACTIVE_CITY));
     await seed(
       conflictStore,
       record({
@@ -323,7 +304,7 @@ describe("runtime working-save integration", () => {
     );
 
     const activationStore = createMemoryCitySaveStore();
-    await seed(activationStore, record());
+    await seed(activationStore, record(ACTIVE_CITY));
     const targetBackend = backend();
     targetBackend.setRestoreOutcome({
       ok: false,
@@ -352,7 +333,7 @@ describe("runtime working-save integration", () => {
 
   it("retains a newly created record but clears active identity after a thrown activation", async () => {
     const store = createMemoryCitySaveStore();
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const targetBackend = backend();
     targetBackend.setRestoreOutcome(new Error("new city restore was lost"));
     const runtime = await runtimeWithStore(store, { backend: targetBackend });
@@ -418,7 +399,7 @@ describe("runtime working-save integration", () => {
 
   it("reports busy for a duplicate mutating action", async () => {
     const delegate = createMemoryCitySaveStore();
-    await seed(delegate, record());
+    await seed(delegate, record(ACTIVE_CITY));
     const store = createDelayedCitySaveStore(delegate);
     store.defer("updateCity");
     const runtime = await runtimeWithStore(store);
