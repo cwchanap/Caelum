@@ -32,6 +32,8 @@ export type RouteDraftNotice = {
   waypointId: string;
 };
 
+export type CommandDestination = "build" | "lines" | "data" | "city";
+
 // The five categories with a permanent chip in the bottom bar.
 export type PrimaryHudCategory =
   | "build"

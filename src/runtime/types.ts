@@ -15,7 +15,12 @@ import type {
   TransitMode,
 } from "../domain/types";
 import type { BuildCategoryId } from "../domain/catalog/buildMenu";
-import type { HudCategory, RouteDraftNotice, UiState } from "../ui/uiState";
+import type {
+  CommandDestination,
+  HudCategory,
+  RouteDraftNotice,
+  UiState,
+} from "../ui/uiState";
 import type { RouteDraft } from "../ui/routeDraft";
 import type {
   AuthoredRoadTilePreview,
@@ -47,6 +52,25 @@ export interface ShellTopbarState {
   late: string;
   unserved: string;
   avgWait: string;
+}
+
+export interface ShellCommandState {
+  activeDestination: CommandDestination | null;
+  activeModeLabel: string;
+  routeDraftActive: boolean;
+  selectActive: boolean;
+  demolishActive: boolean;
+  lineCount: number;
+  activeOverlayLabel: string | null;
+}
+
+export interface ShellCityState {
+  title: string;
+  template: string;
+  simulation: "Running" | "Paused";
+  population: string;
+  lineCount: string;
+  networkSummary: string;
 }
 
 export interface ShellBriefState {
