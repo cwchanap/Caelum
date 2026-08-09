@@ -277,7 +277,7 @@ This avoids adding a second creation path solely to preserve the temporary pre-p
 ## 12. Save
 
 1. Enter the busy gate and drain gameplay.
-2. Require an active city and configured store.
+2. Require an active city, then a configured store — `noActiveCity` takes precedence when both are absent.
 3. Call `backend.snapshotForSave()`.
 4. Generate one save timestamp.
 5. Call:
@@ -339,8 +339,8 @@ HPA-547 distinguishes a definite `{ ok: false }` restore from a thrown host/tran
 For **Load and New City activation only**:
 
 - returned `{ ok: false }` means definite non-mutation and preserves current gameplay/identity;
-- a thrown `restoreSnapshot` maps to the concise `backend.hostFailure` result;
-- on that thrown path, set `activeCity = null` and `dirty = false` before final publication;
+- a thrown `restoreSnapshot` or `installRestoredGameplay` maps to the concise `backend.hostFailure` result;
+- on either thrown path, set `activeCity = null` and `dirty = false` before final publication;
 - do not capture a prior canonical snapshot solely for rollback;
 - do not auto-restore, re-read storage, auto-delete, finalize, repair, or enter fatal recovery.
 
@@ -349,7 +349,8 @@ Detaching identity is a narrow safety invariant, not a recovery state. If the ho
 Focused tests must prove:
 
 - thrown Load restore resolves `hostFailure` and leaves `activeCity === null`;
-- thrown New City activation leaves the newly created record available and `activeCity === null`;
+- thrown Load `installRestoredGameplay` resolves `hostFailure` and leaves `activeCity === null`;
+- thrown New City activation or install leaves the newly created record available and `activeCity === null`;
 - a subsequent `save()` returns `noActiveCity` rather than updating the formerly active city.
 
 HPA-544 may harden an observed transport failure later. Do not retain the current rollback state machine for active development.

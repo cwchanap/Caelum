@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type {
-  CitySaveRecord,
   CitySaveStore,
   CitySummary,
 } from "../../src/persistence/citySaveStore";
@@ -24,6 +23,7 @@ import {
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
+import { record, seed } from "../fixtures/citySave";
 
 const ACTIVE_CITY: CitySummary = {
   id: "city-active",
@@ -41,29 +41,6 @@ const SANDBOX_REQUEST: SandboxCreationRequest = {
   demandMultiplier: 1,
   moveInRate: "paused",
 };
-
-function record(
-  city: CitySummary = ACTIVE_CITY,
-  snapshot: RustGameSnapshot = createRustSnapshot({ paused: true }),
-): CitySaveRecord {
-  return {
-    city: {
-      id: city.id,
-      name: city.name,
-      createdAt: city.createdAt,
-    },
-    savedAt: city.savedAt,
-    snapshot,
-  };
-}
-
-async function seed(
-  store: CitySaveStore,
-  value: CitySaveRecord,
-): Promise<void> {
-  const result = await store.createCity(value);
-  if (!result.ok) throw new Error("Test fixture city record failed to seed");
-}
 
 function backendStub(): GameBackend {
   const snapshot = createRustSnapshot({ paused: true });
@@ -182,6 +159,7 @@ interface RuntimeFixture {
   readonly publications: number;
   readonly installedSnapshot: RustGameSnapshot | null;
   killRuntime(): void;
+  failNextInstall(error: Error): void;
 }
 
 function createRuntimeFixture(
@@ -206,6 +184,7 @@ function createRuntimeFixture(
   let publications = 0;
   let installedSnapshot: RustGameSnapshot | null = null;
   let runtimeDead = false;
+  let installError: Error | null = null;
   const runtime = createWorkingSaveRuntime({
     backend,
     ...(saveStore === null ? {} : { saveStore }),
@@ -218,6 +197,7 @@ function createRuntimeFixture(
         events.push("awaitGameplayIdle");
       }),
     installRestoredGameplay(snapshot) {
+      if (installError) throw installError;
       installedSnapshot = snapshot;
       events.push("installRestoredGameplay");
     },
@@ -240,6 +220,9 @@ function createRuntimeFixture(
     },
     killRuntime() {
       runtimeDead = true;
+    },
+    failNextInstall(error: Error) {
+      installError = error;
     },
   };
 }
@@ -376,7 +359,7 @@ describe("working save runtime city lists", () => {
 describe("working save runtime saves", () => {
   it("saves the active city snapshot and marks it clean", async () => {
     const fixture = createRuntimeFixture();
-    await seed(fixture.saveStore!, record());
+    await seed(fixture.saveStore!, record(ACTIVE_CITY));
     fixture.runtime.markDirty();
 
     const result = await fixture.runtime.controller.save();
@@ -390,7 +373,7 @@ describe("working save runtime saves", () => {
   it("keeps the active city dirty when its update fails", async () => {
     const failures = createMemoryCitySaveStoreFailureControls();
     const delegate = createMemoryCitySaveStore({ failures });
-    await seed(delegate, record());
+    await seed(delegate, record(ACTIVE_CITY));
     let readCalls = 0;
     let createCalls = 0;
     const store: CitySaveStore = {
@@ -448,7 +431,7 @@ describe("working save runtime saves", () => {
         throw new Error("gameplay did not settle");
       },
     });
-    await seed(fixture.saveStore!, record());
+    await seed(fixture.saveStore!, record(ACTIVE_CITY));
 
     await expect(fixture.runtime.controller.save()).resolves.toEqual({
       ok: false,
@@ -472,7 +455,7 @@ describe("working save runtime saves", () => {
 
   it("keeps the city dirty when saving returns a backend snapshot failure", async () => {
     const fixture = createRuntimeFixture();
-    await seed(fixture.saveStore!, record());
+    await seed(fixture.saveStore!, record(ACTIVE_CITY));
     fixture.runtime.markDirty();
     fixture.backend.setSnapshotForSaveOutcome({
       ok: false,
@@ -517,9 +500,21 @@ describe("working save runtime saves", () => {
     });
   });
 
+  it("returns noActiveCity when both active city and store are absent", async () => {
+    const fixture = createRuntimeFixture({
+      initialCity: null,
+      saveStore: null,
+    });
+
+    await expect(fixture.runtime.controller.save()).resolves.toEqual({
+      ok: false,
+      error: { kind: "noActiveCity" },
+    });
+  });
+
   it("allows city listing while a save is waiting for its store update", async () => {
     const delegate = createMemoryCitySaveStore();
-    await seed(delegate, record());
+    await seed(delegate, record(ACTIVE_CITY));
     const delayed = createDelayedCitySaveStore(delegate);
     delayed.defer("updateCity");
     const fixture = createRuntimeFixture({ saveStore: delayed });
@@ -539,7 +534,7 @@ describe("working save runtime saves", () => {
 
   it("rejects overlapping mutations while a save is busy", async () => {
     const delegate = createMemoryCitySaveStore();
-    await seed(delegate, record());
+    await seed(delegate, record(ACTIVE_CITY));
     const delayed = createDelayedCitySaveStore(delegate);
     delayed.defer("updateCity");
     const fixture = createRuntimeFixture({ saveStore: delayed });
@@ -561,7 +556,7 @@ describe("working save runtime saves", () => {
 
   it("suppresses final publication after synchronous disposal", async () => {
     const delegate = createMemoryCitySaveStore();
-    await seed(delegate, record());
+    await seed(delegate, record(ACTIVE_CITY));
     const delayed = createDelayedCitySaveStore(delegate);
     delayed.defer("updateCity");
     const fixture = createRuntimeFixture({ saveStore: delayed });
@@ -700,6 +695,49 @@ describe("working save runtime loads", () => {
       ok: false,
       error: { kind: "unavailable" },
     });
+  });
+
+  it("detaches after a thrown install and prevents a later save", async () => {
+    const loadedCity: CitySummary = {
+      id: "city-loaded",
+      name: "Loaded City",
+      createdAt: "2026-08-08T08:00:00.000Z",
+      savedAt: "2026-08-08T11:30:00.000Z",
+    };
+    const delegate = createMemoryCitySaveStore();
+    await seed(delegate, record(loadedCity));
+    let updates = 0;
+    const store: CitySaveStore = {
+      ...delegate,
+      updateCity(id, update) {
+        updates += 1;
+        return delegate.updateCity(id, update);
+      },
+    };
+    const fixture = createRuntimeFixture({ saveStore: store });
+    fixture.runtime.markDirty();
+    fixture.failNextInstall(new Error("install was lost"));
+
+    await expect(
+      fixture.runtime.controller.load(loadedCity.id),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "backend",
+        error: {
+          code: "hostFailure",
+          diagnostic: "install was lost",
+        },
+      },
+    });
+    expect(fixture.runtime.getView().activeCity).toBeNull();
+    expect(fixture.runtime.getView().dirty).toBe(false);
+
+    await expect(fixture.runtime.controller.save()).resolves.toEqual({
+      ok: false,
+      error: { kind: "noActiveCity" },
+    });
+    expect(updates).toBe(0);
   });
 });
 
@@ -887,12 +925,45 @@ describe("working save runtime new cities", () => {
       error: { kind: "noActiveCity" },
     });
   });
+
+  it("keeps the created record but detaches after a thrown new-city install", async () => {
+    const fixture = createRuntimeFixture();
+    fixture.runtime.markDirty();
+    fixture.failNextInstall(new Error("new city install was lost"));
+
+    await expect(
+      fixture.runtime.controller.createCity({
+        name: "New City",
+        sandbox: SANDBOX_REQUEST,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        kind: "backend",
+        error: {
+          code: "hostFailure",
+          diagnostic: "new city install was lost",
+        },
+      },
+    });
+    await expect(
+      fixture.saveStore!.readCity("city-new"),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(fixture.runtime.getView().activeCity).toBeNull();
+    expect(fixture.runtime.getView().dirty).toBe(false);
+    await expect(fixture.runtime.controller.save()).resolves.toEqual({
+      ok: false,
+      error: { kind: "noActiveCity" },
+    });
+  });
 });
 
 describe("working save runtime city library mutations", () => {
   it("replaces the active city summary after renaming it without changing dirty", async () => {
     const fixture = createRuntimeFixture();
-    await seed(fixture.saveStore!, record());
+    await seed(fixture.saveStore!, record(ACTIVE_CITY));
     fixture.runtime.markDirty();
 
     await expect(
@@ -939,7 +1010,7 @@ describe("working save runtime city library mutations", () => {
   it("keeps active identity and dirty state when renaming it fails", async () => {
     const failures = createMemoryCitySaveStoreFailureControls();
     const store = createMemoryCitySaveStore({ failures });
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const fixture = createRuntimeFixture({ saveStore: store });
     fixture.runtime.markDirty();
     failures.failNext("renameCity", "failed");
@@ -975,7 +1046,7 @@ describe("working save runtime city library mutations", () => {
 
   it("clears an active city only after its deletion succeeds", async () => {
     const fixture = createRuntimeFixture();
-    await seed(fixture.saveStore!, record());
+    await seed(fixture.saveStore!, record(ACTIVE_CITY));
     fixture.runtime.markDirty();
 
     await expect(
@@ -989,7 +1060,7 @@ describe("working save runtime city library mutations", () => {
   it("keeps an active city and dirty state when deletion fails", async () => {
     const failures = createMemoryCitySaveStoreFailureControls();
     const store = createMemoryCitySaveStore({ failures });
-    await seed(store, record());
+    await seed(store, record(ACTIVE_CITY));
     const fixture = createRuntimeFixture({ saveStore: store });
     fixture.runtime.markDirty();
     failures.failNext("deleteCity", "failed");

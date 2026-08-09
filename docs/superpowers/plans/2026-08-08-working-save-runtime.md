@@ -347,7 +347,7 @@ expect(runtime.getView().dirty).toBe(true);
 
 Inside `runExclusive`:
 
-1. require store + active city;
+1. require active city then configured store — `noActiveCity` takes precedence when both are absent;
 2. call `backend.snapshotForSave()`; thrown backend -> `hostFailure`;
 3. generate `savedAt = host.now()`;
 4. call `updateCity(activeCity.id, { savedAt, snapshot })`;
@@ -366,7 +366,8 @@ Failure tests:
 - `readCity` failure;
 - returned `{ ok: false }` restore preserves active identity;
 - thrown `restoreSnapshot` resolves `hostFailure`, sets `activeCity` to `null`, clears dirty, and does not reject;
-- after thrown restore, `save()` returns `noActiveCity` and `updateCity` is not called.
+- thrown `installRestoredGameplay` resolves `hostFailure`, sets `activeCity` to `null`, clears dirty, and does not reject;
+- after thrown restore or install, `save()` returns `noActiveCity` and `updateCity` is not called.
 
 Implementation:
 
@@ -378,27 +379,19 @@ const stored = await callStore(
 );
 if (!stored.ok) return stored;
 
-let restored: Awaited<ReturnType<GameBackend["restoreSnapshot"]>>;
-try {
-  restored = await host.backend.restoreSnapshot(stored.value.snapshot);
-} catch (thrown: unknown) {
-  if (isLive()) {
-    activeCity = null;
-    dirty = false;
-  }
-  return { ok: false, error: backendHostFailure(thrown) };
-}
+const installed = await restoreAndInstall(stored.value.snapshot);
+if (!installed.ok) return installed;
 
-if (!restored.ok) {
-  return { ok: false, error: { kind: "backend", error: restored.error } };
-}
-if (!isLive()) return { ok: false, error: { kind: "unavailable" } };
-
-host.installRestoredGameplay(restored.snapshot);
 activeCity = { ...stored.value.city, savedAt: stored.value.savedAt };
 dirty = false;
 return { ok: true, value: activeCity };
 ```
+
+`restoreAndInstall` wraps `restoreSnapshot` and `installRestoredGameplay` in one
+shared try/catch: a thrown failure from either step detaches `activeCity` and
+clears dirty before returning `backendHostFailure`. A returned `{ ok: false }`
+restore preserves identity (definite non-mutation). An `!isLive()` check after a
+successful restore returns `unavailable` before installing.
 
 Do not capture/restore a rollback snapshot.
 
@@ -426,7 +419,7 @@ Cover:
 - create conflict;
 - definite create failure;
 - returned activation failure after create preserves prior active identity and keeps created record;
-- thrown activation failure keeps the created record, resolves `hostFailure`, and sets `activeCity = null` / `dirty = false`.
+- thrown activation or install failure keeps the created record, resolves `hostFailure`, and sets `activeCity = null` / `dirty = false`.
 
 For a returned activation failure:
 

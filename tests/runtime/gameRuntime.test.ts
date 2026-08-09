@@ -1779,118 +1779,118 @@ describe("Game Runtime", () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
-  it("does not schedule animation frames while paused", async () => {
-    const requestAnimationFrame = vi.fn(() => 1);
-    const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-
-    const runtime = await createGameRuntime({
-      hoverPreviewDebounceMs: 0,
-      backend: backendSpy(),
+  describe("animation frame scheduling", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
     });
 
-    runtime.start();
-    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    it("does not schedule animation frames while paused", async () => {
+      const requestAnimationFrame = vi.fn(() => 1);
+      const cancelAnimationFrame = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
 
-    await runtime.togglePause();
-    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(),
+      });
 
-    runtime.stop();
-    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+      runtime.start();
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
 
-    vi.unstubAllGlobals();
-  });
+      await runtime.togglePause();
+      expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
 
-  it("re-arms animation after a busy Save drops a frame", async () => {
-    let scheduledFrame: FrameRequestCallback | null = null;
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        scheduledFrame = callback;
-        return 1;
-      }),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
-    const initial = fullRustSnapshot({ paused: false });
-    const delegate = createMemoryCitySaveStore();
-    const city = {
-      id: "city-raf",
-      name: "RAF City",
-      createdAt: "2026-08-08T09:00:00.000Z",
-      savedAt: "2026-08-08T09:30:00.000Z",
-    };
-    await delegate.createCity({
-      city: { id: city.id, name: city.name, createdAt: city.createdAt },
-      savedAt: city.savedAt,
-      snapshot: initial,
-    });
-    const store = createDelayedCitySaveStore(delegate);
-    store.defer("updateCity");
-    const runtime = await createGameRuntime({
-      backend: backendSpy(initial),
-      saveStore: store,
-      initialCity: city,
-      now: () => "2026-08-08T10:00:00.000Z",
+      runtime.stop();
+      expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
     });
 
-    runtime.start();
-    const firstFrame = scheduledFrame as FrameRequestCallback | null;
-    if (firstFrame === null)
-      throw new Error("runtime did not schedule a frame");
-    scheduledFrame = null;
-    firstFrame(0);
-    const busyFrame = scheduledFrame as FrameRequestCallback | null;
-    if (busyFrame === null)
-      throw new Error("runtime did not reschedule a frame");
+    it("re-arms animation after a busy Save drops a frame", async () => {
+      let scheduledFrame: FrameRequestCallback | null = null;
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn((callback: FrameRequestCallback) => {
+          scheduledFrame = callback;
+          return 1;
+        }),
+      );
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
-    const save = runtime.persistence.save();
-    await store.waitForActive("updateCity");
-    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+      const initial = fullRustSnapshot({ paused: false });
+      const delegate = createMemoryCitySaveStore();
+      const city = {
+        id: "city-raf",
+        name: "RAF City",
+        createdAt: "2026-08-08T09:00:00.000Z",
+        savedAt: "2026-08-08T09:30:00.000Z",
+      };
+      await delegate.createCity({
+        city: { id: city.id, name: city.name, createdAt: city.createdAt },
+        savedAt: city.savedAt,
+        snapshot: initial,
+      });
+      const store = createDelayedCitySaveStore(delegate);
+      store.defer("updateCity");
+      const runtime = await createGameRuntime({
+        backend: backendSpy(initial),
+        saveStore: store,
+        initialCity: city,
+        now: () => "2026-08-08T10:00:00.000Z",
+      });
 
-    scheduledFrame = null;
-    busyFrame(16);
-    await Promise.resolve();
-    expect(scheduledFrame).toBeNull();
+      runtime.start();
+      const firstFrame = scheduledFrame as FrameRequestCallback | null;
+      if (firstFrame === null)
+        throw new Error("runtime did not schedule a frame");
+      scheduledFrame = null;
+      firstFrame(0);
+      const busyFrame = scheduledFrame as FrameRequestCallback | null;
+      if (busyFrame === null)
+        throw new Error("runtime did not reschedule a frame");
 
-    store.releaseNext("updateCity");
-    await save;
-    expect(scheduledFrame).not.toBeNull();
+      const save = runtime.persistence.save();
+      await store.waitForActive("updateCity");
+      expect(runtime.getSnapshot().persistence.busy).toBe(true);
 
-    vi.unstubAllGlobals();
-  });
+      scheduledFrame = null;
+      busyFrame(16);
+      await Promise.resolve();
+      expect(scheduledFrame).toBeNull();
 
-  it("does not fast-forward after resuming from a paused gap", async () => {
-    const callbacks: Array<(timestamp: number) => void> = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: (timestamp: number) => void) => {
-        callbacks.push(callback);
-        return callbacks.length;
-      }),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
-    const runtime = await createGameRuntime({
-      hoverPreviewDebounceMs: 0,
-      backend: backendSpy(),
+      store.releaseNext("updateCity");
+      await save;
+      expect(scheduledFrame).not.toBeNull();
     });
-    runtime.start();
-    await runtime.togglePause();
 
-    callbacks.shift()?.(1_000);
-    await Promise.resolve();
-    expect(runtime.getSnapshot().state.time).toBe(0);
+    it("does not fast-forward after resuming from a paused gap", async () => {
+      const callbacks: Array<(timestamp: number) => void> = [];
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn((callback: (timestamp: number) => void) => {
+          callbacks.push(callback);
+          return callbacks.length;
+        }),
+      );
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
-    await runtime.togglePause();
-    await runtime.togglePause();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(),
+      });
+      runtime.start();
+      await runtime.togglePause();
 
-    callbacks.shift()?.(5_000);
-    await Promise.resolve();
-    expect(runtime.getSnapshot().state.time).toBe(0);
+      callbacks.shift()?.(1_000);
+      await Promise.resolve();
+      expect(runtime.getSnapshot().state.time).toBe(0);
 
-    vi.unstubAllGlobals();
+      await runtime.togglePause();
+      await runtime.togglePause();
+
+      callbacks.shift()?.(5_000);
+      await Promise.resolve();
+      expect(runtime.getSnapshot().state.time).toBe(0);
+    });
   });
 
   it("handles tool changes", async () => {
