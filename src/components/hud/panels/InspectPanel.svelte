@@ -13,7 +13,7 @@
   let { inspector, onAssignRouteToPlatform }: Props = $props();
 </script>
 
-<div class="hud-panel" data-testid="panel-inspect">
+<aside class="inspection-card" data-testid="panel-inspect">
   <section class="panel-section platform-panel" data-testid="platform-panel">
     <h3 class="section-head"><span class="num">07</span> Platforms</h3>
     <p class="brief-id">{inspector.nodeLabel}</p>
@@ -59,4 +59,4 @@
       </div>
     {/each}
   </section>
-</div>
+</aside>

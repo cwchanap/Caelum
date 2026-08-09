@@ -62,6 +62,49 @@ function fullRustSnapshot(
   });
 }
 
+function snapshotWithTwoStops(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [
+        createStop("stop-001", { x: 14, y: 7 }),
+        createStop("stop-002", { x: 14, y: 8 }),
+      ],
+      stations: [],
+      routes: [],
+      metroLines: [],
+      vehicles: [],
+    },
+  });
+}
+
+function snapshotWithBusRoute(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [
+        createStop("stop-001", { x: 14, y: 7 }),
+        createStop("stop-002", { x: 14, y: 8 }),
+      ],
+      stations: [],
+      routes: [
+        {
+          id: "route-001",
+          name: "Bus 1",
+          color: "#2563eb",
+          stopIds: ["stop-001", "stop-002"],
+          vehicleIds: [],
+          active: true,
+          pattern: "loop",
+          revision: 0,
+          legs: [],
+          pathBroken: false,
+        },
+      ],
+      metroLines: [],
+      vehicles: [],
+    },
+  });
+}
+
 function updateTile(
   map: GameMap,
   point: Point,
@@ -1580,7 +1623,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("busStop");
     expect(snapshot.state.paused).toBe(false);
     expect(snapshot.shell.topbar.budget).toBe("$120,000");
-    expect(snapshot.shell.brief.title).toBe("Standard Sandbox");
+    expect(snapshot.shell.city.title).toBe("Standard Sandbox");
   });
 
   it("publishes state changes to subscribers", async () => {
@@ -1743,7 +1786,7 @@ describe("Game Runtime", () => {
     runtime.setOverlay("growth");
     runtime.handleTileClick({ x: 5, y: 5 });
     runtime.setTool("busRoute");
-    runtime.setHudCategory("manage");
+    runtime.setCommandDestination("data");
 
     const beforeReset = runtime.getSnapshot();
     expect(beforeReset.state.paused).toBe(false);
@@ -1751,8 +1794,8 @@ describe("Game Runtime", () => {
     expect(beforeReset.state.time).toBeGreaterThan(0);
     expect(beforeReset.ui.activeTool).toBe("busRoute");
     expect(beforeReset.ui.activeOverlay).toBe("growth");
-    expect(beforeReset.ui.selectedId).toBe("5,5");
-    expect(beforeReset.ui.activeHudCategory).toBe("manage");
+    expect(beforeReset.ui.selectedId).toBeNull();
+    expect(beforeReset.ui.activeCommandDestination).toBe("lines");
 
     runtime.resetUi();
 
@@ -1763,7 +1806,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.ui.activeOverlay).toBe(null);
     expect(snapshot.ui.selectedId).toBe(null);
-    expect(snapshot.ui.activeHudCategory).toBe("brief");
+    expect(snapshot.ui.activeCommandDestination).toBeNull();
   });
 
   it("manages simulation lifecycle", async () => {
@@ -1920,7 +1963,7 @@ describe("Game Runtime", () => {
     expect(snapshot.ui.activeTool).toBe("inspect");
     expect(snapshot.ui.selectedBuilding).toBe("busTerminal");
     expect(snapshot.ui.buildingRotation).toBe(180);
-    expect(snapshot.shell.brief.activeTool).toBe("BUS TERMINAL 180");
+    expect(snapshot.shell.command.activeModeLabel).toBe("BUS TERMINAL 180");
   });
 
   it("dispatches selected building placement through the backend on tile click", async () => {
@@ -2160,29 +2203,20 @@ describe("Game Runtime", () => {
     expect(backend.intents).toEqual([]);
   });
 
-  it("sets HUD category to data", async () => {
+  it("opens and closes one command destination", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
 
-    const before = runtime.getSnapshot().ui.activeHudCategory;
-    runtime.setHudCategory("data");
-    const after = runtime.getSnapshot().ui.activeHudCategory;
+    const before = runtime.getSnapshot().ui.activeCommandDestination;
+    runtime.setCommandDestination("data");
+    const after = runtime.getSnapshot().ui.activeCommandDestination;
 
-    expect(before).toBe("brief");
+    expect(before).toBeNull();
     expect(after).toBe("data");
-  });
-
-  it("collapses the drawer when setHudCategory(null) is dispatched", async () => {
-    const runtime = await createGameRuntime({
-      hoverPreviewDebounceMs: 0,
-      backend: backendSpy(),
-    });
-    runtime.setHudCategory("build");
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
-    runtime.setHudCategory(null);
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+    runtime.setCommandDestination("data");
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBeNull();
   });
 
   it("auto-opens the inspect drawer when a node is clicked, and collapses it on empty tiles", async () => {
@@ -2204,12 +2238,12 @@ describe("Game Runtime", () => {
     runtime.setTool("inspect");
     const onNode = await runtime.handleTileClick({ x: 7, y: 8 });
 
-    expect(onNode.ui.activeHudCategory).toBe("inspect");
+    expect(onNode.ui.activeCommandDestination).toBeNull();
     expect(onNode.shell.inspector).not.toBeNull();
     expect(onNode.ui.selectedId).toBe("7,8");
 
     const onEmpty = await runtime.handleTileClick({ x: 20, y: 20 });
-    expect(onEmpty.ui.activeHudCategory).toBeNull();
+    expect(onEmpty.ui.activeCommandDestination).toBeNull();
   });
 });
 
@@ -2247,52 +2281,55 @@ describe("runtime road preset", () => {
   });
 });
 
-describe("build category navigation", () => {
-  it("setBuildCategory changes buildCategory without closing the drawer", async () => {
+describe("command destination navigation", () => {
+  it("setBuildGroup changes the Build drill-down without closing the panel", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setHudCategory("build");
-    const snap = runtime.setBuildCategory("bus");
-    expect(snap.ui.buildCategory).toBe("bus");
-    expect(snap.ui.activeHudCategory).toBe("build");
+    runtime.setCommandDestination("build");
+    const snap = runtime.setBuildGroup("transit");
+    expect(snap.ui.activeBuildGroup).toBe("transit");
+    expect(snap.ui.activeCommandDestination).toBe("build");
   });
 
-  it("setBuildCategory(null) returns to the category root", async () => {
+  it("setBuildGroup(null) returns to the command plate root", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setBuildCategory("bus");
-    expect(runtime.setBuildCategory(null).ui.buildCategory).toBeNull();
+    runtime.setCommandDestination("build");
+    runtime.setBuildGroup("transit");
+    expect(runtime.setBuildGroup(null).ui.activeBuildGroup).toBeNull();
   });
 
-  it("selecting a tool/area/building resets buildCategory to null", async () => {
+  it("selecting a tool/area/building resets the Build drill-down", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setBuildCategory("residential");
-    expect(runtime.setBuilding("smallHouse").ui.buildCategory).toBeNull();
-    runtime.setBuildCategory("road");
-    expect(runtime.setTool("track").ui.buildCategory).toBeNull();
-    runtime.setBuildCategory("residential");
-    expect(runtime.setArea("residential").ui.buildCategory).toBeNull();
+    runtime.setCommandDestination("build");
+    runtime.setBuildGroup("buildings");
+    expect(runtime.setBuilding("smallHouse").ui.activeBuildGroup).toBeNull();
+    runtime.setCommandDestination("build");
+    runtime.setBuildGroup("roads");
+    expect(runtime.setTool("track").ui.activeBuildGroup).toBeNull();
+    runtime.setCommandDestination("build");
+    runtime.setBuildGroup("zones");
+    expect(runtime.setArea("residential").ui.activeBuildGroup).toBeNull();
   });
 
-  it("leaving the Build category via setHudCategory resets buildCategory to null", async () => {
+  it("opens one destination and resets Build drill-down when leaving Build", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setHudCategory("build");
-    runtime.setBuildCategory("bus");
-    expect(runtime.setHudCategory("area").ui.buildCategory).toBeNull();
-    // Returning to Build reopens at the root, not the Bus detail.
-    const snap = runtime.setHudCategory("build");
-    expect(snap.ui.buildCategory).toBeNull();
-    expect(snap.ui.activeHudCategory).toBe("build");
+    runtime.setCommandDestination("build");
+    runtime.setBuildGroup("transit");
+    expect(
+      runtime.setCommandDestination("data").ui.activeBuildGroup,
+    ).toBeNull();
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBe("data");
   });
 
   it("armRoad selects the road tool with the given preset and closes the drawer", async () => {
@@ -2300,13 +2337,218 @@ describe("build category navigation", () => {
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setHudCategory("build");
     const snap = runtime.armRoad("dualBidirectional");
     expect(snap.ui.activeTool).toBe("road");
     expect(snap.ui.roadPreset).toBe("dualBidirectional");
     expect(snap.ui.selectedBuilding).toBeNull();
-    expect(snap.ui.activeHudCategory).toBeNull();
-    expect(snap.ui.buildCategory).toBeNull();
+    expect(snap.ui.activeCommandDestination).toBeNull();
+    expect(snap.ui.activeBuildGroup).toBeNull();
+  });
+
+  it("starts in Select with no command panel open", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "inspect",
+      activeCommandDestination: null,
+      activeBuildGroup: null,
+    });
+  });
+
+  it("ignores destination, overlay, tool, Build leaf, and second edit changes while a route draft is active", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithBusRoute()),
+    });
+    runtime.setTool("busRoute");
+    const before = runtime.getSnapshot();
+
+    for (const next of [
+      () => runtime.setCommandDestination("data"),
+      () => runtime.setOverlay("coverage"),
+      () => runtime.setTool("road"),
+      () => runtime.setArea("commercial"),
+      () => runtime.setBuilding("smallHouse"),
+      () => runtime.setBuildGroup("buildings"),
+      () => runtime.setRoadPreset("oneWay"),
+      () => runtime.armRoad("oneWay"),
+      () => runtime.armRoundabout("standard3x3"),
+      () => runtime.startRouteEdit("route-001"),
+    ]) {
+      const after = next();
+      expect(after.ui).toBe(before.ui);
+      expect(after.state).toBe(before.state);
+    }
+  });
+
+  it("pins new and edited drafts to Lines", async () => {
+    const fresh = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    expect(fresh.setTool("busRoute").ui.activeCommandDestination).toBe("lines");
+
+    const edited = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithBusRoute()),
+    });
+    expect(edited.startRouteEdit("route-001").ui.activeCommandDestination).toBe(
+      "lines",
+    );
+  });
+
+  it("returns to Select and the Lines list after successful Save", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithTwoStops()),
+    });
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    await flushPromises();
+    const saved = await runtime.saveRouteDraft();
+    expect(saved.ui).toMatchObject({
+      activeTool: "inspect",
+      activeCommandDestination: "lines",
+      routeDraft: null,
+    });
+  });
+
+  it("returns to Select and the Lines list after Cancel", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithTwoStops()),
+    });
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.ui).toMatchObject({
+      activeTool: "inspect",
+      activeCommandDestination: "lines",
+      routeDraft: null,
+    });
+  });
+
+  it("Cancel clears only the editor-owned rejection", async () => {
+    const base = backendSpy(snapshotWithBusRoute());
+    const backend: GameBackend = {
+      ...base,
+      async dispatch() {
+        return {
+          snapshot: await base.snapshot(),
+          applied: false,
+          rejection: {
+            code: "routeChangedWhileEditing" as const,
+            context: {
+              routeId: "route-001",
+              expectedRevision: 0,
+              actualRevision: 1,
+              affectedRouteIds: ["route-001"],
+            },
+          },
+        };
+      },
+    };
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    await runtime.saveRouteDraft();
+    expect(runtime.getSnapshot().rejection?.code).toBe(
+      "routeChangedWhileEditing",
+    );
+
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.rejection).toBeNull();
+    expect(cancelled.ui).toMatchObject({
+      activeTool: "inspect",
+      activeCommandDestination: "lines",
+      routeDraft: null,
+    });
+  });
+
+  it.each([
+    {
+      name: "drag",
+      first: { tool: "road" as const, destination: null },
+    },
+    {
+      name: "draft",
+      first: { tool: "inspect" as const, destination: "lines" as const },
+    },
+    {
+      name: "panel",
+      first: { tool: "inspect" as const, destination: null },
+    },
+    {
+      name: "placement",
+      first: { tool: "road" as const, destination: null },
+      second: { tool: "inspect" as const, destination: null },
+    },
+    {
+      name: "demolish",
+      first: { tool: "remove" as const, destination: null },
+      second: { tool: "inspect" as const, destination: null },
+    },
+  ])(
+    "Escape clears the $name state without touching unrelated state",
+    async (entry) => {
+      expect(entry.first).toBeDefined();
+      const runtime = await createGameRuntime({
+        hoverPreviewDebounceMs: 0,
+        backend: backendSpy(),
+      });
+      if (entry.name === "drag") {
+        runtime.setTool("road");
+        runtime.startDrag({ x: 2, y: 2 });
+        const escaped = runtime.handleEscape();
+        expect(escaped.ui.drag).toBeNull();
+        expect(escaped.ui.activeTool).toBe("road");
+        expect(escaped.ui.activeCommandDestination).toBeNull();
+      } else if (entry.name === "draft") {
+        runtime.setTool("busRoute");
+        const escaped = runtime.handleEscape();
+        expect(escaped.ui.routeDraft).toBeNull();
+        expect(escaped.ui.activeTool).toBe("inspect");
+        expect(escaped.ui.activeCommandDestination).toBe("lines");
+      } else if (entry.name === "panel") {
+        runtime.setCommandDestination("data");
+        runtime.setOverlay("coverage");
+        const escaped = runtime.handleEscape();
+        expect(escaped.ui.activeCommandDestination).toBeNull();
+        expect(escaped.ui.activeOverlay).toBe("coverage");
+      } else {
+        runtime.setTool(entry.name === "demolish" ? "remove" : "road");
+        runtime.setCommandDestination("build");
+        const firstEscape = runtime.handleEscape();
+        expect(firstEscape.ui.activeCommandDestination).toBeNull();
+        expect(firstEscape.ui.activeTool).toBe(
+          entry.name === "demolish" ? "remove" : "road",
+        );
+        const secondEscape = runtime.handleEscape();
+        expect(secondEscape.ui.activeCommandDestination).toBeNull();
+        expect(secondEscape.ui.activeTool).toBe("inspect");
+      }
+    },
+  );
+
+  it("keeps the exact UI object and contextual selection on idle Select Escape", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setOverlay("coverage");
+    await runtime.handleTileClick({ x: 5, y: 5 });
+    const before = runtime.getSnapshot();
+    const escaped = runtime.handleEscape();
+    expect(escaped.ui).toBe(before.ui);
+    expect(escaped.ui.selectedId).toBe("5,5");
+    expect(escaped.ui.activeOverlay).toBe("coverage");
   });
 });
 
@@ -2600,7 +2842,7 @@ describe("route creation and management", () => {
       });
     });
 
-    it("clears history when editing starts over or the route mode switches", async () => {
+    it("guards a second edit and route-tool switch while a draft is active", async () => {
       const { backend } = countedPreviewBackend(routeSnapshotWithRoute());
       const runtime = await createGameRuntime({
         hoverPreviewDebounceMs: 0,
@@ -2612,13 +2854,19 @@ describe("route creation and management", () => {
       runtime.handleTileClick({ x: 14, y: 9 });
       expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(1);
 
+      const beforeSecondEdit = runtime.getSnapshot();
       runtime.startRouteEdit("route-001");
-      expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
-        past: [],
-        future: [],
-      });
+      expect(runtime.getSnapshot().ui).toBe(beforeSecondEdit.ui);
+      expect(runtime.getSnapshot().state).toBe(beforeSecondEdit.state);
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(1);
 
+      runtime.cancelRouteDraft();
+      runtime.startRouteEdit("route-001");
+      runtime.selectRouteWaypoint(1, "replace");
       runtime.handleTileClick({ x: 14, y: 9 });
+      expect(runtime.getSnapshot().ui.routeDraftHistory.past).toHaveLength(1);
+
+      runtime.cancelRouteDraft();
       runtime.setTool("metroLine");
       expect(runtime.getSnapshot().ui.routeDraft?.mode).toBe("metro");
       expect(runtime.getSnapshot().ui.routeDraftHistory).toEqual({
@@ -3225,7 +3473,7 @@ describe("route creation and management", () => {
     }
   });
 
-  it("Reload captures the latest saved revision after a stale rejection", async () => {
+  it("keeps the route tool and Lines editor after Save rejection or Reload", async () => {
     const initial = routeSnapshotWithRoute();
     const latest = {
       ...initial,
@@ -3263,9 +3511,17 @@ describe("route creation and management", () => {
     runtime.startRouteEdit("route-001");
     await flushPromises();
     await runtime.saveRouteDraft();
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "busRoute",
+      activeCommandDestination: "lines",
+    });
 
     runtime.reloadRouteDraft();
 
+    expect(runtime.getSnapshot().ui).toMatchObject({
+      activeTool: "busRoute",
+      activeCommandDestination: "lines",
+    });
     expect(runtime.getSnapshot().ui.routeDraft?.source).toEqual({
       kind: "edit",
       routeId: "route-001",
@@ -4224,7 +4480,7 @@ describe("runtime area drag", () => {
       selectedBuilding: null,
       drag: null,
     });
-    expect(runtime.getSnapshot().shell.hud.activeToolChip).toBe(
+    expect(runtime.getSnapshot().shell.command.activeModeLabel).toBe(
       "AREA RESIDENTIAL",
     );
   });
@@ -4273,27 +4529,27 @@ describe("runtime area drag", () => {
   });
 });
 
-describe("build drawer auto-hide", () => {
-  it("closes the drawer when a tool, building, or area is selected, but not on preset change", async () => {
+describe("Build destination auto-hide", () => {
+  it("closes the panel when a tool, building, or area is selected, but not on preset change", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    runtime.setHudCategory("build");
+    runtime.setCommandDestination("build");
     runtime.setTool("road");
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBeNull();
 
-    runtime.setHudCategory("build");
+    runtime.setCommandDestination("build");
     runtime.setRoadPreset("oneWay");
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBe("build");
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBe("build");
 
-    runtime.setHudCategory("build");
+    runtime.setCommandDestination("build");
     runtime.setBuilding("smallHouse");
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBeNull();
 
-    runtime.setHudCategory("build");
+    runtime.setCommandDestination("build");
     runtime.setArea("commercial");
-    expect(runtime.getSnapshot().ui.activeHudCategory).toBeNull();
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBeNull();
   });
 });
 

@@ -1,11 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import BottomHud from "./components/hud/BottomHud.svelte";
-  import HudDrawer from "./components/hud/HudDrawer.svelte";
+  import CommandShelf from "./components/hud/CommandShelf.svelte";
+  import CommandPanel from "./components/hud/CommandPanel.svelte";
+  import BuildPanel from "./components/hud/panels/BuildPanel.svelte";
+  import LinesPanel from "./components/hud/panels/LinesPanel.svelte";
+  import DataPanel from "./components/hud/panels/DataPanel.svelte";
+  import CityPanel from "./components/hud/panels/CityPanel.svelte";
+  import InspectPanel from "./components/hud/panels/InspectPanel.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
   import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
-  import type { AreaKind, Overlay, ServicePattern, Tool } from "./domain/types";
+  import type { Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
     RuntimeCommandResult,
@@ -13,11 +18,11 @@
     RuntimeSnapshot,
   } from "./runtime/types";
   import { rejectionMessage } from "./runtime/rejectionMessages";
-  import type { HudCategory } from "./ui/uiState";
+  import type { CommandDestination } from "./ui/uiState";
   import type {
-    BuildCategoryId,
+    BuildGroup,
     BuildItemAction,
-  } from "./domain/catalog/buildMenu";
+  } from "./domain/catalog/buildGroups";
 
   interface Props {
     runtime: RuntimeController | null;
@@ -56,9 +61,11 @@
     }
   }
 
-  function handleSetHudCategory(category: HudCategory | null): void {
+  function handleSetCommandDestination(
+    destination: CommandDestination | null,
+  ): void {
     if (runtime !== null) {
-      setSnapshot(runtime.setHudCategory(category));
+      setSnapshot(runtime.setCommandDestination(destination));
     }
   }
 
@@ -80,21 +87,15 @@
     }
   }
 
-  function handleSetArea(area: AreaKind): void {
-    if (runtime !== null) {
-      setSnapshot(runtime.setArea(area));
-    }
-  }
-
   function handleRotateBuilding(): void {
     if (runtime !== null) {
       setSnapshot(runtime.rotateBuilding());
     }
   }
 
-  function handleSetBuildCategory(category: BuildCategoryId | null): void {
+  function handleSetBuildGroup(group: BuildGroup | null): void {
     if (runtime !== null) {
-      setSnapshot(runtime.setBuildCategory(category));
+      setSnapshot(runtime.setBuildGroup(group));
     }
   }
 
@@ -110,6 +111,8 @@
       setSnapshot(runtime.setTool("track"));
     } else if (action.kind === "tool") {
       setSnapshot(runtime.setTool(action.tool));
+    } else if (action.kind === "area") {
+      setSnapshot(runtime.setArea(action.area));
     } else {
       setSnapshot(runtime.setBuilding(action.building));
     }
@@ -226,12 +229,6 @@
     }
   }
 
-  function handleSelectRoute(routeId: string | null): void {
-    if (runtime !== null) {
-      setSnapshot(runtime.selectRoute(routeId));
-    }
-  }
-
   function handleFocusRouteFailure(routeId: string, legIndex: number): void {
     if (runtime !== null) {
       setSnapshot(runtime.focusRouteFailure(routeId, legIndex));
@@ -253,13 +250,6 @@
 
   function handleCancelOrEscape(): void {
     if (shellError || runtime === null) {
-      return;
-    }
-    if (snapshot !== null && snapshot.ui.drag !== null) {
-      setSnapshot(runtime.cancelDrag());
-      return;
-    }
-    if (snapshot !== null && !snapshot.shell.hud.canCancel) {
       return;
     }
     setSnapshot(runtime.handleEscape());
@@ -332,8 +322,9 @@
     }
 
     if (key === "b") {
-      const next = snapshot?.ui.activeHudCategory === "build" ? null : "build";
-      setSnapshot(runtime.setHudCategory(next));
+      const next =
+        snapshot?.ui.activeCommandDestination === "build" ? null : "build";
+      setSnapshot(runtime.setCommandDestination(next));
       return;
     }
     if (key === "r") {
@@ -423,7 +414,7 @@
   <main
     class="shell"
     data-testid="game-shell"
-    data-hud-category={snapshot?.ui.activeHudCategory ?? "none"}
+    data-command-destination={snapshot?.ui.activeCommandDestination ?? "none"}
   >
     {#if snapshot !== null}
       <Topbar
@@ -457,54 +448,99 @@
         error={snapshot.ui.roadMutationPreviewError}
       />
 
-      <GameCanvas {runtime} onShellError={handleShellError} />
+      <div class="game-workspace">
+        <GameCanvas {runtime} onShellError={handleShellError} />
+        {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
+          <InspectPanel
+            inspector={snapshot.shell.inspector}
+            onAssignRouteToPlatform={handleAssignRouteToPlatform}
+          />
+        {/if}
+      </div>
 
-      <HudDrawer
-        category={snapshot.ui.activeHudCategory}
-        brief={snapshot.shell.brief}
-        activeTool={snapshot.ui.activeTool}
-        activeOverlay={snapshot.ui.activeOverlay}
-        selectedArea={snapshot.ui.selectedArea}
-        selectedBuilding={snapshot.ui.selectedBuilding}
-        buildingRotation={snapshot.ui.buildingRotation}
-        roadPreset={snapshot.ui.roadPreset}
-        roundaboutSize={snapshot.ui.roundaboutSize}
-        buildCategory={snapshot.ui.buildCategory}
-        inspector={snapshot.shell.inspector}
-        routeDraft={snapshot.shell.routeDraft}
-        routes={snapshot.shell.routes}
-        onCloseDrawer={() => handleSetHudCategory(null)}
-        onSetTool={handleSetTool}
-        onSetArea={handleSetArea}
-        onRotateBuilding={handleRotateBuilding}
-        onSetBuildCategory={handleSetBuildCategory}
-        onSelectBuildItem={handleSelectBuildItem}
-        onSetOverlay={handleSetOverlay}
-        onAssignRouteToPlatform={handleAssignRouteToPlatform}
-        onSelectRouteWaypoint={handleSelectRouteWaypoint}
-        onRemoveRouteWaypoint={handleRemoveRouteWaypoint}
-        onUndoRouteDraft={handleUndoRouteDraft}
-        onRedoRouteDraft={handleRedoRouteDraft}
-        onMoveRouteWaypoint={handleMoveRouteWaypoint}
-        onReverseRouteDraft={handleReverseRouteDraft}
-        onSetRoutePattern={handleSetRoutePattern}
-        onSaveRouteDraft={handleSaveRouteDraft}
-        onCancelRouteDraft={handleCancelRouteDraft}
-        onReloadRouteDraft={handleReloadRouteDraft}
-        onStartRouteEdit={handleStartRouteEdit}
-        onRenameRoute={handleRenameRoute}
-        onRecolorRoute={handleRecolorRoute}
-        onToggleRouteActive={handleToggleRouteActive}
-        onDeleteRoute={handleDeleteRoute}
-        onSelectRoute={handleSelectRoute}
-        onFocusRouteFailure={handleFocusRouteFailure}
-      />
+      {@const currentSnapshot = snapshot}
+      {#if snapshot.ui.activeCommandDestination === "build"}
+        <CommandPanel
+          destination="build"
+          title="Build"
+          canClose={currentSnapshot.ui.routeDraft === null}
+          onClose={() => handleSetCommandDestination(null)}
+        >
+          <BuildPanel
+            activeBuildGroup={currentSnapshot.ui.activeBuildGroup}
+            activeTool={currentSnapshot.ui.activeTool}
+            selectedArea={currentSnapshot.ui.selectedArea}
+            selectedBuilding={currentSnapshot.ui.selectedBuilding}
+            roadPreset={currentSnapshot.ui.roadPreset}
+            roundaboutSize={currentSnapshot.ui.roundaboutSize}
+            buildingRotation={currentSnapshot.ui.buildingRotation}
+            onSetBuildGroup={handleSetBuildGroup}
+            onSelectItem={handleSelectBuildItem}
+            onRotateBuilding={handleRotateBuilding}
+          />
+        </CommandPanel>
+      {:else if snapshot.ui.activeCommandDestination === "lines"}
+        <CommandPanel
+          destination="lines"
+          title="Lines"
+          canClose={currentSnapshot.ui.routeDraft === null}
+          onClose={() => handleSetCommandDestination(null)}
+        >
+          <LinesPanel
+            activeTool={currentSnapshot.ui.activeTool}
+            selectedBuilding={currentSnapshot.ui.selectedBuilding}
+            routeDraft={currentSnapshot.shell.routeDraft}
+            routes={currentSnapshot.shell.routes}
+            onSetTool={(tool) => handleSetTool(tool)}
+            onSelectWaypoint={handleSelectRouteWaypoint}
+            onRemove={handleRemoveRouteWaypoint}
+            onUndo={handleUndoRouteDraft}
+            onRedo={handleRedoRouteDraft}
+            onMove={handleMoveRouteWaypoint}
+            onReverse={handleReverseRouteDraft}
+            onPattern={handleSetRoutePattern}
+            onSave={handleSaveRouteDraft}
+            onCancel={handleCancelRouteDraft}
+            onReload={handleReloadRouteDraft}
+            onRenameRoute={handleRenameRoute}
+            onRecolorRoute={handleRecolorRoute}
+            onToggleRouteActive={handleToggleRouteActive}
+            onDeleteRoute={handleDeleteRoute}
+            onFocusRouteFailure={handleFocusRouteFailure}
+            onEditRoute={handleStartRouteEdit}
+          />
+        </CommandPanel>
+      {:else if snapshot.ui.activeCommandDestination === "data"}
+        <CommandPanel
+          destination="data"
+          title="Data"
+          canClose={currentSnapshot.ui.routeDraft === null}
+          onClose={() => handleSetCommandDestination(null)}
+        >
+          <DataPanel
+            activeOverlay={currentSnapshot.ui.activeOverlay}
+            metrics={currentSnapshot.shell.topbar}
+            onSetOverlay={handleSetOverlay}
+          />
+        </CommandPanel>
+      {:else if snapshot.ui.activeCommandDestination === "city"}
+        <CommandPanel
+          destination="city"
+          title="City"
+          canClose={currentSnapshot.ui.routeDraft === null}
+          onClose={() => handleSetCommandDestination(null)}
+        >
+          <CityPanel
+            shell={currentSnapshot.shell.city}
+            cityName={currentSnapshot.persistence.activeCity?.name ?? null}
+          />
+        </CommandPanel>
+      {/if}
 
-      <BottomHud
-        hud={snapshot.shell.hud}
-        onSetHudCategory={handleSetHudCategory}
-        onCancel={handleCancelOrEscape}
-        onSetTool={handleSetTool}
+      <CommandShelf
+        command={currentSnapshot.shell.command}
+        onSetDestination={handleSetCommandDestination}
+        onSetTool={(tool) => handleSetTool(tool)}
       />
     {/if}
   </main>
