@@ -242,6 +242,10 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
     /connected/i,
   );
   await page.getByRole("button", { name: "Save route" }).click();
+  await expect(page.getByTestId("command-tool-select")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.getByTestId("lines-list")).toBeFocused();
 
   const created = (await runtimeSnapshot(page)).state.transit.routes.at(-1);
@@ -342,4 +346,66 @@ test("shows one road impact strip and one dismissible rejection", async ({
   );
   await expect(page.getByTestId("action-feedback")).toHaveCount(0);
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
+});
+
+test("keeps visible Data labels owned while a road tool is armed", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  const targetTile = "tile-14-12";
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await openCommandDestination(page, "data");
+  const before = await runtimeSnapshot(page);
+  const beforeTile = before.state.map.tiles.find(
+    (tile) => tile.id === targetTile,
+  );
+  expect(beforeTile).toBeDefined();
+
+  const lateLabel = page.getByText("Late", { exact: true });
+  const lateBox = await lateLabel.boundingBox();
+  expect(lateBox).not.toBeNull();
+  await page.mouse.click(
+    lateBox!.x + lateBox!.width / 2,
+    lateBox!.y + lateBox!.height / 2,
+  );
+
+  const after = await runtimeSnapshot(page);
+  const afterTile = after.state.map.tiles.find(
+    (tile) => tile.id === targetTile,
+  );
+  expect(afterTile?.kind).toBe(beforeTile?.kind);
+  await expect(page.getByTestId("panel-data")).toBeVisible();
+});
+
+test("keeps RouteEditor labels owned while a line draft is pinned", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  const stops = [
+    { x: 5, y: 3 },
+    { x: 9, y: 3 },
+  ] as const;
+  for (const stop of stops) await clickMapTile(canvas, stop);
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of stops) await clickMapTile(canvas, stop);
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+
+  const shuttleLabel = page.getByText("Shuttle", { exact: true });
+  const shuttleBox = await shuttleLabel.boundingBox();
+  expect(shuttleBox).not.toBeNull();
+  await page.mouse.click(
+    shuttleBox!.x + shuttleBox!.width / 2,
+    shuttleBox!.y + shuttleBox!.height / 2,
+  );
+  await expect(page.getByRole("radio", { name: "Shuttle" })).toBeChecked();
 });
