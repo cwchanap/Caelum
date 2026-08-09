@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import CommandShelf from "./components/hud/CommandShelf.svelte";
   import CommandPanel from "./components/hud/CommandPanel.svelte";
   import BuildPanel from "./components/hud/panels/BuildPanel.svelte";
@@ -31,6 +31,10 @@
   let { runtime, error = null }: Props = $props();
   let shellError = $state<string | null>(null);
   let snapshot = $state<RuntimeSnapshot | null>(null);
+  let gameCanvas: { focus: () => void } | null = $state(null);
+  let commandShelf: {
+    focusDestination: (destination: CommandDestination) => void;
+  } | null = $state(null);
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
@@ -66,6 +70,20 @@
     if (runtime !== null) {
       setSnapshot(runtime.setCommandDestination(destination));
     }
+  }
+
+  function focusCanvasAfterCommit(): void {
+    void tick().then(() => gameCanvas?.focus());
+  }
+
+  function focusShelfAfterClose(destination: CommandDestination): void {
+    void tick().then(() => commandShelf?.focusDestination(destination));
+  }
+
+  function handleCloseCommandPanel(destination: CommandDestination): void {
+    if (runtime === null) return;
+    setSnapshot(runtime.setCommandDestination(null));
+    focusShelfAfterClose(destination);
   }
 
   function handleTogglePause(): void {
@@ -115,6 +133,7 @@
     } else {
       setSnapshot(runtime.setBuilding(action.building));
     }
+    focusCanvasAfterCommit();
   }
 
   function handleSetOverlay(overlay: Overlay | null): void {
@@ -251,7 +270,19 @@
     if (shellError || runtime === null) {
       return;
     }
-    setSnapshot(runtime.handleEscape());
+    const previousSnapshot = snapshot;
+    const previousDestination = previousSnapshot?.ui.activeCommandDestination;
+    const nextSnapshot = runtime.handleEscape();
+    setSnapshot(nextSnapshot);
+
+    if (
+      previousDestination !== null &&
+      previousDestination !== undefined &&
+      previousSnapshot?.ui.routeDraft === null &&
+      nextSnapshot.ui.activeCommandDestination === null
+    ) {
+      focusShelfAfterClose(previousDestination);
+    }
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -430,7 +461,11 @@
       />
 
       <div class="game-workspace">
-        <GameCanvas {runtime} onShellError={handleShellError} />
+        <GameCanvas
+          bind:this={gameCanvas}
+          {runtime}
+          onShellError={handleShellError}
+        />
         {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
           <InspectPanel
             inspector={snapshot.shell.inspector}
@@ -445,7 +480,7 @@
           destination="build"
           title="Build"
           canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleSetCommandDestination(null)}
+          onClose={() => handleCloseCommandPanel("build")}
         >
           <BuildPanel
             activeBuildGroup={currentSnapshot.ui.activeBuildGroup}
@@ -465,7 +500,7 @@
           destination="lines"
           title="Lines"
           canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleSetCommandDestination(null)}
+          onClose={() => handleCloseCommandPanel("lines")}
         >
           <LinesPanel
             activeTool={currentSnapshot.ui.activeTool}
@@ -496,7 +531,7 @@
           destination="data"
           title="Data"
           canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleSetCommandDestination(null)}
+          onClose={() => handleCloseCommandPanel("data")}
         >
           <DataPanel
             activeOverlay={currentSnapshot.ui.activeOverlay}
@@ -509,7 +544,7 @@
           destination="city"
           title="City"
           canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleSetCommandDestination(null)}
+          onClose={() => handleCloseCommandPanel("city")}
         >
           <CityPanel
             shell={currentSnapshot.shell.city}
@@ -519,6 +554,7 @@
       {/if}
 
       <CommandShelf
+        bind:this={commandShelf}
         command={currentSnapshot.shell.command}
         onSetDestination={handleSetCommandDestination}
         onSetTool={(tool) => handleSetTool(tool)}

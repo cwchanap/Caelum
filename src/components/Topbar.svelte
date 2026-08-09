@@ -13,14 +13,13 @@
   const readouts: Array<{
     key: keyof ShellTopbarState;
     label: string;
-    modifier?: string;
+    wide?: boolean;
   }> = [
-    { key: "budget", label: "Budget" },
-    { key: "time", label: "Clock" },
-    { key: "population", label: "Population" },
-    { key: "late", label: "Late", modifier: "readout--warn" },
-    { key: "unserved", label: "Unserved", modifier: "readout--alert" },
-    { key: "avgWait", label: "Avg Wait" },
+    { key: "budget", label: "Money" },
+    { key: "time", label: "Time" },
+    { key: "networkSummary", label: "Network" },
+    { key: "population", label: "Population", wide: true },
+    { key: "avgWait", label: "Avg Wait", wide: true },
   ];
 
   let { shell, paused, speed, onTogglePause, onSetSpeed }: Props = $props();
@@ -33,18 +32,9 @@
     <span class="brand-tag">Transit Ops</span>
   </div>
 
-  <div class:signal--paused={paused} class="signal" aria-live="polite">
-    <span class="signal-dot" aria-hidden="true"></span>
-    <span class="signal-label">{shell.signalState}</span>
-  </div>
-
   <div class="readouts">
     {#each readouts as readout (readout.key)}
-      <div
-        class:readout--warn={readout.modifier === "readout--warn"}
-        class:readout--alert={readout.modifier === "readout--alert"}
-        class="readout"
-      >
+      <div class:topbar-readout--wide={readout.wide === true} class="readout">
         <span class="readout-label">{readout.label}</span>
         <span class="readout-value">{shell[readout.key]}</span>
       </div>

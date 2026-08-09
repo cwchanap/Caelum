@@ -158,11 +158,11 @@
     --shelf-muted: var(--ink-mid, #9aaeb6);
     --shelf-signal: var(--cyan, #3fe0c5);
     --shelf-danger: var(--red, #ff5b5b);
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     gap: 16px;
-    min-height: 72px;
+    min-height: var(--command-shelf-height, 92px);
     padding: 10px 16px;
     color: var(--shelf-ink);
     background: linear-gradient(
@@ -179,6 +179,19 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .command-shelf__destinations {
+    grid-column: 2;
+    justify-content: center;
+  }
+
+  .command-shelf__tools {
+    grid-column: 3;
+    justify-content: flex-end;
+    min-width: 0;
+    padding-left: 16px;
+    border-left: 1px solid var(--shelf-line);
   }
 
   .command-shelf__destination,
@@ -199,7 +212,9 @@
     transition:
       color 150ms ease,
       background-color 150ms ease,
-      border-color 150ms ease;
+      border-color 150ms ease,
+      opacity 150ms ease,
+      transform 150ms ease;
   }
 
   .command-shelf__destination {
@@ -218,6 +233,7 @@
     color: var(--shelf-ink);
     background: rgba(63, 224, 197, 0.08);
     border-color: rgba(63, 224, 197, 0.24);
+    transform: translateY(-1px);
   }
 
   .command-shelf__destination:focus-visible,
@@ -310,6 +326,11 @@
     .command-shelf__destination,
     .command-shelf__tool {
       transition: none;
+    }
+
+    .command-shelf__destination:hover,
+    .command-shelf__tool:hover {
+      transform: none;
     }
   }
 </style>

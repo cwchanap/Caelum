@@ -26,6 +26,20 @@
       );
     }
   });
+
+  export function focus(): void {
+    host?.focus();
+  }
 </script>
 
-<div class="board" data-testid="game-canvas-host" bind:this={host}></div>
+<div
+  class="board"
+  data-testid="game-canvas-host"
+  bind:this={host}
+  tabindex="-1"
+  aria-label="City map"
+  aria-describedby="game-canvas-description"
+></div>
+<p id="game-canvas-description" class="sr-only">
+  Build and inspect the transport sandbox on the city map.
+</p>

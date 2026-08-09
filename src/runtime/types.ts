@@ -45,11 +45,11 @@ export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {
   budget: string;
-  signalState: string;
   time: string;
   population: string;
   late: string;
   unserved: string;
+  networkSummary: string;
   avgWait: string;
 }
 

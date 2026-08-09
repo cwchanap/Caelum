@@ -51,8 +51,6 @@
     --panel-ink: var(--ink, #e6f1f4);
     --panel-muted: var(--ink-mid, #9aaeb6);
     --panel-signal: var(--cyan, #3fe0c5);
-    max-width: calc(100vw - 32px);
-    max-height: min(540px, calc(100vh - 120px));
     overflow: hidden;
     color: var(--panel-ink);
     background: var(--panel-surface);
@@ -112,8 +110,8 @@
   }
 
   .command-panel__body {
-    max-height: min(470px, calc(100vh - 190px));
-    overflow: auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 16px;
   }
 
