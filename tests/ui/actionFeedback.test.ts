@@ -83,4 +83,17 @@ describe("ActionFeedback", () => {
       "Metro A will become broken",
     );
   });
+
+  it("renders duplicate material-impact detail labels without crashing", () => {
+    render(ActionFeedback, {
+      props: {
+        feedback: feedback({
+          details: ["Loop 1 will reroute", "Loop 1 will reroute"],
+        }),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
 });

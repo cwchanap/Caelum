@@ -1076,6 +1076,40 @@ describe("action feedback selector", () => {
     expect(shell.actionFeedback).toBeNull();
   });
 
+  it("keeps a matching non-reloadable route-save rejection inside the editor", () => {
+    const state = addTestBusStop(
+      addTestBusStop(createTestGameState(), { x: 7, y: 7 }),
+      { x: 11, y: 7 },
+    );
+    const rejection = {
+      code: "routeRevisionExhausted" as const,
+      context: { routeId: "route-001", actualRevision: 9 },
+    };
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        previewPending: false,
+        preview: null,
+      },
+      routePreviewError: rejection,
+    };
+    const shell = selectShellState(state, ui, rejection);
+
+    expect(shell.routeDraft?.canReload).toBe(false);
+    expect(shell.actionFeedback).toBeNull();
+  });
+
   it("prioritizes a road host error over road rejection and impact", () => {
     const shell = selectShellState(createTestGameState(), {
       ...createUiState(),
