@@ -115,7 +115,8 @@ function nextToolUiState(activeTool: Tool, current = createUiState()): UiState {
     ...current,
     activeTool,
     selectedId: activeTool === "inspect" ? current.selectedId : null,
-    selectedNodeKind: null,
+    selectedNodeKind:
+      activeTool === "inspect" ? current.selectedNodeKind : null,
     selectedBuilding: null,
     selectedArea: null,
     activeBuildGroup: null,

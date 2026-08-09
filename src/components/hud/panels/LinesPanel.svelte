@@ -124,8 +124,8 @@
     <section class="panel-section lines-section">
       <h3 class="section-head"><span class="num">03</span> Lines</h3>
       <p
-        id="route-draft-gate"
-        data-testid="route-draft-gate"
+        id="route-draft-panel-gate"
+        data-testid="route-draft-panel-gate"
         class="route-draft-gate"
       >
         Save or Cancel this line before changing commands

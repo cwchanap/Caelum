@@ -233,8 +233,8 @@ describe("LinesPanel line workspace", () => {
       props: panelProps({ routeDraft: createDraftView() }),
     });
 
-    expect(screen.getByTestId("route-draft-gate")).toBeVisible();
-    expect(screen.getByTestId("route-draft-gate")).toHaveTextContent(
+    expect(screen.getByTestId("route-draft-panel-gate")).toBeVisible();
+    expect(screen.getByTestId("route-draft-panel-gate")).toHaveTextContent(
       "Save or Cancel this line before changing commands",
     );
     expect(screen.getByTestId("route-draft")).toBeVisible();

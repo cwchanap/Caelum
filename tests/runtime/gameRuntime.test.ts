@@ -105,6 +105,38 @@ function snapshotWithBusRoute(): RustGameSnapshot {
   });
 }
 
+function snapshotWithColocatedStopAndStation(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [createStop("stop-001", { x: 7, y: 8 })],
+      stations: [
+        {
+          id: "station-001",
+          status: "present",
+          position: { x: 7, y: 8 },
+          platforms: [
+            {
+              id: "station-001-p0",
+              label: "A",
+              capacity: 300,
+              routeIds: [],
+            },
+            {
+              id: "station-001-p1",
+              label: "B",
+              capacity: 300,
+              routeIds: [],
+            },
+          ],
+        },
+      ],
+      routes: [],
+      metroLines: [],
+      vehicles: [],
+    },
+  });
+}
+
 function updateTile(
   map: GameMap,
   point: Point,
@@ -2201,6 +2233,24 @@ describe("Game Runtime", () => {
 
     expect(snapshot.ui.selectedId).toBe("5,5");
     expect(backend.intents).toEqual([]);
+  });
+
+  it("preserves the selected co-located station when returning to Select", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithColocatedStopAndStation()),
+    });
+
+    runtime.setTool("inspect");
+    await runtime.handleTileClick({ x: 7, y: 8 });
+    const station = await runtime.handleTileClick({ x: 7, y: 8 });
+    expect(station.ui.selectedNodeKind).toBe("station");
+
+    const selected = runtime.setTool("inspect");
+
+    expect(selected.ui.selectedId).toBe("7,8");
+    expect(selected.ui.selectedNodeKind).toBe("station");
+    expect(selected.shell.inspector?.nodeLabel).toBe("Metro Station");
   });
 
   it("opens and closes one command destination", async () => {

@@ -69,7 +69,7 @@
         aria-controls={`command-panel-${destination.id}`}
         aria-disabled={command.routeDraftActive ? "true" : undefined}
         aria-describedby={command.routeDraftActive
-          ? "route-draft-gate"
+          ? "route-draft-shelf-gate"
           : undefined}
         data-testid={`command-destination-${destination.id}`}
         onclick={() => activate(destination.id)}
@@ -110,7 +110,7 @@
       aria-pressed={command.selectActive}
       aria-disabled={command.routeDraftActive ? "true" : undefined}
       aria-describedby={command.routeDraftActive
-        ? "route-draft-gate"
+        ? "route-draft-shelf-gate"
         : undefined}
       data-testid="command-tool-select"
       onclick={() => activateTool("inspect")}
@@ -125,7 +125,7 @@
       aria-pressed={command.demolishActive}
       aria-disabled={command.routeDraftActive ? "true" : undefined}
       aria-describedby={command.routeDraftActive
-        ? "route-draft-gate"
+        ? "route-draft-shelf-gate"
         : undefined}
       data-testid="command-tool-demolish"
       onclick={() => activateTool("remove")}
@@ -140,7 +140,11 @@
   </div>
 
   {#if command.routeDraftActive}
-    <span id="route-draft-gate" class="command-shelf__gate">
+    <span
+      id="route-draft-shelf-gate"
+      data-testid="route-draft-shelf-gate"
+      class="command-shelf__gate"
+    >
       Save or cancel the active route draft to switch commands.
     </span>
   {/if}
