@@ -53,7 +53,7 @@
 
     {#if feedback.details.length > 0}
       <ul class="action-feedback-details">
-        {#each feedback.details as detail (detail)}
+        {#each feedback.details as detail, index (index)}
           <li>{detail}</li>
         {/each}
       </ul>
