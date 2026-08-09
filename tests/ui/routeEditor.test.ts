@@ -1,12 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
-import HudDrawer from "../../src/components/hud/HudDrawer.svelte";
 import RouteEditor from "../../src/components/hud/panels/RouteEditor.svelte";
-import type {
-  RouteEditorView,
-  ShellBriefState,
-  ShellRouteListState,
-} from "../../src/runtime/types";
+import type { RouteEditorView } from "../../src/runtime/types";
 
 function createDraftView(
   overrides: Partial<RouteEditorView> = {},
@@ -71,61 +66,6 @@ function editorProps(editor: RouteEditorView) {
     onSave: vi.fn(),
     onCancel: vi.fn(),
     onReload: vi.fn(),
-  };
-}
-
-const brief: ShellBriefState = {
-  title: "Scenario",
-  context: "Template · Crossroads",
-  status: "RUNNING",
-  objective: "obj",
-  lossNote: "note",
-  nextGrowth: "wave",
-  selectedId: "2,2",
-  activeTool: "INSPECT",
-};
-
-function drawerProps(overrides: Record<string, unknown> = {}) {
-  return {
-    category: "build" as const,
-    brief,
-    activeTool: "inspect" as const,
-    activeOverlay: null,
-    selectedArea: null,
-    selectedBuilding: null,
-    buildingRotation: 0 as const,
-    roadPreset: "twoWay" as const,
-    roundaboutSize: "compact2x2" as const,
-    buildCategory: null,
-    inspector: null,
-    routeDraft: null,
-    routes: [] as ShellRouteListState,
-    onCloseDrawer: vi.fn(),
-    onSetTool: vi.fn(),
-    onSetArea: vi.fn(),
-    onRotateBuilding: vi.fn(),
-    onSetBuildCategory: vi.fn(),
-    onSelectBuildItem: vi.fn(),
-    onSetOverlay: vi.fn(),
-    onAssignRouteToPlatform: vi.fn(),
-    onSelectRouteWaypoint: vi.fn(),
-    onRemoveRouteWaypoint: vi.fn(),
-    onUndoRouteDraft: vi.fn(),
-    onRedoRouteDraft: vi.fn(),
-    onMoveRouteWaypoint: vi.fn(),
-    onReverseRouteDraft: vi.fn(),
-    onSetRoutePattern: vi.fn(),
-    onSaveRouteDraft: vi.fn(),
-    onCancelRouteDraft: vi.fn(),
-    onReloadRouteDraft: vi.fn(),
-    onStartRouteEdit: vi.fn(),
-    onRenameRoute: vi.fn(),
-    onRecolorRoute: vi.fn(),
-    onToggleRouteActive: vi.fn(),
-    onDeleteRoute: vi.fn(),
-    onSelectRoute: vi.fn(),
-    onFocusRouteFailure: vi.fn(),
-    ...overrides,
   };
 }
 
@@ -255,11 +195,10 @@ describe("RouteEditor", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
   });
 
-  it("renders retained missing waypoints in the Manage editor", () => {
-    render(HudDrawer, {
-      props: drawerProps({
-        category: "manage",
-        routeDraft: editDraftView({
+  it("renders retained missing waypoints directly in the editor", () => {
+    render(RouteEditor, {
+      props: editorProps(
+        editDraftView({
           waypoints: [
             {
               id: "stop-001",
@@ -281,7 +220,7 @@ describe("RouteEditor", () => {
           previewMessage:
             "Stop A → Missing Bus Stop includes a missing waypoint.",
         }),
-      }),
+      ),
     });
 
     expect(screen.getByTestId("route-waypoint-1")).toHaveTextContent(
