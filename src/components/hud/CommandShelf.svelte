@@ -302,21 +302,6 @@
     white-space: nowrap;
   }
 
-  @media (max-width: 720px) {
-    .command-shelf {
-      gap: 8px;
-      padding-inline: 8px;
-    }
-
-    .command-shelf__destination {
-      padding-inline: 7px;
-    }
-
-    .command-shelf__label {
-      display: none;
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .command-shelf__destination,
     .command-shelf__tool {
