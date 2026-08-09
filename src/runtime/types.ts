@@ -14,10 +14,9 @@ import type {
   Tool,
   TransitMode,
 } from "../domain/types";
-import type { BuildCategoryId } from "../domain/catalog/buildMenu";
+import type { BuildGroup } from "../domain/catalog/buildGroups";
 import type {
   CommandDestination,
-  HudCategory,
   RouteDraftNotice,
   UiState,
 } from "../ui/uiState";
@@ -71,34 +70,6 @@ export interface ShellCityState {
   population: string;
   lineCount: string;
   networkSummary: string;
-}
-
-export interface ShellBriefState {
-  title: string;
-  context: string;
-  status: string;
-  objective: string;
-  lossNote: string;
-  nextGrowth: string;
-  selectedId: string;
-  activeTool: string;
-}
-
-export interface ShellHudBadges {
-  routeDraftActive: boolean;
-  routeCount: number;
-  activeOverlayLabel: string | null;
-  inspectActive: boolean;
-}
-
-export interface ShellHudState {
-  activeCategory: HudCategory | null;
-  activeToolChip: string;
-  canCancel: boolean;
-  buildCategory: BuildCategoryId | null;
-  inspectToolActive: boolean;
-  removeToolActive: boolean;
-  badges: ShellHudBadges;
 }
 
 export interface ShellPlatformMoveTarget {
@@ -209,8 +180,8 @@ export type ShellRouteListState = ShellRouteListItem[];
 
 export interface ShellState {
   topbar: ShellTopbarState;
-  brief: ShellBriefState;
-  hud: ShellHudState;
+  command: ShellCommandState;
+  city: ShellCityState;
   inspector: ShellInspectorState | null;
   routeDraft: RouteEditorView | null;
   routes: ShellRouteListState;
@@ -251,7 +222,10 @@ export interface RuntimeController {
   setBuilding: (building: BuildingType) => RuntimeSnapshot;
   setArea: (area: AreaKind) => RuntimeSnapshot;
   setRoadPreset: (preset: RoadPreset) => RuntimeSnapshot;
-  setBuildCategory: (category: BuildCategoryId | null) => RuntimeSnapshot;
+  setCommandDestination: (
+    destination: CommandDestination | null,
+  ) => RuntimeSnapshot;
+  setBuildGroup: (group: BuildGroup | null) => RuntimeSnapshot;
   armRoad: (preset: RoadPreset) => RuntimeSnapshot;
   armRoundabout: (size: RoundaboutSize) => RuntimeSnapshot;
   startDrag: (point: Point) => RuntimeSnapshot;
@@ -262,7 +236,6 @@ export interface RuntimeController {
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeCommandResult;
   setSpeed: (speed: GameState["speed"]) => RuntimeCommandResult;
-  setHudCategory: (category: HudCategory | null) => RuntimeSnapshot;
   handleTileClick: (point: Point) => RuntimeCommandResult;
   assignRouteToPlatform: (
     nodeId: string,

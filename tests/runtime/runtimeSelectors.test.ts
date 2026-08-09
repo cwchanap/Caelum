@@ -983,179 +983,7 @@ describe("route selectors", () => {
   });
 });
 
-describe("selectShellState Brief", () => {
-  const thresholds = {
-    maxLateRatio: 0.25,
-    maxUnservedRatio: 0.2,
-    maxAverageWait: 180,
-    rollingWindowSeconds: 300,
-    survivalTime: 1_200,
-  };
-
-  const defaultRules = createTestGameState().rules;
-  const defaultSandbox = defaultRules.sandbox;
-
-  it.each([
-    {
-      name: "standard sandbox",
-      rules: {
-        gameMode: "sandbox" as const,
-        economyPreset: "standard" as const,
-        templateId: "crossroads" as const,
-      },
-      scenarioName: "Crossroads",
-      objectives: null,
-      title: "Standard Sandbox",
-      context: "Template · Crossroads",
-      objective: "Open-ended city — no campaign objective.",
-      lossNote: "Metrics continue without win/loss.",
-    },
-    {
-      name: "blank grid sandbox",
-      rules: {
-        gameMode: "sandbox" as const,
-        economyPreset: "standard" as const,
-        templateId: "blankGrid" as const,
-      },
-      scenarioName: "Blank Grid",
-      objectives: null,
-      title: "Standard Sandbox",
-      context: "Template · Blank Grid",
-      objective: "Open-ended city — no campaign objective.",
-      lossNote: "Metrics continue without win/loss.",
-    },
-    {
-      name: "creative sandbox",
-      rules: {
-        gameMode: "sandbox" as const,
-        economyPreset: "creative" as const,
-        templateId: "crossroads" as const,
-      },
-      scenarioName: "Crossroads",
-      objectives: thresholds,
-      title: "Creative Sandbox",
-      context: "Template · Crossroads",
-      objective: "Open-ended city — no campaign objective.",
-      lossNote: "Metrics continue without win/loss.",
-    },
-    {
-      name: "campaign with objectives",
-      rules: {
-        gameMode: "campaign" as const,
-        economyPreset: "standard" as const,
-        templateId: "crossroads" as const,
-      },
-      scenarioName: "Growing Suburb",
-      objectives: thresholds,
-      title: "Growing Suburb",
-      context: "Campaign · Growing Suburb",
-      objective:
-        "Hold late trips below 25%, unserved below 20%, average wait under 180s.",
-      lossNote: "Within tolerances. Hold the line.",
-    },
-    {
-      name: "campaign without objectives",
-      rules: {
-        gameMode: "campaign" as const,
-        economyPreset: "creative" as const,
-        templateId: "crossroads" as const,
-      },
-      scenarioName: "Growing Suburb",
-      objectives: null,
-      title: "Growing Suburb",
-      context: "Campaign · Growing Suburb",
-      objective: "No campaign objective.",
-      lossNote: "Metrics continue without win/loss.",
-    },
-  ])("renders $name", (entry) => {
-    const state = createTestGameState({
-      rules: {
-        ...defaultRules,
-        gameMode: entry.rules.gameMode,
-        economyPreset: entry.rules.economyPreset,
-        sandbox: {
-          ...defaultSandbox,
-          templateId: entry.rules.templateId,
-        },
-      },
-      scenario: {
-        name: entry.scenarioName,
-        objectives: entry.objectives,
-        growthWaves: [],
-      },
-    });
-
-    expect(selectShellState(state, createUiState()).brief).toMatchObject({
-      title: entry.title,
-      context: entry.context,
-      objective: entry.objective,
-      lossNote: entry.lossNote,
-      nextGrowth: "No automatic growth",
-    });
-  });
-
-  it("uses campaign wave copy and preserves a Rust loss reason", () => {
-    const base = createTestGameState();
-    const state = createTestGameState({
-      rules: {
-        ...base.rules,
-        gameMode: "campaign",
-        economyPreset: "creative",
-      },
-      metrics: {
-        ...base.metrics,
-        state: "lost",
-        lossReason: "Existing campaign loss",
-      },
-      scenario: {
-        name: "Authored Campaign",
-        objectives: thresholds,
-        growthWaves: [
-          {
-            id: "wave-1",
-            triggerTime: 60,
-            message: "New residents arrive soon.",
-            applied: false,
-            actions: [],
-          },
-        ],
-      },
-    });
-
-    expect(selectShellState(state, createUiState()).brief).toMatchObject({
-      title: "Authored Campaign",
-      context: "Campaign · Authored Campaign",
-      lossNote: "Existing campaign loss",
-      nextGrowth: "New residents arrive soon.",
-    });
-  });
-
-  it("ignores sandbox-attached objectives and waves", () => {
-    const state = createTestGameState({
-      scenario: {
-        name: "Crossroads",
-        objectives: thresholds,
-        growthWaves: [
-          {
-            id: "inert-wave",
-            triggerTime: 0,
-            message: "Must not render",
-            applied: false,
-            actions: [],
-          },
-        ],
-      },
-    });
-
-    expect(selectShellState(state, createUiState()).brief).toMatchObject({
-      title: "Standard Sandbox",
-      objective: "Open-ended city — no campaign objective.",
-      nextGrowth: "No automatic growth",
-    });
-  });
-});
-
-describe("ShellHudState", () => {
+describe("ShellCommandState and ShellCityState", () => {
   it("exposes bus terminal cost from the shared transit catalog", () => {
     expect(COSTS.busTerminal).toBe(12_000);
   });
@@ -1200,149 +1028,95 @@ describe("ShellHudState", () => {
     expect(shell.topbar.population).toBe("2");
   });
 
-  it("derives the active tool chip and default cancel state", () => {
+  it("starts in Select with no command destination", () => {
     const state = createTestGameState();
     const ui = createUiState();
     const shell = selectShellState(state, ui);
 
-    expect(shell.hud.activeCategory).toBe("brief");
-    expect(shell.hud.activeToolChip).toBe("INSPECT");
-    expect(shell.hud.canCancel).toBe(false);
-    expect(shell.hud.badges.routeDraftActive).toBe(false);
-    expect(shell.hud.badges.routeCount).toBe(0);
-    expect(shell.hud.badges.activeOverlayLabel).toBeNull();
-    expect(shell.hud.badges.inspectActive).toBe(false);
+    expect(shell.command).toMatchObject({
+      activeDestination: null,
+      activeModeLabel: "SELECT",
+      routeDraftActive: false,
+      selectActive: true,
+      demolishActive: false,
+      lineCount: 0,
+      activeOverlayLabel: null,
+    });
+    expect("brief" in shell).toBe(false);
+    expect("hud" in shell).toBe(false);
   });
 
-  it("treats an overlay-only inspect state as cancellable", () => {
-    // Enabling a data overlay while staying on the inspect tool must still
-    // arm Cancel/Escape so the player can clear the overlay without diving
-    // back into the Data drawer. resetUi() clears activeOverlay, so the gate
-    // must let it through.
+  it("derives Select and Demolish command labels and active overlays", () => {
     const state = createTestGameState();
-    const ui = { ...createUiState(), activeOverlay: "coverage" as const };
-    const shell = selectShellState(state, ui);
-
-    expect(shell.hud.canCancel).toBe(true);
-    expect(shell.hud.badges.activeOverlayLabel).toBe("Coverage");
+    expect(
+      selectShellState(state, {
+        ...createUiState(),
+        activeOverlay: "coverage",
+      }).command,
+    ).toMatchObject({
+      activeModeLabel: "SELECT",
+      activeOverlayLabel: "Coverage",
+    });
+    expect(
+      selectShellState(state, {
+        ...createUiState(),
+        activeTool: "remove",
+      }).command,
+    ).toMatchObject({
+      activeModeLabel: "DEMOLISH",
+      demolishActive: true,
+      selectActive: false,
+    });
   });
 
-  it("flags cancellable state and overlay label", () => {
+  it("pins a route draft to Lines and counts bus plus metro lines", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "busRoute" as const,
-      activeOverlay: "coverage" as const,
+      activeCommandDestination: "lines" as const,
       routeDraft: {
         ...createDraft("bus", 1),
         waypointIds: ["stop-001"],
       },
     };
-    const shell = selectShellState(state, ui);
-
-    expect(shell.hud.canCancel).toBe(true);
-    expect(shell.hud.badges.routeDraftActive).toBe(true);
-    expect(shell.hud.badges.activeOverlayLabel).toBe("Coverage");
+    expect(selectShellState(state, ui).command).toMatchObject({
+      activeDestination: "lines",
+      routeDraftActive: true,
+    });
   });
 
-  // Lock the full OVERLAY_LABELS map so a new overlay or a renamed label is
-  // caught here rather than rendering as `undefined` in the bottom-bar badge.
-  it.each([
-    ["coverage", "Coverage"],
-    ["crowding", "Crowding"],
-    ["demand", "Demand"],
-    ["lateness", "Lateness"],
-    ["growth", "Growth"],
-  ] as const)(
-    "derives the badge label for the %s overlay",
-    (overlay, label) => {
-      const state = createTestGameState();
-      const ui = { ...createUiState(), activeOverlay: overlay };
-      const shell = selectShellState(state, ui);
-
-      expect(shell.hud.badges.activeOverlayLabel).toBe(label);
-    },
-  );
-
-  it("treats a selected route (no draft/building/overlay) as cancellable", () => {
-    // When only selectedRouteId is set — no draft, no building, no overlay,
-    // tool === "inspect" — the player must still be able to dismiss the route
-    // halo via Cancel/Escape. resetUi() clears selectedRouteId, so the gate
-    // must let it through.
-    const state = createTestGameState();
-    const ui = { ...createUiState(), selectedRouteId: "route-001" };
-    const shell = selectShellState(state, ui);
-
-    expect(shell.hud.canCancel).toBe(true);
-  });
-
-  it("formats a selected area as the active tool and allows cancel", () => {
+  it("formats a single active placement label", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "area" as const,
       selectedArea: "commercial" as const,
     };
-    const shell = selectShellState(state, ui);
-
-    expect(shell.hud.activeToolChip).toBe("AREA COMMERCIAL");
-    expect(shell.hud.canCancel).toBe(true);
+    expect(selectShellState(state, ui).command.activeModeLabel).toBe(
+      "AREA COMMERCIAL",
+    );
   });
 
-  it("counts routes and metro lines together", () => {
-    let state = createTestGameState();
-    state = withRoads(state, pointsOnRow(2, 7, 15));
-    state = addTestBusStop(state, { x: 7, y: 2 });
-    state = addTestBusStop(state, { x: 15, y: 2 });
-    const stopIds = state.transit.stops.map((s) => s.id);
-    state = addTestBusRoute(state, stopIds);
-    state = withTracks(state, pointsOnRow(0, 3, 9));
-    state = addTestMetroStation(state, { x: 3, y: 0 });
-    state = addTestMetroStation(state, { x: 9, y: 0 });
-    state = addTestMetroLine(state, ["station-001", "station-002"]);
-    const shell = selectShellState(state, createUiState());
-
-    expect(shell.hud.badges.routeCount).toBe(2);
-  });
-});
-
-describe("selectShellState build HUD fields", () => {
-  it("exposes buildCategory from ui", () => {
-    const hud = selectShellState(createTestGameState(), {
-      ...createUiState(),
-      buildCategory: "bus",
-    }).hud;
-    expect(hud.buildCategory).toBe("bus");
-  });
-
-  it("marks inspect active only when inspect tool with no building/area", () => {
+  it("returns city summary values from the current sandbox snapshot", () => {
     const base = createTestGameState();
-    expect(
-      selectShellState(base, { ...createUiState(), activeTool: "inspect" }).hud
-        .inspectToolActive,
-    ).toBe(true);
-    expect(
-      selectShellState(base, {
-        ...createUiState(),
-        activeTool: "inspect",
-        selectedBuilding: "smallHouse",
-      }).hud.inspectToolActive,
-    ).toBe(false);
-    expect(
-      selectShellState(base, {
-        ...createUiState(),
-        activeTool: "inspect",
-        selectedArea: "residential",
-      }).hud.inspectToolActive,
-    ).toBe(false);
-  });
-
-  it("marks remove active when the remove tool is selected", () => {
-    const hud = selectShellState(createTestGameState(), {
-      ...createUiState(),
-      activeTool: "remove",
-    }).hud;
-    expect(hud.removeToolActive).toBe(true);
-    expect(hud.inspectToolActive).toBe(false);
+    const state = {
+      ...base,
+      rules: {
+        ...base.rules,
+        economyPreset: "creative" as const,
+        sandbox: { ...base.rules.sandbox, templateId: "blankGrid" as const },
+      },
+      paused: true,
+      metrics: { ...base.metrics, lateTrips: 4, unservedTrips: 2 },
+    };
+    expect(selectShellState(state, createUiState()).city).toMatchObject({
+      title: "Creative Sandbox",
+      template: "Blank Grid",
+      simulation: "Paused",
+      population: "0",
+      lineCount: "0",
+      networkSummary: "4 late · 2 unserved",
+    });
   });
 });

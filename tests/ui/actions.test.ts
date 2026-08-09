@@ -147,7 +147,43 @@ describe("resolveNodesAtTile", () => {
 });
 
 describe("applyUiTileClick inspect", () => {
-  it("opens the inspect drawer when a node is clicked", () => {
+  it("selects an empty tile without opening or closing a destination", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      activeCommandDestination: "data" as const,
+    };
+
+    const result = applyUiTileClick(state, ui, { x: 0, y: 0 });
+
+    expect(result.state).toBe(state);
+    expect(result.ui.activeCommandDestination).toBe("data");
+    expect(result.ui.selectedId).toBe("0,0");
+    expect(result.ui.selectedNodeKind).toBeNull();
+  });
+
+  it("cycles co-located stop and station selection without changing the destination", () => {
+    const state = withColocatedStopAndStation(createTestGameState(), {
+      x: 7,
+      y: 2,
+    });
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      activeCommandDestination: "lines" as const,
+      selectedId: "7,2",
+      selectedNodeKind: "stop" as const,
+    };
+
+    const result = applyUiTileClick(state, ui, { x: 7, y: 2 });
+
+    expect(result.ui.activeCommandDestination).toBe("lines");
+    expect(result.ui.selectedId).toBe("7,2");
+    expect(result.ui.selectedNodeKind).toBe("station");
+  });
+
+  it("selects a node without opening or closing a destination", () => {
     let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 7 }]);
     state = addTestBusStop(state, { x: 7, y: 7 });
@@ -156,42 +192,9 @@ describe("applyUiTileClick inspect", () => {
     const result = applyUiTileClick(state, ui, { x: 7, y: 7 });
 
     expect(result.state).toBe(state);
-    expect(result.ui.activeHudCategory).toBe("inspect");
+    expect(result.ui.activeCommandDestination).toBeNull();
     expect(result.ui.selectedId).toBe("7,7");
     expect(result.ui.selectedNodeKind).toBe("stop");
-  });
-
-  it("selects empty tiles and closes an open inspect drawer", () => {
-    const state = createTestGameState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "inspect" as const,
-      activeHudCategory: "inspect" as const,
-    };
-
-    const result = applyUiTileClick(state, ui, { x: 0, y: 0 });
-
-    expect(result.state).toBe(state);
-    expect(result.ui.selectedId).toBe("0,0");
-    expect(result.ui.selectedNodeKind).toBeNull();
-    expect(result.ui.activeHudCategory).toBeNull();
-  });
-
-  it("cycles co-located node kinds on repeated clicks", () => {
-    const state = withColocatedStopAndStation(createTestGameState(), {
-      x: 7,
-      y: 2,
-    });
-    const ui = {
-      ...createUiState(),
-      activeTool: "inspect" as const,
-      selectedId: "7,2",
-      selectedNodeKind: "stop" as const,
-    };
-
-    const result = applyUiTileClick(state, ui, { x: 7, y: 2 });
-
-    expect(result.ui.selectedNodeKind).toBe("station");
   });
 });
 

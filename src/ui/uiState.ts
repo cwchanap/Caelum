@@ -8,7 +8,7 @@ import type {
   RoundaboutSize,
   Tool,
 } from "../domain/types";
-import type { BuildCategoryId } from "../domain/catalog/buildMenu";
+import type { BuildGroup } from "../domain/catalog/buildGroups";
 import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
 import type { RouteDraft, RouteDraftError } from "./routeDraft";
 
@@ -33,19 +33,6 @@ export type RouteDraftNotice = {
 };
 
 export type CommandDestination = "build" | "lines" | "data" | "city";
-
-// The five categories with a permanent chip in the bottom bar.
-export type PrimaryHudCategory =
-  | "build"
-  | "area"
-  | "routes"
-  | "manage"
-  | "data"
-  | "brief";
-
-// "inspect" is auto-opened by clicking a map node and has no permanent chip,
-// so it is legibly the odd one out of the primary set.
-export type HudCategory = PrimaryHudCategory | "inspect";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 export type DragTool = "road" | "track" | "remove" | "area";
@@ -83,8 +70,8 @@ export interface UiState {
   selectedNodeKind: "stop" | "station" | null;
   selectedBuilding: BuildingType | null;
   selectedArea: AreaKind | null;
-  /** Open Build drill-down category, or null when showing the category root. */
-  buildCategory: BuildCategoryId | null;
+  /** Open Build drill-down group, or null when showing the command plates. */
+  activeBuildGroup: BuildGroup | null;
   buildingRotation: BuildingRotation;
   /** Cursor tile while idle (badge / hover highlight / building preview). */
   hoverTile: Point | null;
@@ -100,7 +87,7 @@ export interface UiState {
   roadMutationPreviewError: string | null;
   selectedRouteId: string | null;
   routeFailureFocus: { routeId: string; legIndex: number } | null;
-  activeHudCategory: HudCategory | null;
+  activeCommandDestination: CommandDestination | null;
 }
 
 export function createUiState(): UiState {
@@ -114,7 +101,7 @@ export function createUiState(): UiState {
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: null,
-    buildCategory: null,
+    activeBuildGroup: null,
     buildingRotation: 0,
     hoverTile: null,
     routeDraft: null,
@@ -127,6 +114,6 @@ export function createUiState(): UiState {
     roadMutationPreviewError: null,
     selectedRouteId: null,
     routeFailureFocus: null,
-    activeHudCategory: "brief",
+    activeCommandDestination: null,
   };
 }

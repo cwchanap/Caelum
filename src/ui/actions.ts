@@ -136,8 +136,6 @@ export function applyUiTileClick(
           ...ui,
           selectedId: `${point.x},${point.y}`,
           selectedNodeKind: null,
-          activeHudCategory:
-            ui.activeHudCategory === "inspect" ? null : ui.activeHudCategory,
         },
       };
     }
@@ -157,7 +155,6 @@ export function applyUiTileClick(
         ...ui,
         selectedId: `${point.x},${point.y}`,
         selectedNodeKind,
-        activeHudCategory: "inspect",
       },
     };
   }

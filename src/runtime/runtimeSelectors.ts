@@ -2,11 +2,11 @@ import type {
   GameState,
   GameplayRejection,
   MetroLine,
-  ObjectiveThresholds,
   Overlay,
   Route,
   RouteLegPath,
   SandboxTemplateId,
+  Tool,
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
@@ -21,7 +21,7 @@ import {
 } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
 import type {
-  ShellHudState,
+  ShellCommandState,
   ShellInspectorState,
   ShellPlatform,
   RouteFailureRow,
@@ -58,12 +58,6 @@ function formatSnapshotClock(state: GameState): string {
   return `Day ${state.day + 1} ${pad2(hours)}:${pad2(minutes)}`;
 }
 
-export function formatObjective(objectives: ObjectiveThresholds): string {
-  return `Hold late trips below ${Math.round(objectives.maxLateRatio * 100)}%, unserved below ${Math.round(
-    objectives.maxUnservedRatio * 100,
-  )}%, average wait under ${objectives.maxAverageWait}s.`;
-}
-
 export function formatActiveTool(ui: UiState): string {
   if (ui.selectedArea !== null) {
     return `AREA ${AREA_LABELS[ui.selectedArea].toUpperCase()}`;
@@ -73,7 +67,19 @@ export function formatActiveTool(ui: UiState): string {
     return `${BUILDING_CATALOG[ui.selectedBuilding].label.toUpperCase()} ${ui.buildingRotation}`;
   }
 
-  return ui.activeTool.toUpperCase();
+  const labels: Record<Tool, string> = {
+    inspect: "SELECT",
+    busStop: "BUS STOP",
+    busRoute: "BUS LINE",
+    metroStation: "METRO STATION",
+    metroLine: "METRO LINE",
+    area: "AREA",
+    road: "ROAD",
+    roundabout: "ROUNDABOUT",
+    track: "TRACK",
+    remove: "DEMOLISH",
+  };
+  return labels[ui.activeTool];
 }
 
 function parseSelectedPoint(selectedId: string | null): {
@@ -509,43 +515,24 @@ export function selectShellState(
 ): ShellState {
   const inspector = buildInspector(state, ui);
   const draftActive = ui.routeDraft !== null;
-  // Single derivation of the active-tool label — bound to both the HUD chip
-  // and the Brief panel so the two can never drift apart.
   const activeToolLabel = formatActiveTool(ui);
   const templateLabel = SANDBOX_TEMPLATE_LABELS[state.rules.sandbox.templateId];
-  const isCampaign = state.rules.gameMode === "campaign";
-  const campaignObjectives = isCampaign ? state.scenario.objectives : null;
-  const defaultLossNote =
-    campaignObjectives === null
-      ? "Metrics continue without win/loss."
-      : "Within tolerances. Hold the line.";
-  const pendingCampaignWave = isCampaign
-    ? state.scenario.growthWaves.find((wave) => !wave.applied)
-    : undefined;
+  const lineCount =
+    state.transit.routes.length + state.transit.metroLines.length;
+  const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
 
-  const hud: ShellHudState = {
-    activeCategory: ui.activeHudCategory,
-    activeToolChip: activeToolLabel,
-    canCancel:
-      draftActive ||
-      ui.activeTool !== "inspect" ||
-      ui.selectedBuilding !== null ||
-      ui.selectedArea !== null ||
-      ui.activeOverlay !== null ||
-      ui.selectedRouteId !== null,
-    buildCategory: ui.buildCategory,
-    inspectToolActive:
+  const command: ShellCommandState = {
+    activeDestination: ui.activeCommandDestination,
+    activeModeLabel: activeToolLabel,
+    routeDraftActive: draftActive,
+    selectActive:
       ui.activeTool === "inspect" &&
       ui.selectedBuilding === null &&
       ui.selectedArea === null,
-    removeToolActive: ui.activeTool === "remove",
-    badges: {
-      routeDraftActive: draftActive,
-      routeCount: state.transit.routes.length + state.transit.metroLines.length,
-      activeOverlayLabel:
-        ui.activeOverlay === null ? null : OVERLAY_LABELS[ui.activeOverlay],
-      inspectActive: inspector !== null,
-    },
+    demolishActive: ui.activeTool === "remove",
+    lineCount,
+    activeOverlayLabel:
+      ui.activeOverlay === null ? null : OVERLAY_LABELS[ui.activeOverlay],
   };
 
   return {
@@ -558,27 +545,18 @@ export function selectShellState(
       unserved: `${state.metrics.unservedTrips}`,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
     },
-    brief: {
-      title: isCampaign
-        ? state.scenario.name
-        : state.rules.economyPreset === "creative"
+    command,
+    city: {
+      title:
+        state.rules.economyPreset === "creative"
           ? "Creative Sandbox"
           : "Standard Sandbox",
-      context: isCampaign
-        ? `Campaign · ${state.scenario.name}`
-        : `Template · ${templateLabel}`,
-      status: state.metrics.state.toUpperCase(),
-      objective: isCampaign
-        ? campaignObjectives === null
-          ? "No campaign objective."
-          : formatObjective(campaignObjectives)
-        : "Open-ended city — no campaign objective.",
-      lossNote: state.metrics.lossReason ?? defaultLossNote,
-      nextGrowth: pendingCampaignWave?.message ?? "No automatic growth",
-      selectedId: ui.selectedId ?? "—",
-      activeTool: activeToolLabel,
+      template: templateLabel,
+      simulation: state.paused ? "Paused" : "Running",
+      population: `${state.sims?.length ?? 0}`,
+      lineCount: `${lineCount}`,
+      networkSummary,
     },
-    hud,
     inspector,
     routeDraft: selectRouteEditorView(state, ui, rejection),
     routes: buildRouteList(state, ui),

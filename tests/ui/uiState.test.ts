@@ -12,8 +12,14 @@ describe("createUiState road UX defaults", () => {
 });
 
 describe("createUiState build menu defaults", () => {
-  it("defaults buildCategory to null", () => {
+  it("defaults command destinations and build drill-down to null", () => {
     const ui = createUiState();
-    expect(ui.buildCategory).toBeNull();
+    expect(ui).toMatchObject({
+      activeTool: "inspect",
+      activeCommandDestination: null,
+      activeBuildGroup: null,
+    });
+    expect("activeHudCategory" in ui).toBe(false);
+    expect("buildCategory" in ui).toBe(false);
   });
 });

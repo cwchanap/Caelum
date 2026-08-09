@@ -7,7 +7,7 @@ import {
   type RoundaboutSize,
   type Tool,
 } from "../domain/types";
-import type { BuildCategoryId } from "../domain/catalog/buildMenu";
+import type { BuildGroup } from "../domain/catalog/buildGroups";
 import {
   cancelDraftRoute,
   applyUiTileClick,
@@ -31,6 +31,7 @@ import {
 import { axisLockedLine } from "../ui/roadDrag";
 import {
   createUiState,
+  type CommandDestination,
   type RouteDraftCheckpoint,
   type RouteDraftHistory,
   type UiState,
@@ -109,14 +110,15 @@ export interface CreateGameRuntimeOptions {
   hoverPreviewDebounceMs?: number;
 }
 
-function nextToolUiState(activeTool: Tool, current = createUiState()) {
+function nextToolUiState(activeTool: Tool, current = createUiState()): UiState {
   return {
     ...current,
     activeTool,
+    selectedId: activeTool === "inspect" ? current.selectedId : null,
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: null,
-    buildCategory: null,
+    activeBuildGroup: null,
     buildingRotation: 0 as const,
     routeDraft:
       activeTool === "busRoute" || activeTool === "metroLine"
@@ -138,11 +140,11 @@ function nextToolUiState(activeTool: Tool, current = createUiState()) {
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
-    activeHudCategory: null,
+    activeCommandDestination: null,
   };
 }
 
-function nextAreaUiState(area: AreaKind, current = createUiState()) {
+function nextAreaUiState(area: AreaKind, current = createUiState()): UiState {
   return {
     ...current,
     activeTool: "area" as const,
@@ -150,7 +152,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     selectedNodeKind: null,
     selectedBuilding: null,
     selectedArea: area,
-    buildCategory: null,
+    activeBuildGroup: null,
     buildingRotation: 0 as const,
     routeDraft: null,
     routeDraftHistory: emptyRouteDraftHistory(),
@@ -163,14 +165,14 @@ function nextAreaUiState(area: AreaKind, current = createUiState()) {
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
-    activeHudCategory: null,
+    activeCommandDestination: null,
   };
 }
 
 function nextBuildingUiState(
   selectedBuilding: BuildingType,
   current = createUiState(),
-) {
+): UiState {
   return {
     ...current,
     activeTool: "inspect" as const,
@@ -178,7 +180,7 @@ function nextBuildingUiState(
     selectedNodeKind: null,
     selectedBuilding,
     selectedArea: null,
-    buildCategory: null,
+    activeBuildGroup: null,
     buildingRotation: 0 as const,
     routeDraft: null,
     routeDraftHistory: emptyRouteDraftHistory(),
@@ -191,7 +193,7 @@ function nextBuildingUiState(
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
     drag: null,
-    activeHudCategory: null,
+    activeCommandDestination: null,
   };
 }
 
@@ -647,7 +649,7 @@ export async function createGameRuntime(
     });
   };
 
-  const startRouteEdit = (routeId: string): RuntimeSnapshot => {
+  const openRouteEdit = (routeId: string): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
     const route = state.transit.routes.find(
       (candidate) => candidate.id === routeId,
@@ -696,7 +698,9 @@ export async function createGameRuntime(
       selectedNodeKind: null,
       selectedBuilding: null,
       selectedArea: null,
-      buildCategory: null,
+      activeBuildGroup: null,
+      activeCommandDestination: "lines",
+      selectedId: null,
       routeDraft,
       routeDraftHistory: emptyRouteDraftHistory(),
       routeDraftNotice: null,
@@ -778,6 +782,13 @@ export async function createGameRuntime(
           previewCoordinator.invalidateRoute();
           return commitDispatchResult(result, {
             ...ui,
+            activeTool: "inspect",
+            selectedId: null,
+            selectedNodeKind: null,
+            selectedBuilding: null,
+            selectedArea: null,
+            activeBuildGroup: null,
+            activeCommandDestination: "lines",
             routeDraft: null,
             routeDraftHistory: emptyRouteDraftHistory(),
             routeDraftNotice: null,
@@ -842,8 +853,14 @@ export async function createGameRuntime(
 
   const cancelRouteDraft = (): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
+    const draft = ui.routeDraft;
     previewCoordinator.invalidateRoute();
     const cancelledUi = cancelDraftRoute(ui);
+    const editorOwnsRejection =
+      draft?.source.kind === "edit" &&
+      rejection?.code === "routeChangedWhileEditing" &&
+      rejection.context.routeId === draft.source.routeId;
+    if (editorOwnsRejection) rejection = null;
     if (
       cancelledUi === ui &&
       ui.routeDraftHistory.past.length === 0 &&
@@ -854,6 +871,13 @@ export async function createGameRuntime(
     }
     return commit(state, {
       ...cancelledUi,
+      activeTool: "inspect",
+      selectedId: null,
+      selectedNodeKind: null,
+      selectedBuilding: null,
+      selectedArea: null,
+      activeBuildGroup: null,
+      activeCommandDestination: "lines",
       routeDraftHistory: emptyRouteDraftHistory(),
       routeDraftNotice: null,
     });
@@ -926,13 +950,31 @@ export async function createGameRuntime(
       return commit(state, ui);
     }
     if (globalStale) rejection = null;
-    // startRouteEdit clears routePreviewError via commit.
-    return startRouteEdit(routeId);
+    // openRouteEdit clears routePreviewError via commit.
+    return openRouteEdit(routeId);
   };
 
   const handleEscape = (): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
-    return ui.routeDraft === null ? api.resetUi() : cancelRouteDraft();
+    if (ui.drag !== null) return api.cancelDrag();
+    if (ui.routeDraft !== null) return cancelRouteDraft();
+    if (ui.activeCommandDestination !== null) {
+      return commit(state, {
+        ...ui,
+        activeCommandDestination: null,
+        activeBuildGroup: null,
+      });
+    }
+    if (
+      ui.activeTool !== "inspect" ||
+      ui.selectedBuilding !== null ||
+      ui.selectedArea !== null
+    ) {
+      clearHoverPreviewTimer();
+      invalidateRoadPreview();
+      return commit(state, nextToolUiState("inspect", ui));
+    }
+    return commit(state, ui);
   };
 
   const sendRoadMutationPreviewRequest = (
@@ -1200,6 +1242,7 @@ export async function createGameRuntime(
     setTool(tool) {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -1212,12 +1255,14 @@ export async function createGameRuntime(
         nextRouteDraftInstanceId += 1;
         next.routePreviewError = null;
         next.routePreviewHostError = null;
+        next.activeCommandDestination = "lines";
       }
       return commitWithRoadPreview(next);
     },
     setBuilding(building) {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -1226,6 +1271,7 @@ export async function createGameRuntime(
     setArea(area) {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
@@ -1233,23 +1279,48 @@ export async function createGameRuntime(
     },
     setRoadPreset(preset) {
       if (dead) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       return commitWithRoadPreview(
         ui.roadPreset === preset ? ui : { ...ui, roadPreset: preset },
       );
     },
-    // Pure UI mutation; callers (Build panel drill-down) only invoke this while
-    // the Build drawer is open. No guard here, so a direct controller call could
-    // leave a non-null buildCategory with Build inactive — unreachable from UI.
-    setBuildCategory(category: BuildCategoryId | null) {
+    setCommandDestination(destination: CommandDestination | null) {
       if (dead) return getSnapshot();
-      return commit(
-        state,
-        ui.buildCategory === category ? ui : { ...ui, buildCategory: category },
-      );
+      if (ui.routeDraft !== null) return getSnapshot();
+      const nextDestination =
+        destination === ui.activeCommandDestination ? null : destination;
+      const nextBuildGroup =
+        nextDestination === "build" ? ui.activeBuildGroup : null;
+      if (
+        nextDestination === ui.activeCommandDestination &&
+        nextBuildGroup === ui.activeBuildGroup
+      ) {
+        return commit(state, ui);
+      }
+      return commit(state, {
+        ...ui,
+        activeCommandDestination: nextDestination,
+        activeBuildGroup: nextBuildGroup,
+      });
+    },
+    setBuildGroup(group: BuildGroup | null) {
+      if (dead) return getSnapshot();
+      if (
+        ui.routeDraft !== null ||
+        ui.activeCommandDestination !== "build" ||
+        (group !== null &&
+          !["roads", "transit", "zones", "buildings"].includes(group))
+      ) {
+        return getSnapshot();
+      }
+      return group === ui.activeBuildGroup
+        ? commit(state, ui)
+        : commit(state, { ...ui, activeBuildGroup: group });
     },
     armRoad(preset) {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
@@ -1264,6 +1335,7 @@ export async function createGameRuntime(
     armRoundabout(size: RoundaboutSize) {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
       // and invalidates any in-flight road preview so an older footprint can
       // never populate the newly armed stamp.
@@ -1394,6 +1466,7 @@ export async function createGameRuntime(
     },
     setOverlay(overlay) {
       if (dead) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
       return commit(
         state,
         overlay === ui.activeOverlay ? ui : { ...ui, activeOverlay: overlay },
@@ -1409,20 +1482,6 @@ export async function createGameRuntime(
     setSpeed(speed) {
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setSpeed", speed });
-    },
-    setHudCategory(category) {
-      if (dead) return getSnapshot();
-      if (category === ui.activeHudCategory) {
-        return commit(state, ui);
-      }
-      // Leaving the Build category resets the drill-down so the next time
-      // Build opens it shows the root (spec line 75-76). `buildCategory` is
-      // only meaningful while Build is the active category.
-      const nextUi =
-        category === "build"
-          ? { ...ui, activeHudCategory: category }
-          : { ...ui, activeHudCategory: category, buildCategory: null };
-      return commit(state, nextUi);
     },
     handleTileClick(point) {
       if (dead) return Promise.resolve(getSnapshot());
@@ -1504,7 +1563,8 @@ export async function createGameRuntime(
     },
     startRouteEdit(routeId) {
       if (dead) return getSnapshot();
-      return startRouteEdit(routeId);
+      if (ui.routeDraft !== null) return getSnapshot();
+      return openRouteEdit(routeId);
     },
     selectRouteWaypoint(index, interaction) {
       if (dead) return getSnapshot();
