@@ -983,6 +983,207 @@ describe("route selectors", () => {
   });
 });
 
+describe("action feedback selector", () => {
+  function roadPreview(overrides: Record<string, unknown> = {}) {
+    return {
+      generation: 3,
+      changedTiles: [{ x: 9, y: 8 }],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 0,
+      skippedTiles: [],
+      routeImpacts: [],
+      warnings: [],
+      rejection: null,
+      ...overrides,
+    };
+  }
+
+  it("prioritizes a global gameplay rejection over every road outcome", () => {
+    const state = createTestGameState();
+    const rejection = {
+      code: "insufficientBudget" as const,
+      context: { requiredBudget: 1_200, availableBudget: 0 },
+    };
+    const outcomes = [
+      {
+        roadMutationPreviewError: "host timed out",
+        roadMutationPreview: roadPreview({
+          cost: 1_200,
+          routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
+          rejection: {
+            code: "blockedTile" as const,
+            context: { point: { x: 9, y: 8 } },
+          },
+        }),
+      },
+      {
+        roadMutationPreviewError: null,
+        roadMutationPreview: roadPreview({ cost: 1_200 }),
+      },
+    ];
+
+    for (const outcome of outcomes) {
+      const shell = selectShellState(
+        state,
+        {
+          ...createUiState(),
+          roadPreviewGeneration: 3,
+          ...outcome,
+        },
+        rejection,
+      );
+      expect(shell.actionFeedback).toEqual({
+        source: "rejection",
+        tone: "error",
+        message: "Needs $1,200; only $0 is available.",
+        details: [],
+        dismissible: true,
+        announce: true,
+      });
+    }
+  });
+
+  it("keeps a current route Save rejection inside its reloadable editor", () => {
+    const state = addTestBusStop(
+      addTestBusStop(createTestGameState(), { x: 7, y: 7 }),
+      { x: 11, y: 7 },
+    );
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        previewPending: false,
+        preview: null,
+      },
+    };
+    const shell = selectShellState(state, ui, {
+      code: "routeChangedWhileEditing",
+      context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+    });
+
+    expect(shell.routeDraft?.canReload).toBe(true);
+    expect(shell.actionFeedback).toBeNull();
+  });
+
+  it("prioritizes a road host error over road rejection and impact", () => {
+    const shell = selectShellState(createTestGameState(), {
+      ...createUiState(),
+      roadPreviewGeneration: 3,
+      roadMutationPreviewError: "host timed out",
+      roadMutationPreview: roadPreview({
+        cost: 1_200,
+        routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
+        rejection: {
+          code: "blockedTile" as const,
+          context: { point: { x: 9, y: 8 } },
+        },
+      }),
+    });
+
+    expect(shell.actionFeedback).toEqual({
+      source: "roadHostError",
+      tone: "warning",
+      message: "Road preview unavailable: host timed out",
+      details: [],
+      dismissible: false,
+      announce: false,
+    });
+  });
+
+  it("prioritizes a road rejection over cost and route impacts", () => {
+    const shell = selectShellState(createTestGameState(), {
+      ...createUiState(),
+      roadPreviewGeneration: 3,
+      roadMutationPreview: roadPreview({
+        cost: 1_200,
+        routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
+        rejection: {
+          code: "blockedTile" as const,
+          context: { point: { x: 9, y: 8 } },
+        },
+      }),
+    });
+
+    expect(shell.actionFeedback).toEqual({
+      source: "roadRejection",
+      tone: "warning",
+      message: "That tile is blocked.",
+      details: [],
+      dismissible: false,
+      announce: false,
+    });
+  });
+
+  it("formats material road cost and every affected route", () => {
+    let state = addTestBusStop(
+      addTestBusStop(createTestGameState(), { x: 7, y: 7 }),
+      { x: 11, y: 7 },
+    );
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestMetroStation(state, { x: 7, y: 2 });
+    state = addTestMetroStation(state, { x: 11, y: 2 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          name: "Loop 1",
+        })),
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          name: "Metro A",
+        })),
+      },
+    };
+    const shell = selectShellState(state, {
+      ...createUiState(),
+      roadPreviewGeneration: 3,
+      roadMutationPreview: roadPreview({
+        cost: 1_200,
+        routeImpacts: [
+          { routeId: "route-001", kind: "rerouted" as const },
+          { routeId: "metro-001", kind: "broken" as const },
+        ],
+      }),
+    });
+
+    expect(shell.actionFeedback).toEqual({
+      source: "roadImpact",
+      tone: "info",
+      message: "Preview cost $1,200",
+      details: ["Loop 1 will reroute", "Metro A will become broken"],
+      dismissible: false,
+      announce: false,
+    });
+  });
+
+  it("returns no feedback for empty or stale road previews", () => {
+    const state = createTestGameState();
+    expect(selectShellState(state, createUiState()).actionFeedback).toBeNull();
+
+    expect(
+      selectShellState(state, {
+        ...createUiState(),
+        roadPreviewGeneration: 4,
+        roadMutationPreview: roadPreview({ generation: 3, cost: 1_200 }),
+      }).actionFeedback,
+    ).toBeNull();
+  });
+});
+
 describe("ShellCommandState and ShellCityState", () => {
   it("exposes bus terminal cost from the shared transit catalog", () => {
     expect(COSTS.busTerminal).toBe(12_000);

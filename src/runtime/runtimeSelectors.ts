@@ -30,6 +30,7 @@ import type {
   RoadMutationPreviewView,
   ShellRouteListItem,
   ShellRouteListState,
+  ShellActionFeedback,
   ShellState,
 } from "./types";
 
@@ -508,6 +509,66 @@ export function buildRoadMutationPreview(
   };
 }
 
+function selectActionFeedback(
+  rejection: GameplayRejection | null,
+  editorOwnsRejection: boolean,
+  roadHostError: string | null,
+  roadPreview: RoadMutationPreviewView | null,
+): ShellActionFeedback | null {
+  if (rejection !== null && !editorOwnsRejection) {
+    return {
+      source: "rejection",
+      tone: "error",
+      message: rejectionMessage(rejection),
+      details: [],
+      dismissible: true,
+      announce: true,
+    };
+  }
+  if (roadHostError !== null) {
+    return {
+      source: "roadHostError",
+      tone: "warning",
+      message: `Road preview unavailable: ${roadHostError}`,
+      details: [],
+      dismissible: false,
+      announce: false,
+    };
+  }
+  if (roadPreview !== null && roadPreview.rejection !== null) {
+    return {
+      source: "roadRejection",
+      tone: "warning",
+      message: rejectionMessage(roadPreview.rejection),
+      details: [],
+      dismissible: false,
+      announce: false,
+    };
+  }
+  if (
+    roadPreview !== null &&
+    (roadPreview.cost > 0 || roadPreview.routeImpacts.length > 0)
+  ) {
+    return {
+      source: "roadImpact",
+      tone: "info",
+      message:
+        roadPreview.cost > 0
+          ? `Preview cost ${roadPreview.costLabel}`
+          : "Road network impact",
+      details: roadPreview.routeImpacts.map(
+        (impact) =>
+          `${impact.routeName} will ${
+            impact.kind === "broken" ? "become broken" : "reroute"
+          }`,
+      ),
+      dismissible: false,
+      announce: false,
+    };
+  }
+  return null;
+}
+
 export function selectShellState(
   state: GameState,
   ui: UiState,
@@ -520,6 +581,19 @@ export function selectShellState(
   const lineCount =
     state.transit.routes.length + state.transit.metroLines.length;
   const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
+  const routeDraft = selectRouteEditorView(state, ui, rejection);
+  const roadMutationPreview = buildRoadMutationPreview(state, ui);
+  const routeId =
+    ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
+  const editorOwnsRejection =
+    routeDraft !== null &&
+    (routeDraft.canReload ||
+      (rejection !== null &&
+        routeId !== null &&
+        ui.routePreviewError !== null &&
+        ui.routePreviewError.code === rejection.code &&
+        ui.routePreviewError.context.routeId === routeId &&
+        rejection.context.routeId === routeId));
 
   const command: ShellCommandState = {
     activeDestination: ui.activeCommandDestination,
@@ -558,8 +632,14 @@ export function selectShellState(
       networkSummary,
     },
     inspector,
-    routeDraft: selectRouteEditorView(state, ui, rejection),
+    routeDraft,
     routes: buildRouteList(state, ui),
-    roadMutationPreview: buildRoadMutationPreview(state, ui),
+    roadMutationPreview,
+    actionFeedback: selectActionFeedback(
+      rejection,
+      editorOwnsRejection,
+      ui.roadMutationPreviewError,
+      roadMutationPreview,
+    ),
   };
 }

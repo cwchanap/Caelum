@@ -9,7 +9,7 @@
   import InspectPanel from "./components/hud/panels/InspectPanel.svelte";
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
-  import RoadMutationNotice from "./components/RoadMutationNotice.svelte";
+  import ActionFeedback from "./components/ActionFeedback.svelte";
   import type { Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
@@ -17,7 +17,6 @@
     RuntimeController,
     RuntimeSnapshot,
   } from "./runtime/types";
-  import { rejectionMessage } from "./runtime/rejectionMessages";
   import type { CommandDestination } from "./ui/uiState";
   import type {
     BuildGroup,
@@ -425,27 +424,9 @@
         onSetSpeed={handleSetSpeed}
       />
 
-      {#if snapshot.rejection !== null && !(snapshot.rejection.code === "routeChangedWhileEditing" && snapshot.shell.routeDraft?.canReload === true)}
-        <div
-          class="rejection-banner"
-          data-testid="rejection-banner"
-          role="status"
-        >
-          <span>{rejectionMessage(snapshot.rejection)}</span>
-          <button
-            type="button"
-            class="rejection-dismiss"
-            aria-label="Dismiss"
-            onclick={handleDismissRejection}
-          >
-            &times;
-          </button>
-        </div>
-      {/if}
-
-      <RoadMutationNotice
-        preview={snapshot.shell.roadMutationPreview}
-        error={snapshot.ui.roadMutationPreviewError}
+      <ActionFeedback
+        feedback={snapshot.shell.actionFeedback}
+        onDismiss={handleDismissRejection}
       />
 
       <div class="game-workspace">

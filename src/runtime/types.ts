@@ -164,6 +164,15 @@ export interface RoadMutationPreviewView {
   rejection: GameplayRejection | null;
 }
 
+export interface ShellActionFeedback {
+  source: "rejection" | "roadHostError" | "roadRejection" | "roadImpact";
+  tone: "error" | "warning" | "info";
+  message: string;
+  details: string[];
+  dismissible: boolean;
+  announce: boolean;
+}
+
 export interface ShellRouteListItem {
   id: string;
   name: string;
@@ -186,6 +195,7 @@ export interface ShellState {
   routeDraft: RouteEditorView | null;
   routes: ShellRouteListState;
   roadMutationPreview: RoadMutationPreviewView | null;
+  actionFeedback: ShellActionFeedback | null;
 }
 
 export interface RuntimeSnapshot {
