@@ -10,6 +10,7 @@ import { withRoads } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createUiState } from "../../src/ui/uiState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
+import type { GameplayRejection } from "../../src/domain/types";
 import type {
   RuntimeController,
   RuntimeSnapshot,
@@ -19,10 +20,12 @@ function createRuntimeHarness(
   options: {
     state?: ReturnType<typeof createTestGameState>;
     ui?: ReturnType<typeof createUiState>;
+    rejection?: GameplayRejection | null;
   } = {},
 ): { runtime: RuntimeController; getSnapshot: () => RuntimeSnapshot } {
   const state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
+  let rejection = options.rejection ?? null;
   const listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
   const persistence = {
     activeCity: {
@@ -38,10 +41,10 @@ function createRuntimeHarness(
   const snapshot = (): RuntimeSnapshot => ({
     state,
     ui,
-    shell: selectShellState(state, ui),
+    shell: selectShellState(state, ui, rejection),
     persistence,
     backendError: null,
-    rejection: null,
+    rejection,
     sandboxResetError: null,
   });
   const publish = (): RuntimeSnapshot => {
@@ -137,7 +140,10 @@ function createRuntimeHarness(
     focusRouteFailure: vi.fn(() => publish()),
     setHoverTile: vi.fn(() => publish()),
     previewRoadMutation: vi.fn(() => publish()),
-    dismissRejection: vi.fn(() => publish()),
+    dismissRejection: vi.fn(() => {
+      rejection = null;
+      return publish();
+    }),
     tick: vi.fn(async () => publish()),
     reset: vi.fn(async () => publish()),
     resetUi: vi.fn(() => publish()),
@@ -320,5 +326,24 @@ describe("App command shell", () => {
     expect(runtime.handleEscape).toHaveBeenCalledTimes(1);
     view.unmount();
     expect(runtime.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders selector-owned gameplay feedback and dismisses it", async () => {
+    const { runtime } = createRuntimeHarness({
+      rejection: {
+        code: "insufficientBudget",
+        context: { requiredBudget: 1_200, availableBudget: 0 },
+      },
+    });
+    render(App, { props: { runtime } });
+
+    const feedback = screen.getByTestId("action-feedback");
+    expect(feedback).toHaveAttribute("data-source", "rejection");
+    expect(feedback).toHaveAttribute("data-tone", "error");
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(feedback).toHaveTextContent("Needs $1,200; only $0 is available.");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(runtime.dismissRejection).toHaveBeenCalledTimes(1);
   });
 });
