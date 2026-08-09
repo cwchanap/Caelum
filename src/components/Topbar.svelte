@@ -34,7 +34,11 @@
 
   <div class="readouts">
     {#each readouts as readout (readout.key)}
-      <div class:topbar-readout--wide={readout.wide === true} class="readout">
+      <div
+        class:topbar-readout--wide={readout.wide === true}
+        class:topbar-readout--network={readout.key === "networkSummary"}
+        class="readout"
+      >
         <span class="readout-label">{readout.label}</span>
         <span class="readout-value">{shell[readout.key]}</span>
       </div>
