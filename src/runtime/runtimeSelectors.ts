@@ -588,6 +588,7 @@ export function selectShellState(
   const editorOwnsRejection =
     routeDraft !== null &&
     (routeDraft.canReload ||
+      (rejection !== null && ui.routePreviewError === rejection) ||
       (rejection !== null &&
         routeId !== null &&
         ui.routePreviewError !== null &&
