@@ -1276,6 +1276,11 @@ body {
   padding-inline: 12px;
 }
 
+.topbar-readout--network {
+  flex: 0 0 220px;
+  min-width: 220px;
+}
+
 .topbar-readout--wide {
   display: flex;
 }
