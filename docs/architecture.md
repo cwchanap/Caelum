@@ -130,9 +130,32 @@ The browser persistence adapter is `indexedDbCitySaveStore.ts`: one
 records, lets IndexedDB clone values at `add`/`put`, and has no metadata index,
 migration layer, recovery model, or multi-tab ownership. Multi-request
 transactions keep only IndexedDB request awaits between requests so the
-transaction remains active. HPA-345 owns wiring the adapter into the first
-no-city/New City browser flow; the current anonymous development bootstrap
-remains unchanged until then.
+transaction remains active.
+
+The first-city bootstrap is deliberately narrow:
+
+```text
+Browser/WASM startup:
+  createWasmBackend
+  -> createIndexedDbCitySaveStore
+  -> createGameRuntime(activeCity = null)
+  -> NewCityScreen
+  -> createCity
+  -> active game shell
+
+Tauri startup until HPA-344:
+  createTauriBackend
+  -> createMemoryCitySaveStore (non-durable temporary bridge)
+  -> same NewCityScreen/createCity/runtime flow
+
+HPA-344:
+  replaces only the Tauri memory-store branch with native application-data persistence
+```
+
+HPA-346 owns the city library and the Save, Load, Rename, and Delete actions;
+HPA-345 only creates the first city through the shared runtime flow. The Tauri
+memory store is therefore an intentionally temporary bridge, not an
+IndexedDB-on-Tauri fallback.
 
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
