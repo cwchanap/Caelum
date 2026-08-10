@@ -1,7 +1,13 @@
 import "./styles.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
-import { createBackend, type GameBackend } from "./runtime/backend";
+import {
+  createBackend,
+  isTauriRuntime,
+  type GameBackend,
+} from "./runtime/backend";
+import { createIndexedDbCitySaveStore } from "./persistence/indexedDbCitySaveStore";
+import { createMemoryCitySaveStore } from "./persistence/memoryCitySaveStore";
 import { createGameRuntime } from "./runtime/createGameRuntime";
 import type { RuntimeController } from "./runtime/types";
 
@@ -57,11 +63,18 @@ function installDeferredRoutePreviewHarness(backend: GameBackend): GameBackend {
 }
 
 async function mountApp(): Promise<void> {
+  const nativeTauri = isTauriRuntime();
   let backend = await createBackend();
   if (import.meta.env.DEV) {
     backend = installDeferredRoutePreviewHarness(backend);
   }
-  const runtime: RuntimeController = await createGameRuntime({ backend });
+  const saveStore = nativeTauri
+    ? createMemoryCitySaveStore() // HPA-344 replaces this with native persistence.
+    : createIndexedDbCitySaveStore();
+  const runtime: RuntimeController = await createGameRuntime({
+    backend,
+    saveStore,
+  });
   // Expose the runtime on `window` in dev only, so Playwright e2e can inspect
   // the live Rust-derived snapshot (e.g. assert a vehicle was assigned after
   // finishing a route). The branch is dead-code-eliminated from production
