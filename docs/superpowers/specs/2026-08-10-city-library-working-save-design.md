@@ -4,38 +4,49 @@
 
 HPA-346 is the next player-facing Phase 1 slice after HPA-345.
 
-HPA-345 is merged and already provides the no-city New City screen, browser IndexedDB wiring, the six-operation runtime persistence controller, and shared player-facing persistence error copy. HPA-346 should now complete the first useful browser loop:
+HPA-345 is merged and already provides:
+
+- the no-city New City screen;
+- the browser IndexedDB store;
+- the six-operation `RuntimePersistenceController`;
+- one persistence busy gate;
+- active-city and dirty state;
+- shared player-facing `WorkingSaveError` copy.
+
+HPA-346 should complete the first useful browser loop without widening those foundations:
 
 > New City -> play -> Save Now -> reload -> city library -> Continue/Load
 
-HPA-344 remains a separate required Phase 1 task for native Tauri durability. It does not need to block HPA-346 because the same Svelte/runtime workflow can be completed and exercised against the already-real browser IndexedDB path first. HPA-349 remains the final cross-host smoke after both HPA-346 and HPA-344 are complete.
-
-The implementation should reuse the current runtime contract unchanged. No new persistence service, repository, navigation state machine, store cache, or runtime city-list state is needed.
+HPA-344 remains a separate required Phase 1 task for native Tauri durability. HPA-349 remains the final representative cross-host smoke after HPA-344 and HPA-346 are both complete.
 
 ## Approaches considered
 
-### 1. UI-local city list on top of the existing runtime — chosen
+### Chosen: UI-local city list over the existing runtime
 
-Keep `RuntimePersistenceView` as active city + busy + dirty + error. `App.svelte` loads summaries through `runtime.persistence.listCities()` and keeps only the current list/read error as UI-local state. Mutating actions continue to go through the existing runtime controller.
+`App.svelte` loads summaries through `runtime.persistence.listCities()` and stores only the current list/read error as presentation state. All mutations still go through the existing runtime controller.
 
-This is the smallest design because:
+This keeps responsibilities narrow:
 
-- all six required operations already exist;
-- the runtime already owns mutation ordering, active identity, dirty state, and error publication;
-- the stores already own deterministic summary ordering;
-- the UI only needs a current list projection and explicit action callbacks.
+```text
+City UI
+  -> RuntimePersistenceController
+       -> workingSaveRuntime
+            -> CitySaveStore
+```
 
-### 2. Add `cities` to `RuntimePersistenceView` — rejected
+The runtime already owns the hard behavior: mutation exclusion, active identity, dirty state, candidate-first restore, save ordering, and mutation errors. The UI only needs a current list projection and explicit callbacks.
 
-This would turn the runtime into a second cache of store summaries and require refresh rules after create/save/load/rename/delete. That state is not needed by gameplay and would duplicate data already available from `listCities()`.
+### Rejected: put `cities` in `RuntimePersistenceView`
 
-### 3. Add a generic save manager/router/view-model layer — rejected
+That would turn the runtime into a second summary cache and require synchronization after create/save/load/rename/delete even though city summaries are not gameplay state.
 
-HPA-346 has one concrete workflow and one current UI. A new repository, command bus, route state machine, or generic view-model abstraction would add more code than behavior and make later feature iteration slower.
+### Rejected: save manager / repository / router / view-model layer
 
-## Existing contracts to reuse
+There is one current workflow and one current Svelte application. A generic manager, command bus, navigation state machine, metadata cache, repository, or view-model framework would add more code than behavior and slow iteration.
 
-HPA-346 does not change these interfaces:
+## Existing contracts remain authoritative
+
+HPA-346 does not change:
 
 ```ts
 export interface RuntimePersistenceController {
@@ -57,17 +68,13 @@ export interface RuntimePersistenceView {
 }
 ```
 
-`CitySaveStore.listCities()` already returns summaries ordered by `savedAt` descending with the city ID as the deterministic tie-breaker. HPA-346 must not add a second sort implementation in Svelte.
+`CitySaveStore.listCities()` already returns summaries by `savedAt` descending with ID as a deterministic tie-breaker. Svelte must not add another sort.
 
-`workingSaveErrorMessage()` already maps all six store operations plus runtime/backend failures to concise copy. HPA-346 reuses it instead of adding component-local error taxonomies.
+`workingSaveErrorMessage()` already maps all six store operations plus runtime/backend failures to concise copy and must remain the only UI-facing persistence error mapper.
 
-## Product flow
+## App-level presentation state
 
-### Initial bootstrap
-
-After the runtime is mounted, `App.svelte` performs one `runtime.persistence.listCities()` refresh.
-
-UI-local state is intentionally small:
+Add only:
 
 ```ts
 let cities = $state<CitySummary[] | null>(null);
@@ -75,63 +82,100 @@ let cityListError = $state<string | null>(null);
 let showNewCity = $state(false);
 ```
 
-`null` means the first list read has not completed yet. A successful read replaces the summaries and clears `cityListError`. A failed read preserves any already-rendered summaries and shows the mapped error with a Retry action.
+Meanings:
 
-No interval, subscription to storage, cross-tab listener, metadata cache, or background refresh is added. The Phase 1 assumption is one application runtime at a time.
+- `cities === null`: first list read has not completed;
+- `cities !== null`: last successful summary list;
+- `cityListError`: latest `listCities()` failure only;
+- `showNewCity`: local presentation choice, not gameplay/navigation state.
 
-### No active city
+No polling, storage events, cross-tab listener, background refresh, metadata cache, or runtime list state is introduced.
 
-The fatal shell branch remains first.
+## Initial list behavior
 
-When `snapshot.persistence.activeCity === null`:
+After the existing runtime subscription/start setup, `App.svelte` performs one `runtime.persistence.listCities()` call.
 
-1. while the first city-list read is pending, show the city-library loading state;
-2. when the list is empty, keep the current focused `NewCityScreen` as the primary experience;
-3. when saved cities exist, show `CityLibraryScreen`;
-4. `Continue` loads `cities[0]`, which is already the most recently saved city according to the store contract;
-5. every row may Load, Rename, or Delete;
-6. `New City` opens the existing `NewCityScreen` and provides a Cancel action back to the library.
+A successful read replaces `cities` and clears `cityListError`.
 
-A failed Load leaves the player on the library because the runtime changes active identity only after restore succeeds. The same row remains deletable, which is the minimal current-development escape hatch for invalid or obsolete data. There is no repair/migration flow.
+A failed read:
 
-### Active city
+- leaves any previously loaded summaries intact;
+- stores only mapped player copy in `cityListError`;
+- exposes a `Retry city list` control;
+- does not modify runtime busy/error state because list remains a read-only operation.
 
-The normal game shell stays unchanged except for the existing City command panel.
+UI refreshes the list again only after successful create/save/rename/delete operations or an explicit list retry. Load does not change summary metadata and does not need a refresh.
 
-`CityPanel.svelte` gains the working-save controls:
+## No-active-city flow
 
-- current city name;
-- Saved / Unsaved changes state from `dirty`;
+Fatal shell failure remains the first render branch.
+
+When no city is active:
+
+1. `cities === null` and no list error -> show City Library loading state;
+2. successful empty list -> show the existing `NewCityScreen` directly;
+3. non-empty list -> show `CityLibraryScreen`;
+4. Continue loads `cities[0]` because store ordering is already authoritative;
+5. every city row supports Load, Rename, and Delete;
+6. New City opens the existing New City form with a Cancel button back to the library.
+
+A failed Load keeps the player on the library. The same city row stays available for Delete, which is the current-development escape hatch for obsolete/invalid data. No migration, repair, or recovery flow is added.
+
+A Load failure does **not** display `Retry city list`; the player retries Load by pressing Load/Continue again. List Retry is reserved for `cityListError` so the UI never implies a list refresh will retry a restore.
+
+## Active-city flow
+
+The normal game shell remains intact. The existing City command panel gains:
+
+- active city name;
+- `Saved` / `Unsaved changes` from `persistence.dirty`;
 - Save Now;
 - New City;
-- the current city list;
+- current local city list;
 - Load for inactive cities;
-- Rename for active or inactive cities;
-- Delete for active or inactive cities.
+- Rename for active/inactive cities;
+- Delete for active/inactive cities;
+- `Retry city list` only when the latest list read failed.
 
-Save, Load, Rename, Delete, and New City creation all remain runtime calls. The panel never accesses IndexedDB or Tauri commands.
+The panel receives data and callbacks; it does not own a runtime or store.
 
-Deleting the active city already clears active identity only after storage success. The normal App branch therefore returns to the city library automatically after a successful active delete.
+Save semantics remain the runtime's current behavior:
 
-Loading another city already installs the candidate before changing active identity. The game shell remains on the current city after a failed read/restore.
+```text
+busy gate
+  -> wait gameplay idle
+  -> snapshotForSave
+  -> atomic updateCity
+  -> update active summary
+  -> dirty = false
+```
 
-### Starting a second city
+A failed Save leaves dirty state and prior committed storage intact through the existing runtime/store contract.
 
-HPA-345 only exposed New City while no city was active. HPA-346 must expose the same form from both the city library and the active City panel so multiple slots are actually usable.
+Load semantics also remain unchanged: read, candidate-first restore/install, then change active identity. A failed Load leaves current gameplay and identity unchanged.
 
-Do not add a second New City form. Extend `NewCityScreen.svelte` with one optional callback:
+Deleting the active city already clears active identity only after storage success. App therefore naturally falls back to the city library after runtime publication.
+
+## Starting another city
+
+HPA-345 exposed New City only when no city was active. HPA-346 must make multiple slots usable by exposing the same form from:
+
+- `CityLibraryScreen`;
+- the active City panel.
+
+Do not duplicate the form. Extend `NewCityScreen.svelte` only with:
 
 ```ts
 onCancel?: () => void;
 ```
 
-When `onCancel` is supplied, render a Cancel button. The original empty-storage path omits it.
+`showNewCity` remains App-local presentation state. It is not added to `RuntimeSnapshot`, `UiState`, a router, or a navigation state machine.
 
-`showNewCity` is UI-local presentation state only. It is not added to `RuntimeSnapshot`, `UiState`, or a router because it has no gameplay meaning.
+No unsaved-change navigation guard is added in this phase; Load/New City remain explicit player actions and Save Now remains explicit.
 
-## Shared city-list component
+## Shared city list
 
-Add one focused presentational component:
+Add:
 
 ```text
 src/components/city/CityList.svelte
@@ -150,23 +194,21 @@ interface Props {
 }
 ```
 
-The component owns only transient row-edit state:
+The component owns only transient row state:
 
-- which city is being renamed;
-- the current rename input;
-- which city is awaiting delete confirmation.
+- current rename row/input;
+- current delete-confirmation row.
 
-Name rules remain simple:
+Rules:
 
-- trim on submit;
-- reject an empty trimmed name;
+- active row shows `Active` instead of Load;
+- rename trims input and rejects empty trimmed names;
+- Delete requires one inline `Delete -> Confirm delete` step;
+- all mutation controls are disabled while runtime persistence is busy;
+- display city name and last-saved time only;
 - normal Svelte escaping only.
 
-Delete uses one inline confirmation step (`Delete` -> `Confirm delete`) rather than browser dialogs or a modal framework. Changing rows or completing the action clears the confirmation state.
-
-The active row shows `Active` instead of a Load button. Other rows show `Load`.
-
-The list displays only the city name and last-saved time. `createdAt` stays in the summary contract but is not added merely to fill UI space.
+Do not add created-time display merely to fill space, nor tags, thumbnails, search, folders, or duplicate-city controls.
 
 ## Full-screen city library
 
@@ -189,24 +231,15 @@ interface Props {
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
   onNewCity: () => void;
-  onRetry: () => void;
+  onRetry?: () => void;
 }
 ```
 
-Behavior:
+`onRetry` is present only for a `listCities()` failure. Runtime Load/Rename/Delete errors still render mapped copy but no misleading list-retry button.
 
-- `cities === null`: show `Loading cities…`;
-- non-null/non-empty: show Continue for `cities[0]`, New City, and `CityList`;
-- list/read error: show the existing mapped player copy and Retry;
-- no active city is expected here, but `activeCityId` remains explicit so the component can share `CityList` without hidden assumptions.
+## App action orchestration
 
-The empty-list experience remains `NewCityScreen`; `CityLibraryScreen` does not duplicate the form.
-
-## App orchestration
-
-`App.svelte` remains the one place that bridges runtime actions to UI callbacks, matching the current command-shell pattern.
-
-Add a small `refreshCities()` helper:
+Keep one small read helper:
 
 ```ts
 async function refreshCities(): Promise<void> {
@@ -215,183 +248,173 @@ async function refreshCities(): Promise<void> {
   if (result.ok) {
     cities = result.value;
     cityListError = null;
-  } else {
-    cityListError = workingSaveErrorMessage(result.error);
+    return;
   }
+  cityListError = workingSaveErrorMessage(result.error);
 }
 ```
 
-Do not create a generic action runner. Keep the six handlers explicit because their post-success behavior differs:
+Keep mutation handlers explicit rather than creating a generic action runner:
 
-- Create: refresh list, close New City presentation;
-- Save: refresh list so the saved timestamp updates;
-- Load: active snapshot publication changes the shell; list data does not need a write-through cache;
-- Rename: refresh list so both full-screen and panel names stay current;
-- Delete: refresh list; active delete naturally returns to the library;
-- list retry: call `refreshCities()`.
+- Create -> clear stale list error, create through runtime, refresh list on success;
+- Save -> clear stale list error, save through runtime, refresh list on success;
+- Load -> clear stale list error, load through runtime;
+- Rename -> clear stale list error, rename through runtime, refresh list on success;
+- Delete -> clear stale list error, delete through runtime, refresh list on success.
 
-The initial `refreshCities()` runs from the existing `onMount` block after runtime subscription/start setup.
+Clearing `cityListError` before an explicit mutation prevents an old list-read failure from masking a newer runtime operation error.
 
-## Busy behavior
+## Busy and dirty behavior
 
-The runtime busy gate remains authoritative.
+The existing runtime busy gate remains authoritative. No queue, cancellation token, per-row pending map, optimistic mutation, or overlapping workflow model is added.
 
-All mutating controls receive `snapshot.persistence.busy` and are disabled while it is true. Do not add overlapping-action queues, per-row loading maps, optimistic mutation state, or cancellation machinery.
+The UI receives one `busy` boolean and disables conflicting persistence controls.
 
-`listCities()` remains a read-only operation and is not pushed into the mutating busy gate. UI refreshes occur after mutating promises settle.
-
-## Dirty behavior
-
-HPA-346 exposes the existing dirty boolean but does not create a second unsaved-changes state machine.
-
-The City panel displays either:
+The existing dirty boolean is only presented as:
 
 - `Unsaved changes`; or
 - `Saved`.
 
-Save Now remains explicit. HPA-346 does not add autosave, navigation guards, unload prompts, or draft recovery.
-
-Loading/New City are explicit player actions and continue to use the existing runtime behavior. Delete keeps the required one-step confirmation.
+HPA-346 does not add autosave, unload prompts, navigation guards, recovery drafts, or additional dirty states.
 
 ## Error behavior
 
-There are two error sources at the UI boundary:
+There are two UI error sources:
 
-1. `snapshot.persistence.error` for mutating runtime operations;
-2. `cityListError` for the read-only `listCities()` call, because listing intentionally does not mutate runtime persistence state.
+1. `cityListError` for `listCities()`;
+2. `snapshot.persistence.error` for mutating runtime operations.
 
-The rendered copy is:
+Rendered copy may use list-error precedence:
 
 ```ts
 cityListError ??
-(snapshot.persistence.error === null
+(snapshot?.persistence.error == null
   ? null
   : workingSaveErrorMessage(snapshot.persistence.error))
 ```
 
-Diagnostics never cross into component text.
+But the Retry control is keyed specifically from `cityListError !== null`, not from the combined message.
 
-A failed Save keeps dirty state and the prior committed record because the runtime/store contracts already guarantee that behavior.
+Diagnostics never cross into Svelte text.
 
-A failed Load keeps the current gameplay and active identity for definite read/restore failures.
-
-No new error codes, recovery states, or host-specific branches are added.
+No new error union, host-specific error branch, recovery state, or detailed diagnostic UI is added.
 
 ## Browser persistence proof
 
-Add one focused Chromium test for the first complete browser workflow:
+Add one focused Chromium test using the production browser path:
 
-1. start with a fresh Playwright context;
-2. create a named city through the real New City screen;
-3. open City and click Save Now;
+1. fresh Playwright context;
+2. create a named city through New City;
+3. open City and invoke Save Now;
 4. reload the page;
-5. verify the city library appears instead of the empty New City screen;
-6. verify the city row is present;
-7. click Continue;
-8. verify the game shell returns and the active city name matches.
+5. verify City Library appears and contains the city;
+6. click Continue;
+7. verify the game shell returns with that city active.
 
-This test uses the existing real WASM runtime and real IndexedDB adapter. It does not use `fake-indexeddb`.
+This uses real WASM gameplay + real IndexedDB. HPA-343/HPA-345 already prove direct adapter record acceptance, so HPA-346 should not add another direct IndexedDB inspection helper.
 
-Do not expand this into the HPA-349 cross-host matrix. HPA-349 still owns the representative second-city + gameplay-mutation flow across browser and native Tauri.
+HPA-349 still owns the broader representative browser/native flow, including the native adapter once HPA-344 lands.
 
 ## Focused tests
 
-### Shared CityList
+### `CityList`
 
 Cover:
 
-- active row does not offer Load;
-- inactive row invokes Load with the correct ID;
-- rename trims the value and rejects empty names;
-- Delete requires the second confirmation click;
-- busy disables Load/Rename/Delete controls.
+- active vs inactive Load behavior;
+- correct ID callbacks;
+- trimmed rename / empty-name rejection;
+- one-step delete confirmation;
+- busy disables city mutations.
 
-### App / screen integration
+### `App.svelte` / City panel
 
-Extend `tests/ui/appShell.test.ts` to cover:
+Cover:
 
-- empty list keeps the existing New City experience;
-- saved cities + no active city render the library;
-- Continue loads the first summary ID;
-- list failure shows concise copy and Retry;
-- active City panel invokes Save Now;
-- active City panel can open and cancel New City;
-- Rename/Delete callbacks use the selected city ID;
-- busy disables conflicting city actions;
-- active delete publication returns to the library;
-- failed Load leaves the current game shell active.
+- existing HPA-345 no-city form tests now wait for initial list read;
+- empty list -> New City;
+- saved list + no active city -> City Library;
+- Continue selects first store-ordered summary;
+- list error maps copy, hides diagnostics, and exposes list Retry;
+- Save Now invokes runtime save;
+- New City opens/cancels from an active city;
+- Rename/Delete use selected city IDs;
+- active city is present in test list fixtures;
+- busy disables controls;
+- dirty state is visible;
+- active delete publication returns to library;
+- failed Load preserves active game and does not show a list Retry control.
 
-Runtime save/load/rename/delete correctness is already covered by the working-save runtime tests. HPA-346 should not duplicate those branch matrices in UI tests.
+Do not duplicate runtime save/load branch matrices already covered by working-save runtime tests.
 
 ## Styling
 
-Reuse the existing Signal Console visual language and current New City card styles.
+Reuse the current Signal Console / New City visual language. Add only scoped styles for:
 
-Add only the classes needed for:
-
-- city library layout;
+- city-library layout;
 - city rows/actions;
-- compact save status/actions in the City panel;
-- inline rename and delete confirmation.
+- rename/delete-confirmation controls;
+- Save/dirty status in City panel.
 
-No design-system extraction or generic button/form component work is part of HPA-346.
+No design-system extraction is part of HPA-346.
 
 ## Documentation
 
-Update `docs/architecture.md` to replace the HPA-345-only no-city flow with the completed browser working-save workflow:
+Update `docs/architecture.md` to show:
 
 ```text
 startup
-  -> list cities
+  -> runtime.persistence.listCities()
   -> empty: New City
-  -> existing: Continue / Load / Rename / Delete
-  -> active game
-  -> Save Now / switch city / New City
+  -> existing: City Library
+       -> Continue / Load / Rename / Delete / New City
+  -> active game shell
+       -> City panel: Save Now / city list / New City
 ```
 
-Keep HPA-344 clearly marked as the remaining native durability task and HPA-349 as the final cross-host smoke.
+Keep HPA-344 identified as the remaining native-durability slice and HPA-349 as final cross-host smoke.
 
 ## Scope boundaries
 
 HPA-346 includes only:
 
-- city list;
+- list cities;
 - Continue / Load;
 - Save Now;
 - Rename;
 - Delete with one confirmation;
-- New City entry from the library/active City panel;
-- one real-browser reload/Continue persistence smoke.
+- New City entry from library/active City panel;
+- one real-browser reload/Continue smoke.
 
-HPA-346 does **not** add:
+HPA-346 excludes:
 
-- native Tauri save files (HPA-344);
+- native Tauri files (HPA-344);
 - autosave/checkpoints/recovery;
 - duplicate city;
 - folders/tags/search/thumbnails;
 - import/export/cloud sync;
-- migration, legacy readers, compatibility badges;
+- migration/legacy readers/compatibility badges;
 - multi-tab/window ownership;
-- optimistic writes or background refresh;
+- optimistic writes/background polling;
 - save repositories/managers/view models/routers/state machines;
 - new dependencies;
-- security-hardening or hostile-input frameworks.
+- security-hardening/hostile-input frameworks.
 
 ## Acceptance criteria
 
-- [ ] HPA-346 reuses the existing six-operation runtime controller without widening its interface.
-- [ ] City summaries remain UI-local read state rather than a new runtime/store cache.
-- [ ] Empty storage still leads directly to the existing New City form.
-- [ ] Existing cities lead to a full-screen city library with Continue, Load, Rename, Delete, and New City.
-- [ ] Continue uses the first already-sorted `CitySummary`.
-- [ ] The active City panel exposes Save Now, dirty state, New City, and the same list-management actions.
-- [ ] New City uses the existing form with only an optional Cancel callback.
-- [ ] Rename trims and rejects empty names without adding a validation framework.
+- [ ] Existing six-operation runtime controller/view remain unchanged.
+- [ ] City summaries stay UI-local instead of becoming runtime cache state.
+- [ ] Empty storage still leads to the existing New City form.
+- [ ] Existing cities lead to City Library with Continue, Load, Rename, Delete, and New City.
+- [ ] Continue uses the first store-ordered summary.
+- [ ] Active City panel exposes Save Now, dirty state, New City, and the shared city list.
+- [ ] New City reuses the existing form with optional Cancel only.
+- [ ] Rename trims/rejects empty names without a validation framework.
 - [ ] Delete requires one inline confirmation.
-- [ ] All mutating actions are disabled while the existing runtime busy gate is active.
-- [ ] List errors and runtime errors both reuse `workingSaveErrorMessage` and never expose diagnostics.
-- [ ] Failed Save keeps dirty state/prior storage through existing runtime/store behavior.
-- [ ] Failed Load preserves current gameplay/identity through existing runtime behavior.
-- [ ] One real Chromium test proves create -> Save Now -> reload -> city library -> Continue using IndexedDB + WASM.
-- [ ] HPA-344 remains separate for native durability; HPA-349 remains separate for cross-host smoke.
+- [ ] Existing runtime busy state disables city mutations.
+- [ ] List and mutation failures use `workingSaveErrorMessage` without diagnostics.
+- [ ] `Retry city list` appears only for list-read failure, never as a fake retry for Load/Save/Rename/Delete.
+- [ ] Failed Save and Load behavior remains the existing runtime behavior.
+- [ ] One Chromium smoke proves create -> Save -> reload -> City Library -> Continue through real WASM + IndexedDB.
+- [ ] HPA-344 and HPA-349 remain separate downstream work.
 - [ ] No autosave, recovery, migration, compatibility, multi-instance, security, or generic save-management framework is introduced.
