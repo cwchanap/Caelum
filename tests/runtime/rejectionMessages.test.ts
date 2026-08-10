@@ -2,10 +2,62 @@ import { describe, expect, it } from "vitest";
 import {
   rejectionMessage,
   routeFailureGuidance,
+  workingSaveErrorMessage,
   warningMessage,
 } from "../../src/runtime/rejectionMessages";
 import type { GameplayRejection } from "../../src/domain/types";
 import type { GameplayWarning } from "../../src/runtime/backend/types";
+
+describe("workingSaveErrorMessage", () => {
+  it.each([
+    [{ kind: "busy" } as const, "Another city action is already in progress."],
+    [{ kind: "unavailable" } as const, "City storage is unavailable."],
+    [{ kind: "noActiveCity" } as const, "No city is active."],
+    [
+      {
+        kind: "sandbox",
+        error: { code: "unknownTemplateId", context: {} },
+      } as const,
+      "Could not create that city setup.",
+    ],
+    [
+      { kind: "backend", error: { code: "hostFailure" } } as const,
+      "Could not apply the city state.",
+    ],
+  ])("maps working-save error %o to player copy", (error, message) => {
+    expect(workingSaveErrorMessage(error)).toBe(message);
+  });
+
+  it("maps create-store failure without exposing diagnostics", () => {
+    const message = workingSaveErrorMessage({
+      kind: "store",
+      error: {
+        operation: "createCity",
+        code: "failed",
+        diagnostic: "QuotaExceededError: private browser detail",
+      },
+    });
+
+    expect(message).toBe("Could not save the new city.");
+    expect(message).not.toContain("QuotaExceededError");
+  });
+
+  it.each([
+    ["listCities", "Could not load the city list."],
+    ["readCity", "Could not load that city."],
+    ["createCity", "Could not save the new city."],
+    ["updateCity", "Could not save the city."],
+    ["renameCity", "Could not rename the city."],
+    ["deleteCity", "Could not delete the city."],
+  ] as const)("maps %s store errors", (operation, expected) => {
+    expect(
+      workingSaveErrorMessage({
+        kind: "store",
+        error: { operation, code: "failed" },
+      }),
+    ).toBe(expected);
+  });
+});
 
 describe("routeFailureGuidance", () => {
   it("guides noLegalTurnaround", () => {
@@ -149,6 +201,6 @@ describe("assertNever fallbacks", () => {
         code: "unknownCode" as unknown as GameplayWarning["code"],
         context: gameplayRejectionContext(),
       }),
-    ).toThrow("Unhandled rejection code");
+    ).toThrow("Unhandled warning code");
   });
 });

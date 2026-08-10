@@ -1,18 +1,20 @@
 import type { GameplayRejection } from "../domain/types";
 import type { RouteLegKind } from "../domain/types";
+import type { CitySaveStoreOperation } from "../persistence/citySaveStore";
 import type { GameplayWarning } from "./backend/types";
 import type { RouteFailureRow } from "./types";
+import type { WorkingSaveError } from "./workingSaveRuntime";
 
 const numberFormat = new Intl.NumberFormat("en-US");
 const money = (value: number): string => numberFormat.format(value);
 
-function assertNever(value: never): string {
+function assertNever(value: never, label: string): string {
   // In dev/test, surface unknown codes immediately so a Rust/TS enum drift is
   // caught loudly. In production, fall back to a generic message instead of
   // throwing — a rejection toast must never crash the UI over an unrecognized
   // code that Rust may have added before TS caught up.
   if (import.meta.env.DEV) {
-    throw new Error("Unhandled rejection code: " + String(value));
+    throw new Error(`Unhandled ${label}: ${String(value)}`);
   }
   return "This action could not be completed.";
 }
@@ -81,7 +83,7 @@ export function rejectionMessage(rejection: GameplayRejection): string {
     case "blockedFootprint":
       return "The full footprint must contain only empty or replaceable road tiles.";
     default:
-      return assertNever(code);
+      return assertNever(code, "rejection code");
   }
 }
 
@@ -127,6 +129,44 @@ export function warningMessage(warning: GameplayWarning): string {
     case "routeWillBreak":
       return "This will break the saved route.";
     default:
-      return assertNever(code);
+      return assertNever(code, "warning code");
+  }
+}
+
+function cityStoreOperationMessage(operation: CitySaveStoreOperation): string {
+  switch (operation) {
+    case "listCities":
+      return "Could not load the city list.";
+    case "readCity":
+      return "Could not load that city.";
+    case "createCity":
+      return "Could not save the new city.";
+    case "updateCity":
+      return "Could not save the city.";
+    case "renameCity":
+      return "Could not rename the city.";
+    case "deleteCity":
+      return "Could not delete the city.";
+    default:
+      return assertNever(operation, "city save operation");
+  }
+}
+
+export function workingSaveErrorMessage(error: WorkingSaveError): string {
+  switch (error.kind) {
+    case "busy":
+      return "Another city action is already in progress.";
+    case "unavailable":
+      return "City storage is unavailable.";
+    case "noActiveCity":
+      return "No city is active.";
+    case "sandbox":
+      return "Could not create that city setup.";
+    case "backend":
+      return "Could not apply the city state.";
+    case "store":
+      return cityStoreOperationMessage(error.error.operation);
+    default:
+      return assertNever(error, "working-save error");
   }
 }
