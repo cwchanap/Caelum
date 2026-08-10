@@ -61,4 +61,20 @@ describe("BUILD_GROUPS", () => {
     expect(actual).toEqual(expected);
     expect(new Set(items().map((item) => item.id)).size).toBe(items().length);
   });
+
+  it("places every BUILDING_CATALOG entry exactly once across all groups", () => {
+    // busStop and metroStation are BUILDING_CATALOG entries surfaced as transit
+    // tool actions rather than building actions, so count them through the tool
+    // action. Every catalog entry must appear exactly once somewhere in the
+    // menu; an orphaned or duplicated entry fails here.
+    const placed = items()
+      .flatMap((item) => {
+        if (item.action.kind === "building") return [item.action.building];
+        if (item.action.kind === "tool") return [item.action.tool];
+        return [];
+      })
+      .sort();
+    const catalogEntries = Object.keys(BUILDING_CATALOG).sort();
+    expect(placed).toEqual(catalogEntries);
+  });
 });

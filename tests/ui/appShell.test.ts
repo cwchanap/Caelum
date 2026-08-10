@@ -161,7 +161,7 @@ function createRuntimeHarness(
     cancelDrag: vi.fn(() => publish()),
     handleTileClick: vi.fn(async () => publish()),
     mountCanvas: vi.fn(() => () => {}),
-  } as unknown as RuntimeController;
+  } satisfies RuntimeController;
   return { runtime, getSnapshot: snapshot };
 }
 
@@ -421,7 +421,10 @@ describe("App command shell", () => {
     const feedback = screen.getByTestId("action-feedback");
     expect(feedback).toHaveAttribute("data-source", "rejection");
     expect(feedback).toHaveAttribute("data-tone", "error");
-    expect(feedback).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("action-feedback-slot")).toHaveAttribute(
+      "role",
+      "status",
+    );
     expect(feedback).toHaveTextContent("Needs $1,200; only $0 is available.");
 
     await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));

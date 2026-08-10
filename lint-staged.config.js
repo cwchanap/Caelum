@@ -5,7 +5,8 @@ const rustLint = [
 
 export default {
   "*.{js,ts,svelte}": ["eslint --fix", "prettier --write"],
-  "*.{css,json,md}": "prettier --write",
+  "*.css": ["stylelint --fix", "prettier --write"],
+  "*.{json,md}": "prettier --write",
   // One combined Rust glob so a commit touching both src-tauri and crates runs the
   // workspace-wide cargo fmt/clippy once, not twice.
   "{src-tauri,crates}/**/*.rs": () => rustLint,

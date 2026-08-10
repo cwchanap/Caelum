@@ -12,6 +12,7 @@ import {
 import { normalizeRoutePreviewResponse } from "../../src/runtime/backend/shared";
 import { routeFailureGuidance } from "../../src/runtime/rejectionMessages";
 import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
+import type { RoadMutationPreviewResponse } from "../../src/runtime/backend/types";
 import { createUiState } from "../../src/ui/uiState";
 import {
   canSaveRouteDraft,
@@ -984,14 +985,16 @@ describe("route selectors", () => {
 });
 
 describe("action feedback selector", () => {
-  function roadPreview(overrides: Record<string, unknown> = {}) {
+  function roadPreview(
+    overrides: Partial<RoadMutationPreviewResponse> = {},
+  ): RoadMutationPreviewResponse {
     return {
       generation: 3,
       changedTiles: [{ x: 9, y: 8 }],
+      skippedTiles: [],
       authoredTiles: [],
       generatedStructures: [],
       cost: 0,
-      skippedTiles: [],
       routeImpacts: [],
       warnings: [],
       rejection: null,

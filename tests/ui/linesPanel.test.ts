@@ -1,5 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
-import { tick } from "svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import LinesPanel from "../../src/components/hud/panels/LinesPanel.svelte";
 import type { BuildingType, Tool } from "../../src/domain/types";
@@ -8,46 +7,7 @@ import type {
   ShellRouteListState,
 } from "../../src/runtime/types";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
-
-function createDraftView(
-  overrides: Partial<RouteEditorView> = {},
-): RouteEditorView {
-  return {
-    source: "create",
-    title: "New Bus Route",
-    mode: "bus",
-    pattern: "loop",
-    waypoints: [
-      {
-        id: "stop-001",
-        index: 0,
-        label: "Stop A",
-        status: "present",
-        selected: true,
-      },
-      {
-        id: "stop-002",
-        index: 1,
-        label: "Stop B",
-        status: "present",
-        selected: false,
-      },
-    ],
-    selectedIndex: 0,
-    interaction: "replace",
-    previewPending: false,
-    previewStatus: "connected",
-    previewMessage: "Connected",
-    previewWarnings: [],
-    canSave: true,
-    canReload: false,
-    canUndo: false,
-    canRedo: false,
-    notice: null,
-    failures: [],
-    ...overrides,
-  };
-}
+import { createDraftView } from "../helpers/routeEditor";
 
 function callbacks() {
   return {
@@ -250,10 +210,10 @@ describe("LinesPanel line workspace", () => {
     });
 
     await rerender(panelProps({ routeDraft: null }));
-    await tick();
-    await tick();
 
-    expect(screen.getByTestId("lines-list")).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByTestId("lines-list")).toHaveFocus();
+    });
     expect(screen.getByTestId("lines-list")).toHaveAttribute(
       "aria-label",
       "Lines list",

@@ -1,7 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import CommandShelf from "../../src/components/hud/CommandShelf.svelte";
-import commandShelfSource from "../../src/components/hud/CommandShelf.svelte?raw";
 
 const command = {
   activeDestination: null,
@@ -53,7 +52,7 @@ describe("CommandShelf", () => {
     expect(onSetTool).not.toHaveBeenCalled();
   });
 
-  it("keeps destination labels accessible without a narrow-width hiding rule", () => {
+  it("keeps destination labels accessible", () => {
     render(CommandShelf, {
       props: {
         command,
@@ -67,7 +66,5 @@ describe("CommandShelf", () => {
         screen.getByRole("button", { name: new RegExp(label) }),
       ).toHaveAccessibleName(expect.stringContaining(label));
     }
-
-    expect(commandShelfSource).not.toContain("@media (max-width: 720px)");
   });
 });

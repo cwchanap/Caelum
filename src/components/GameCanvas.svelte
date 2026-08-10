@@ -37,6 +37,7 @@
   data-testid="game-canvas-host"
   bind:this={host}
   tabindex="-1"
+  role="region"
   aria-label="City map"
   aria-describedby="game-canvas-description"
 ></div>
