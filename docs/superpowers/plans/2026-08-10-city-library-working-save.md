@@ -31,7 +31,6 @@
 - Create: `src/components/city/CityLibraryScreen.svelte`
 - Modify: `src/components/NewCityScreen.svelte`
 - Create: `tests/ui/cityList.test.ts`
-- Modify: `tests/ui/appShell.test.ts`
 - Modify: `src/styles.css`
 
 **Interfaces:**
@@ -86,11 +85,16 @@ interface Props {
 
 ### Steps
 
-- [ ] **Step 1: Write the CityList interaction tests first**
+- [ ] **Step 1: Write the complete CityList interaction test file**
 
-Create `tests/ui/cityList.test.ts` with two deterministic summaries:
+Create `tests/ui/cityList.test.ts`:
 
 ```ts
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import { describe, expect, it, vi } from "vitest";
+import CityList from "../../src/components/city/CityList.svelte";
+import type { CitySummary } from "../../src/persistence/citySaveStore";
+
 const CITIES = [
   {
     id: "city-new",
@@ -105,212 +109,434 @@ const CITIES = [
     savedAt: "2026-08-09T13:00:00.000Z",
   },
 ] satisfies CitySummary[];
-```
 
-Cover these behaviors with Testing Library:
-
-```ts
-it("loads only inactive rows", async () => {
+function renderList(options: { activeCityId?: string | null; busy?: boolean } = {}) {
   const onLoad = vi.fn();
+  const onRename = vi.fn();
+  const onDelete = vi.fn();
+
   render(CityList, {
     props: {
       cities: CITIES,
-      activeCityId: "city-new",
-      busy: false,
+      activeCityId: options.activeCityId ?? "city-new",
+      busy: options.busy ?? false,
       onLoad,
-      onRename: vi.fn(),
-      onDelete: vi.fn(),
+      onRename,
+      onDelete,
     },
   });
 
-  expect(screen.getByText("Active")).toBeVisible();
-  await fireEvent.click(screen.getByRole("button", { name: "Load Harbour City" }));
-  expect(onLoad).toHaveBeenCalledWith("city-old");
+  return { onLoad, onRename, onDelete };
+}
+
+describe("CityList", () => {
+  it("marks the active city and loads only an inactive city", async () => {
+    const { onLoad } = renderList();
+    const activeRow = screen.getByTestId("city-row-city-new");
+    const inactiveRow = screen.getByTestId("city-row-city-old");
+
+    expect(within(activeRow).getByText("Active")).toBeVisible();
+    expect(
+      within(activeRow).queryByRole("button", { name: "Load Maple Junction" }),
+    ).toBeNull();
+
+    await fireEvent.click(
+      within(inactiveRow).getByRole("button", { name: "Load Harbour City" }),
+    );
+
+    expect(onLoad).toHaveBeenCalledWith("city-old");
+  });
+
+  it("trims rename input and prevents an empty rename", async () => {
+    const { onRename } = renderList();
+    const row = screen.getByTestId("city-row-city-new");
+
+    await fireEvent.click(
+      within(row).getByRole("button", { name: "Rename Maple Junction" }),
+    );
+
+    const input = within(row).getByRole("textbox", {
+      name: "City name for Maple Junction",
+    });
+    const saveName = within(row).getByRole("button", { name: "Save name" });
+
+    await fireEvent.input(input, { target: { value: "   " } });
+    expect(saveName).toBeDisabled();
+    expect(onRename).not.toHaveBeenCalled();
+
+    await fireEvent.input(input, { target: { value: "  Maple Central  " } });
+    await fireEvent.click(saveName);
+
+    expect(onRename).toHaveBeenCalledWith("city-new", "Maple Central");
+  });
+
+  it("requires a second delete click", async () => {
+    const { onDelete } = renderList();
+    const row = screen.getByTestId("city-row-city-old");
+
+    await fireEvent.click(
+      within(row).getByRole("button", { name: "Delete Harbour City" }),
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+
+    await fireEvent.click(
+      within(row).getByRole("button", {
+        name: "Confirm delete Harbour City",
+      }),
+    );
+    expect(onDelete).toHaveBeenCalledWith("city-old");
+  });
+
+  it("disables persistence actions while busy", () => {
+    renderList({ busy: true });
+
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
+    for (const button of screen.getAllByRole("button", { name: /^Rename / })) {
+      expect(button).toBeDisabled();
+    }
+    for (const button of screen.getAllByRole("button", { name: /^Delete / })) {
+      expect(button).toBeDisabled();
+    }
+  });
 });
 ```
 
-```ts
-it("trims rename and rejects an empty name", async () => {
-  const onRename = vi.fn();
-  // render, click Rename Maple Junction, clear/fill the input, submit
-  // first submit with whitespace: expect no callback
-  // second submit with "  Maple Central  ":
-  expect(onRename).toHaveBeenCalledWith("city-new", "Maple Central");
-});
-```
-
-```ts
-it("requires a second click to confirm delete", async () => {
-  const onDelete = vi.fn();
-  // first click "Delete Harbour City": callback remains untouched
-  // second click "Confirm delete Harbour City":
-  expect(onDelete).toHaveBeenCalledWith("city-old");
-});
-```
-
-```ts
-it("disables mutating controls while busy", () => {
-  // render with busy: true and assert Load/Rename/Delete buttons are disabled
-});
-```
-
-- [ ] **Step 2: Run the new component tests red**
+- [ ] **Step 2: Run the new component test red**
 
 ```bash
 bun run test -- tests/ui/cityList.test.ts
 ```
 
-Expected: FAIL because `CityList.svelte` does not exist.
+Expected: FAIL with the missing `CityList.svelte` module.
 
-- [ ] **Step 3: Implement `CityList.svelte` with only row-local transient state**
+- [ ] **Step 3: Implement the complete `CityList.svelte` component**
 
-Use:
-
-```ts
-let editingCityId = $state<string | null>(null);
-let renameValue = $state("");
-let confirmingDeleteId = $state<string | null>(null);
-```
-
-Start rename with:
-
-```ts
-function startRename(city: CitySummary): void {
-  editingCityId = city.id;
-  renameValue = city.name;
-  confirmingDeleteId = null;
-}
-```
-
-Submit rename with:
-
-```ts
-function submitRename(cityId: string, event: SubmitEvent): void {
-  event.preventDefault();
-  const trimmed = renameValue.trim();
-  if (busy || trimmed.length === 0) return;
-  onRename(cityId, trimmed);
-  editingCityId = null;
-  renameValue = "";
-}
-```
-
-Require inline delete confirmation:
-
-```ts
-function requestDelete(cityId: string): void {
-  if (busy) return;
-  if (confirmingDeleteId === cityId) {
-    onDelete(cityId);
-    confirmingDeleteId = null;
-    return;
-  }
-  confirmingDeleteId = cityId;
-  editingCityId = null;
-}
-```
-
-For each row:
-
-- render the name;
-- render `<time datetime={city.savedAt}>` for last-saved time;
-- render `Active` when `city.id === activeCityId`, otherwise an accessible `Load ${city.name}` button;
-- render `Rename ${city.name}`;
-- render `Delete ${city.name}` then `Confirm delete ${city.name}` when armed.
-
-Use a small `Intl.DateTimeFormat` in the component for display only. Tests must target roles/`datetime`, not locale-specific rendered date text.
-
-- [ ] **Step 4: Implement `CityLibraryScreen.svelte` as a thin wrapper around CityList**
-
-Render:
+Create `src/components/city/CityList.svelte`:
 
 ```svelte
+<script lang="ts">
+  import type { CitySummary } from "../../persistence/citySaveStore";
+
+  interface Props {
+    cities: CitySummary[];
+    activeCityId: string | null;
+    busy: boolean;
+    onLoad: (cityId: string) => void;
+    onRename: (cityId: string, name: string) => void;
+    onDelete: (cityId: string) => void;
+  }
+
+  let {
+    cities,
+    activeCityId,
+    busy,
+    onLoad,
+    onRename,
+    onDelete,
+  }: Props = $props();
+
+  let editingCityId = $state<string | null>(null);
+  let renameValue = $state("");
+  let confirmingDeleteId = $state<string | null>(null);
+
+  const savedAtFormat = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
+  function startRename(city: CitySummary): void {
+    if (busy) return;
+    editingCityId = city.id;
+    renameValue = city.name;
+    confirmingDeleteId = null;
+  }
+
+  function cancelRename(): void {
+    editingCityId = null;
+    renameValue = "";
+  }
+
+  function submitRename(cityId: string, event: SubmitEvent): void {
+    event.preventDefault();
+    const trimmedName = renameValue.trim();
+    if (busy || trimmedName.length === 0) return;
+    onRename(cityId, trimmedName);
+    cancelRename();
+  }
+
+  function requestDelete(cityId: string): void {
+    if (busy) return;
+    if (confirmingDeleteId === cityId) {
+      onDelete(cityId);
+      confirmingDeleteId = null;
+      return;
+    }
+    confirmingDeleteId = cityId;
+    editingCityId = null;
+    renameValue = "";
+  }
+</script>
+
+<div class="city-list" data-testid="city-list">
+  {#each cities as city (city.id)}
+    <article class="city-list-row" data-testid={`city-row-${city.id}`}>
+      <div class="city-list-meta">
+        <strong>{city.name}</strong>
+        <span>
+          Saved
+          <time datetime={city.savedAt}>
+            {savedAtFormat.format(new Date(city.savedAt))}
+          </time>
+        </span>
+      </div>
+
+      {#if editingCityId === city.id}
+        <form
+          class="city-list-rename"
+          onsubmit={(event) => submitRename(city.id, event)}
+        >
+          <input
+            aria-label={`City name for ${city.name}`}
+            bind:value={renameValue}
+            autocomplete="off"
+          />
+          <button
+            type="submit"
+            disabled={busy || renameValue.trim().length === 0}
+          >
+            Save name
+          </button>
+          <button type="button" disabled={busy} onclick={cancelRename}>
+            Cancel rename
+          </button>
+        </form>
+      {:else}
+        <div class="city-list-actions">
+          {#if city.id === activeCityId}
+            <span class="city-list-active">Active</span>
+          {:else}
+            <button
+              type="button"
+              aria-label={`Load ${city.name}`}
+              disabled={busy}
+              onclick={() => onLoad(city.id)}
+            >
+              Load
+            </button>
+          {/if}
+          <button
+            type="button"
+            aria-label={`Rename ${city.name}`}
+            disabled={busy}
+            onclick={() => startRename(city)}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            aria-label={confirmingDeleteId === city.id
+              ? `Confirm delete ${city.name}`
+              : `Delete ${city.name}`}
+            disabled={busy}
+            onclick={() => requestDelete(city.id)}
+          >
+            {confirmingDeleteId === city.id ? "Confirm delete" : "Delete"}
+          </button>
+        </div>
+      {/if}
+    </article>
+  {/each}
+</div>
+```
+
+Do not add store/runtime imports or async state to this component.
+
+- [ ] **Step 4: Implement the complete full-screen library wrapper**
+
+Create `src/components/city/CityLibraryScreen.svelte`:
+
+```svelte
+<script lang="ts">
+  import type { CitySummary } from "../../persistence/citySaveStore";
+  import CityList from "./CityList.svelte";
+
+  interface Props {
+    cities: CitySummary[] | null;
+    activeCityId: string | null;
+    busy: boolean;
+    error: string | null;
+    onContinue: (cityId: string) => void;
+    onLoad: (cityId: string) => void;
+    onRename: (cityId: string, name: string) => void;
+    onDelete: (cityId: string) => void;
+    onNewCity: () => void;
+    onRetry: () => void;
+  }
+
+  let {
+    cities,
+    activeCityId,
+    busy,
+    error,
+    onContinue,
+    onLoad,
+    onRename,
+    onDelete,
+    onNewCity,
+    onRetry,
+  }: Props = $props();
+</script>
+
 <main class="city-library-screen" data-testid="city-library-screen">
   <section class="city-library-card">
     <p class="new-city-kicker">CAELUM // LOCAL CITIES</p>
     <h1>City Library</h1>
 
     {#if error !== null}
-      <p role="alert">{error}</p>
-      <button type="button" onclick={onRetry}>Retry</button>
+      <div class="city-library-error">
+        <p role="alert">{error}</p>
+        <button type="button" onclick={onRetry}>Retry</button>
+      </div>
     {/if}
 
     {#if cities === null}
-      <p>Loading cities…</p>
+      {#if error === null}
+        <p>Loading cities…</p>
+      {/if}
     {:else}
       <div class="city-library-actions">
         <button
           type="button"
           disabled={busy || cities.length === 0}
           onclick={() => cities[0] && onContinue(cities[0].id)}
-        >Continue</button>
-        <button type="button" disabled={busy} onclick={onNewCity}>New City</button>
+        >
+          Continue
+        </button>
+        <button type="button" disabled={busy} onclick={onNewCity}>
+          New City
+        </button>
       </div>
 
-      <CityList
-        {cities}
-        {activeCityId}
-        {busy}
-        {onLoad}
-        {onRename}
-        {onDelete}
-      />
+      {#if cities.length > 0}
+        <CityList
+          {cities}
+          {activeCityId}
+          {busy}
+          {onLoad}
+          {onRename}
+          {onDelete}
+        />
+      {:else}
+        <p>No saved cities.</p>
+      {/if}
     {/if}
   </section>
 </main>
 ```
 
-Do not put list fetching or runtime/store imports into this component.
+- [ ] **Step 5: Add optional Cancel to the existing New City form**
 
-- [ ] **Step 5: Add optional Cancel to the existing NewCityScreen**
-
-Change props to:
+In `src/components/NewCityScreen.svelte`, extend `Props` and the props destructure:
 
 ```ts
+interface Props {
+  busy: boolean;
+  error: string | null;
+  onCreate: (request: NewCityRequest) => void;
+  onCancel?: () => void;
+}
+
 let { busy, error, onCreate, onCancel }: Props = $props();
 ```
 
-Below Create City render:
+After the existing Create City button, add:
 
 ```svelte
 {#if onCancel !== undefined}
-  <button type="button" disabled={busy} onclick={onCancel}>Cancel</button>
+  <button type="button" disabled={busy} onclick={onCancel}>
+    Cancel
+  </button>
 {/if}
 ```
 
-Do not change the current name/economy/template request shape or defaults.
+Keep the existing form fields, defaults, trimming, and submit behavior unchanged.
 
-- [ ] **Step 6: Add focused New City cancel coverage to `appShell.test.ts`**
+- [ ] **Step 6: Add only the required library/list layout styles**
 
-Keep the existing no-city tests. Add a direct `NewCityScreen`/App path assertion later in Task 2 once `showNewCity` is wired; at this task boundary, only update any prop typings needed for the optional callback.
+Append to `src/styles.css` and adjust spacing only if an existing selector conflicts:
 
-- [ ] **Step 7: Add minimal city-library/list styles**
+```css
+.city-library-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
 
-In `src/styles.css`, reuse the existing New City card spacing/typography where practical. Add only scoped selectors for:
+.city-library-card {
+  width: min(56rem, 100%);
+  display: grid;
+  gap: 1rem;
+}
 
-```text
-.city-library-screen
-.city-library-card
-.city-library-actions
-.city-list
-.city-list-row
-.city-list-meta
-.city-list-actions
-.city-list-rename
+.city-library-actions,
+.city-list-actions,
+.city-list-rename,
+.city-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.city-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.city-list-row {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem 0;
+  border-top: 1px solid currentColor;
+}
+
+.city-list-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.city-list-meta span {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.city-list-active {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.city-library-error,
+.city-action-error {
+  display: grid;
+  gap: 0.5rem;
+}
 ```
 
-Keep the command-panel footprint compact. Do not extract a new design system.
-
-- [ ] **Step 8: Run focused UI verification**
+- [ ] **Step 7: Run focused UI verification**
 
 ```bash
-bun run test -- tests/ui/cityList.test.ts tests/ui/appShell.test.ts
+bun run test -- tests/ui/cityList.test.ts
 bun run check
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit the reusable city-library UI**
+- [ ] **Step 8: Commit the presentational UI**
 
 ```bash
 git add \
@@ -318,7 +544,6 @@ git add \
   src/components/city/CityLibraryScreen.svelte \
   src/components/NewCityScreen.svelte \
   tests/ui/cityList.test.ts \
-  tests/ui/appShell.test.ts \
   src/styles.css
 git commit -m "feat: add city library components"
 ```
@@ -335,7 +560,7 @@ git commit -m "feat: add city library components"
 
 **Interfaces:**
 
-Consumes existing runtime methods only:
+Consumes only the existing runtime persistence controller:
 
 ```ts
 runtime.persistence.listCities()
@@ -366,128 +591,367 @@ interface Props {
 
 ### Steps
 
-- [ ] **Step 1: Make the App test harness return a real list result by default**
+- [ ] **Step 1: Give the App test harness valid persistence promises**
 
-Extend `createRuntimeHarness` options:
+In `tests/ui/appShell.test.ts`, add imports:
+
+```ts
+import type { CitySummary } from "../../src/persistence/citySaveStore";
+import type {
+  NewCityRequest,
+  WorkingSaveResult,
+} from "../../src/runtime/workingSaveRuntime";
+```
+
+Add shared summaries near the existing test helpers:
+
+```ts
+const CITY_NEW: CitySummary = {
+  id: "city-new",
+  name: "Maple Junction",
+  createdAt: "2026-08-10T12:00:00.000Z",
+  savedAt: "2026-08-10T13:00:00.000Z",
+};
+
+const CITY_OLD: CitySummary = {
+  id: "city-old",
+  name: "Harbour City",
+  createdAt: "2026-08-09T12:00:00.000Z",
+  savedAt: "2026-08-09T13:00:00.000Z",
+};
+```
+
+Extend the harness option type with:
 
 ```ts
 cities?: CitySummary[];
-listCitiesResult?: WorkingSaveResult<CitySummary[]>;
 ```
 
-Default to the current active city summary when one exists, otherwise `[]`:
+After the current `persistence` snapshot value is created, add:
 
 ```ts
 const defaultCities =
   options.cities ?? (persistence.activeCity === null ? [] : [persistence.activeCity]);
+
+const findCity = (cityId: string): CitySummary | undefined =>
+  defaultCities.find((city) => city.id === cityId);
 ```
 
-Change the persistence mock from a bare `vi.fn()` to:
+Replace the six bare persistence spies with promises that satisfy the real controller shape:
 
 ```ts
-listCities: vi.fn(async () =>
-  options.listCitiesResult ?? { ok: true as const, value: defaultCities },
-),
+persistence: {
+  listCities: vi.fn(async (): Promise<WorkingSaveResult<CitySummary[]>> => ({
+    ok: true,
+    value: defaultCities,
+  })),
+  save: vi.fn(async (): Promise<WorkingSaveResult<CitySummary>> =>
+    persistence.activeCity === null
+      ? { ok: false, error: { kind: "noActiveCity" } }
+      : { ok: true, value: persistence.activeCity },
+  ),
+  load: vi.fn(async (cityId: string): Promise<WorkingSaveResult<CitySummary>> => {
+    const city = findCity(cityId);
+    return city === undefined
+      ? {
+          ok: false,
+          error: {
+            kind: "store",
+            error: { operation: "readCity", code: "notFound", cityId },
+          },
+        }
+      : { ok: true, value: city };
+  }),
+  createCity: vi.fn(
+    async (request: NewCityRequest): Promise<WorkingSaveResult<CitySummary>> => ({
+      ok: true,
+      value: {
+        id: "city-created",
+        name: request.name,
+        createdAt: "2026-08-10T14:00:00.000Z",
+        savedAt: "2026-08-10T14:00:00.000Z",
+      },
+    }),
+  ),
+  renameCity: vi.fn(
+    async (
+      cityId: string,
+      name: string,
+    ): Promise<WorkingSaveResult<CitySummary>> => {
+      const city = findCity(cityId);
+      return city === undefined
+        ? {
+            ok: false,
+            error: {
+              kind: "store",
+              error: { operation: "renameCity", code: "notFound", cityId },
+            },
+          }
+        : { ok: true, value: { ...city, name } };
+    },
+  ),
+  deleteCity: vi.fn(
+    async (cityId: string): Promise<WorkingSaveResult<void>> =>
+      findCity(cityId) === undefined
+        ? {
+            ok: false,
+            error: {
+              kind: "store",
+              error: { operation: "deleteCity", code: "notFound", cityId },
+            },
+          }
+        : { ok: true, value: undefined },
+  ),
+},
 ```
 
-Keep the other persistence methods as spies unless a test needs a resolved value.
+Keep the rest of the runtime harness unchanged.
 
-This prevents the new initial App refresh from calling `.ok` on `undefined` in unrelated shell tests.
+- [ ] **Step 2: Update the existing empty-storage New City test for the asynchronous list read**
 
-- [ ] **Step 2: Add failing App integration tests for the no-active-city branches**
+Replace the synchronous test with:
+
+```ts
+it("shows New City instead of game chrome when no city is active and storage is empty", async () => {
+  const { runtime } = createRuntimeHarness({
+    persistence: { activeCity: null },
+    cities: [],
+  });
+
+  render(App, { props: { runtime } });
+
+  expect(await screen.findByTestId("new-city-screen")).toBeVisible();
+  expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+  expect(screen.queryByTestId("command-shelf")).toBeNull();
+  expect(screen.queryByTestId("topbar")).toBeNull();
+});
+```
+
+- [ ] **Step 3: Add no-active-city library/Continue/list-error tests**
 
 Add:
 
 ```ts
-it("shows the library when saved cities exist but no city is active", async () => {
+it("shows the city library when saved cities exist but no city is active", async () => {
   const { runtime } = createRuntimeHarness({
     persistence: { activeCity: null },
     cities: [CITY_NEW, CITY_OLD],
   });
 
   render(App, { props: { runtime } });
-  await screen.findByTestId("city-library-screen");
 
+  expect(await screen.findByTestId("city-library-screen")).toBeVisible();
   expect(screen.getByText("Maple Junction")).toBeVisible();
+  expect(screen.getByText("Harbour City")).toBeVisible();
   expect(screen.queryByTestId("new-city-screen")).toBeNull();
 });
-```
 
-```ts
 it("continues the first already-sorted city", async () => {
   const harness = createRuntimeHarness({
     persistence: { activeCity: null },
     cities: [CITY_NEW, CITY_OLD],
   });
-  harness.runtime.persistence.load = vi.fn(async () => ({
-    ok: true as const,
-    value: CITY_NEW,
-  }));
 
   render(App, { props: { runtime: harness.runtime } });
-  await fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Continue" }),
+  );
 
   expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new");
 });
+
+it("shows a mapped list failure and retries the read", async () => {
+  const harness = createRuntimeHarness({
+    persistence: { activeCity: null },
+    cities: [CITY_NEW],
+  });
+  const listCities = vi.mocked(harness.runtime.persistence.listCities);
+  listCities
+    .mockResolvedValueOnce({
+      ok: false,
+      error: {
+        kind: "store",
+        error: {
+          operation: "listCities",
+          code: "failed",
+          diagnostic: "private filesystem/browser detail",
+        },
+      },
+    })
+    .mockResolvedValueOnce({ ok: true, value: [CITY_NEW] });
+
+  render(App, { props: { runtime: harness.runtime } });
+
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Could not load the city list.");
+  expect(alert).not.toHaveTextContent("private filesystem/browser detail");
+
+  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+  expect(await screen.findByText("Maple Junction")).toBeVisible();
+  expect(listCities).toHaveBeenCalledTimes(2);
+});
 ```
 
-Add a list failure/Retry test using:
+- [ ] **Step 4: Add active City-panel persistence tests**
+
+Add the following tests:
 
 ```ts
-listCitiesResult: {
-  ok: false,
-  error: {
-    kind: "store",
-    error: { operation: "listCities", code: "failed", diagnostic: "private" },
-  },
-}
+it("saves the active city from the City panel", async () => {
+  const harness = createRuntimeHarness({ cities: [CITY_NEW, CITY_OLD] });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+
+  expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1);
+});
+
+it("opens and cancels the existing New City form from an active city", async () => {
+  const harness = createRuntimeHarness({ cities: [CITY_NEW, CITY_OLD] });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
+  expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+
+  await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(screen.queryByTestId("new-city-screen")).toBeNull();
+  expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+  expect(harness.runtime.persistence.createCity).not.toHaveBeenCalled();
+});
+
+it("renames and deletes the selected inactive city by ID", async () => {
+  const harness = createRuntimeHarness({ cities: [CITY_NEW, CITY_OLD] });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  const oldRow = await screen.findByTestId("city-row-city-old");
+
+  await fireEvent.click(
+    within(oldRow).getByRole("button", { name: "Rename Harbour City" }),
+  );
+  await fireEvent.input(
+    within(oldRow).getByRole("textbox", { name: "City name for Harbour City" }),
+    { target: { value: "  Old Harbour  " } },
+  );
+  await fireEvent.click(
+    within(oldRow).getByRole("button", { name: "Save name" }),
+  );
+
+  expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+    "city-old",
+    "Old Harbour",
+  );
+
+  await fireEvent.click(
+    within(oldRow).getByRole("button", { name: "Delete Harbour City" }),
+  );
+  await fireEvent.click(
+    within(oldRow).getByRole("button", {
+      name: "Confirm delete Harbour City",
+    }),
+  );
+
+  expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith("city-old");
+});
+
+it("shows dirty state and disables conflicting city actions while busy", async () => {
+  const harness = createRuntimeHarness({
+    cities: [CITY_NEW, CITY_OLD],
+    persistence: { dirty: true, busy: true },
+  });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+
+  expect(screen.getByText("Unsaved changes")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Working…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  expect(
+    screen.getByRole("button", { name: "Load Harbour City" }),
+  ).toBeDisabled();
+});
+
+it("returns to the city library when the active city becomes deleted", async () => {
+  const harness = createRuntimeHarness({ cities: [CITY_NEW, CITY_OLD] });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  const activeRow = await screen.findByTestId("city-row-city-1");
+  await fireEvent.click(
+    within(activeRow).getByRole("button", { name: "Delete Harbour City" }),
+  );
+  await fireEvent.click(
+    within(activeRow).getByRole("button", {
+      name: "Confirm delete Harbour City",
+    }),
+  );
+
+  harness.setPersistence({ activeCity: null, busy: false, dirty: false });
+
+  expect(await screen.findByTestId("city-library-screen")).toBeVisible();
+});
+
+it("keeps the active game visible when Load fails", async () => {
+  const harness = createRuntimeHarness({ cities: [CITY_NEW, CITY_OLD] });
+  harness.runtime.persistence.load = vi.fn(async () => ({
+    ok: false as const,
+    error: {
+      kind: "backend" as const,
+      error: { code: "invalidSnapshot" as const },
+    },
+  }));
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  await fireEvent.click(
+    await screen.findByRole("button", { name: "Load Harbour City" }),
+  );
+  harness.setPersistence({
+    error: {
+      kind: "backend",
+      error: { code: "invalidSnapshot" },
+    },
+  });
+
+  expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Could not apply the city state.",
+  );
+});
 ```
 
-Assert the alert contains `Could not load the city list.` and excludes `private`; Retry calls `listCities` again.
+The existing harness active city is `city-1` / `Harbour City`; keep those values for the active-delete test rather than changing unrelated shell fixtures.
 
-- [ ] **Step 3: Add failing active-panel action tests**
-
-Cover:
-
-- Save Now invokes `runtime.persistence.save()`;
-- clicking New City hides the game shell and shows `NewCityScreen` with Cancel;
-- Cancel returns to the game shell without a persistence call;
-- Load/Rename/Delete from the City panel use the selected city ID;
-- busy disables city mutation controls;
-- `dirty: true` displays `Unsaved changes`;
-- publishing `activeCity: null` after active delete returns to the library;
-- a failed Load result plus unchanged active persistence state leaves `game-canvas-host` visible and shows mapped error copy in the City panel.
-
-Use the existing `setPersistence()` harness method to publish runtime state transitions rather than teaching the mock persistence methods a second runtime implementation.
-
-- [ ] **Step 4: Run the App tests red**
+- [ ] **Step 5: Run the App tests red**
 
 ```bash
 bun run test -- tests/ui/appShell.test.ts
 ```
 
-Expected: FAIL because App still renders New City whenever no active city exists and CityPanel has no persistence actions.
+Expected: FAIL because App still selects New City solely from `activeCity === null` and CityPanel has no persistence controls.
 
-- [ ] **Step 5: Add UI-local list state and imports to App**
+- [ ] **Step 6: Add UI-local city-list state and one list refresh helper to App**
 
-Import:
+In `src/App.svelte`, import:
 
 ```ts
 import CityLibraryScreen from "./components/city/CityLibraryScreen.svelte";
 import type { CitySummary } from "./persistence/citySaveStore";
 ```
 
-Add state:
+Add beside the current component state:
 
 ```ts
 let cities = $state<CitySummary[] | null>(null);
 let cityListError = $state<string | null>(null);
 let showNewCity = $state(false);
-```
 
-Add a derived player error:
-
-```ts
 const cityActionError = $derived(
   cityListError ??
     (snapshot?.persistence.error == null
@@ -496,9 +960,7 @@ const cityActionError = $derived(
 );
 ```
 
-- [ ] **Step 6: Add the one read helper without a generic action framework**
-
-Implement:
+Add the read helper:
 
 ```ts
 async function refreshCities(): Promise<void> {
@@ -513,81 +975,74 @@ async function refreshCities(): Promise<void> {
 }
 ```
 
-Do not call `sortCitySummaries()` here; the store contract already owns ordering.
+Do not call `sortCitySummaries()` here.
 
-- [ ] **Step 7: Make the existing New City handler await the result and refresh on success**
+- [ ] **Step 7: Replace the fire-and-forget New City handler and add explicit persistence handlers**
 
-Replace the fire-and-forget handler with:
+Use:
 
 ```ts
 async function handleCreateCity(request: NewCityRequest): Promise<void> {
   if (runtime === null) return;
+  cityListError = null;
   const result = await runtime.persistence.createCity(request);
   if (!result.ok) return;
   showNewCity = false;
   await refreshCities();
 }
-```
 
-Pass it as:
-
-```svelte
-onCreate={(request) => void handleCreateCity(request)}
-```
-
-- [ ] **Step 8: Add explicit Save/Load/Rename/Delete handlers**
-
-Use separate functions:
-
-```ts
 async function handleSaveCity(): Promise<void> {
   if (runtime === null) return;
+  cityListError = null;
   const result = await runtime.persistence.save();
   if (result.ok) await refreshCities();
 }
-```
 
-```ts
 async function handleLoadCity(cityId: string): Promise<void> {
   if (runtime === null) return;
+  cityListError = null;
   const result = await runtime.persistence.load(cityId);
   if (result.ok) showNewCity = false;
 }
-```
 
-```ts
 async function handleRenameCity(cityId: string, name: string): Promise<void> {
   if (runtime === null) return;
+  cityListError = null;
   const result = await runtime.persistence.renameCity(cityId, name);
   if (result.ok) await refreshCities();
 }
-```
 
-```ts
 async function handleDeleteCity(cityId: string): Promise<void> {
   if (runtime === null) return;
+  cityListError = null;
   const result = await runtime.persistence.deleteCity(cityId);
   if (result.ok) await refreshCities();
 }
 ```
 
-No optimistic list edits are needed.
+These remain separate because their success behavior differs. Do not add an action-runner abstraction.
 
-- [ ] **Step 9: Refresh the list from the existing mount lifecycle**
+- [ ] **Step 8: Start exactly one initial list read in the existing mount lifecycle**
 
-In the current `onMount` block, after subscribing and calling `runtime.start()`, add:
+In the existing `onMount` block, keep subscription/start/disposal behavior and add only:
 
 ```ts
+runtime.start();
 void refreshCities();
 ```
 
-Keep the existing unsubscribe + synchronous `runtime.dispose()` cleanup unchanged.
+The cleanup remains:
 
-Do not add polling, storage events, or a second lifecycle hook.
+```ts
+return () => {
+  unsubscribe();
+  runtime.dispose();
+};
+```
 
-- [ ] **Step 10: Replace the no-active-city render branch with loading/library/empty behavior**
+- [ ] **Step 9: Replace the pre-game branch with loading/library/empty/New-City presentation**
 
-Preserve the fatal branch first, then use:
+Keep the fatal branch first. Replace the current no-active branch with:
 
 ```svelte
 {:else if showNewCity}
@@ -619,23 +1074,57 @@ Preserve the fatal branch first, then use:
     />
   {/if}
 {:else}
-  <!-- existing game shell -->
+  <!-- keep the existing active game shell -->
 ```
 
-The initial `cities === null` state therefore renders `CityLibraryScreen`'s loading state instead of flashing the empty New City form.
+The sole retained template comment marks the unchanged existing game-shell body; it is not an implementation placeholder.
 
-- [ ] **Step 11: Expand CityPanel props without giving it the runtime/store**
+- [ ] **Step 10: Expand CityPanel with working-save state and callbacks**
 
-Change `CityPanel.svelte` to import:
+In `src/components/hud/panels/CityPanel.svelte`, replace the current props with:
 
 ```ts
 import type { CitySummary } from "../../../persistence/citySaveStore";
+import type { ShellCityState } from "../../../runtime/types";
 import CityList from "../../city/CityList.svelte";
+
+interface Props {
+  shell: ShellCityState;
+  activeCity: CitySummary;
+  cities: CitySummary[] | null;
+  busy: boolean;
+  dirty: boolean;
+  error: string | null;
+  onSave: () => void;
+  onLoad: (cityId: string) => void;
+  onRename: (cityId: string, name: string) => void;
+  onDelete: (cityId: string) => void;
+  onNewCity: () => void;
+}
+
+let {
+  shell,
+  activeCity,
+  cities,
+  busy,
+  dirty,
+  error,
+  onSave,
+  onLoad,
+  onRename,
+  onDelete,
+  onNewCity,
+}: Props = $props();
 ```
 
-Replace `cityName` with the explicit active summary and callbacks defined in this task's interface.
+Replace the current city-name heading with:
 
-Keep the existing city overview, then add:
+```svelte
+<h2 data-testid="active-city-name">{activeCity.name}</h2>
+<p class="brief-id">{shell.title}</p>
+```
+
+Immediately after that heading block, add:
 
 ```svelte
 <div class="city-save-status" data-dirty={dirty}>
@@ -646,34 +1135,36 @@ Keep the existing city overview, then add:
   <button type="button" disabled={busy} onclick={onSave}>
     {busy ? "Working…" : "Save Now"}
   </button>
-  <button type="button" disabled={busy} onclick={onNewCity}>New City</button>
+  <button type="button" disabled={busy} onclick={onNewCity}>
+    New City
+  </button>
 </div>
-```
 
-Render runtime error copy when non-null and render `CityList` when `cities !== null`:
-
-```svelte
 {#if error !== null}
   <p class="city-action-error" role="alert">{error}</p>
 {/if}
+```
 
+Keep the existing city-overview `<dl>` unchanged. After it, add:
+
+```svelte
 {#if cities !== null}
-  <CityList
-    {cities}
-    activeCityId={activeCity.id}
-    {busy}
-    {onLoad}
-    {onRename}
-    {onDelete}
-  />
+  <section class="city-local-list" aria-label="Local cities">
+    <CityList
+      {cities}
+      activeCityId={activeCity.id}
+      {busy}
+      {onLoad}
+      {onRename}
+      {onDelete}
+    />
+  </section>
 {/if}
 ```
 
-Do not add another fetch layer inside CityPanel.
+- [ ] **Step 11: Pass App state/actions into the existing CityPanel call**
 
-- [ ] **Step 12: Pass the city workflow into the existing City command panel**
-
-At the existing `CityPanel` call in `App.svelte`, pass:
+Inside the already-active game-shell branch, replace the old `CityPanel` props with:
 
 ```svelte
 <CityPanel
@@ -691,31 +1182,61 @@ At the existing `CityPanel` call in `App.svelte`, pass:
 />
 ```
 
-The active branch proves `activeCity` is non-null; do not add a duplicate null fallback inside CityPanel.
+If Svelte's type narrowing does not carry the enclosing non-null `activeCity` branch into this call, introduce one template-local constant immediately before the call:
 
-- [ ] **Step 13: Add compact City-panel styles only**
-
-In `src/styles.css`, add scoped rules for:
-
-```text
-.city-save-status
-.city-actions
-.city-action-error
+```svelte
+{@const activeCity = currentSnapshot.persistence.activeCity}
+{#if activeCity !== null}
+  <CityPanel
+    shell={currentSnapshot.shell.city}
+    {activeCity}
+    {cities}
+    busy={currentSnapshot.persistence.busy}
+    dirty={currentSnapshot.persistence.dirty}
+    error={cityActionError}
+    onSave={() => void handleSaveCity()}
+    onLoad={(cityId) => void handleLoadCity(cityId)}
+    onRename={(cityId, name) => void handleRenameCity(cityId, name)}
+    onDelete={(cityId) => void handleDeleteCity(cityId)}
+    onNewCity={() => (showNewCity = true)}
+  />
+{/if}
 ```
 
-Reuse the CityList styles from Task 1.
+Use the first form when `bun run check` accepts the existing branch narrowing; otherwise use the explicit local guard. Do not widen `CityPanel.activeCity` to nullable merely for the compiler.
 
-- [ ] **Step 14: Run focused tests and the complete frontend unit/type gate**
+- [ ] **Step 12: Add compact City-panel status spacing**
+
+Append to `src/styles.css`:
+
+```css
+.city-save-status {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.city-save-status[data-dirty="true"] {
+  text-decoration: underline;
+}
+
+.city-local-list {
+  margin-top: 1rem;
+}
+```
+
+- [ ] **Step 13: Run the focused and full frontend verification gate**
 
 ```bash
 bun run test -- tests/ui/cityList.test.ts tests/ui/appShell.test.ts
 bun run test:unit
 bun run check
+bun run lint
+bun run format:check
 ```
 
 Expected: PASS.
 
-- [ ] **Step 15: Commit the working-save UI wiring**
+- [ ] **Step 14: Commit the working-save UI orchestration**
 
 ```bash
 git add \
@@ -736,15 +1257,13 @@ git commit -m "feat: add city working-save workflow"
 
 **Interfaces:**
 
-Reuses:
+Reuses the HPA-345 Playwright helper:
 
 ```ts
 createDefaultCity(page, name)
 ```
 
-from `tests/e2e/helpers.ts` for the initial fresh-context New City bootstrap.
-
-The test must use the production browser path already wired by HPA-345:
+The browser path under test is already production-wired as:
 
 ```text
 WASM GameBackend -> workingSaveRuntime -> IndexedDbCitySaveStore
@@ -752,7 +1271,7 @@ WASM GameBackend -> workingSaveRuntime -> IndexedDbCitySaveStore
 
 ### Steps
 
-- [ ] **Step 1: Add the real-browser persistence smoke**
+- [ ] **Step 1: Add the real-browser reload/Continue smoke**
 
 Create `tests/e2e/cityLibrary.spec.ts`:
 
@@ -765,7 +1284,7 @@ test("created city survives reload and Continue restores it", async ({ page }) =
 
   await page.getByTestId("command-destination-city").click();
   await page.getByRole("button", { name: "Save Now" }).click();
-  await expect(page.getByText("Saved")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save Now" })).toBeEnabled();
 
   await page.reload();
 
@@ -776,11 +1295,13 @@ test("created city survives reload and Continue restores it", async ({ page }) =
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   await page.getByTestId("command-destination-city").click();
-  await expect(page.getByRole("heading", { name: "Reload Junction" })).toBeVisible();
+  await expect(page.getByTestId("active-city-name")).toHaveText(
+    "Reload Junction",
+  );
 });
 ```
 
-If the City panel's name is not a semantic heading after Task 2, assert the visible city-name test ID added there instead; do not inspect IndexedDB directly in this test because HPA-343/HPA-345 already prove the adapter record path. This smoke proves the player-visible reload/restore path.
+This intentionally proves the player-visible reload/restore path. HPA-343/HPA-345 already cover direct IndexedDB record acceptance; do not duplicate direct IndexedDB inspection here.
 
 - [ ] **Step 2: Run the dedicated Chromium spec**
 
@@ -790,21 +1311,17 @@ bun run test:e2e -- tests/e2e/cityLibrary.spec.ts
 
 Expected: PASS.
 
-- [ ] **Step 3: Verify existing gameplay e2e bootstrap remains valid**
-
-Run:
+- [ ] **Step 3: Run all existing Playwright flows**
 
 ```bash
 bun run test:e2e
 ```
 
-Expected: PASS. Existing tests still start in fresh contexts, so `createDefaultCity()` continues to encounter the empty New City screen on their first navigation.
+Expected: PASS. Keep `createDefaultCity()` unconditional for fresh test contexts; HPA-346 does not weaken HPA-345's empty-storage bootstrap assertion.
 
-Do not make `createDefaultCity()` conditionally accept a city library unless a real existing test context now needs it; conditional bootstrap would weaken the HPA-345 fresh-context assertion.
+- [ ] **Step 4: Update architecture documentation to the completed browser working-save flow**
 
-- [ ] **Step 4: Update the architecture flow**
-
-In `docs/architecture.md`, document the browser UI flow as:
+In `docs/architecture.md`, replace the HPA-345-only no-city description with this flow:
 
 ```text
 startup
@@ -816,13 +1333,16 @@ startup
        -> City panel: Save Now / city list / New City
 ```
 
-Keep these boundaries explicit:
+Keep the surrounding persistence boundary text explicit:
 
-- UI calls the runtime controller, never a store adapter;
-- browser uses IndexedDB;
-- Tauri still uses the temporary memory store until HPA-344;
-- HPA-349 owns final cross-host smoke;
-- no autosave/recovery/migration/multi-instance framework exists.
+```text
+UI -> RuntimePersistenceController -> CitySaveStore
+browser store: IndexedDB
+native Tauri store: temporary memory adapter until HPA-344
+final cross-host smoke: HPA-349
+```
+
+Do not add autosave, recovery, migration, compatibility, multi-instance, or native-file details that belong to other issues.
 
 - [ ] **Step 5: Run the final repository gate**
 
@@ -836,26 +1356,36 @@ bun run test:e2e
 bun run tauri:build
 ```
 
-Expected: all commands PASS.
+Expected: every command exits successfully.
 
-`bun run lint` already includes the repository's Rust lint gate. No Rust source changes are expected in HPA-346, so a separate new Rust test matrix is unnecessary.
-
-- [ ] **Step 6: Review the final diff for scope creep**
-
-Run:
+- [ ] **Step 6: Verify the final diff remains inside HPA-346**
 
 ```bash
 git diff --stat main...HEAD
 git diff --name-only main...HEAD
 rg -n "autosave|checkpoint|recovery|migration|repository|view.?model|state machine|storage event" \
-  src/components/city src/App.svelte src/components/hud/panels/CityPanel.svelte docs/architecture.md
+  src/components/city \
+  src/App.svelte \
+  src/components/hud/panels/CityPanel.svelte \
+  docs/architecture.md
 ```
 
-Expected:
+Expected file scope:
 
-- production changes are limited to the city UI/App orchestration/styles;
-- no new persistence abstraction or deferred feature appears;
-- no `src/runtime/workingSaveRuntime.ts` or store-adapter change is required.
+```text
+src/App.svelte
+src/components/NewCityScreen.svelte
+src/components/city/CityList.svelte
+src/components/city/CityLibraryScreen.svelte
+src/components/hud/panels/CityPanel.svelte
+src/styles.css
+tests/ui/cityList.test.ts
+tests/ui/appShell.test.ts
+tests/e2e/cityLibrary.spec.ts
+docs/architecture.md
+```
+
+Any source match from the scope scan must be either an explicit statement that the deferred feature is absent or removed before completion. No new persistence abstraction should appear.
 
 - [ ] **Step 7: Commit the browser smoke and architecture update**
 
@@ -871,24 +1401,26 @@ git commit -m "test: cover city library reload flow"
 ### Spec coverage
 
 - City list: Tasks 1-2.
-- Continue/Load: Task 2 plus real browser proof in Task 3.
-- Save Now: Task 2 plus browser proof in Task 3.
-- Rename active/inactive: shared CityList in Tasks 1-2.
+- Continue/Load: Task 2 plus the real-browser proof in Task 3.
+- Save Now: Task 2 plus invocation in Task 3.
+- Rename active/inactive: the shared `CityList` in Tasks 1-2.
 - Delete active/inactive with one confirmation: Tasks 1-2.
-- New City from existing library/active shell: Tasks 1-2, reusing the existing form.
+- New City from an existing library or active game: Tasks 1-2, reusing `NewCityScreen`.
 - Busy behavior: Tasks 1-2.
-- Error copy: Task 2 reuses `workingSaveErrorMessage` for read and mutation failures.
+- Dirty presentation: Task 2.
+- Error copy: Task 2 reuses `workingSaveErrorMessage` for list and mutation failures.
 - Real IndexedDB + reload + Continue: Task 3.
 - Architecture documentation: Task 3.
 - Native persistence: explicitly excluded for HPA-344.
 
 ### Placeholder scan
 
-The plan contains no `TBD`, `TODO`, compatibility shim, generic error-handling instruction, or unspecified implementation step. Every production behavior has an owning file and focused test path.
+The executable steps contain no unfinished test bodies, omitted implementation branches, generic error-handling instructions, or fill-in-later markers. The one template comment in the App render snippet explicitly preserves the already-existing game-shell body rather than standing in for new HPA-346 logic.
 
 ### Type consistency
 
 - `CitySummary` comes only from `src/persistence/citySaveStore.ts`.
 - `RuntimePersistenceController` remains unchanged.
 - `CityList` callbacks use `cityId: string` and trimmed rename `name: string` consistently in both library and panel surfaces.
-- `cities: CitySummary[] | null` uses `null` only for the initial/pending list read, not as a second persistence state.
+- `cities: CitySummary[] | null` uses `null` only for initial/pending list read, not as a second persistence lifecycle state.
+- `CityPanel.activeCity` stays non-null by construction of the active game-shell branch.
