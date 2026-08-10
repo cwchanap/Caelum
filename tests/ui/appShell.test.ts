@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
-import { tick } from "svelte";
+import { flushSync, tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
 import {
@@ -22,13 +22,20 @@ function createRuntimeHarness(
     state?: ReturnType<typeof createTestGameState>;
     ui?: ReturnType<typeof createUiState>;
     rejection?: GameplayRejection | null;
+    persistence?: Partial<RuntimeSnapshot["persistence"]>;
   } = {},
-): { runtime: RuntimeController; getSnapshot: () => RuntimeSnapshot } {
+): {
+  runtime: RuntimeController;
+  getSnapshot: () => RuntimeSnapshot;
+  setPersistence: (
+    next: Partial<RuntimeSnapshot["persistence"]>,
+  ) => RuntimeSnapshot;
+} {
   const state = options.state ?? createTestGameState();
   let ui = options.ui ?? createUiState();
   let rejection = options.rejection ?? null;
   const listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
-  const persistence = {
+  let persistence: RuntimeSnapshot["persistence"] = {
     activeCity: {
       id: "city-1",
       name: "Harbour City",
@@ -38,7 +45,8 @@ function createRuntimeHarness(
     busy: false,
     dirty: false,
     error: null,
-  } as const;
+    ...options.persistence,
+  };
   const snapshot = (): RuntimeSnapshot => ({
     state,
     ui,
@@ -48,11 +56,12 @@ function createRuntimeHarness(
     rejection,
     sandboxResetError: null,
   });
-  const publish = (): RuntimeSnapshot => {
-    const next = snapshot();
-    for (const listener of listeners) listener(next);
-    return next;
-  };
+  const publish = (): RuntimeSnapshot =>
+    flushSync(() => {
+      const next = snapshot();
+      for (const listener of listeners) listener(next);
+      return next;
+    });
   const runtime = {
     persistence: {
       listCities: vi.fn(),
@@ -162,10 +171,119 @@ function createRuntimeHarness(
     handleTileClick: vi.fn(async () => publish()),
     mountCanvas: vi.fn(() => () => {}),
   } satisfies RuntimeController;
-  return { runtime, getSnapshot: snapshot };
+  return {
+    runtime,
+    getSnapshot: snapshot,
+    setPersistence(next: Partial<RuntimeSnapshot["persistence"]>) {
+      persistence = { ...persistence, ...next };
+      return publish();
+    },
+  };
 }
 
 describe("App command shell", () => {
+  it("shows New City instead of game chrome when no city is active", () => {
+    const { runtime } = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+
+    render(App, { props: { runtime } });
+
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+    expect(screen.queryByTestId("command-shelf")).toBeNull();
+    expect(screen.queryByTestId("topbar")).toBeNull();
+  });
+
+  it("submits only trimmed name, economy, and template", async () => {
+    const { runtime } = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    render(App, { props: { runtime } });
+
+    const create = screen.getByRole("button", { name: "Create City" });
+    expect(create).toBeDisabled();
+
+    await fireEvent.input(screen.getByLabelText("City name"), {
+      target: { value: "  Maple Junction  " },
+    });
+    await fireEvent.change(screen.getByLabelText("Economy"), {
+      target: { value: "creative" },
+    });
+    await fireEvent.change(screen.getByLabelText("Template"), {
+      target: { value: "blankGrid" },
+    });
+    await fireEvent.click(create);
+
+    expect(runtime.persistence.createCity).toHaveBeenCalledWith({
+      name: "Maple Junction",
+      economyPreset: "creative",
+      templateId: "blankGrid",
+    });
+  });
+
+  it("disables repeat New City submission while persistence is busy", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.input(screen.getByLabelText("City name"), {
+      target: { value: "Busy City" },
+    });
+    harness.setPersistence({ busy: true });
+
+    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
+  });
+
+  it("shows runtime-mapped persistence copy without diagnostics", () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    harness.setPersistence({
+      error: {
+        kind: "store",
+        error: {
+          operation: "createCity",
+          code: "failed",
+          diagnostic: "QuotaExceededError: private browser detail",
+        },
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not save the new city.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent(
+      "QuotaExceededError",
+    );
+  });
+
+  it("returns to the normal game shell after a city becomes active", () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    harness.setPersistence({
+      activeCity: {
+        id: "city-new",
+        name: "Maple Junction",
+        createdAt: "2026-08-10T17:00:00.000Z",
+        savedAt: "2026-08-10T17:00:00.000Z",
+      },
+      busy: false,
+      dirty: false,
+      error: null,
+    });
+
+    expect(screen.queryByTestId("new-city-screen")).toBeNull();
+    expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+    expect(screen.getByTestId("command-shelf")).toBeVisible();
+  });
+
   it("starts in Select with no command panel open", () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

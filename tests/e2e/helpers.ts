@@ -19,6 +19,17 @@ export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
   });
 }
 
+export async function createDefaultCity(
+  page: Page,
+  name = "E2E City",
+): Promise<void> {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByLabel("City name").fill(name);
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+}
+
 export async function openCommandDestination(
   page: Page,
   destination: CommandDestination,

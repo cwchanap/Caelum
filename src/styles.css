@@ -1542,6 +1542,39 @@ body {
   background: rgba(0, 0, 0, 0.1);
 }
 
+.new-city-screen {
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100vh;
+  padding: 48px;
+  background: var(--bg-deep);
+}
+
+.new-city-card {
+  display: grid;
+  gap: 18px;
+  width: min(520px, 100%);
+  padding: 32px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.new-city-card label {
+  display: grid;
+  gap: 8px;
+}
+
+.new-city-card input,
+.new-city-card select,
+.new-city-card button {
+  min-height: 44px;
+}
+
+.new-city-error {
+  color: var(--red);
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    GENERIC BUTTON RESET (default)
    ────────────────────────────────────────────────────────────────────────── */

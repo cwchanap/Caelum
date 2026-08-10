@@ -5,6 +5,7 @@ import { colors } from "../../src/render/colors";
 import {
   selectBuildLeaf,
   clickMapTile,
+  createDefaultCity,
   debugSetBudget,
   dragMapTiles,
   openCommandDestination,
@@ -311,7 +312,7 @@ async function readRuntimeTransit(
 }
 
 test("create, manage, and delete a bus route", async ({ page }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
@@ -382,7 +383,7 @@ test("undoes and redoes a roadside route draft while preview is pending", async 
       value: harness,
     });
   });
-  await page.goto("/");
+  await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
@@ -464,7 +465,7 @@ test("undoes and redoes a roadside route draft while preview is pending", async 
 });
 
 test("create a metro line on laid track", async ({ page }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
@@ -496,7 +497,7 @@ test("create a metro line on laid track", async ({ page }) => {
 test("finishing a bus route assigns a vehicle and runs live transit", async ({
   page,
 }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
@@ -564,7 +565,7 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
 test("turns between paired roads and edits the committed route", async ({
   page,
 }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 13, y: 4 });
@@ -637,7 +638,7 @@ test("turns between paired roads and edits the committed route", async ({
 test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   page,
 }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const first = { x: 16, y: 2 };
   const second = { x: 20, y: 2 };
@@ -685,7 +686,7 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
 test("reroutes when possible, then preserves a dotted last-valid leg until repair", async ({
   page,
 }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await seedRouteWithPrimaryAndAlternateRoad(page);
   await createDamageRoute(page);
