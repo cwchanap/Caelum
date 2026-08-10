@@ -42,14 +42,6 @@ const LOADED_CITY: CitySummary = {
   savedAt: "2026-08-08T09:15:00.000Z",
 };
 
-const SANDBOX_REQUEST = {
-  templateId: "blankGrid",
-  economyPreset: "standard",
-  startingCapital: 150_000,
-  demandMultiplier: 1,
-  moveInRate: "paused",
-} as const;
-
 interface TestBackend extends GameBackend {
   setRestoreOutcome(outcome: SnapshotResult | Error | null): void;
 }
@@ -253,7 +245,8 @@ describe("runtime working-save integration", () => {
     await expect(
       runtime.persistence.createCity({
         name: "New City",
-        sandbox: SANDBOX_REQUEST,
+        economyPreset: "standard",
+        templateId: "crossroads",
       }),
     ).resolves.toEqual({
       ok: true,
@@ -290,7 +283,8 @@ describe("runtime working-save integration", () => {
     await expect(
       conflictRuntime.persistence.createCity({
         name: "New City",
-        sandbox: SANDBOX_REQUEST,
+        economyPreset: "standard",
+        templateId: "crossroads",
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -317,7 +311,8 @@ describe("runtime working-save integration", () => {
     await expect(
       activationRuntime.persistence.createCity({
         name: "New City",
-        sandbox: SANDBOX_REQUEST,
+        economyPreset: "standard",
+        templateId: "crossroads",
       }),
     ).resolves.toEqual({
       ok: false,
@@ -341,7 +336,8 @@ describe("runtime working-save integration", () => {
     await expect(
       runtime.persistence.createCity({
         name: "New City",
-        sandbox: SANDBOX_REQUEST,
+        economyPreset: "standard",
+        templateId: "crossroads",
       }),
     ).resolves.toEqual({
       ok: false,
