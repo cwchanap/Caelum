@@ -7,10 +7,14 @@ import type {
 } from "../persistence/citySaveStore";
 import { citySaveStoreError } from "../persistence/citySaveStore";
 import type {
+  EconomyPreset,
+  MoveInRateSelection,
+  SandboxTemplateId,
+} from "../domain/types";
+import type {
   GameBackend,
   RustGameSnapshot,
   SandboxCreationError,
-  SandboxCreationRequest,
   SandboxHostError,
   SnapshotError,
 } from "./backend";
@@ -24,8 +28,16 @@ export interface RuntimePersistenceView {
 
 export interface NewCityRequest {
   name: string;
-  sandbox: SandboxCreationRequest;
+  economyPreset: EconomyPreset;
+  templateId: SandboxTemplateId;
 }
+
+// Mirror the current hidden values from `canonical_default_request()` in
+// crates/caelum-core/src/sandbox.rs. Real-WASM parity is checked by HPA-345's
+// Chromium New City smoke; Rust's strict missing/null validation remains intact.
+const NEW_CITY_STARTING_CAPITAL = 120_000;
+const NEW_CITY_DEMAND_MULTIPLIER = 1;
+const NEW_CITY_MOVE_IN_RATE: MoveInRateSelection = "paused";
 
 export type WorkingSaveError =
   | { kind: "busy" }
@@ -259,9 +271,13 @@ export function createWorkingSaveRuntime(
         return { ok: false, error: { kind: "unavailable" } };
       }
 
-      const candidate = await host.backend.buildSandboxSnapshot(
-        request.sandbox,
-      );
+      const candidate = await host.backend.buildSandboxSnapshot({
+        templateId: request.templateId,
+        economyPreset: request.economyPreset,
+        startingCapital: NEW_CITY_STARTING_CAPITAL,
+        demandMultiplier: NEW_CITY_DEMAND_MULTIPLIER,
+        moveInRate: NEW_CITY_MOVE_IN_RATE,
+      });
       if (!candidate.ok) {
         return {
           ok: false,

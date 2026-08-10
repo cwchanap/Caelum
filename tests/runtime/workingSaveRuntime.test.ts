@@ -34,13 +34,11 @@ const ACTIVE_CITY: CitySummary = {
 
 const NEXT_SAVED_AT = "2026-08-08T12:00:00.000Z";
 
-const SANDBOX_REQUEST: SandboxCreationRequest = {
-  templateId: "blankGrid",
+const NEW_CITY_REQUEST = {
+  name: "New City",
   economyPreset: "standard",
-  startingCapital: 150_000,
-  demandMultiplier: 1,
-  moveInRate: "paused",
-};
+  templateId: "blankGrid",
+} as const;
 
 function backendStub(): GameBackend {
   const snapshot = createRustSnapshot({ paused: true });
@@ -80,6 +78,7 @@ function createRuntime(
 
 interface TestBackend extends GameBackend {
   calls: string[];
+  sandboxRequests: SandboxCreationRequest[];
   setSnapshotForSaveOutcome(outcome: SnapshotResult | Error | null): void;
   setRestoreOutcome(outcome: SnapshotResult | Error | null): void;
   setSandboxOutcome(outcome: SandboxCreationResult | Error | null): void;
@@ -95,10 +94,12 @@ function createTestBackend(
   let restoreOutcome: SnapshotResult | Error | null = null;
   let sandboxOutcome: SandboxCreationResult | Error | null = null;
   const calls: string[] = [];
+  const sandboxRequests: SandboxCreationRequest[] = [];
 
   return {
     ...base,
     calls,
+    sandboxRequests,
     setSnapshotForSaveOutcome(outcome) {
       snapshotForSaveOutcome = outcome;
     },
@@ -120,6 +121,7 @@ function createTestBackend(
     async buildSandboxSnapshot(request: SandboxCreationRequest) {
       calls.push("buildSandboxSnapshot");
       events?.push("buildSandboxSnapshot");
+      sandboxRequests.push(request);
       if (sandboxOutcome instanceof Error) throw sandboxOutcome;
       return (
         sandboxOutcome ?? {
@@ -790,10 +792,7 @@ describe("working save runtime new cities", () => {
     const fixture = createRuntimeFixture({ saveStore: store, events });
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toEqual({
       ok: true,
       value: {
@@ -818,22 +817,39 @@ describe("working save runtime new cities", () => {
     });
   });
 
+  it("translates player New City choices to the current hidden settings", async () => {
+    const fixture = createRuntimeFixture({ initialCity: null });
+
+    await fixture.runtime.controller.createCity({
+      name: "Creative Grid",
+      economyPreset: "creative",
+      templateId: "blankGrid",
+    });
+
+    expect(fixture.backend.sandboxRequests).toEqual([
+      {
+        templateId: "blankGrid",
+        economyPreset: "creative",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+        moveInRate: "paused",
+      },
+    ]);
+  });
+
   it("returns a sandbox candidate failure without creating a city", async () => {
     const backend = createTestBackend();
     backend.setSandboxOutcome({
       ok: false,
       error: {
         code: "unknownTemplateId",
-        context: { templateId: SANDBOX_REQUEST.templateId },
+        context: { templateId: NEW_CITY_REQUEST.templateId },
       },
     });
     const fixture = createRuntimeFixture({ backend });
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toMatchObject({
       ok: false,
       error: { kind: "sandbox", error: { code: "unknownTemplateId" } },
@@ -861,10 +877,7 @@ describe("working save runtime new cities", () => {
     const fixture = createRuntimeFixture({ saveStore: store });
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toMatchObject({
       ok: false,
       error: {
@@ -887,10 +900,7 @@ describe("working save runtime new cities", () => {
     failures.failNext("createCity", "failed");
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toMatchObject({
       ok: false,
       error: { kind: "store", error: { operation: "createCity" } },
@@ -910,10 +920,7 @@ describe("working save runtime new cities", () => {
     });
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toEqual({
       ok: false,
       error: { kind: "backend", error: { code: "invalidSnapshot" } },
@@ -934,10 +941,7 @@ describe("working save runtime new cities", () => {
     fixture.backend.setRestoreOutcome(new Error("new city restore was lost"));
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toEqual({
       ok: false,
       error: {
@@ -967,10 +971,7 @@ describe("working save runtime new cities", () => {
     fixture.failNextInstall(new Error("new city install was lost"));
 
     await expect(
-      fixture.runtime.controller.createCity({
-        name: "New City",
-        sandbox: SANDBOX_REQUEST,
-      }),
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
     ).resolves.toEqual({
       ok: false,
       error: {
