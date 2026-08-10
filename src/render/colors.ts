@@ -35,6 +35,7 @@ export const colors = {
   crowding: "rgba(224, 79, 57, 0.2)",
   demand: "rgba(216, 180, 95, 0.24)",
   lateness: "rgba(185, 46, 53, 0.24)",
+  growth: "rgba(79, 154, 97, 0.25)",
   previewValid: "rgba(200, 255, 92, 0.32)",
   previewInvalid: "rgba(255, 91, 91, 0.32)",
   previewValidStroke: "#c8ff5c",

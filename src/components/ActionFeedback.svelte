@@ -10,18 +10,21 @@
 </script>
 
 <!--
-  The slot stays mounted so screen readers observe a stable container; the
-  live-region semantics attach only when the current feedback is meant to be
-  announced. Continuous road-hover feedback (`announce: false`) renders inside
-  the slot without live-region attributes so it does not spam assistive tech,
-  preserving the non-live road-hover contract.
+  A dedicated polite live region stays mounted permanently so screen readers
+  observe a stable announcement container before any rejection text changes.
+  Only `announce: true` feedback updates its text; continuous road-hover
+  feedback (`announce: false`) renders in the visible strip below without
+  live-region semantics, preserving the non-live road-hover contract.
 -->
-<aside
-  class="action-feedback-slot"
-  data-testid="action-feedback-slot"
-  role={feedback?.announce ? "status" : undefined}
-  aria-live={feedback?.announce ? "polite" : undefined}
->
+<aside class="action-feedback-slot" data-testid="action-feedback-slot">
+  <div
+    class="sr-only"
+    role="status"
+    aria-live="polite"
+    data-testid="action-feedback-announce"
+  >
+    {feedback?.announce ? feedback.message : ""}
+  </div>
   {#if feedback !== null}
     <div
       class={`action-feedback action-feedback--${feedback.tone}`}

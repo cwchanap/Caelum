@@ -84,7 +84,12 @@ export type Tool =
   | "track"
   | "remove";
 export type RoadPreset = "twoWay" | "oneWay" | "dualBidirectional";
-export type Overlay = "coverage" | "crowding" | "demand" | "lateness";
+export type Overlay =
+  | "coverage"
+  | "crowding"
+  | "demand"
+  | "lateness"
+  | "growth";
 
 export interface Point {
   x: number;

@@ -18,10 +18,14 @@ function feedback(
 }
 
 describe("ActionFeedback", () => {
-  it("keeps the live-region slot mounted but empty when feedback is null", () => {
+  it("keeps the live-region slot and announcement node mounted but empty when feedback is null", () => {
     render(ActionFeedback, { props: { feedback: null, onDismiss: vi.fn() } });
     expect(screen.getByTestId("action-feedback-slot")).toBeInTheDocument();
     expect(screen.queryByTestId("action-feedback")).toBeNull();
+    const announce = screen.getByTestId("action-feedback-announce");
+    expect(announce).toHaveAttribute("role", "status");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("");
   });
 
   it("announces and dismisses gameplay rejection feedback", async () => {
@@ -39,9 +43,10 @@ describe("ActionFeedback", () => {
       },
     });
 
-    const slot = screen.getByTestId("action-feedback-slot");
-    expect(slot).toHaveAttribute("role", "status");
-    expect(slot).toHaveAttribute("aria-live", "polite");
+    const announce = screen.getByTestId("action-feedback-announce");
+    expect(announce).toHaveAttribute("role", "status");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("Needs $1,200; only $0 is available.");
     const view = screen.getByTestId("action-feedback");
     expect(view).toHaveAttribute("data-source", "rejection");
     expect(view).toHaveAttribute("data-tone", "error");
@@ -64,9 +69,10 @@ describe("ActionFeedback", () => {
       },
     });
 
-    const slot = screen.getByTestId("action-feedback-slot");
-    expect(slot).not.toHaveAttribute("role");
-    expect(slot).not.toHaveAttribute("aria-live");
+    const announce = screen.getByTestId("action-feedback-announce");
+    expect(announce).toHaveAttribute("role", "status");
+    expect(announce).toHaveAttribute("aria-live", "polite");
+    expect(announce).toHaveTextContent("");
     const view = screen.getByTestId("action-feedback");
     expect(view).toHaveAttribute("data-source", "roadHostError");
     expect(view).toHaveAttribute("data-tone", "warning");

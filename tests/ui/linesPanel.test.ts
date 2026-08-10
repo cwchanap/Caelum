@@ -214,10 +214,9 @@ describe("LinesPanel line workspace", () => {
     await waitFor(() => {
       expect(screen.getByTestId("lines-list")).toHaveFocus();
     });
-    expect(screen.getByTestId("lines-list")).toHaveAttribute(
-      "aria-label",
-      "Lines list",
-    );
-    expect(screen.getByTestId("lines-list")).toHaveAttribute("tabindex", "-1");
+    const list = screen.getByTestId("lines-list");
+    expect(list).toHaveAttribute("aria-label", "Lines list");
+    expect(list).toHaveAttribute("tabindex", "-1");
+    expect(list.tagName).toBe("SECTION");
   });
 });
