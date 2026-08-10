@@ -10,6 +10,7 @@
   import GameCanvas from "./components/GameCanvas.svelte";
   import Topbar from "./components/Topbar.svelte";
   import ActionFeedback from "./components/ActionFeedback.svelte";
+  import NewCityScreen from "./components/NewCityScreen.svelte";
   import type { Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
@@ -22,6 +23,8 @@
     BuildGroup,
     BuildItemAction,
   } from "./domain/catalog/buildGroups";
+  import { workingSaveErrorMessage } from "./runtime/rejectionMessages";
+  import type { NewCityRequest } from "./runtime/workingSaveRuntime";
 
   interface Props {
     runtime: RuntimeController | null;
@@ -47,6 +50,11 @@
     if (runtime !== null) {
       setSnapshot(runtime.dismissRejection());
     }
+  }
+
+  function handleCreateCity(request: NewCityRequest): void {
+    if (runtime === null) return;
+    void runtime.persistence.createCity(request);
   }
 
   async function applyRuntimeResult(
@@ -440,6 +448,14 @@
       </button>
     </div>
   </main>
+{:else if snapshot?.persistence.activeCity == null}
+  <NewCityScreen
+    busy={snapshot?.persistence.busy ?? false}
+    error={snapshot?.persistence.error == null
+      ? null
+      : workingSaveErrorMessage(snapshot.persistence.error)}
+    onCreate={handleCreateCity}
+  />
 {:else}
   <main
     class="shell"

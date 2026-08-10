@@ -4,6 +4,7 @@ import { MAP_WIDTH } from "../../src/scenario/sandbox";
 import {
   selectBuildLeaf,
   clickMapTile,
+  createDefaultCity,
   dragMapTiles,
   openCommandDestination,
   removeMapTile,
@@ -180,7 +181,7 @@ for (const fixture of [
   test(`places, routes, U-turns, and removes ${fixture.label}`, async ({
     page,
   }) => {
-    await page.goto("/");
+    await createDefaultCity(page);
     const canvas = page.locator("canvas[data-runtime-canvas='true']");
     await paintLatentRoundaboutArea(page, fixture.origin, fixture.size);
     await seedRoundaboutApproaches(page, fixture.origin, fixture.size);

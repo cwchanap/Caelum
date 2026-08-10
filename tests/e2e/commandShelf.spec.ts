@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   clickMapTile,
+  createDefaultCity,
   debugSetBudget,
   dragMapTiles,
   hoverMapTile,
@@ -39,7 +40,7 @@ for (const viewport of desktopViewports) {
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await page.goto("/");
+    await createDefaultCity(page);
 
     await expect(page.getByTestId("game-shell")).toBeVisible();
     await expect
@@ -166,7 +167,7 @@ test("navigates the command shelf and plate grid with the keyboard", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await createDefaultCity(page);
 
   const destinations = ["build", "lines", "data", "city"] as const;
   await page.getByTestId("command-destination-build").focus();
@@ -209,7 +210,7 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
@@ -314,7 +315,7 @@ test("shows one road impact strip and one dismissible rejection", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const tile = { x: 2, y: 10 } as const;
 
@@ -352,7 +353,7 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await createDefaultCity(page);
   const targetTile = "tile-14-12";
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
@@ -385,7 +386,7 @@ test("keeps RouteEditor labels owned while a line draft is pinned", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
 
   await selectBuildLeaf(page, "roads", "road-twoWay");

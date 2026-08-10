@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createDefaultCity } from "./helpers";
 
 const viewports = [
   { width: 1024, height: 768 },
@@ -13,7 +14,7 @@ test("topbar readouts and controls do not overlap at supported desktop widths", 
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await page.goto("/");
+    await createDefaultCity(page);
     await expect(page.getByTestId("topbar")).toBeVisible();
 
     const geometry = await page.evaluate(() => {

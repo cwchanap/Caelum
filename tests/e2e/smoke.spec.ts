@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   selectBuildLeaf,
   clickMapTile,
+  createDefaultCity,
   dragMapTiles,
   openCommandDestination,
 } from "./helpers";
@@ -9,7 +10,7 @@ import {
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
   page,
 }) => {
-  await page.goto("/");
+  await createDefaultCity(page);
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
@@ -25,9 +26,7 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await expect(populationReadout.getByText("0")).toBeVisible();
   await openCommandDestination(page, "city");
   const city = page.getByTestId("panel-city");
-  await expect(
-    city.getByRole("heading", { name: "Standard Sandbox" }),
-  ).toBeVisible();
+  await expect(city.getByText("Standard Sandbox")).toBeVisible();
   await expect(city.getByText("Crossroads")).toBeVisible();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
