@@ -4,7 +4,7 @@
 
 **Goal:** Add the smallest durable browser implementation of the existing six-operation `CitySaveStore`, backed by one IndexedDB object store and verified without wiring persistence into the player UI yet.
 
-**Architecture:** `src/persistence/indexedDbCitySaveStore.ts` talks to raw IndexedDB directly and exposes only `CitySaveStore`. Full `CitySaveRecord` values live in one `cities` object store under out-of-line keys equal to `record.city.id`; list metadata is derived on read and sorted by the existing helper. The current runtime/bootstrap stays unchanged until HPA-345 supplies this adapter to `createGameRuntime()`.
+**Architecture:** `src/persistence/indexedDbCitySaveStore.ts` talks to raw IndexedDB directly and exposes only `CitySaveStore`. Full `CitySaveRecord` values live in one `cities` object store under out-of-line keys equal to `record.city.id`; list metadata is projected through one shared `citySummaryFromRecord()` helper and sorted by the existing `sortCitySummaries()` helper. The current runtime/bootstrap stays unchanged until HPA-345 supplies this adapter to `createGameRuntime()`.
 
 **Tech Stack:** TypeScript, browser IndexedDB API, Vitest runtime project, Bun, `fake-indexeddb` as a dev-only test dependency.
 
@@ -13,38 +13,97 @@
 - Implement exactly `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, and `deleteCity`.
 - Use database `caelum-city-saves-v1`, version `1`, with one object store named `cities`.
 - Store complete `CitySaveRecord` values and use `record.city.id` as the out-of-line key.
+- Export one pure `citySummaryFromRecord()` helper from `citySaveStore.ts`; memory and IndexedDB adapters must share it.
 - Reuse `sortCitySummaries()`; do not add a metadata store or index.
+- The shared adapter contract must prove multi-city `listCities()` ordering, not only the pure sorting helper.
 - Do not inspect or validate gameplay snapshots in TypeScript.
 - Do not add production storage libraries, repositories, services, registries, migrations, compatibility readers, retries, recovery, multi-tab ownership, quota handling, or security frameworks.
 - Do not change `src/main.ts`, `createGameRuntime()`, Svelte UI, or the anonymous development bootstrap in HPA-343.
 - Development saves are disposable; a future breaking schema can use a new database name/version instead of migration code.
 - Keep tests in the existing `runtime` Vitest project; do not add a browser Vitest project or Playwright-only persistence hook.
+- `fake-indexeddb` proves adapter behavior only. Real-browser wiring starts in HPA-345; the full `New City -> reload -> Continue/Load` player proof belongs to HPA-346 when the city library exists.
 
 ---
 
-### Task 1: Make the shared CitySaveStore contract adapter-neutral
+### Task 1: Share store helpers and make the contract adapter-neutral
 
 **Files:**
+- Modify: `src/persistence/citySaveStore.ts`
+- Modify: `src/persistence/memoryCitySaveStore.ts`
 - Modify: `tests/runtime/persistence/citySaveStoreContract.ts`
 - Modify: `tests/runtime/persistence/memoryCitySaveStore.test.ts`
 
 **Interfaces:**
-- Consumes: `CitySaveStore` and `CitySaveStoreResult` from `src/persistence/citySaveStore.ts`.
-- Produces: `defineCitySaveStoreContract(name, createStore)` that real adapters can run without exposing a test-only failure API.
+- Consumes: existing `CitySaveRecord`, `CitySummary`, `CitySaveStore`, and `CitySaveStoreResult`.
+- Produces: `citySummaryFromRecord(record: CitySaveRecord): CitySummary` for all concrete adapters.
+- Produces: `defineCitySaveStoreContract(name, createStore)` without a test-only failure interface.
+- Produces test-only `expectCitySaveStoreOk()` and `makeCitySaveRecord()` helpers for adapter suites.
 - Preserves: `MemoryCitySaveStoreFailureControls` only for memory-adapter-specific failure tests.
 
-- [ ] **Step 1: Move injected failure tests into the memory adapter suite**
+- [ ] **Step 1: Extract the shared record-to-summary projection**
 
-In `tests/runtime/persistence/memoryCitySaveStore.test.ts`, add local helpers:
+In `src/persistence/citySaveStore.ts`, add the projection next to the existing store types and sorting helper:
 
 ```ts
-import type {
-  CitySaveRecord,
-  CitySaveStoreResult,
-} from "../../../src/persistence/citySaveStore";
+export function citySummaryFromRecord(record: CitySaveRecord): CitySummary {
+  return {
+    id: record.city.id,
+    name: record.city.name,
+    createdAt: record.city.createdAt,
+    savedAt: record.savedAt,
+  };
+}
+```
 
-async function expectOk<T>(
-  result: Promise<CitySaveStoreResult<T>>,
+In `src/persistence/memoryCitySaveStore.ts`, import it:
+
+```ts
+import {
+  citySummaryFromRecord,
+  sortCitySummaries,
+  type CitySaveRecord,
+  type CitySaveStore,
+  type CitySaveStoreError,
+  type CitySaveStoreErrorCode,
+  type CitySaveStoreOperation,
+  type CitySaveStoreResult,
+  type CitySummary,
+} from "./citySaveStore";
+```
+
+Delete the private `summaryFor()` implementation and replace its usages:
+
+```ts
+const summaries = sortCitySummaries(
+  [...records.values()].map(citySummaryFromRecord),
+);
+```
+
+```ts
+return cloneValue(
+  citySummaryFromRecord(cloned.value),
+  "createCity",
+  cityId,
+);
+```
+
+```ts
+return cloneValue(citySummaryFromRecord(replacement), "updateCity", id);
+```
+
+```ts
+return cloneValue(citySummaryFromRecord(replacement), "renameCity", id);
+```
+
+Do not extract `errorResult`, cloning, failure queues, or adapter transaction behavior. The shared helper is only the duplicated domain projection.
+
+- [ ] **Step 2: Export the two reusable test helpers from the contract module**
+
+In `tests/runtime/persistence/citySaveStoreContract.ts`, keep `expectError()` private but rename/export the generic success helper and record factory:
+
+```ts
+export async function expectCitySaveStoreOk<T>(
+  result: Promise<CitySaveStoreResult<T>> | CitySaveStoreResult<T>,
 ): Promise<T> {
   const resolved = await result;
   if (!resolved.ok) {
@@ -55,20 +114,50 @@ async function expectOk<T>(
   return resolved.value;
 }
 
-function makeRecord(id = "city-1"): CitySaveRecord {
+export function makeCitySaveRecord(
+  id: string,
+  name: string,
+  overrides: {
+    createdAt?: string;
+    savedAt?: string;
+    snapshot?: unknown;
+  } = {},
+): CitySaveRecord {
   return {
     city: {
       id,
-      name: "First",
-      createdAt: "2026-08-01T10:00:00.000Z",
+      name,
+      createdAt: overrides.createdAt ?? "2026-08-01T10:00:00.000Z",
     },
-    savedAt: "2026-08-01T10:00:00.000Z",
-    snapshot: { budget: 120_000 },
+    savedAt: overrides.savedAt ?? "2026-08-01T10:00:00.000Z",
+    snapshot: overrides.snapshot ?? { budget: 120_000 },
   };
 }
 ```
 
-Move the shared contract's three `failNext` cases into `describe("MemoryCitySaveStore failure injection", ...)` so they remain explicit memory-adapter tests:
+Rename existing calls inside the contract from `expectOk()` / `makeRecord()` to these exported names. Do not create another fixture module: `tests/fixtures/citySave.ts` intentionally builds real Rust-shaped snapshots and is not suitable for the IndexedDB uncloneable-value test.
+
+- [ ] **Step 3: Move injected failure tests into the memory adapter suite**
+
+In `tests/runtime/persistence/memoryCitySaveStore.test.ts`, import the shared test helpers:
+
+```ts
+import {
+  defineCitySaveStoreContract,
+  expectCitySaveStoreOk,
+  makeCitySaveRecord,
+} from "./citySaveStoreContract";
+```
+
+Register the shared contract without failure controls:
+
+```ts
+defineCitySaveStoreContract("MemoryCitySaveStore", () =>
+  createMemoryCitySaveStore(),
+);
+```
+
+Move the contract's three injected failure cases into the existing `describe("MemoryCitySaveStore failure injection", ...)` block:
 
 ```ts
 it("does not commit an injected create failure", async () => {
@@ -76,7 +165,9 @@ it("does not commit an injected create failure", async () => {
   const store = createMemoryCitySaveStore({ failures });
   failures.failNext("createCity", "failed");
 
-  expect(await store.createCity(makeRecord())).toMatchObject({
+  expect(
+    await store.createCity(makeCitySaveRecord("city-1", "First")),
+  ).toMatchObject({
     ok: false,
     error: { operation: "createCity", code: "failed", cityId: "city-1" },
   });
@@ -85,12 +176,14 @@ it("does not commit an injected create failure", async () => {
     error: { operation: "readCity", code: "notFound", cityId: "city-1" },
   });
 });
+```
 
+```ts
 it("preserves the prior record after an injected update failure", async () => {
   const failures = createMemoryCitySaveStoreFailureControls();
   const store = createMemoryCitySaveStore({ failures });
-  const original = makeRecord();
-  await expectOk(store.createCity(original));
+  const original = makeCitySaveRecord("city-1", "First");
+  await expectCitySaveStoreOk(store.createCity(original));
   failures.failNext("updateCity", "failed");
 
   expect(
@@ -102,29 +195,35 @@ it("preserves the prior record after an injected update failure", async () => {
     ok: false,
     error: { operation: "updateCity", code: "failed", cityId: "city-1" },
   });
-  expect(await expectOk(store.readCity("city-1"))).toEqual(original);
+  expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+    original,
+  );
 });
+```
 
+```ts
 it("preserves the prior record after an injected rename failure", async () => {
   const failures = createMemoryCitySaveStoreFailureControls();
   const store = createMemoryCitySaveStore({ failures });
-  const original = makeRecord();
-  await expectOk(store.createCity(original));
+  const original = makeCitySaveRecord("city-1", "Original");
+  await expectCitySaveStoreOk(store.createCity(original));
   failures.failNext("renameCity", "failed");
 
   expect(await store.renameCity("city-1", "Renamed")).toMatchObject({
     ok: false,
     error: { operation: "renameCity", code: "failed", cityId: "city-1" },
   });
-  expect(await expectOk(store.readCity("city-1"))).toEqual(original);
+  expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+    original,
+  );
 });
 ```
 
-Keep the existing injected `listCities` failure test in the same describe block.
+Keep the existing injected `listCities` failure test in the same memory-only block. Do not add failure injection to the production `CitySaveStore` interface.
 
-- [ ] **Step 2: Simplify the shared contract factory**
+- [ ] **Step 4: Simplify the shared contract factory and add adapter-level list ordering**
 
-In `tests/runtime/persistence/citySaveStoreContract.ts`, delete the failure-aware harness interface and change the public helper to:
+In `tests/runtime/persistence/citySaveStoreContract.ts`, delete `CitySaveStoreContractHarness` and change the public helper to:
 
 ```ts
 export function defineCitySaveStoreContract(
@@ -133,7 +232,7 @@ export function defineCitySaveStoreContract(
 ): void {
 ```
 
-Inside shared tests, replace:
+Inside each shared case, replace:
 
 ```ts
 const { store } = createHarness();
@@ -145,30 +244,57 @@ with:
 const store = createStore();
 ```
 
-Delete the three injected create/update/rename failure tests from this shared file and remove now-unused `CitySaveStoreErrorCode` / `CitySaveStoreOperation` imports.
+Delete the three injected create/update/rename failure tests and remove now-unused `CitySaveStoreErrorCode` / `CitySaveStoreOperation` imports.
 
-Add one adapter-neutral empty-list test:
+Add an adapter-neutral empty-list case:
 
 ```ts
 it("starts with an empty city list", async () => {
   const store = createStore();
-  expect(await expectOk(store.listCities())).toEqual([]);
+  expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
 });
 ```
 
-Keep all existing deterministic contract cases for create/list/read, conflict, update, identity preservation, rename, delete/notFound, sorting, and detached values.
-
-- [ ] **Step 3: Update the memory contract registration**
-
-Replace the current failure-control harness registration with:
+Add a multi-city ordering case that catches both Map insertion order and IndexedDB key order:
 
 ```ts
-defineCitySaveStoreContract("MemoryCitySaveStore", () =>
-  createMemoryCitySaveStore(),
-);
+it("lists multiple cities by saved time then ID", async () => {
+  const store = createStore();
+
+  await expectCitySaveStoreOk(
+    store.createCity(
+      makeCitySaveRecord("city-b", "B", {
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ),
+  );
+  await expectCitySaveStoreOk(
+    store.createCity(
+      makeCitySaveRecord("city-z", "Newest", {
+        savedAt: "2026-08-01T11:00:00.000Z",
+      }),
+    ),
+  );
+  await expectCitySaveStoreOk(
+    store.createCity(
+      makeCitySaveRecord("city-a", "A", {
+        savedAt: "2026-08-01T10:00:00.000Z",
+      }),
+    ),
+  );
+
+  const listed = await expectCitySaveStoreOk(store.listCities());
+  expect(listed.map((city) => city.id)).toEqual([
+    "city-z",
+    "city-a",
+    "city-b",
+  ]);
+});
 ```
 
-- [ ] **Step 4: Run focused contract verification**
+Keep the existing pure `sortCitySummaries()` test as well: it still verifies the helper does not mutate its input and handles the tie-break rule directly. The new case verifies that each concrete adapter actually uses that ordering.
+
+- [ ] **Step 5: Run focused contract verification**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistence/memoryCitySaveStore.test.ts
@@ -176,13 +302,13 @@ bun run check
 bun run format:check
 ```
 
-Expected: all commands pass.
+Expected: all commands pass, including the new adapter-level multi-city ordering case.
 
-- [ ] **Step 5: Commit the test-boundary cleanup**
+- [ ] **Step 6: Commit the shared helper/contract cleanup**
 
 ```bash
-git add tests/runtime/persistence/citySaveStoreContract.ts tests/runtime/persistence/memoryCitySaveStore.test.ts
-git commit -m "test: make city save store contract adapter neutral"
+git add src/persistence/citySaveStore.ts src/persistence/memoryCitySaveStore.ts tests/runtime/persistence/citySaveStoreContract.ts tests/runtime/persistence/memoryCitySaveStore.test.ts
+git commit -m "refactor: share city save store adapter helpers"
 ```
 
 ---
@@ -197,9 +323,10 @@ git commit -m "test: make city save store contract adapter neutral"
 - Modify: `docs/architecture.md`
 
 **Interfaces:**
-- Consumes: `CitySaveStore`, `CitySaveRecord`, `CitySummary`, `CitySaveStoreResult`, and `sortCitySummaries()` from `src/persistence/citySaveStore.ts`.
+- Consumes: `CitySaveStore`, `CitySaveRecord`, `CitySaveStoreResult`, `citySummaryFromRecord()`, and `sortCitySummaries()` from `src/persistence/citySaveStore.ts`.
+- Consumes test-only: `defineCitySaveStoreContract()`, `expectCitySaveStoreOk()`, and `makeCitySaveRecord()` from `tests/runtime/persistence/citySaveStoreContract.ts`.
 - Produces: `createIndexedDbCitySaveStore(options?: IndexedDbCitySaveStoreOptions): CitySaveStore`.
-- Downstream: HPA-345 creates this adapter and passes it through the existing `createGameRuntime({ saveStore })` option.
+- Downstream: HPA-345 creates this adapter and passes it through the existing `createGameRuntime({ saveStore })` option. HPA-346 owns the complete reload/Continue browser proof after city-library UI exists.
 
 - [ ] **Step 1: Add the dev-only IndexedDB implementation used by tests**
 
@@ -216,12 +343,12 @@ Create `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`:
 ```ts
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
-import type {
-  CitySaveRecord,
-  CitySaveStoreResult,
-} from "../../../src/persistence/citySaveStore";
 import { createIndexedDbCitySaveStore } from "../../../src/persistence/indexedDbCitySaveStore";
-import { defineCitySaveStoreContract } from "./citySaveStoreContract";
+import {
+  defineCitySaveStoreContract,
+  expectCitySaveStoreOk,
+  makeCitySaveRecord,
+} from "./citySaveStoreContract";
 
 let databaseSequence = 0;
 
@@ -237,46 +364,25 @@ function createStore(databaseName = nextDatabaseName()) {
   });
 }
 
-async function expectOk<T>(
-  result: Promise<CitySaveStoreResult<T>>,
-): Promise<T> {
-  const resolved = await result;
-  if (!resolved.ok) {
-    throw new Error(
-      `${resolved.error.operation} failed with ${resolved.error.code}`,
-    );
-  }
-  return resolved.value;
-}
-
-function makeRecord(snapshot: unknown = { budget: 120_000 }): CitySaveRecord {
-  return {
-    city: {
-      id: "city-1",
-      name: "First",
-      createdAt: "2026-08-01T10:00:00.000Z",
-    },
-    savedAt: "2026-08-01T10:00:00.000Z",
-    snapshot,
-  };
-}
-
 defineCitySaveStoreContract("IndexedDbCitySaveStore", () => createStore());
 
 describe("IndexedDbCitySaveStore persistence", () => {
   it("reopens data through a second adapter instance", async () => {
     const databaseName = nextDatabaseName();
     const first = createStore(databaseName);
-    await expectOk(first.createCity(makeRecord()));
+    const saved = makeCitySaveRecord("city-1", "First");
+    await expectCitySaveStoreOk(first.createCity(saved));
 
     const second = createStore(databaseName);
-    expect(await expectOk(second.readCity("city-1"))).toEqual(makeRecord());
+    expect(
+      await expectCitySaveStoreOk(second.readCity("city-1")),
+    ).toEqual(saved);
   });
 
   it("preserves the previous record when an update cannot be cloned", async () => {
     const store = createStore();
-    const original = makeRecord();
-    await expectOk(store.createCity(original));
+    const original = makeCitySaveRecord("city-1", "First");
+    await expectCitySaveStoreOk(store.createCity(original));
 
     const result = await store.updateCity("city-1", {
       savedAt: "2026-08-02T11:00:00.000Z",
@@ -287,10 +393,14 @@ describe("IndexedDbCitySaveStore persistence", () => {
       ok: false,
       error: { operation: "updateCity", code: "failed", cityId: "city-1" },
     });
-    expect(await expectOk(store.readCity("city-1"))).toEqual(original);
+    expect(
+      await expectCitySaveStoreOk(store.readCity("city-1")),
+    ).toEqual(original);
   });
 });
 ```
+
+The shared contract now supplies empty-list, create/list/read, conflict, update, rename, delete, detached-value, and multi-city ordering coverage. Keep only IndexedDB-specific persistence/failure behavior in this file.
 
 Inject `fakeIndexedDB` directly. Do not install IndexedDB globals for unrelated tests.
 
@@ -308,13 +418,13 @@ Create `src/persistence/indexedDbCitySaveStore.ts`:
 
 ```ts
 import {
+  citySummaryFromRecord,
   sortCitySummaries,
   type CitySaveRecord,
   type CitySaveStore,
   type CitySaveStoreErrorCode,
   type CitySaveStoreOperation,
   type CitySaveStoreResult,
-  type CitySummary,
 } from "./citySaveStore";
 
 const DEFAULT_DATABASE_NAME = "caelum-city-saves-v1";
@@ -324,15 +434,6 @@ const CITY_STORE_NAME = "cities";
 export interface IndexedDbCitySaveStoreOptions {
   indexedDB?: IDBFactory;
   databaseName?: string;
-}
-
-function summaryFor(record: CitySaveRecord): CitySummary {
-  return {
-    id: record.city.id,
-    name: record.city.name,
-    createdAt: record.city.createdAt,
-    savedAt: record.savedAt,
-  };
 }
 
 function errorName(error: unknown): string {
@@ -445,7 +546,7 @@ export function createIndexedDbCitySaveStore(
       return {
         ok: true,
         value: sortCitySummaries(
-          (records as CitySaveRecord[]).map(summaryFor),
+          (records as CitySaveRecord[]).map(citySummaryFromRecord),
         ),
       };
     } catch (error) {
@@ -486,7 +587,7 @@ export function createIndexedDbCitySaveStore(
       await runTransaction(database, "readwrite", async (store) => {
         await requestResult(store.add(detached, id));
       });
-      return { ok: true, value: summaryFor(detached) };
+      return { ok: true, value: citySummaryFromRecord(detached) };
     } catch (error) {
       const name = errorName(error);
       return errorResult(
@@ -528,7 +629,7 @@ export function createIndexedDbCitySaveStore(
       );
       return replacement === null
         ? errorResult("updateCity", "notFound", id)
-        : { ok: true, value: summaryFor(replacement) };
+        : { ok: true, value: citySummaryFromRecord(replacement) };
     } catch (error) {
       return errorResult("updateCity", "failed", id, errorName(error));
     }
@@ -556,7 +657,7 @@ export function createIndexedDbCitySaveStore(
       );
       return replacement === null
         ? errorResult("renameCity", "notFound", id)
-        : { ok: true, value: summaryFor(replacement) };
+        : { ok: true, value: citySummaryFromRecord(replacement) };
     } catch (error) {
       return errorResult("renameCity", "failed", id, errorName(error));
     }
@@ -596,13 +697,17 @@ export function createIndexedDbCitySaveStore(
 
 `runTransaction()` is a file-local Promise bridge for IndexedDB completion/abort semantics, not a reusable persistence abstraction. Keep it in this module and do not export it.
 
+Waiting for `transaction.oncomplete` before returning success is load-bearing. Do not simplify mutation completion to request `onsuccess`: a successful request can still belong to a transaction that later aborts.
+
 - [ ] **Step 5: Run the IndexedDB contract and focused persistence tests**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistence/indexedDbCitySaveStore.test.ts tests/runtime/persistence/memoryCitySaveStore.test.ts
 ```
 
-Expected: both adapters pass their applicable tests, including reopen behavior and the failed-uncloneable-update preservation test.
+Expected: both adapters pass the shared contract, including the adapter-level multi-city ordering case. IndexedDB-specific reopen behavior and the failed-uncloneable-update preservation test also pass.
+
+Do not add a create/rename/delete abort matrix. The one uncloneable update is the representative real failure proving that the shared `runTransaction`/commit boundary preserves the prior record.
 
 - [ ] **Step 6: Document the browser storage boundary**
 
@@ -611,12 +716,13 @@ In `docs/architecture.md`, immediately after the `workingSaveRuntime.ts` persist
 ```md
 The browser persistence adapter is `indexedDbCitySaveStore.ts`: one
 `caelum-city-saves-v1` IndexedDB database, one `cities` object store, and full
-`CitySaveRecord` values keyed by opaque city ID. It implements the six
-`CitySaveStore` operations directly, derives/sorts list summaries from the same
-records, and has no metadata index, migration layer, recovery model, or
-multi-tab ownership. HPA-345 owns wiring this adapter into the first no-city/New
-City browser flow; the current anonymous development bootstrap remains
-unchanged until then.
+`CitySaveRecord` values keyed by opaque city ID. Memory and browser adapters
+reuse the shared `citySummaryFromRecord()` projection; city-list ordering uses
+`sortCitySummaries()` after reading the records. The browser adapter implements
+the six `CitySaveStore` operations directly and has no metadata index, migration
+layer, recovery model, or multi-tab ownership. HPA-345 owns wiring this adapter
+into the first no-city/New City browser flow; the current anonymous development
+bootstrap remains unchanged until then.
 ```
 
 - [ ] **Step 7: Run the complete frontend verification gate**
@@ -630,6 +736,8 @@ bun run build
 ```
 
 Expected: all commands pass. Do not add HPA-343-specific Playwright or Rust work: the adapter is not wired to the application and contains no Rust changes.
+
+Passing this gate does **not** claim real-browser persistence integration. `fake-indexeddb` validates the adapter contract in Node. HPA-345 owns the first Chromium proof after wiring; HPA-346 owns the full `New City -> reload -> Continue/Load` player smoke once the city library exists.
 
 - [ ] **Step 8: Verify no premature runtime/UI wiring entered scope**
 
@@ -656,7 +764,9 @@ git commit -m "feat: add IndexedDB city save store"
 
 ## Plan self-review
 
-- **Spec coverage:** one database/store, six operations, create conflict, failed-update preservation, detached values, reopen behavior, adapter-only boundary, and deferred bootstrap wiring are covered.
+- **Spec coverage:** one database/store, six operations, create conflict, failed-update preservation, detached values, reopen behavior, adapter-level multi-city ordering, shared summary projection, adapter-only boundary, and deferred bootstrap wiring are covered.
 - **Placeholder scan:** no TODO/TBD or unspecified implementation steps remain.
-- **Type consistency:** the plan reuses the existing `CitySaveStore`, `CitySaveRecord`, `CitySummary`, and `createGameRuntime({ saveStore })` contracts without compatibility types.
-- **Scope check:** HPA-343 remains one browser-storage subsystem. HPA-345 and HPA-344 stay separate downstream tasks.
+- **Type consistency:** the plan reuses the existing `CitySaveStore`, `CitySaveRecord`, `CitySummary`, `citySummaryFromRecord()`, `sortCitySummaries()`, and `createGameRuntime({ saveStore })` contracts without compatibility types.
+- **Duplication check:** memory and IndexedDB share only the stable record-to-summary projection and test factories; IndexedDB-specific error/transaction code remains local.
+- **Risk check:** `fake-indexeddb` is explicitly treated as unit-level adapter evidence, not browser integration evidence. HPA-345/HPA-346 own the real Chromium handoff at the correct player-flow boundaries.
+- **Scope check:** HPA-343 remains one browser-storage subsystem. HPA-345, HPA-346, and HPA-344 stay separate downstream tasks.
