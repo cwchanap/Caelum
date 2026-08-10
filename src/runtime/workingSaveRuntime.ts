@@ -5,6 +5,7 @@ import type {
   CitySaveStoreResult,
   CitySummary,
 } from "../persistence/citySaveStore";
+import { citySaveStoreError } from "../persistence/citySaveStore";
 import type {
   GameBackend,
   RustGameSnapshot,
@@ -104,13 +105,11 @@ export function createWorkingSaveRuntime(
         ok: false,
         error: {
           kind: "store",
-          error: {
-            operation,
-            code: "failed",
-            ...(cityId === undefined ? {} : { cityId }),
+          error: citySaveStoreError(operation, "failed", {
+            cityId,
             diagnostic:
               thrown instanceof Error ? thrown.message : String(thrown),
-          },
+          }),
         },
       };
     }
