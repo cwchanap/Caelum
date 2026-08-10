@@ -4,21 +4,21 @@
 
 **Goal:** Add the smallest durable browser implementation of the existing six-operation `CitySaveStore`, backed by one IndexedDB object store and verified without wiring persistence into the player UI yet.
 
-**Architecture:** `src/persistence/indexedDbCitySaveStore.ts` talks to raw IndexedDB directly and exposes only `CitySaveStore`. Full `CitySaveRecord` values live in one `cities` object store under out-of-line keys equal to `record.city.id`; list metadata is derived on read and sorted by the existing helper. The existing runtime remains unchanged until HPA-345 supplies the adapter to `createGameRuntime()`.
+**Architecture:** `src/persistence/indexedDbCitySaveStore.ts` talks to raw IndexedDB directly and exposes only `CitySaveStore`. Full `CitySaveRecord` values live in one `cities` object store under out-of-line keys equal to `record.city.id`; list metadata is derived on read and sorted by the existing helper. The current runtime/bootstrap stays unchanged until HPA-345 supplies this adapter to `createGameRuntime()`.
 
 **Tech Stack:** TypeScript, browser IndexedDB API, Vitest runtime project, Bun, `fake-indexeddb` as a dev-only test dependency.
 
 ## Global Constraints
 
-- Implement exactly the existing six `CitySaveStore` operations: `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, `deleteCity`.
-- Use one IndexedDB database named `caelum-city-saves-v1`, version `1`, with one object store named `cities`.
-- Store complete `CitySaveRecord` values; use `record.city.id` as the out-of-line object-store key.
+- Implement exactly `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, and `deleteCity`.
+- Use database `caelum-city-saves-v1`, version `1`, with one object store named `cities`.
+- Store complete `CitySaveRecord` values and use `record.city.id` as the out-of-line key.
 - Reuse `sortCitySummaries()`; do not add a metadata store or index.
 - Do not inspect or validate gameplay snapshots in TypeScript.
-- Do not add production storage libraries, repositories, services, registries, migration code, compatibility readers, retries, recovery, multi-tab ownership, quota handling, or security frameworks.
-- Do not change `src/main.ts`, `createGameRuntime()`, Svelte UI, or the current anonymous bootstrap in HPA-343.
-- Development saves are disposable; future breaking schema changes may use a new database name/version instead of migration code.
-- Keep tests in the existing `runtime` Vitest project; do not add a browser Vitest project or Playwright-only test hook.
+- Do not add production storage libraries, repositories, services, registries, migrations, compatibility readers, retries, recovery, multi-tab ownership, quota handling, or security frameworks.
+- Do not change `src/main.ts`, `createGameRuntime()`, Svelte UI, or the anonymous development bootstrap in HPA-343.
+- Development saves are disposable; a future breaking schema can use a new database name/version instead of migration code.
+- Keep tests in the existing `runtime` Vitest project; do not add a browser Vitest project or Playwright-only persistence hook.
 
 ---
 
@@ -29,13 +29,13 @@
 - Modify: `tests/runtime/persistence/memoryCitySaveStore.test.ts`
 
 **Interfaces:**
-- Consumes: existing `CitySaveStore` and `CitySaveStoreResult` from `src/persistence/citySaveStore.ts`.
-- Produces: `defineCitySaveStoreContract(name, createStore)` that any real adapter can run without exposing a test-only `failNext` API.
-- Preserves: `MemoryCitySaveStoreFailureControls` for memory-adapter-specific atomicity tests only.
+- Consumes: `CitySaveStore` and `CitySaveStoreResult` from `src/persistence/citySaveStore.ts`.
+- Produces: `defineCitySaveStoreContract(name, createStore)` that real adapters can run without exposing a test-only failure API.
+- Preserves: `MemoryCitySaveStoreFailureControls` only for memory-adapter-specific failure tests.
 
-- [ ] **Step 1: Move failure-injection assertions into the memory adapter test**
+- [ ] **Step 1: Move injected failure tests into the memory adapter suite**
 
-In `tests/runtime/persistence/memoryCitySaveStore.test.ts`, add local helpers and preserve the three existing injected-failure guarantees outside the shared contract:
+In `tests/runtime/persistence/memoryCitySaveStore.test.ts`, add local helpers:
 
 ```ts
 import type {
@@ -55,7 +55,7 @@ async function expectOk<T>(
   return resolved.value;
 }
 
-function record(id = "city-1"): CitySaveRecord {
+function makeRecord(id = "city-1"): CitySaveRecord {
   return {
     city: {
       id,
@@ -68,7 +68,7 @@ function record(id = "city-1"): CitySaveRecord {
 }
 ```
 
-Add/retain these memory-specific tests:
+Move the shared contract's three `failNext` cases into `describe("MemoryCitySaveStore failure injection", ...)` so they remain explicit memory-adapter tests:
 
 ```ts
 it("does not commit an injected create failure", async () => {
@@ -76,8 +76,7 @@ it("does not commit an injected create failure", async () => {
   const store = createMemoryCitySaveStore({ failures });
   failures.failNext("createCity", "failed");
 
-  const result = await store.createCity(record());
-  expect(result).toMatchObject({
+  expect(await store.createCity(makeRecord())).toMatchObject({
     ok: false,
     error: { operation: "createCity", code: "failed", cityId: "city-1" },
   });
@@ -90,46 +89,42 @@ it("does not commit an injected create failure", async () => {
 it("preserves the prior record after an injected update failure", async () => {
   const failures = createMemoryCitySaveStoreFailureControls();
   const store = createMemoryCitySaveStore({ failures });
-  const original = record();
+  const original = makeRecord();
   await expectOk(store.createCity(original));
   failures.failNext("updateCity", "failed");
 
-  await store.updateCity("city-1", {
-    savedAt: "2026-08-02T11:00:00.000Z",
-    snapshot: { budget: 90_000 },
+  expect(
+    await store.updateCity("city-1", {
+      savedAt: "2026-08-02T11:00:00.000Z",
+      snapshot: { budget: 90_000 },
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: { operation: "updateCity", code: "failed", cityId: "city-1" },
   });
-
   expect(await expectOk(store.readCity("city-1"))).toEqual(original);
 });
 
 it("preserves the prior record after an injected rename failure", async () => {
   const failures = createMemoryCitySaveStoreFailureControls();
   const store = createMemoryCitySaveStore({ failures });
-  const original = record();
+  const original = makeRecord();
   await expectOk(store.createCity(original));
   failures.failNext("renameCity", "failed");
 
-  await store.renameCity("city-1", "Renamed");
-
+  expect(await store.renameCity("city-1", "Renamed")).toMatchObject({
+    ok: false,
+    error: { operation: "renameCity", code: "failed", cityId: "city-1" },
+  });
   expect(await expectOk(store.readCity("city-1"))).toEqual(original);
 });
 ```
 
-- [ ] **Step 2: Simplify the shared contract harness**
+Keep the existing injected `listCities` failure test in the same describe block.
 
-Change `tests/runtime/persistence/citySaveStoreContract.ts` from the failure-aware harness:
+- [ ] **Step 2: Simplify the shared contract factory**
 
-```ts
-export interface CitySaveStoreContractHarness {
-  store: CitySaveStore;
-  failNext: (
-    operation: CitySaveStoreOperation,
-    code: CitySaveStoreErrorCode,
-  ) => void;
-}
-```
-
-to a direct store factory:
+In `tests/runtime/persistence/citySaveStoreContract.ts`, delete the failure-aware harness interface and change the public helper to:
 
 ```ts
 export function defineCitySaveStoreContract(
@@ -138,7 +133,7 @@ export function defineCitySaveStoreContract(
 ): void {
 ```
 
-Inside each shared test, replace:
+Inside shared tests, replace:
 
 ```ts
 const { store } = createHarness();
@@ -150,11 +145,9 @@ with:
 const store = createStore();
 ```
 
-Delete the three `failNext` tests from the shared contract. They now live in the memory adapter suite and no longer force production adapters to expose failure injection.
+Delete the three injected create/update/rename failure tests from this shared file and remove now-unused `CitySaveStoreErrorCode` / `CitySaveStoreOperation` imports.
 
-Remove now-unused imports of `CitySaveStoreErrorCode` and `CitySaveStoreOperation` from the shared contract.
-
-Add an explicit adapter-neutral empty-list test:
+Add one adapter-neutral empty-list test:
 
 ```ts
 it("starts with an empty city list", async () => {
@@ -163,24 +156,11 @@ it("starts with an empty city list", async () => {
 });
 ```
 
-Keep the existing shared tests for create/list/read, conflict, update, identity preservation, rename, delete/notFound, sorting helper behavior, and detached values.
+Keep all existing deterministic contract cases for create/list/read, conflict, update, identity preservation, rename, delete/notFound, sorting, and detached values.
 
-- [ ] **Step 3: Update the memory harness call**
+- [ ] **Step 3: Update the memory contract registration**
 
-Change:
-
-```ts
-defineCitySaveStoreContract("MemoryCitySaveStore", () => {
-  const failures = createMemoryCitySaveStoreFailureControls();
-  const store = createMemoryCitySaveStore({ failures });
-  return {
-    store,
-    failNext: (operation, code) => failures.failNext(operation, code),
-  };
-});
-```
-
-to:
+Replace the current failure-control harness registration with:
 
 ```ts
 defineCitySaveStoreContract("MemoryCitySaveStore", () =>
@@ -188,28 +168,17 @@ defineCitySaveStoreContract("MemoryCitySaveStore", () =>
 );
 ```
 
-- [ ] **Step 4: Run the focused memory-store contract**
-
-Run:
+- [ ] **Step 4: Run focused contract verification**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistence/memoryCitySaveStore.test.ts
-```
-
-Expected: all memory-store contract and injected-failure tests pass.
-
-- [ ] **Step 5: Run TypeScript and formatting checks**
-
-Run:
-
-```bash
 bun run check
 bun run format:check
 ```
 
-Expected: both commands pass.
+Expected: all commands pass.
 
-- [ ] **Step 6: Commit the adapter-neutral test contract**
+- [ ] **Step 5: Commit the test-boundary cleanup**
 
 ```bash
 git add tests/runtime/persistence/citySaveStoreContract.ts tests/runtime/persistence/memoryCitySaveStore.test.ts
@@ -228,22 +197,19 @@ git commit -m "test: make city save store contract adapter neutral"
 - Modify: `docs/architecture.md`
 
 **Interfaces:**
-- Consumes: `CitySaveStore`, `CitySaveRecord`, `CitySaveUpdate`, `CitySummary`, `CitySaveStoreResult`, `sortCitySummaries()` from `src/persistence/citySaveStore.ts`.
+- Consumes: `CitySaveStore`, `CitySaveRecord`, `CitySummary`, `CitySaveStoreResult`, and `sortCitySummaries()` from `src/persistence/citySaveStore.ts`.
 - Produces: `createIndexedDbCitySaveStore(options?: IndexedDbCitySaveStoreOptions): CitySaveStore`.
-- Test-only dependency: `fake-indexeddb` provides an `IDBFactory` implementation; the production adapter API remains ordinary IndexedDB.
-- Downstream HPA-345 will call the factory and pass the result to the already-existing `createGameRuntime({ saveStore })` option.
+- Downstream: HPA-345 creates this adapter and passes it through the existing `createGameRuntime({ saveStore })` option.
 
-- [ ] **Step 1: Add the dev-only IndexedDB test implementation**
-
-Run:
+- [ ] **Step 1: Add the dev-only IndexedDB implementation used by tests**
 
 ```bash
 bun add -d fake-indexeddb
 ```
 
-Expected: `package.json` and `bun.lock` gain only the `fake-indexeddb` development dependency and its lock data.
+Expected: only `package.json` and `bun.lock` gain the development dependency and lock entries.
 
-- [ ] **Step 2: Write the IndexedDB adapter tests before the module exists**
+- [ ] **Step 2: Write the IndexedDB tests before the adapter exists**
 
 Create `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`:
 
@@ -326,11 +292,9 @@ describe("IndexedDbCitySaveStore persistence", () => {
 });
 ```
 
-Do not add global IndexedDB setup; inject the factory directly so the adapter remains easy to test and no unrelated tests acquire browser globals.
+Inject `fakeIndexedDB` directly. Do not install IndexedDB globals for unrelated tests.
 
-- [ ] **Step 3: Run the new test to verify it fails**
-
-Run:
+- [ ] **Step 3: Run the new test and confirm the red state**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistence/indexedDbCitySaveStore.test.ts
@@ -338,9 +302,9 @@ bunx vitest run --project runtime tests/runtime/persistence/indexedDbCitySaveSto
 
 Expected: FAIL because `src/persistence/indexedDbCitySaveStore.ts` does not exist.
 
-- [ ] **Step 4: Implement the minimal raw IndexedDB adapter**
+- [ ] **Step 4: Implement the raw IndexedDB adapter**
 
-Create `src/persistence/indexedDbCitySaveStore.ts` with this structure:
+Create `src/persistence/indexedDbCitySaveStore.ts`:
 
 ```ts
 import {
@@ -395,7 +359,9 @@ function errorResult<T>(
       operation,
       code,
       ...(cityId === undefined ? {} : { cityId }),
-      ...(diagnostic === undefined ? {} : { diagnostic }),
+      ...(code === "failed" && diagnostic !== undefined
+        ? { diagnostic }
+        : {}),
     },
   };
 }
@@ -403,7 +369,8 @@ function errorResult<T>(
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
+    request.onerror = () =>
+      reject(request.error ?? new Error("IndexedDB request failed"));
   });
 }
 
@@ -412,11 +379,29 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
     transaction.oncomplete = () => resolve();
     transaction.onabort = () =>
       reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-    transaction.onerror = () => {
-      // Abort/completion decides the transaction outcome. The request-specific
-      // error is handled by requestResult().
-    };
   });
+}
+
+async function runTransaction<T>(
+  database: IDBDatabase,
+  mode: IDBTransactionMode,
+  run: (store: IDBObjectStore) => Promise<T>,
+): Promise<T> {
+  const transaction = database.transaction(CITY_STORE_NAME, mode);
+  const done = transactionDone(transaction);
+  try {
+    const value = await run(transaction.objectStore(CITY_STORE_NAME));
+    await done;
+    return value;
+  } catch (error) {
+    try {
+      transaction.abort();
+    } catch {
+      // The request may already have aborted or completed the transaction.
+    }
+    await done.catch(() => undefined);
+    throw error;
+  }
 }
 
 export function createIndexedDbCitySaveStore(
@@ -454,14 +439,14 @@ export function createIndexedDbCitySaveStore(
   const listCities: CitySaveStore["listCities"] = async () => {
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readonly");
-      const done = transactionDone(transaction);
-      const request = transaction.objectStore(CITY_STORE_NAME).getAll();
-      const records = (await requestResult(request)) as CitySaveRecord[];
-      await done;
+      const records = await runTransaction(database, "readonly", async (store) =>
+        requestResult(store.getAll()),
+      );
       return {
         ok: true,
-        value: sortCitySummaries(records.map(summaryFor)),
+        value: sortCitySummaries(
+          (records as CitySaveRecord[]).map(summaryFor),
+        ),
       };
     } catch (error) {
       return errorResult("listCities", "failed", undefined, errorName(error));
@@ -471,11 +456,9 @@ export function createIndexedDbCitySaveStore(
   const readCity: CitySaveStore["readCity"] = async (id) => {
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readonly");
-      const done = transactionDone(transaction);
-      const request = transaction.objectStore(CITY_STORE_NAME).get(id);
-      const record = (await requestResult(request)) as CitySaveRecord | undefined;
-      await done;
+      const record = (await runTransaction(database, "readonly", async (store) =>
+        requestResult(store.get(id)),
+      )) as CitySaveRecord | undefined;
       return record === undefined
         ? errorResult("readCity", "notFound", id)
         : { ok: true, value: record };
@@ -500,18 +483,17 @@ export function createIndexedDbCitySaveStore(
     const id = detached.city.id;
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readwrite");
-      const done = transactionDone(transaction);
-      const request = transaction.objectStore(CITY_STORE_NAME).add(detached, id);
-      await requestResult(request);
-      await done;
+      await runTransaction(database, "readwrite", async (store) => {
+        await requestResult(store.add(detached, id));
+      });
       return { ok: true, value: summaryFor(detached) };
     } catch (error) {
+      const name = errorName(error);
       return errorResult(
         "createCity",
-        errorName(error) === "ConstraintError" ? "conflict" : "failed",
+        name === "ConstraintError" ? "conflict" : "failed",
         id,
-        errorName(error),
+        name,
       );
     }
   };
@@ -526,26 +508,27 @@ export function createIndexedDbCitySaveStore(
 
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readwrite");
-      const done = transactionDone(transaction);
-      const objectStore = transaction.objectStore(CITY_STORE_NAME);
-      const existing = (await requestResult(objectStore.get(id))) as
-        | CitySaveRecord
-        | undefined;
+      const replacement = await runTransaction(
+        database,
+        "readwrite",
+        async (store) => {
+          const existing = (await requestResult(store.get(id))) as
+            | CitySaveRecord
+            | undefined;
+          if (existing === undefined) return null;
 
-      if (existing === undefined) {
-        await done;
-        return errorResult("updateCity", "notFound", id);
-      }
-
-      const replacement: CitySaveRecord = {
-        city: existing.city,
-        savedAt: detachedUpdate.savedAt,
-        snapshot: detachedUpdate.snapshot,
-      };
-      await requestResult(objectStore.put(replacement, id));
-      await done;
-      return { ok: true, value: summaryFor(replacement) };
+          const next: CitySaveRecord = {
+            city: existing.city,
+            savedAt: detachedUpdate.savedAt,
+            snapshot: detachedUpdate.snapshot,
+          };
+          await requestResult(store.put(next, id));
+          return next;
+        },
+      );
+      return replacement === null
+        ? errorResult("updateCity", "notFound", id)
+        : { ok: true, value: summaryFor(replacement) };
     } catch (error) {
       return errorResult("updateCity", "failed", id, errorName(error));
     }
@@ -554,25 +537,26 @@ export function createIndexedDbCitySaveStore(
   const renameCity: CitySaveStore["renameCity"] = async (id, name) => {
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readwrite");
-      const done = transactionDone(transaction);
-      const objectStore = transaction.objectStore(CITY_STORE_NAME);
-      const existing = (await requestResult(objectStore.get(id))) as
-        | CitySaveRecord
-        | undefined;
+      const replacement = await runTransaction(
+        database,
+        "readwrite",
+        async (store) => {
+          const existing = (await requestResult(store.get(id))) as
+            | CitySaveRecord
+            | undefined;
+          if (existing === undefined) return null;
 
-      if (existing === undefined) {
-        await done;
-        return errorResult("renameCity", "notFound", id);
-      }
-
-      const replacement: CitySaveRecord = {
-        ...existing,
-        city: { ...existing.city, name },
-      };
-      await requestResult(objectStore.put(replacement, id));
-      await done;
-      return { ok: true, value: summaryFor(replacement) };
+          const next: CitySaveRecord = {
+            ...existing,
+            city: { ...existing.city, name },
+          };
+          await requestResult(store.put(next, id));
+          return next;
+        },
+      );
+      return replacement === null
+        ? errorResult("renameCity", "notFound", id)
+        : { ok: true, value: summaryFor(replacement) };
     } catch (error) {
       return errorResult("renameCity", "failed", id, errorName(error));
     }
@@ -581,19 +565,19 @@ export function createIndexedDbCitySaveStore(
   const deleteCity: CitySaveStore["deleteCity"] = async (id) => {
     try {
       const database = await openDatabase();
-      const transaction = database.transaction(CITY_STORE_NAME, "readwrite");
-      const done = transactionDone(transaction);
-      const objectStore = transaction.objectStore(CITY_STORE_NAME);
-      const existing = await requestResult(objectStore.get(id));
-
-      if (existing === undefined) {
-        await done;
-        return errorResult("deleteCity", "notFound", id);
-      }
-
-      await requestResult(objectStore.delete(id));
-      await done;
-      return { ok: true, value: undefined };
+      const deleted = await runTransaction(
+        database,
+        "readwrite",
+        async (store) => {
+          const existing = await requestResult(store.get(id));
+          if (existing === undefined) return false;
+          await requestResult(store.delete(id));
+          return true;
+        },
+      );
+      return deleted
+        ? { ok: true, value: undefined }
+        : errorResult("deleteCity", "notFound", id);
     } catch (error) {
       return errorResult("deleteCity", "failed", id, errorName(error));
     }
@@ -610,28 +594,24 @@ export function createIndexedDbCitySaveStore(
 }
 ```
 
-Keep all constants/helpers module-local except the options type and factory. Do not add a class, base adapter, generic transaction runner, or public database lifecycle API.
+`runTransaction()` is a file-local Promise bridge for IndexedDB completion/abort semantics, not a reusable persistence abstraction. Keep it in this module and do not export it.
 
-- [ ] **Step 5: Run the IndexedDB tests**
-
-Run:
+- [ ] **Step 5: Run the IndexedDB contract and focused persistence tests**
 
 ```bash
-bunx vitest run --project runtime tests/runtime/persistence/indexedDbCitySaveStore.test.ts
+bunx vitest run --project runtime tests/runtime/persistence/indexedDbCitySaveStore.test.ts tests/runtime/persistence/memoryCitySaveStore.test.ts
 ```
 
-Expected: the full shared contract plus reopen and failed-update-preservation tests pass.
-
-If `fake-indexeddb` reports a `ConstraintError` or clone failure with a different concrete error object, adjust only `errorName()` extraction; do not add a browser/vendor error taxonomy.
+Expected: both adapters pass their applicable tests, including reopen behavior and the failed-uncloneable-update preservation test.
 
 - [ ] **Step 6: Document the browser storage boundary**
 
-In `docs/architecture.md`, in the persistence section immediately after the `workingSaveRuntime.ts` paragraph, add:
+In `docs/architecture.md`, immediately after the `workingSaveRuntime.ts` persistence paragraph, add:
 
 ```md
 The browser persistence adapter is `indexedDbCitySaveStore.ts`: one
 `caelum-city-saves-v1` IndexedDB database, one `cities` object store, and full
-`CitySaveRecord` values keyed by the opaque city ID. It implements the six
+`CitySaveRecord` values keyed by opaque city ID. It implements the six
 `CitySaveStore` operations directly, derives/sorts list summaries from the same
 records, and has no metadata index, migration layer, recovery model, or
 multi-tab ownership. HPA-345 owns wiring this adapter into the first no-city/New
@@ -639,11 +619,7 @@ City browser flow; the current anonymous development bootstrap remains
 unchanged until then.
 ```
 
-Do not describe IndexedDB as a generic platform abstraction or claim native/browser internals are identical.
-
 - [ ] **Step 7: Run the complete frontend verification gate**
-
-Run:
 
 ```bash
 bun run test:unit
@@ -653,19 +629,9 @@ bun run format:check
 bun run build
 ```
 
-Expected:
+Expected: all commands pass. Do not add HPA-343-specific Playwright or Rust work: the adapter is not wired to the application and contains no Rust changes.
 
-- all UI/runtime unit tests pass;
-- TypeScript/Svelte checks pass;
-- ESLint/stylelint/Rust lint command remains green;
-- formatting is clean;
-- the production browser build succeeds.
-
-Do not add Playwright or Rust test work specifically for HPA-343: the adapter is not wired to the application and contains no Rust changes. HPA-345 owns the first real browser persistence E2E slice.
-
-- [ ] **Step 8: Verify scope and absence of premature wiring**
-
-Run:
+- [ ] **Step 8: Verify no premature runtime/UI wiring entered scope**
 
 ```bash
 git diff --stat main...HEAD
@@ -674,12 +640,12 @@ git grep -n "createIndexedDbCitySaveStore" -- src tests docs
 
 Expected:
 
-- production usage appears only in `src/persistence/indexedDbCitySaveStore.ts`;
+- production usage exists only in `src/persistence/indexedDbCitySaveStore.ts`;
 - tests import the factory;
 - `src/main.ts`, `src/runtime/createGameRuntime.ts`, and Svelte components are unchanged;
 - no migration/index/recovery/multi-tab modules were added.
 
-- [ ] **Step 9: Commit the IndexedDB adapter**
+- [ ] **Step 9: Commit the adapter**
 
 ```bash
 git add package.json bun.lock src/persistence/indexedDbCitySaveStore.ts tests/runtime/persistence/indexedDbCitySaveStore.test.ts docs/architecture.md
@@ -690,7 +656,7 @@ git commit -m "feat: add IndexedDB city save store"
 
 ## Plan self-review
 
-- **Spec coverage:** one database/store, six operations, create conflict, failed-update preservation, detached values, reopen behavior, adapter-only boundary, and deferred bootstrap wiring are all covered.
-- **Placeholder scan:** no TODO/TBD/future implementation placeholders are required by the tasks.
-- **Type consistency:** the plan reuses the existing `CitySaveStore`, `CitySaveRecord`, `CitySummary`, and `createGameRuntime({ saveStore })` contracts without adding compatibility types.
+- **Spec coverage:** one database/store, six operations, create conflict, failed-update preservation, detached values, reopen behavior, adapter-only boundary, and deferred bootstrap wiring are covered.
+- **Placeholder scan:** no TODO/TBD or unspecified implementation steps remain.
+- **Type consistency:** the plan reuses the existing `CitySaveStore`, `CitySaveRecord`, `CitySummary`, and `createGameRuntime({ saveStore })` contracts without compatibility types.
 - **Scope check:** HPA-343 remains one browser-storage subsystem. HPA-345 and HPA-344 stay separate downstream tasks.
