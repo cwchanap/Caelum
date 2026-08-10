@@ -123,6 +123,17 @@ one dirty boolean, one current persistence error, and the six-operation
 no multi-window workflow, so persistence needs no ownership handoff or
 cross-runtime coordination.
 
+The browser persistence adapter is `indexedDbCitySaveStore.ts`: one
+`caelum-city-saves-v1` IndexedDB database, one `cities` object store, and full
+`CitySaveRecord` values keyed by opaque city ID. It implements the six
+`CitySaveStore` operations directly, derives/sorts list summaries from the same
+records, lets IndexedDB clone values at `add`/`put`, and has no metadata index,
+migration layer, recovery model, or multi-tab ownership. Multi-request
+transactions keep only IndexedDB request awaits between requests so the
+transaction remains active. HPA-345 owns wiring the adapter into the first
+no-city/New City browser flow; the current anonymous development bootstrap
+remains unchanged until then.
+
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
 worker or other host-execution boundary only if background saving is actually
