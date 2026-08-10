@@ -48,6 +48,9 @@ jobs:
       - name: Lint Svelte and TypeScript
         run: bun run lint:svelte
 
+      - name: Lint CSS
+        run: bun run lint:css
+
       - name: Build frontend
         run: bun run build
 

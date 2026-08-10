@@ -703,41 +703,6 @@ export function renderOverlays(
     }
   }
 
-  // Rust only applies growth waves in campaign mode
-  // (`growth::apply_due_growth_waves` returns early otherwise), so the overlay
-  // must also gate on campaign mode — otherwise a sandbox snapshot carrying a
-  // non-empty `growthWaves` list would preview changes Rust will never make.
-  if (ui.activeOverlay === "growth" && state.rules.gameMode === "campaign") {
-    ctx.fillStyle = colors.growth;
-
-    for (const wave of state.scenario.growthWaves) {
-      if (wave.applied) {
-        continue;
-      }
-      for (const action of wave.actions) {
-        if (action.type === "paintAreaRectangle") {
-          const minX = Math.min(action.start.x, action.end.x);
-          const maxX = Math.max(action.start.x, action.end.x);
-          const minY = Math.min(action.start.y, action.end.y);
-          const maxY = Math.max(action.start.y, action.end.y);
-          for (let y = minY; y <= maxY; y += 1) {
-            for (let x = minX; x <= maxX; x += 1) {
-              fillTile(ctx, { x, y });
-            }
-          }
-        } else if (action.type === "placeBuilding") {
-          for (const tile of getBuildingFootprint(
-            action.buildingType,
-            action.origin,
-            action.rotation,
-          )) {
-            fillTile(ctx, tile);
-          }
-        }
-      }
-    }
-  }
-
   renderBrokenRouteMarkers(ctx, state, ui);
 
   if (ui.drag !== null) {

@@ -2,46 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import RouteEditor from "../../src/components/hud/panels/RouteEditor.svelte";
 import type { RouteEditorView } from "../../src/runtime/types";
-
-function createDraftView(
-  overrides: Partial<RouteEditorView> = {},
-): RouteEditorView {
-  return {
-    source: "create",
-    title: "New Bus Route",
-    mode: "bus",
-    pattern: "loop",
-    waypoints: [
-      {
-        id: "stop-001",
-        index: 0,
-        label: "Stop A",
-        status: "present",
-        selected: true,
-      },
-      {
-        id: "stop-002",
-        index: 1,
-        label: "Stop B",
-        status: "present",
-        selected: false,
-      },
-    ],
-    selectedIndex: 0,
-    interaction: "replace",
-    previewPending: false,
-    previewStatus: "connected",
-    previewMessage: "Connected",
-    previewWarnings: [],
-    canSave: true,
-    canReload: false,
-    canUndo: false,
-    canRedo: false,
-    notice: null,
-    failures: [],
-    ...overrides,
-  };
-}
+import { createDraftView } from "../helpers/routeEditor";
 
 function editDraftView(
   overrides: Partial<RouteEditorView> = {},

@@ -39,7 +39,6 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   crowding: "Crowding",
   demand: "Demand",
   lateness: "Lateness",
-  growth: "Growth",
 };
 
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {

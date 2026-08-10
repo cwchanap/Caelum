@@ -34,10 +34,10 @@ function expectInsideViewport(
   );
 }
 
-test("keeps the command shelf and panel inside the approved desktop widths", async ({
-  page,
-}) => {
-  for (const viewport of desktopViewports) {
+for (const viewport of desktopViewports) {
+  test(`keeps the command shelf and panel inside the ${viewport.name} desktop width (${viewport.width}x${viewport.height})`, async ({
+    page,
+  }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
 
@@ -159,8 +159,8 @@ test("keeps the command shelf and panel inside the approved desktop widths", asy
       await expect(population).toBeVisible();
       await expect(avgWait).toBeVisible();
     }
-  }
-});
+  });
+}
 
 test("navigates the command shelf and plate grid with the keyboard", async ({
   page,
@@ -363,7 +363,9 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   );
   expect(beforeTile).toBeDefined();
 
-  const lateLabel = page.getByText("Late", { exact: true });
+  const lateLabel = page.getByTestId("panel-data").getByText("Late", {
+    exact: true,
+  });
   const lateBox = await lateLabel.boundingBox();
   expect(lateBox).not.toBeNull();
   await page.mouse.click(
@@ -400,7 +402,9 @@ test("keeps RouteEditor labels owned while a line draft is pinned", async ({
   for (const stop of stops) await clickMapTile(canvas, stop);
   await expect(page.getByTestId("route-draft")).toBeVisible();
 
-  const shuttleLabel = page.getByText("Shuttle", { exact: true });
+  const shuttleLabel = page.getByTestId("route-draft").getByText("Shuttle", {
+    exact: true,
+  });
   const shuttleBox = await shuttleLabel.boundingBox();
   expect(shuttleBox).not.toBeNull();
   await page.mouse.click(

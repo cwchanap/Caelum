@@ -28,11 +28,20 @@ test("topbar readouts and controls do not overlap at supported desktop widths", 
         .filter((readout) => getComputedStyle(readout).display !== "none")
         .map((readout) => {
           const value = readout.querySelector<HTMLElement>(".readout-value");
+          if (value === null) {
+            throw new Error(
+              `Readout is missing a .readout-value child: ${readout.outerHTML}`,
+            );
+          }
+          const firstChild = value.firstChild;
+          if (firstChild === null) {
+            throw new Error(
+              `.readout-value has no measurable text node: ${value.outerHTML}`,
+            );
+          }
           const box = readout.getBoundingClientRect();
           const range = document.createRange();
-          if (value?.firstChild !== undefined && value?.firstChild !== null) {
-            range.selectNodeContents(value.firstChild);
-          }
+          range.selectNodeContents(firstChild);
           const textBox = range.getBoundingClientRect();
           return {
             label: readout

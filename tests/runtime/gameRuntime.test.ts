@@ -1815,7 +1815,7 @@ describe("Game Runtime", () => {
     await runtime.togglePause();
     await runtime.setSpeed(4);
     await runtime.tick(1);
-    runtime.setOverlay("growth");
+    runtime.setOverlay("coverage");
     runtime.handleTileClick({ x: 5, y: 5 });
     runtime.setTool("busRoute");
     runtime.setCommandDestination("data");
@@ -1825,7 +1825,7 @@ describe("Game Runtime", () => {
     expect(beforeReset.state.speed).toBe(4);
     expect(beforeReset.state.time).toBeGreaterThan(0);
     expect(beforeReset.ui.activeTool).toBe("busRoute");
-    expect(beforeReset.ui.activeOverlay).toBe("growth");
+    expect(beforeReset.ui.activeOverlay).toBe("coverage");
     expect(beforeReset.ui.selectedId).toBeNull();
     expect(beforeReset.ui.activeCommandDestination).toBe("lines");
 
@@ -2522,70 +2522,72 @@ describe("command destination navigation", () => {
     });
   });
 
-  it.each([
-    {
-      name: "drag",
-      first: { tool: "road" as const, destination: null },
-    },
-    {
-      name: "draft",
-      first: { tool: "inspect" as const, destination: "lines" as const },
-    },
-    {
-      name: "panel",
-      first: { tool: "inspect" as const, destination: null },
-    },
-    {
-      name: "placement",
-      first: { tool: "road" as const, destination: null },
-      second: { tool: "inspect" as const, destination: null },
-    },
-    {
-      name: "demolish",
-      first: { tool: "remove" as const, destination: null },
-      second: { tool: "inspect" as const, destination: null },
-    },
-  ])(
-    "Escape clears the $name state without touching unrelated state",
-    async (entry) => {
-      expect(entry.first).toBeDefined();
-      const runtime = await createGameRuntime({
-        hoverPreviewDebounceMs: 0,
-        backend: backendSpy(),
-      });
-      if (entry.name === "drag") {
-        runtime.setTool("road");
-        runtime.startDrag({ x: 2, y: 2 });
-        const escaped = runtime.handleEscape();
-        expect(escaped.ui.drag).toBeNull();
-        expect(escaped.ui.activeTool).toBe("road");
-        expect(escaped.ui.activeCommandDestination).toBeNull();
-      } else if (entry.name === "draft") {
-        runtime.setTool("busRoute");
-        const escaped = runtime.handleEscape();
-        expect(escaped.ui.routeDraft).toBeNull();
-        expect(escaped.ui.activeTool).toBe("inspect");
-        expect(escaped.ui.activeCommandDestination).toBe("lines");
-      } else if (entry.name === "panel") {
-        runtime.setCommandDestination("data");
-        runtime.setOverlay("coverage");
-        const escaped = runtime.handleEscape();
-        expect(escaped.ui.activeCommandDestination).toBeNull();
-        expect(escaped.ui.activeOverlay).toBe("coverage");
-      } else {
-        runtime.setTool(entry.name === "demolish" ? "remove" : "road");
-        runtime.setCommandDestination("build");
-        const firstEscape = runtime.handleEscape();
-        expect(firstEscape.ui.activeCommandDestination).toBeNull();
-        expect(firstEscape.ui.activeTool).toBe(
-          entry.name === "demolish" ? "remove" : "road",
-        );
-        const secondEscape = runtime.handleEscape();
-        expect(secondEscape.ui.activeCommandDestination).toBeNull();
-        expect(secondEscape.ui.activeTool).toBe("inspect");
-      }
-    },
-  );
+  it("Escape clears a road drag without touching unrelated state", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setTool("road");
+    runtime.startDrag({ x: 2, y: 2 });
+    const escaped = runtime.handleEscape();
+    expect(escaped.ui.drag).toBeNull();
+    expect(escaped.ui.activeTool).toBe("road");
+    expect(escaped.ui.activeCommandDestination).toBeNull();
+  });
+
+  it("Escape cancels a busRoute draft and restores the Lines destination", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setTool("busRoute");
+    const escaped = runtime.handleEscape();
+    expect(escaped.ui.routeDraft).toBeNull();
+    expect(escaped.ui.activeTool).toBe("inspect");
+    expect(escaped.ui.activeCommandDestination).toBe("lines");
+  });
+
+  it("Escape closes the command panel without clearing the active overlay", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setCommandDestination("data");
+    runtime.setOverlay("coverage");
+    const escaped = runtime.handleEscape();
+    expect(escaped.ui.activeCommandDestination).toBeNull();
+    expect(escaped.ui.activeOverlay).toBe("coverage");
+  });
+
+  it("Escape clears a road placement's command panel then restores inspect", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setTool("road");
+    runtime.setCommandDestination("build");
+    const firstEscape = runtime.handleEscape();
+    expect(firstEscape.ui.activeCommandDestination).toBeNull();
+    expect(firstEscape.ui.activeTool).toBe("road");
+    const secondEscape = runtime.handleEscape();
+    expect(secondEscape.ui.activeCommandDestination).toBeNull();
+    expect(secondEscape.ui.activeTool).toBe("inspect");
+  });
+
+  it("Escape clears a demolish placement's command panel then restores inspect", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    runtime.setTool("remove");
+    runtime.setCommandDestination("build");
+    const firstEscape = runtime.handleEscape();
+    expect(firstEscape.ui.activeCommandDestination).toBeNull();
+    expect(firstEscape.ui.activeTool).toBe("remove");
+    const secondEscape = runtime.handleEscape();
+    expect(secondEscape.ui.activeCommandDestination).toBeNull();
+    expect(secondEscape.ui.activeTool).toBe("inspect");
+  });
 
   it("keeps the exact UI object and contextual selection on idle Select Escape", async () => {
     const runtime = await createGameRuntime({

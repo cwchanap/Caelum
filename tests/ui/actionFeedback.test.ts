@@ -18,8 +18,9 @@ function feedback(
 }
 
 describe("ActionFeedback", () => {
-  it("renders nothing when feedback is null", () => {
+  it("keeps the live-region slot mounted but empty when feedback is null", () => {
     render(ActionFeedback, { props: { feedback: null, onDismiss: vi.fn() } });
+    expect(screen.getByTestId("action-feedback-slot")).toBeInTheDocument();
     expect(screen.queryByTestId("action-feedback")).toBeNull();
   });
 
@@ -38,9 +39,10 @@ describe("ActionFeedback", () => {
       },
     });
 
+    const slot = screen.getByTestId("action-feedback-slot");
+    expect(slot).toHaveAttribute("role", "status");
+    expect(slot).toHaveAttribute("aria-live", "polite");
     const view = screen.getByTestId("action-feedback");
-    expect(view).toHaveAttribute("role", "status");
-    expect(view).toHaveAttribute("aria-live", "polite");
     expect(view).toHaveAttribute("data-source", "rejection");
     expect(view).toHaveAttribute("data-tone", "error");
     expect(view).toHaveTextContent("Needs $1,200; only $0 is available.");
@@ -62,9 +64,12 @@ describe("ActionFeedback", () => {
       },
     });
 
+    const slot = screen.getByTestId("action-feedback-slot");
+    expect(slot).not.toHaveAttribute("role");
+    expect(slot).not.toHaveAttribute("aria-live");
     const view = screen.getByTestId("action-feedback");
-    expect(view).not.toHaveAttribute("role");
-    expect(view).not.toHaveAttribute("aria-live");
+    expect(view).toHaveAttribute("data-source", "roadHostError");
+    expect(view).toHaveAttribute("data-tone", "warning");
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
