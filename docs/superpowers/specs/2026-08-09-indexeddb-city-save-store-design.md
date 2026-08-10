@@ -390,4 +390,4 @@ This split matters: pulling Load/Continue into HPA-345 solely to strengthen an a
 - [ ] Runtime/UI code does not access IndexedDB and `src/main.ts` is unchanged.
 - [ ] No migration, compatibility, security, recovery, retry, quota, or multi-tab framework is introduced.
 - [ ] Tests use the real adapter through `fake-indexeddb` and remain in the existing runtime Vitest project.
-- [ ] Real-browser wiring/proof remains downstream rather than being simulated by HPA-343.
+- [ ] HPA-345's Chromium New City smoke explicitly verifies the real Rust/WASM snapshot is accepted by actual browser IndexedDB; HPA-346 owns reload + Continue/Load.
