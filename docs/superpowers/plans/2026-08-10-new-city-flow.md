@@ -4,51 +4,69 @@
 
 **Goal:** Let a browser player create a named Standard/Creative Blank Grid/Crossroads city through the existing working-save runtime, persist the real Rust/WASM snapshot in IndexedDB before activation, and enter the normal paused game shell.
 
-**Architecture:** Reuse `RuntimePersistenceController.createCity` and the merged IndexedDB `CitySaveStore`; do not add another persistence layer. Narrow `NewCityRequest` to the three player-facing values, render a dedicated no-city screen from `App.svelte`, and wire the browser store in `main.ts`. Native Tauri persistence remains HPA-344 rather than using a temporary IndexedDB fallback.
+**Architecture:** Reuse `RuntimePersistenceController.createCity` and the merged IndexedDB `CitySaveStore`; do not add another persistence layer. Narrow `NewCityRequest` to the three player-facing values using existing domain unions, render a dedicated no-city screen from `App.svelte`, wire the browser store in `main.ts`, and make explicit city bootstrap mandatory for every existing gameplay e2e spec. Native Tauri persistence remains HPA-344 rather than using a temporary IndexedDB fallback.
 
 **Tech Stack:** TypeScript 5.8, Svelte 5, Vitest + Testing Library, Playwright/Chromium, Rust/WASM `caelum-core`, browser IndexedDB.
 
 ## Global Constraints
 
+- Reuse `EconomyPreset`, `SandboxTemplateId`, and `MoveInRateSelection` from `src/domain/types.ts`; do not declare duplicate New City preset/template aliases.
 - The Svelte form collects only city name, Standard/Creative, and Blank Grid/Crossroads.
 - Hidden sandbox settings use the current Rust canonical defaults: starting capital `120_000`, demand multiplier `1`, move-in rate `"paused"`.
 - UI invokes only `runtime.persistence.createCity`; it never builds snapshots or accesses IndexedDB.
 - Preserve storage-first create then candidate-first activation; do not add rollback, pending/finalize, reconciliation, retry loops, or recovery state.
 - Do not add Continue/Load, city library, Save Now, Rename, or Delete UI; HPA-346 owns those.
 - Do not add native storage or an IndexedDB-on-Tauri fallback; HPA-344 owns native persistence.
-- No migrations or backward-compatibility adapters for development saves.
+- No migrations or backward-compatibility overloads for the old `{ name, sandbox }` internal request.
 - No sanitization/security framework; trim and require a non-empty name, then rely on normal Svelte escaping.
 - No generic form abstraction, repository/service layer, state machine, DI container, registry, or new dependency.
-- Prefer characterization of one non-default option combination over a full economy/template test matrix.
+- The shared e2e `createDefaultCity(page)` bootstrap is required work because existing gameplay specs currently navigate directly to `/` and assume an active game.
+- Prefer one non-default economy/template characterization over a full option matrix.
 
 ---
 
-## Task 1: Narrow the runtime New City action to player-facing inputs
+## Task 1: Narrow the runtime New City request and migrate every caller
 
 **Files:**
-- Modify: `src/runtime/workingSaveRuntime.ts:20-33,214-251`
-- Modify: `tests/runtime/workingSaveRuntime.test.ts:1-180` and the `working save runtime new cities` describe block
+- Modify: `src/runtime/workingSaveRuntime.ts`
+- Modify: `tests/runtime/workingSaveRuntime.test.ts`
+- Modify: `tests/runtime/citySaveRuntime.test.ts`
+- Modify: `tests/runtime/gameRuntime.test.ts` if its current `createCity` setup still uses `{ sandbox }`
 
 **Interfaces:**
-- Consumes: existing `GameBackend.buildSandboxSnapshot(SandboxCreationRequest)` and `CitySaveStore.createCity(CitySaveRecord)`.
+- Consumes existing domain types:
+
+```ts
+import type {
+  EconomyPreset,
+  MoveInRateSelection,
+  SandboxTemplateId,
+} from "../domain/types";
+```
+
 - Produces:
 
 ```ts
-export type NewCityEconomyPreset = "standard" | "creative";
-export type NewCityTemplateId = "blankGrid" | "crossroads";
-
 export interface NewCityRequest {
   name: string;
-  economyPreset: NewCityEconomyPreset;
-  templateId: NewCityTemplateId;
+  economyPreset: EconomyPreset;
+  templateId: SandboxTemplateId;
 }
 ```
 
-- `RuntimePersistenceController.createCity(request)` keeps the same method name/result type, so `createGameRuntime` and future HPA-346 work keep one persistence API.
+- Keeps:
 
-- [ ] **Step 1: Replace the test request fixture with the player-facing request**
+```ts
+RuntimePersistenceController.createCity(
+  request: NewCityRequest,
+): Promise<WorkingSaveResult<CitySummary>>;
+```
 
-In `tests/runtime/workingSaveRuntime.test.ts`, replace the current `SANDBOX_REQUEST` fixture with:
+- Keeps the existing backend/storage sequence unchanged after request translation.
+
+- [ ] **Step 1: Replace the working-save test request fixture with the player-facing shape**
+
+In `tests/runtime/workingSaveRuntime.test.ts`, replace the backend-shaped New City fixture with:
 
 ```ts
 const NEW_CITY_REQUEST = {
@@ -58,9 +76,9 @@ const NEW_CITY_REQUEST = {
 } as const;
 ```
 
-Remove `SandboxCreationRequest` from the fixture import only if it is no longer needed elsewhere after the next step.
+Keep `SandboxCreationRequest` imported only for the backend test double that records the translated request.
 
-- [ ] **Step 2: Capture backend sandbox requests in the existing test backend**
+- [ ] **Step 2: Record translated sandbox requests in the existing backend test double**
 
 Extend `TestBackend`:
 
@@ -80,7 +98,7 @@ Inside `createTestBackend`, add:
 const sandboxRequests: SandboxCreationRequest[] = [];
 ```
 
-return it with the backend, and record every candidate request:
+Return that array on the test backend, and record requests:
 
 ```ts
 async buildSandboxSnapshot(request: SandboxCreationRequest) {
@@ -99,10 +117,10 @@ async buildSandboxSnapshot(request: SandboxCreationRequest) {
 
 - [ ] **Step 3: Write the failing canonical-default translation test**
 
-Add this first test to the `working save runtime new cities` block:
+Add to `working save runtime new cities`:
 
 ```ts
-it("maps the player New City choices to the canonical sandbox defaults", async () => {
+it("maps player New City choices to the canonical hidden defaults", async () => {
   const fixture = createRuntimeFixture({ initialCity: null });
 
   await fixture.runtime.controller.createCity({
@@ -123,7 +141,7 @@ it("maps the player New City choices to the canonical sandbox defaults", async (
 });
 ```
 
-- [ ] **Step 4: Run the focused runtime test and verify it fails at the old request shape**
+- [ ] **Step 4: Run the focused runtime test and verify the new test fails**
 
 Run:
 
@@ -131,42 +149,52 @@ Run:
 bun run test -- tests/runtime/workingSaveRuntime.test.ts
 ```
 
-Expected: FAIL because `createCity` still expects `{ name, sandbox }` and does not derive canonical hidden settings.
+Expected: FAIL because `createCity` still expects `{ name, sandbox }` and does not derive the hidden defaults.
 
-- [ ] **Step 5: Narrow `NewCityRequest` and add the local canonical request builder**
+- [ ] **Step 5: Reuse the existing domain unions in `workingSaveRuntime.ts`**
 
-In `src/runtime/workingSaveRuntime.ts`, replace the current request shape with:
+Add the type import:
 
 ```ts
-export type NewCityEconomyPreset = "standard" | "creative";
-export type NewCityTemplateId = "blankGrid" | "crossroads";
-
-export interface NewCityRequest {
-  name: string;
-  economyPreset: NewCityEconomyPreset;
-  templateId: NewCityTemplateId;
-}
-
-const NEW_CITY_STARTING_CAPITAL = 120_000;
-const NEW_CITY_DEMAND_MULTIPLIER = 1;
-const NEW_CITY_MOVE_IN_RATE = "paused";
+import type {
+  EconomyPreset,
+  MoveInRateSelection,
+  SandboxTemplateId,
+} from "../domain/types";
 ```
 
-Keep these constants in this module instead of creating a settings/config module. Add a comment immediately above them:
+Replace the old request interface with:
+
+```ts
+export interface NewCityRequest {
+  name: string;
+  economyPreset: EconomyPreset;
+  templateId: SandboxTemplateId;
+}
+```
+
+Do not add `NewCityEconomyPreset` or `NewCityTemplateId` aliases.
+
+- [ ] **Step 6: Add typed canonical hidden defaults beside the runtime action**
+
+Immediately after the request interface, add:
 
 ```ts
 // Mirror `canonical_default_request()` in crates/caelum-core/src/sandbox.rs.
 // HPA-345 exposes only economy + template; hidden sandbox tuning stays fixed.
+const NEW_CITY_STARTING_CAPITAL = 120_000;
+const NEW_CITY_DEMAND_MULTIPLIER = 1;
+const NEW_CITY_MOVE_IN_RATE: MoveInRateSelection = "paused";
 ```
 
-- [ ] **Step 6: Build the backend candidate from the three-field request**
+Do not create a settings/config module for these three values.
+
+- [ ] **Step 7: Translate the player request immediately before candidate construction**
 
 Replace:
 
 ```ts
-const candidate = await host.backend.buildSandboxSnapshot(
-  request.sandbox,
-);
+const candidate = await host.backend.buildSandboxSnapshot(request.sandbox);
 ```
 
 with:
@@ -181,11 +209,11 @@ const candidate = await host.backend.buildSandboxSnapshot({
 });
 ```
 
-Do not change the subsequent build -> create -> restore -> install order.
+Do not change the later build -> create -> restore -> install order.
 
-- [ ] **Step 7: Update existing New City lifecycle tests to the narrowed request**
+- [ ] **Step 8: Update every working-save New City call to the narrowed request**
 
-For every current call shaped like:
+Replace calls shaped like:
 
 ```ts
 fixture.runtime.controller.createCity({
@@ -194,13 +222,13 @@ fixture.runtime.controller.createCity({
 })
 ```
 
-use:
+with:
 
 ```ts
 fixture.runtime.controller.createCity(NEW_CITY_REQUEST)
 ```
 
-For tests that need a different template/economy, spread the fixture explicitly:
+For a non-default case, spread the player fixture:
 
 ```ts
 fixture.runtime.controller.createCity({
@@ -209,56 +237,96 @@ fixture.runtime.controller.createCity({
 })
 ```
 
-When constructing the expected sandbox error context, use `NEW_CITY_REQUEST.templateId` rather than the removed backend request fixture.
+Update expected sandbox error context to reference `NEW_CITY_REQUEST.templateId`.
 
-- [ ] **Step 8: Run the full working-save runtime suite**
+- [ ] **Step 9: Migrate `citySaveRuntime.test.ts` in the same contract-change task**
+
+Find every old call in `tests/runtime/citySaveRuntime.test.ts` and replace the old backend-shaped request:
+
+```ts
+{
+  name: "...",
+  sandbox: SANDBOX_REQUEST,
+}
+```
+
+with the player-facing form:
+
+```ts
+{
+  name: "...",
+  economyPreset: "standard",
+  templateId: "crossroads",
+}
+```
+
+Preserve each test's existing lifecycle intent; only change request construction unless a specific test characterizes template/economy.
+
+Remove the old `SANDBOX_REQUEST` fixture/import when no longer used.
+
+- [ ] **Step 10: Migrate other current runtime callers before committing**
 
 Run:
 
 ```bash
-bun run test -- tests/runtime/workingSaveRuntime.test.ts
+rg -n 'createCity\(|sandbox:' src tests/runtime
 ```
 
-Expected: PASS, including existing create order, conflict, store failure, activation failure, busy-gate, and disposal tests.
+Inspect every `createCity` call. In particular, update `tests/runtime/gameRuntime.test.ts` if it still passes `{ name, sandbox }`.
 
-- [ ] **Step 9: Type-check the contract change**
+Expected after edits: no production/test New City caller passes a `sandbox` field to `RuntimePersistenceController.createCity`.
+
+Do not edit historical docs in this task just to erase examples of superseded designs.
+
+- [ ] **Step 11: Run all directly affected runtime test files**
+
+Run:
+
+```bash
+bun run test -- \
+  tests/runtime/workingSaveRuntime.test.ts \
+  tests/runtime/citySaveRuntime.test.ts \
+  tests/runtime/gameRuntime.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 12: Run the complete frontend type/unit gate**
 
 Run:
 
 ```bash
 bun run check
+bun run test:unit
 ```
 
-Expected: PASS. If a remaining test caller uses the removed `{ sandbox }` field, update that caller to the three player fields in the same change; do not add a compatibility overload.
+Expected: PASS. A green `workingSaveRuntime.test.ts` alone is not sufficient for this breaking internal request change.
 
-- [ ] **Step 10: Commit the runtime contract slice**
+- [ ] **Step 13: Commit the complete request-contract slice**
 
 ```bash
-git add src/runtime/workingSaveRuntime.ts tests/runtime/workingSaveRuntime.test.ts
+git add \
+  src/runtime/workingSaveRuntime.ts \
+  tests/runtime/workingSaveRuntime.test.ts \
+  tests/runtime/citySaveRuntime.test.ts \
+  tests/runtime/gameRuntime.test.ts
 git commit -m "feat: narrow new city runtime request"
 ```
 
+If `tests/runtime/gameRuntime.test.ts` required no edit after the scan, omit it from `git add` rather than touching it unnecessarily.
+
 ---
 
-## Task 2: Render a focused no-city entry screen and wire it to the runtime
+## Task 2: Render the no-city entry screen without an empty-shell flash
 
 **Files:**
 - Create: `src/components/NewCityScreen.svelte`
-- Modify: `src/App.svelte:1-430`
-- Modify: `src/styles.css` after the shell/grid section
-- Modify: `tests/ui/appShell.test.ts:1-180` and add focused New City cases in the same describe suite
+- Modify: `src/App.svelte`
+- Modify: `src/styles.css`
+- Modify: `tests/ui/appShell.test.ts`
 
 **Interfaces:**
-- Consumes:
-
-```ts
-NewCityRequest
-WorkingSaveError
-RuntimeSnapshot["persistence"]
-RuntimeController["persistence"]["createCity"]
-```
-
-- Produces a presentational screen with:
+- `NewCityScreen.svelte` consumes:
 
 ```ts
 interface Props {
@@ -268,7 +336,18 @@ interface Props {
 }
 ```
 
-No store/backend object crosses into the component.
+- Local form state reuses:
+
+```ts
+EconomyPreset
+SandboxTemplateId
+```
+
+- App calls only:
+
+```ts
+runtime.persistence.createCity(request)
+```
 
 - [ ] **Step 1: Make the App test harness persistence state mutable**
 
@@ -283,7 +362,7 @@ options: {
 } = {},
 ```
 
-Replace the current `const persistence = ... as const` with mutable state:
+Replace the fixed persistence value with:
 
 ```ts
 let persistence: RuntimeSnapshot["persistence"] = {
@@ -300,7 +379,7 @@ let persistence: RuntimeSnapshot["persistence"] = {
 };
 ```
 
-Extend the harness return type and returned object with:
+Extend the harness return with:
 
 ```ts
 setPersistence(next: Partial<RuntimeSnapshot["persistence"]>) {
@@ -309,9 +388,25 @@ setPersistence(next: Partial<RuntimeSnapshot["persistence"]>) {
 },
 ```
 
-so tests can emulate the runtime publications that `workingSaveRuntime` already performs.
+- [ ] **Step 2: Write the failing initial-null pre-game test**
 
-- [ ] **Step 2: Write the failing no-city shell test**
+The component initializes `snapshot` to `null`, so test the initial render explicitly rather than only `activeCity: null`:
+
+```ts
+it("treats the unset initial snapshot as pre-game", () => {
+  const { runtime } = createRuntimeHarness();
+
+  render(App, { props: { runtime } });
+
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
+  expect(screen.queryByTestId("game-canvas-host")).toBeNull();
+  expect(screen.queryByTestId("command-shelf")).toBeNull();
+});
+```
+
+Because Svelte effects may run during the test renderer lifecycle, if the harness immediately seeds an active snapshot before this assertion, use a focused component/harness variant whose first `getSnapshot()` returns a no-city snapshot. The required behavior remains: `snapshot === null` must select the pre-game branch, never an empty active shell.
+
+- [ ] **Step 3: Write the failing no-active-city shell test**
 
 Add:
 
@@ -330,7 +425,7 @@ it("shows New City instead of game chrome when no city is active", () => {
 });
 ```
 
-- [ ] **Step 3: Write the failing form validation/request test**
+- [ ] **Step 4: Write the failing form request test**
 
 Add:
 
@@ -363,9 +458,9 @@ it("submits only name, economy, and template for New City", async () => {
 });
 ```
 
-- [ ] **Step 4: Write the failing busy/error/success transition tests**
+- [ ] **Step 5: Write the failing busy/error/transition tests**
 
-Add three focused cases:
+Add:
 
 ```ts
 it("disables New City submission while persistence is busy", async () => {
@@ -382,7 +477,7 @@ it("disables New City submission while persistence is busy", async () => {
   expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
 });
 
-it("shows concise New City errors without diagnostics", () => {
+it("shows concise New City errors without adapter diagnostics", () => {
   const harness = createRuntimeHarness({
     persistence: { activeCity: null },
   });
@@ -405,7 +500,7 @@ it("shows concise New City errors without diagnostics", () => {
   expect(screen.getByRole("alert")).not.toHaveTextContent("QuotaExceededError");
 });
 
-it("enters the normal game shell after the runtime publishes an active city", () => {
+it("enters the game shell after the runtime publishes an active city", () => {
   const harness = createRuntimeHarness({
     persistence: { activeCity: null },
   });
@@ -429,7 +524,7 @@ it("enters the normal game shell after the runtime publishes an active city", ()
 });
 ```
 
-- [ ] **Step 5: Run the focused App tests and verify the new cases fail**
+- [ ] **Step 6: Run the focused App tests and verify the New City cases fail**
 
 Run:
 
@@ -437,18 +532,20 @@ Run:
 bun run test -- tests/ui/appShell.test.ts
 ```
 
-Expected: FAIL because `App.svelte` has no no-city gate or New City form yet.
+Expected: FAIL because App has no no-city gate or New City screen yet.
 
-- [ ] **Step 6: Create `NewCityScreen.svelte`**
+- [ ] **Step 7: Create `NewCityScreen.svelte` using existing domain types**
 
-Create `src/components/NewCityScreen.svelte` with this implementation shape:
+Create `src/components/NewCityScreen.svelte`:
 
 ```svelte
 <script lang="ts">
   import type {
-    NewCityEconomyPreset,
+    EconomyPreset,
+    SandboxTemplateId,
+  } from "../domain/types";
+  import type {
     NewCityRequest,
-    NewCityTemplateId,
     WorkingSaveError,
   } from "../runtime/workingSaveRuntime";
 
@@ -460,218 +557,160 @@ Create `src/components/NewCityScreen.svelte` with this implementation shape:
 
   let { busy, error, onCreate }: Props = $props();
   let name = $state("");
-  let economyPreset = $state<NewCityEconomyPreset>("standard");
-  let templateId = $state<NewCityTemplateId>("crossroads");
+  let economyPreset = $state<EconomyPreset>("standard");
+  let templateId = $state<SandboxTemplateId>("crossroads");
   const canCreate = $derived(!busy && name.trim().length > 0);
 
   function errorMessage(value: WorkingSaveError): string {
-    if (value.kind === "busy") return "City creation is already in progress.";
-    if (value.kind === "sandbox") return "Could not create that city setup.";
-    if (value.kind === "backend") return "Could not open the new city.";
-    if (value.kind === "unavailable") {
-      return "City saves are not available in this build yet.";
+    switch (value.kind) {
+      case "busy":
+        return "City creation is already in progress.";
+      case "unavailable":
+        return "City storage is unavailable.";
+      case "store":
+        return "Could not save the new city.";
+      case "sandbox":
+      case "backend":
+        return "Could not create that city setup.";
+      case "noActiveCity":
+        return "Could not create the new city.";
     }
-    if (value.kind === "store") {
-      return value.error.code === "conflict"
-        ? "That city slot could not be created. Try again."
-        : "Could not save the new city.";
-    }
-    return "Could not create the city.";
   }
 
   function submit(event: SubmitEvent): void {
     event.preventDefault();
-    if (!canCreate) return;
-    onCreate({
-      name: name.trim(),
-      economyPreset,
-      templateId,
-    });
+    const trimmedName = name.trim();
+    if (busy || trimmedName.length === 0) return;
+    onCreate({ name: trimmedName, economyPreset, templateId });
   }
 </script>
 
-<main class="new-city-screen" data-testid="new-city-screen">
-  <section class="new-city-card" aria-labelledby="new-city-title">
-    <p class="new-city-kicker">Caelum // Local City</p>
-    <h1 id="new-city-title">New City</h1>
-    <p class="new-city-copy">Create a local sandbox city to start building.</p>
+<main class="new-city" data-testid="new-city-screen">
+  <form class="new-city__card" onsubmit={submit}>
+    <p class="new-city__eyebrow">New City</p>
+    <h1>Start a sandbox</h1>
 
-    <form class="new-city-form" onsubmit={submit}>
-      <label>
-        <span>City name</span>
-        <input bind:value={name} name="cityName" autocomplete="off" />
-      </label>
+    <label>
+      <span>City name</span>
+      <input aria-label="City name" bind:value={name} disabled={busy} />
+    </label>
 
-      <label>
-        <span>Economy</span>
-        <select bind:value={economyPreset} name="economy">
-          <option value="standard">Standard</option>
-          <option value="creative">Creative</option>
-        </select>
-      </label>
+    <label>
+      <span>Economy</span>
+      <select aria-label="Economy" bind:value={economyPreset} disabled={busy}>
+        <option value="standard">Standard</option>
+        <option value="creative">Creative</option>
+      </select>
+    </label>
 
-      <label>
-        <span>Template</span>
-        <select bind:value={templateId} name="template">
-          <option value="crossroads">Crossroads</option>
-          <option value="blankGrid">Blank Grid</option>
-        </select>
-      </label>
-
-      <button type="submit" disabled={!canCreate}>
-        {busy ? "Creating…" : "Create City"}
-      </button>
-    </form>
+    <label>
+      <span>Template</span>
+      <select aria-label="Template" bind:value={templateId} disabled={busy}>
+        <option value="crossroads">Crossroads</option>
+        <option value="blankGrid">Blank Grid</option>
+      </select>
+    </label>
 
     {#if error !== null}
-      <p class="new-city-error" role="alert">{errorMessage(error)}</p>
+      <p class="new-city__error" role="alert">{errorMessage(error)}</p>
     {/if}
-  </section>
+
+    <button type="submit" disabled={!canCreate}>
+      {busy ? "Creating…" : "Create City"}
+    </button>
+  </form>
 </main>
 ```
 
-Do not add local storage, runtime imports other than types, or extra settings fields.
+Keep the markup small. Adjust classes only as needed to follow existing accessibility/lint rules.
 
-- [ ] **Step 7: Add the no-city rendering gate to `App.svelte`**
+- [ ] **Step 8: Add one App handler for the persistence action**
 
-At the top, import:
-
-```ts
-import NewCityScreen from "./components/NewCityScreen.svelte";
-import type { NewCityRequest } from "./runtime/workingSaveRuntime";
-```
+In `src/App.svelte`, import `NewCityScreen` and `NewCityRequest`.
 
 Add:
 
 ```ts
-function handleCreateCity(request: NewCityRequest): void {
+async function handleCreateCity(request: NewCityRequest): Promise<void> {
   if (runtime === null) return;
-  void runtime.persistence.createCity(request);
+  try {
+    await runtime.persistence.createCity(request);
+  } catch (err) {
+    shellError =
+      err instanceof Error ? err.message : "New City command failed";
+  }
 }
 ```
 
-Change the top-level template branch from:
+Do not access the backend or save store here.
+
+- [ ] **Step 9: Gate both unset snapshot and null active city into pre-game**
+
+Keep the existing fatal error branch first. Inside the live-runtime branch, use the nullish active-city gate:
 
 ```svelte
-{#if shellError || runtime === null}
-  ...
-{:else}
-  <main class="shell" ...>
-```
-
-into:
-
-```svelte
-{#if shellError || runtime === null}
-  <main class="shell" data-testid="game-shell">
-    <!-- keep the current fatal shell error unchanged -->
-  </main>
-{:else if snapshot?.persistence.activeCity === null}
+{:else if snapshot?.persistence.activeCity == null}
   <NewCityScreen
-    busy={snapshot.persistence.busy}
-    error={snapshot.persistence.error}
-    onCreate={handleCreateCity}
+    busy={snapshot?.persistence.busy ?? false}
+    error={snapshot?.persistence.error ?? null}
+    onCreate={(request) => void handleCreateCity(request)}
   />
 {:else}
-  <main class="shell" data-testid="game-shell" ...>
-    <!-- keep the current active-game shell unchanged -->
+  <main
+    class="shell"
+    data-testid="game-shell"
+    data-command-destination={snapshot.ui.activeCommandDestination ?? "none"}
+  >
+    <!-- existing active-game shell -->
   </main>
 {/if}
 ```
 
-Do not put New City inside `CityPanel.svelte` or render game chrome behind the form.
+Do not use `snapshot?.persistence.activeCity === null`; it is false when `snapshot` is still `null` and would select an empty active-game branch on initial render.
 
-- [ ] **Step 8: Add minimal entry-screen CSS using existing tokens**
+After this branch, `snapshot` is non-null by construction; simplify nested `snapshot !== null` guards only when TypeScript/Svelte narrowing permits it cleanly. Do not broadly restructure App.
 
-In `src/styles.css`, immediately after `.shell`, add:
+- [ ] **Step 10: Add minimal Signal Console styling**
+
+In `src/styles.css`, add only the classes used by `NewCityScreen`:
 
 ```css
-.new-city-screen {
+.new-city {
+  min-height: 100vh;
   display: grid;
   place-items: center;
-  width: 100vw;
-  height: 100vh;
-  padding: 48px;
-  background-size: 32px 32px;
+  padding: 32px;
+  background: var(--bg-deep);
 }
 
-.new-city-card {
-  width: min(520px, 100%);
-  padding: 32px;
+.new-city__card {
+  width: min(480px, 100%);
+  display: grid;
+  gap: 20px;
+  padding: 28px;
   background: var(--surface);
   border: 1px solid var(--line-strong);
 }
 
-.new-city-kicker {
-  margin: 0 0 8px;
-  color: var(--cyan);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.new-city-card h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 36px;
-}
-
-.new-city-copy {
-  margin: 8px 0 24px;
-  color: var(--ink-mid);
-}
-
-.new-city-form {
+.new-city__card label {
   display: grid;
-  gap: 16px;
+  gap: 8px;
 }
 
-.new-city-form label {
-  display: grid;
-  gap: 6px;
-  color: var(--ink-mid);
-  font-size: 12px;
+.new-city__card input,
+.new-city__card select,
+.new-city__card button {
+  min-height: 44px;
 }
 
-.new-city-form input,
-.new-city-form select,
-.new-city-form button {
-  min-height: 42px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface-sunk);
-  color: var(--ink);
-  font: inherit;
-}
-
-.new-city-form input,
-.new-city-form select {
-  padding: 0 12px;
-}
-
-.new-city-form button {
-  margin-top: 8px;
-  cursor: pointer;
-  color: var(--bg-deep);
-  background: var(--amber);
-  font-weight: 700;
-}
-
-.new-city-form button:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.new-city-error {
-  margin: 16px 0 0;
+.new-city__error {
   color: var(--red);
-  font-size: 12px;
 }
 ```
 
-If stylelint rejects an existing-project convention, adjust only syntax/order needed for the current stylesheet; do not introduce a component styling system.
+Reuse existing typography/button/input rules where available instead of duplicating them. Do not add animations or a new component theme.
 
-- [ ] **Step 9: Run UI tests**
+- [ ] **Step 11: Run focused UI tests**
 
 Run:
 
@@ -681,7 +720,7 @@ bun run test -- tests/ui/appShell.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 10: Run Svelte/TypeScript and CSS checks**
+- [ ] **Step 12: Run type/lint/style checks for the new Svelte surface**
 
 Run:
 
@@ -689,243 +728,399 @@ Run:
 bun run check
 bun run lint:svelte
 bun run lint:css
+bun run format:check
 ```
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit the UI slice**
+- [ ] **Step 13: Commit the pre-game UI slice**
 
 ```bash
-git add src/components/NewCityScreen.svelte src/App.svelte src/styles.css tests/ui/appShell.test.ts
+git add \
+  src/components/NewCityScreen.svelte \
+  src/App.svelte \
+  src/styles.css \
+  tests/ui/appShell.test.ts
 git commit -m "feat: add new city entry screen"
 ```
 
 ---
 
-## Task 3: Wire the real browser IndexedDB store and prove the Rust/WASM path in Chromium
+## Task 3: Wire real browser IndexedDB and make city bootstrap mandatory for e2e
 
 **Files:**
-- Modify: `src/main.ts:1-80`
+- Modify: `src/main.ts`
+- Modify: `tests/e2e/helpers.ts`
 - Create: `tests/e2e/newCity.spec.ts`
+- Modify: `tests/e2e/smoke.spec.ts`
+- Modify: `tests/e2e/commandShelf.spec.ts`
+- Modify: `tests/e2e/topbarViewport.spec.ts`
+- Modify: `tests/e2e/routes.spec.ts`
+- Modify: `tests/e2e/roundabouts.spec.ts`
 
 **Interfaces:**
-- Consumes `createIndexedDbCitySaveStore(): CitySaveStore` and `isTauriRuntime()`.
-- Produces browser bootstrap with a real `saveStore`; native bootstrap deliberately keeps `saveStore` undefined until HPA-344.
+- Browser startup uses:
 
-- [ ] **Step 1: Write the Chromium New City smoke test first**
+```ts
+createIndexedDbCitySaveStore(): CitySaveStore
+```
+
+- Runtime detection reuses:
+
+```ts
+isTauriRuntime(): boolean
+```
+
+- Required e2e helper:
+
+```ts
+export async function createDefaultCity(
+  page: Page,
+  name?: string,
+): Promise<void>;
+```
+
+- [ ] **Step 1: Write a failing browser startup/New City e2e test before wiring the store**
 
 Create `tests/e2e/newCity.spec.ts`:
 
 ```ts
 import { expect, test } from "@playwright/test";
+import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { runtimeSnapshot } from "./helpers";
 
-test("creates a real Rust/WASM city through browser IndexedDB", async ({
+test("creates and activates a real Rust/WASM city through browser IndexedDB", async ({
   page,
 }) => {
+  const cityName = "IndexedDB Junction";
   await page.goto("/");
 
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
-  await expect(page.getByTestId("game-canvas-host")).toHaveCount(0);
-
-  await page.getByLabel("City name").fill("E2E Creative Grid");
-  await page.getByLabel("Economy").selectOption("creative");
-  await page.getByLabel("Template").selectOption("blankGrid");
+  await page.getByLabel("City name").fill(cityName);
   await page.getByRole("button", { name: "Create City" }).click();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 
-  const live = await runtimeSnapshot(page);
-  expect(live.persistence.activeCity?.name).toBe("E2E Creative Grid");
-  expect(live.persistence.busy).toBe(false);
-  expect(live.persistence.dirty).toBe(false);
-  expect(live.state.paused).toBe(true);
-  expect(live.state.rules.economyPreset).toBe("creative");
-  expect(live.state.rules.sandbox.templateId).toBe("blankGrid");
+  const runtime = await runtimeSnapshot(page);
+  expect(runtime.persistence.activeCity?.name).toBe(cityName);
+  expect(runtime.persistence.dirty).toBe(false);
+  expect(runtime.persistence.busy).toBe(false);
+  const activeId = runtime.persistence.activeCity?.id;
+  expect(activeId).toBeDefined();
 
-  const records = await page.evaluate(
-    () =>
-      new Promise<unknown[]>((resolve, reject) => {
-        const open = indexedDB.open("caelum-city-saves-v1", 1);
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-          const database = open.result;
-          const transaction = database.transaction("cities", "readonly");
-          const request = transaction.objectStore("cities").getAll();
-          request.onerror = () => reject(request.error);
-          request.onsuccess = () => resolve(request.result);
+  const matching = await page.evaluate(
+    async ({ expectedName, expectedId }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("caelum-city-saves-v1", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const records = await new Promise<unknown[]>((resolve, reject) => {
+        const transaction = database.transaction("cities", "readonly");
+        const request = transaction.objectStore("cities").getAll();
+        request.onsuccess = () => resolve(request.result as unknown[]);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+
+      return records.find((candidate) => {
+        const record = candidate as {
+          city?: { id?: string; name?: string };
+          snapshot?: { schemaVersion?: number };
         };
-      }),
+        return (
+          record.city?.name === expectedName && record.city?.id === expectedId
+        );
+      }) as
+        | {
+            city?: { id?: string; name?: string };
+            snapshot?: { schemaVersion?: number };
+          }
+        | undefined;
+    },
+    { expectedName: cityName, expectedId: activeId },
   );
 
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    city: { name: "E2E Creative Grid" },
-    snapshot: {
-      schemaVersion: live.state.schemaVersion,
-      paused: true,
-      rules: {
-        economyPreset: "creative",
-        sandbox: { templateId: "blankGrid" },
-      },
-    },
-  });
+  expect(matching).toBeDefined();
+  expect(matching?.snapshot?.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
 });
 ```
 
-This direct IndexedDB read exists only in e2e test code. Production UI/runtime must continue using `CitySaveStore`.
+This intentionally asserts by matching name/ID rather than `records.length === 1`.
 
-- [ ] **Step 2: Run the new e2e test and verify it fails before store wiring**
+- [ ] **Step 2: Run only the New City e2e and verify it fails before browser store wiring**
 
 Run:
 
 ```bash
-bun run test:e2e -- tests/e2e/newCity.spec.ts
+bunx playwright test tests/e2e/newCity.spec.ts
 ```
 
-Expected: FAIL after clicking Create City because browser runtime currently has no `saveStore`, so no record can be created/activated.
+Expected: FAIL because browser startup currently creates the runtime without a `CitySaveStore`, so creation reports storage unavailable.
 
-- [ ] **Step 3: Wire the IndexedDB store only for the browser host**
+- [ ] **Step 3: Wire IndexedDB only on the browser/WASM startup path**
 
-In `src/main.ts`, update imports:
+In `src/main.ts`, add:
 
 ```ts
+import { createIndexedDbCitySaveStore } from "./persistence/indexedDbCitySaveStore";
 import {
   createBackend,
   isTauriRuntime,
   type GameBackend,
 } from "./runtime/backend";
-import { createIndexedDbCitySaveStore } from "./persistence/indexedDbCitySaveStore";
 ```
 
-Inside `mountApp()`, after backend creation and before `createGameRuntime`, add:
+Inside `mountApp`, keep backend creation unchanged and add the store boundary:
 
 ```ts
-const saveStore = isTauriRuntime()
-  ? undefined
-  : createIndexedDbCitySaveStore();
+const nativeTauri = isTauriRuntime();
+let backend = await createBackend();
+if (import.meta.env.DEV) {
+  backend = installDeferredRoutePreviewHarness(backend);
+}
+
+const runtime: RuntimeController = await createGameRuntime({
+  backend,
+  ...(nativeTauri ? {} : { saveStore: createIndexedDbCitySaveStore() }),
+});
 ```
 
-Then replace:
+Do not instantiate IndexedDB on Tauri in this ticket.
+
+- [ ] **Step 4: Re-run the focused real-browser New City proof**
+
+Run:
+
+```bash
+bunx playwright test tests/e2e/newCity.spec.ts
+```
+
+Expected: PASS. This is the required real Chromium/WASM/IndexedDB integration proof; `fake-indexeddb` is not the evidence for this step.
+
+- [ ] **Step 5: Add the required `createDefaultCity` e2e helper**
+
+In `tests/e2e/helpers.ts`, add:
 
 ```ts
-const runtime: RuntimeController = await createGameRuntime({ backend });
+export async function createDefaultCity(
+  page: Page,
+  name = "E2E Default City",
+): Promise<void> {
+  await page.goto("/");
+
+  const newCity = page.getByTestId("new-city-screen");
+  if (await newCity.isVisible()) {
+    await page.getByLabel("City name").fill(name);
+    await page.getByRole("button", { name: "Create City" }).click();
+  }
+
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+}
+```
+
+The helper includes navigation so existing gameplay tests replace `page.goto("/")` with one call rather than remembering a two-step bootstrap sequence.
+
+Do not call this helper from `newCity.spec.ts`; that test must prove the pre-game screen itself.
+
+- [ ] **Step 6: Replace every current gameplay-start `page.goto("/")` in `smoke.spec.ts`**
+
+Import `createDefaultCity` from `./helpers` and replace:
+
+```ts
+await page.goto("/");
 ```
 
 with:
 
 ```ts
-const runtime: RuntimeController = await createGameRuntime({
-  backend,
-  saveStore,
-});
+await createDefaultCity(page);
 ```
 
-Do not change `createBackend` host selection and do not instantiate the browser store on the Tauri branch.
+Leave all gameplay assertions unchanged.
 
-- [ ] **Step 4: Run the Chromium smoke again**
+- [ ] **Step 7: Replace every current gameplay-start `page.goto("/")` in `commandShelf.spec.ts`**
+
+Add `createDefaultCity` to the existing helper import and replace every direct root navigation that expects command/game chrome with:
+
+```ts
+await createDefaultCity(page);
+```
+
+Preserve viewport setup before the helper when a test calls `page.setViewportSize(...)` first.
+
+- [ ] **Step 8: Migrate the remaining current gameplay e2e specs**
+
+Apply the same required bootstrap to:
+
+```text
+tests/e2e/topbarViewport.spec.ts
+tests/e2e/routes.spec.ts
+tests/e2e/roundabouts.spec.ts
+```
+
+Each test that expects active gameplay after root navigation must call `createDefaultCity(page)` instead of direct `page.goto("/")`.
+
+- [ ] **Step 9: Scan for remaining direct root navigations and classify every one**
 
 Run:
 
 ```bash
-bun run test:e2e -- tests/e2e/newCity.spec.ts
+rg -n 'page\.goto\("/"\)' tests/e2e
 ```
 
-Expected: PASS. The test demonstrates an actual Rust/WASM candidate was accepted by structured clone, committed to real browser IndexedDB, activated, and published as the active clean city.
+Expected: the dedicated `tests/e2e/newCity.spec.ts` direct navigation remains. Any other match must either:
 
-- [ ] **Step 5: Run nearby browser runtime/e2e regression tests**
+1. be converted to `createDefaultCity(page)` because the test expects gameplay; or
+2. explicitly test the pre-game/New City state and therefore remain direct.
+
+Do not leave an active-game test depending on the old anonymous bootstrap.
+
+- [ ] **Step 10: Run the affected gameplay e2e files together**
 
 Run:
 
 ```bash
-bun run test -- tests/runtime/indexedDbCitySaveStore.test.ts tests/runtime/gameRuntime.test.ts
+bunx playwright test \
+  tests/e2e/newCity.spec.ts \
+  tests/e2e/smoke.spec.ts \
+  tests/e2e/commandShelf.spec.ts \
+  tests/e2e/topbarViewport.spec.ts \
+  tests/e2e/routes.spec.ts \
+  tests/e2e/roundabouts.spec.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 11: Run the complete e2e suite before calling Task 3 green**
+
+Run:
+
+```bash
 bun run test:e2e
 ```
 
-Expected: PASS. Existing e2e tests that previously assumed immediate game-shell startup will now need to create a city first if they use the real `main.ts` bootstrap.
+Expected: PASS. The Task 3 e2e bootstrap work is mandatory; do not defer helper/call-site migration after the new test passes.
 
-For those tests, add one small helper to `tests/e2e/helpers.ts` only if more than one spec needs the same setup:
-
-```ts
-export async function createDefaultCity(
-  page: Page,
-  name = "E2E City",
-): Promise<void> {
-  if ((await page.getByTestId("new-city-screen").count()) === 0) return;
-  await page.getByLabel("City name").fill(name);
-  await page.getByRole("button", { name: "Create City" }).click();
-  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
-}
-```
-
-Call it immediately after `page.goto("/")` in existing gameplay specs. Do not bypass the UI by mutating IndexedDB or `window.__caelumRuntime` to seed an active city.
-
-- [ ] **Step 6: Commit the browser wiring/e2e slice**
-
-```bash
-git add src/main.ts tests/e2e/newCity.spec.ts tests/e2e/helpers.ts tests/e2e
-git commit -m "feat: persist new browser cities in indexeddb"
-```
-
-The broad `tests/e2e` add is intentional only because existing gameplay specs may require the shared `createDefaultCity` call after the no-city startup change; inspect `git diff --cached` before committing and ensure there are no unrelated test edits.
-
----
-
-## Task 4: Update architecture notes and run full verification
-
-**Files:**
-- Modify: `docs/architecture.md` in the runtime/persistence section
-- Verify all files changed in Tasks 1-3
-
-**Interfaces:**
-- Documentation records the implemented boundary only; it must not promise HPA-344/HPA-346 behavior as already available.
-
-- [ ] **Step 1: Document the no-city and browser-store boundary**
-
-Add a concise subsection to `docs/architecture.md` near the current runtime/persistence discussion:
-
-```markdown
-### New City entry and local browser persistence
-
-`App.svelte` treats `RuntimeSnapshot.persistence.activeCity === null` as the
-pre-game New City state. The entry form submits only city name, economy preset,
-and sandbox template to `RuntimePersistenceController.createCity`; the working-
-save runtime supplies the fixed canonical sandbox defaults, builds a pure Rust
-candidate, persists it, then activates it.
-
-Browser/WASM bootstrap injects `createIndexedDbCitySaveStore()` into
-`createGameRuntime`. Native Tauri persistence is intentionally not backed by
-IndexedDB; HPA-344 supplies the native `CitySaveStore` behind the same runtime
-contract. Continue/Load and working-save city-library controls remain HPA-346.
-```
-
-Do not add a diagram or architecture layer for this one path.
-
-- [ ] **Step 2: Run formatting**
+- [ ] **Step 12: Run browser build/type checks after bootstrap wiring**
 
 Run:
 
 ```bash
-bun run format
+bun run check
+bun run build
 ```
 
-Expected: Prettier and Rust formatting complete without semantic changes.
+Expected: PASS.
 
-- [ ] **Step 3: Run the complete TypeScript/Svelte/Rust validation suite**
+- [ ] **Step 13: Commit the browser integration plus complete e2e bootstrap migration**
+
+```bash
+git add \
+  src/main.ts \
+  tests/e2e/helpers.ts \
+  tests/e2e/newCity.spec.ts \
+  tests/e2e/smoke.spec.ts \
+  tests/e2e/commandShelf.spec.ts \
+  tests/e2e/topbarViewport.spec.ts \
+  tests/e2e/routes.spec.ts \
+  tests/e2e/roundabouts.spec.ts
+git commit -m "feat: wire browser new city persistence"
+```
+
+---
+
+## Task 4: Align architecture docs and run the full verification gate
+
+**Files:**
+- Modify: `docs/architecture.md`
+- Verify: all Task 1-3 files
+
+**Interfaces:** None. This task records the delivered boundary and proves the branch as a whole.
+
+- [ ] **Step 1: Update architecture documentation with the delivered New City boundary**
+
+Add a concise HPA-345 section to `docs/architecture.md` covering exactly:
+
+```text
+No active city
+  -> NewCityScreen
+  -> RuntimePersistenceController.createCity({ name, economyPreset, templateId })
+  -> GameBackend.buildSandboxSnapshot(canonical hidden defaults)
+  -> browser CitySaveStore.createCity(record)
+  -> GameBackend.restoreSnapshot(candidate)
+  -> runtime installs gameplay and publishes activeCity
+```
+
+Record that browser startup uses `IndexedDbCitySaveStore` while native storage still belongs to HPA-344.
+
+Record that existing gameplay e2e tests explicitly create a default city before interacting with the game shell.
+
+Do not document HPA-346 city-library UI as implemented.
+
+- [ ] **Step 2: Run a stale request-shape scan**
+
+Run:
+
+```bash
+rg -n 'createCity\(|sandbox:' src tests/runtime
+```
+
+Expected: no current `RuntimePersistenceController.createCity` call passes a `sandbox` property. Backend `SandboxCreationRequest` usage is still valid and must not be removed.
+
+- [ ] **Step 3: Run the e2e bootstrap scan**
+
+Run:
+
+```bash
+rg -n 'page\.goto\("/"\)' tests/e2e
+```
+
+Expected: only tests intentionally proving pre-game state use direct root navigation; all active-game specs bootstrap through `createDefaultCity(page)`.
+
+- [ ] **Step 4: Run full frontend unit tests**
+
+Run:
+
+```bash
+bun run test:unit
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Run Rust tests to protect the canonical sandbox/backend boundary**
+
+Run:
+
+```bash
+cargo test --workspace
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Run static verification**
 
 Run:
 
 ```bash
 bun run check
 bun run lint
-bun run test
-bun run rust:test
+bun run format:check
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Run production build**
+
+Run:
+
+```bash
 bun run build
 ```
 
-Expected: all PASS.
+Expected: PASS.
 
-- [ ] **Step 4: Run the complete Chromium suite one final time after build-facing changes**
+- [ ] **Step 8: Run the complete Chromium suite one final time**
 
 Run:
 
@@ -933,63 +1128,64 @@ Run:
 bun run test:e2e
 ```
 
-Expected: PASS in the configured Chromium project.
+Expected: PASS, including the real browser New City/IndexedDB proof and every existing gameplay spec using explicit city bootstrap.
 
-- [ ] **Step 5: Confirm the implementation remains within HPA-345 scope**
+- [ ] **Step 9: Review the final diff for scope**
 
 Run:
 
 ```bash
 git diff --stat main...HEAD
-git diff --name-only main...HEAD
+git diff main...HEAD -- \
+  src/runtime/workingSaveRuntime.ts \
+  src/components/NewCityScreen.svelte \
+  src/App.svelte \
+  src/main.ts \
+  tests/runtime \
+  tests/ui/appShell.test.ts \
+  tests/e2e \
+  docs/architecture.md
 ```
 
-Expected production surface is limited to:
+Confirm the branch does not add:
 
 ```text
-src/runtime/workingSaveRuntime.ts
-src/components/NewCityScreen.svelte
-src/App.svelte
-src/main.ts
-src/styles.css
+city library / Continue / Load UI
+Save Now / Rename / Delete UI
+Tauri filesystem persistence
+IndexedDB-on-Tauri fallback
+retry/recovery/reconciliation
+migrations or legacy readers
+new security framework
+new persistence/form/service abstraction
+new dependency
 ```
 
-plus focused tests, `tests/e2e/helpers.ts` only if shared setup became necessary, and `docs/architecture.md`.
-
-There should be no new Tauri storage code, city-library UI, autosave/recovery modules, migration code, or persistence abstractions.
-
-- [ ] **Step 6: Commit documentation/verification cleanup**
+- [ ] **Step 10: Commit architecture documentation**
 
 ```bash
 git add docs/architecture.md
-git commit -m "docs: document new city persistence flow"
+git commit -m "docs: document new city browser flow"
 ```
-
-If `bun run format` changed files already committed in Tasks 1-3, include only those formatting-only edits with this commit after verifying the diff is non-semantic.
 
 ---
 
-## Self-review checklist
+## Final self-review checklist
 
-Before marking HPA-345 implementation ready for review, verify all of these are true:
+Before implementation is considered complete:
 
-- [ ] The Svelte component has exactly three player choices: name, economy, template.
-- [ ] Hidden sandbox defaults live outside Svelte and match Rust canonical defaults (`120_000`, `1`, `paused`).
-- [ ] `workingSaveRuntime.createCity` still runs build -> create -> restore -> install in that order.
-- [ ] No compatibility overload for the old `{ name, sandbox }` request remains.
-- [ ] No active city means no gameplay chrome is rendered.
-- [ ] Busy state disables the Create button and runtime busy gate remains authoritative.
-- [ ] Player errors are concise and never include `diagnostic` text.
-- [ ] Browser bootstrap injects the real IndexedDB store.
-- [ ] Tauri bootstrap does not use IndexedDB as a fallback.
-- [ ] Chromium proves the actual Rust/WASM snapshot exists in real IndexedDB and the active runtime is clean/paused afterward.
-- [ ] Existing gameplay e2e tests enter through New City rather than bypassing the player flow.
-- [ ] No Save/Load/Rename/Delete/city-library UI slipped into this ticket.
-- [ ] No migration, retry, recovery, security, manager/service, or state-machine framework was introduced.
-- [ ] `bun run check`, `bun run lint`, `bun run test`, `bun run rust:test`, `bun run build`, and `bun run test:e2e` all pass.
-
-## Implementation handoff
-
-Plan complete at `docs/superpowers/plans/2026-08-10-new-city-flow.md`.
-
-Recommended execution mode: **subagent-driven development**, one task at a time with review gates, because the four tasks are independently testable and the browser bootstrap change may require small mechanical updates across existing e2e specs. Inline execution with `superpowers:executing-plans` is also valid.
+- [ ] `NewCityRequest` reuses `EconomyPreset` and `SandboxTemplateId` from `src/domain/types.ts`.
+- [ ] The fixed move-in default is typed as `MoveInRateSelection`.
+- [ ] `tests/runtime/workingSaveRuntime.test.ts`, `tests/runtime/citySaveRuntime.test.ts`, and every other old-shape runtime caller were migrated in Task 1.
+- [ ] No compatibility overload preserves `{ name, sandbox }`.
+- [ ] `snapshot === null` cannot select an empty active-game shell.
+- [ ] `activeCity === null` renders `NewCityScreen`.
+- [ ] New City form exposes only name/economy/template.
+- [ ] Hidden values are `120_000`, `1`, and `"paused"`.
+- [ ] Browser startup uses `createIndexedDbCitySaveStore()`.
+- [ ] Tauri does not receive IndexedDB storage.
+- [ ] `tests/e2e/helpers.ts` contains required `createDefaultCity(page)`.
+- [ ] Every existing gameplay e2e root navigation uses the shared city bootstrap.
+- [ ] The dedicated New City e2e proves a matching named/ID record exists in real browser IndexedDB and contains the current snapshot schema.
+- [ ] Full unit, Rust, type, lint, format, build, and e2e gates pass.
+- [ ] HPA-344 and HPA-346 scope remains untouched.
