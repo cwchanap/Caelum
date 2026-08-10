@@ -95,10 +95,10 @@ scheduled for deletion. Do not extend them, build on them, or preserve their
 invariants in new code. If a task touches one, prefer moving toward the target
 shape.
 
-| Area            | Today                                                                        | Target                                                            |
-| --------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Durable storage | No browser/native durable adapter is wired; `src/main.ts` provides no store. | Browser IndexedDB and native Tauri application-data-file adapters |
-| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path      | Removed, once it measurably slows sandbox work                    |
+| Area            | Today                                                                                          | Target                                         |
+| --------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Durable storage | Browser IndexedDB is wired; Tauri temporarily uses the non-durable memory store until HPA-344. | Native Tauri application-data-file adapter     |
+| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path                        | Removed, once it measurably slows sandbox work |
 
 `CitySaveStore` is the six-operation save boundary: `list`, `read`, `create`,
 `update`, `rename`, and `delete` over `CitySaveRecord`. `workingSaveRuntime.ts`
