@@ -2,75 +2,111 @@
 
 ## Decision
 
-HPA-345 is the next player-visible Phase 1 persistence slice.
+HPA-345 remains the next player-visible Phase 1 persistence slice.
 
-The browser prerequisites are already present on `main`:
+The browser prerequisites are already on `main`:
 
-- HPA-543 provides the focused working-save runtime with active-city state, one busy gate, one dirty boolean, storage-first New City creation, and candidate-first activation.
-- HPA-343 provides the concrete browser IndexedDB `CitySaveStore`.
-- The existing Rust/WASM backend already builds deterministic sandbox candidates and restores them through the same runtime boundary used by native Tauri.
+- HPA-543 provides `RuntimePersistenceController.createCity`, one persistence busy gate, active-city state, dirty tracking, and the storage-first build → create → restore → install lifecycle.
+- HPA-343 provides the real browser `IndexedDbCitySaveStore`.
+- HPA-345 connects those existing pieces to the first player-facing New City screen and then unlocks HPA-346.
 
-HPA-345 should connect those existing pieces. It must not create a second persistence workflow, a second sandbox settings model, or a temporary native storage path.
+The implementation must also keep the Tauri desktop host playable while HPA-344 is still pending. HPA-345 therefore gives Tauri the existing in-memory `CitySaveStore` as an explicitly temporary, non-durable bridge. HPA-344 replaces that branch with native application-data persistence. This is not an IndexedDB-on-Tauri fallback and does not change HPA-344's scope.
 
-## Scope
+## Product scope
 
-A player with no active city can:
+The player can:
 
-1. enter a city name;
-2. choose Standard or Creative economy;
-3. choose Blank Grid or Crossroads;
-4. create the city;
-5. persist the real Rust/WASM candidate in browser IndexedDB before activation;
-6. enter the normal game shell with the created city active, paused, and clean.
+1. start with no active city;
+2. enter a city name;
+3. choose Standard or Creative;
+4. choose Blank Grid or Crossroads;
+5. create the city;
+6. enter the normal paused game shell after the city record is stored and the candidate is activated.
 
-This ticket does not add a city library, Continue/Load, Save Now, Rename, Delete, autosave, checkpoints, recovery, migrations, import/export, cloud sync, or native filesystem persistence.
+Nothing else is added to the city workflow in this ticket.
 
-## Current boundaries to reuse
+HPA-345 does **not** add:
 
-### Working-save runtime
+- city library / Continue / Load;
+- Save Now;
+- Rename / Delete;
+- native durable persistence;
+- checkpoints / autosave / recovery;
+- migration or backward compatibility;
+- retries, rollback, pending/finalize, or reconciliation;
+- security frameworks or hostile-input infrastructure;
+- generic form, persistence-service, state-machine, or DI abstractions.
 
-`src/runtime/workingSaveRuntime.ts` already owns the important lifecycle:
+## Reuse survey
+
+### Runtime lifecycle
+
+Reuse `RuntimePersistenceController.createCity` and `createWorkingSaveRuntime` unchanged in lifecycle order:
 
 ```text
-buildSandboxSnapshot
-  -> createCity(record)
+player request
+  -> buildSandboxSnapshot(candidate)
+  -> CitySaveStore.createCity(record)
   -> restoreSnapshot(candidate)
   -> installRestoredGameplay(candidate)
-  -> publish activeCity + clean state
+  -> publish active city / clean state
 ```
 
-That order remains authoritative.
+No second persistence path is introduced.
 
-A failure before storage leaves current gameplay and storage unchanged. A failure after storage but before successful activation leaves the newly created record available for later loading. HPA-345 must not add rollback, pending/finalize, reconciliation, or automatic cleanup.
+### Domain types
 
-### Browser store
-
-`src/persistence/indexedDbCitySaveStore.ts` already exposes a zero-configuration browser factory:
+Reuse the closed unions already owned by `src/domain/types.ts`:
 
 ```ts
-createIndexedDbCitySaveStore()
+EconomyPreset = "standard" | "creative"
+SandboxTemplateId = "blankGrid" | "crossroads"
+MoveInRateSelection = "paused"
 ```
 
-It implements the existing six-operation `CitySaveStore` and stores snapshots opaquely. HPA-345 wires this adapter into browser startup; the UI never imports or calls IndexedDB.
+Do not add `NewCityEconomyPreset` or `NewCityTemplateId` aliases.
 
-### Native store remains separate
+### Browser storage
 
-HPA-344 still owns the native Tauri `CitySaveStore`.
+Reuse `createIndexedDbCitySaveStore()` with its existing `caelum-city-saves-v1` database and `cities` object store.
 
-Do not use IndexedDB as a temporary Tauri fallback. Until HPA-344 lands, native startup may continue without durable city storage; HPA-349 owns the later browser/native smoke gate.
+The UI and `App.svelte` never access IndexedDB directly.
 
-## Player-facing request contract
+### Tauri transition
 
-The player action should expose only the choices the form actually owns.
+Reuse `createMemoryCitySaveStore()` for the native host **only until HPA-344 lands**.
 
-Reuse the existing domain unions from `src/domain/types.ts` instead of declaring duplicate aliases:
+This preserves the same durability level the current native anonymous sandbox has: none across app restarts. It keeps `bun run tauri:dev` usable after the no-city gate, without pretending browser IndexedDB is a native storage solution.
+
+The bootstrap branch is intentionally obvious and disposable:
 
 ```ts
-import type {
-  EconomyPreset,
-  SandboxTemplateId,
-} from "../domain/types";
+const saveStore = nativeTauri
+  ? createMemoryCitySaveStore() // HPA-344 replaces this with native storage.
+  : createIndexedDbCitySaveStore();
+```
 
+HPA-344 removes the memory branch rather than supporting both permanently.
+
+### Error copy
+
+Reuse the runtime message pattern already established by `rejectionMessage()` in `src/runtime/rejectionMessages.ts`.
+
+Add:
+
+```ts
+workingSaveErrorMessage(error: WorkingSaveError): string
+```
+
+there, with an exhaustive switch and DEV-loud `never` handling. `NewCityScreen.svelte` receives only `string | null` error copy; it does not own persistence error taxonomy.
+
+This keeps the message map reusable when HPA-346 adds Save/Load/Rename/Delete UI.
+
+## Player request contract
+
+Narrow the current backend-shaped New City input to the actual player choice:
+
+```ts
 export interface NewCityRequest {
   name: string;
   economyPreset: EconomyPreset;
@@ -78,65 +114,58 @@ export interface NewCityRequest {
 }
 ```
 
-Do not add `NewCityEconomyPreset` or `NewCityTemplateId`. `EconomyPreset` and `SandboxTemplateId` are already the closed source of truth for the same values.
-
-The runtime translates this player request into the existing backend `SandboxCreationRequest` immediately beside `createCity`.
-
-The hidden values remain fixed to the current Rust canonical defaults:
+The old internal shape:
 
 ```ts
-const NEW_CITY_STARTING_CAPITAL = 120_000;
-const NEW_CITY_DEMAND_MULTIPLIER = 1;
-const NEW_CITY_MOVE_IN_RATE: MoveInRateSelection = "paused";
+{
+  name,
+  sandbox: SandboxCreationRequest
+}
 ```
 
-`MoveInRateSelection` is also reused from `src/domain/types.ts` so the fixed value is checked against the existing closed domain type.
+is removed in the same commit from every production/test caller. No overload or compatibility adapter remains.
 
-These constants intentionally mirror `canonical_default_request()` in `crates/caelum-core/src/sandbox.rs`. Do not create a frontend sandbox-settings object, config service, or extra form fields.
+## Hidden sandbox defaults
 
-## Runtime responsibility
+The player does not see advanced sandbox tuning in HPA-345.
 
-`RuntimePersistenceController.createCity(request)` keeps its existing method name and result type.
+The runtime translates the player request into the current required host request using:
 
-The only contract change is the input shape. Internally it builds the backend request:
+- starting capital `120_000`;
+- demand multiplier `1`;
+- move-in rate `"paused"`.
 
-```ts
-const candidate = await host.backend.buildSandboxSnapshot({
-  templateId: request.templateId,
-  economyPreset: request.economyPreset,
-  startingCapital: NEW_CITY_STARTING_CAPITAL,
-  demandMultiplier: NEW_CITY_DEMAND_MULTIPLIER,
-  moveInRate: NEW_CITY_MOVE_IN_RATE,
-});
-```
+`MoveInRateSelection` types the fixed move-in value. The numeric values remain beside `createCity` with a source comment pointing to `canonical_default_request()` in `crates/caelum-core/src/sandbox.rs`.
 
-Everything after candidate construction stays unchanged:
+### Why HPA-345 does not make the numeric fields optional
 
-- generate the city ID and timestamp through the existing injected dependencies;
-- create one `CitySaveRecord`;
-- call `saveStore.createCity(record)`;
-- restore/install only after storage succeeds;
-- publish `activeCity` only after activation succeeds;
-- clear dirty state on success;
-- preserve existing busy/error behavior.
+The Rust request already uses `Option<f64>` internally, but `validate_request` intentionally treats `None` as:
 
-There is no compatibility overload for the old `{ name, sandbox }` request. All current callers change in the same implementation slice.
+- `InvalidStartingCapital`; and
+- `InvalidDemandMultiplier`.
 
-## Contract blast radius
+`crates/caelum-core/tests/sandbox_coverage.rs` explicitly characterizes null/missing values as typed errors. Making `None` mean "use the default" would weaken that strict request contract and change existing semantics beyond what New City needs.
 
-The request shape is already exercised outside `workingSaveRuntime.test.ts`.
+HPA-345 therefore does **not** change Rust parsing to default omitted numeric fields.
 
-Task 1 must update every current runtime/test caller, including at minimum:
+### Drift protection
 
-- `tests/runtime/workingSaveRuntime.test.ts`;
-- `tests/runtime/citySaveRuntime.test.ts`;
-- `tests/runtime/gameRuntime.test.ts` when its `createCity` setup uses the old `{ sandbox }` form.
+A TypeScript-only test asserting `120_000` against another TypeScript literal cannot detect Rust-default drift.
 
-The task ends with a repository scan for old `{ sandbox }` New City calls plus the full frontend type-check/unit gate. A green focused working-save test alone is not sufficient evidence for this breaking internal contract change.
+The required Chromium New City proof must instead:
 
-## No-city application state
+1. wait for the real WASM runtime and pre-game screen;
+2. capture the anonymous pre-game runtime snapshot produced by `WasmGameEngine::new()` / `GameEngine::new()`;
+3. create a default Standard/Crossroads city through the UI;
+4. compare the created city's hidden sandbox values against that pre-game Rust-owned snapshot:
+   - budget / starting capital;
+   - demand multiplier;
+   - move-in rate;
+5. read the committed IndexedDB record and verify the same created city by name/ID.
 
-The no-city state is a real pre-game screen, not an empty version of the active game shell.
+If Rust changes its canonical hidden defaults while the TypeScript translation remains stale, this real-engine comparison fails.
+
+## UI boundary
 
 Create one focused component:
 
@@ -144,246 +173,213 @@ Create one focused component:
 src/components/NewCityScreen.svelte
 ```
 
-It receives only:
+Props:
 
 ```ts
 interface Props {
   busy: boolean;
-  error: WorkingSaveError | null;
+  error: string | null;
   onCreate: (request: NewCityRequest) => void;
 }
 ```
 
-The component owns local form state only:
+Local state contains only:
 
-- city name;
-- economy preset;
-- template.
+- name;
+- `EconomyPreset`;
+- `SandboxTemplateId`.
 
 Defaults:
 
-- economy: `standard`;
-- template: `crossroads`.
+- Standard;
+- Crossroads.
 
-The component does not know about `GameBackend`, `CitySaveStore`, IndexedDB, WASM, Tauri, timestamps, IDs, snapshots, or hidden sandbox tuning.
+Name behavior:
 
-## Initial render gate
+- trim on submit;
+- disable Create while trimmed name is empty;
+- normal Svelte escaping only.
 
-`App.svelte` initializes its local `snapshot` to `null`, then seeds it from `runtime.getSnapshot()` in an effect. Therefore the pre-game check must treat both `snapshot === null` and `activeCity === null` as no-city state.
+No advanced settings, snapshot data, store object, backend object, diagnostics, or persistence error union crosses into the component.
 
-Do not use:
+## App rendering gate
 
-```svelte
-snapshot?.persistence.activeCity === null
-```
+`App.svelte` keeps the existing fatal-shell branch first.
 
-because it is false while `snapshot` is still `null` and would briefly select the active-game branch.
-
-Use an equivalent nullish gate such as:
+The pre-game branch is selected whenever no active city is available:
 
 ```svelte
-{#if snapshot?.persistence.activeCity == null}
+{:else if snapshot?.persistence.activeCity == null}
   <NewCityScreen
     busy={snapshot?.persistence.busy ?? false}
-    error={snapshot?.persistence.error ?? null}
+    error={snapshot?.persistence.error == null
+      ? null
+      : workingSaveErrorMessage(snapshot.persistence.error)}
     onCreate={handleCreateCity}
   />
 {:else}
-  <!-- normal active-game shell -->
+  <!-- existing active game shell -->
 {/if}
 ```
 
-The existing fatal shell-error branch remains outside and above this gate.
+The nullish form is correct for both `snapshot === null` and `activeCity === null`, but HPA-345 does not add a dedicated "observe snapshot before Svelte's initial effect flush" test. Existing Svelte rendering seeds `snapshot` during the render lifecycle, so that transient state is not a meaningful user-visible contract.
 
-This prevents an empty game shell from flashing before the initial runtime snapshot is seeded.
-
-## Form behavior
-
-The form follows the existing desktop Signal Console visual language without becoming another UI system.
-
-Required behavior:
-
-- trim leading/trailing whitespace from the name on submit;
-- disable Create while the trimmed name is empty;
-- disable all repeat submission while persistence is busy;
-- show `Creating…` while busy;
-- submit only `{ name, economyPreset, templateId }`;
-- rely on normal Svelte escaping for the name;
-- keep the form visible after a failure so the player can retry.
-
-Do not add length policies, character allowlists, sanitization libraries, async name validation, or uniqueness checks. City IDs, not names, provide storage identity.
+The focused UI test is the real branch condition: a runtime snapshot whose `activeCity` is null renders New City instead of game chrome.
 
 ## Error copy
 
-`WorkingSaveError` stays the runtime contract. The screen maps it to concise player copy and does not render adapter diagnostics.
+`workingSaveErrorMessage` owns concise player copy and never exposes adapter/backend diagnostics.
 
-Representative mapping:
+The mapping stays small and tied to existing unions:
 
-- `busy` -> `City creation is already in progress.`
-- `sandbox` / `backend` -> `Could not create that city setup.`
-- `store` -> `Could not save the new city.`
-- `unavailable` -> `City storage is unavailable.`
-- `noActiveCity` is not expected from creation; use a generic creation failure if it is ever observed.
+- busy → another city action is already in progress;
+- unavailable → city storage is unavailable;
+- no active city → no city is active;
+- sandbox → city setup could not be created;
+- backend → city state could not be applied;
+- store → message derived from the existing six `CitySaveStoreOperation` values.
 
-A store error may contain a browser diagnostic such as an IndexedDB error name. The screen does not display it.
+For `createCity`, the New City screen therefore receives a generic save failure rather than IndexedDB names, quota details, stack traces, or host diagnostics.
 
-## App transition
+No UI-specific error switch is duplicated in Svelte.
 
-`App.svelte` calls only:
+## Browser/Tauri bootstrap
 
-```ts
-runtime.persistence.createCity(request)
+`src/main.ts` determines the current host once and passes a store for both paths:
+
+```text
+browser/WASM -> createIndexedDbCitySaveStore()
+native Tauri -> createMemoryCitySaveStore()   // temporary until HPA-344
 ```
 
-The runtime already publishes `busy`, `error`, and final `activeCity` state through its normal subscription path. App does not manually synthesize persistence state.
+This store wiring lands **before** the no-city gate, so every intermediate implementation commit remains playable:
 
-When `activeCity` becomes non-null, the existing active-game shell renders. The restored candidate already resets transient UI through `installRestoredGameplay`, so no extra App reset is needed.
+1. request contract changes;
+2. host store wiring (inert while the old anonymous UI remains);
+3. runtime error-message mapping;
+4. pre-game gate + UI + e2e migration;
+5. docs / final verification.
 
-## Browser bootstrap
+No commit should leave browser Create permanently unavailable or make the current Tauri host impossible to enter.
 
-`src/main.ts` currently creates a backend and then creates a runtime without a save store.
+## E2E bootstrap contract
 
-HPA-345 changes startup so the browser/WASM path gets the real IndexedDB adapter while Tauri does not receive a fake browser fallback.
+Existing gameplay e2e specs currently assume `page.goto("/")` opens an active game. After HPA-345 that assumption is invalid.
 
-Use the existing runtime detection boundary, conceptually:
-
-```ts
-const tauri = isTauriRuntime();
-const backend = await createBackend();
-const saveStore = tauri ? undefined : createIndexedDbCitySaveStore();
-const runtime = await createGameRuntime({ backend, saveStore });
-```
-
-Exact local ordering may be adjusted to keep startup code simple, but the invariant is fixed:
-
-- browser -> IndexedDB store;
-- Tauri -> no IndexedDB fallback in this ticket.
-
-## Required browser proof
-
-HPA-345 requires one real Chromium New City proof. `fake-indexeddb` unit tests from HPA-343 are not sufficient for this integration ticket.
-
-Add a focused Playwright case that:
-
-1. opens `/` with a fresh browser context;
-2. sees the New City screen;
-3. enters a city name and creates a city;
-4. waits for the normal game canvas/shell;
-5. reads `runtime.getSnapshot()` and confirms the active city name;
-6. opens the real `caelum-city-saves-v1` IndexedDB database from page context;
-7. reads the `cities` object store;
-8. finds a record whose `record.city.name` matches the created name;
-9. confirms the stored record contains the expected active city ID and a real Rust snapshot/schema;
-10. confirms the runtime is active and clean.
-
-Assert by matching the created city name/ID, not by assuming the entire object store has exactly one record. Playwright currently provides a fresh context per test, but a name/ID match is more durable if test storage strategy changes later.
-
-Do not expose a production IndexedDB debug hook just for this assertion.
-
-## Existing e2e bootstrap is part of HPA-345
-
-The current gameplay e2e suite directly calls `page.goto("/")` and assumes the game shell is immediately active. After the no-city gate, those tests will correctly land on `NewCityScreen` instead.
-
-Updating those specs is mandatory work, not optional cleanup.
-
-Add a shared helper in `tests/e2e/helpers.ts`:
+Add mandatory shared helper:
 
 ```ts
-createDefaultCity(page)
+export async function createDefaultCity(
+  page: Page,
+  name = "E2E City",
+): Promise<void> {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByLabel("City name").fill(name);
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+}
 ```
 
-The helper should:
+The helper is unconditional. Playwright config has no shared `storageState`; each test context is fresh, so the pre-game screen is expected. A one-shot `isVisible()` check is specifically rejected because WASM/backend initialization may finish after `page.goto()` resolves.
 
-1. navigate to `/`;
-2. create a default Standard/Crossroads city if `new-city-screen` is visible;
-3. wait for `game-canvas-host` to become visible;
-4. return only after the ordinary gameplay shell is ready.
+Every gameplay spec that currently navigates to `/` and then assumes the game shell must call this helper before gameplay assertions.
 
-Replace direct gameplay-start `page.goto("/")` calls with this helper in every affected current spec, including the files found on current `main`:
+The dedicated New City persistence smoke does **not** call the helper because it needs to inspect pre-game state and the persistence transition itself.
 
-- `tests/e2e/smoke.spec.ts`;
-- `tests/e2e/commandShelf.spec.ts`;
-- `tests/e2e/topbarViewport.spec.ts`;
-- `tests/e2e/routes.spec.ts`;
-- `tests/e2e/roundabouts.spec.ts`.
+## Focused tests
 
-The dedicated New City integration test keeps its direct `page.goto("/")` because proving the pre-game state is the point of that test.
+### Runtime request tests
 
-The Task 3 acceptance gate includes a repository scan for remaining direct gameplay `page.goto("/")` sites and a full `bun run test:e2e` pass. The suite is not considered green until every affected existing gameplay test bootstraps a city explicitly.
+Keep the existing lifecycle coverage and migrate every old request-shape caller in one task:
 
-## Testing strategy
+- `tests/runtime/workingSaveRuntime.test.ts`;
+- `tests/runtime/citySaveRuntime.test.ts`;
+- any current `tests/runtime/gameRuntime.test.ts` caller found by the required repository scan.
 
-### Runtime tests
+The unit test characterizes request translation; the Chromium test owns Rust-default drift detection.
 
-Reuse and update existing New City lifecycle coverage instead of duplicating it:
+### Runtime message tests
 
-- candidate build -> store -> restore -> install ordering;
-- create conflict;
-- candidate failure;
-- store failure;
-- activation failure preserving the created record;
-- busy suppression;
-- disposal behavior.
+Extend `tests/runtime/rejectionMessages.test.ts` to prove:
 
-Add one characterization proving the new player request maps to the fixed hidden defaults.
-
-Update all old request-shape callers in the same task.
+- each `WorkingSaveError.kind` returns concise copy;
+- create-store diagnostics are not included;
+- store-operation messages cover the existing closed `CitySaveStoreOperation` union;
+- DEV handling stays exhaustive.
 
 ### Svelte tests
 
-Add focused cases for:
+Cover:
 
-- `snapshot === null` renders the New City pre-game screen, not an empty active shell;
-- `activeCity === null` renders the New City screen;
-- active city renders the existing game shell;
-- trimmed non-empty name is required;
-- economy/template submission uses the domain values;
-- busy disables duplicate submit;
-- concise error copy hides diagnostics;
-- successful runtime publication transitions into the game shell.
+- `activeCity: null` renders New City and hides active game chrome;
+- request contains only trimmed name + economy + template;
+- busy disables repeat submission;
+- runtime-mapped error text is shown without diagnostics;
+- publishing an active city returns to the normal game shell.
 
-Do not build a large form-validation matrix.
+Do not add a special test for an unobservable pre-effect `snapshot === null` frame.
 
-### Playwright
+### Chromium persistence proof
 
-Required:
+One real browser smoke must prove:
 
-- one real New City + real IndexedDB proof;
-- mandatory `createDefaultCity` bootstrap for every existing gameplay e2e spec;
-- full existing e2e suite remains green.
+- real WASM candidate creation;
+- real IndexedDB structured clone / commit;
+- storage-before-activation path completes;
+- active city is paused and clean;
+- committed record is found by created city name/ID, not by assuming `records.length === 1`;
+- hidden defaults on the created snapshot match the pre-game Rust-owned canonical snapshot.
 
-## Deliberate non-goals
+No `fake-indexeddb` is used for this proof.
 
-HPA-345 does not include:
+## Failure behavior
 
-- city list/library;
-- Continue/Load;
-- Save Now controls;
-- Rename/Delete controls;
-- native Tauri city files;
-- autosave/checkpoints/save history;
-- recovery/reconciliation;
-- import/export;
-- migrations or old-save readers;
-- cloud sync;
-- encryption/signing/checksums;
-- multi-tab/window ownership;
-- generic repository/service/form abstractions;
-- new dependencies.
+Existing `workingSaveRuntime.createCity` behavior remains authoritative:
 
-HPA-344 and HPA-346 remain unchanged.
+- candidate failure: no record, active gameplay unchanged;
+- create conflict: no overwrite, active gameplay unchanged;
+- store failure: no activation;
+- returned activation rejection: created record remains available;
+- ambiguous thrown restore/install: runtime applies its existing safety behavior;
+- duplicate submit: busy gate rejects/disables overlap.
+
+HPA-345 adds no rollback, cleanup, retry, or recovery layer.
 
 ## Acceptance criteria
 
-- [ ] `NewCityRequest` uses existing `EconomyPreset` and `SandboxTemplateId` domain types; no duplicate aliases are introduced.
-- [ ] All current `{ name, sandbox }` New City callers are migrated in one contract-change task.
-- [ ] The form exposes only name, economy, and template.
-- [ ] Hidden sandbox values remain the current canonical `120_000`, `1`, and typed `"paused"` defaults.
-- [ ] Initial `snapshot === null` and `activeCity === null` both render the New City pre-game screen.
-- [ ] UI calls only `runtime.persistence.createCity` and never accesses storage/backend APIs.
-- [ ] Storage succeeds before activation and the existing working-save lifecycle is reused unchanged after candidate construction.
-- [ ] Browser startup uses `createIndexedDbCitySaveStore()`.
-- [ ] Tauri does not receive an IndexedDB fallback.
-- [ ] One Chromium test proves a real Rust/WASM candidate is committed to real browser IndexedDB and activated.
-- [ ] Existing gameplay e2e specs use the required shared `createDefaultCity` bootstrap and the full e2e suite passes.
-- [ ] No HPA-344 or HPA-346 functionality is pulled into this ticket.
+- [ ] `NewCityRequest` uses existing domain unions and contains only player-facing fields.
+- [ ] Every current `{ name, sandbox }` runtime/test caller is migrated in the request-contract commit.
+- [ ] Hidden numeric settings remain required at the strict Rust host boundary; HPA-345 does not change null/missing validation semantics.
+- [ ] One real-WASM Chromium assertion compares created hidden settings with the Rust-owned pre-game canonical snapshot.
+- [ ] Browser startup uses the real IndexedDB store.
+- [ ] Tauri startup uses the existing in-memory store temporarily and remains playable until HPA-344 replaces it with native persistence.
+- [ ] No IndexedDB-on-Tauri fallback is introduced.
+- [ ] Player-facing `WorkingSaveError` copy lives under `src/runtime/`, not inside Svelte.
+- [ ] No active city renders the focused New City screen; an active city renders the existing game shell.
+- [ ] New City invokes only `runtime.persistence.createCity` from UI code.
+- [ ] All existing gameplay e2e tests explicitly create a default city through a retrying/assertive shared helper.
+- [ ] The dedicated Chromium smoke reads real IndexedDB and matches the committed city by name/ID.
+- [ ] No city library, Save/Load, Rename/Delete, recovery, migration, compatibility, security, or generic framework is added.
+- [ ] HPA-344 and HPA-346 remain separate downstream work.
+
+## Follow-on boundaries
+
+### HPA-344
+
+Replace only the Tauri `createMemoryCitySaveStore()` bootstrap branch with the native application-data `CitySaveStore` adapter and add native persistence evidence.
+
+### HPA-346
+
+Build the city library and working-save UI on the same runtime/store contracts:
+
+- Continue / Load;
+- Save Now;
+- Rename;
+- Delete.
+
+It reuses `workingSaveErrorMessage` instead of inventing UI-local persistence copy.
+
+### Later work
+
+Autosave, checkpoints, recovery, import/export, migrations, cloud sync, multi-instance ownership, and release hardening remain deferred until separately justified.
