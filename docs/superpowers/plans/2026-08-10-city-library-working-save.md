@@ -19,6 +19,7 @@
 - Keep the existing dirty boolean; expose only `Saved` / `Unsaved changes` and explicit `Save Now`.
 - Delete uses one inline confirmation step; no modal framework.
 - Reuse `NewCityScreen.svelte`; add only optional Cancel behavior.
+- A Retry control is shown only for a failed `listCities()` read. Save/Load/Rename/Delete failures remain retryable through their original action buttons and must not relabel a list refresh as an operation retry.
 - Add no autosave, checkpoints, recovery, duplicate-city, folders, tags, search, thumbnails, import/export, cloud sync, migration, compatibility, multi-instance ownership, security hardening, or new dependency.
 - HPA-344 remains native durability. HPA-349 remains final cross-host smoke.
 
@@ -59,7 +60,7 @@ interface Props {
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
   onNewCity: () => void;
-  onRetry: () => void;
+  onRetry?: () => void;
 }
 ```
 
@@ -331,7 +332,7 @@ Create `src/components/city/CityLibraryScreen.svelte`:
     onRename: (cityId: string, name: string) => void;
     onDelete: (cityId: string) => void;
     onNewCity: () => void;
-    onRetry: () => void;
+    onRetry?: () => void;
   }
 
   let {
@@ -356,7 +357,9 @@ Create `src/components/city/CityLibraryScreen.svelte`:
     {#if error !== null}
       <div class="city-library-error">
         <p role="alert">{error}</p>
-        <button type="button" onclick={onRetry}>Retry</button>
+        {#if onRetry !== undefined}
+          <button type="button" onclick={onRetry}>Retry city list</button>
+        {/if}
       </div>
     {/if}
 
@@ -607,9 +610,25 @@ persistence: {
 },
 ```
 
-- [ ] **Step 2: Update/add the no-active-city tests**
+- [ ] **Step 2: Migrate every existing no-active-city test to wait for the list read**
 
-Replace the existing synchronous empty-storage branch test and add saved-list/Continue/retry tests:
+The HPA-345 tests currently assume `NewCityScreen` is synchronous. After HPA-346, the first render is a city-list loading state. For every existing `createRuntimeHarness({ persistence: { activeCity: null } })` test that interacts with the New City form, await the form before the first query:
+
+```ts
+render(App, { props: { runtime } });
+await screen.findByTestId("new-city-screen");
+```
+
+Specifically update the existing tests for:
+
+```text
+shows New City instead of game chrome
+submits only trimmed name, economy, and template
+disables repeat New City submission while persistence is busy
+shows runtime-mapped persistence copy without diagnostics
+```
+
+The first becomes:
 
 ```ts
 it("shows New City when no city is active and storage is empty", async () => {
@@ -622,7 +641,45 @@ it("shows New City when no city is active and storage is empty", async () => {
   expect(await screen.findByTestId("new-city-screen")).toBeVisible();
   expect(screen.queryByTestId("game-canvas-host")).toBeNull();
 });
+```
 
+For the submit test, insert:
+
+```ts
+await screen.findByTestId("new-city-screen");
+const create = screen.getByRole("button", { name: "Create City" });
+```
+
+For the busy test, insert:
+
+```ts
+await screen.findByTestId("new-city-screen");
+await fireEvent.input(screen.getByLabelText("City name"), {
+  target: { value: "Busy City" },
+});
+```
+
+For the mapped-error test, wait for the form before calling `setPersistence()`:
+
+```ts
+await screen.findByTestId("new-city-screen");
+harness.setPersistence({
+  error: {
+    kind: "store",
+    error: {
+      operation: "createCity",
+      code: "failed",
+      diagnostic: "QuotaExceededError: private browser detail",
+    },
+  },
+});
+```
+
+- [ ] **Step 3: Add saved-list/Continue/list-error tests**
+
+Add:
+
+```ts
 it("shows the library when saved cities exist and no city is active", async () => {
   const { runtime } = createRuntimeHarness({
     persistence: { activeCity: null },
@@ -671,13 +728,15 @@ it("maps a list failure and retries without exposing diagnostics", async () => {
   expect(alert).toHaveTextContent("Could not load the city list.");
   expect(alert).not.toHaveTextContent("private storage detail");
 
-  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await fireEvent.click(
+    screen.getByRole("button", { name: "Retry city list" }),
+  );
   expect(await screen.findByText("Maple Junction")).toBeVisible();
   expect(listCities).toHaveBeenCalledTimes(2);
 });
 ```
 
-- [ ] **Step 3: Run the App tests red**
+- [ ] **Step 4: Run the App tests red**
 
 ```bash
 bun run test -- tests/ui/appShell.test.ts
@@ -685,7 +744,7 @@ bun run test -- tests/ui/appShell.test.ts
 
 Expected: the new library assertions FAIL before App orchestration is added.
 
-- [ ] **Step 4: Add the UI-local city-list state and read helper**
+- [ ] **Step 5: Add the UI-local city-list state and read helper**
 
 In `src/App.svelte`, import:
 
@@ -720,7 +779,7 @@ async function refreshCities(): Promise<void> {
 }
 ```
 
-- [ ] **Step 5: Make New City and Load handlers await their existing runtime operations**
+- [ ] **Step 6: Make New City and Load handlers await their existing runtime operations**
 
 Replace the current fire-and-forget create handler and add load:
 
@@ -742,7 +801,7 @@ async function handleLoadCity(cityId: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 6: Start one initial list read in the existing mount lifecycle**
+- [ ] **Step 7: Start one initial list read in the existing mount lifecycle**
 
 Keep the current subscribe/start/dispose sequence and add only:
 
@@ -751,7 +810,7 @@ runtime.start();
 void refreshCities();
 ```
 
-- [ ] **Step 7: Replace the no-active-city branch**
+- [ ] **Step 8: Replace the no-active-city branch**
 
 Keep the fatal branch first. Before the existing active game-shell branch, use:
 
@@ -781,7 +840,7 @@ Keep the fatal branch first. Before the existing active game-shell branch, use:
       onRename={(cityId, name) => void handleRenameCity(cityId, name)}
       onDelete={(cityId) => void handleDeleteCity(cityId)}
       onNewCity={() => (showNewCity = true)}
-      onRetry={() => void refreshCities()}
+      onRetry={cityListError === null ? undefined : () => void refreshCities()}
     />
   {/if}
 {:else}
@@ -789,11 +848,11 @@ Keep the fatal branch first. Before the existing active game-shell branch, use:
 
 The active game-shell body after that final `{:else}` remains unchanged in Task 2.
 
-Task 3 adds the referenced rename/delete handlers before this branch is committed; implement Tasks 2 and 3 on the same working branch and commit only after both compile. This keeps the plan's review boundary at the complete player workflow rather than creating a knowingly broken intermediate commit.
+Task 3 adds the referenced rename/delete handlers before this branch is committed. Implement Tasks 2 and 3 on the same working branch and commit only after the combined App/CityPanel slice passes its tests.
 
-- [ ] **Step 8: Do not commit yet; continue directly into Task 3**
+- [ ] **Step 9: Continue directly into Task 3 without committing a broken intermediate App**
 
-Task 2 introduces the library read/render flow, while Task 3 completes the mutation callbacks already wired above. The first implementation commit occurs at the end of Task 3 after the combined App/CityPanel slice passes its tests.
+No production commit is made between Tasks 2 and 3. The reviewable commit boundary is the complete working-save UI after the missing callbacks and City panel are in place.
 
 ---
 
@@ -820,6 +879,7 @@ interface CityPanelProps {
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
   onNewCity: () => void;
+  onRetryList?: () => void;
 }
 ```
 
@@ -960,6 +1020,9 @@ it("keeps the active game visible when Load fails", async () => {
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Could not apply the city state.",
   );
+  expect(
+    screen.queryByRole("button", { name: "Retry city list" }),
+  ).toBeNull();
 });
 ```
 
@@ -1017,6 +1080,7 @@ interface Props {
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
   onNewCity: () => void;
+  onRetryList?: () => void;
 }
 ```
 
@@ -1041,6 +1105,9 @@ Immediately below it add:
 </div>
 {#if error !== null}
   <p class="city-action-error" role="alert">{error}</p>
+{/if}
+{#if onRetryList !== undefined}
+  <button type="button" onclick={onRetryList}>Retry city list</button>
 {/if}
 ```
 
@@ -1079,6 +1146,7 @@ At the existing CityPanel call inside the active game-shell branch, use an expli
     onRename={(cityId, name) => void handleRenameCity(cityId, name)}
     onDelete={(cityId) => void handleDeleteCity(cityId)}
     onNewCity={() => (showNewCity = true)}
+    onRetryList={cityListError === null ? undefined : () => void refreshCities()}
   />
 {/if}
 ```
@@ -1250,7 +1318,7 @@ git commit -m "test: cover city library reload flow"
 - New City from saved-library/active-game surfaces: Tasks 2-3, reusing `NewCityScreen`.
 - Busy behavior: Tasks 1 and 3.
 - Dirty presentation: Task 3.
-- List/runtime error copy: Tasks 2-3 reuse `workingSaveErrorMessage`.
+- List/runtime error copy: Tasks 2-3 reuse `workingSaveErrorMessage`; only list failures expose a list Retry control.
 - Real browser reload/Continue: Task 4.
 - Native persistence: explicitly remains HPA-344.
 
@@ -1263,5 +1331,6 @@ Every new test and production branch has concrete code or a precise modification
 - `CitySummary` is reused from `src/persistence/citySaveStore.ts`.
 - `RuntimePersistenceController` remains unchanged.
 - Every active-panel test explicitly sets `activeCity: CITY_NEW` and supplies `[CITY_NEW, CITY_OLD]`, so the active summary is present in the rendered list.
+- Every existing no-active New City test waits for the initial `listCities()` read before querying the form.
 - `CityPanel.activeCity` is non-null through an explicit template guard.
 - `cities: CitySummary[] | null` uses `null` only for initial/pending list reads; it is not a second persistence lifecycle state.
