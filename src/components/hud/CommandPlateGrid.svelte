@@ -18,11 +18,17 @@
   function nextIndex(index: number, key: string): number {
     const row = Math.floor(index / 2);
     const column = index % 2;
-    if (key === "ArrowRight" || key === "ArrowLeft") {
-      return row * 2 + (column === 0 ? 1 : 0);
+    if (key === "ArrowRight" && column < 1) {
+      return row * 2 + 1;
     }
-    if (key === "ArrowDown" || key === "ArrowUp") {
-      return (row === 0 ? 1 : 0) * 2 + column;
+    if (key === "ArrowLeft" && column > 0) {
+      return row * 2;
+    }
+    if (key === "ArrowDown" && row < 1) {
+      return 2 + column;
+    }
+    if (key === "ArrowUp" && row > 0) {
+      return column;
     }
     return index;
   }

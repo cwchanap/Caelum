@@ -170,7 +170,7 @@
         </button>
       </div>
 
-      <div
+      <section
         bind:this={listRegion}
         class="lines-list-region"
         data-testid="lines-list"
@@ -315,7 +315,7 @@
             {/each}
           </ul>
         {/if}
-      </div>
+      </section>
     </section>
   {/if}
 </div>

@@ -41,4 +41,35 @@ describe("CommandPlateGrid", () => {
       expect(button).not.toHaveAttribute("tabindex");
     }
   });
+
+  it("keeps focus in place when an arrow has no neighbor at a grid edge", async () => {
+    render(CommandPlateGrid, { props: { plates, onSelect: vi.fn() } });
+    const roads = screen.getByRole("button", { name: "Roads" });
+    const transit = screen.getByRole("button", { name: "Transit" });
+    const zones = screen.getByRole("button", { name: "Zones" });
+    const buildings = screen.getByRole("button", { name: "Buildings" });
+
+    // Left edge: ArrowLeft from column 0 must not wrap to column 1.
+    roads.focus();
+    await fireEvent.keyDown(roads, { key: "ArrowLeft" });
+    expect(roads).toHaveFocus();
+
+    // Right edge: ArrowRight from column 1 must not wrap to column 0.
+    transit.focus();
+    await fireEvent.keyDown(transit, { key: "ArrowRight" });
+    expect(transit).toHaveFocus();
+
+    // Top edge: ArrowUp from row 0 must not wrap to row 1.
+    roads.focus();
+    await fireEvent.keyDown(roads, { key: "ArrowUp" });
+    expect(roads).toHaveFocus();
+
+    // Bottom edge: ArrowDown from row 1 must not wrap to row 0.
+    zones.focus();
+    await fireEvent.keyDown(zones, { key: "ArrowDown" });
+    expect(zones).toHaveFocus();
+    buildings.focus();
+    await fireEvent.keyDown(buildings, { key: "ArrowDown" });
+    expect(buildings).toHaveFocus();
+  });
 });

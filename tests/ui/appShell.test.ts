@@ -421,7 +421,7 @@ describe("App command shell", () => {
     const feedback = screen.getByTestId("action-feedback");
     expect(feedback).toHaveAttribute("data-source", "rejection");
     expect(feedback).toHaveAttribute("data-tone", "error");
-    expect(screen.getByTestId("action-feedback-slot")).toHaveAttribute(
+    expect(screen.getByTestId("action-feedback-announce")).toHaveAttribute(
       "role",
       "status",
     );
