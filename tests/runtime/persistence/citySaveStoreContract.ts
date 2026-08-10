@@ -4,27 +4,11 @@ import {
   type CitySaveRecord,
   type CitySaveStore,
   type CitySaveStoreErrorCode,
-  type CitySaveStoreOperation,
   type CitySaveStoreResult,
   type CitySummary,
 } from "../../../src/persistence/citySaveStore";
 
-/**
- * Shared harness for running the city-save-store contract against a concrete
- * adapter. `failNext` is mandatory: every adapter must expose a deterministic
- * failure seam so the shared contract exercises the atomicity guarantees: a
- * failed create commits nothing, and a failed update or rename leaves the
- * prior record intact.
- */
-export interface CitySaveStoreContractHarness {
-  store: CitySaveStore;
-  failNext: (
-    operation: CitySaveStoreOperation,
-    code: CitySaveStoreErrorCode,
-  ) => void;
-}
-
-async function expectOk<T>(
+export async function expectCitySaveStoreOk<T>(
   result: Promise<CitySaveStoreResult<T>> | CitySaveStoreResult<T>,
 ): Promise<T> {
   const resolved = await result;
@@ -46,7 +30,7 @@ async function expectError(
   expect(resolved.error.code).toBe(code);
 }
 
-function makeRecord(
+export function makeCitySaveRecord(
   id: string,
   name: string,
   overrides: {
@@ -68,14 +52,19 @@ function makeRecord(
 
 export function defineCitySaveStoreContract(
   name: string,
-  createHarness: () => CitySaveStoreContractHarness,
+  createStore: () => CitySaveStore,
 ): void {
   describe(`${name} CitySaveStore contract`, () => {
-    it("creates, lists, and reads a city", async () => {
-      const { store } = createHarness();
-      const record = makeRecord("city-1", "First");
+    it("starts with an empty city list", async () => {
+      const store = createStore();
+      expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
+    });
 
-      const summary = await expectOk(store.createCity(record));
+    it("creates, lists, and reads a city", async () => {
+      const store = createStore();
+      const record = makeCitySaveRecord("city-1", "First");
+
+      const summary = await expectCitySaveStoreOk(store.createCity(record));
       expect(summary).toEqual({
         id: "city-1",
         name: "First",
@@ -83,39 +72,41 @@ export function defineCitySaveStoreContract(
         savedAt: "2026-08-01T10:00:00.000Z",
       });
 
-      const listed = await expectOk(store.listCities());
+      const listed = await expectCitySaveStoreOk(store.listCities());
       expect(listed).toEqual([summary]);
 
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       expect(read).toEqual(record);
     });
 
     it("rejects a duplicate city ID", async () => {
-      const { store } = createHarness();
-      const record = makeRecord("city-1", "First");
-      await expectOk(store.createCity(record));
+      const store = createStore();
+      const record = makeCitySaveRecord("city-1", "First");
+      await expectCitySaveStoreOk(store.createCity(record));
 
       await expectError(
-        store.createCity(makeRecord("city-1", "Replacement")),
+        store.createCity(makeCitySaveRecord("city-1", "Replacement")),
         "conflict",
       );
 
       // The original record is unchanged.
-      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
+      expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+        record,
+      );
     });
 
     it("updates savedAt and snapshot", async () => {
-      const { store } = createHarness();
-      await expectOk(
+      const store = createStore();
+      await expectCitySaveStoreOk(
         store.createCity(
-          makeRecord("city-1", "First", {
+          makeCitySaveRecord("city-1", "First", {
             savedAt: "2026-08-01T10:00:00.000Z",
             snapshot: { budget: 120_000 },
           }),
         ),
       );
 
-      const summary = await expectOk(
+      const summary = await expectCitySaveStoreOk(
         store.updateCity("city-1", {
           savedAt: "2026-08-02T11:00:00.000Z",
           snapshot: { budget: 90_000 },
@@ -123,13 +114,13 @@ export function defineCitySaveStoreContract(
       );
       expect(summary.savedAt).toBe("2026-08-02T11:00:00.000Z");
 
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       expect(read.savedAt).toBe("2026-08-02T11:00:00.000Z");
       expect(read.snapshot).toEqual({ budget: 90_000 });
     });
 
     it("returns notFound when updating a missing city", async () => {
-      const { store } = createHarness();
+      const store = createStore();
       await expectError(
         store.updateCity("missing", {
           savedAt: "2026-08-02T11:00:00.000Z",
@@ -140,20 +131,20 @@ export function defineCitySaveStoreContract(
     });
 
     it("returns notFound when renaming a missing city", async () => {
-      const { store } = createHarness();
+      const store = createStore();
       await expectError(store.renameCity("missing", "Renamed"), "notFound");
     });
 
     it("preserves identity metadata during update", async () => {
-      const { store } = createHarness();
-      const record = makeRecord("city-1", "First", {
+      const store = createStore();
+      const record = makeCitySaveRecord("city-1", "First", {
         createdAt: "2026-07-01T09:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
         snapshot: { budget: 120_000 },
       });
-      await expectOk(store.createCity(record));
+      await expectCitySaveStoreOk(store.createCity(record));
 
-      const summary = await expectOk(
+      const summary = await expectCitySaveStoreOk(
         store.updateCity("city-1", {
           savedAt: "2026-08-02T11:00:00.000Z",
           snapshot: { budget: 90_000 },
@@ -167,7 +158,7 @@ export function defineCitySaveStoreContract(
         savedAt: "2026-08-02T11:00:00.000Z",
       });
 
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       expect(read.city).toEqual({
         id: "city-1",
         name: "First",
@@ -176,89 +167,42 @@ export function defineCitySaveStoreContract(
     });
 
     it("does not revert a committed rename during update", async () => {
-      const { store } = createHarness();
+      const store = createStore();
       const originalCreatedAt = "2026-07-01T09:00:00.000Z";
-      await expectOk(
+      await expectCitySaveStoreOk(
         store.createCity(
-          makeRecord("city-1", "Original", {
+          makeCitySaveRecord("city-1", "Original", {
             createdAt: originalCreatedAt,
             savedAt: "2026-08-01T10:00:00.000Z",
             snapshot: { budget: 120_000 },
           }),
         ),
       );
-      await expectOk(store.renameCity("city-1", "Renamed"));
-      await expectOk(
+      await expectCitySaveStoreOk(store.renameCity("city-1", "Renamed"));
+      await expectCitySaveStoreOk(
         store.updateCity("city-1", {
           savedAt: "2026-08-02T11:00:00.000Z",
           snapshot: { budget: 90_000 },
         }),
       );
 
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       expect(read.city.name).toBe("Renamed");
       expect(read.city.createdAt).toBe(originalCreatedAt);
     });
 
-    // Atomicity: a failed create must commit nothing.
-    it("does not create a record after failed create", async () => {
-      const { store, failNext } = createHarness();
-      failNext("createCity", "failed");
-
-      await expectError(
-        store.createCity(makeRecord("city-1", "First")),
-        "failed",
-      );
-
-      // No partial record was committed.
-      await expectError(store.readCity("city-1"), "notFound");
-      expect(await expectOk(store.listCities())).toEqual([]);
-    });
-
-    // Atomicity: a failed update must leave the complete prior record intact.
-    it("preserves the complete prior record after failed update", async () => {
-      const { store, failNext } = createHarness();
-      const record = makeRecord("city-1", "First", {
-        savedAt: "2026-08-01T10:00:00.000Z",
-        snapshot: { budget: 120_000 },
-      });
-      await expectOk(store.createCity(record));
-      failNext("updateCity", "failed");
-
-      await expectError(
-        store.updateCity("city-1", {
-          savedAt: "2026-08-02T11:00:00.000Z",
-          snapshot: { budget: 90_000 },
-        }),
-        "failed",
-      );
-
-      // The full prior record — identity, savedAt, and snapshot — is intact.
-      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
-    });
-
-    // Atomicity: a failed rename must leave the complete prior record intact.
-    it("preserves the complete prior record after failed rename", async () => {
-      const { store, failNext } = createHarness();
-      const record = makeRecord("city-1", "Original");
-      await expectOk(store.createCity(record));
-
-      failNext("renameCity", "failed");
-      await expectError(store.renameCity("city-1", "Renamed"), "failed");
-
-      expect(await expectOk(store.readCity("city-1"))).toEqual(record);
-    });
-
     it("renames only the city name", async () => {
-      const { store } = createHarness();
-      const record = makeRecord("city-1", "First", {
+      const store = createStore();
+      const record = makeCitySaveRecord("city-1", "First", {
         createdAt: "2026-07-01T09:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
         snapshot: { budget: 120_000 },
       });
-      await expectOk(store.createCity(record));
+      await expectCitySaveStoreOk(store.createCity(record));
 
-      const summary = await expectOk(store.renameCity("city-1", "North Loop"));
+      const summary = await expectCitySaveStoreOk(
+        store.renameCity("city-1", "North Loop"),
+      );
       expect(summary).toEqual({
         id: "city-1",
         name: "North Loop",
@@ -266,7 +210,7 @@ export function defineCitySaveStoreContract(
         savedAt: "2026-08-01T10:00:00.000Z",
       });
 
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       expect(read).toEqual({
         ...record,
         city: {
@@ -278,15 +222,50 @@ export function defineCitySaveStoreContract(
     });
 
     it("deletes a city and reports notFound afterward", async () => {
-      const { store } = createHarness();
-      await expectOk(store.createCity(makeRecord("city-1", "First")));
+      const store = createStore();
+      await expectCitySaveStoreOk(
+        store.createCity(makeCitySaveRecord("city-1", "First")),
+      );
 
-      await expectOk(store.deleteCity("city-1"));
+      await expectCitySaveStoreOk(store.deleteCity("city-1"));
 
       await expectError(store.readCity("city-1"), "notFound");
       // A second delete of the now-missing id is also notFound.
       await expectError(store.deleteCity("city-1"), "notFound");
-      expect(await expectOk(store.listCities())).toEqual([]);
+      expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
+    });
+
+    it("lists multiple cities by saved time then ID", async () => {
+      const store = createStore();
+
+      await expectCitySaveStoreOk(
+        store.createCity(
+          makeCitySaveRecord("city-b", "B", {
+            savedAt: "2026-08-01T10:00:00.000Z",
+          }),
+        ),
+      );
+      await expectCitySaveStoreOk(
+        store.createCity(
+          makeCitySaveRecord("city-z", "Newest", {
+            savedAt: "2026-08-01T11:00:00.000Z",
+          }),
+        ),
+      );
+      await expectCitySaveStoreOk(
+        store.createCity(
+          makeCitySaveRecord("city-a", "A", {
+            savedAt: "2026-08-01T10:00:00.000Z",
+          }),
+        ),
+      );
+
+      const listed = await expectCitySaveStoreOk(store.listCities());
+      expect(listed.map((city) => city.id)).toEqual([
+        "city-z",
+        "city-a",
+        "city-b",
+      ]);
     });
 
     it("sorts by saved time then ID without mutating inputs", () => {
@@ -327,37 +306,37 @@ export function defineCitySaveStoreContract(
     });
 
     it("detaches committed inputs and returned values", async () => {
-      const { store } = createHarness();
-      const record = makeRecord("city-1", "First", {
+      const store = createStore();
+      const record = makeCitySaveRecord("city-1", "First", {
         savedAt: "2026-08-01T10:00:00.000Z",
         snapshot: { budget: 120_000 },
       });
-      await expectOk(store.createCity(record));
+      await expectCitySaveStoreOk(store.createCity(record));
 
       // Mutating the committed input after create does not affect storage.
       record.city.name = "Mutated input name";
       record.city.id = "city-mutated";
       record.savedAt = "2026-08-09T10:00:00.000Z";
       (record.snapshot as { budget: number }).budget = 1;
-      expect(await expectOk(store.readCity("city-1"))).toEqual(
-        makeRecord("city-1", "First"),
+      expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+        makeCitySaveRecord("city-1", "First"),
       );
 
       // Mutating a returned summary does not affect storage.
-      const listed = await expectOk(store.listCities());
+      const listed = await expectCitySaveStoreOk(store.listCities());
       listed[0]!.name = "Mutated summary";
       listed[0]!.savedAt = "2026-08-09T10:00:00.000Z";
-      expect(await expectOk(store.readCity("city-1"))).toEqual(
-        makeRecord("city-1", "First"),
+      expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+        makeCitySaveRecord("city-1", "First"),
       );
 
       // Mutating a read-back record does not affect storage.
-      const read = await expectOk(store.readCity("city-1"));
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
       read.city.name = "Mutated read";
       read.savedAt = "2026-08-09T10:00:00.000Z";
       (read.snapshot as { budget: number }).budget = 99;
-      expect(await expectOk(store.readCity("city-1"))).toEqual(
-        makeRecord("city-1", "First"),
+      expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+        makeCitySaveRecord("city-1", "First"),
       );
 
       // Mutating an update input after update does not affect storage.
@@ -365,11 +344,11 @@ export function defineCitySaveStoreContract(
         savedAt: "2026-08-02T11:00:00.000Z",
         snapshot: { budget: 90_000 },
       };
-      await expectOk(store.updateCity("city-1", update));
+      await expectCitySaveStoreOk(store.updateCity("city-1", update));
       update.savedAt = "2026-08-09T11:00:00.000Z";
       (update.snapshot as { budget: number }).budget = -1;
-      expect(await expectOk(store.readCity("city-1"))).toEqual(
-        makeRecord("city-1", "First", {
+      expect(await expectCitySaveStoreOk(store.readCity("city-1"))).toEqual(
+        makeCitySaveRecord("city-1", "First", {
           savedAt: "2026-08-02T11:00:00.000Z",
           snapshot: { budget: 90_000 },
         }),

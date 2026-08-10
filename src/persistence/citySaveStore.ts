@@ -39,6 +39,11 @@ export interface CitySaveStoreError {
   diagnostic?: string;
 }
 
+export interface CitySaveStoreErrorOptions {
+  cityId?: string;
+  diagnostic?: string;
+}
+
 export type CitySaveStoreResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: CitySaveStoreError };
@@ -48,8 +53,7 @@ export type CitySaveStoreResult<T> =
  * have committed the mutation. Specifically:
  * - a failed `createCity` commits nothing — `readCity(id)` remains `notFound`;
  * - a failed `updateCity`/`renameCity` leaves the complete prior record intact.
- * Adapters must build the candidate before the failure seam and commit
- * (`records.set` / write) only on the success path.
+ * Adapters must not report success before their storage commit boundary.
  */
 export interface CitySaveStore {
   listCities(): Promise<CitySaveStoreResult<CitySummary[]>>;
@@ -64,6 +68,30 @@ export interface CitySaveStore {
     name: string,
   ): Promise<CitySaveStoreResult<CitySummary>>;
   deleteCity(id: string): Promise<CitySaveStoreResult<void>>;
+}
+
+export function citySummaryFromRecord(record: CitySaveRecord): CitySummary {
+  return {
+    id: record.city.id,
+    name: record.city.name,
+    createdAt: record.city.createdAt,
+    savedAt: record.savedAt,
+  };
+}
+
+export function citySaveStoreError(
+  operation: CitySaveStoreOperation,
+  code: CitySaveStoreErrorCode,
+  options: CitySaveStoreErrorOptions = {},
+): CitySaveStoreError {
+  return {
+    operation,
+    code,
+    ...(options.cityId === undefined ? {} : { cityId: options.cityId }),
+    ...(code === "failed" && options.diagnostic !== undefined
+      ? { diagnostic: options.diagnostic }
+      : {}),
+  };
 }
 
 /**

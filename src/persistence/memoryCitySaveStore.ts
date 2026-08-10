@@ -1,8 +1,9 @@
 import {
+  citySaveStoreError,
+  citySummaryFromRecord,
   sortCitySummaries,
   type CitySaveRecord,
   type CitySaveStore,
-  type CitySaveStoreError,
   type CitySaveStoreErrorCode,
   type CitySaveStoreOperation,
   type CitySaveStoreResult,
@@ -47,15 +48,13 @@ function errorResult<T>(
   code: CitySaveStoreErrorCode,
   cityId?: string,
 ): CitySaveStoreResult<T> {
-  const error: CitySaveStoreError = {
-    operation,
-    code,
-    ...(cityId !== undefined ? { cityId } : {}),
-    // Internal diagnostic kept generic and only for the catch-all `failed`
-    // code; `notFound`/`conflict` are self-describing from operation + code.
-    ...(code === "failed" ? { diagnostic: `${operation} failed` } : {}),
+  return {
+    ok: false,
+    error: citySaveStoreError(operation, code, {
+      cityId,
+      ...(code === "failed" ? { diagnostic: `${operation} failed` } : {}),
+    }),
   };
-  return { ok: false, error };
 }
 
 function cloneValue<T>(
@@ -68,15 +67,6 @@ function cloneValue<T>(
   } catch {
     return errorResult<T>(operation, "failed", cityId);
   }
-}
-
-function summaryFor(record: CitySaveRecord): CitySummary {
-  return {
-    id: record.city.id,
-    name: record.city.name,
-    createdAt: record.city.createdAt,
-    savedAt: record.savedAt,
-  };
 }
 
 export function createMemoryCitySaveStore(options?: {
@@ -100,7 +90,9 @@ export function createMemoryCitySaveStore(options?: {
   const listCities: CitySaveStore["listCities"] = async () => {
     const failure = injectedFailure<CitySummary[]>("listCities");
     if (failure) return failure;
-    const summaries = sortCitySummaries([...records.values()].map(summaryFor));
+    const summaries = sortCitySummaries(
+      [...records.values()].map(citySummaryFromRecord),
+    );
     return cloneValue(summaries, "listCities");
   };
 
@@ -125,7 +117,11 @@ export function createMemoryCitySaveStore(options?: {
     const failure = injectedFailure<CitySummary>("createCity", cityId);
     if (failure) return failure;
     records.set(cityId, cloned.value);
-    return cloneValue(summaryFor(cloned.value), "createCity", cityId);
+    return cloneValue(
+      citySummaryFromRecord(cloned.value),
+      "createCity",
+      cityId,
+    );
   };
 
   // updateCity: require an existing record, clone the incoming update, build a
@@ -147,7 +143,7 @@ export function createMemoryCitySaveStore(options?: {
     const failure = injectedFailure<CitySummary>("updateCity", id);
     if (failure) return failure;
     records.set(id, replacement);
-    return cloneValue(summaryFor(replacement), "updateCity", id);
+    return cloneValue(citySummaryFromRecord(replacement), "updateCity", id);
   };
 
   // renameCity: construct a replacement preserving every non-name field
@@ -166,7 +162,7 @@ export function createMemoryCitySaveStore(options?: {
     const failure = injectedFailure<CitySummary>("renameCity", id);
     if (failure) return failure;
     records.set(id, replacement);
-    return cloneValue(summaryFor(replacement), "renameCity", id);
+    return cloneValue(citySummaryFromRecord(replacement), "renameCity", id);
   };
 
   const deleteCity: CitySaveStore["deleteCity"] = async (id) => {
