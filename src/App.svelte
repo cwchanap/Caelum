@@ -88,6 +88,11 @@
     await refreshCities();
   }
 
+  function handleCancelNewCity(): void {
+    showNewCity = false;
+    if (cities === null) void refreshCities();
+  }
+
   async function handleLoadCity(cityId: string): Promise<void> {
     if (runtime === null) return;
     cityListError = null;
@@ -524,7 +529,7 @@
     busy={snapshot?.persistence.busy ?? false}
     error={cityError}
     onCreate={(request) => void handleCreateCity(request)}
-    onCancel={() => (showNewCity = false)}
+    onCancel={handleCancelNewCity}
   />
 {:else if snapshot?.persistence.activeCity == null}
   {#if cities !== null && cities.length === 0 && cityListError === null}

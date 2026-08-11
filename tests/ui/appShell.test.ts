@@ -619,6 +619,52 @@ describe("App command shell", () => {
     expect(screen.getByTestId("new-city-screen")).toBeVisible();
   });
 
+  it("refreshes the library when Cancel follows a failed Create after list failure", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          kind: "store" as const,
+          error: { operation: "listCities" as const, code: "failed" as const },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: [CITY_NEW],
+      });
+    harness.runtime.persistence.createCity = vi.fn(async () => {
+      const error = {
+        kind: "store" as const,
+        error: {
+          operation: "createCity" as const,
+          code: "failed" as const,
+        },
+      };
+      harness.setPersistence({ error, busy: false });
+      return { ok: false as const, error };
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "New City" }),
+    );
+    await fireEvent.input(await screen.findByLabelText("City name"), {
+      target: { value: "Failed City" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Create City" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not save the new city.",
+    );
+
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByTestId("city-row-city-new")).toBeVisible();
+  });
+
   it("ignores an older city-list response that resolves after a newer retry", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null },
