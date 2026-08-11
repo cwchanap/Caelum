@@ -1363,9 +1363,9 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   await page.reload();
 
   await expect(page.getByTestId("city-library-screen")).toBeVisible();
-  await expect(page.getByTestId("city-name-city-new")).toHaveValue(
-    "Reload Junction",
-  );
+  await expect(
+    page.getByRole("textbox", { name: "Rename Reload Junction" }),
+  ).toHaveValue("Reload Junction");
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
@@ -1378,22 +1378,13 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
 });
 ```
 
-If `city-new` is not the generated ID in real E2E, do not hard-code the ID. Instead assert the library input by accessible value:
-
-```ts
-await expect(
-  page.getByRole("textbox", { name: "Rename Reload Junction" }),
-).toHaveValue("Reload Junction");
-```
-
-Use that accessible assertion in the final test so the opaque generated city ID remains opaque.
-
 Why the proof is meaningful:
 
 - New City already persists the initial `$120,000` snapshot.
 - The small house creates a known `$116,000` post-create snapshot and marks dirty.
 - `data-dirty="false"` proves the UI observed save success without substring matching `Saved` inside `Unsaved changes`.
 - A no-op Save reloads `$120,000`, so the post-Continue budget assertion fails.
+- The city is located by its accessible name, not by assuming an opaque generated city ID.
 
 - [ ] **Step 2: Run the focused Playwright test**
 
