@@ -132,30 +132,49 @@ migration layer, recovery model, or multi-tab ownership. Multi-request
 transactions keep only IndexedDB request awaits between requests so the
 transaction remains active.
 
-The first-city bootstrap is deliberately narrow:
+The first-city bootstrap and city-library flow are deliberately narrow:
 
 ```text
-Browser/WASM startup:
+startup
+  -> runtime.persistence.listCities()
+  -> empty: New City
+  -> list failure: Retry city list OR New City
+  -> existing: City Library
+       -> Continue / Load / inline Rename / Delete? / New City
+  -> active game shell
+       -> City panel: Save Now / city list / New City
+
+Browser/WASM startup wiring:
   createWasmBackend
   -> createIndexedDbCitySaveStore
   -> createGameRuntime(activeCity = null)
-  -> NewCityScreen
-  -> createCity
-  -> active game shell
+  -> runtime.persistence.listCities()
 
 Tauri startup until HPA-344:
   createTauriBackend
   -> createMemoryCitySaveStore (non-durable temporary bridge)
-  -> same NewCityScreen/createCity/runtime flow
+  -> same city-list/create-city/runtime flow
 
 HPA-344:
   replaces only the Tauri memory-store branch with native application-data persistence
+```
+
+The UI calls `RuntimePersistenceController`, which is the only runtime-facing
+persistence boundary; it delegates to `CitySaveStore` rather than exposing a
+store adapter to Svelte:
+
+```text
+UI -> RuntimePersistenceController -> CitySaveStore
+browser store: IndexedDB
+native Tauri store: temporary memory adapter until HPA-344
 ```
 
 HPA-346 owns the city library and the Save, Load, Rename, and Delete actions;
 HPA-345 only creates the first city through the shared runtime flow. The Tauri
 memory store is therefore an intentionally temporary bridge, not an
 IndexedDB-on-Tauri fallback.
+
+The final representative cross-host Save/reload/Continue smoke is HPA-349.
 
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a

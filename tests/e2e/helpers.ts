@@ -24,7 +24,15 @@ export async function createDefaultCity(
   name = "E2E City",
 ): Promise<void> {
   await page.goto("/");
-  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  const newCityScreen = page.getByTestId("new-city-screen");
+  const cityLibraryScreen = page.getByTestId("city-library-screen");
+  await expect(newCityScreen.or(cityLibraryScreen)).toBeVisible();
+  if (await cityLibraryScreen.isVisible()) {
+    await cityLibraryScreen
+      .getByRole("button", { name: "New City", exact: true })
+      .click();
+  }
+  await expect(newCityScreen).toBeVisible();
   await page.getByLabel("City name").fill(name);
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
