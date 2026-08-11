@@ -564,7 +564,7 @@ Extend harness options:
 cities?: CitySummary[];
 ```
 
-After constructing `persistence`, derive:
+Immediately after constructing the local `persistence: RuntimeSnapshot["persistence"]` value, derive defaults **before** constructing the `runtime` object:
 
 ```ts
 const fallbackCity: CitySummary = {
@@ -580,7 +580,7 @@ const defaultSummary =
   persistence.activeCity ?? defaultCities[0] ?? fallbackCity;
 ```
 
-Replace bare persistence spies with valid async results:
+Then construct `runtime.persistence` with valid async results instead of bare spies:
 
 ```ts
 persistence: {
@@ -1524,6 +1524,7 @@ There are no `TBD`/`TODO` markers, compatibility shims, generic “add error han
 
 - `CitySummary` comes from `src/persistence/citySaveStore.ts`.
 - `RuntimePersistenceController` remains unchanged.
+- Harness default summary data is derived after the local `persistence` snapshot view is initialized and before the `runtime` object is constructed.
 - `cityError` is the only combined error identifier used by library/panel.
 - `cityListRequestId` is the only list-read race guard.
 - `city-library-screen`, `city-row-${id}`, `city-name-${id}`, `city-save-status`, and `active-city-name` are explicitly implemented before tests use them.
