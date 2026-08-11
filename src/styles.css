@@ -1575,6 +1575,43 @@ body {
   color: var(--red);
 }
 
+.city-library-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.city-library-card {
+  width: min(56rem, 100%);
+  display: grid;
+  gap: 1rem;
+}
+
+.city-library-actions,
+.city-list-actions,
+.city-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.city-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.city-list-row {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.city-list-meta {
+  display: grid;
+  gap: 0.25rem;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    GENERIC BUTTON RESET (default)
    ────────────────────────────────────────────────────────────────────────── */
