@@ -90,7 +90,14 @@
 
   function handleCancelNewCity(): void {
     showNewCity = false;
-    if (cities === null) void refreshCities();
+    if (snapshot?.persistence.activeCity == null && cities === null) {
+      void refreshCities();
+    }
+  }
+
+  function handleShowNewCity(): void {
+    cityListError = null;
+    showNewCity = true;
   }
 
   async function handleLoadCity(cityId: string): Promise<void> {
@@ -548,7 +555,7 @@
       onLoad={(cityId) => void handleLoadCity(cityId)}
       onRename={(cityId, name) => void handleRenameCity(cityId, name)}
       onDelete={(cityId) => void handleDeleteCity(cityId)}
-      onNewCity={() => (showNewCity = true)}
+      onNewCity={handleShowNewCity}
       onRetry={cityListError === null ? undefined : () => void refreshCities()}
     />
   {/if}
@@ -670,7 +677,7 @@
               onLoad={(cityId) => void handleLoadCity(cityId)}
               onRename={(cityId, name) => void handleRenameCity(cityId, name)}
               onDelete={(cityId) => void handleDeleteCity(cityId)}
-              onNewCity={() => (showNewCity = true)}
+              onNewCity={handleShowNewCity}
               onRetryList={cityListError === null
                 ? undefined
                 : () => void refreshCities()}

@@ -304,10 +304,11 @@ The root is explicitly:
 States:
 
 - `cities === null && error === null`: Loading cities…;
-- error: show mapped copy + optional Retry + New City;
-- non-empty list: Continue + New City + `CityList`.
+- list failure (`onRetry` present): show mapped copy + Retry + New City, hiding the list;
+- mutation error (`onRetry` absent): show mapped copy above the existing city controls (Continue + New City + `CityList`);
+- non-empty list, no error: Continue + New City + `CityList`.
 
-App never intentionally passes a successful empty list to this screen.
+The retry-only error state applies solely to list failures. Mutation errors retain the existing city controls so the player can still continue, load, rename, or delete cities while seeing the error. App never intentionally passes a successful empty list to this screen.
 
 ## City panel test contract
 
