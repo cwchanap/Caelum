@@ -5,13 +5,21 @@
     cities: CitySummary[];
     activeCityId: string | null;
     busy: boolean;
+    dirty?: boolean;
     onLoad: (cityId: string) => void;
     onRename: (cityId: string, name: string) => void;
     onDelete: (cityId: string) => void;
   }
 
-  let { cities, activeCityId, busy, onLoad, onRename, onDelete }: Props =
-    $props();
+  let {
+    cities,
+    activeCityId,
+    busy,
+    dirty = false,
+    onLoad,
+    onRename,
+    onDelete,
+  }: Props = $props();
   let pendingDeleteId = $state<string | null>(null);
   let cityNameDrafts = $state<Record<string, string>>({});
 
@@ -112,7 +120,7 @@
           <button
             type="button"
             aria-label={`Load ${city.name}`}
-            disabled={busy}
+            disabled={busy || dirty}
             onclick={() => {
               pendingDeleteId = null;
               onLoad(city.id);

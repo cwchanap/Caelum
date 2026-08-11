@@ -19,7 +19,7 @@ const CITIES = [
   },
 ] satisfies CitySummary[];
 
-function renderList(busy = false) {
+function renderList(busy = false, dirty = false) {
   const onLoad = vi.fn();
   const onRename = vi.fn();
   const onDelete = vi.fn();
@@ -28,6 +28,7 @@ function renderList(busy = false) {
       cities: CITIES,
       activeCityId: "city-new",
       busy,
+      dirty,
       onLoad,
       onRename,
       onDelete,
@@ -115,6 +116,13 @@ describe("CityList", () => {
     for (const button of screen.getAllByRole("button", { name: "Delete" })) {
       expect(button).toBeDisabled();
     }
+  });
+
+  it("disables Load while the active city has unsaved changes", () => {
+    renderList(false, true);
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
   });
 });
 
