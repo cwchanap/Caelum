@@ -1612,6 +1612,23 @@ body {
   gap: 0.25rem;
 }
 
+.city-save-status {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.city-save-status[data-dirty="true"] {
+  text-decoration: underline;
+}
+
+.city-local-list {
+  margin-top: 1rem;
+}
+
+.city-action-error {
+  margin: 0.5rem 0 0;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    GENERIC BUTTON RESET (default)
    ────────────────────────────────────────────────────────────────────────── */

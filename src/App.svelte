@@ -11,6 +11,7 @@
   import Topbar from "./components/Topbar.svelte";
   import ActionFeedback from "./components/ActionFeedback.svelte";
   import NewCityScreen from "./components/NewCityScreen.svelte";
+  import CityLibraryScreen from "./components/city/CityLibraryScreen.svelte";
   import type { Overlay, ServicePattern, Tool } from "./domain/types";
   import type {
     RouteDraft,
@@ -25,6 +26,7 @@
   } from "./domain/catalog/buildGroups";
   import { workingSaveErrorMessage } from "./runtime/rejectionMessages";
   import type { NewCityRequest } from "./runtime/workingSaveRuntime";
+  import type { CitySummary } from "./persistence/citySaveStore";
 
   interface Props {
     runtime: RuntimeController | null;
@@ -38,6 +40,17 @@
   let commandShelf: {
     focusDestination: (destination: CommandDestination) => void;
   } | null = $state(null);
+  let cities = $state<CitySummary[] | null>(null);
+  let cityListError = $state<string | null>(null);
+  let showNewCity = $state(false);
+  let cityListRequestId = 0;
+
+  const cityError = $derived(
+    cityListError ??
+      (snapshot?.persistence.error == null
+        ? null
+        : workingSaveErrorMessage(snapshot.persistence.error)),
+  );
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
@@ -52,9 +65,63 @@
     }
   }
 
-  function handleCreateCity(request: NewCityRequest): void {
+  async function refreshCities(): Promise<void> {
     if (runtime === null) return;
-    void runtime.persistence.createCity(request);
+    const requestId = ++cityListRequestId;
+    const result = await runtime.persistence.listCities();
+    if (requestId !== cityListRequestId) return;
+
+    if (result.ok) {
+      cities = result.value;
+      cityListError = null;
+    } else {
+      cityListError = workingSaveErrorMessage(result.error);
+    }
+  }
+
+  async function handleCreateCity(request: NewCityRequest): Promise<void> {
+    if (runtime === null) return;
+    cityListError = null;
+    const result = await runtime.persistence.createCity(request);
+    if (!result.ok) return;
+    showNewCity = false;
+    await refreshCities();
+  }
+
+  async function handleLoadCity(cityId: string): Promise<void> {
+    if (runtime === null) return;
+    cityListError = null;
+    await runtime.persistence.load(cityId);
+  }
+
+  async function handleSaveCity(): Promise<void> {
+    if (runtime === null) return;
+    cityListError = null;
+    const result = await runtime.persistence.save();
+    if (result.ok) await refreshCities();
+  }
+
+  async function handleRenameCity(cityId: string, name: string): Promise<void> {
+    if (runtime === null) return;
+    cityListError = null;
+    const result = await runtime.persistence.renameCity(cityId, name);
+    if (result.ok) await refreshCities();
+  }
+
+  async function handleDeleteCity(cityId: string): Promise<void> {
+    if (runtime === null) return;
+    cityListError = null;
+
+    const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
+    if (deletingActive) cities = null;
+
+    const result = await runtime.persistence.deleteCity(cityId);
+    if (!result.ok) {
+      if (deletingActive) await refreshCities();
+      return;
+    }
+
+    await refreshCities();
   }
 
   async function applyRuntimeResult(
@@ -418,6 +485,7 @@
       });
 
       runtime.start();
+      void refreshCities();
 
       return () => {
         unsubscribe();
@@ -448,14 +516,34 @@
       </button>
     </div>
   </main>
-{:else if snapshot?.persistence.activeCity == null}
+{:else if showNewCity}
   <NewCityScreen
     busy={snapshot?.persistence.busy ?? false}
-    error={snapshot?.persistence.error == null
-      ? null
-      : workingSaveErrorMessage(snapshot.persistence.error)}
-    onCreate={handleCreateCity}
+    error={cityError}
+    onCreate={(request) => void handleCreateCity(request)}
+    onCancel={() => (showNewCity = false)}
   />
+{:else if snapshot?.persistence.activeCity == null}
+  {#if cities !== null && cities.length === 0 && cityListError === null}
+    <NewCityScreen
+      busy={snapshot?.persistence.busy ?? false}
+      error={cityError}
+      onCreate={(request) => void handleCreateCity(request)}
+    />
+  {:else}
+    <CityLibraryScreen
+      {cities}
+      activeCityId={null}
+      busy={snapshot?.persistence.busy ?? false}
+      error={cityError}
+      onContinue={(cityId) => void handleLoadCity(cityId)}
+      onLoad={(cityId) => void handleLoadCity(cityId)}
+      onRename={(cityId, name) => void handleRenameCity(cityId, name)}
+      onDelete={(cityId) => void handleDeleteCity(cityId)}
+      onNewCity={() => (showNewCity = true)}
+      onRetry={cityListError === null ? undefined : () => void refreshCities()}
+    />
+  {/if}
 {:else}
   <main
     class="shell"
@@ -556,17 +644,31 @@
           />
         </CommandPanel>
       {:else if snapshot.ui.activeCommandDestination === "city"}
-        <CommandPanel
-          destination="city"
-          title="City"
-          canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleCloseCommandPanel("city")}
-        >
-          <CityPanel
-            shell={currentSnapshot.shell.city}
-            cityName={currentSnapshot.persistence.activeCity?.name ?? null}
-          />
-        </CommandPanel>
+        {#if currentSnapshot.persistence.activeCity !== null}
+          <CommandPanel
+            destination="city"
+            title="City"
+            canClose={currentSnapshot.ui.routeDraft === null}
+            onClose={() => handleCloseCommandPanel("city")}
+          >
+            <CityPanel
+              shell={currentSnapshot.shell.city}
+              activeCity={currentSnapshot.persistence.activeCity}
+              {cities}
+              busy={currentSnapshot.persistence.busy}
+              dirty={currentSnapshot.persistence.dirty}
+              error={cityError}
+              onSave={() => void handleSaveCity()}
+              onLoad={(cityId) => void handleLoadCity(cityId)}
+              onRename={(cityId, name) => void handleRenameCity(cityId, name)}
+              onDelete={(cityId) => void handleDeleteCity(cityId)}
+              onNewCity={() => (showNewCity = true)}
+              onRetryList={cityListError === null
+                ? undefined
+                : () => void refreshCities()}
+            />
+          </CommandPanel>
+        {/if}
       {/if}
 
       <CommandShelf

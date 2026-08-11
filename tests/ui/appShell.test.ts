@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { flushSync, tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
@@ -16,6 +16,7 @@ import type {
   RuntimeController,
   RuntimeSnapshot,
 } from "../../src/runtime/types";
+import type { CitySummary } from "../../src/persistence/citySaveStore";
 
 function createRuntimeHarness(
   options: {
@@ -23,6 +24,7 @@ function createRuntimeHarness(
     ui?: ReturnType<typeof createUiState>;
     rejection?: GameplayRejection | null;
     persistence?: Partial<RuntimeSnapshot["persistence"]>;
+    cities?: CitySummary[];
   } = {},
 ): {
   runtime: RuntimeController;
@@ -47,6 +49,17 @@ function createRuntimeHarness(
     error: null,
     ...options.persistence,
   };
+  const fallbackCity: CitySummary = {
+    id: "city-fallback",
+    name: "Fallback City",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    savedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const defaultCities =
+    options.cities ??
+    (persistence.activeCity === null ? [] : [persistence.activeCity]);
+  const defaultSummary =
+    persistence.activeCity ?? defaultCities[0] ?? fallbackCity;
   const snapshot = (): RuntimeSnapshot => ({
     state,
     ui,
@@ -64,12 +77,34 @@ function createRuntimeHarness(
     });
   const runtime = {
     persistence: {
-      listCities: vi.fn(),
-      save: vi.fn(),
-      load: vi.fn(),
-      createCity: vi.fn(),
-      renameCity: vi.fn(),
-      deleteCity: vi.fn(),
+      listCities: vi.fn(async () => ({
+        ok: true as const,
+        value: defaultCities,
+      })),
+      save: vi.fn(async () => ({
+        ok: true as const,
+        value: defaultSummary,
+      })),
+      load: vi.fn(async () => ({
+        ok: true as const,
+        value: defaultSummary,
+      })),
+      createCity: vi.fn(async (request) => ({
+        ok: true as const,
+        value: { ...defaultSummary, name: request.name },
+      })),
+      renameCity: vi.fn(async (cityId, name) => ({
+        ok: true as const,
+        value: {
+          ...(defaultCities.find((city) => city.id === cityId) ??
+            defaultSummary),
+          name,
+        },
+      })),
+      deleteCity: vi.fn(async () => ({
+        ok: true as const,
+        value: undefined,
+      })),
     },
     getSnapshot: snapshot,
     subscribe: vi.fn((listener: (next: RuntimeSnapshot) => void) => {
@@ -181,15 +216,37 @@ function createRuntimeHarness(
   };
 }
 
+const CITY_NEW: CitySummary = {
+  id: "city-new",
+  name: "Maple Junction",
+  createdAt: "2026-08-10T12:00:00.000Z",
+  savedAt: "2026-08-10T13:00:00.000Z",
+};
+
+const CITY_OLD: CitySummary = {
+  id: "city-old",
+  name: "Harbour City",
+  createdAt: "2026-08-09T12:00:00.000Z",
+  savedAt: "2026-08-09T13:00:00.000Z",
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("App command shell", () => {
-  it("shows New City instead of game chrome when no city is active", () => {
+  it("shows New City instead of game chrome when no city is active", async () => {
     const { runtime } = createRuntimeHarness({
       persistence: { activeCity: null },
     });
 
     render(App, { props: { runtime } });
 
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
     expect(screen.queryByTestId("command-shelf")).toBeNull();
     expect(screen.queryByTestId("topbar")).toBeNull();
@@ -201,7 +258,7 @@ describe("App command shell", () => {
     });
     render(App, { props: { runtime } });
 
-    const create = screen.getByRole("button", { name: "Create City" });
+    const create = await screen.findByRole("button", { name: "Create City" });
     expect(create).toBeDisabled();
 
     await fireEvent.input(screen.getByLabelText("City name"), {
@@ -228,7 +285,7 @@ describe("App command shell", () => {
     });
     render(App, { props: { runtime: harness.runtime } });
 
-    await fireEvent.input(screen.getByLabelText("City name"), {
+    await fireEvent.input(await screen.findByLabelText("City name"), {
       target: { value: "Busy City" },
     });
     harness.setPersistence({ busy: true });
@@ -236,7 +293,7 @@ describe("App command shell", () => {
     expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
   });
 
-  it("shows runtime-mapped persistence copy without diagnostics", () => {
+  it("shows runtime-mapped persistence copy without diagnostics", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null },
     });
@@ -253,7 +310,7 @@ describe("App command shell", () => {
       },
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not save the new city.",
     );
     expect(screen.getByRole("alert")).not.toHaveTextContent(
@@ -261,12 +318,13 @@ describe("App command shell", () => {
     );
   });
 
-  it("returns to the normal game shell after a city becomes active", () => {
+  it("returns to the normal game shell after a city becomes active", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null },
     });
     render(App, { props: { runtime: harness.runtime } });
 
+    await screen.findByTestId("new-city-screen");
     harness.setPersistence({
       activeCity: {
         id: "city-new",
@@ -282,6 +340,267 @@ describe("App command shell", () => {
     expect(screen.queryByTestId("new-city-screen")).toBeNull();
     expect(screen.getByTestId("game-canvas-host")).toBeVisible();
     expect(screen.getByTestId("command-shelf")).toBeVisible();
+  });
+
+  it("shows City Library when saved cities exist but no city is active", async () => {
+    const { runtime } = createRuntimeHarness({
+      persistence: { activeCity: null },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+
+    render(App, { props: { runtime } });
+
+    expect(await screen.findByTestId("city-library-screen")).toBeVisible();
+    expect(screen.getByTestId("city-row-city-new")).toBeVisible();
+    expect(screen.getByTestId("city-row-city-old")).toBeVisible();
+  });
+
+  it("Continues the first already-sorted city", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Continue" }),
+    );
+
+    expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new");
+  });
+
+  it("shows dirty state and invokes Save Now", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW, dirty: true },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+
+    expect(screen.getByTestId("city-save-status")).toHaveAttribute(
+      "data-dirty",
+      "true",
+    );
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+    expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens and cancels New City from the active City panel", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+  });
+
+  it("renames and deletes an inactive city from the active City panel", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const row = await screen.findByTestId("city-row-city-old");
+    const input = within(row).getByTestId("city-name-city-old");
+    await fireEvent.input(input, { target: { value: "  Old Harbour  " } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+      "city-old",
+      "Old Harbour",
+    );
+
+    const del = within(row).getByRole("button", { name: "Delete" });
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+    expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+      "city-old",
+    );
+  });
+
+  it("does not show a deleted active city while refreshing the remaining library", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const refreshed = deferred<{ ok: true; value: CitySummary[] }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: [CITY_NEW, CITY_OLD],
+      })
+      .mockImplementationOnce(() => refreshed.promise);
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const row = await screen.findByTestId("city-row-city-new");
+    const del = within(row).getByRole("button", { name: "Delete" });
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+
+    harness.setPersistence({ activeCity: null, busy: false, dirty: false });
+    expect(await screen.findByTestId("city-library-screen")).toBeVisible();
+    expect(screen.queryByTestId("city-row-city-new")).toBeNull();
+    expect(screen.getByText("Loading cities…")).toBeVisible();
+
+    refreshed.resolve({ ok: true, value: [CITY_OLD] });
+    expect(await screen.findByTestId("city-row-city-old")).toBeVisible();
+  });
+
+  it("returns directly to New City after deleting the final active city", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW],
+    });
+    const refreshed = deferred<{ ok: true; value: CitySummary[] }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, value: [CITY_NEW] })
+      .mockImplementationOnce(() => refreshed.promise);
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const row = await screen.findByTestId("city-row-city-new");
+    const del = within(row).getByRole("button", { name: "Delete" });
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+
+    harness.setPersistence({ activeCity: null, busy: false, dirty: false });
+    expect(await screen.findByTestId("city-library-screen")).toBeVisible();
+    expect(screen.queryByTestId("city-row-city-new")).toBeNull();
+
+    refreshed.resolve({ ok: true, value: [] });
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
+    expect(screen.queryByTestId("city-library-screen")).toBeNull();
+  });
+
+  it("disables active City actions and rows while persistence is busy", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await screen.findByTestId("city-row-city-old");
+    harness.setPersistence({ busy: true });
+
+    expect(screen.getByRole("button", { name: "Working…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
+    expect(screen.getByTestId("city-name-city-old")).toBeDisabled();
+  });
+
+  it("keeps the active shell and shows a mapped error after a failed Load", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    harness.runtime.persistence.load = vi.fn(async () => {
+      const error = {
+        kind: "backend" as const,
+        error: { code: "invalidSnapshot" as const },
+      };
+      harness.setPersistence({ error, busy: false });
+      return { ok: false as const, error };
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const row = await screen.findByTestId("city-row-city-old");
+    await fireEvent.click(
+      within(row).getByRole("button", { name: "Load Harbour City" }),
+    );
+
+    expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not apply the city state.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Retry city list" }),
+    ).toBeNull();
+  });
+
+  it("keeps New City reachable when the city list fails", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    harness.runtime.persistence.listCities = vi.fn(async () => ({
+      ok: false as const,
+      error: {
+        kind: "store" as const,
+        error: {
+          operation: "listCities" as const,
+          code: "failed" as const,
+          diagnostic: "private IndexedDB detail",
+        },
+      },
+    }));
+
+    render(App, { props: { runtime: harness.runtime } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load the city list.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("IndexedDB");
+    expect(
+      screen.getByRole("button", { name: "Retry city list" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "New City" })).toBeVisible();
+
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+  });
+
+  it("ignores an older city-list response that resolves after a newer retry", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    const older = deferred<{
+      ok: true;
+      value: CitySummary[];
+    }>();
+    const newer = deferred<{
+      ok: true;
+      value: CitySummary[];
+    }>();
+
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          kind: "store" as const,
+          error: { operation: "listCities" as const, code: "failed" as const },
+        },
+      })
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+
+    render(App, { props: { runtime: harness.runtime } });
+    const retry = await screen.findByRole("button", {
+      name: "Retry city list",
+    });
+    await fireEvent.click(retry);
+    await fireEvent.click(retry);
+
+    newer.resolve({ ok: true, value: [CITY_NEW] });
+    expect(await screen.findByTestId("city-row-city-new")).toBeVisible();
+
+    older.resolve({ ok: true, value: [CITY_OLD] });
+    await tick();
+    expect(screen.getByTestId("city-row-city-new")).toBeVisible();
+    expect(screen.queryByTestId("city-row-city-old")).toBeNull();
   });
 
   it("starts in Select with no command panel open", () => {
