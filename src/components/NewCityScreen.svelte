@@ -6,9 +6,10 @@
     busy: boolean;
     error: string | null;
     onCreate: (request: NewCityRequest) => void;
+    onCancel?: () => void;
   }
 
-  let { busy, error, onCreate }: Props = $props();
+  let { busy, error, onCreate, onCancel }: Props = $props();
   let name = $state("");
   let economyPreset = $state<EconomyPreset>("standard");
   let templateId = $state<SandboxTemplateId>("crossroads");
@@ -55,5 +56,8 @@
     <button type="submit" disabled={!canCreate}>
       {busy ? "Creating…" : "Create City"}
     </button>
+    {#if onCancel !== undefined}
+      <button type="button" disabled={busy} onclick={onCancel}>Cancel</button>
+    {/if}
   </form>
 </main>
