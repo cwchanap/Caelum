@@ -1068,7 +1068,10 @@ async function handleDeleteCity(cityId: string): Promise<void> {
   cityListError = null;
 
   const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
-  if (deletingActive) cities = null;
+  if (deletingActive) {
+    cityListRequestId += 1;
+    cities = null;
+  }
 
   const result = await runtime.persistence.deleteCity(cityId);
   if (!result.ok) {
@@ -1476,7 +1479,7 @@ git commit -m "test: prove city working-save reload flow"
 
 The runtime publishes `activeCity: null` before the delete caller starts its list refresh.
 
-**Control:** if deleting the active city, set the App list projection to `null` before invoking delete. The no-active branch then shows loading until the store supplies the authoritative list. If delete fails, refresh the list to restore the projection.
+**Control:** if deleting the active city, invalidate the current `cityListRequestId` and set the App list projection to `null` before invoking delete. The no-active branch then shows loading until the store supplies the authoritative list; the invalidation prevents an older overlapping list response from restoring the deleted row. If delete fails, refresh the list to restore the projection.
 
 ### Risk: Save E2E passes on create-time persistence
 

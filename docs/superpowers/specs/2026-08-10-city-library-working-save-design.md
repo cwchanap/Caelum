@@ -201,7 +201,10 @@ async function handleDeleteCity(cityId: string): Promise<void> {
   cityListError = null;
 
   const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
-  if (deletingActive) cities = null;
+  if (deletingActive) {
+    cityListRequestId += 1;
+    cities = null;
+  }
 
   const result = await runtime.persistence.deleteCity(cityId);
   if (!result.ok) {
@@ -213,7 +216,7 @@ async function handleDeleteCity(cityId: string): Promise<void> {
 }
 ```
 
-This is not optimistic list editing: App discards a projection it knows is about to become invalid and waits for the store to provide the next authoritative list. If deletion fails, a read restores the projection.
+This is not optimistic list editing: App invalidates any in-flight list read, discards a projection it knows is about to become invalid, and waits for the store to provide the next authoritative list. Incrementing `cityListRequestId` makes an older response stale before the delete starts, so it cannot repopulate the deleted row while the runtime publishes `activeCity: null`. If deletion fails, a read restores the projection.
 
 For inactive deletion, keep the current list visible until the successful post-delete refresh.
 

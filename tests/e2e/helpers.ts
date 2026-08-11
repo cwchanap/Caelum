@@ -25,12 +25,12 @@ export async function createDefaultCity(
 ): Promise<void> {
   await page.goto("/");
   const newCityScreen = page.getByTestId("new-city-screen");
-  const cityLibraryScreen = page.getByTestId("city-library-screen");
-  await expect(newCityScreen.or(cityLibraryScreen)).toBeVisible();
-  if (await cityLibraryScreen.isVisible()) {
-    await cityLibraryScreen
-      .getByRole("button", { name: "New City", exact: true })
-      .click();
+  const libraryNewCityButton = page
+    .getByTestId("city-library-screen")
+    .getByRole("button", { name: "New City", exact: true });
+  await expect(newCityScreen.or(libraryNewCityButton)).toBeVisible();
+  if (await libraryNewCityButton.isVisible()) {
+    await libraryNewCityButton.click();
   }
   await expect(newCityScreen).toBeVisible();
   await page.getByLabel("City name").fill(name);
