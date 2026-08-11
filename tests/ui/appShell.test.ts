@@ -303,18 +303,25 @@ describe("App command shell", () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null },
     });
-    render(App, { props: { runtime: harness.runtime } });
-
-    harness.setPersistence({
-      error: {
-        kind: "store",
+    harness.runtime.persistence.createCity = vi.fn(async () => {
+      const error = {
+        kind: "store" as const,
         error: {
-          operation: "createCity",
-          code: "failed",
+          operation: "createCity" as const,
+          code: "failed" as const,
           diagnostic: "QuotaExceededError: private browser detail",
         },
-      },
+      };
+      harness.setPersistence({ error, busy: false });
+      return { ok: false as const, error };
     });
+
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.input(await screen.findByLabelText("City name"), {
+      target: { value: "Fail City" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Create City" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not save the new city.",
@@ -665,6 +672,70 @@ describe("App command shell", () => {
     expect(await screen.findByTestId("city-row-city-new")).toBeVisible();
   });
 
+  it("does not show a stale mutation error when opening New City from the active panel", async () => {
+    const harness = createRuntimeHarness({
+      persistence: {
+        activeCity: CITY_NEW,
+        error: {
+          kind: "store",
+          error: { operation: "renameCity", code: "failed" },
+        },
+      },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    // The active panel shows the stale rename error via the shared cityError.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not rename the city.",
+    );
+
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    // The New City form uses a create-specific error state, so the stale
+    // rename error must not leak into it.
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not inject a late list error into the New City form", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const lateList = deferred<{
+      ok: false;
+      error: {
+        kind: "store";
+        error: { operation: "listCities"; code: "failed" };
+      };
+    }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, value: [CITY_NEW, CITY_OLD] })
+      .mockImplementationOnce(() => lateList.promise);
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    // Trigger a list refresh (Save Now refreshes on success), then immediately
+    // open New City before the refresh resolves.
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    // The late list error resolves after New City opened; it must not inject
+    // "Could not load the city list" into the form.
+    lateList.resolve({
+      ok: false,
+      error: {
+        kind: "store",
+        error: { operation: "listCities", code: "failed" },
+      },
+    });
+    await tick();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("ignores an older city-list response that resolves after a newer retry", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null },
@@ -720,6 +791,41 @@ describe("App command shell", () => {
     ).toBeDisabled();
     // Save Now stays available so the player can clear the dirty state.
     expect(screen.getByRole("button", { name: "Save Now" })).toBeEnabled();
+    // The hint explains the required workflow.
+    expect(screen.getByTestId("city-switch-hint")).toHaveTextContent(
+      "Pause and Save before switching cities.",
+    );
+  });
+
+  it("an applied tick marks the active city dirty and disables switching", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW, dirty: false },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    // Model the real runtime contract: an applied tick calls markDirty(),
+    // so an unpaused simulation continuously marks the active city dirty.
+    harness.runtime.tick = vi.fn(async () => {
+      harness.setPersistence({ dirty: true });
+      return harness.getSnapshot();
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+
+    // Before any tick, switching is available and no hint is shown.
+    expect(screen.getByRole("button", { name: "New City" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeEnabled();
+    expect(screen.queryByTestId("city-switch-hint")).toBeNull();
+
+    // An applied tick marks the city dirty, disabling switching.
+    await harness.runtime.tick(0.016);
+    expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
+    expect(screen.getByTestId("city-switch-hint")).toBeVisible();
   });
 
   it("restores the city list when Cancel returns to an active city panel", async () => {

@@ -61,4 +61,48 @@ describe("CityPanel", () => {
       expect(screen.getByText(label)).toBeVisible();
     }
   });
+
+  it("shows a switching hint when the active city has unsaved changes", () => {
+    render(CityPanel, {
+      props: {
+        shell,
+        activeCity,
+        cities: [activeCity],
+        busy: false,
+        dirty: true,
+        error: null,
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.getByTestId("city-switch-hint")).toHaveTextContent(
+      "Pause and Save before switching cities.",
+    );
+    expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  });
+
+  it("hides the switching hint when the active city is clean", () => {
+    render(CityPanel, {
+      props: {
+        shell,
+        activeCity,
+        cities: [activeCity],
+        busy: false,
+        dirty: false,
+        error: null,
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.queryByTestId("city-switch-hint")).toBeNull();
+    expect(screen.getByRole("button", { name: "New City" })).toBeEnabled();
+  });
 });
