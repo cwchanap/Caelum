@@ -34,32 +34,42 @@
     <p class="new-city-kicker">CAELUM // LOCAL CITIES</p>
     <h1>City Library</h1>
 
-    {#if error !== null}
+    {#if error !== null && onRetry !== undefined}
       <p role="alert">{error}</p>
       <div class="city-library-actions">
-        {#if onRetry !== undefined}
-          <button type="button" disabled={busy} onclick={onRetry}>
-            Retry city list
+        <button type="button" disabled={busy} onclick={onRetry}>
+          Retry city list
+        </button>
+        <button type="button" disabled={busy} onclick={onNewCity}>
+          New City
+        </button>
+      </div>
+    {:else}
+      {#if error !== null}
+        <p role="alert">{error}</p>
+      {/if}
+      {#if cities === null}
+        <p>Loading cities…</p>
+      {:else if cities.length > 0}
+        <div class="city-library-actions">
+          <button
+            type="button"
+            disabled={busy}
+            onclick={() => onContinue(cities[0].id)}>Continue</button
+          >
+          <button type="button" disabled={busy} onclick={onNewCity}>
+            New City
           </button>
-        {/if}
-        <button type="button" disabled={busy} onclick={onNewCity}>
-          New City
-        </button>
-      </div>
-    {:else if cities === null}
-      <p>Loading cities…</p>
-    {:else if cities.length > 0}
-      <div class="city-library-actions">
-        <button
-          type="button"
-          disabled={busy}
-          onclick={() => onContinue(cities[0].id)}>Continue</button
-        >
-        <button type="button" disabled={busy} onclick={onNewCity}>
-          New City
-        </button>
-      </div>
-      <CityList {cities} {activeCityId} {busy} {onLoad} {onRename} {onDelete} />
+        </div>
+        <CityList
+          {cities}
+          {activeCityId}
+          {busy}
+          {onLoad}
+          {onRename}
+          {onDelete}
+        />
+      {/if}
     {/if}
   </section>
 </main>

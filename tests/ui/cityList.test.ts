@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import CityList from "../../src/components/city/CityList.svelte";
+import CityLibraryScreen from "../../src/components/city/CityLibraryScreen.svelte";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
 
 const CITIES = [
@@ -114,5 +115,39 @@ describe("CityList", () => {
     for (const button of screen.getAllByRole("button", { name: "Delete" })) {
       expect(button).toBeDisabled();
     }
+  });
+});
+
+describe("CityLibraryScreen", () => {
+  it("retains loaded city controls for a non-list operation error", () => {
+    render(CityLibraryScreen, {
+      props: {
+        cities: CITIES,
+        activeCityId: "city-new",
+        busy: false,
+        error: "Could not rename city.",
+        onContinue: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not rename city.",
+    );
+    expect(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("textbox", { name: "Rename Maple Junction" }),
+    ).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "New City" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Retry city list" }),
+    ).toBeNull();
   });
 });
