@@ -92,6 +92,13 @@
 
   async function handleCreateCity(request: NewCityRequest): Promise<void> {
     if (runtime === null) return;
+    // The New City form's Create button is busy/name-gated, not dirty-gated, so
+    // a tick can mark the active city dirty while the form is open. Re-check the
+    // current snapshot before creating: aborting preserves unsaved changes.
+    if (snapshot?.persistence.dirty) {
+      newCityError = "Pause and Save before creating a new city.";
+      return;
+    }
     beginPersistenceMutation();
     newCityError = null;
     const result = await runtime.persistence.createCity(request);
@@ -126,6 +133,13 @@
 
   async function handleLoadCity(cityId: string): Promise<void> {
     if (runtime === null) return;
+    // The CityPanel Load button is disabled while dirty, but re-check the
+    // snapshot to guard the render/click race and keep switching consistent.
+    if (snapshot?.persistence.dirty) {
+      cityListRequestId += 1;
+      cityListError = "Pause and Save before switching cities.";
+      return;
+    }
     beginPersistenceMutation();
     await runtime.persistence.load(cityId);
   }

@@ -836,6 +836,13 @@ Replace the fire-and-forget New City handler with:
 ```ts
 async function handleCreateCity(request: NewCityRequest): Promise<void> {
   if (runtime === null) return;
+  // The New City form's Create button is busy/name-gated, not dirty-gated, so
+  // a tick can mark the active city dirty while the form is open. Re-check the
+  // current snapshot before creating: aborting preserves unsaved changes.
+  if (snapshot?.persistence.dirty) {
+    newCityError = "Pause and Save before creating a new city.";
+    return;
+  }
   beginPersistenceMutation();
   newCityError = null;
   const result = await runtime.persistence.createCity(request);
@@ -850,6 +857,13 @@ async function handleCreateCity(request: NewCityRequest): Promise<void> {
 
 async function handleLoadCity(cityId: string): Promise<void> {
   if (runtime === null) return;
+  // The CityPanel Load button is disabled while dirty, but re-check the
+  // snapshot to guard the render/click race and keep switching consistent.
+  if (snapshot?.persistence.dirty) {
+    cityListRequestId += 1;
+    cityListError = "Pause and Save before switching cities.";
+    return;
+  }
   beginPersistenceMutation();
   await runtime.persistence.load(cityId);
 }
@@ -981,6 +995,34 @@ it("opens and cancels New City from the active City panel", async () => {
   expect(screen.getByTestId("new-city-screen")).toBeVisible();
   await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+});
+
+it("aborts Create when the active city becomes dirty while the form is open", async () => {
+  const harness = createRuntimeHarness({
+    persistence: { activeCity: CITY_NEW, dirty: false },
+    cities: [CITY_NEW, CITY_OLD],
+  });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
+
+  // A tick marks the active city dirty while the form is open. The Create
+  // button is busy/name-gated, not dirty-gated, so it stays clickable.
+  harness.setPersistence({ dirty: true });
+
+  await fireEvent.input(await screen.findByLabelText("City name"), {
+    target: { value: "Riverside" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "Create City" }));
+
+  expect(harness.runtime.persistence.createCity).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Pause and Save before creating a new city.",
+  );
+  // The form stays open so the user can Save or cancel.
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
 });
 
 it("disables Load and New City while the active city has unsaved changes", async () => {
