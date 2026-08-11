@@ -111,6 +111,21 @@ Mutation handlers clear `cityListError` before invoking the runtime, so an old l
 
 A `Retry city list` button is keyed specifically from `cityListError !== null`, not from `cityError !== null`.
 
+### Create-specific error for New City
+
+The New City form uses a separate `newCityError` state, not the shared `cityError`, so only Create failures appear there:
+
+```ts
+let newCityError = $state<string | null>(null);
+```
+
+- `handleShowNewCity()` clears `newCityError` and bumps `cityListRequestId` to invalidate any in-flight list read, preventing a late list error from injecting "Could not load the city list" into the form.
+- `handleCreateCity()` sets `newCityError = workingSaveErrorMessage(result.error)` on failure.
+- `handleCancelNewCity()` clears `newCityError`.
+- Both `NewCityScreen` instances receive `error={newCityError}`.
+
+This keeps the fix local to App presentation state; `RuntimePersistenceController` is unchanged.
+
 ## Latest-wins list reads
 
 `listCities()` deliberately remains outside the runtime busy gate. UI retries and post-mutation refreshes can therefore overlap. Protect the presentation projection with one request counter:
@@ -175,17 +190,42 @@ The normal shell remains intact. `CityPanel.svelte` gains:
 - mapped `cityError`;
 - `Retry city list` only when `cityListError !== null`.
 
-All mutation controls use the existing single `snapshot.persistence.busy` gate. No per-row pending state or mutation queue is added.
+### Dirty gating for city switching
+
+Load and New City are disabled while `dirty` is true (`disabled={busy || dirty}`), preventing silent data loss when switching away from an unsaved city. Save Now remains available so the player can clear dirty state.
+
+Because applied simulation ticks call `markDirty()`, an unpaused city is continuously dirty — Save Now clears dirty only until the next applied tick. The effective workflow to switch cities is therefore Pause → Save → switch. When `dirty` is true, CityPanel shows a hint:
+
+```svelte
+{#if dirty}
+  <p class="city-switch-hint" data-testid="city-switch-hint">
+    Pause and Save before switching cities.
+  </p>
+{/if}
+```
+
+`CityList.svelte` receives a `dirty?: boolean` prop (default `false`) so inactive-row Load buttons are also gated. The library screen does not pass `dirty` (no active city means no unsaved changes).
+
+All other mutation controls (Save Now, Rename, Delete) use only the existing single `snapshot.persistence.busy` gate. No per-row pending state or mutation queue is added.
 
 ## Explicit App handlers
 
-Keep per-operation handlers rather than a generic action runner because post-success behavior differs:
+Keep per-operation handlers rather than a generic action runner because post-success behavior differs. Each mutation handler calls `beginPersistenceMutation()` before invoking the runtime, which bumps `cityListRequestId` (invalidating any in-flight list read) and clears `cityListError` so the mutation's own result owns the alert:
 
-- Create -> clear stale list error, create through runtime, refresh list on success, close New City presentation;
-- Save -> clear stale list error, save through runtime, refresh list on success;
-- Load -> clear stale list error, load through runtime, no list refresh;
-- Rename -> clear stale list error, rename through runtime, refresh list on success;
-- Delete -> clear stale list error, delete through runtime, refresh list on success.
+```ts
+function beginPersistenceMutation(): void {
+  cityListRequestId += 1;
+  cityListError = null;
+}
+```
+
+- Create -> `beginPersistenceMutation()`, clear `newCityError`, create through runtime, set `newCityError` on failure, close New City + refresh list on success;
+- Save -> `beginPersistenceMutation()`, save through runtime, refresh list on success;
+- Load -> `beginPersistenceMutation()`, load through runtime, no list refresh;
+- Rename -> `beginPersistenceMutation()`, rename through runtime, refresh list on success;
+- Delete -> `beginPersistenceMutation()`, delete through runtime, refresh list on success.
+
+`handleShowNewCity()` also bumps `cityListRequestId` and clears both `cityListError` and `newCityError`, so a late list error cannot inject into the form and no stale mutation error carries over.
 
 No handler writes a synthetic city summary into the list.
 
@@ -198,11 +238,10 @@ For an active-city deletion, App therefore invalidates the read projection **bef
 ```ts
 async function handleDeleteCity(cityId: string): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
 
   const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
   if (deletingActive) {
-    cityListRequestId += 1;
     cities = null;
   }
 
@@ -216,7 +255,7 @@ async function handleDeleteCity(cityId: string): Promise<void> {
 }
 ```
 
-This is not optimistic list editing: App invalidates any in-flight list read, discards a projection it knows is about to become invalid, and waits for the store to provide the next authoritative list. Incrementing `cityListRequestId` makes an older response stale before the delete starts, so it cannot repopulate the deleted row while the runtime publishes `activeCity: null`. If deletion fails, a read restores the projection.
+This is not optimistic list editing: App invalidates any in-flight list read (via `beginPersistenceMutation()`), discards a projection it knows is about to become invalid, and waits for the store to provide the next authoritative list. If deletion fails, a read restores the projection.
 
 For inactive deletion, keep the current list visible until the successful post-delete refresh.
 
@@ -229,6 +268,7 @@ interface Props {
   cities: CitySummary[];
   activeCityId: string | null;
   busy: boolean;
+  dirty?: boolean;
   onLoad: (cityId: string) => void;
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
@@ -272,7 +312,7 @@ Delete rules:
 - second click clears it and invokes `onDelete(city.id)`;
 - selecting another city action clears pending delete when practical.
 
-The active row shows `Active` instead of Load. Inactive rows show Load. All city mutation controls are disabled while `busy` is true.
+The active row shows `Active` instead of Load. Inactive rows show Load. Load is disabled while `busy` or `dirty` is true; all other mutation controls are disabled while `busy` is true.
 
 Display only city name and last-saved time.
 
@@ -497,12 +537,16 @@ Control: existing generic load error + Delete path only; no migration/recovery f
 - [ ] Existing cities render City Library with Continue, Load, inline Rename, Delete?, and New City.
 - [ ] City row rename/delete interaction matches the established LinesPanel vocabulary and rejects blank city names.
 - [ ] Active City panel exposes Save Now, dirty state, New City, and the shared city list.
+- [ ] Load and New City are disabled while `dirty` is true; a switching hint explains the Pause → Save → switch workflow.
+- [ ] `CityList.svelte` accepts a `dirty?: boolean` prop for gating inactive-row Load.
+- [ ] New City form uses a create-specific `newCityError` state, not the shared `cityError`, so only Create failures appear there.
+- [ ] Opening New City invalidates in-flight list reads and clears stale errors.
 - [ ] Active deletion never intentionally renders the known-deleted city from a stale list projection.
 - [ ] Final-slot deletion transitions to New City; another-city-remains deletion transitions to City Library after refresh.
 - [ ] `tests/ui/cityPanel.test.ts` is migrated with obsolete old-contract tests removed.
 - [ ] All six persistence methods in the App test harness resolve valid default results.
-- [ ] One derived `cityError` is passed consistently to library and panel.
-- [ ] `city-library-screen`, `city-row-${id}`, `city-name-${id}`, `city-save-status`, and `active-city-name` test hooks are specified in implementation.
+- [ ] One derived `cityError` is passed consistently to library and panel; `newCityError` is passed to both New City form instances.
+- [ ] `city-library-screen`, `city-row-${id}`, `city-name-${id}`, `city-save-status`, `city-switch-hint`, and `active-city-name` test hooks are specified in implementation.
 - [ ] Chromium proves mutate -> dirty -> Save -> clean -> reload -> Continue -> changed state through real WASM + IndexedDB.
 - [ ] HPA-344 and HPA-349 remain separate downstream work.
 - [ ] No autosave, recovery, migration, compatibility, multi-instance, security, or generic save-management framework is introduced.

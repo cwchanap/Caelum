@@ -19,6 +19,8 @@
 - Failed list read must still expose New City.
 - Reuse LinesPanel's inline rename + `Delete` -> `Delete?` interaction vocabulary for city rows; add trim/reject-empty behavior.
 - Keep the existing runtime busy gate authoritative. Do not add a mutation queue or per-row pending map.
+- Load and New City are additionally gated on `dirty` to prevent silent data loss when switching away from an unsaved city; Save Now stays available to clear dirty state. A switching hint explains the Pause → Save → switch workflow.
+- The New City form uses a create-specific `newCityError` state, not the shared `cityError`, so only Create failures appear there. Opening New City invalidates in-flight list reads and clears stale errors.
 - Add one latest-wins request counter around read-only list refreshes; no polling/cancellation framework.
 - Invalidate the App city-list projection before deleting the active city so runtime publication cannot intentionally render a known-deleted row.
 - Extend `NewCityScreen.svelte` only with optional Cancel.
@@ -45,6 +47,7 @@ interface Props {
   cities: CitySummary[];
   activeCityId: string | null;
   busy: boolean;
+  dirty?: boolean;
   onLoad: (cityId: string) => void;
   onRename: (cityId: string, name: string) => void;
   onDelete: (cityId: string) => void;
@@ -104,7 +107,7 @@ const CITIES = [
   },
 ] satisfies CitySummary[];
 
-function renderList(busy = false) {
+function renderList(busy = false, dirty = false) {
   const onLoad = vi.fn();
   const onRename = vi.fn();
   const onDelete = vi.fn();
@@ -113,6 +116,7 @@ function renderList(busy = false) {
       cities: CITIES,
       activeCityId: "city-new",
       busy,
+      dirty,
       onLoad,
       onRename,
       onDelete,
@@ -201,6 +205,13 @@ describe("CityList", () => {
       expect(button).toBeDisabled();
     }
   });
+
+  it("disables Load while the active city has unsaved changes", () => {
+    renderList(false, true);
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
+  });
 });
 ```
 
@@ -224,12 +235,13 @@ Create `src/components/city/CityList.svelte` with row-local draft/delete state:
     cities: CitySummary[];
     activeCityId: string | null;
     busy: boolean;
+    dirty?: boolean;
     onLoad: (cityId: string) => void;
     onRename: (cityId: string, name: string) => void;
     onDelete: (cityId: string) => void;
   }
 
-  let { cities, activeCityId, busy, onLoad, onRename, onDelete }: Props =
+  let { cities, activeCityId, busy, dirty = false, onLoad, onRename, onDelete }: Props =
     $props();
   let pendingDeleteId = $state<string | null>(null);
   let cityNameDrafts = $state<Record<string, string>>({});
@@ -334,7 +346,7 @@ Create `src/components/city/CityList.svelte` with row-local draft/delete state:
           <button
             type="button"
             aria-label={`Load ${city.name}`}
-            disabled={busy}
+            disabled={busy || dirty}
             onclick={() => {
               pendingDeleteId = null;
               onLoad(city.id);
@@ -783,6 +795,7 @@ In `src/App.svelte` import `CitySummary` and `CityLibraryScreen`, then add:
 let cities = $state<CitySummary[] | null>(null);
 let cityListError = $state<string | null>(null);
 let showNewCity = $state(false);
+let newCityError = $state<string | null>(null);
 let cityListRequestId = 0;
 
 const cityError = $derived(
@@ -805,6 +818,15 @@ async function refreshCities(): Promise<void> {
     cityListError = workingSaveErrorMessage(result.error);
   }
 }
+
+// A persistence mutation supersedes any in-flight city-list read: bump the
+// request id so a late list response cannot overwrite the list or mask the
+// mutation's own error, and clear the list error so the mutation's result
+// owns the alert.
+function beginPersistenceMutation(): void {
+  cityListRequestId += 1;
+  cityListError = null;
+}
 ```
 
 - [ ] **Step 8: Make Create and Load explicit async handlers**
@@ -814,28 +836,40 @@ Replace the fire-and-forget New City handler with:
 ```ts
 async function handleCreateCity(request: NewCityRequest): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
+  newCityError = null;
   const result = await runtime.persistence.createCity(request);
-  if (!result.ok) return;
+  if (!result.ok) {
+    newCityError = workingSaveErrorMessage(result.error);
+    return;
+  }
   showNewCity = false;
+  newCityError = null;
   await refreshCities();
 }
 
 async function handleLoadCity(cityId: string): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
   await runtime.persistence.load(cityId);
 }
 
 function handleCancelNewCity(): void {
   showNewCity = false;
-  if (snapshot?.persistence.activeCity == null && cities === null) {
-    void refreshCities();
-  }
+  newCityError = null;
+  // Always re-fetch: handleShowNewCity clears cityListError, so cancelling
+  // must restore the list (and any list error/Retry) for both the library
+  // and the active-city panel, regardless of whether a list was loaded.
+  void refreshCities();
 }
 
 function handleShowNewCity(): void {
+  // Invalidate any in-flight list read so a late list error cannot inject
+  // into the New City form. The form uses newCityError, not cityError, so
+  // only Create failures appear there.
+  cityListRequestId += 1;
   cityListError = null;
+  newCityError = null;
   showNewCity = true;
 }
 ```
@@ -860,7 +894,7 @@ After the fatal shell branch, use this ordering:
 {:else if showNewCity}
   <NewCityScreen
     busy={snapshot?.persistence.busy ?? false}
-    error={cityError}
+    error={newCityError}
     onCreate={(request) => void handleCreateCity(request)}
     onCancel={handleCancelNewCity}
   />
@@ -868,7 +902,7 @@ After the fatal shell branch, use this ordering:
   {#if cities !== null && cities.length === 0 && cityListError === null}
     <NewCityScreen
       busy={snapshot?.persistence.busy ?? false}
-      error={cityError}
+      error={newCityError}
       onCreate={(request) => void handleCreateCity(request)}
     />
   {:else}
@@ -947,6 +981,103 @@ it("opens and cancels New City from the active City panel", async () => {
   expect(screen.getByTestId("new-city-screen")).toBeVisible();
   await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.getByTestId("game-canvas-host")).toBeVisible();
+});
+
+it("disables Load and New City while the active city has unsaved changes", async () => {
+  const harness = createRuntimeHarness({
+    persistence: { activeCity: CITY_NEW, dirty: true },
+    cities: [CITY_NEW, CITY_OLD],
+  });
+  render(App, { props: { runtime: harness.runtime } });
+
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  expect(
+    screen.getByRole("button", { name: "Load Harbour City" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save Now" })).toBeEnabled();
+  expect(screen.getByTestId("city-switch-hint")).toHaveTextContent(
+    "Pause and Save before switching cities.",
+  );
+});
+
+it("an applied tick marks the active city dirty and disables switching", async () => {
+  const harness = createRuntimeHarness({
+    persistence: { activeCity: CITY_NEW, dirty: false },
+    cities: [CITY_NEW, CITY_OLD],
+  });
+  // Model the real runtime contract: an applied tick calls markDirty().
+  harness.runtime.tick = vi.fn(async () => {
+    harness.setPersistence({ dirty: true });
+    return harness.getSnapshot();
+  });
+
+  render(App, { props: { runtime: harness.runtime } });
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+
+  expect(screen.getByRole("button", { name: "New City" })).toBeEnabled();
+  expect(screen.queryByTestId("city-switch-hint")).toBeNull();
+
+  await harness.runtime.tick(0.016);
+  expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  expect(screen.getByTestId("city-switch-hint")).toBeVisible();
+});
+
+it("does not show a stale mutation error when opening New City from the active panel", async () => {
+  const harness = createRuntimeHarness({
+    persistence: {
+      activeCity: CITY_NEW,
+      error: {
+        kind: "store",
+        error: { operation: "renameCity", code: "failed" },
+      },
+    },
+    cities: [CITY_NEW, CITY_OLD],
+  });
+
+  render(App, { props: { runtime: harness.runtime } });
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Could not rename the city.",
+  );
+
+  await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("does not inject a late list error into the New City form", async () => {
+  const harness = createRuntimeHarness({
+    persistence: { activeCity: CITY_NEW },
+    cities: [CITY_NEW, CITY_OLD],
+  });
+  const lateList = deferred<{
+    ok: false;
+    error: {
+      kind: "store";
+      error: { operation: "listCities"; code: "failed" };
+    };
+  }>();
+  harness.runtime.persistence.listCities = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true as const, value: [CITY_NEW, CITY_OLD] })
+    .mockImplementationOnce(() => lateList.promise);
+
+  render(App, { props: { runtime: harness.runtime } });
+  await fireEvent.click(screen.getByTestId("command-destination-city"));
+  await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+  await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+
+  expect(screen.getByTestId("new-city-screen")).toBeVisible();
+  lateList.resolve({
+    ok: false,
+    error: {
+      kind: "store",
+      error: { operation: "listCities", code: "failed" },
+    },
+  });
+  await tick();
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 ```
 
@@ -1066,25 +1197,24 @@ expect(
 ```ts
 async function handleSaveCity(): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
   const result = await runtime.persistence.save();
   if (result.ok) await refreshCities();
 }
 
 async function handleRenameCity(cityId: string, name: string): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
   const result = await runtime.persistence.renameCity(cityId, name);
   if (result.ok) await refreshCities();
 }
 
 async function handleDeleteCity(cityId: string): Promise<void> {
   if (runtime === null) return;
-  cityListError = null;
+  beginPersistenceMutation();
 
   const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
   if (deletingActive) {
-    cityListRequestId += 1;
     cities = null;
   }
 
@@ -1143,8 +1273,16 @@ Render the heading and exact save-state test hook:
   <button type="button" disabled={busy} onclick={onSave}>
     {busy ? "Working…" : "Save Now"}
   </button>
-  <button type="button" disabled={busy} onclick={onNewCity}>New City</button>
+  <button type="button" disabled={busy || dirty} onclick={onNewCity}>
+    New City
+  </button>
 </div>
+
+{#if dirty}
+  <p class="city-switch-hint" data-testid="city-switch-hint">
+    Pause and Save before switching cities.
+  </p>
+{/if}
 
 {#if error !== null}
   <p class="city-action-error" role="alert">{error}</p>
@@ -1165,6 +1303,7 @@ Keep the existing overview `<dl>` unchanged. After it:
       {cities}
       activeCityId={activeCity.id}
       {busy}
+      {dirty}
       {onLoad}
       {onRename}
       {onDelete}
@@ -1266,6 +1405,50 @@ describe("CityPanel", () => {
       expect(screen.getByText(label)).toBeVisible();
     }
   });
+
+  it("shows a switching hint when the active city has unsaved changes", () => {
+    render(CityPanel, {
+      props: {
+        shell,
+        activeCity,
+        cities: [activeCity],
+        busy: false,
+        dirty: true,
+        error: null,
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.getByTestId("city-switch-hint")).toHaveTextContent(
+      "Pause and Save before switching cities.",
+    );
+    expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  });
+
+  it("hides the switching hint when the active city is clean", () => {
+    render(CityPanel, {
+      props: {
+        shell,
+        activeCity,
+        cities: [activeCity],
+        busy: false,
+        dirty: false,
+        error: null,
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.queryByTestId("city-switch-hint")).toBeNull();
+    expect(screen.getByRole("button", { name: "New City" })).toBeEnabled();
+  });
 });
 ```
 
@@ -1289,6 +1472,12 @@ Delete the old null-city fallback test and persistence-controls-absent test with
 
 .city-action-error {
   margin: 0.5rem 0 0;
+}
+
+.city-switch-hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
 }
 ```
 

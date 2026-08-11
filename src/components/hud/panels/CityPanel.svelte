@@ -57,6 +57,12 @@
       >
     </div>
 
+    {#if dirty}
+      <p class="city-switch-hint" data-testid="city-switch-hint">
+        Pause and Save before switching cities.
+      </p>
+    {/if}
+
     {#if error !== null}
       <p class="city-action-error" role="alert">{error}</p>
     {/if}

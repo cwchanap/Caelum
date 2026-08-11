@@ -43,6 +43,7 @@
   let cities = $state<CitySummary[] | null>(null);
   let cityListError = $state<string | null>(null);
   let showNewCity = $state(false);
+  let newCityError = $state<string | null>(null);
   let cityListRequestId = 0;
 
   const cityError = $derived(
@@ -92,14 +93,20 @@
   async function handleCreateCity(request: NewCityRequest): Promise<void> {
     if (runtime === null) return;
     beginPersistenceMutation();
+    newCityError = null;
     const result = await runtime.persistence.createCity(request);
-    if (!result.ok) return;
+    if (!result.ok) {
+      newCityError = workingSaveErrorMessage(result.error);
+      return;
+    }
     showNewCity = false;
+    newCityError = null;
     await refreshCities();
   }
 
   function handleCancelNewCity(): void {
     showNewCity = false;
+    newCityError = null;
     // Always re-fetch: handleShowNewCity clears cityListError, so cancelling
     // must restore the list (and any list error/Retry) for both the library
     // and the active-city panel, regardless of whether a list was loaded.
@@ -107,7 +114,13 @@
   }
 
   function handleShowNewCity(): void {
+    // Invalidate any in-flight list read so a late list error cannot inject
+    // "Could not load the city list" into the New City form. The form uses a
+    // create-specific error state (newCityError), not the shared cityError,
+    // so only Create failures appear there.
+    cityListRequestId += 1;
     cityListError = null;
+    newCityError = null;
     showNewCity = true;
   }
 
@@ -544,7 +557,7 @@
 {:else if showNewCity}
   <NewCityScreen
     busy={snapshot?.persistence.busy ?? false}
-    error={cityError}
+    error={newCityError}
     onCreate={(request) => void handleCreateCity(request)}
     onCancel={handleCancelNewCity}
   />
@@ -552,7 +565,7 @@
   {#if cities !== null && cities.length === 0 && cityListError === null}
     <NewCityScreen
       busy={snapshot?.persistence.busy ?? false}
-      error={cityError}
+      error={newCityError}
       onCreate={(request) => void handleCreateCity(request)}
     />
   {:else}
