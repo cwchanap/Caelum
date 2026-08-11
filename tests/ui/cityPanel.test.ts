@@ -1,9 +1,10 @@
 import { render, screen } from "@testing-library/svelte";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import CityPanel from "../../src/components/hud/panels/CityPanel.svelte";
+import type { CitySummary } from "../../src/persistence/citySaveStore";
 import type { ShellCityState } from "../../src/runtime/types";
 
-const city = {
+const shell = {
   title: "Standard Sandbox",
   template: "Crossroads",
   simulation: "Running",
@@ -12,11 +13,38 @@ const city = {
   networkSummary: "4 late · 2 unserved",
 } satisfies ShellCityState;
 
-describe("CityPanel", () => {
-  it("renders the selected city heading and every overview field", () => {
-    render(CityPanel, { props: { shell: city, cityName: "Harbour Loop" } });
+const activeCity = {
+  id: "city-1",
+  name: "Harbour Loop",
+  createdAt: "2026-08-10T12:00:00.000Z",
+  savedAt: "2026-08-10T13:00:00.000Z",
+} satisfies CitySummary;
 
-    expect(screen.getByRole("heading", { name: "Harbour Loop" })).toBeVisible();
+describe("CityPanel", () => {
+  it("renders the active city, save status, and every overview field", () => {
+    render(CityPanel, {
+      props: {
+        shell,
+        activeCity,
+        cities: [activeCity],
+        busy: false,
+        dirty: false,
+        error: null,
+        onSave: vi.fn(),
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewCity: vi.fn(),
+      },
+    });
+
+    expect(screen.getByTestId("active-city-name")).toHaveTextContent(
+      "Harbour Loop",
+    );
+    expect(screen.getByTestId("city-save-status")).toHaveAttribute(
+      "data-dirty",
+      "false",
+    );
     expect(screen.getByText("Standard Sandbox")).toBeVisible();
     expect(screen.getByText("Crossroads")).toBeVisible();
     expect(screen.getByText("Running")).toBeVisible();
@@ -31,33 +59,6 @@ describe("CityPanel", () => {
       "Network",
     ]) {
       expect(screen.getByText(label)).toBeVisible();
-    }
-  });
-
-  it("falls back to the shell title when no city name is active", () => {
-    render(CityPanel, { props: { shell: city, cityName: null } });
-
-    expect(
-      screen.getByRole("heading", { name: "Standard Sandbox" }),
-    ).toBeVisible();
-  });
-
-  it("does not expose campaign or persistence controls", () => {
-    render(CityPanel, { props: { shell: city, cityName: "Harbour Loop" } });
-
-    for (const label of [
-      "Objective",
-      "Note",
-      "Wave",
-      "Win",
-      "Loss",
-      "Save",
-      "Load",
-      "Rename",
-      "Delete",
-    ]) {
-      expect(screen.queryByRole("button", { name: label })).toBeNull();
-      expect(screen.queryByText(label, { exact: true })).toBeNull();
     }
   });
 });
