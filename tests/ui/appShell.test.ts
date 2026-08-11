@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import { flushSync, tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import App from "../../src/App.svelte";
@@ -452,6 +458,57 @@ describe("App command shell", () => {
     expect(screen.getByText("Loading cities…")).toBeVisible();
 
     refreshed.resolve({ ok: true, value: [CITY_OLD] });
+    expect(await screen.findByTestId("city-row-city-old")).toBeVisible();
+  });
+
+  it("invalidates an older list read before active-delete refresh publishes", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const older = deferred<{ ok: true; value: CitySummary[] }>();
+    const postDelete = deferred<{ ok: true; value: CitySummary[] }>();
+    const deleteComplete = deferred<{ ok: true; value: undefined }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: [CITY_NEW, CITY_OLD],
+      })
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => postDelete.promise);
+    harness.runtime.persistence.deleteCity = vi.fn(
+      () => deleteComplete.promise,
+    );
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const row = await screen.findByTestId("city-row-city-new");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+    await waitFor(() =>
+      expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(2),
+    );
+
+    const del = within(row).getByRole("button", { name: "Delete" });
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+    expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+      "city-new",
+    );
+
+    older.resolve({ ok: true, value: [CITY_NEW, CITY_OLD] });
+    await tick();
+    harness.setPersistence({ activeCity: null, busy: false, dirty: false });
+    expect(await screen.findByTestId("city-library-screen")).toBeVisible();
+    expect(screen.queryByTestId("city-row-city-new")).toBeNull();
+    expect(screen.getByText("Loading cities…")).toBeVisible();
+
+    deleteComplete.resolve({ ok: true, value: undefined });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(3),
+    );
+    postDelete.resolve({ ok: true, value: [CITY_OLD] });
     expect(await screen.findByTestId("city-row-city-old")).toBeVisible();
   });
 

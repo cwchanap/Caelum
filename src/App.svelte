@@ -113,7 +113,10 @@
     cityListError = null;
 
     const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
-    if (deletingActive) cities = null;
+    if (deletingActive) {
+      cityListRequestId += 1;
+      cities = null;
+    }
 
     const result = await runtime.persistence.deleteCity(cityId);
     if (!result.ok) {
