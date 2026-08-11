@@ -79,9 +79,19 @@
     }
   }
 
+  // A persistence mutation supersedes any in-flight city-list read: bump the
+  // request id so a late list response (success or failure) cannot overwrite
+  // the list or mask the mutation's own error, and clear the list error so the
+  // mutation's result owns the alert. Successful mutations that need fresh
+  // metadata issue their own refreshCities() afterward.
+  function beginPersistenceMutation(): void {
+    cityListRequestId += 1;
+    cityListError = null;
+  }
+
   async function handleCreateCity(request: NewCityRequest): Promise<void> {
     if (runtime === null) return;
-    cityListError = null;
+    beginPersistenceMutation();
     const result = await runtime.persistence.createCity(request);
     if (!result.ok) return;
     showNewCity = false;
@@ -90,9 +100,10 @@
 
   function handleCancelNewCity(): void {
     showNewCity = false;
-    if (snapshot?.persistence.activeCity == null && cities === null) {
-      void refreshCities();
-    }
+    // Always re-fetch: handleShowNewCity clears cityListError, so cancelling
+    // must restore the list (and any list error/Retry) for both the library
+    // and the active-city panel, regardless of whether a list was loaded.
+    void refreshCities();
   }
 
   function handleShowNewCity(): void {
@@ -102,31 +113,30 @@
 
   async function handleLoadCity(cityId: string): Promise<void> {
     if (runtime === null) return;
-    cityListError = null;
+    beginPersistenceMutation();
     await runtime.persistence.load(cityId);
   }
 
   async function handleSaveCity(): Promise<void> {
     if (runtime === null) return;
-    cityListError = null;
+    beginPersistenceMutation();
     const result = await runtime.persistence.save();
     if (result.ok) await refreshCities();
   }
 
   async function handleRenameCity(cityId: string, name: string): Promise<void> {
     if (runtime === null) return;
-    cityListError = null;
+    beginPersistenceMutation();
     const result = await runtime.persistence.renameCity(cityId, name);
     if (result.ok) await refreshCities();
   }
 
   async function handleDeleteCity(cityId: string): Promise<void> {
     if (runtime === null) return;
-    cityListError = null;
+    beginPersistenceMutation();
 
     const deletingActive = snapshot?.persistence.activeCity?.id === cityId;
     if (deletingActive) {
-      cityListRequestId += 1;
       cities = null;
     }
 

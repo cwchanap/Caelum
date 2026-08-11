@@ -706,6 +706,115 @@ describe("App command shell", () => {
     expect(screen.queryByTestId("city-row-city-old")).toBeNull();
   });
 
+  it("disables Load and New City while the active city has unsaved changes", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW, dirty: true },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    ).toBeDisabled();
+    // Save Now stays available so the player can clear the dirty state.
+    expect(screen.getByRole("button", { name: "Save Now" })).toBeEnabled();
+  });
+
+  it("restores the city list when Cancel returns to an active city panel", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+    });
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          kind: "store" as const,
+          error: { operation: "listCities" as const, code: "failed" as const },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: [CITY_NEW, CITY_OLD],
+      });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    // The mount-time list read failed, so the active panel offers a Retry.
+    expect(
+      await screen.findByRole("button", { name: "Retry city list" }),
+    ).toBeVisible();
+
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Cancel re-fetches the list even with an active city, restoring the rows.
+    expect(await screen.findByTestId("city-row-city-old")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Retry city list" }),
+    ).toBeNull();
+  });
+
+  it("a persistence mutation supersedes an in-flight city-list retry", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+    });
+    const retrying = deferred<{
+      ok: false;
+      error: {
+        kind: "store";
+        error: { operation: "listCities"; code: "failed" };
+      };
+    }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          kind: "store" as const,
+          error: { operation: "listCities" as const, code: "failed" as const },
+        },
+      })
+      .mockImplementationOnce(() => retrying.promise);
+    const saveError = {
+      kind: "store" as const,
+      error: { operation: "updateCity" as const, code: "failed" as const },
+    };
+    harness.runtime.persistence.save = vi.fn(async () => {
+      harness.setPersistence({ error: saveError, busy: false });
+      return { ok: false as const, error: saveError };
+    });
+
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const retry = await screen.findByRole("button", {
+      name: "Retry city list",
+    });
+    await fireEvent.click(retry);
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+
+    // The older retry fails after the save started; it must not mask the save
+    // error, since the save superseded the list attempt.
+    retrying.resolve({
+      ok: false,
+      error: {
+        kind: "store",
+        error: { operation: "listCities", code: "failed" },
+      },
+    });
+    await tick();
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not save the city.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent(
+      "Could not load the city list.",
+    );
+  });
+
   it("starts in Select with no command panel open", () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

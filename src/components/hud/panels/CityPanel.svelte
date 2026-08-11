@@ -52,7 +52,8 @@
       <button type="button" disabled={busy} onclick={onSave}>
         {busy ? "Working…" : "Save Now"}
       </button>
-      <button type="button" disabled={busy} onclick={onNewCity}>New City</button
+      <button type="button" disabled={busy || dirty} onclick={onNewCity}
+        >New City</button
       >
     </div>
 
@@ -94,6 +95,7 @@
           {cities}
           activeCityId={activeCity.id}
           {busy}
+          {dirty}
           {onLoad}
           {onRename}
           {onDelete}
