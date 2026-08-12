@@ -14,6 +14,10 @@ const CITY_PREFIX: &str = "city-";
 const CITY_SUFFIX: &str = ".json";
 const TEMP_SUFFIX: &str = ".tmp";
 
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestCityStoreRoot(pub(crate) PathBuf);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CityIdentity {
@@ -114,6 +118,11 @@ impl CityFileStore {
     fn from_app<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
     ) -> Result<Self, CityStoreCommandError> {
+        #[cfg(test)]
+        if let Some(root) = app.try_state::<TestCityStoreRoot>() {
+            return Ok(Self::new(root.0.clone()));
+        }
+
         Ok(Self::new(
             app.path()
                 .app_data_dir()
@@ -286,31 +295,31 @@ impl CityFileStore {
 }
 
 #[tauri::command]
-pub(crate) fn city_store_list(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_list<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
 ) -> Result<Vec<CitySummary>, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.list_cities()
 }
 
 #[tauri::command]
-pub(crate) fn city_store_read(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_read<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     id: String,
 ) -> Result<CitySaveRecord, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.read_city(&id)
 }
 
 #[tauri::command]
-pub(crate) fn city_store_create(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_create<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     record: CitySaveRecord,
 ) -> Result<CitySummary, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.create_city(record)
 }
 
 #[tauri::command]
-pub(crate) fn city_store_update(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     id: String,
     update: CitySaveUpdate,
 ) -> Result<CitySummary, CityStoreCommandError> {
@@ -318,8 +327,8 @@ pub(crate) fn city_store_update(
 }
 
 #[tauri::command]
-pub(crate) fn city_store_rename(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_rename<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     id: String,
     name: String,
 ) -> Result<CitySummary, CityStoreCommandError> {
@@ -327,8 +336,8 @@ pub(crate) fn city_store_rename(
 }
 
 #[tauri::command]
-pub(crate) fn city_store_delete(
-    app: tauri::AppHandle,
+pub(crate) fn city_store_delete<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     id: String,
 ) -> Result<(), CityStoreCommandError> {
     CityFileStore::from_app(&app)?.delete_city(&id)
@@ -366,6 +375,41 @@ mod tests {
             serde_json::to_value(CityStoreCommandError::Failed("disk full".into())).unwrap(),
             json!({ "code": "failed", "diagnostic": "disk full" })
         );
+    }
+
+    #[test]
+    fn city_store_record_wire_is_stable() {
+        let record = record("city-ipc", "IPC City");
+
+        assert_eq!(
+            serde_json::to_value(summary(&record)).expect("summary serializes"),
+            json!({
+                "id": "city-ipc",
+                "name": "IPC City",
+                "createdAt": "2026-08-11T18:00:00.000Z",
+                "savedAt": "2026-08-11T19:00:00.000Z"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&record).expect("record serializes"),
+            json!({
+                "city": {
+                    "id": "city-ipc",
+                    "name": "IPC City",
+                    "createdAt": "2026-08-11T18:00:00.000Z"
+                },
+                "savedAt": "2026-08-11T19:00:00.000Z",
+                "snapshot": { "id": "city-ipc" }
+            })
+        );
+
+        let update: CitySaveUpdate = serde_json::from_value(json!({
+            "savedAt": "2026-08-11T20:00:00.000Z",
+            "snapshot": { "revision": 2 }
+        }))
+        .expect("update deserializes");
+        assert_eq!(update.saved_at, "2026-08-11T20:00:00.000Z");
+        assert_eq!(update.snapshot, json!({ "revision": 2 }));
     }
 
     #[test]

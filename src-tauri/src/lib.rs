@@ -253,31 +253,35 @@ fn game_preview_road_mutation(
     Ok(owned.engine.preview_road_mutation(request))
 }
 
+fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![
+        game_snapshot,
+        game_begin_runtime,
+        game_dispatch,
+        game_tick,
+        game_build_sandbox_snapshot,
+        game_reset,
+        game_snapshot_for_save,
+        game_restore_snapshot,
+        game_preview_route,
+        game_preview_road_mutation,
+        city_store::city_store_list,
+        city_store::city_store_read,
+        city_store::city_store_create,
+        city_store::city_store_update,
+        city_store::city_store_rename,
+        city_store::city_store_delete,
+    ])
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .manage(Mutex::new(OwnedEngine {
-            engine: GameEngine::new(),
-            runtime_epoch: 0,
-        }))
-        .invoke_handler(tauri::generate_handler![
-            game_snapshot,
-            game_begin_runtime,
-            game_dispatch,
-            game_tick,
-            game_build_sandbox_snapshot,
-            game_reset,
-            game_snapshot_for_save,
-            game_restore_snapshot,
-            game_preview_route,
-            game_preview_road_mutation,
-            city_store::city_store_list,
-            city_store::city_store_read,
-            city_store::city_store_create,
-            city_store::city_store_update,
-            city_store::city_store_rename,
-            city_store::city_store_delete
-        ])
+    let builder = tauri::Builder::default().manage(Mutex::new(OwnedEngine {
+        engine: GameEngine::new(),
+        runtime_epoch: 0,
+    }));
+
+    with_commands(builder)
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -296,7 +300,35 @@ pub fn run() {
 mod tests {
     use super::*;
     use caelum_core::{canonical_default_request, create_sandbox_snapshot};
+    use serde_json::{json, Value};
     use tauri::Manager;
+    use tauri::{ipc::InvokeBody, test::MockRuntime, webview::InvokeRequest};
+
+    fn invoke_city_store(
+        webview: &tauri::WebviewWindow<MockRuntime>,
+        command: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
+        tauri::test::get_ipc_response(
+            webview,
+            InvokeRequest {
+                cmd: command.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .expect("valid Tauri URL"),
+                body: InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.into(),
+            },
+        )
+        .map(|response| response.deserialize::<Value>().expect("JSON response"))
+    }
 
     #[test]
     fn sandbox_build_is_pure() {
@@ -381,5 +413,60 @@ mod tests {
             .expect("valid restore succeeds");
 
         assert_eq!(restored, saved);
+    }
+
+    #[test]
+    fn production_city_store_handler_round_trips_ipc() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("cities");
+        let app = with_commands(tauri::test::mock_builder())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app builds");
+        assert!(app.manage(city_store::TestCityStoreRoot(root.clone())));
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let record = json!({
+            "city": {
+                "id": "city-ipc",
+                "name": "IPC City",
+                "createdAt": "2026-08-11T18:00:00.000Z"
+            },
+            "savedAt": "2026-08-11T19:00:00.000Z",
+            "snapshot": { "revision": 1 }
+        });
+        assert_eq!(
+            invoke_city_store(&webview, "city_store_create", json!({ "record": record }))
+                .expect("create IPC succeeds"),
+            json!({
+                "id": "city-ipc",
+                "name": "IPC City",
+                "createdAt": "2026-08-11T18:00:00.000Z",
+                "savedAt": "2026-08-11T19:00:00.000Z"
+            })
+        );
+
+        invoke_city_store(
+            &webview,
+            "city_store_update",
+            json!({
+                "id": "city-ipc",
+                "update": {
+                    "savedAt": "2026-08-11T20:00:00.000Z",
+                    "snapshot": { "revision": 2 }
+                }
+            }),
+        )
+        .expect("update IPC succeeds");
+
+        let listed =
+            invoke_city_store(&webview, "city_store_list", json!({})).expect("list IPC succeeds");
+        assert_eq!(listed.as_array().expect("summary array").len(), 1);
+        let loaded = invoke_city_store(&webview, "city_store_read", json!({ "id": "city-ipc" }))
+            .expect("read IPC succeeds");
+        assert_eq!(loaded["savedAt"], "2026-08-11T20:00:00.000Z");
+        assert_eq!(loaded["snapshot"], json!({ "revision": 2 }));
+        assert!(root.join("city-636974792d697063.json").is_file());
     }
 }

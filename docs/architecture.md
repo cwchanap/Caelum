@@ -187,8 +187,6 @@ production command/serialization seam and direct disk reopen behavior with
 isolated Rust tests. HPA-349 owns the packaged native/browser UI journey and
 real-bundle application-data permission.
 
-The final representative cross-host Save/reload/Continue smoke is HPA-349.
-
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
 worker or other host-execution boundary only if background saving is actually
