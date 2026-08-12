@@ -287,7 +287,7 @@ city_store_rename
 city_store_delete
 ```
 
-Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`. A small runtime-generic builder helper owns the production `generate_handler!` list so the mock-runtime IPC test executes the same registration rather than copying a second list.
+Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`. One local macro expands to the production `generate_handler!` value, and both `run()` and the mock-runtime IPC test invoke that macro. Do not extract an app/builder abstraction: managed gameplay state, plugins, setup, and production run-loop construction remain only in `run()`.
 
 No command accepts a path, filename, or directory.
 
@@ -459,7 +459,7 @@ Automated HPA-344 coverage proves:
 
 - real filesystem semantics in temp directories;
 - production app-data root computation through `mock_app` without an override;
-- exact production command registration through a shared runtime-generic handler builder;
+- exact production command registration through the same local handler macro used by `run()`;
 - native create/update persistence across two mock Tauri app instances using one isolated root;
 - native list/read responses through Tauri IPC after the simulated restart;
 - the committed `city-<hex-id>.json` file exists under that root;
