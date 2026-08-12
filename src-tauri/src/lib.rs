@@ -10,6 +10,8 @@ use caelum_core::{
 };
 use tauri::State;
 
+mod city_store;
+
 /// The managed engine paired with a monotonic runtime epoch.
 ///
 /// The epoch is the cross-reload ownership authority: every
@@ -268,7 +270,13 @@ pub fn run() {
             game_snapshot_for_save,
             game_restore_snapshot,
             game_preview_route,
-            game_preview_road_mutation
+            game_preview_road_mutation,
+            city_store::city_store_list,
+            city_store::city_store_read,
+            city_store::city_store_create,
+            city_store::city_store_update,
+            city_store::city_store_rename,
+            city_store::city_store_delete
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
