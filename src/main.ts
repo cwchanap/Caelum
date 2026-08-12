@@ -6,8 +6,7 @@ import {
   isTauriRuntime,
   type GameBackend,
 } from "./runtime/backend";
-import { createIndexedDbCitySaveStore } from "./persistence/indexedDbCitySaveStore";
-import { createMemoryCitySaveStore } from "./persistence/memoryCitySaveStore";
+import { createCitySaveStore } from "./persistence/createCitySaveStore";
 import { createGameRuntime } from "./runtime/createGameRuntime";
 import type { RuntimeController } from "./runtime/types";
 
@@ -68,9 +67,7 @@ async function mountApp(): Promise<void> {
   if (import.meta.env.DEV) {
     backend = installDeferredRoutePreviewHarness(backend);
   }
-  const saveStore = nativeTauri
-    ? createMemoryCitySaveStore() // HPA-344 replaces this with native persistence.
-    : createIndexedDbCitySaveStore();
+  const saveStore = createCitySaveStore({ nativeTauri });
   const runtime: RuntimeController = await createGameRuntime({
     backend,
     saveStore,

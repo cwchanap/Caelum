@@ -132,6 +132,17 @@ migration layer, recovery model, or multi-tab ownership. Multi-request
 transactions keep only IndexedDB request awaits between requests so the
 transaction remains active.
 
+The native persistence adapter is `tauriCitySaveStore.ts`: six narrow Tauri
+commands own application-data JSON files under
+`<app_data_dir>/cities/city-<hex-id>.json`. Create payloads are written to a
+sibling temporary file first and committed with a create-only hard link;
+update and rename payloads are likewise temp-first and replace the committed
+file only after the complete payload is written. Listing ignores malformed,
+misnamed, stale temporary, and non-file entries so healthy cities remain
+available. TypeScript owns the shared `sortCitySummaries` list ordering for
+both hosts. `MemoryCitySaveStore` remains a test double used by
+runtime/persistence tests, not a production host.
+
 The first-city bootstrap and city-library flow are deliberately narrow:
 
 ```text
@@ -150,13 +161,12 @@ Browser/WASM startup wiring:
   -> createGameRuntime(activeCity = null)
   -> runtime.persistence.listCities()
 
-Tauri startup until HPA-344:
+Tauri startup:
   createTauriBackend
-  -> createMemoryCitySaveStore (non-durable temporary bridge)
+  -> createTauriCitySaveStore
+       -> city_store_* Tauri commands
+       -> <app_data_dir>/cities/city-<hex-id>.json
   -> same city-list/create-city/runtime flow
-
-HPA-344:
-  replaces only the Tauri memory-store branch with native application-data persistence
 ```
 
 The UI calls `RuntimePersistenceController`, which is the only runtime-facing
@@ -166,13 +176,15 @@ store adapter to Svelte:
 ```text
 UI -> RuntimePersistenceController -> CitySaveStore
 browser store: IndexedDB
-native Tauri store: temporary memory adapter until HPA-344
+native Tauri store: application-data JSON files through narrow Tauri commands
 ```
 
 HPA-346 owns the city library and the Save, Load, Rename, and Delete actions;
 HPA-345 only creates the first city through the shared runtime flow. The Tauri
-memory store is therefore an intentionally temporary bridge, not an
-IndexedDB-on-Tauri fallback.
+city store owns native application-data files through the six narrow commands;
+it is not an IndexedDB-on-Tauri fallback. HPA-349 owns automated native/browser
+restart smoke coverage. The representative desktop restart smoke remains a
+human acceptance gate for the native release path.
 
 The final representative cross-host Save/reload/Continue smoke is HPA-349.
 

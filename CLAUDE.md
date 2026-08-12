@@ -95,16 +95,25 @@ scheduled for deletion. Do not extend them, build on them, or preserve their
 invariants in new code. If a task touches one, prefer moving toward the target
 shape.
 
-| Area            | Today                                                                                          | Target                                         |
-| --------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Durable storage | Browser IndexedDB is wired; Tauri temporarily uses the non-durable memory store until HPA-344. | Native Tauri application-data-file adapter     |
-| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path                        | Removed, once it measurably slows sandbox work |
+| Area            | Today                                                                   | Target                                         |
+| --------------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
+| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path | Removed, once it measurably slows sandbox work |
+
+Durable storage current state:
+
+- browser: IndexedDB
+- native Tauri: application-data city JSON files
 
 `CitySaveStore` is the six-operation save boundary: `list`, `read`, `create`,
 `update`, `rename`, and `delete` over `CitySaveRecord`. `workingSaveRuntime.ts`
 owns one active city, one busy gate, and one dirty boolean. The active-development
 scope supports one runtime from `src/main.ts`; multi-window ownership is not a
 supported workflow.
+
+Native persistence is provided by six separate `city_store_*` Tauri commands;
+they are a storage boundary, not part of the gameplay `GameBackend`.
+`MemoryCitySaveStore` is a test double used by runtime/persistence tests; it is
+not a production host after HPA-344.
 
 ## Commands
 
@@ -163,7 +172,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 
 **Rust crate `crates/caelum-core`** is the authoritative simulation core (engine, sandbox factory/reset, transit, router, trips, objectives, metrics, areas/buildings, scenario/clock, platforms). It is a workspace member gated by CI and `lint-staged`. See `docs/superpowers/specs/2026-06-23-rust-simulation-commute-design.md` for the design.
 
-**Tauri host (`src-tauri/`)** exposes thin gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`. This is the intended desktop release path and stays. Its epoch is private to the adapter/native command boundary, sandbox construction is pure, and no gameplay rules live in Tauri. The future narrow application-data city-save adapter remains HPA-548 work.
+**Tauri host (`src-tauri/`)** exposes thin gameplay commands backed by managed Rust state and delegates to `caelum-core::GameEngine`. This is the intended desktop release path and stays. Its epoch is private to the adapter/native command boundary, sandbox construction is pure, and no gameplay rules live in Tauri. The six native city-store commands separately own application-data city JSON files and do not extend the gameplay `GameBackend`.
 
 ### Authored roads and cached topology
 
