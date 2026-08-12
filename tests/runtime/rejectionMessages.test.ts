@@ -14,6 +14,10 @@ describe("workingSaveErrorMessage", () => {
     [{ kind: "unavailable" } as const, "City storage is unavailable."],
     [{ kind: "noActiveCity" } as const, "No city is active."],
     [
+      { kind: "unsavedChanges" } as const,
+      "Pause and Save before switching cities.",
+    ],
+    [
       {
         kind: "sandbox",
         error: { code: "unknownTemplateId", context: {} },

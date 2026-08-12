@@ -133,11 +133,14 @@
 
   async function handleLoadCity(cityId: string): Promise<void> {
     if (runtime === null) return;
-    // The CityPanel Load button is disabled while dirty, but re-check the
-    // snapshot to guard the render/click race and keep switching consistent.
+    // The CityPanel Load button is disabled while dirty and renders the
+    // city-switch hint. Re-check the snapshot to guard the render/click race,
+    // but don't overload cityListError (the list-read-failure channel) with
+    // the switching message — just return and let the existing dirty hint
+    // stay visible. The runtime also enforces this inside its critical
+    // section after the gameplay drain, so a tick admitted between this
+    // check and the load is still refused with unsavedChanges.
     if (snapshot?.persistence.dirty) {
-      cityListRequestId += 1;
-      cityListError = "Pause and Save before switching cities.";
       return;
     }
     beginPersistenceMutation();
