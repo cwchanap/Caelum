@@ -360,7 +360,11 @@ createCitySaveStore({
 
 Production defaults are `createTauriCitySaveStore` and `createIndexedDbCitySaveStore`. Tests inject both factories and prove true selects only Tauri and false selects only IndexedDB.
 
-`src/main.ts` remains the single place that calls `isTauriRuntime()`. No second `windowLike` detector or host-selection framework is introduced.
+`src/main.ts` remains the sole production caller for `CitySaveStore` selection
+and passes the already-computed `nativeTauri` boolean to the selector.
+`createBackend()` continues to own gameplay-backend detection independently,
+including its own `isTauriRuntime()` call; no second save-store detector,
+`windowLike` detector, or host-selection framework is introduced.
 
 ## 11. Operation behavior
 

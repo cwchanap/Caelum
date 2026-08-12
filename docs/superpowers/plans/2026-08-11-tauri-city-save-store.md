@@ -26,8 +26,11 @@
 - Lock the exact Rust error JSON with a serde test before relying on TypeScript mocks.
 - Reuse a single guarded `describeHostRejection()` formatter for snapshot-host and city-store unexpected rejections; do not merge their error-code taxonomies.
 - Keep gameplay Tauri commands and city-store commands separate from each other and from `EngineState`.
-- `src/main.ts` remains the only production caller of `isTauriRuntime()`.
-- Store selection is a small plain function over the already-computed `nativeTauri` boolean; do not create a second host detector.
+- `src/main.ts` is the sole production caller for `CitySaveStore` selection and
+  passes its already-computed `nativeTauri` boolean to the selector.
+- `createBackend()` continues to own gameplay-backend detection independently;
+  its `isTauriRuntime()` call is not part of save-store selection. Do not couple
+  these host decisions or introduce a second save-store detector.
 - `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
 - No migrations, compatibility readers, IndexedDB import, autosave/checkpoints, recovery/repair, metadata index, retries, locks, multi-process ownership, import/export, encryption/signing/checksums, fsync certification, or power-loss matrix.
 - HPA-349 owns automated native/browser restart coverage. HPA-344 requires one explicit **HUMAN** desktop restart smoke after the final implementation commit; agents must stop and hand it off rather than silently checking it off.
@@ -1293,7 +1296,10 @@ Why this remains manual: a command-level `mock_app()` persistence test would use
 - App-data path: generic `from_app<R>` + `mock_app` test.
 - Exact native error wire: Rust serde test.
 - Readable unexpected errors: shared `describeHostRejection` + existing/new TS tests.
-- Store host selection: tested boolean selector; existing `isTauriRuntime` tests remain authority for marker detection.
+- Store host selection: `src/main.ts` is the sole production caller for
+  `CitySaveStore` selection; the tested boolean selector maps its value, while
+  `createBackend()` retains independent gameplay-backend detection and the
+  existing `isTauriRuntime` tests remain authority for marker cases.
 - Browser regression: existing Playwright suite included after main bootstrap change.
 - Manual native integration: explicit human-stop gate after final commit.
 - Memory test double: retained/documented.
