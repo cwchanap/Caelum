@@ -4,154 +4,113 @@
 **Status:** Proposed  
 **Decision date:** 2026-08-11  
 **Prerequisite:** HPA-548 (done)  
-**Downstream:** HPA-349 cross-host smoke
+**Downstream:** HPA-349 automated cross-host smoke
 
 ## 1. Decision
 
-Replace the native Tauri branch's temporary `MemoryCitySaveStore` with one small filesystem-backed adapter that implements the existing six-operation `CitySaveStore` and nothing more.
-
-The boundary is deliberately split by responsibility:
+Replace Tauri's temporary in-memory city store with one concrete native file store behind the existing six-operation `CitySaveStore`.
 
 ```text
 Svelte / runtime
   -> CitySaveStore
-      -> browser: IndexedDB adapter
+      -> browser: IndexedDB
       -> native: tauriCitySaveStore.ts
-           -> six narrow Tauri commands
+           -> six Tauri commands
                 -> src-tauri/src/city_store.rs
-                     -> <app_data_dir>/cities/*.json
+                     -> <app_data_dir>/cities/
 ```
 
-Rust owns every filesystem concern: application-data path resolution, filename encoding, directory creation/scanning, JSON serialization, create-only file creation, temp-file replacement, and native I/O diagnostics.
+Keep responsibilities narrow:
 
-TypeScript owns only the existing frontend contract: invoke six commands, sort returned summaries with `sortCitySummaries()`, and map native command failures into `CitySaveStoreError` using `citySaveStoreError()`.
+- Rust owns the application-data path, filename encoding, directory scan, JSON I/O, create-only commit, replacement writes, and native diagnostics.
+- TypeScript owns six `invoke()` calls, existing `CitySaveStoreError` mapping, and shared `sortCitySummaries()` ordering.
+- `workingSaveRuntime.ts`, Svelte, gameplay `GameBackend`, and the Rust gameplay core do not change.
+- `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
 
-The application bootstrap change is one substitution in `src/main.ts`:
-
-```ts
-const saveStore = nativeTauri
-  ? createTauriCitySaveStore()
-  : createIndexedDbCitySaveStore();
-```
-
-No runtime, gameplay-host, Svelte, save-schema, or persistence-coordination redesign is part of HPA-344.
+HPA-344 adds no generic repository, filesystem API, migration layer, lock service, recovery model, or native automation framework.
 
 ## 2. Why HPA-344 is next
 
-The Phase 1 browser path is now complete through the city library:
+The browser Phase 1 persistence path is already complete:
 
 - HPA-548 — six-operation `CitySaveStore`: done;
-- HPA-343 — IndexedDB implementation: done;
+- HPA-343 — IndexedDB adapter: done;
 - HPA-345 — New City flow: done;
-- HPA-346 — city library / Save / Load / Rename / Delete: done.
+- HPA-346 — City Library / Save / Load / Rename / Delete: done.
 
-`src/main.ts` already makes the remaining gap explicit: native Tauri uses `createMemoryCitySaveStore()` only as a temporary bridge and comments that HPA-344 replaces it.
-
-HPA-344 is therefore the smallest unblocked Phase 1 feature that closes a real product gap. HPA-349 is intentionally downstream because its representative automated native/browser restart smoke is only meaningful after native persistence exists.
-
-Do not jump to HPA-349 first, and do not begin Phase 2 demand work while the intended desktop release host still loses all city records on process exit.
+`src/main.ts` still selects `MemoryCitySaveStore` for Tauri, so the intended desktop release host loses cities when the process exits. HPA-344 is the smallest remaining unblocked Phase 1 implementation. HPA-349 stays downstream and owns automated browser/native restart coverage.
 
 ## 3. Approaches considered
 
-### A. Small Rust filesystem module + thin TypeScript invoke adapter — selected
+### A. Rust city-file module + thin TypeScript adapter — selected
 
-Add:
+Create:
 
 ```text
 src-tauri/src/city_store.rs
 src/persistence/tauriCitySaveStore.ts
 ```
 
-The Rust module is city-save-specific rather than generic. It receives only city IDs, records, updates, and names; it derives every path internally.
+Advantages:
 
-**Advantages**
+- reuses the current `CitySaveStore`;
+- keeps paths out of frontend input;
+- keeps gameplay and persistence command responsibilities separate;
+- one file per city is easy to inspect while development saves are disposable;
+- no production filesystem dependency;
+- focused Rust tests can exercise real filesystem behavior directly.
 
-- matches HPA-344's fixed native-storage boundary exactly;
-- no frontend path authority;
-- reuses the existing `CitySaveStore` without changing runtime or UI code;
-- one file per city keeps multi-city behavior inspectable during active development;
-- no production dependency is required for storage;
-- temp-file replacement is sufficient for the current single-runtime manual-save scope;
-- easy to delete or reshape while development saves remain disposable.
+### B. Frontend Tauri filesystem plugin — rejected
 
-**Cost**
+This would move app-data resolution and file policy into TypeScript and expose more filesystem surface than the six save operations need.
 
-- a small amount of Rust JSON/filesystem code;
-- one TypeScript command adapter and focused mocks.
+### C. Generic Rust repository/storage service — rejected
 
-### B. Use a frontend Tauri filesystem plugin — rejected
+There is one native storage domain and six operations. A trait hierarchy, managed storage state, repository, command bus, or storage service would have no second current consumer.
 
-Letting TypeScript resolve application-data paths and read/write files would move native storage policy into the frontend and expose a broader filesystem capability than `CitySaveStore` requires.
-
-That duplicates responsibilities across IndexedDB and native host code without improving the runtime boundary. HPA-344 specifically calls for narrow storage commands and no frontend-supplied paths.
-
-### C. Introduce a generic Rust repository/storage service — rejected
-
-A reusable filesystem repository, storage trait hierarchy, managed storage state, command bus, or persistence service would have one consumer and six operations. It would increase surface area without unlocking any current feature.
-
-If a second native storage domain appears later, extract only the concrete reuse demonstrated then.
-
-## 4. Scope boundary
+## 4. Scope
 
 ### HPA-344 owns
 
-- one fixed native city-save directory under Tauri's application-data directory;
-- one JSON file per city;
-- deterministic filename encoding derived solely from the opaque city ID;
-- native list/read/create/update/rename/delete operations;
+- fixed `<app_data_dir>/cities/` root;
+- one JSON `CitySaveRecord` per committed city;
+- opaque-ID filename encoding;
+- list/read/create/update/rename/delete;
 - create-only conflict semantics;
-- temp-file replacement for update and rename;
-- best-effort stale-temp ignoring/cleanup only;
-- native command error mapping to `notFound`, `conflict`, or `failed`;
-- one Rust serialization assertion that locks the exact native error IPC shape consumed by TypeScript;
-- a thin TypeScript `CitySaveStore` adapter;
-- native bootstrap wiring in `src/main.ts`;
-- focused Rust filesystem tests and TypeScript command-mapping tests;
-- one one-shot manual Tauri create/save/quit/relaunch/load smoke after wiring;
-- architecture documentation for the final Phase 1 native persistence boundary.
+- temp-first payload writes;
+- exact native error wire for `notFound | conflict | failed`;
+- thin TypeScript command adapter;
+- a tiny tested host-store selector;
+- reuse of one existing-quality host-rejection diagnostic formatter;
+- Tauri bootstrap swap;
+- focused Rust and Vitest coverage;
+- current architecture/CLAUDE guidance updates;
+- one explicit human-only restart smoke after the implementation commit.
 
 ### HPA-344 does not own
 
 - changes to `CitySaveStore`, `workingSaveRuntime.ts`, `createGameRuntime()`, or Svelte persistence APIs;
-- changes to the native gameplay `GameBackend` or runtime epoch logic;
-- IndexedDB behavior;
-- import/export between browser and desktop;
-- migration of IndexedDB data or earlier Tauri development files;
-- save version adapters, legacy readers, or compatibility fixtures;
-- autosaves, checkpoints, generations, save history, recovery, or repair;
-- metadata indexes or caches;
-- multi-window/multi-process locks or save ownership;
-- encryption, signing, checksums, permission frameworks, path pickers, fsync/directory-sync certification, crash/power-loss matrices, or forensic recovery;
-- generic filesystem/repository abstractions;
-- a native UI automation harness or full native E2E suite. HPA-349 owns the representative automated cross-host smoke.
+- gameplay `GameBackend` changes;
+- IndexedDB changes;
+- import/export or browser-to-native migration;
+- old development-save compatibility;
+- metadata indexes/caches;
+- autosave, checkpoints, generations, history, recovery, or repair;
+- retries or multi-window/multi-process ownership;
+- encryption, signing, checksums, filesystem permission frameworks, fsync/directory-sync certification, or power-loss matrices;
+- a native Playwright/test-driver framework.
 
-## 5. Storage layout
+## 5. Storage layout and filename authority
 
-Use one directory:
+Committed files live directly under:
 
 ```text
 <app_data_dir>/cities/
 ```
 
-Each committed city is one UTF-8 JSON file containing the complete current `CitySaveRecord` wire shape:
+The complete current `CitySaveRecord` is stored as UTF-8 JSON.
 
-```json
-{
-  "city": {
-    "id": "opaque-city-id",
-    "name": "North Loop",
-    "createdAt": "2026-08-11T18:00:00.000Z"
-  },
-  "savedAt": "2026-08-11T18:30:00.000Z",
-  "snapshot": {}
-}
-```
-
-There is no metadata index and no separate snapshot file.
-
-### Filename encoding
-
-Never place the frontend-provided city ID directly into a path. Encode every UTF-8 byte as lowercase hexadecimal and wrap it in a fixed filename form:
+A city ID never becomes a path directly. Encode every UTF-8 byte as lowercase hex:
 
 ```text
 city-<hex(id bytes)>.json
@@ -160,31 +119,80 @@ city-<hex(id bytes)>.json
 Examples:
 
 ```text
-"city-1"       -> city-636974792d31.json
-"../outside"   -> city-2e2e2f6f757473696465.json
+city-1      -> city-636974792d31.json
+../outside  -> city-2e2e2f6f757473696465.json
 ```
 
-The encoding does not need a reverse operation. `listCities()` accepts only direct-child filenames that could have been produced by this encoder: `city-`, an even-length lowercase hexadecimal byte sequence, then `.json`. Arbitrary `*.json`, uppercase/odd hexadecimal lookalikes, temp files, and other entries are ignored before parsing.
+`listCities()` recognizes only direct-child names in exactly that shape:
 
-Once a filename passes that authority check, list reads the city ID from the JSON record; no decoder or second index is introduced. The runtime already generates opaque IDs, so the native layer needs only this fixed filename boundary rather than an ID-validation framework.
+- `city-` prefix;
+- non-empty even-length lowercase hexadecimal payload;
+- `.json` suffix.
 
-### Temp files
+No reverse decoder is needed. After parsing a candidate record, list re-encodes `record.city.id` and requires it to equal the actual filename. A copied/renamed file whose embedded ID disagrees with its name is ignored rather than producing a ghost list row.
 
-Update and rename use a deterministic sibling temp path:
+Entries that are directories, symlinks, temp files, unrelated JSON, malformed JSON, or filename/content-ID mismatches are skipped. Directory/read I/O failures still fail `listCities()`.
+
+This makes the city library resilient without adding repair UI or a corruption taxonomy: one bad development file does not hide healthy cities.
+
+## 6. Temp and commit model
+
+Use one deterministic sibling temp name per city:
 
 ```text
 city-<hex>.json.tmp
 ```
 
-The supported product model has one runtime and one persistence busy gate, so unique temp generations and lock ownership are unnecessary.
+The supported product has one runtime and one persistence busy gate, so temp generations and lock ownership are unnecessary.
 
-`listCities` accepts only committed encoder-shaped `.json` filenames, so `.tmp` files and unrelated JSON files are ignored automatically. A later write for the same city may overwrite a stale temp. Best-effort temp deletion after a failed replacement is sufficient; no recovery scan is introduced.
+All payload bytes go through one temp writer:
 
-## 6. Rust module shape
+```text
+serialize complete record
+  -> write/truncate sibling .tmp
+  -> close file
+  -> operation-specific commit
+```
 
-Create `src-tauri/src/city_store.rs` and keep all native persistence types/functions there.
+### Create commit
 
-A small module-private store object is enough to make temp-directory testing direct without creating a generic repository:
+Create must satisfy both current contract requirements:
+
+1. an existing city ID cannot be overwritten;
+2. a create operation that returns failure leaves no committed city record.
+
+Do not stream payload bytes into the committed path.
+
+After the complete temp file is closed, create commits with a hard link:
+
+```text
+hard_link(temp, committed)
+```
+
+Because temp and committed are siblings, they are on the same filesystem. An existing committed destination is a conflict; success exposes the already-complete file at the committed name. Then best-effort remove the temp name.
+
+Crash shape without fsync certification:
+
+- before `hard_link`: only `.tmp` may remain, and list ignores it;
+- after `hard_link`: the committed name refers to the complete temp contents; a stale `.tmp` name may remain.
+
+This is not a power-loss/fsync guarantee. It only avoids the plan's previous torn committed create path and keeps create-only semantics without a reservation file.
+
+### Update and rename commit
+
+Update and rename read the existing committed record, construct the complete replacement, write it through the same temp writer, then:
+
+```text
+rename(temp, committed)
+```
+
+Do not remove/truncate the committed file before rename.
+
+Update replaces only `savedAt` and `snapshot`. Rename replaces only `city.name`.
+
+## 7. Rust module shape
+
+Use one module-private concrete store:
 
 ```rust
 struct CityFileStore {
@@ -192,14 +200,25 @@ struct CityFileStore {
 }
 
 impl CityFileStore {
-    fn from_app(app: &tauri::AppHandle) -> Result<Self, CityStoreCommandError>;
     fn new(root: PathBuf) -> Self;
+
+    fn from_app<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+    ) -> Result<Self, CityStoreCommandError>;
 
     fn list_cities(&self) -> Result<Vec<CitySummary>, CityStoreCommandError>;
     fn read_city(&self, id: &str) -> Result<CitySaveRecord, CityStoreCommandError>;
     fn create_city(&self, record: CitySaveRecord) -> Result<CitySummary, CityStoreCommandError>;
-    fn update_city(&self, id: &str, update: CitySaveUpdate) -> Result<CitySummary, CityStoreCommandError>;
-    fn rename_city(&self, id: &str, name: String) -> Result<CitySummary, CityStoreCommandError>;
+    fn update_city(
+        &self,
+        id: &str,
+        update: CitySaveUpdate,
+    ) -> Result<CitySummary, CityStoreCommandError>;
+    fn rename_city(
+        &self,
+        id: &str,
+        name: String,
+    ) -> Result<CitySummary, CityStoreCommandError>;
     fn delete_city(&self, id: &str) -> Result<(), CityStoreCommandError>;
 }
 ```
@@ -210,14 +229,16 @@ impl CityFileStore {
 app.path().app_data_dir()?.join("cities")
 ```
 
-Do not manage `CityFileStore` as Tauri state. Path resolution is cheap, keeps this module stateless, and avoids another lifecycle object.
+Keep it generic over `tauri::Runtime` so the existing `tauri::test::mock_app()` path can prove the production path-resolution line without doing disk I/O.
 
-### Wire record types
+Do not manage `CityFileStore` as Tauri state.
 
-Mirror only the existing TypeScript save-store wire shape:
+### Wire shapes
+
+Mirror only the existing frontend storage wire:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CityIdentity {
     id: String,
@@ -225,7 +246,7 @@ struct CityIdentity {
     created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CitySaveRecord {
     city: CityIdentity,
@@ -240,7 +261,7 @@ struct CitySaveUpdate {
     snapshot: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CitySummary {
     id: String,
@@ -250,24 +271,11 @@ struct CitySummary {
 }
 ```
 
-These are transport/storage shapes, not new gameplay-domain models. `snapshot` remains opaque JSON; native persistence does not inspect or validate gameplay state.
+List may deserialize a partial `CityListRecord` so the full snapshot is not materialized into `serde_json::Value`. The file still has to be read/scanned; this is not an index or reduced disk-I/O claim.
 
-For `listCities()`, deserialize only the fields needed for `CitySummary` rather than materializing every snapshot:
+## 8. Native commands and error wire
 
-```rust
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CityListRecord {
-    city: CityIdentity,
-    saved_at: String,
-}
-```
-
-Serde ignores the extra `snapshot` field by default, so directory scanning does not need a metadata index merely to avoid loading complete snapshots into `serde_json::Value`.
-
-## 7. Native command boundary
-
-Expose exactly six Tauri commands from `city_store.rs`:
+Expose exactly:
 
 ```text
 city_store_list
@@ -278,43 +286,11 @@ city_store_rename
 city_store_delete
 ```
 
-Their conceptual signatures are:
+Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`.
 
-```rust
-#[tauri::command]
-fn city_store_list(app: tauri::AppHandle)
-    -> Result<Vec<CitySummary>, CityStoreCommandError>;
+No command accepts a path, filename, or directory.
 
-#[tauri::command]
-fn city_store_read(app: tauri::AppHandle, id: String)
-    -> Result<CitySaveRecord, CityStoreCommandError>;
-
-#[tauri::command]
-fn city_store_create(app: tauri::AppHandle, record: CitySaveRecord)
-    -> Result<CitySummary, CityStoreCommandError>;
-
-#[tauri::command]
-fn city_store_update(app: tauri::AppHandle, id: String, update: CitySaveUpdate)
-    -> Result<CitySummary, CityStoreCommandError>;
-
-#[tauri::command]
-fn city_store_rename(app: tauri::AppHandle, id: String, name: String)
-    -> Result<CitySummary, CityStoreCommandError>;
-
-#[tauri::command]
-fn city_store_delete(app: tauri::AppHandle, id: String)
-    -> Result<(), CityStoreCommandError>;
-```
-
-Register these beside the existing gameplay commands in `src-tauri/src/lib.rs`. Do not merge storage into `createTauriBackend()` or the gameplay command enums; gameplay and city files remain separate responsibilities even though both use Tauri IPC.
-
-No command accepts `path`, `directory`, `filename`, or a generic filesystem request.
-
-## 8. Error wire and TypeScript mapping
-
-Keep native command failures smaller than the frontend `CitySaveStoreError` because the adapter already knows the operation and city ID.
-
-Rust returns:
+Rust errors:
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -326,7 +302,7 @@ enum CityStoreCommandError {
 }
 ```
 
-The exact serialized contract is:
+Lock these exact values in a Rust serde test:
 
 ```json
 {"code":"notFound"}
@@ -334,277 +310,205 @@ The exact serialized contract is:
 {"code":"failed","diagnostic":"disk full"}
 ```
 
-Lock those three shapes with one Rust serde test in the same module. The TypeScript adapter tests may then safely mock these objects as consumer-side IPC tests; do not create a shared error-serialization framework.
+TypeScript owns operation/city-ID context and maps only these codes into `citySaveStoreError()`.
 
-Rules:
+## 9. TypeScript adapter and shared rejection diagnostics
 
-- missing committed city file -> `notFound`;
-- create-only destination already exists -> `conflict`;
-- application-data resolution, directory, read, parse, serialize, write, rename, and other native failures -> `failed`;
-- diagnostics are development detail only and may differ from IndexedDB diagnostics.
-
-Do not expose full filesystem paths in player-facing copy. The existing runtime/UI already renders generic persistence messages from store codes, not adapter diagnostics.
-
-The TypeScript adapter recognizes only those three codes. It builds the normal store error with:
-
-```ts
-citySaveStoreError(operation, code, { cityId, diagnostic });
-```
-
-If Tauri rejects with anything that is not the expected native error object, map it to `failed` for the current operation. Do not invent transport-specific store codes.
-
-## 9. TypeScript adapter
-
-Create `src/persistence/tauriCitySaveStore.ts` with one factory:
+`src/persistence/tauriCitySaveStore.ts` exposes only:
 
 ```ts
 export function createTauriCitySaveStore(): CitySaveStore;
 ```
 
-It imports `invoke` from `@tauri-apps/api/core` and the existing helpers/types from `citySaveStore.ts`.
+Each method invokes one native command. `listCities()` applies `sortCitySummaries()` after IPC.
 
-Each method invokes exactly one command:
+Do not parse filesystem details or validate snapshots in TypeScript.
 
-```ts
-invoke<CitySummary[]>("city_store_list");
-invoke<CitySaveRecord>("city_store_read", { id });
-invoke<CitySummary>("city_store_create", { record });
-invoke<CitySummary>("city_store_update", { id, update });
-invoke<CitySummary>("city_store_rename", { id, name });
-invoke<void>("city_store_delete", { id });
+The repository already has guarded formatting for structured host rejections in `src/runtime/backend/persistence.ts`; raw `String(object)` would collapse useful context to `[object Object]`. Once the Tauri save adapter becomes a second consumer, extract only that pure formatting behavior to:
+
+```text
+src/hostDiagnostics.ts
 ```
 
-`listCities()` applies `sortCitySummaries()` after IPC so both durable adapters keep the shared frontend ordering contract without duplicating sort rules in Rust.
+with:
 
-Tauri IPC serializes request/response values, so no explicit cloning layer or adapter-local snapshot normalization is needed.
+```ts
+describeHostRejection(error: unknown): string | undefined
+```
 
-Do not add an injected invoke parameter to production API unless an existing project pattern requires it. Vitest already mocks `@tauri-apps/api/core` directly in `tests/runtime/tauriBackend.test.ts`.
+Both snapshot persistence and the Tauri save adapter use it. Error-code taxonomies stay separate.
 
-## 10. Operation semantics
+## 10. Store selection
 
-### `listCities`
+The gameplay backend already uses a small tested host selector. Apply the same idea to save storage without duplicating Tauri detection.
 
-1. Resolve/create `<app_data_dir>/cities`.
-2. Scan direct children only.
-3. Accept only names in the encoder-produced committed form: `city-` + an even-length lowercase hexadecimal byte sequence + `.json`.
-4. Ignore every other entry, including arbitrary `*.json` files and `.tmp` files.
-5. Deserialize `CityListRecord` from each accepted committed JSON file.
-6. Return summaries to TypeScript.
-7. TypeScript applies `sortCitySummaries()`.
+Create:
 
-A malformed accepted city JSON file produces generic `failed` rather than silently hiding a city or introducing repair logic. An unrelated JSON file is not a city record and is ignored before parsing.
+```text
+src/persistence/createCitySaveStore.ts
+```
 
-### `readCity(id)`
+with a plain function that receives the already-computed `nativeTauri` boolean:
 
-1. Derive the encoded committed path from `id`.
-2. Read the file.
-3. `NotFound` -> `notFound`.
-4. Deserialize the full `CitySaveRecord`.
-5. Return it unchanged.
+```ts
+createCitySaveStore({
+  nativeTauri,
+  createTauri?,
+  createIndexedDb?,
+}): CitySaveStore
+```
 
-Do not validate Rust gameplay snapshot schema here; `restoreSnapshot()` remains the validation/activation boundary.
+Production defaults are `createTauriCitySaveStore` and `createIndexedDbCitySaveStore`. Tests inject both factories and prove true selects only Tauri and false selects only IndexedDB.
 
-### `createCity(record)`
+`src/main.ts` remains the single place that calls `isTauriRuntime()`. No second `windowLike` detector or host-selection framework is introduced.
 
-1. Resolve/create the city directory.
-2. Serialize the complete record to bytes before opening a destination.
-3. Derive the committed path from `record.city.id`.
-4. Open with `OpenOptions::create_new(true).write(true)`.
-5. Existing destination -> `conflict`.
-6. Write all serialized bytes.
-7. Return `CitySummary` only after the write completes.
+## 11. Operation behavior
 
-If writing the newly created file fails, best-effort delete the partial destination before returning `failed`. No fsync/power-loss guarantee is claimed in Phase 1.
+### List
 
-There is no read-before-create conflict check and no overwrite path.
+For each direct child:
 
-### `updateCity(id, update)`
+1. filename must match the encoder-produced committed shape;
+2. entry must be a regular file;
+3. read bytes; I/O failure -> `failed`;
+4. malformed `CityListRecord` -> skip;
+5. re-encode embedded city ID; mismatch with filename -> skip;
+6. return summary.
 
-1. Read the existing record by encoded ID path.
-2. Missing -> `notFound`.
-3. Build a replacement that preserves stored `city.id`, `city.name`, and `city.createdAt` while replacing only `savedAt` and `snapshot`.
-4. Serialize the replacement before touching the committed file.
-5. Write bytes to the deterministic sibling `.tmp` file.
-6. Rename the temp file onto the committed path.
-7. Return the replacement summary only after rename succeeds.
+TypeScript applies shared ordering.
 
-A failure before the rename leaves the committed file untouched. A failed rename returns `failed`; best-effort remove the temp file. Do not delete the committed file before rename.
+### Read
 
-### `renameCity(id, name)`
+Derive encoded path from requested ID, read full record, map missing to `notFound`, parse failure to `failed`.
 
-Use the same read -> build replacement -> serialize -> temp write -> rename helper as update. Replace only `city.name`; preserve `createdAt`, `savedAt`, and `snapshot`.
+### Create
 
-Do not update `savedAt` merely because metadata was renamed.
+1. ensure root;
+2. write complete temp record;
+3. `hard_link(temp, committed)`;
+4. existing destination -> `conflict`;
+5. other link failure -> `failed`;
+6. best-effort remove temp;
+7. return summary only after link success.
 
-### `deleteCity(id)`
+### Update
 
-Delete the encoded committed path directly.
+Read existing record, preserve identity/name, replace only `savedAt`/`snapshot`, temp-write, rename over committed, then return summary.
 
-- missing -> `notFound`;
-- success -> `{ ok: true, value: undefined }` through the TypeScript adapter;
-- other native failure -> `failed`.
+### Rename
 
-A stale temp file does not make a missing committed city exist.
+Read existing record, change only name, temp-write, rename over committed, then return summary.
 
-## 11. Atomicity and active-development tradeoffs
+### Delete
 
-Use the smallest guarantees already promised by `CitySaveStore` and HPA-344:
-
-- create uses create-new semantics and cannot overwrite an existing city;
-- update/rename serialize first, write a sibling temp, and replace only at rename;
-- a definite pre-replacement update/rename failure leaves the prior committed file unchanged;
-- mutation success is returned only after its filesystem operation completes;
-- paths never come from frontend strings other than opaque IDs transformed by the fixed encoder;
-- list recognizes only filenames produced by that same encoder shape.
-
-Do not add:
-
-- `fsync`/directory sync;
-- journal files;
-- generations;
-- checksums;
-- lock files;
-- rollback records;
-- startup repair;
-- multi-process coordination.
-
-The product currently has one runtime, one persistence busy gate, manual saves, and disposable development data. HPA-544 owns additional hardening only if observed risk justifies it.
+Remove encoded committed path. Missing -> `notFound`. A stale temp alone does not make a city exist.
 
 ## 12. Test strategy
 
-### Rust filesystem and wire tests
+Add `tempfile = "3"` as a dev-only Rust dependency.
 
-Add `tempfile` as a **dev-only** dependency in `src-tauri/Cargo.toml`; using a maintained temp-directory utility is smaller than inventing a project-specific test-directory allocator/cleanup helper.
+### Rust filesystem tests
 
-Test `CityFileStore` directly with fresh temp directories:
+Required:
 
-1. **empty list** — new root returns no summaries;
-2. **create/list/read** — create a JSON-shaped record, list metadata, read the complete record;
-3. **create conflict** — second create with the same ID returns `conflict` and the first record remains unchanged;
-4. **update** — only `savedAt`/`snapshot` change;
-5. **failed update preserves prior file** — make the deterministic temp path unwritable as a file (for example, create a directory at the temp path), assert `failed`, then read and compare the complete original record;
-6. **rename** — only name changes; save time and snapshot remain unchanged;
-7. **delete** — committed file disappears; second delete/read returns `notFound`;
-8. **reopen** — create through one `CityFileStore`, construct a second store for the same temp root, then list/read the city;
-9. **fixed-path authority** — create/read an ID containing path-looking characters such as `../outside\\city`; assert the committed file is still a direct child of the configured root and no caller-controlled relative path is created;
-10. **list ignores non-authoritative entries** — leave a valid `.json.tmp` and an unrelated valid `notes.json` record in the directory; neither appears in the city list;
-11. **native error wire** — serialize `NotFound`, `Conflict`, and `Failed("disk full")` and assert the exact JSON objects consumed by the TypeScript adapter.
+1. empty list;
+2. create/list/read;
+3. create conflict preserves original;
+4. failed create commits nothing;
+5. update changes only saved payload;
+6. failed update preserves prior committed record;
+7. rename changes only name;
+8. missing update -> `notFound`;
+9. missing rename -> `notFound`;
+10. delete + second delete/read -> `notFound`;
+11. reopen through a second `CityFileStore`;
+12. path-looking ID stays inside root;
+13. list skips stale temp/unrelated JSON/non-file/malformed JSON;
+14. list skips filename/content-ID mismatch;
+15. `from_app(mock_app.handle())` resolves exactly `app_data_dir()/cities`;
+16. native error serde wire is exact.
 
-Do not build permission/vendor/power-loss matrices or test-only production failure switches.
+The `from_app` test does not call storage commands or write to app data. A command-level mock-app persistence test would risk writing into the machine's real resolved application-data location, so the remaining registration + real disk path is intentionally left to the human smoke.
 
-### TypeScript adapter tests
+### TypeScript tests
 
-Create `tests/runtime/persistence/tauriCitySaveStore.test.ts` and mock `@tauri-apps/api/core` exactly like the existing Tauri backend tests.
+Adapter tests mock `@tauri-apps/api/core` and prove:
 
-Focus on the adapter seam rather than reimplementing a fake filesystem:
+- exact six command names/arguments with no paths;
+- successful value passthrough;
+- shared list ordering;
+- `notFound`, `conflict`, `failed` mapping;
+- unknown primitive rejection -> readable generic `failed`;
+- unknown structured rejection -> JSON-readable diagnostic via `describeHostRejection`.
 
-- each `CitySaveStore` method calls the intended command with only record/ID/update/name arguments and no path;
-- successful values pass through unchanged;
-- list results are normalized with shared summary sorting;
-- native `notFound`, `conflict`, and `failed` rejections become existing `CitySaveStoreError` objects with the correct operation/city ID;
-- an unexpected rejection becomes generic `failed`.
+Do not run the shared `defineCitySaveStoreContract` through a fake `invoke`; that would primarily test the fake.
 
-The mocked native error objects are backed by the Rust serde-wire test above; the TypeScript tests prove consumer mapping, not producer serialization.
+Store-selection tests prove each host chooses only its intended durable adapter.
 
-Do not run the shared behavioral contract against a hand-written `invoke` fake. The common contract already proves frontend semantics for real in-memory/IndexedDB implementations; the Rust suite proves native filesystem semantics, and the TypeScript suite proves the IPC mapping. A fake native store would duplicate the behavior under test.
+Existing runtime/backend tests continue to prove structured snapshot rejections remain readable after extracting the formatter.
 
-### Bootstrap proof
+## 13. Runtime acceptance boundary
 
-`src/main.ts` is a one-line host-selection change. Do not extract a production bootstrap factory solely to unit-test that ternary.
+Automated HPA-344 coverage proves:
 
-`bun run tauri:build` proves compilation/package integration but not that `AppHandle -> app_data_dir -> command registration -> TypeScript adapter -> disk` actually works. Before the implementation PR merges, run one one-shot manual native smoke:
+- real filesystem semantics in temp directories;
+- app-data root computation through `mock_app`;
+- native error serialization;
+- TypeScript IPC mapping;
+- tested native/browser store selection;
+- existing browser E2E remains green.
 
-1. launch `bun run tauri:dev`;
-2. create a named city and enter it;
-3. make one simple gameplay change, pause if needed, and use **Save Now**;
-4. fully quit the desktop app/process;
-5. relaunch `bun run tauri:dev`;
-6. verify the city is listed, Continue/Load succeeds, and the saved change is present;
-7. confirm a committed `city-<hex-id>.json` exists under the platform-resolved `<app_data_dir>/cities/` directory.
+One seam remains intentionally manual: actual Tauri command registration and real desktop restart persistence.
 
-Treat any failure as an HPA-344 blocker. This is a manual acceptance check only: do not add a script, Playwright project, native automation harness, or reusable smoke framework. HPA-349 still owns the automated representative cross-host Save/reload/Continue smoke.
-
-## 13. Verification gate
-
-Implementation should finish with:
-
-```bash
-bun run test:unit
-bun run check
-bun run lint
-bun run format:check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
-bun run tauri:build
-```
-
-Then run the one-shot manual Tauri create/save/quit/relaunch/list/load check from the Bootstrap proof section. A successful `tauri:build` without this runtime check is not sufficient HPA-344 integration evidence.
-
-The focused inner loops should be narrower:
-
-```bash
-cargo test -p caelum --lib city_store
-bunx vitest run --project runtime tests/runtime/persistence/tauriCitySaveStore.test.ts
-```
-
-If Cargo's package filter differs because the package is exposed through the workspace under another target name, use the repository's existing `bun run rust:test` wrapper for the broad gate rather than adding another script.
-
-No browser Playwright expansion is required in HPA-344. Existing browser E2E should remain unaffected; HPA-349 owns the new automated native smoke.
-
-## 14. Documentation update
-
-Update `docs/architecture.md` only where the current architecture still says:
+After the final implementation commit, the executing agent must stop and hand off this check to a human:
 
 ```text
-Tauri startup until HPA-344:
-  createTauriBackend
-  -> createMemoryCitySaveStore
+tauri:dev
+-> create named city
+-> make one visible gameplay change
+-> Save Now
+-> fully quit
+-> tauri:dev
+-> city appears
+-> Continue/Load
+-> saved change remains
+-> committed city-<hex>.json exists under resolved app_data_dir/cities
 ```
 
-Replace that temporary bridge with the final Phase 1 boundary:
+The human gate is required for HPA-344 completion, but it creates no checked-in harness. HPA-349 later automates the representative cross-host smoke.
 
-```text
-Tauri startup:
-  createTauriBackend
-  -> createTauriCitySaveStore
-       -> six narrow Tauri storage commands
-       -> <app_data_dir>/cities/*.json
-  -> same city-list/create-city/runtime flow
-```
+## 14. Documentation cleanup
 
-Keep HPA-349 explicitly identified as the representative automated cross-host Save/reload/Continue smoke.
+`docs/architecture.md` currently describes the temporary Tauri memory bridge in three connected places. HPA-344 updates all of them:
 
-Do not rewrite unrelated architecture sections.
+1. the `Tauri startup until HPA-344` block;
+2. the `native Tauri store: temporary memory adapter until HPA-344` diagram line;
+3. the prose calling the memory store an intentionally temporary bridge.
 
-## 15. Acceptance criteria mapping
+`CLAUDE.md` is updated to state browser = IndexedDB and native = application-data files.
 
-- **One file per city / six operations:** `CityFileStore` plus the six command registrations.
-- **No arbitrary frontend path:** commands accept no paths; city IDs are always hex-encoded into a single filename component, and list accepts only that committed filename shape.
-- **Create cannot overwrite:** `OpenOptions::create_new(true)` and conflict mapping.
-- **Failed update preserves prior file:** serialize -> temp write -> rename, plus a real filesystem failure test before replacement.
-- **Error behavior crosses real IPC shape:** Rust locks `{code, diagnostic?}` serialization; TypeScript maps the same three objects to the existing store taxonomy.
-- **No metadata index/migration/lock/recovery/security framework:** one directory scan and one JSON record per city only.
-- **Adapter independent from gameplay host:** separate `tauriCitySaveStore.ts` and `city_store.rs`; no changes to `GameBackend`.
-- **Focused tests:** Rust filesystem/wire behavior + thin TypeScript IPC mapping; no exhaustive platform matrix.
-- **Native runtime integration:** one manual create/save/quit/relaunch/list/load check before merge; no new automation harness.
-- **Same small UI behavior across stores:** TypeScript returns the existing `CitySaveStoreResult` taxonomy and shared summary ordering.
+`MemoryCitySaveStore` is **not deleted**. After bootstrap switches, it remains the focused test double used by runtime/persistence tests.
 
-## 16. Implementation sequence
+## 15. Acceptance criteria
 
-Use three reviewable implementation slices:
+HPA-344 is complete when:
 
-1. Add the Rust city-file module, six commands, command registration, exact error-wire assertion, and focused temp-directory tests.
-2. Add the TypeScript Tauri `CitySaveStore` adapter and command/error mapping tests.
-3. Replace the native memory-store bootstrap, update architecture docs, run the full frontend/Rust/Tauri verification gate, then complete the one-shot manual restart durability smoke.
+- native desktop uses one file per city behind the existing six-operation `CitySaveStore`;
+- no frontend-supplied paths exist;
+- create cannot overwrite and a returned create failure leaves no committed record;
+- update/rename do not touch committed payload before replacement;
+- one malformed/mismatched city file cannot hide healthy city rows;
+- native error JSON matches the TypeScript consumer;
+- native/browser store selection is unit tested;
+- `from_app` path resolution is exercised with Tauri's mock runtime;
+- browser E2E remains green;
+- the final human restart smoke passes;
+- no index, migration, compatibility, lock, recovery, fsync, or security framework is added.
 
-No step should introduce a compatibility layer or refactor the existing runtime/UI to make HPA-344 fit.
+## 16. Review focus
 
-## 17. Review focus
-
-Reviewers should concentrate on four questions:
-
-1. Can any frontend value become a filesystem path, and does list recognize only filenames authorized by the same fixed encoder?
-2. Can create overwrite an existing city, or can update/rename touch the committed file before the temp replacement boundary?
-3. Does Rust serialize `notFound | conflict | failed` exactly as the TypeScript adapter expects, rather than relying only on mocked rejections?
-4. Does the TypeScript adapter remain exactly `CitySaveStore` without leaking native filesystem/command concepts upward or adding storage architecture HPA-349/Phase 2 do not need?
+1. Is every payload temp-first, with create committed create-only and update/rename replacement-only?
+2. Can one malformed/misnamed file affect healthy city listing?
+3. Does any frontend value become a path?
+4. Are native error wire, host selection, and app-data path computation tested without building a fake native filesystem?
+5. Did any abstraction appear that current Phase 1 work does not need?
