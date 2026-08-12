@@ -27,3 +27,4 @@ tauri-plugin-log = "2"
 
 [dev-dependencies]
 tauri = { version = "2.11.0", features = ["test"] }
+tempfile = "3"
