@@ -118,6 +118,8 @@ A city ID never becomes a path directly. Encode every UTF-8 byte as lowercase he
 city-<hex(id bytes)>.json
 ```
 
+The encoded hex payload must be non-empty, so a city ID must be non-empty. `createCity` rejects an empty `record.city.id` with `failed` before writing any temp file: an empty ID would encode to `city-.json`, which the list filter rejects as not encoder-shaped, leaving an unlistable committed record.
+
 Examples:
 
 ```text

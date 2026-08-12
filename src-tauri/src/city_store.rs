@@ -221,6 +221,9 @@ impl CityFileStore {
 
     fn create_city(&self, record: CitySaveRecord) -> Result<CitySummary, CityStoreCommandError> {
         let id = record.city.id.clone();
+        if id.is_empty() {
+            return Err(failed("city id must be non-empty"));
+        }
         let committed = self.city_path(&id);
         let temp = self.write_temp_record(&id, &record)?;
 
@@ -448,6 +451,23 @@ mod tests {
             Err(CityStoreCommandError::Conflict)
         ));
         assert_eq!(store.read_city("city-1").expect("original"), original);
+    }
+
+    #[test]
+    fn create_rejects_empty_city_id_and_leaves_store_empty() {
+        let temp = tempdir().expect("temp dir");
+        let store = CityFileStore::new(temp.path().join("cities"));
+        let empty = record("", "Empty");
+
+        assert!(matches!(
+            store.create_city(empty),
+            Err(CityStoreCommandError::Failed(_))
+        ));
+        assert_eq!(
+            store.list_cities().expect("list"),
+            Vec::<CitySummary>::new()
+        );
+        assert!(!store.root.join(encoded_city_filename("")).exists());
     }
 
     #[test]

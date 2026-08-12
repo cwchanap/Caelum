@@ -14,7 +14,7 @@
 - Native committed records live only under `<app_data_dir>/cities/`.
 - Store one complete `CitySaveRecord` JSON file per city; no index, sidecar, database, generation directory, or cache.
 - No command accepts a frontend path, filename, or directory.
-- Encode every city ID as `city-<lowercase hex UTF-8 bytes>.json`.
+- Encode every city ID as `city-<lowercase hex UTF-8 bytes>.json`; the encoded hex payload must be non-empty, so native `createCity` rejects an empty `record.city.id` with `failed` before writing any temp file.
 - `listCities` accepts only encoder-shaped direct-child filenames, regular files, parseable list records, and records whose embedded ID re-encodes to the actual filename.
 - Malformed/mismatched/non-file entries are skipped; directory enumeration, entry metadata, and accepted-entry read I/O failures remain `failed` rather than silently hiding an ambiguous city.
 - Never stream city payload bytes into a committed path.
