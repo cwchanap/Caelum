@@ -1252,7 +1252,7 @@ Expected implementation shape:
 - bootstrap swap;
 - focused docs.
 
-Reject the diff if it adds a repository/service/trait hierarchy, generic filesystem API, migration/compatibility code, lock/recovery/autosave framework, gameplay-backend changes, or native automation harness.
+Reject the diff if it adds a repository/service/trait hierarchy, generic filesystem API, migration/compatibility code, lock/recovery/autosave framework, gameplay-backend changes, or native browser/WebDriver framework.
 
 - [ ] **Step 7: Commit the wiring/docs slice**
 
