@@ -43,6 +43,7 @@ export type WorkingSaveError =
   | { kind: "busy" }
   | { kind: "unavailable" }
   | { kind: "noActiveCity" }
+  | { kind: "unsavedChanges" }
   | { kind: "store"; error: CitySaveStoreError }
   | { kind: "backend"; error: SnapshotError | SandboxHostError }
   | { kind: "sandbox"; error: SandboxCreationError };
@@ -244,6 +245,14 @@ export function createWorkingSaveRuntime(
 
   const load = (cityId: string): Promise<WorkingSaveResult<CitySummary>> =>
     runExclusive(async () => {
+      // runExclusive has already awaited gameplay idle (draining admitted
+      // gameplay work) before invoking this body. An applied tick drained
+      // during that wait can mark the active city dirty after the App's
+      // pre-check passed. Refuse here — before replacing gameplay — so the
+      // unsaved changes are not silently discarded.
+      if (dirty) {
+        return { ok: false, error: { kind: "unsavedChanges" } };
+      }
       const saveStore = host.saveStore;
       if (saveStore === undefined) {
         return { ok: false, error: { kind: "unavailable" } };
@@ -266,6 +275,12 @@ export function createWorkingSaveRuntime(
     request: NewCityRequest,
   ): Promise<WorkingSaveResult<CitySummary>> =>
     runExclusive(async () => {
+      // Same drain-race guard as load: an applied tick drained during
+      // awaitGameplayIdle can mark the active city dirty after the App's
+      // pre-check passed. Refuse before building/installing the new city.
+      if (dirty) {
+        return { ok: false, error: { kind: "unsavedChanges" } };
+      }
       const saveStore = host.saveStore;
       if (saveStore === undefined) {
         return { ok: false, error: { kind: "unavailable" } };

@@ -592,7 +592,6 @@ describe("working save runtime loads", () => {
     const loadedSnapshot = createRustSnapshot({ budget: 321_000 });
     const fixture = createRuntimeFixture();
     await seed(fixture.saveStore!, record(loadedCity, loadedSnapshot));
-    fixture.runtime.markDirty();
 
     await expect(
       fixture.runtime.controller.load(loadedCity.id),
@@ -609,7 +608,6 @@ describe("working save runtime loads", () => {
     const failures = createMemoryCitySaveStoreFailureControls();
     const store = createMemoryCitySaveStore({ failures });
     const fixture = createRuntimeFixture({ saveStore: store });
-    fixture.runtime.markDirty();
     failures.failNext("readCity", "failed");
 
     await expect(
@@ -622,7 +620,7 @@ describe("working save runtime loads", () => {
       },
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
-    expect(fixture.runtime.getView().dirty).toBe(true);
+    expect(fixture.runtime.getView().dirty).toBe(false);
   });
 
   it("preserves the active identity for a returned restore rejection", async () => {
@@ -634,7 +632,6 @@ describe("working save runtime loads", () => {
     };
     const fixture = createRuntimeFixture();
     await seed(fixture.saveStore!, record(loadedCity));
-    fixture.runtime.markDirty();
     fixture.backend.setRestoreOutcome({
       ok: false,
       error: { code: "invalidSnapshot" },
@@ -647,7 +644,7 @@ describe("working save runtime loads", () => {
       error: { kind: "backend", error: { code: "invalidSnapshot" } },
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
-    expect(fixture.runtime.getView().dirty).toBe(true);
+    expect(fixture.runtime.getView().dirty).toBe(false);
     expect(fixture.installedSnapshot).toBeNull();
   });
 
@@ -669,7 +666,6 @@ describe("working save runtime loads", () => {
       },
     };
     const fixture = createRuntimeFixture({ saveStore: store });
-    fixture.runtime.markDirty();
     fixture.backend.setRestoreOutcome(new Error("restore response was lost"));
 
     await expect(
@@ -721,7 +717,6 @@ describe("working save runtime loads", () => {
       },
     };
     const fixture = createRuntimeFixture({ saveStore: store });
-    fixture.runtime.markDirty();
     fixture.failNextInstall(new Error("install was lost"));
 
     await expect(
@@ -759,7 +754,6 @@ describe("working save runtime loads", () => {
     const delayed = createDelayedCitySaveStore(delegate);
     delayed.defer("readCity");
     const fixture = createRuntimeFixture({ saveStore: delayed });
-    fixture.runtime.markDirty();
 
     const loading = fixture.runtime.controller.load(loadedCity.id);
     await delayed.waitForActive("readCity");
@@ -913,7 +907,6 @@ describe("working save runtime new cities", () => {
 
   it("keeps the prior active city after a returned new-city activation failure", async () => {
     const fixture = createRuntimeFixture();
-    fixture.runtime.markDirty();
     fixture.backend.setRestoreOutcome({
       ok: false,
       error: { code: "invalidSnapshot" },
@@ -931,13 +924,12 @@ describe("working save runtime new cities", () => {
       ok: true,
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
-    expect(fixture.runtime.getView().dirty).toBe(true);
+    expect(fixture.runtime.getView().dirty).toBe(false);
     expect(fixture.installedSnapshot).toBeNull();
   });
 
   it("keeps the created record but detaches after a thrown new-city activation", async () => {
     const fixture = createRuntimeFixture();
-    fixture.runtime.markDirty();
     fixture.backend.setRestoreOutcome(new Error("new city restore was lost"));
 
     await expect(
@@ -967,7 +959,6 @@ describe("working save runtime new cities", () => {
 
   it("keeps the created record but detaches after a thrown new-city install", async () => {
     const fixture = createRuntimeFixture();
-    fixture.runtime.markDirty();
     fixture.failNextInstall(new Error("new city install was lost"));
 
     await expect(
@@ -993,6 +984,57 @@ describe("working save runtime new cities", () => {
       ok: false,
       error: { kind: "noActiveCity" },
     });
+  });
+});
+
+describe("working save runtime drain-race guard", () => {
+  // The App checks persistence.dirty before calling Create/Load, but an
+  // already-admitted gameplay operation can apply during the awaitGameplayIdle
+  // drain inside runExclusive and mark the active city dirty after that check
+  // passed. The runtime refuses the replacement so unsaved changes are not
+  // silently discarded.
+  it("refuses load after the gameplay drain marks the active city dirty", async () => {
+    const loadedCity: CitySummary = {
+      id: "city-loaded",
+      name: "Loaded City",
+      createdAt: "2026-08-08T08:00:00.000Z",
+      savedAt: "2026-08-08T11:30:00.000Z",
+    };
+    const fixture = createRuntimeFixture({
+      awaitGameplayIdle: async () => {
+        fixture.runtime.markDirty();
+      },
+    });
+    await seed(fixture.saveStore!, record(loadedCity));
+
+    await expect(
+      fixture.runtime.controller.load(loadedCity.id),
+    ).resolves.toEqual({
+      ok: false,
+      error: { kind: "unsavedChanges" },
+    });
+    expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
+    expect(fixture.runtime.getView().dirty).toBe(true);
+    expect(fixture.installedSnapshot).toBeNull();
+  });
+
+  it("refuses createCity after the gameplay drain marks the active city dirty", async () => {
+    const fixture = createRuntimeFixture({
+      awaitGameplayIdle: async () => {
+        fixture.runtime.markDirty();
+      },
+    });
+
+    await expect(
+      fixture.runtime.controller.createCity(NEW_CITY_REQUEST),
+    ).resolves.toEqual({
+      ok: false,
+      error: { kind: "unsavedChanges" },
+    });
+    expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
+    expect(fixture.runtime.getView().dirty).toBe(true);
+    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.backend.calls).not.toContain("buildSandboxSnapshot");
   });
 });
 

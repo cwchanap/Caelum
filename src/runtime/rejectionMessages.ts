@@ -160,6 +160,8 @@ export function workingSaveErrorMessage(error: WorkingSaveError): string {
       return "City storage is unavailable.";
     case "noActiveCity":
       return "No city is active.";
+    case "unsavedChanges":
+      return "Pause and Save before switching cities.";
     case "sandbox":
       return "Could not create that city setup.";
     case "backend":
