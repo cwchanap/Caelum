@@ -16,14 +16,14 @@
 - No command accepts a frontend path, filename, or directory.
 - Encode every city ID as `city-<lowercase hex UTF-8 bytes>.json`.
 - `listCities` accepts only encoder-shaped direct-child filenames, regular files, parseable list records, and records whose embedded ID re-encodes to the actual filename.
-- Malformed/mismatched/non-file entries are skipped; directory/read I/O failures remain `failed`.
+- Malformed/mismatched/non-file entries are skipped; directory enumeration, entry metadata, and accepted-entry read I/O failures remain `failed` rather than silently hiding an ambiguous city.
 - Never stream city payload bytes into a committed path.
 - `createCity` writes a complete sibling temp and commits create-only via `std::fs::hard_link(temp, committed)`.
 - `updateCity` and `renameCity` write the same temp path then `std::fs::rename(temp, committed)`.
 - An existing create destination maps to `conflict`; a create operation that returns failure must leave `readCity(id)` as `notFound`.
 - Snapshot JSON remains opaque to storage; `GameBackend.restoreSnapshot()` owns gameplay validation.
 - Store errors remain exactly `notFound | conflict | failed`.
-- Lock the exact Rust error JSON with a serde test before relying on TypeScript mocks.
+- Lock the exact Rust error JSON and the camelCase `CitySummary`, `CitySaveRecord`, and `CitySaveUpdate` wire fields with serde tests before relying on TypeScript mocks.
 - Reuse a single guarded `describeHostRejection()` formatter for snapshot-host and city-store unexpected rejections; do not merge their error-code taxonomies.
 - Keep gameplay Tauri commands and city-store commands separate from each other and from `EngineState`.
 - `src/main.ts` is the sole production caller for `CitySaveStore` selection and
@@ -33,7 +33,7 @@
   these host decisions or introduce a second save-store detector.
 - `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
 - No migrations, compatibility readers, IndexedDB import, autosave/checkpoints, recovery/repair, metadata index, retries, locks, multi-process ownership, import/export, encryption/signing/checksums, fsync certification, or power-loss matrix.
-- HPA-349 owns automated native/browser restart coverage. HPA-344 requires one explicit **HUMAN** desktop restart smoke after the final implementation commit; agents must stop and hand it off rather than silently checking it off.
+- HPA-344 replaces its human restart smoke with a CI-portable composition: one production-handler mock-runtime IPC story plus the direct second-store reopen test. HPA-349 owns packaged native/browser UI coverage and real-bundle application-data permission.
 
 ---
 
@@ -1077,7 +1077,7 @@ git commit -m "feat: add Tauri city save adapter"
 
 ---
 
-### Task 3: Wire native durability, update guidance, verify, commit, then hand off the human smoke
+### Task 3: Wire native durability, update guidance, verify, and commit
 
 **Files:**
 - Modify: `src/main.ts`
@@ -1164,7 +1164,7 @@ Also document:
 - list ignores malformed/misnamed/non-file entries so healthy cities remain available;
 - TypeScript owns shared list ordering;
 - `MemoryCitySaveStore` remains a test double;
-- HPA-349 owns automated native/browser restart smoke.
+- HPA-349 owns packaged native/browser UI smoke.
 
 Do not rewrite unrelated gameplay architecture.
 
@@ -1254,32 +1254,340 @@ Expected implementation shape:
 
 Reject the diff if it adds a repository/service/trait hierarchy, generic filesystem API, migration/compatibility code, lock/recovery/autosave framework, gameplay-backend changes, or native automation harness.
 
-- [ ] **Step 7: Commit the wiring/docs slice before the manual gate**
+- [ ] **Step 7: Commit the wiring/docs slice**
 
 ```bash
 git add src/main.ts docs/architecture.md CLAUDE.md
 git commit -m "feat: enable native city persistence"
 ```
 
-At this point automated implementation is complete, but HPA-344 acceptance is **not** complete until the human smoke below passes.
+---
 
-- [ ] **Step 8: HUMAN — STOP AND HAND OFF the real desktop restart smoke**
+### Task 4: Replace the human smoke with the native command/disk automation seam
 
-**Agents must stop here. Do not mark this checkbox complete on the user's behalf.** Report the completed automated gates and ask the human to perform this one-shot acceptance check:
+**Files:**
+- Modify: `src-tauri/src/city_store.rs`
+- Modify: `src-tauri/src/lib.rs`
+- Modify: `docs/architecture.md`
 
-1. Run `bun run tauri:dev`.
-2. Create a named city such as `HPA-344 Native Smoke`.
-3. Make one visible gameplay change.
-4. Pause if needed and use **Save Now**.
-5. Fully quit the Tauri app/process.
-6. Run `bun run tauri:dev` again.
-7. Confirm the city appears in the City Library.
-8. Continue/Load it and verify the gameplay change is still present.
-9. Confirm a committed `city-<hex-id>.json` exists under the platform-resolved `<app_data_dir>/cities/`.
+**Interfaces:**
+- Consumes: Tauri 2.11 `mock_builder`, `mock_context`, `WebviewWindowBuilder`, `InvokeRequest`, and `get_ipc_response`.
+- Produces: six command functions generic over `R: tauri::Runtime` and accepting `tauri::AppHandle<R>`.
+- Produces: `with_commands<R: tauri::Runtime>(tauri::Builder<R>) -> tauri::Builder<R>` as the single production command-registration list.
+- Produces: test-only `TestCityStoreRoot(PathBuf)`; no production command argument or filesystem override.
+- Proves: exact record/update wire JSON, native create/update/list/read IPC, encoded file creation, and direct second-store reopen behavior.
 
-If this fails, HPA-344 is not complete.
+- [ ] **Step 1: Add the record-wire assertions and the failing IPC story**
 
-Why this remains manual: a command-level `mock_app()` persistence test would use the mock application's resolved application-data directory rather than a temp root and risks writing outside the test sandbox. The unit test covers `from_app -> app_data_dir/cities` path computation only; the manual smoke covers command registration plus real desktop restart. HPA-349 later owns automated cross-host restart coverage.
+Extend `src-tauri/src/city_store.rs` tests beside `city_store_command_error_wire_is_stable`:
+
+```rust
+#[test]
+fn city_store_record_wire_is_stable() {
+    let record = record("city-ipc", "IPC City");
+
+    assert_eq!(
+        serde_json::to_value(summary(&record)).expect("summary serializes"),
+        json!({
+            "id": "city-ipc",
+            "name": "IPC City",
+            "createdAt": "2026-08-11T18:00:00.000Z",
+            "savedAt": "2026-08-11T19:00:00.000Z"
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&record).expect("record serializes"),
+        json!({
+            "city": {
+                "id": "city-ipc",
+                "name": "IPC City",
+                "createdAt": "2026-08-11T18:00:00.000Z"
+            },
+            "savedAt": "2026-08-11T19:00:00.000Z",
+            "snapshot": { "id": "city-ipc" }
+        })
+    );
+
+    let update: CitySaveUpdate = serde_json::from_value(json!({
+        "savedAt": "2026-08-11T20:00:00.000Z",
+        "snapshot": { "revision": 2 }
+    }))
+    .expect("update deserializes");
+    assert_eq!(update.saved_at, "2026-08-11T20:00:00.000Z");
+    assert_eq!(update.snapshot, json!({ "revision": 2 }));
+}
+```
+
+Add this helper and story to `src-tauri/src/lib.rs` tests:
+
+```rust
+use serde_json::{json, Value};
+use tauri::{ipc::InvokeBody, test::MockRuntime, webview::InvokeRequest};
+
+fn invoke_city_store(
+    webview: &tauri::WebviewWindow<MockRuntime>,
+    command: &str,
+    body: Value,
+) -> Result<Value, Value> {
+    tauri::test::get_ipc_response(
+        webview,
+        InvokeRequest {
+            cmd: command.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .expect("valid Tauri URL"),
+            body: InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.into(),
+        },
+    )
+    .map(|response| response.deserialize::<Value>().expect("JSON response"))
+}
+
+#[test]
+fn production_city_store_handler_round_trips_ipc() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("cities");
+    let app = with_commands(tauri::test::mock_builder())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("mock app builds");
+    assert!(app.manage(city_store::TestCityStoreRoot(root.clone())));
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("mock webview builds");
+
+    let record = json!({
+        "city": {
+            "id": "city-ipc",
+            "name": "IPC City",
+            "createdAt": "2026-08-11T18:00:00.000Z"
+        },
+        "savedAt": "2026-08-11T19:00:00.000Z",
+        "snapshot": { "revision": 1 }
+    });
+    assert_eq!(
+        invoke_city_store(&webview, "city_store_create", json!({ "record": record }))
+            .expect("create IPC succeeds"),
+        json!({
+            "id": "city-ipc",
+            "name": "IPC City",
+            "createdAt": "2026-08-11T18:00:00.000Z",
+            "savedAt": "2026-08-11T19:00:00.000Z"
+        })
+    );
+
+    invoke_city_store(
+        &webview,
+        "city_store_update",
+        json!({
+            "id": "city-ipc",
+            "update": {
+                "savedAt": "2026-08-11T20:00:00.000Z",
+                "snapshot": { "revision": 2 }
+            }
+        }),
+    )
+    .expect("update IPC succeeds");
+
+    let listed = invoke_city_store(&webview, "city_store_list", json!({}))
+        .expect("list IPC succeeds");
+    assert_eq!(listed.as_array().expect("summary array").len(), 1);
+    let loaded = invoke_city_store(
+        &webview,
+        "city_store_read",
+        json!({ "id": "city-ipc" }),
+    )
+    .expect("read IPC succeeds");
+    assert_eq!(loaded["savedAt"], "2026-08-11T20:00:00.000Z");
+    assert_eq!(loaded["snapshot"], json!({ "revision": 2 }));
+    assert!(root.join("city-636974792d697063.json").is_file());
+}
+```
+
+- [ ] **Step 2: Run the IPC test to observe RED**
+
+Run:
+
+```bash
+cargo test -p caelum --lib production_city_store_handler_round_trips_ipc
+```
+
+Expected: compilation fails because `with_commands`, `TestCityStoreRoot`, and mock-runtime-compatible generic command signatures do not exist yet. This is the observed RED; do not weaken the test to a mocked invoke.
+
+- [ ] **Step 3: Add the test root and make the six commands runtime-generic**
+
+In `src-tauri/src/city_store.rs`, add:
+
+```rust
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestCityStoreRoot(pub(crate) PathBuf);
+```
+
+At the start of `CityFileStore::from_app` add:
+
+```rust
+#[cfg(test)]
+if let Some(root) = app.try_state::<TestCityStoreRoot>() {
+    return Ok(Self::new(root.0.clone()));
+}
+```
+
+Change all six commands to the exact generic shape:
+
+```rust
+#[tauri::command]
+pub(crate) fn city_store_list<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Vec<CitySummary>, CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.list_cities()
+}
+
+#[tauri::command]
+pub(crate) fn city_store_read<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+) -> Result<CitySaveRecord, CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.read_city(&id)
+}
+
+#[tauri::command]
+pub(crate) fn city_store_create<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    record: CitySaveRecord,
+) -> Result<CitySummary, CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.create_city(record)
+}
+
+#[tauri::command]
+pub(crate) fn city_store_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+    update: CitySaveUpdate,
+) -> Result<CitySummary, CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.update_city(&id, update)
+}
+
+#[tauri::command]
+pub(crate) fn city_store_rename<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+    name: String,
+) -> Result<CitySummary, CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.rename_city(&id, name)
+}
+
+#[tauri::command]
+pub(crate) fn city_store_delete<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    id: String,
+) -> Result<(), CityStoreCommandError> {
+    CityFileStore::from_app(&app)?.delete_city(&id)
+}
+```
+
+Keep the existing no-override `from_app_uses_app_data_cities_child` test. Do not expose the test root in production configuration or IPC.
+
+- [ ] **Step 4: Share only the production command-registration list**
+
+In `src-tauri/src/lib.rs`, extract:
+
+```rust
+fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![
+        game_snapshot,
+        game_begin_runtime,
+        game_dispatch,
+        game_tick,
+        game_build_sandbox_snapshot,
+        game_reset,
+        game_snapshot_for_save,
+        game_restore_snapshot,
+        game_preview_route,
+        game_preview_road_mutation,
+        city_store::city_store_list,
+        city_store::city_store_read,
+        city_store::city_store_create,
+        city_store::city_store_update,
+        city_store::city_store_rename,
+        city_store::city_store_delete,
+    ])
+}
+```
+
+Start `run()` with:
+
+```rust
+let builder = tauri::Builder::default().manage(Mutex::new(OwnedEngine {
+    engine: GameEngine::new(),
+    runtime_epoch: 0,
+}));
+
+with_commands(builder)
+```
+
+Then keep the existing `.setup(...)`, `.run(...)`, and error handling unchanged. Do not extract managed state, plugins, setup, context generation, or the run loop.
+
+- [ ] **Step 5: Run focused GREEN and all native module tests**
+
+Run:
+
+```bash
+cargo test -p caelum --lib production_city_store_handler_round_trips_ipc
+cargo test -p caelum --lib city_store
+```
+
+Expected: the IPC story and the full city-store module pass, including `second_store_instance_reopens_same_directory`, no-override app-data resolution, exact error JSON, and exact record/update JSON.
+
+- [ ] **Step 6: Update the acceptance documentation**
+
+In `docs/architecture.md`, state that HPA-344 automatically covers the production command/serialization seam plus direct disk reopen in isolated Rust tests. State that HPA-349 owns the packaged native/browser UI journey and real-bundle application-data permission. Remove the stale human acceptance gate.
+
+Do not claim power-loss behavior or packaged-bundle write permission.
+
+- [ ] **Step 7: Run the complete verification gate**
+
+Run:
+
+```bash
+cargo test --workspace
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+bun run test:unit
+bun run check
+bun run lint
+bun run format:check
+bun run build
+bun run test:e2e
+bun run tauri:build
+```
+
+Expected: all commands pass. If a release build hits the known sandbox `wasm-opt` permission failure, rerun the unchanged command in the approved environment; do not change implementation to accommodate the sandbox.
+
+- [ ] **Step 8: Review and commit the automation slice**
+
+Run:
+
+```bash
+git diff --check
+git diff -- src-tauri/src/city_store.rs src-tauri/src/lib.rs docs/architecture.md
+```
+
+Reject the diff if it adds a second mock app, test-only command duplicates, a fake invoke layer, production path override, storage trait, or crash/fsync machinery.
+
+Commit:
+
+```bash
+git add src-tauri/src/city_store.rs src-tauri/src/lib.rs docs/architecture.md
+git commit -m "test: automate native city persistence seam"
+```
 
 ---
 
@@ -1301,7 +1609,8 @@ Why this remains manual: a command-level `mock_app()` persistence test would use
   `createBackend()` retains independent gameplay-backend detection and the
   existing `isTauriRuntime` tests remain authority for marker cases.
 - Browser regression: existing Playwright suite included after main bootstrap change.
-- Manual native integration: explicit human-stop gate after final commit.
+- Native integration: one production-handler mock-runtime IPC story plus the existing direct second-store reopen proof; no human-only HPA-344 gate.
+- Packaged native permission/UI journey: explicitly deferred to HPA-349.
 - Memory test double: retained/documented.
 - Deferred hardening: global constraints and final diff gate.
 
@@ -1312,6 +1621,7 @@ There are no `TBD`, `TODO`, optional unnamed tests, or “handle later” implem
 ### Type/name consistency
 
 - Native commands: `city_store_list|read|create|update|rename|delete`.
+- All native commands accept `AppHandle<R>` and share one generic `with_commands<R>` registration function across production Wry and the mock runtime.
 - Frontend store operations remain the six `CitySaveStore` names.
 - Native error codes serialize to `notFound|conflict|failed`.
 - `CitySaveUpdate` changes only `savedAt` + `snapshot`.
@@ -1322,4 +1632,4 @@ There are no `TBD`, `TODO`, optional unnamed tests, or “handle later” implem
 
 ## Implementation handoff
 
-After this planning PR is reviewed, implement Task 1 -> Task 2 -> Task 3 in order. Prefer subagent-driven development with a fresh review gate after each task. The automated agent must stop at Task 3 Step 8 and hand the required desktop restart smoke to a human.
+Tasks 1 through 3 are already implemented. After this amendment is reviewed, execute Task 4 with subagent-driven development, observe its focused RED/GREEN cycle, perform a fresh task review, and finish with a whole-branch review. HPA-344 has no remaining human-only smoke gate; HPA-349 retains packaged-host UI and real application-data permission coverage.
