@@ -27,7 +27,7 @@ Keep responsibilities narrow:
 - `workingSaveRuntime.ts`, Svelte, gameplay `GameBackend`, and the Rust gameplay core do not change.
 - `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
 
-HPA-344 adds no generic repository, filesystem API, migration layer, lock service, recovery model, or native browser/WebDriver framework. Its native acceptance proof is one Rust mock-runtime IPC test using the production command handler and an isolated test root.
+HPA-344 adds no generic repository, filesystem API, migration layer, lock service, recovery model, or native browser/WebDriver framework. Its native acceptance proof composes one Rust mock-runtime IPC test using the production command handler with the direct filesystem reopen test, both against isolated test roots.
 
 ## 2. Why HPA-344 is next
 
@@ -38,7 +38,7 @@ The browser Phase 1 persistence path is already complete:
 - HPA-345 — New City flow: done;
 - HPA-346 — City Library / Save / Load / Rename / Delete: done.
 
-`src/main.ts` still selects `MemoryCitySaveStore` for Tauri, so the intended desktop release host loses cities when the process exits. HPA-344 is the smallest remaining unblocked Phase 1 implementation. HPA-349 stays downstream and owns packaged browser/native UI journey coverage; HPA-344 itself proves the native IPC/disk restart seam automatically.
+`src/main.ts` still selects `MemoryCitySaveStore` for Tauri, so the intended desktop release host loses cities when the process exits. HPA-344 is the smallest remaining unblocked Phase 1 implementation. HPA-349 stays downstream and owns packaged browser/native UI journey coverage; HPA-344 proves the native command/disk persistence seam automatically.
 
 ## 3. Approaches considered
 
@@ -84,7 +84,8 @@ There is one native storage domain and six operations. A trait hierarchy, manage
 - reuse of one existing-quality host-rejection diagnostic formatter;
 - Tauri bootstrap swap;
 - focused Rust and Vitest coverage;
-- one CI-portable mock-runtime IPC restart test using the production handler, two app instances, and a shared isolated test root;
+- one CI-portable mock-runtime IPC story using the production handler and one isolated test root;
+- the existing direct second-store reopen proof for the stateless file store;
 - current architecture/CLAUDE guidance updates;
 - no human-only acceptance gate.
 
@@ -132,9 +133,9 @@ city-1      -> city-636974792d31.json
 
 No reverse decoder is needed. After parsing a candidate record, list re-encodes `record.city.id` and requires it to equal the actual filename. A copied/renamed file whose embedded ID disagrees with its name is ignored rather than producing a ghost list row.
 
-Entries that are directories, symlinks, temp files, unrelated JSON, malformed JSON, or filename/content-ID mismatches are skipped. Directory/read I/O failures still fail `listCities()`.
+Entries that are directories, symlinks, temp files, unrelated JSON, malformed JSON, or filename/content-ID mismatches are skipped. Directory enumeration, entry metadata, and accepted-entry read I/O failures still fail `listCities()`.
 
-This makes the city library resilient without adding repair UI or a corruption taxonomy: one bad development file does not hide healthy cities.
+This makes the city library resilient to known-invalid development files without adding repair UI or a corruption taxonomy: one malformed or misnamed file does not hide healthy cities. An OS read failure is ambiguous, so it is surfaced instead of silently hiding a potentially valid city.
 
 ## 6. Temp and commit model
 
@@ -170,14 +171,9 @@ After the complete temp file is closed, create commits with a hard link:
 hard_link(temp, committed)
 ```
 
-Because temp and committed are siblings, they are on the same filesystem. An existing committed destination is a conflict; success exposes the already-complete file at the committed name. Then best-effort remove the temp name.
+Because temp and committed are siblings, they are on the same filesystem. An existing committed destination is a conflict; success exposes the already-written file at the committed name. Then best-effort remove the temp name.
 
-Crash shape without fsync certification:
-
-- before `hard_link`: only `.tmp` may remain, and list ignores it;
-- after `hard_link`: the committed name refers to the complete temp contents; a stale `.tmp` name may remain.
-
-This is not a power-loss/fsync guarantee. It only avoids the plan's previous torn committed create path and keeps create-only semantics without a reservation file.
+Temp-first create exists to satisfy the returned-failure contract: a write failure happens before a committed city name exists, while `hard_link` provides create-only commit without a check-then-write race or empty reservation file. Crash and power-loss behavior is explicitly outside HPA-344; there is no fsync or directory-sync guarantee.
 
 ### Update and rename commit
 
@@ -234,6 +230,8 @@ Keep it generic over `tauri::Runtime` so both the production runtime and Tauri's
 
 Do not manage `CityFileStore` as Tauri state.
 
+All six `#[tauri::command]` functions are generic over `R: tauri::Runtime` and accept `tauri::AppHandle<R>`. This lets the same generated command wrappers execute under production Wry and Tauri's mock runtime without test-only command duplicates.
+
 ### Wire shapes
 
 Mirror only the existing frontend storage wire:
@@ -274,6 +272,8 @@ struct CitySummary {
 
 List may deserialize a partial `CityListRecord` so the full snapshot is not materialized into `serde_json::Value`. The file still has to be read/scanned; this is not an index or reduced disk-I/O claim.
 
+Lock the duplicated TypeScript/Rust field names with exact JSON tests beside the error-wire test: serialize one `CitySummary` and one `CitySaveRecord`, and deserialize one literal camelCase `CitySaveUpdate`. Code generation is not justified for these three small wire records.
+
 ## 8. Native commands and error wire
 
 Expose exactly:
@@ -287,7 +287,17 @@ city_store_rename
 city_store_delete
 ```
 
-Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`. One local macro expands to the production `generate_handler!` value, and both `run()` and the mock-runtime IPC test invoke that macro. Do not extract an app/builder abstraction: managed gameplay state, plugins, setup, and production run-loop construction remain only in `run()`.
+Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`. One generic function owns the complete production handler list:
+
+```rust
+fn with_commands<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![/* gameplay + city commands */])
+}
+```
+
+Both `run()` and the mock-runtime IPC test call `with_commands()`. This is only handler registration reuse: managed gameplay state, plugins, setup, and production run-loop construction remain in `run()`.
 
 No command accepts a path, filename, or directory.
 
@@ -310,6 +320,8 @@ Lock these exact values in a Rust serde test:
 {"code":"conflict"}
 {"code":"failed","diagnostic":"disk full"}
 ```
+
+The same test module also locks the exact camelCase JSON for `CitySummary`, `CitySaveRecord`, and `CitySaveUpdate` so frontend and native field names cannot drift independently.
 
 TypeScript owns operation/city-ID context and maps only these codes into `citySaveStoreError()`.
 
@@ -371,6 +383,8 @@ including its own `isTauriRuntime()` call; no second save-store detector,
 
 ### List
 
+Calling list on a fresh store initializes the fixed `cities/` root before reading it. This is storage initialization, not a frontend-visible write operation or arbitrary path mutation.
+
 For each direct child:
 
 1. filename must match the encoder-produced committed shape;
@@ -414,27 +428,11 @@ Add `tempfile = "3"` as a dev-only Rust dependency.
 
 ### Rust filesystem tests
 
-Required:
+Keep the focused filesystem behaviors already present: empty list; create/list/read; conflict and failed-write preservation; update/rename field preservation; missing-operation errors; delete; second-store reopen; path-looking IDs; malformed/mismatched/non-file filtering; and production app-data path computation. These are behavior groups, not an exhaustive branch matrix.
 
-1. empty list;
-2. create/list/read;
-3. create conflict preserves original;
-4. failed create commits nothing;
-5. update changes only saved payload;
-6. failed update preserves prior committed record;
-7. rename changes only name;
-8. missing update -> `notFound`;
-9. missing rename -> `notFound`;
-10. delete + second delete/read -> `notFound`;
-11. reopen through a second `CityFileStore`;
-12. path-looking ID stays inside root;
-13. list skips stale temp/unrelated JSON/non-file/malformed JSON;
-14. list skips filename/content-ID mismatch;
-15. `from_app(mock_app.handle())` without a test override resolves exactly `app_data_dir()/cities`;
-16. native error serde wire is exact;
-17. a mock-runtime IPC restart test creates and updates through the registered commands, drops the first app, creates a second app with the same isolated root, then lists and reads through IPC and confirms the encoded committed file exists.
+Extend the existing serde test with exact JSON assertions for `CitySummary` and `CitySaveRecord`, plus a literal camelCase `CitySaveUpdate` deserialization assertion.
 
-The IPC test manages a `#[cfg(test)]`-only `TestCityStoreRoot` backed by `tempfile`, so it never writes to the developer or CI machine's real application-data directory. The existing `from_app` test separately locks the production path computation. Together they prove production handler registration, Tauri argument/result serialization, app-handle store construction, disk persistence across app instances, listing, loading, and filename creation without a GUI harness.
+Add one mock-runtime IPC story that uses the production `with_commands()` handler to create, update, list, and read a city, then confirms the encoded committed file exists. It manages a `#[cfg(test)]`-only `TestCityStoreRoot` backed by `tempfile`, so it never writes to the developer or CI machine's real application-data directory. The existing no-override `from_app` test separately locks production path computation, and `second_store_instance_reopens_same_directory` separately proves the stateless disk-reopen invariant. A second mock app would add process-lifetime ceremony without testing new state because every command constructs a fresh `CityFileStore`.
 
 ### TypeScript tests
 
@@ -459,16 +457,16 @@ Automated HPA-344 coverage proves:
 
 - real filesystem semantics in temp directories;
 - production app-data root computation through `mock_app` without an override;
-- exact production command registration through the same local handler macro used by `run()`;
-- native create/update persistence across two mock Tauri app instances using one isolated root;
-- native list/read responses through Tauri IPC after the simulated restart;
+- exact production command registration through the same generic handler function used by `run()`;
+- native create/update/list/read argument and result serialization through Tauri IPC;
 - the committed `city-<hex-id>.json` file exists under that root;
+- a new `CityFileStore` instance can reopen the same directory and read committed data;
 - native error serialization;
 - TypeScript IPC mapping;
 - tested native/browser store selection;
 - existing browser UI E2E remains green.
 
-This composition replaces the HPA-344 human smoke. It intentionally stops below packaged desktop UI automation: the existing browser E2E proves the City Library/New City/Save/Continue UI journey, while the Rust IPC test proves the native command, serialization, path-construction, and disk-restart seam. HPA-349 remains downstream for a representative packaged cross-host UI journey rather than duplicating that infrastructure here.
+Because commands hold no process-lifetime storage state, the IPC story plus direct second-store reopen test is the restart-equivalent proof at the command/disk seam and replaces the HPA-344 human smoke. It intentionally stops below packaged desktop UI automation: the existing browser E2E proves the City Library/New City/Save/Continue UI journey, while the Rust tests prove the native handler, serialization, path-construction, and disk persistence. HPA-349 remains downstream for a representative packaged cross-host UI journey rather than duplicating that infrastructure here.
 
 ## 14. Documentation cleanup
 
@@ -494,15 +492,21 @@ HPA-344 is complete when:
 - native error JSON matches the TypeScript consumer;
 - native/browser store selection is unit tested;
 - `from_app` path resolution is exercised with Tauri's mock runtime;
-- the production Tauri handler is exercised through mock-runtime IPC across two app instances sharing an isolated root;
-- post-restart list/read return the saved record and the encoded committed file exists;
+- the production Tauri handler is exercised through mock-runtime create/update/list/read IPC against an isolated root;
+- a second direct store instance reopens the same directory, and the encoded committed file exists;
 - browser E2E remains green;
 - no index, migration, compatibility, lock, recovery, fsync, or security framework is added.
 
-## 16. Review focus
+## 16. Risks and limits
+
+- The IPC story uses Tauri's version-coupled `tauri::test` invoke plumbing. If a Tauri upgrade breaks it, update the harness or revise this acceptance design; silently replacing it with registration-only or mocked-invoke coverage would no longer prove the serialization seam.
+- Mock-runtime path resolution does not prove that a packaged macOS bundle can write its real Application Support directory. HPA-349 owns that packaged-host permission and UI journey.
+- Crash/power-loss durability is intentionally unclaimed without fsync and directory-sync certification.
+
+## 17. Review focus
 
 1. Is every payload temp-first, with create committed create-only and update/rename replacement-only?
 2. Can one malformed/misnamed file affect healthy city listing?
 3. Does any frontend value become a path?
-4. Are native error wire, host selection, production command registration, restart persistence, and app-data path computation tested without building a fake native filesystem or GUI framework?
+4. Are native error and record wires, host selection, production command registration, IPC serialization, disk reopen, and app-data path computation tested without building a fake native filesystem or GUI framework?
 5. Did any abstraction appear that current Phase 1 work does not need?

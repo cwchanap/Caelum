@@ -182,9 +182,10 @@ native Tauri store: application-data JSON files through narrow Tauri commands
 HPA-346 owns the city library and the Save, Load, Rename, and Delete actions;
 HPA-345 only creates the first city through the shared runtime flow. The Tauri
 city store owns native application-data files through the six narrow commands;
-it is not an IndexedDB-on-Tauri fallback. HPA-349 owns automated native/browser
-restart smoke coverage. The representative desktop restart smoke remains a
-human acceptance gate for the native release path.
+it is not an IndexedDB-on-Tauri fallback. HPA-344 automatically covers the
+production command/serialization seam and direct disk reopen behavior with
+isolated Rust tests. HPA-349 owns the packaged native/browser UI journey and
+real-bundle application-data permission.
 
 The final representative cross-host Save/reload/Continue smoke is HPA-349.
 
