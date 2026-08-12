@@ -1,10 +1,10 @@
 # HPA-344 Native Tauri City Save Store Design
 
 **Issue:** HPA-344  
-**Status:** Proposed  
-**Decision date:** 2026-08-11  
+**Status:** Approved  
+**Decision date:** 2026-08-12  
 **Prerequisite:** HPA-548 (done)  
-**Downstream:** HPA-349 automated cross-host smoke
+**Downstream:** HPA-349 packaged cross-host UI smoke
 
 ## 1. Decision
 
@@ -27,7 +27,7 @@ Keep responsibilities narrow:
 - `workingSaveRuntime.ts`, Svelte, gameplay `GameBackend`, and the Rust gameplay core do not change.
 - `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
 
-HPA-344 adds no generic repository, filesystem API, migration layer, lock service, recovery model, or native automation framework.
+HPA-344 adds no generic repository, filesystem API, migration layer, lock service, recovery model, or native browser/WebDriver framework. Its native acceptance proof is one Rust mock-runtime IPC test using the production command handler and an isolated test root.
 
 ## 2. Why HPA-344 is next
 
@@ -38,7 +38,7 @@ The browser Phase 1 persistence path is already complete:
 - HPA-345 — New City flow: done;
 - HPA-346 — City Library / Save / Load / Rename / Delete: done.
 
-`src/main.ts` still selects `MemoryCitySaveStore` for Tauri, so the intended desktop release host loses cities when the process exits. HPA-344 is the smallest remaining unblocked Phase 1 implementation. HPA-349 stays downstream and owns automated browser/native restart coverage.
+`src/main.ts` still selects `MemoryCitySaveStore` for Tauri, so the intended desktop release host loses cities when the process exits. HPA-344 is the smallest remaining unblocked Phase 1 implementation. HPA-349 stays downstream and owns packaged browser/native UI journey coverage; HPA-344 itself proves the native IPC/disk restart seam automatically.
 
 ## 3. Approaches considered
 
@@ -84,8 +84,9 @@ There is one native storage domain and six operations. A trait hierarchy, manage
 - reuse of one existing-quality host-rejection diagnostic formatter;
 - Tauri bootstrap swap;
 - focused Rust and Vitest coverage;
+- one CI-portable mock-runtime IPC restart test using the production handler, two app instances, and a shared isolated test root;
 - current architecture/CLAUDE guidance updates;
-- one explicit human-only restart smoke after the implementation commit.
+- no human-only acceptance gate.
 
 ### HPA-344 does not own
 
@@ -98,7 +99,7 @@ There is one native storage domain and six operations. A trait hierarchy, manage
 - autosave, checkpoints, generations, history, recovery, or repair;
 - retries or multi-window/multi-process ownership;
 - encryption, signing, checksums, filesystem permission frameworks, fsync/directory-sync certification, or power-loss matrices;
-- a native Playwright/test-driver framework.
+- a native Playwright/test-driver framework or packaged desktop UI automation.
 
 ## 5. Storage layout and filename authority
 
@@ -229,7 +230,7 @@ impl CityFileStore {
 app.path().app_data_dir()?.join("cities")
 ```
 
-Keep it generic over `tauri::Runtime` so the existing `tauri::test::mock_app()` path can prove the production path-resolution line without doing disk I/O.
+Keep it generic over `tauri::Runtime` so both the production runtime and Tauri's mock runtime use the same path-resolution code. Under `#[cfg(test)]` only, the mock app may manage an explicit `TestCityStoreRoot(PathBuf)`; `from_app()` uses that exact root when present and otherwise resolves the production `<app_data_dir>/cities` path. This creates no production command argument or filesystem override.
 
 Do not manage `CityFileStore` as Tauri state.
 
@@ -286,7 +287,7 @@ city_store_rename
 city_store_delete
 ```
 
-Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`.
+Register them beside gameplay commands in `src-tauri/src/lib.rs`; do not put them in `GameBackend` or `EngineState`. A small runtime-generic builder helper owns the production `generate_handler!` list so the mock-runtime IPC test executes the same registration rather than copying a second list.
 
 No command accepts a path, filename, or directory.
 
@@ -429,10 +430,11 @@ Required:
 12. path-looking ID stays inside root;
 13. list skips stale temp/unrelated JSON/non-file/malformed JSON;
 14. list skips filename/content-ID mismatch;
-15. `from_app(mock_app.handle())` resolves exactly `app_data_dir()/cities`;
-16. native error serde wire is exact.
+15. `from_app(mock_app.handle())` without a test override resolves exactly `app_data_dir()/cities`;
+16. native error serde wire is exact;
+17. a mock-runtime IPC restart test creates and updates through the registered commands, drops the first app, creates a second app with the same isolated root, then lists and reads through IPC and confirms the encoded committed file exists.
 
-The `from_app` test does not call storage commands or write to app data. A command-level mock-app persistence test would risk writing into the machine's real resolved application-data location, so the remaining registration + real disk path is intentionally left to the human smoke.
+The IPC test manages a `#[cfg(test)]`-only `TestCityStoreRoot` backed by `tempfile`, so it never writes to the developer or CI machine's real application-data directory. The existing `from_app` test separately locks the production path computation. Together they prove production handler registration, Tauri argument/result serialization, app-handle store construction, disk persistence across app instances, listing, loading, and filename creation without a GUI harness.
 
 ### TypeScript tests
 
@@ -456,30 +458,17 @@ Existing runtime/backend tests continue to prove structured snapshot rejections 
 Automated HPA-344 coverage proves:
 
 - real filesystem semantics in temp directories;
-- app-data root computation through `mock_app`;
+- production app-data root computation through `mock_app` without an override;
+- exact production command registration through a shared runtime-generic handler builder;
+- native create/update persistence across two mock Tauri app instances using one isolated root;
+- native list/read responses through Tauri IPC after the simulated restart;
+- the committed `city-<hex-id>.json` file exists under that root;
 - native error serialization;
 - TypeScript IPC mapping;
 - tested native/browser store selection;
-- existing browser E2E remains green.
+- existing browser UI E2E remains green.
 
-One seam remains intentionally manual: actual Tauri command registration and real desktop restart persistence.
-
-After the final implementation commit, the executing agent must stop and hand off this check to a human:
-
-```text
-tauri:dev
--> create named city
--> make one visible gameplay change
--> Save Now
--> fully quit
--> tauri:dev
--> city appears
--> Continue/Load
--> saved change remains
--> committed city-<hex>.json exists under resolved app_data_dir/cities
-```
-
-The human gate is required for HPA-344 completion, but it creates no checked-in harness. HPA-349 later automates the representative cross-host smoke.
+This composition replaces the HPA-344 human smoke. It intentionally stops below packaged desktop UI automation: the existing browser E2E proves the City Library/New City/Save/Continue UI journey, while the Rust IPC test proves the native command, serialization, path-construction, and disk-restart seam. HPA-349 remains downstream for a representative packaged cross-host UI journey rather than duplicating that infrastructure here.
 
 ## 14. Documentation cleanup
 
@@ -505,8 +494,9 @@ HPA-344 is complete when:
 - native error JSON matches the TypeScript consumer;
 - native/browser store selection is unit tested;
 - `from_app` path resolution is exercised with Tauri's mock runtime;
+- the production Tauri handler is exercised through mock-runtime IPC across two app instances sharing an isolated root;
+- post-restart list/read return the saved record and the encoded committed file exists;
 - browser E2E remains green;
-- the final human restart smoke passes;
 - no index, migration, compatibility, lock, recovery, fsync, or security framework is added.
 
 ## 16. Review focus
@@ -514,5 +504,5 @@ HPA-344 is complete when:
 1. Is every payload temp-first, with create committed create-only and update/rename replacement-only?
 2. Can one malformed/misnamed file affect healthy city listing?
 3. Does any frontend value become a path?
-4. Are native error wire, host selection, and app-data path computation tested without building a fake native filesystem?
+4. Are native error wire, host selection, production command registration, restart persistence, and app-data path computation tested without building a fake native filesystem or GUI framework?
 5. Did any abstraction appear that current Phase 1 work does not need?
