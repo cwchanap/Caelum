@@ -4,29 +4,33 @@
 
 **Goal:** Replace Tauri's session-only memory city store with the smallest durable application-data-file implementation of the existing six-operation `CitySaveStore`.
 
-**Architecture:** `src-tauri/src/city_store.rs` owns a fixed `<app_data_dir>/cities` directory, safe opaque-ID filename encoding, JSON records, create-new writes, temp-file replacement, and native error classification. `src/persistence/tauriCitySaveStore.ts` owns only six `invoke()` calls plus mapping into the existing `CitySaveStoreResult` taxonomy. `src/main.ts` switches the native branch from `createMemoryCitySaveStore()` to `createTauriCitySaveStore()`; the browser IndexedDB branch, runtime persistence controller, gameplay backend, and Svelte UI remain unchanged.
+**Architecture:** `src-tauri/src/city_store.rs` owns the fixed native save directory and real filesystem semantics. Every payload is written to a sibling temp file first; create commits the complete temp file with create-only `hard_link`, while update/rename replace the prior committed file with `rename`. `src/persistence/tauriCitySaveStore.ts` remains a thin Tauri-command adapter. A tiny tested store selector chooses native files vs IndexedDB from the already-computed `nativeTauri` boolean; runtime/Svelte/gameplay interfaces stay unchanged.
 
 **Tech Stack:** Rust 2021, Tauri 2.11, `std::fs`, Serde/`serde_json`, TypeScript, `@tauri-apps/api/core`, Vitest, Bun, dev-only Rust `tempfile`.
 
 ## Global Constraints
 
-- Implement exactly `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, and `deleteCity`; do not widen `CitySaveStore`.
-- Native committed records live only under Tauri's application-data directory in a `cities` child directory.
-- Store one complete `CitySaveRecord` JSON file per city; no metadata index, sidecar, database, generation directory, or cache.
-- Never accept a frontend path, filename, directory, or generic filesystem request.
-- Convert every city ID to one fixed `city-<lowercase hex UTF-8 bytes>.json` filename component before joining it to the configured root.
-- `listCities` must recognize only direct-child filenames in that same encoder-produced form (`city-` + even-length lowercase hex + `.json`); ignore unrelated JSON, temp, and other files before parsing.
-- `createCity` must use create-new semantics and cannot overwrite an existing committed city.
-- `updateCity` and `renameCity` must serialize first, write a sibling `.tmp`, then rename over the committed file; do not delete/truncate the committed file before replacement.
-- Store errors remain exactly `notFound | conflict | failed`; native diagnostics are development-only and may differ from IndexedDB.
-- Lock the Rust `CityStoreCommandError` serde wire with one exact JSON test so TypeScript mocks cannot drift from real Tauri rejection shape.
-- Snapshot JSON is opaque storage data. Do not validate gameplay schema in the save adapter; `GameBackend.restoreSnapshot()` remains the validation/activation boundary.
-- Keep gameplay Tauri commands and storage Tauri commands as separate modules/responsibilities. Do not add city-save methods to `GameBackend`.
-- Do not add a generic repository, storage trait hierarchy, managed storage service/state, command bus, DI container, plugin abstraction, retry layer, or lock manager.
-- No migration/legacy reader, IndexedDB import, compatibility fixture, autosave, checkpoint, recovery, repair, import/export, encryption/signing/checksum, fsync certification, power-loss matrix, multi-window/process ownership, or quota/vendor hardening.
-- Development saves are disposable; a future record/schema break updates the current readers/writers directly.
-- Test the happy path plus the concrete boundaries required by HPA-344: conflict, failed replacement preservation, reopen, fixed path/list authority, and native error wire. Do not add an exhaustive filesystem failure matrix.
-- HPA-349 owns the automated representative browser/native cross-host Save/reload/Continue smoke. HPA-344 still requires one one-shot manual native create/save/quit/relaunch/list/load acceptance check after wiring; do not turn that into a second E2E project or reusable harness.
+- Keep the existing six `CitySaveStore` operations exactly: `listCities`, `readCity`, `createCity`, `updateCity`, `renameCity`, `deleteCity`.
+- Native committed records live only under `<app_data_dir>/cities/`.
+- Store one complete `CitySaveRecord` JSON file per city; no index, sidecar, database, generation directory, or cache.
+- No command accepts a frontend path, filename, or directory.
+- Encode every city ID as `city-<lowercase hex UTF-8 bytes>.json`.
+- `listCities` accepts only encoder-shaped direct-child filenames, regular files, parseable list records, and records whose embedded ID re-encodes to the actual filename.
+- Malformed/mismatched/non-file entries are skipped; directory/read I/O failures remain `failed`.
+- Never stream city payload bytes into a committed path.
+- `createCity` writes a complete sibling temp and commits create-only via `std::fs::hard_link(temp, committed)`.
+- `updateCity` and `renameCity` write the same temp path then `std::fs::rename(temp, committed)`.
+- An existing create destination maps to `conflict`; a create operation that returns failure must leave `readCity(id)` as `notFound`.
+- Snapshot JSON remains opaque to storage; `GameBackend.restoreSnapshot()` owns gameplay validation.
+- Store errors remain exactly `notFound | conflict | failed`.
+- Lock the exact Rust error JSON with a serde test before relying on TypeScript mocks.
+- Reuse a single guarded `describeHostRejection()` formatter for snapshot-host and city-store unexpected rejections; do not merge their error-code taxonomies.
+- Keep gameplay Tauri commands and city-store commands separate from each other and from `EngineState`.
+- `src/main.ts` remains the only production caller of `isTauriRuntime()`.
+- Store selection is a small plain function over the already-computed `nativeTauri` boolean; do not create a second host detector.
+- `MemoryCitySaveStore` remains as a test double after native bootstrap stops using it.
+- No migrations, compatibility readers, IndexedDB import, autosave/checkpoints, recovery/repair, metadata index, retries, locks, multi-process ownership, import/export, encryption/signing/checksums, fsync certification, or power-loss matrix.
+- HPA-349 owns automated native/browser restart coverage. HPA-344 requires one explicit **HUMAN** desktop restart smoke after the final implementation commit; agents must stop and hand it off rather than silently checking it off.
 
 ---
 
@@ -35,49 +39,59 @@
 ### Production
 
 - Create `src-tauri/src/city_store.rs`
-  - city-save wire structs;
-  - fixed root + filename encoding and list filename-authority check;
-  - six filesystem operations;
-  - native error enum;
-  - six narrow Tauri commands.
+  - wire records;
+  - fixed root and ID encoding;
+  - authoritative list filtering;
+  - shared temp writer;
+  - create-only hard-link commit;
+  - update/rename replacement;
+  - six commands;
+  - focused Rust tests in-module.
 - Modify `src-tauri/src/lib.rs`
-  - declare `mod city_store;`;
-  - register six storage commands beside, but separate from, gameplay commands.
-- Create `src/persistence/tauriCitySaveStore.ts`
-  - six `invoke()` calls;
-  - typed native error recognition;
-  - mapping through `citySaveStoreError()`;
-  - shared `sortCitySummaries()` on list.
-- Modify `src/main.ts`
-  - replace native `createMemoryCitySaveStore()` with `createTauriCitySaveStore()`;
-  - remove the temporary HPA-344 bridge comment/import.
-
-### Tests/tooling
-
+  - `mod city_store;`
+  - register six commands beside gameplay commands.
 - Modify `src-tauri/Cargo.toml`
-  - add `tempfile = "3"` under `[dev-dependencies]` only.
+  - add dev-only `tempfile = "3"`.
 - Modify `Cargo.lock`
-  - record the dev-dependency resolution if the lock changes.
-- Keep Rust tests in `src-tauri/src/city_store.rs`
-  - filesystem behavior and filename authority;
-  - exact `CityStoreCommandError` JSON wire.
+  - dependency resolution if changed.
+- Create `src/hostDiagnostics.ts`
+  - one guarded `describeHostRejection(error)` helper.
+- Modify `src/runtime/backend/persistence.ts`
+  - reuse `describeHostRejection`;
+  - remove its private duplicate formatter.
+- Create `src/persistence/tauriCitySaveStore.ts`
+  - six invokes;
+  - native error recognition;
+  - shared error envelope + list sorting.
+- Create `src/persistence/createCitySaveStore.ts`
+  - tested selection from `nativeTauri`.
+- Modify `src/main.ts`
+  - select save store through `createCitySaveStore({ nativeTauri })`.
+
+### Tests
+
 - Create `tests/runtime/persistence/tauriCitySaveStore.test.ts`
-  - command arguments;
-  - list ordering;
+  - exact commands;
+  - list sorting;
   - native error mapping;
-  - unexpected rejection fallback.
+  - primitive/object unexpected rejection diagnostics.
+- Create `tests/runtime/persistence/citySaveStoreSelection.test.ts`
+  - native selects only Tauri;
+  - browser selects only IndexedDB.
+- Existing `tests/runtime/tauriBackend.test.ts`
+  - remains regression coverage for structured host diagnostic formatting after helper extraction.
+- Existing memory-store/runtime tests remain unchanged unless a concrete compiler/test failure requires an import-only adjustment.
 
 ### Documentation
 
 - Modify `docs/architecture.md`
-  - replace the temporary Tauri memory-store branch with the native application-data-file boundary.
+  - update all three temporary-memory-store references in the current persistence boundary.
 - Modify `CLAUDE.md`
-  - mark durable storage reduction as delivered;
-  - remove the stale “Tauri memory store until HPA-344” guidance;
-  - describe `src-tauri` as owning narrow city-save commands in addition to gameplay commands;
-  - keep HPA-349 as the next automated cross-host smoke rather than inventing more persistence work.
+  - record native files as delivered;
+  - retain `MemoryCitySaveStore` as a test double;
+  - keep HPA-349 as downstream automated smoke.
 
-No other production/test files belong in this implementation unless a concrete compiler/test failure proves the need. The manual Task 3 smoke creates no checked-in test file or harness.
+No other files belong in the implementation unless a concrete compile/test failure proves the need.
 
 ---
 
@@ -90,15 +104,15 @@ No other production/test files belong in this implementation unless a concrete c
 - Modify: `Cargo.lock`
 
 **Interfaces:**
-- Consumes: `tauri::AppHandle`, `tauri::Manager::path()`, `serde_json::Value`, standard filesystem APIs.
-- Produces internal wire types mirroring the existing TS contract: `CityIdentity`, `CitySaveRecord`, `CitySaveUpdate`, `CitySummary`.
-- Produces native command error: `CityStoreCommandError::{NotFound, Conflict, Failed(String)}` serialized exactly as `{ code }` for unit variants and `{ code, diagnostic }` for `Failed`.
-- Produces commands: `city_store_list`, `city_store_read`, `city_store_create`, `city_store_update`, `city_store_rename`, `city_store_delete`.
+- Consumes: `tauri::AppHandle<R>`, `tauri::Manager::path()`, standard filesystem APIs, `serde_json::Value`.
+- Produces wire types: `CityIdentity`, `CitySaveRecord`, `CitySaveUpdate`, `CitySummary`.
+- Produces `CityStoreCommandError::{NotFound, Conflict, Failed(String)}` with exact `{ code, diagnostic? }` JSON.
+- Produces commands: `city_store_list|read|create|update|rename|delete`.
 - Produces no gameplay/runtime interface changes.
 
-- [ ] **Step 1: Add the temp-directory test dependency and declare the storage module**
+- [ ] **Step 1: Add the test dependency and module declaration**
 
-In `src-tauri/Cargo.toml` extend the existing dev dependencies:
+In `src-tauri/Cargo.toml`:
 
 ```toml
 [dev-dependencies]
@@ -106,23 +120,23 @@ tauri = { version = "2.11.0", features = ["test"] }
 tempfile = "3"
 ```
 
-In `src-tauri/src/lib.rs`, add the module declaration near the imports/module declarations:
+In `src-tauri/src/lib.rs`:
 
 ```rust
 mod city_store;
 ```
 
-Run dependency resolution so `Cargo.lock` is updated if necessary:
+Run:
 
 ```bash
 cargo check -p caelum
 ```
 
-Do not add a production filesystem crate.
+Expected: PASS and update `Cargo.lock` if dependency resolution changes.
 
-- [ ] **Step 2: Create the wire types, error wire, safe filename helpers, and first failing tests**
+- [ ] **Step 2: Add wire types, filename helpers, error wire, store shell, and red tests**
 
-Create `src-tauri/src/city_store.rs` with imports and wire shapes:
+Create `src-tauri/src/city_store.rs` starting with:
 
 ```rust
 use std::{
@@ -130,7 +144,7 @@ use std::{
     fmt::Write as _,
     fs::{self, OpenOptions},
     io::Write as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -189,7 +203,7 @@ pub(crate) enum CityStoreCommandError {
 }
 ```
 
-Add these helpers:
+Add helpers:
 
 ```rust
 fn failed(error: impl ToString) -> CityStoreCommandError {
@@ -197,7 +211,8 @@ fn failed(error: impl ToString) -> CityStoreCommandError {
 }
 
 fn encoded_city_filename(id: &str) -> String {
-    let mut filename = String::with_capacity(CITY_PREFIX.len() + id.len() * 2 + CITY_SUFFIX.len());
+    let mut filename =
+        String::with_capacity(CITY_PREFIX.len() + id.len() * 2 + CITY_SUFFIX.len());
     filename.push_str(CITY_PREFIX);
     for byte in id.as_bytes() {
         write!(&mut filename, "{byte:02x}").expect("writing to String cannot fail");
@@ -217,7 +232,8 @@ fn is_committed_city_filename(name: &OsStr) -> bool {
         return false;
     };
 
-    hex.len() % 2 == 0
+    !hex.is_empty()
+        && hex.len() % 2 == 0
         && hex
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
@@ -231,13 +247,7 @@ fn summary(record: &CitySaveRecord) -> CitySummary {
         saved_at: record.saved_at.clone(),
     }
 }
-```
 
-The list predicate deliberately recognizes only the filename shape the encoder can emit. It does not decode IDs, validate UUIDs, scan parent paths, or introduce a file index.
-
-Define the concrete, module-private store:
-
-```rust
 struct CityFileStore {
     root: PathBuf,
 }
@@ -247,9 +257,15 @@ impl CityFileStore {
         Self { root }
     }
 
-    fn from_app(app: &tauri::AppHandle) -> Result<Self, CityStoreCommandError> {
-        let root = app.path().app_data_dir().map_err(failed)?.join(CITY_DIRECTORY);
-        Ok(Self::new(root))
+    fn from_app<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+    ) -> Result<Self, CityStoreCommandError> {
+        Ok(Self::new(
+            app.path()
+                .app_data_dir()
+                .map_err(failed)?
+                .join(CITY_DIRECTORY),
+        ))
     }
 
     fn city_path(&self, id: &str) -> PathBuf {
@@ -257,80 +273,82 @@ impl CityFileStore {
     }
 
     fn temp_path(&self, id: &str) -> PathBuf {
-        let filename = format!("{}{}", encoded_city_filename(id), TEMP_SUFFIX);
-        self.root.join(filename)
+        self.root
+            .join(format!("{}{}", encoded_city_filename(id), TEMP_SUFFIX))
     }
 }
 ```
 
-At the bottom of the file, add a `#[cfg(test)] mod tests` with the fixture helper, exact error-wire assertion, and first storage tests. The serde test is the producer-side contract that Task 2's mocked Tauri errors depend on:
+Add a `#[cfg(test)] mod tests` with a local `record(id, name)` fixture and these required tests:
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use tempfile::tempdir;
+#[test]
+fn city_store_command_error_wire_is_stable() {
+    assert_eq!(
+        serde_json::to_value(CityStoreCommandError::NotFound).unwrap(),
+        json!({ "code": "notFound" })
+    );
+    assert_eq!(
+        serde_json::to_value(CityStoreCommandError::Conflict).unwrap(),
+        json!({ "code": "conflict" })
+    );
+    assert_eq!(
+        serde_json::to_value(CityStoreCommandError::Failed("disk full".into())).unwrap(),
+        json!({ "code": "failed", "diagnostic": "disk full" })
+    );
+}
 
-    fn record(id: &str, name: &str) -> CitySaveRecord {
-        CitySaveRecord {
-            city: CityIdentity {
-                id: id.to_owned(),
-                name: name.to_owned(),
-                created_at: "2026-08-11T18:00:00.000Z".to_owned(),
-            },
-            saved_at: "2026-08-11T18:00:00.000Z".to_owned(),
-            snapshot: json!({ "budget": 120_000 }),
-        }
-    }
+#[test]
+fn empty_store_lists_no_cities() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+    assert_eq!(
+        store.list_cities().expect("list succeeds"),
+        Vec::<CitySummary>::new()
+    );
+}
 
-    #[test]
-    fn city_store_command_error_wire_is_stable() {
-        assert_eq!(
-            serde_json::to_value(CityStoreCommandError::NotFound).expect("serialize not found"),
-            json!({ "code": "notFound" })
-        );
-        assert_eq!(
-            serde_json::to_value(CityStoreCommandError::Conflict).expect("serialize conflict"),
-            json!({ "code": "conflict" })
-        );
-        assert_eq!(
-            serde_json::to_value(CityStoreCommandError::Failed("disk full".to_owned()))
-                .expect("serialize failed"),
-            json!({ "code": "failed", "diagnostic": "disk full" })
-        );
-    }
+#[test]
+fn create_list_and_read_round_trip() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+    let city = record("city-1", "First");
 
-    #[test]
-    fn empty_store_lists_no_cities() {
-        let temp = tempdir().expect("temp dir");
-        let store = CityFileStore::new(temp.path().join("cities"));
-        assert_eq!(store.list_cities().expect("list succeeds"), Vec::<CitySummary>::new());
-    }
+    assert_eq!(store.create_city(city.clone()).expect("create"), summary(&city));
+    assert_eq!(store.list_cities().expect("list"), vec![summary(&city)]);
+    assert_eq!(store.read_city("city-1").expect("read"), city);
+}
 
-    #[test]
-    fn create_list_and_read_round_trip() {
-        let temp = tempdir().expect("temp dir");
-        let store = CityFileStore::new(temp.path().join("cities"));
-        let city = record("city-1", "First");
+#[test]
+fn create_conflict_preserves_original() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+    let original = record("city-1", "First");
+    store.create_city(original.clone()).expect("seed");
 
-        let created = store.create_city(city.clone()).expect("create succeeds");
-        assert_eq!(created, summary(&city));
-        assert_eq!(store.list_cities().expect("list succeeds"), vec![summary(&city)]);
-        assert_eq!(store.read_city("city-1").expect("read succeeds"), city);
-    }
+    assert!(matches!(
+        store.create_city(record("city-1", "Replacement")),
+        Err(CityStoreCommandError::Conflict)
+    ));
+    assert_eq!(store.read_city("city-1").expect("original"), original);
+}
 
-    #[test]
-    fn create_conflict_preserves_original_record() {
-        let temp = tempdir().expect("temp dir");
-        let store = CityFileStore::new(temp.path().join("cities"));
-        let original = record("city-1", "First");
-        store.create_city(original.clone()).expect("seed create");
+#[test]
+fn failed_create_commits_nothing() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+    fs::create_dir_all(&store.root).expect("root");
+    fs::create_dir(store.temp_path("city-1")).expect("block temp path");
 
-        let error = store.create_city(record("city-1", "Replacement")).expect_err("conflict");
-        assert!(matches!(error, CityStoreCommandError::Conflict));
-        assert_eq!(store.read_city("city-1").expect("original remains"), original);
-    }
+    assert!(matches!(
+        store.create_city(record("city-1", "First")),
+        Err(CityStoreCommandError::Failed(_))
+    ));
+    assert!(matches!(
+        store.read_city("city-1"),
+        Err(CityStoreCommandError::NotFound)
+    ));
+    assert!(!store.city_path("city-1").exists());
 }
 ```
 
@@ -340,11 +358,11 @@ Run:
 cargo test -p caelum --lib city_store
 ```
 
-Expected: the error-wire test itself is valid, but the module FAILS to compile because the first `CityFileStore` operations are not implemented yet.
+Expected: the module **does not compile yet** because the storage methods referenced by the tests are intentionally not implemented. No test is claimed to run before compilation succeeds.
 
-- [ ] **Step 3: Implement directory setup, authoritative list/read, and create-new semantics**
+- [ ] **Step 3: Implement root setup, resilient list/read, the shared temp writer, and create-only commit**
 
-Add to `impl CityFileStore`:
+Add:
 
 ```rust
 fn ensure_root(&self) -> Result<(), CityStoreCommandError> {
@@ -357,12 +375,25 @@ fn list_cities(&self) -> Result<Vec<CitySummary>, CityStoreCommandError> {
 
     for entry in fs::read_dir(&self.root).map_err(failed)? {
         let entry = entry.map_err(failed)?;
-        if !is_committed_city_filename(&entry.file_name()) {
+        let file_name = entry.file_name();
+
+        if !is_committed_city_filename(&file_name) {
+            continue;
+        }
+        if !entry.file_type().map_err(failed)?.is_file() {
             continue;
         }
 
         let bytes = fs::read(entry.path()).map_err(failed)?;
-        let record: CityListRecord = serde_json::from_slice(&bytes).map_err(failed)?;
+        let Ok(record) = serde_json::from_slice::<CityListRecord>(&bytes) else {
+            continue;
+        };
+
+        let expected_name = encoded_city_filename(&record.city.id);
+        if file_name.to_str() != Some(expected_name.as_str()) {
+            continue;
+        }
+
         cities.push(CitySummary {
             id: record.city.id,
             name: record.city.name,
@@ -375,216 +406,25 @@ fn list_cities(&self) -> Result<Vec<CitySummary>, CityStoreCommandError> {
 }
 
 fn read_city(&self, id: &str) -> Result<CitySaveRecord, CityStoreCommandError> {
-    let path = self.city_path(id);
-    let bytes = fs::read(path).map_err(|error| {
+    let bytes = fs::read(self.city_path(id)).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CityStoreCommandError::NotFound
         } else {
             failed(error)
         }
     })?;
+
     serde_json::from_slice(&bytes).map_err(failed)
 }
 
-fn create_city(&self, record: CitySaveRecord) -> Result<CitySummary, CityStoreCommandError> {
-    self.ensure_root()?;
-    let bytes = serde_json::to_vec(&record).map_err(failed)?;
-    let path = self.city_path(&record.city.id);
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                CityStoreCommandError::Conflict
-            } else {
-                failed(error)
-            }
-        })?;
-
-    if let Err(error) = file.write_all(&bytes) {
-        drop(file);
-        let _ = fs::remove_file(path);
-        return Err(failed(error));
-    }
-
-    Ok(summary(&record))
-}
-```
-
-Do not pre-read to detect conflict. `create_new(true)` is the authority. Do not parse arbitrary `.json` files during list; only encoder-shaped committed names enter the list path.
-
-Run:
-
-```bash
-cargo test -p caelum --lib city_store
-```
-
-Expected: the initial storage tests plus the error-wire assertion PASS.
-
-- [ ] **Step 4: Add the remaining filesystem behavior tests before implementing replacement/delete**
-
-Extend the test module with the remaining HPA-344 cases:
-
-```rust
-#[test]
-fn update_changes_only_saved_payload() {
-    let temp = tempdir().expect("temp dir");
-    let store = CityFileStore::new(temp.path().join("cities"));
-    let original = record("city-1", "First");
-    store.create_city(original.clone()).expect("seed create");
-
-    let updated = store
-        .update_city(
-            "city-1",
-            CitySaveUpdate {
-                saved_at: "2026-08-11T19:00:00.000Z".to_owned(),
-                snapshot: json!({ "budget": 90_000 }),
-            },
-        )
-        .expect("update succeeds");
-
-    assert_eq!(updated.name, "First");
-    assert_eq!(updated.created_at, original.city.created_at);
-    assert_eq!(updated.saved_at, "2026-08-11T19:00:00.000Z");
-    let read = store.read_city("city-1").expect("read updated");
-    assert_eq!(read.city, original.city);
-    assert_eq!(read.snapshot, json!({ "budget": 90_000 }));
-}
-
-#[test]
-fn failed_update_preserves_committed_record() {
-    let temp = tempdir().expect("temp dir");
-    let store = CityFileStore::new(temp.path().join("cities"));
-    let original = record("city-1", "First");
-    store.create_city(original.clone()).expect("seed create");
-
-    fs::create_dir(store.temp_path("city-1")).expect("block temp file creation");
-    let error = store
-        .update_city(
-            "city-1",
-            CitySaveUpdate {
-                saved_at: "2026-08-11T19:00:00.000Z".to_owned(),
-                snapshot: json!({ "budget": 1 }),
-            },
-        )
-        .expect_err("update fails");
-
-    assert!(matches!(error, CityStoreCommandError::Failed(_)));
-    assert_eq!(store.read_city("city-1").expect("old record remains"), original);
-}
-
-#[test]
-fn rename_changes_only_name() {
-    let temp = tempdir().expect("temp dir");
-    let store = CityFileStore::new(temp.path().join("cities"));
-    let original = record("city-1", "First");
-    store.create_city(original.clone()).expect("seed create");
-
-    let renamed = store.rename_city("city-1", "North Loop".to_owned()).expect("rename");
-    assert_eq!(renamed.name, "North Loop");
-    assert_eq!(renamed.created_at, original.city.created_at);
-    assert_eq!(renamed.saved_at, original.saved_at);
-    let read = store.read_city("city-1").expect("read renamed");
-    assert_eq!(read.city.name, "North Loop");
-    assert_eq!(read.snapshot, original.snapshot);
-}
-
-#[test]
-fn delete_removes_only_committed_city() {
-    let temp = tempdir().expect("temp dir");
-    let store = CityFileStore::new(temp.path().join("cities"));
-    store.create_city(record("city-1", "First")).expect("seed create");
-
-    store.delete_city("city-1").expect("delete succeeds");
-    assert!(matches!(store.read_city("city-1"), Err(CityStoreCommandError::NotFound)));
-    assert!(matches!(store.delete_city("city-1"), Err(CityStoreCommandError::NotFound)));
-}
-
-#[test]
-fn second_store_instance_reopens_same_city_directory() {
-    let temp = tempdir().expect("temp dir");
-    let root = temp.path().join("cities");
-    let first = CityFileStore::new(root.clone());
-    let city = record("city-1", "First");
-    first.create_city(city.clone()).expect("seed create");
-    drop(first);
-
-    let reopened = CityFileStore::new(root);
-    assert_eq!(reopened.read_city("city-1").expect("reopen read"), city);
-    assert_eq!(reopened.list_cities().expect("reopen list"), vec![summary(&city)]);
-}
-
-#[test]
-fn encoded_ids_cannot_escape_store_root() {
-    let temp = tempdir().expect("temp dir");
-    let root = temp.path().join("cities");
-    let store = CityFileStore::new(root.clone());
-    let id = "../outside\\city";
-    let city = record(id, "Path Test");
-
-    store.create_city(city.clone()).expect("create succeeds");
-    let expected = root.join(encoded_city_filename(id));
-    assert!(expected.is_file());
-    assert_eq!(expected.parent(), Some(root.as_path()));
-    assert_eq!(store.read_city(id).expect("read by opaque id"), city);
-    assert!(!temp.path().join("outside").exists());
-}
-
-#[test]
-fn list_ignores_non_authoritative_entries() {
-    let temp = tempdir().expect("temp dir");
-    let store = CityFileStore::new(temp.path().join("cities"));
-    let city = record("city-1", "First");
-    store.create_city(city.clone()).expect("seed create");
-
-    fs::write(
-        store.temp_path("city-2"),
-        serde_json::to_vec(&record("city-2", "Temp")).unwrap(),
-    )
-    .expect("write stale temp");
-    fs::write(
-        store.root.join("notes.json"),
-        serde_json::to_vec(&record("city-3", "Stray JSON")).unwrap(),
-    )
-    .expect("write unrelated json");
-
-    assert_eq!(store.list_cities().expect("list succeeds"), vec![summary(&city)]);
-}
-```
-
-Also add explicit missing update/rename tests if they are not naturally covered by the implementation path:
-
-```rust
-assert!(matches!(
-    store.update_city("missing", CitySaveUpdate { saved_at: "2026-08-11T19:00:00.000Z".into(), snapshot: json!({}) }),
-    Err(CityStoreCommandError::NotFound)
-));
-assert!(matches!(
-    store.rename_city("missing", "Renamed".into()),
-    Err(CityStoreCommandError::NotFound)
-));
-```
-
-Run:
-
-```bash
-cargo test -p caelum --lib city_store
-```
-
-Expected: FAIL to compile until `update_city`, `rename_city`, and `delete_city` exist.
-
-- [ ] **Step 5: Implement temp replacement, update, rename, and delete**
-
-Add one record replacement helper:
-
-```rust
-fn replace_record(&self, id: &str, record: &CitySaveRecord) -> Result<(), CityStoreCommandError> {
+fn write_temp_record(
+    &self,
+    id: &str,
+    record: &CitySaveRecord,
+) -> Result<PathBuf, CityStoreCommandError> {
     self.ensure_root()?;
     let bytes = serde_json::to_vec(record).map_err(failed)?;
     let temp = self.temp_path(id);
-    let committed = self.city_path(id);
 
     let _ = fs::remove_file(&temp);
     let mut file = OpenOptions::new()
@@ -599,37 +439,193 @@ fn replace_record(&self, id: &str, record: &CitySaveRecord) -> Result<(), CitySt
         let _ = fs::remove_file(&temp);
         return Err(failed(error));
     }
+
     drop(file);
+    Ok(temp)
+}
+
+fn create_city(
+    &self,
+    record: CitySaveRecord,
+) -> Result<CitySummary, CityStoreCommandError> {
+    let id = record.city.id.clone();
+    let committed = self.city_path(&id);
+    let temp = self.write_temp_record(&id, &record)?;
+
+    let result = fs::hard_link(&temp, &committed);
+    let _ = fs::remove_file(&temp);
+
+    match result {
+        Ok(()) => Ok(summary(&record)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(CityStoreCommandError::Conflict)
+        }
+        Err(error) => Err(failed(error)),
+    }
+}
+```
+
+Important: `hard_link` is the create-only commit primitive. Do not replace it with a read-before-write check or an empty committed reservation.
+
+Run:
+
+```bash
+cargo test -p caelum --lib city_store
+```
+
+Expected: the initial create/list/read/conflict/failed-create/error-wire tests PASS.
+
+- [ ] **Step 4: Add all remaining filesystem tests red-first**
+
+Add required tests for:
+
+```text
+update_changes_only_saved_payload
+failed_update_preserves_committed_record
+rename_changes_only_name
+missing_update_is_not_found
+missing_rename_is_not_found
+delete_then_read_and_second_delete_are_not_found
+second_store_instance_reopens_same_directory
+encoded_ids_cannot_escape_store_root
+list_skips_stale_temp_unrelated_json_and_non_files
+list_skips_malformed_committed_json
+list_skips_filename_content_id_mismatch
+from_app_uses_app_data_cities_child
+```
+
+Use concrete assertions, including:
+
+```rust
+#[test]
+fn missing_update_is_not_found() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+
+    assert!(matches!(
+        store.update_city(
+            "missing",
+            CitySaveUpdate {
+                saved_at: "2026-08-11T19:00:00.000Z".into(),
+                snapshot: json!({}),
+            },
+        ),
+        Err(CityStoreCommandError::NotFound)
+    ));
+}
+
+#[test]
+fn missing_rename_is_not_found() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+
+    assert!(matches!(
+        store.rename_city("missing", "Renamed".into()),
+        Err(CityStoreCommandError::NotFound)
+    ));
+}
+
+#[test]
+fn from_app_uses_app_data_cities_child() {
+    let app = tauri::test::mock_app();
+    let expected = app
+        .handle()
+        .path()
+        .app_data_dir()
+        .expect("app data dir")
+        .join(CITY_DIRECTORY);
+
+    let store = CityFileStore::from_app(app.handle()).expect("store path");
+    assert_eq!(store.root, expected);
+}
+```
+
+For malformed/mismatch authority, create the candidate files directly under the temp root:
+
+```rust
+#[test]
+fn list_skips_malformed_and_mismatched_city_files() {
+    let temp = tempdir().expect("temp dir");
+    let store = CityFileStore::new(temp.path().join("cities"));
+    let valid = record("city-1", "Valid");
+    store.create_city(valid.clone()).expect("seed");
+
+    fs::write(store.root.join("city-ab.json"), b"{bad json").expect("malformed");
+
+    let mismatched = record("city-a", "Copied");
+    fs::write(
+        store.root.join(encoded_city_filename("city-b")),
+        serde_json::to_vec(&mismatched).unwrap(),
+    )
+    .expect("mismatched");
+
+    fs::create_dir(store.root.join("city-cd.json")).expect("directory lookalike");
+    fs::write(store.root.join("notes.json"), b"{}").expect("unrelated");
+
+    assert_eq!(store.list_cities().expect("list"), vec![summary(&valid)]);
+}
+```
+
+Run:
+
+```bash
+cargo test -p caelum --lib city_store
+```
+
+Expected: FAIL to compile until update/rename/delete/replacement exist.
+
+- [ ] **Step 5: Implement replacement, update, rename, and delete**
+
+Reuse `write_temp_record`:
+
+```rust
+fn replace_record(
+    &self,
+    id: &str,
+    record: &CitySaveRecord,
+) -> Result<(), CityStoreCommandError> {
+    let temp = self.write_temp_record(id, record)?;
+    let committed = self.city_path(id);
 
     if let Err(error) = fs::rename(&temp, &committed) {
         let _ = fs::remove_file(&temp);
         return Err(failed(error));
     }
+
     Ok(())
 }
-```
 
-Implement the three methods by reading the committed record first:
-
-```rust
-fn update_city(&self, id: &str, update: CitySaveUpdate) -> Result<CitySummary, CityStoreCommandError> {
+fn update_city(
+    &self,
+    id: &str,
+    update: CitySaveUpdate,
+) -> Result<CitySummary, CityStoreCommandError> {
     let existing = self.read_city(id)?;
     let replacement = CitySaveRecord {
         city: existing.city,
         saved_at: update.saved_at,
         snapshot: update.snapshot,
     };
+
     self.replace_record(id, &replacement)?;
     Ok(summary(&replacement))
 }
 
-fn rename_city(&self, id: &str, name: String) -> Result<CitySummary, CityStoreCommandError> {
+fn rename_city(
+    &self,
+    id: &str,
+    name: String,
+) -> Result<CitySummary, CityStoreCommandError> {
     let existing = self.read_city(id)?;
     let replacement = CitySaveRecord {
-        city: CityIdentity { name, ..existing.city },
+        city: CityIdentity {
+            name,
+            ..existing.city
+        },
         saved_at: existing.saved_at,
         snapshot: existing.snapshot,
     };
+
     self.replace_record(id, &replacement)?;
     Ok(summary(&replacement))
 }
@@ -645,33 +641,39 @@ fn delete_city(&self, id: &str) -> Result<(), CityStoreCommandError> {
 }
 ```
 
-Do not call `remove_file(committed)` before rename. Do not add rollback files, generations, or retries.
-
 Run:
 
 ```bash
 cargo test -p caelum --lib city_store
 ```
 
-Expected: all `city_store` tests, including the exact error-wire and list-authority tests, PASS.
+Expected: all city-store filesystem/path/error-wire tests PASS.
 
-- [ ] **Step 6: Add the six Tauri command wrappers and register them**
+- [ ] **Step 6: Add and register the six Tauri commands**
 
-At module scope in `city_store.rs`, add exactly these wrappers:
+Add wrappers:
 
 ```rust
 #[tauri::command]
-pub(crate) fn city_store_list(app: tauri::AppHandle) -> Result<Vec<CitySummary>, CityStoreCommandError> {
+pub(crate) fn city_store_list(
+    app: tauri::AppHandle,
+) -> Result<Vec<CitySummary>, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.list_cities()
 }
 
 #[tauri::command]
-pub(crate) fn city_store_read(app: tauri::AppHandle, id: String) -> Result<CitySaveRecord, CityStoreCommandError> {
+pub(crate) fn city_store_read(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<CitySaveRecord, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.read_city(&id)
 }
 
 #[tauri::command]
-pub(crate) fn city_store_create(app: tauri::AppHandle, record: CitySaveRecord) -> Result<CitySummary, CityStoreCommandError> {
+pub(crate) fn city_store_create(
+    app: tauri::AppHandle,
+    record: CitySaveRecord,
+) -> Result<CitySummary, CityStoreCommandError> {
     CityFileStore::from_app(&app)?.create_city(record)
 }
 
@@ -694,12 +696,15 @@ pub(crate) fn city_store_rename(
 }
 
 #[tauri::command]
-pub(crate) fn city_store_delete(app: tauri::AppHandle, id: String) -> Result<(), CityStoreCommandError> {
+pub(crate) fn city_store_delete(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), CityStoreCommandError> {
     CityFileStore::from_app(&app)?.delete_city(&id)
 }
 ```
 
-In `src-tauri/src/lib.rs`, append only the storage commands to the existing `tauri::generate_handler![]`:
+Append to the existing `tauri::generate_handler![]` in `src-tauri/src/lib.rs`:
 
 ```rust
 city_store::city_store_list,
@@ -710,7 +715,7 @@ city_store::city_store_rename,
 city_store::city_store_delete,
 ```
 
-Do not move gameplay commands into the new module and do not make city storage part of `EngineState`.
+Do not move gameplay commands or add storage to `EngineState`.
 
 Run:
 
@@ -720,9 +725,9 @@ cargo test -p caelum --lib city_store
 cargo clippy -p caelum --all-targets -- -D warnings
 ```
 
-Expected: PASS, including `city_store_command_error_wire_is_stable` before Task 1 is committed.
+Expected: PASS.
 
-- [ ] **Step 7: Commit the independently working native storage slice**
+- [ ] **Step 7: Commit Task 1**
 
 ```bash
 git add src-tauri/src/city_store.rs src-tauri/src/lib.rs src-tauri/Cargo.toml Cargo.lock
@@ -731,117 +736,107 @@ git commit -m "feat: add native city file store"
 
 ---
 
-### Task 2: Add the thin TypeScript Tauri CitySaveStore adapter
+### Task 2: Add the thin TypeScript adapter, reuse diagnostics, and test store selection
 
 **Files:**
+- Create: `src/hostDiagnostics.ts`
+- Modify: `src/runtime/backend/persistence.ts`
 - Create: `src/persistence/tauriCitySaveStore.ts`
+- Create: `src/persistence/createCitySaveStore.ts`
 - Create: `tests/runtime/persistence/tauriCitySaveStore.test.ts`
+- Create: `tests/runtime/persistence/citySaveStoreSelection.test.ts`
 
 **Interfaces:**
-- Consumes: existing `CitySaveStore`, `CitySaveStoreResult`, `CitySaveStoreErrorCode`, `CitySaveStoreOperation`, `citySaveStoreError()`, `sortCitySummaries()`.
-- Consumes: `invoke` from `@tauri-apps/api/core`.
+- Produces: `describeHostRejection(error: unknown): string | undefined`.
 - Produces: `createTauriCitySaveStore(): CitySaveStore`.
-- Does not expose command names, filesystem details, or Tauri errors above the adapter.
+- Produces: `createCitySaveStore({ nativeTauri, createTauri?, createIndexedDb? }): CitySaveStore`.
+- Reuses: `citySaveStoreError()`, `sortCitySummaries()`.
+- Keeps snapshot error taxonomy and city-save error taxonomy separate.
 
-- [ ] **Step 1: Write adapter tests red-first**
+- [ ] **Step 1: Extract the already-used robust host rejection formatter**
 
-Create `tests/runtime/persistence/tauriCitySaveStore.test.ts`:
+Create `src/hostDiagnostics.ts`:
 
 ```ts
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
-import { createTauriCitySaveStore } from "../../../src/persistence/tauriCitySaveStore";
-import { makeCitySaveRecord } from "./citySaveStoreContract";
+export function describeHostRejection(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  if (error === undefined) return undefined;
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-const invokeMock = vi.mocked(invoke);
+  if (typeof error === "object" && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
 
-const summary = {
-  id: "city-1",
-  name: "First",
-  createdAt: "2026-08-11T18:00:00.000Z",
-  savedAt: "2026-08-11T18:00:00.000Z",
-};
+  return String(error);
+}
+```
 
-describe("TauriCitySaveStore", () => {
-  beforeEach(() => invokeMock.mockReset());
+In `src/runtime/backend/persistence.ts`:
 
-  it("invokes only the six narrow city-store commands", async () => {
-    const record = makeCitySaveRecord("city-1", "First", {
-      createdAt: summary.createdAt,
-      savedAt: summary.savedAt,
-    });
-    invokeMock
-      .mockResolvedValueOnce([summary])
-      .mockResolvedValueOnce(record)
-      .mockResolvedValueOnce(summary)
-      .mockResolvedValueOnce({ ...summary, savedAt: "2026-08-11T19:00:00.000Z" })
-      .mockResolvedValueOnce({ ...summary, name: "Renamed" })
-      .mockResolvedValueOnce(undefined);
+```ts
+import { describeHostRejection } from "../../hostDiagnostics";
+```
 
-    const store = createTauriCitySaveStore();
-    await store.listCities();
-    await store.readCity("city-1");
-    await store.createCity(record);
-    await store.updateCity("city-1", { savedAt: "2026-08-11T19:00:00.000Z", snapshot: { budget: 90_000 } });
-    await store.renameCity("city-1", "Renamed");
-    await store.deleteCity("city-1");
+Delete the private `diagnosticFor()` function and change:
 
-    expect(invokeMock.mock.calls).toEqual([
-      ["city_store_list"],
-      ["city_store_read", { id: "city-1" }],
-      ["city_store_create", { record }],
-      ["city_store_update", { id: "city-1", update: { savedAt: "2026-08-11T19:00:00.000Z", snapshot: { budget: 90_000 } } }],
-      ["city_store_rename", { id: "city-1", name: "Renamed" }],
-      ["city_store_delete", { id: "city-1" }],
-    ]);
+```ts
+diagnostic: diagnosticFor(error),
+```
+
+to:
+
+```ts
+diagnostic: describeHostRejection(error),
+```
+
+Do not move snapshot error-code parsing into the shared helper.
+
+Run the existing focused regression:
+
+```bash
+bunx vitest run --project runtime tests/runtime/tauriBackend.test.ts
+```
+
+Expected: PASS, including the existing structured-object diagnostic expectation.
+
+- [ ] **Step 2: Write Tauri store adapter tests red-first**
+
+Create `tests/runtime/persistence/tauriCitySaveStore.test.ts` using the existing `@tauri-apps/api/core` mock pattern.
+
+Required cases:
+
+```text
+invokes_only_the_six_narrow_commands
+sorts_native_list_with_shared_ordering
+maps_not_found
+maps_conflict
+maps_failed_with_native_diagnostic
+maps_unknown_primitive_rejection
+maps_unknown_object_rejection_to_json_diagnostic
+```
+
+The unknown-object assertion must be concrete:
+
+```ts
+it("keeps an unexpected structured rejection readable", async () => {
+  invokeMock.mockRejectedValue({
+    code: "transportDown",
+    context: { attempt: 2 },
   });
 
-  it("sorts native list results with the shared contract ordering", async () => {
-    invokeMock.mockResolvedValue([
-      { id: "city-b", name: "B", createdAt: summary.createdAt, savedAt: "2026-08-11T18:00:00.000Z" },
-      { id: "city-z", name: "Z", createdAt: summary.createdAt, savedAt: "2026-08-11T19:00:00.000Z" },
-      { id: "city-a", name: "A", createdAt: summary.createdAt, savedAt: "2026-08-11T18:00:00.000Z" },
-    ]);
+  const result = await createTauriCitySaveStore().deleteCity("city-1");
 
-    const result = await createTauriCitySaveStore().listCities();
-    expect(result.ok && result.value.map((city) => city.id)).toEqual(["city-z", "city-a", "city-b"]);
-  });
-
-  // Task 1's city_store_command_error_wire_is_stable test locks these real
-  // Rust rejection objects; this suite proves only the TypeScript consumer.
-  it.each([
-    ["readCity", { code: "notFound" }, "notFound"],
-    ["createCity", { code: "conflict" }, "conflict"],
-    ["updateCity", { code: "failed", diagnostic: "disk full" }, "failed"],
-  ] as const)("maps %s native errors", async (operation, rejection, expectedCode) => {
-    invokeMock.mockRejectedValue(rejection);
-    const store = createTauriCitySaveStore();
-    const result =
-      operation === "readCity"
-        ? await store.readCity("city-1")
-        : operation === "createCity"
-          ? await store.createCity(makeCitySaveRecord("city-1", "First"))
-          : await store.updateCity("city-1", { savedAt: summary.savedAt, snapshot: {} });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: { operation, code: expectedCode, cityId: "city-1" },
-    });
-  });
-
-  it("maps an unexpected Tauri rejection to generic failed", async () => {
-    invokeMock.mockRejectedValue("bridge unavailable");
-    const result = await createTauriCitySaveStore().deleteCity("city-1");
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        operation: "deleteCity",
-        code: "failed",
-        cityId: "city-1",
-        diagnostic: "bridge unavailable",
-      },
-    });
+  expect(result).toEqual({
+    ok: false,
+    error: {
+      operation: "deleteCity",
+      code: "failed",
+      cityId: "city-1",
+      diagnostic: '{"code":"transportDown","context":{"attempt":2}}',
+    },
   });
 });
 ```
@@ -852,14 +847,16 @@ Run:
 bunx vitest run --project runtime tests/runtime/persistence/tauriCitySaveStore.test.ts
 ```
 
-Expected: FAIL because `tauriCitySaveStore.ts` does not exist.
+Expected: FAIL because the adapter does not exist.
 
-- [ ] **Step 2: Implement native error recognition without a new error framework**
+- [ ] **Step 3: Implement native error recognition and the six invokes**
 
-Create `src/persistence/tauriCitySaveStore.ts` with imports:
+Create `src/persistence/tauriCitySaveStore.ts`:
 
 ```ts
 import { invoke } from "@tauri-apps/api/core";
+
+import { describeHostRejection } from "../hostDiagnostics";
 import {
   citySaveStoreError,
   sortCitySummaries,
@@ -870,11 +867,7 @@ import {
   type CitySaveStoreResult,
   type CitySummary,
 } from "./citySaveStore";
-```
 
-Use one file-local native error parser:
-
-```ts
 interface NativeCityStoreError {
   code: CitySaveStoreErrorCode;
   diagnostic?: string;
@@ -890,19 +883,15 @@ function asNativeCityStoreError(error: unknown): NativeCityStoreError | null {
     return null;
   }
 
-  const rawDiagnostic = (error as { diagnostic?: unknown }).diagnostic;
+  const diagnostic = (error as { diagnostic?: unknown }).diagnostic;
   return {
     code,
-    ...(code === "failed" && typeof rawDiagnostic === "string"
-      ? { diagnostic: rawDiagnostic }
+    ...(code === "failed" && typeof diagnostic === "string"
+      ? { diagnostic }
       : {}),
   };
 }
-```
 
-Add one generic command wrapper local to this adapter:
-
-```ts
 async function runCommand<T>(
   operation: CitySaveStoreOperation,
   cityId: string | undefined,
@@ -913,26 +902,22 @@ async function runCommand<T>(
   } catch (error: unknown) {
     const native = asNativeCityStoreError(error);
     const code = native?.code ?? "failed";
+
     return {
       ok: false,
       error: citySaveStoreError(operation, code, {
         cityId,
         ...(code === "failed"
-          ? { diagnostic: native?.diagnostic ?? String(error) }
+          ? {
+              diagnostic:
+                native?.diagnostic ?? describeHostRejection(error),
+            }
           : {}),
       }),
     };
   }
 }
-```
 
-Do not export the parser/wrapper and do not merge it with `tauriBackend.ts` error handling; gameplay-host and city-store errors are different contracts.
-
-- [ ] **Step 3: Implement the six CitySaveStore methods**
-
-Add the factory:
-
-```ts
 export function createTauriCitySaveStore(): CitySaveStore {
   return {
     async listCities() {
@@ -979,13 +964,94 @@ export function createTauriCitySaveStore(): CitySaveStore {
 }
 ```
 
-Do not add an adapter class, injected command client, path arguments, local record cache, or clone layer.
-
-- [ ] **Step 4: Run focused and runtime verification**
+Run:
 
 ```bash
 bunx vitest run --project runtime tests/runtime/persistence/tauriCitySaveStore.test.ts
-bunx vitest run --project runtime
+bunx vitest run --project runtime tests/runtime/tauriBackend.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 4: Add a small tested store selector**
+
+Create `src/persistence/createCitySaveStore.ts`:
+
+```ts
+import type { CitySaveStore } from "./citySaveStore";
+import { createIndexedDbCitySaveStore } from "./indexedDbCitySaveStore";
+import { createTauriCitySaveStore } from "./tauriCitySaveStore";
+
+export interface CreateCitySaveStoreOptions {
+  nativeTauri: boolean;
+  createTauri?: () => CitySaveStore;
+  createIndexedDb?: () => CitySaveStore;
+}
+
+export function createCitySaveStore({
+  nativeTauri,
+  createTauri = createTauriCitySaveStore,
+  createIndexedDb = createIndexedDbCitySaveStore,
+}: CreateCitySaveStoreOptions): CitySaveStore {
+  return nativeTauri ? createTauri() : createIndexedDb();
+}
+```
+
+Create `tests/runtime/persistence/citySaveStoreSelection.test.ts`:
+
+```ts
+import { describe, expect, it, vi } from "vitest";
+
+import type { CitySaveStore } from "../../../src/persistence/citySaveStore";
+import { createCitySaveStore } from "../../../src/persistence/createCitySaveStore";
+
+describe("city save store selection", () => {
+  it("uses Tauri storage when nativeTauri is true", () => {
+    const tauri = {} as CitySaveStore;
+    const indexedDb = {} as CitySaveStore;
+    const createTauri = vi.fn(() => tauri);
+    const createIndexedDb = vi.fn(() => indexedDb);
+
+    expect(
+      createCitySaveStore({
+        nativeTauri: true,
+        createTauri,
+        createIndexedDb,
+      }),
+    ).toBe(tauri);
+    expect(createTauri).toHaveBeenCalledTimes(1);
+    expect(createIndexedDb).not.toHaveBeenCalled();
+  });
+
+  it("uses IndexedDB storage when nativeTauri is false", () => {
+    const tauri = {} as CitySaveStore;
+    const indexedDb = {} as CitySaveStore;
+    const createTauri = vi.fn(() => tauri);
+    const createIndexedDb = vi.fn(() => indexedDb);
+
+    expect(
+      createCitySaveStore({
+        nativeTauri: false,
+        createTauri,
+        createIndexedDb,
+      }),
+    ).toBe(indexedDb);
+    expect(createTauri).not.toHaveBeenCalled();
+    expect(createIndexedDb).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+Do not add `windowLike` here. `isTauriRuntime()` and its marker cases already have focused coverage in `tests/runtime/backendSelection.test.ts`; this selector only maps that boolean to the two current stores.
+
+Run:
+
+```bash
+bunx vitest run --project runtime \
+  tests/runtime/persistence/tauriCitySaveStore.test.ts \
+  tests/runtime/persistence/citySaveStoreSelection.test.ts \
+  tests/runtime/tauriBackend.test.ts \
+  tests/runtime/backendSelection.test.ts
 bun run check
 bun run lint:svelte
 bun run format:check
@@ -993,16 +1059,22 @@ bun run format:check
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the independently testable frontend adapter**
+- [ ] **Step 5: Commit Task 2**
 
 ```bash
-git add src/persistence/tauriCitySaveStore.ts tests/runtime/persistence/tauriCitySaveStore.test.ts
+git add \
+  src/hostDiagnostics.ts \
+  src/runtime/backend/persistence.ts \
+  src/persistence/tauriCitySaveStore.ts \
+  src/persistence/createCitySaveStore.ts \
+  tests/runtime/persistence/tauriCitySaveStore.test.ts \
+  tests/runtime/persistence/citySaveStoreSelection.test.ts
 git commit -m "feat: add Tauri city save adapter"
 ```
 
 ---
 
-### Task 3: Wire native durability, update current guidance, and prove the runtime path
+### Task 3: Wire native durability, update guidance, verify, commit, then hand off the human smoke
 
 **Files:**
 - Modify: `src/main.ts`
@@ -1010,45 +1082,55 @@ git commit -m "feat: add Tauri city save adapter"
 - Modify: `CLAUDE.md`
 
 **Interfaces:**
-- Consumes: `createTauriCitySaveStore(): CitySaveStore` from Task 2.
-- Produces: native startup uses durable files; browser startup remains IndexedDB.
-- Preserves: `createGameRuntime({ backend, saveStore })`, `RuntimePersistenceController`, Svelte city flow, `GameBackend`, IndexedDB adapter.
+- Consumes: existing `isTauriRuntime()`.
+- Consumes: `createCitySaveStore({ nativeTauri })`.
+- Produces: native startup = Tauri files; browser startup = IndexedDB.
+- Preserves: `createBackend()`, `createGameRuntime()`, runtime persistence controller, Svelte city flow, and `GameBackend`.
 
-- [ ] **Step 1: Replace only the native memory-store bootstrap**
+- [ ] **Step 1: Replace bootstrap selection without an inline store ternary**
 
-In `src/main.ts`, replace:
+In `src/main.ts`, remove direct imports of:
 
 ```ts
-import { createMemoryCitySaveStore } from "./persistence/memoryCitySaveStore";
+createIndexedDbCitySaveStore
+createMemoryCitySaveStore
+```
+
+Import:
+
+```ts
+import { createCitySaveStore } from "./persistence/createCitySaveStore";
+```
+
+Keep the existing:
+
+```ts
+const nativeTauri = isTauriRuntime();
+```
+
+Replace store construction with:
+
+```ts
+const saveStore = createCitySaveStore({ nativeTauri });
+```
+
+Do not change backend creation, New City flow, App props, or runtime construction.
+
+`MemoryCitySaveStore` is not deleted; it remains a test double.
+
+- [ ] **Step 2: Update every current temporary-storage statement in architecture docs**
+
+In `docs/architecture.md`, update all three connected stale areas, not only the first diagram:
+
+1. Replace:
+
+```text
+Tauri startup until HPA-344:
+  createTauriBackend
+  -> createMemoryCitySaveStore (non-durable temporary bridge)
 ```
 
 with:
-
-```ts
-import { createTauriCitySaveStore } from "./persistence/tauriCitySaveStore";
-```
-
-Then replace:
-
-```ts
-const saveStore = nativeTauri
-  ? createMemoryCitySaveStore() // HPA-344 replaces this with native persistence.
-  : createIndexedDbCitySaveStore();
-```
-
-with:
-
-```ts
-const saveStore = nativeTauri
-  ? createTauriCitySaveStore()
-  : createIndexedDbCitySaveStore();
-```
-
-Do not change `createBackend()`, `createGameRuntime()`, the New City bootstrap, or App props.
-
-- [ ] **Step 2: Update the architecture's persistence host boundary**
-
-In `docs/architecture.md`, keep the existing browser block and replace the temporary Tauri block:
 
 ```text
 Tauri startup:
@@ -1056,48 +1138,69 @@ Tauri startup:
   -> createTauriCitySaveStore
        -> city_store_* Tauri commands
        -> <app_data_dir>/cities/city-<hex-id>.json
-  -> createGameRuntime(activeCity = null)
-  -> runtime.persistence.listCities()
 ```
 
-Update the nearby prose so it states:
-
-- native Tauri persistence is now one file per city under application data;
-- filesystem details are Rust-only;
-- frontend commands accept IDs/records/updates/names, never paths;
-- list recognizes only encoder-shaped committed filenames;
-- update/rename use temp replacement;
-- list has no metadata index and TypeScript applies the shared summary order;
-- HPA-349 remains the final automated representative cross-host Save/reload/Continue smoke.
-
-Delete text saying Tauri uses the memory bridge “until HPA-344.” Do not rewrite unrelated gameplay-host architecture.
-
-- [ ] **Step 3: Update CLAUDE.md so future work sees the delivered state**
-
-In `CLAUDE.md`:
-
-1. Replace the `In-flight reductions` durable-storage row with delivered wording, or remove the row if campaign/growth is the only remaining in-flight reduction. The current-state guidance must say browser = IndexedDB and native Tauri = application-data city files.
-2. Keep the small save-boundary rule exactly six operations.
-3. In the Tauri host section, replace the stale “future narrow application-data city-save adapter remains HPA-548 work” sentence with current ownership:
+2. Replace:
 
 ```text
-Tauri also exposes six narrow city-store commands whose Rust module owns the
-application-data path and JSON file replacement. These commands are separate
-from GameBackend/gameplay state; TypeScript sees them only through CitySaveStore.
+native Tauri store: temporary memory adapter until HPA-344
 ```
 
-4. Do not add HPA-344 as an ongoing architectural dependency after it is delivered.
+with:
+
+```text
+native Tauri store: application-data JSON files through narrow Tauri commands
+```
+
+3. Replace the prose calling memory storage an intentionally temporary Tauri bridge with current native ownership.
+
+Also document:
+
+- create payloads are temp-first and create-only;
+- update/rename are temp-first replacement;
+- list ignores malformed/misnamed/non-file entries so healthy cities remain available;
+- TypeScript owns shared list ordering;
+- `MemoryCitySaveStore` remains a test double;
+- HPA-349 owns automated native/browser restart smoke.
+
+Do not rewrite unrelated gameplay architecture.
+
+- [ ] **Step 3: Update CLAUDE.md current-state guidance**
+
+Update the durable-storage current state to:
+
+```text
+browser: IndexedDB
+native Tauri: application-data city JSON files
+```
+
+State that six native city-store commands are separate from gameplay `GameBackend`.
+
+Remove stale language saying Tauri uses memory until HPA-344 or that the future adapter belongs to HPA-548.
+
+Explicitly retain:
+
+```text
+MemoryCitySaveStore is a test double used by runtime/persistence tests; it is
+not a production host after HPA-344.
+```
+
+Do not add HPA-344 as an ongoing architectural dependency after delivery.
 
 - [ ] **Step 4: Run the task-focused gate**
 
 ```bash
 cargo test -p caelum --lib city_store
-bunx vitest run --project runtime tests/runtime/persistence/tauriCitySaveStore.test.ts
+bunx vitest run --project runtime \
+  tests/runtime/persistence/tauriCitySaveStore.test.ts \
+  tests/runtime/persistence/citySaveStoreSelection.test.ts \
+  tests/runtime/tauriBackend.test.ts \
+  tests/runtime/backendSelection.test.ts
 ```
 
-Expected: PASS, including the Rust error-wire assertion that backs Task 2's mocked rejection objects.
+Expected: PASS.
 
-- [ ] **Step 5: Run the repository verification gate**
+- [ ] **Step 5: Run the repository gate, including browser E2E because main.ts changed**
 
 ```bash
 bun run test:unit
@@ -1105,6 +1208,7 @@ bun run check
 bun run lint
 bun run format:check
 bun run build
+bun run test:e2e
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
@@ -1113,49 +1217,66 @@ bun run tauri:build
 
 Expected: all commands PASS.
 
-Do not add a new browser Playwright test or native automation harness merely for HPA-344. If the existing CI Playwright suite runs automatically, it should remain green without edits. HPA-349 is the next task specifically because it owns the automated representative native/browser restart proof.
+Browser Playwright is not new HPA-344 coverage; it is the existing suite proving the bootstrap change did not accidentally route browser persistence to Tauri commands.
 
-- [ ] **Step 6: Run one manual native persistence smoke**
-
-`tauri:build` proves the code packages; it does not prove the real `AppHandle -> app_data_dir -> command registration -> TypeScript adapter -> disk` path. Perform this one-shot acceptance check before the implementation PR is considered complete:
-
-1. Run `bun run tauri:dev`.
-2. Create a named city such as **HPA-344 Native Smoke** and enter it.
-3. Make one simple gameplay change, pause if needed, and use **Save Now**.
-4. Fully quit the desktop app/process.
-5. Run `bun run tauri:dev` again.
-6. Verify the city appears in the library, Continue/Load succeeds, and the saved gameplay change is still present.
-7. Confirm one committed `city-<hex-id>.json` exists under the platform-resolved `<app_data_dir>/cities/` directory.
-
-If any step fails, stop and fix HPA-344 before merge. Do not check in a script, native Playwright project, debug command, or reusable manual-smoke framework. HPA-349 still owns automated cross-host coverage.
-
-- [ ] **Step 7: Review the final diff for accidental architecture growth**
+- [ ] **Step 6: Review the final diff before commit**
 
 Run:
 
 ```bash
 git diff --stat main...HEAD
-git diff main...HEAD -- src-tauri/src src/persistence src/main.ts docs/architecture.md CLAUDE.md
+git diff main...HEAD -- \
+  src-tauri/src \
+  src/persistence \
+  src/runtime/backend/persistence.ts \
+  src/hostDiagnostics.ts \
+  src/main.ts \
+  docs/architecture.md \
+  CLAUDE.md
 ```
 
-The final diff should show exactly:
+Expected implementation shape:
 
-- one concrete Rust city-file module with filesystem, list-authority, and error-wire tests;
-- six registered storage commands;
-- one thin TS adapter;
-- one TS adapter test file;
-- dev-only `tempfile` test support;
-- one native bootstrap substitution;
-- focused current-state docs.
+- one concrete Rust city-file module;
+- six registered commands;
+- one shared temp payload writer;
+- hard-link create-only commit;
+- rename update/rename commit;
+- one thin Tauri `CitySaveStore`;
+- one tiny tested store selector;
+- one extracted host-rejection stringifier with two current consumers;
+- dev-only `tempfile`;
+- bootstrap swap;
+- focused docs.
 
-Reject the diff before merge if it contains a new repository/service/trait hierarchy, generic filesystem API, migration/compatibility code, persistence scheduler/lock, autosave/recovery mechanism, gameplay-backend changes, or native automation framework.
+Reject the diff if it adds a repository/service/trait hierarchy, generic filesystem API, migration/compatibility code, lock/recovery/autosave framework, gameplay-backend changes, or native automation harness.
 
-- [ ] **Step 8: Commit the wiring/docs slice**
+- [ ] **Step 7: Commit the wiring/docs slice before the manual gate**
 
 ```bash
 git add src/main.ts docs/architecture.md CLAUDE.md
 git commit -m "feat: enable native city persistence"
 ```
+
+At this point automated implementation is complete, but HPA-344 acceptance is **not** complete until the human smoke below passes.
+
+- [ ] **Step 8: HUMAN — STOP AND HAND OFF the real desktop restart smoke**
+
+**Agents must stop here. Do not mark this checkbox complete on the user's behalf.** Report the completed automated gates and ask the human to perform this one-shot acceptance check:
+
+1. Run `bun run tauri:dev`.
+2. Create a named city such as `HPA-344 Native Smoke`.
+3. Make one visible gameplay change.
+4. Pause if needed and use **Save Now**.
+5. Fully quit the Tauri app/process.
+6. Run `bun run tauri:dev` again.
+7. Confirm the city appears in the City Library.
+8. Continue/Load it and verify the gameplay change is still present.
+9. Confirm a committed `city-<hex-id>.json` exists under the platform-resolved `<app_data_dir>/cities/`.
+
+If this fails, HPA-344 is not complete.
+
+Why this remains manual: a command-level `mock_app()` persistence test would use the mock application's resolved application-data directory rather than a temp root and risks writing outside the test sandbox. The unit test covers `from_app -> app_data_dir/cities` path computation only; the manual smoke covers command registration plus real desktop restart. HPA-349 later owns automated cross-host restart coverage.
 
 ---
 
@@ -1163,34 +1284,36 @@ git commit -m "feat: enable native city persistence"
 
 ### Spec coverage
 
-- Six-operation native adapter: Tasks 1-2.
-- Fixed application-data root/no arbitrary paths: Task 1 filename encoder + command signatures.
-- List filename authority: Task 1 `is_committed_city_filename()` + non-authoritative-entry test.
-- One file per city/no index: Task 1 store layout/list implementation.
-- Create-only conflict: Task 1 `create_new(true)` + conflict test.
-- Failed update preserves prior file: Task 1 temp replacement + concrete blocked-temp test.
-- Rename/delete/reopen: Task 1 focused tests.
-- Exact native error IPC shape: Task 1 `city_store_command_error_wire_is_stable`.
-- Same frontend error taxonomy: Task 2 native error parser + `citySaveStoreError()` mapping, consuming the Rust-proven wire.
-- Independent gameplay/storage boundaries: Task 1 separate Rust module + Task 2 separate TS adapter; no `GameBackend` edits.
-- Native bootstrap: Task 3 one-line host selection + one-shot real Tauri restart smoke.
-- Current docs: Task 3 architecture + CLAUDE cleanup.
-- Deferred hardening and HPA-349 boundary: Global Constraints + Task 3 verification/review.
+- Six native operations: Task 1 + Task 2.
+- No arbitrary paths: ID encoding + narrow commands.
+- Create returned-failure atomicity: temp write + hard-link commit + failed-create test.
+- Create conflict: hard-link destination existence + conflict test.
+- Update/rename preservation: shared temp writer + rename + failure test.
+- Resilient listing: filename shape + regular file + parse skip + embedded-ID/filename match.
+- App-data path: generic `from_app<R>` + `mock_app` test.
+- Exact native error wire: Rust serde test.
+- Readable unexpected errors: shared `describeHostRejection` + existing/new TS tests.
+- Store host selection: tested boolean selector; existing `isTauriRuntime` tests remain authority for marker detection.
+- Browser regression: existing Playwright suite included after main bootstrap change.
+- Manual native integration: explicit human-stop gate after final commit.
+- Memory test double: retained/documented.
+- Deferred hardening: global constraints and final diff gate.
 
 ### Placeholder scan
 
-The plan contains no `TBD`, `TODO`, “handle later,” generic “add tests,” or unnamed implementation step. Every planned file, command name, wire type, failure code, filename rule, test behavior, manual acceptance step, and verification command is explicit.
+There are no `TBD`, `TODO`, optional unnamed tests, or “handle later” implementation steps. Missing update and rename tests are required explicitly.
 
 ### Type/name consistency
 
-- Command names are consistently `city_store_list|read|create|update|rename|delete` in Rust, TypeScript, and tests.
-- Frontend operations remain `listCities|readCity|createCity|updateCity|renameCity|deleteCity`.
-- Native errors serialize as `notFound|conflict|failed`, matching `CitySaveStoreErrorCode` and Task 2's mocked objects.
-- Committed filenames are produced and recognized by the same `city-<lowercase even-length hex>.json` rule.
-- `CitySaveUpdate` contains only `savedAt` + `snapshot`; update preserves stored identity/name metadata.
-- Rename preserves stored ID/createdAt/savedAt/snapshot and changes only name.
-- Browser store remains `createIndexedDbCitySaveStore()`; native store becomes `createTauriCitySaveStore()`.
+- Native commands: `city_store_list|read|create|update|rename|delete`.
+- Frontend store operations remain the six `CitySaveStore` names.
+- Native error codes serialize to `notFound|conflict|failed`.
+- `CitySaveUpdate` changes only `savedAt` + `snapshot`.
+- Rename changes only city name.
+- Committed filenames are both produced and validated by the same encoder rule.
+- `createCitySaveStore` maps only the already-computed `nativeTauri` boolean.
+- Browser store remains `createIndexedDbCitySaveStore`; native store is `createTauriCitySaveStore`.
 
 ## Implementation handoff
 
-After this planning PR is reviewed, implement Task 1 -> Task 2 -> Task 3 in order. Prefer subagent-driven development with a fresh review gate after each task; inline execution is also valid if the same red/green and review boundaries are preserved.
+After this planning PR is reviewed, implement Task 1 -> Task 2 -> Task 3 in order. Prefer subagent-driven development with a fresh review gate after each task. The automated agent must stop at Task 3 Step 8 and hand the required desktop restart smoke to a human.
