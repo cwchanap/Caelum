@@ -1,4 +1,5 @@
 import { SNAPSHOT_SCHEMA_VERSION } from "../../domain/types";
+import { describeHostRejection } from "../../hostDiagnostics";
 import type { RustGameSnapshot } from "./types";
 import type {
   SnapshotError,
@@ -6,31 +7,13 @@ import type {
   SnapshotResult,
 } from "./persistenceContract";
 
-function diagnosticFor(error: unknown): string | undefined {
-  if (error instanceof Error) return error.message;
-  if (error === undefined) return undefined;
-  // Structured host rejections (e.g. `{ code, context }`) carry useful detail
-  // that `String(...)` would flatten to "[object Object]"; serialize them so
-  // the diagnostic stays readable. Guard against circular references or BigInt
-  // values that would make JSON.stringify throw, falling back to String(error)
-  // so diagnostic generation never throws inside an error-handling path.
-  if (isRecord(error)) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
-  return String(error);
-}
-
 export function snapshotError(
   code: SnapshotErrorCode,
   error?: unknown,
 ): SnapshotError {
   return {
     code,
-    diagnostic: diagnosticFor(error),
+    diagnostic: describeHostRejection(error),
   };
 }
 
