@@ -468,5 +468,10 @@ mod tests {
         assert_eq!(loaded["savedAt"], "2026-08-11T20:00:00.000Z");
         assert_eq!(loaded["snapshot"], json!({ "revision": 2 }));
         assert!(root.join("city-636974792d697063.json").is_file());
+
+        assert_eq!(
+            invoke_city_store(&webview, "city_store_read", json!({ "id": "missing" })),
+            Err(json!({ "code": "notFound" }))
+        );
     }
 }
