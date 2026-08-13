@@ -184,8 +184,10 @@ HPA-345 only creates the first city through the shared runtime flow. The Tauri
 city store owns native application-data files through the six narrow commands;
 it is not an IndexedDB-on-Tauri fallback. HPA-344 automatically covers the
 production command/serialization seam and direct disk reopen behavior with
-isolated Rust tests. HPA-349 owns the packaged native/browser UI journey and
-real-bundle application-data permission.
+isolated Rust tests. HPA-349 closes the remaining packaged composition gate
+with the representative browser Playwright multi-city journey and one
+operator-run packaged Tauri restart/load smoke; no permanent native UI
+automation layer is required for the current Phase 1 architecture.
 
 Saving is a manual player action. Autosave, save history, and recovery are
 deferred (HPA-347), so no animation-frame latency budget applies yet; revisit a
