@@ -156,14 +156,14 @@ Use unique smoke names and ignore unrelated rows.
 
 ### First process
 
-1. create unique Native Smoke A as Standard Crossroads;
+1. create unique Native Smoke A as Standard Crossroads and record its city ID;
 2. drag Two Way Road `(1,1)..(3,1)`;
 3. before release, visually confirm the native road-preview overlay;
 4. release and verify `$119,700`;
 5. Resume until the visible clock leaves `Day 1 00:00`;
 6. Pause and wait until the button label becomes **Resume**;
 7. Save Now and verify clean state;
-8. from the clean City panel create unique Native Smoke B;
+8. from the clean City panel create unique Native Smoke B and record its city ID;
 9. quit with **Cmd+Q**, not only window close.
 
 ### Second process
@@ -172,8 +172,9 @@ Use unique smoke names and ignore unrelated rows.
 2. verify both unique smoke names are listed among any unrelated rows;
 3. Continue once;
 4. explicitly Load Native Smoke A;
-5. require the saved road, `$119,700`, and non-zero clock before PASS;
-6. add `(1,2)..(3,2)` and verify `$119,400` to prove continued native gameplay.
+5. require the saved road, `$119,700`, and non-zero clock;
+6. add `(1,2)..(3,2)` and verify `$119,400` to prove continued native gameplay;
+7. require both the saved road/`$119,700`/non-zero clock and the adjacent road/`$119,400` before PASS.
 
 Rename/delete do not need another manual replay. They are shared UI/runtime behavior already covered by focused automated tests; the native-only gap is production bootstrap + real app-data write + true process restart/load.
 
@@ -211,11 +212,13 @@ The useful contract is player-facing authored state:
 
 Record only coarse native observations in the implementation PR:
 
-- approximate smoke-city JSON size;
+- each smoke city's application-data file path (located by the recorded ID, since filenames are opaque `city-<hex-id>.json`) and approximate JSON size;
 - Save Now: effectively immediate / about 1 s / visibly slower;
 - relaunch + Load: effectively immediate / about 1–2 s / visibly slower.
 
 Do not add telemetry, benchmark harnesses, indexes, tracing, or optimization work without an observed problem.
+
+Clean up only the two smoke records by ID; never wipe the cities directory.
 
 ## 9. Risks
 
@@ -271,7 +274,7 @@ Native Save Now                              coarse observation
 Native relaunch + Load                       coarse observation
 ```
 
-The packaged row is PASS only after the second process explicitly loads A and visibly proves road + `$119,700` + non-zero clock.
+The packaged row is PASS only after the second process explicitly loads A and visibly proves the saved road + `$119,700` + non-zero clock, then adds the adjacent road and proves `$119,400`.
 
 When no defect is found, the expected implementation diff stays deliberately small:
 
