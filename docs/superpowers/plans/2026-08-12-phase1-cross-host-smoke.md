@@ -4,7 +4,7 @@
 
 **Goal:** Close Phase 1 by proving one representative multi-city save/restore/continue journey in the browser and in the packaged Tauri app, without introducing new persistence or desktop-test architecture.
 
-**Architecture:** Keep the existing Svelte UI and working-save runtime as the shared workflow. Browser proof runs through the existing Playwright + WASM + IndexedDB stack. Native proof runs through the packaged Tauri app + native `GameEngine` + application-data file store. Existing focused tests remain authoritative for failed-update, invalid-load, busy, rename/delete, host-selection, IPC, and file-reopen contracts.
+**Architecture:** Keep the existing Svelte UI and working-save runtime as the shared workflow. Browser proof runs through Playwright + WASM + IndexedDB. Native proof runs through the packaged Tauri app + native `GameEngine` + application-data file store. Existing focused tests remain authoritative for failure semantics.
 
 **Tech Stack:** Svelte 5, TypeScript, Playwright, Vitest, Rust, Tauri 2, `caelum-core`, WASM, IndexedDB.
 
@@ -12,19 +12,13 @@
 
 ---
 
-## Scope guard before implementation
+## Scope guard
 
 No production change is planned.
 
-Do not add:
+Do not add `tauri-driver`, WebDriver/Appium, a host-parity layer, test-only persistence commands, telemetry, migration/recovery infrastructure, or compatibility work.
 
-- `tauri-driver`, WebDriver, Appium, or another desktop automation harness;
-- a new browser/native parity layer;
-- test-only persistence commands or filesystem path overrides;
-- telemetry or benchmark instrumentation;
-- save migrations, recovery, import/export, compatibility, locks, or multi-process support.
-
-If an acceptance smoke exposes a real defect, first pin that defect in the closest existing focused test, then make the smallest fix needed to pass HPA-349. Do not pre-build infrastructure for hypothetical failures.
+If a smoke exposes a real defect, pin it in the closest existing focused test first, then make the smallest fix needed for HPA-349.
 
 ---
 
@@ -32,21 +26,19 @@ If an acceptance smoke exposes a real defect, first pin that defect in the close
 
 **Files:**
 - Modify: `tests/e2e/cityLibrary.spec.ts`
-- Reuse without planned changes: `tests/e2e/helpers.ts`
+- Reuse unchanged unless genuinely needed: `tests/e2e/helpers.ts`
 
-**Step 1: Run the existing browser persistence smoke as the baseline**
-
-Run:
+**Step 1: Run the existing baseline**
 
 ```bash
 bunx playwright test tests/e2e/cityLibrary.spec.ts --project=chromium
 ```
 
-Expected: the current single-city Save Now -> reload -> Continue test passes before widening it.
+Expected: the current one-city Save Now -> reload -> Continue flow passes.
 
-**Step 2: Import the existing runtime snapshot helper**
+**Step 2: Reuse `runtimeSnapshot()`**
 
-Extend the helper import in `tests/e2e/cityLibrary.spec.ts`:
+Add it to the existing helper import:
 
 ```ts
 import {
@@ -58,129 +50,57 @@ import {
 } from "./helpers";
 ```
 
-Do not add a second way to reach `window.__caelumRuntime`; the helper already owns that test seam.
+Do not add another `window.__caelumRuntime` accessor.
 
-**Step 3: Replace the one-city journey with one representative two-city journey**
+**Step 3: Widen the one test; do not create a matrix**
 
-Keep this as one Playwright test. Use Standard Crossroads for both cities; do not turn it into a preset/template matrix.
+Use Standard Crossroads for both city slots.
 
-The test should follow this shape:
+The test sequence is:
+
+1. Create `Browser Smoke A`.
+2. Select Two Way Road and drag `(1,1) -> (3,1)`.
+   - live drag exercises preview;
+   - release exercises dispatch;
+   - assert budget `$119,700`.
+3. Resume until `runtimeSnapshot(page).state.time > 0`, then pause.
+4. Capture the canonical `state` immediately before Save Now.
+5. Save Now and assert `data-dirty="false"`.
+6. From the City panel create `Browser Smoke B` with the default settings.
+7. Reload the page and assert both city names are in City Library.
+8. Continue; open the City panel and assert `Browser Smoke B` is active.
+9. Explicitly Load `Browser Smoke A`; reopen the City panel if the load reset UI state.
+10. Compare restored `map`, `budget`, and `time` exactly with the state captured before Save Now.
+11. Add another road `(1,2) -> (3,2)` and assert budget `$119,400` to prove restored gameplay continues.
+12. Open the City panel, rename inactive `Browser Smoke B`, then delete it with the existing two-click confirmation; assert A remains active.
+
+The core state assertions should look like:
 
 ```ts
-test("browser multi-city save journey survives reopen and continues gameplay", async ({
-  page,
-}) => {
-  await createDefaultCity(page, "Browser Smoke A");
+const savedA = (await runtimeSnapshot(page)).state;
+// Save A, create B, reload, Continue B, Load A...
+const restoredA = (await runtimeSnapshot(page)).state;
 
-  const topbar = page.getByTestId("topbar");
-  const canvas = page.locator("canvas[data-runtime-canvas='true']");
-
-  // Preview + dispatch: three deterministic empty Crossroads tiles.
-  await selectBuildLeaf(page, "roads", "road-twoWay");
-  await dragMapTiles(page, canvas, { x: 1, y: 1 }, { x: 3, y: 1 });
-  await expect(topbar.getByText("$119,700")).toBeVisible();
-
-  // Tick through the shared runtime before saving.
-  await page.getByRole("button", { name: "Resume" }).click();
-  await expect
-    .poll(async () => (await runtimeSnapshot(page)).state.time)
-    .toBeGreaterThan(0);
-  await page.getByRole("button", { name: "Pause" }).click();
-
-  const savedA = (await runtimeSnapshot(page)).state;
-
-  await openCommandDestination(page, "city");
-  const cityPanel = page.getByTestId("panel-city");
-  await cityPanel.getByRole("button", { name: "Save Now" }).click();
-  await expect(cityPanel.getByTestId("city-save-status")).toHaveAttribute(
-    "data-dirty",
-    "false",
-  );
-
-  // Second slot through the real shared New City UI.
-  await cityPanel.getByRole("button", { name: "New City" }).click();
-  await page.getByLabel("City name").fill("Browser Smoke B");
-  await page.getByRole("button", { name: "Create City" }).click();
-  await expect(page.getByTestId("active-city-name")).toHaveText(
-    "Browser Smoke B",
-  );
-
-  // Reopen the browser host and prove both records are discoverable.
-  await page.reload();
-  await expect(page.getByTestId("city-library-screen")).toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: "Rename Browser Smoke A" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: "Rename Browser Smoke B" }),
-  ).toBeVisible();
-
-  // Continue exercises the sorted first row; B is the most recent city.
-  await page.getByRole("button", { name: "Continue" }).click();
-  await openCommandDestination(page, "city");
-  await expect(page.getByTestId("active-city-name")).toHaveText(
-    "Browser Smoke B",
-  );
-
-  // Explicit Load proves switching back to the first slot.
-  await page
-    .getByRole("button", { name: "Load Browser Smoke A" })
-    .click();
-  await expect(page.getByTestId("active-city-name")).toHaveText(
-    "Browser Smoke A",
-  );
-
-  const restoredA = (await runtimeSnapshot(page)).state;
-  expect(restoredA.map).toEqual(savedA.map);
-  expect(restoredA.budget).toBe(savedA.budget);
-  expect(restoredA.time).toBe(savedA.time);
-
-  // Continue gameplay from the restored snapshot.
-  await selectBuildLeaf(page, "roads", "road-twoWay");
-  await dragMapTiles(page, canvas, { x: 1, y: 2 }, { x: 3, y: 2 });
-  await expect(page.getByTestId("topbar").getByText("$119,400")).toBeVisible();
-
-  // Exercise rename + Delete through the shared city list while A stays active.
-  await openCommandDestination(page, "city");
-  const bName = page.getByRole("textbox", {
-    name: "Rename Browser Smoke B",
-  });
-  await bName.fill("Browser Smoke B Renamed");
-  await bName.press("Enter");
-
-  const renamedB = page.getByRole("textbox", {
-    name: "Rename Browser Smoke B Renamed",
-  });
-  const bRow = page
-    .getByTestId("city-list")
-    .locator("article")
-    .filter({ has: renamedB });
-  const deleteB = bRow.locator("button").filter({ hasText: "Delete" });
-  await deleteB.click();
-  await deleteB.click();
-
-  await expect(renamedB).toHaveCount(0);
-  await expect(page.getByTestId("active-city-name")).toHaveText(
-    "Browser Smoke A",
-  );
-});
+expect(restoredA.map).toEqual(savedA.map);
+expect(restoredA.budget).toBe(savedA.budget);
+expect(restoredA.time).toBe(savedA.time);
 ```
 
-Treat this as a shape, not a reason to invent new helpers. Adjust selectors only to current rendered semantics if necessary.
+After city creation or Load, open the City panel before reading `active-city-name`; that label belongs to the City panel rather than the always-visible shell.
 
-**Step 4: Run the widened browser smoke before touching production code**
+For the inactive B row, locate the row from its rename textbox and use that row's Delete button. Do not add ID exposure only for E2E selectors.
 
-Run:
+**Step 4: Run the widened smoke before touching production code**
 
 ```bash
 bunx playwright test tests/e2e/cityLibrary.spec.ts --project=chromium
 ```
 
-Expected: PASS with no production change.
+Expected: PASS with only the test changed.
 
-If it fails, identify whether the failure is test timing/selectors or a real product defect. Do not weaken a valid state assertion just to make the smoke green.
+If it fails, distinguish a selector/timing mistake from a real product defect. Do not weaken a valid state assertion just to make the test green.
 
-**Step 5: Commit the browser smoke change**
+**Step 5: Commit**
 
 ```bash
 git add tests/e2e/cityLibrary.spec.ts
@@ -189,21 +109,19 @@ git commit -m "test: expand browser multi-city smoke"
 
 ---
 
-### Task 2: Run the existing focused contracts that own HPA-349's failure bullets
+### Task 2: Run the focused contracts that already own HPA-349's failure bullets
 
-**Files:**
-- Verify: `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`
-- Verify: `tests/runtime/workingSaveRuntime.test.ts`
-- Verify: `tests/ui/appShell.test.ts`
-- Verify: `tests/runtime/persistence/tauriCitySaveStore.test.ts`
-- Verify: `tests/runtime/persistence/citySaveStoreSelection.test.ts`
-- Verify: `src-tauri/src/city_store.rs`
+**Files to verify:**
+- `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`
+- `tests/runtime/workingSaveRuntime.test.ts`
+- `tests/ui/appShell.test.ts`
+- `tests/runtime/persistence/tauriCitySaveStore.test.ts`
+- `tests/runtime/persistence/citySaveStoreSelection.test.ts`
+- `src-tauri/src/city_store.rs`
 
-No file change is expected for this task when the existing contracts remain green.
+No file change is expected if the current coverage remains green.
 
-**Step 1: Run the browser/store/runtime focused tests**
-
-Run:
+**Step 1: Run focused TypeScript tests**
 
 ```bash
 bunx vitest run \
@@ -214,193 +132,168 @@ bunx vitest run \
   tests/runtime/persistence/citySaveStoreSelection.test.ts
 ```
 
-Verify specifically that current tests still prove:
+Confirm these existing behaviors:
 
-- IndexedDB failed update leaves the prior record unchanged;
+- failed IndexedDB update preserves the prior record;
 - returned `invalidSnapshot` load leaves the prior active city installed;
-- persistence buttons/actions are disabled while busy;
-- rename/delete preserve the correct active-city semantics;
-- native adapter maps only the six intended commands;
-- host selection chooses IndexedDB for browser and Tauri store for native.
+- persistence actions are disabled while busy;
+- rename/delete preserve correct active-city semantics;
+- the Tauri adapter maps only the intended six commands;
+- browser selects IndexedDB and native selects the Tauri store.
 
-**Step 2: Run the Rust workspace tests**
-
-Run:
+**Step 2: Run Rust tests**
 
 ```bash
 cargo test --workspace
 ```
 
-Verify the native city-file suite includes and passes:
+Confirm the native suite still passes:
 
 - `failed_update_preserves_committed_record`;
 - `second_store_instance_reopens_same_directory`;
 - `from_app_uses_app_data_cities_child`;
-- the Tauri mock-runtime IPC story using production command registration.
+- production-handler Tauri mock-runtime IPC coverage.
 
-Do not duplicate these failures through browser/native UI injection.
+Do not replay these failure cases through brittle E2E injection.
 
-**Step 3: If a listed acceptance behavior is unexpectedly not covered, add only the missing focused assertion**
+**Step 3: Only if a listed behavior lacks proof, add one focused assertion**
 
-Choose the closest existing test file. Examples:
+Use the nearest existing test file:
 
 ```text
-IndexedDB record semantics -> indexedDbCitySaveStore.test.ts
-working-save active/busy semantics -> workingSaveRuntime.test.ts
-Svelte button/rename/delete semantics -> appShell.test.ts
-Tauri invoke mapping -> tauriCitySaveStore.test.ts
-native file replacement -> src-tauri/src/city_store.rs
+IndexedDB semantics       -> indexedDbCitySaveStore.test.ts
+working-save state        -> workingSaveRuntime.test.ts
+Svelte busy/rename/delete -> appShell.test.ts
+Tauri invoke mapping      -> tauriCitySaveStore.test.ts
+host selection            -> citySaveStoreSelection.test.ts
+native file replacement   -> src-tauri/src/city_store.rs
 ```
 
-Run only that focused test first, then the Task 2 set again.
-
-If no coverage gap exists, make no commit for Task 2.
+Run the new focused assertion first, then rerun Task 2. If nothing is missing, make no Task 2 commit.
 
 ---
 
-### Task 3: Build and run one real packaged Tauri multi-city restart smoke
+### Task 3: Build and run one real packaged Tauri restart smoke
 
-**Files:**
-- No source file changes expected.
-- Record evidence in the implementation PR body, not a new permanent smoke-results document.
+**Files:** No source change expected. Record evidence in the implementation PR body.
 
-This is the one human/operator gate. Do not infer a pass from mock-runtime, unit, or build success.
+This is a human/operator gate. Do not infer a pass from build, unit, or mock-runtime success.
 
-**Step 1: Build the production app bundle**
-
-Run:
+**Step 1: Build the packaged app**
 
 ```bash
 bun run tauri:build
 ```
 
-Expected on the current macOS setup:
+Expected on the current macOS host:
 
 ```text
 src-tauri/target/release/bundle/macos/Caelum.app
 ```
 
-**Step 2: Launch the packaged app**
-
-Run:
+**Step 2: Launch it**
 
 ```bash
 open src-tauri/target/release/bundle/macos/Caelum.app
 ```
 
-Use unique names if existing development cities are present; do not delete unrelated cities.
+Use unique smoke city names if unrelated development cities already exist.
 
-**Step 3: First-process native journey**
+**Step 3: First process**
 
 Through the real UI:
 
-1. Create `Native Smoke A` with Standard + Crossroads.
-2. Choose Build -> Roads -> Two Way.
-3. Drag `(1,1) -> (3,1)` and observe the preview before release.
-4. Release to commit and verify budget is `$119,700`.
-5. Resume until the clock visibly advances, then pause.
-6. Save Now and verify the dirty indicator clears.
-7. Create `Native Smoke B` with Standard + Crossroads.
-8. Quit the application fully with Cmd+Q.
+1. Create `Native Smoke A` as Standard Crossroads.
+2. Drag Two Way Road `(1,1) -> (3,1)`; observe preview and assert visible budget `$119,700` after release.
+3. Resume until the clock advances, then pause.
+4. Save Now and confirm the dirty indicator clears.
+5. Create `Native Smoke B` as a second Standard Crossroads city.
+6. Quit fully with Cmd+Q.
 
-This one sequence exercises native preview, dispatch, tick, snapshot-for-save, create/update, and shared UI/runtime ownership.
+This covers native preview, dispatch, tick, create/update, and the shared runtime/UI path.
 
-**Step 4: Second-process native journey**
+**Step 4: Second process**
 
-Relaunch:
+Relaunch the same packaged app, then:
 
-```bash
-open src-tauri/target/release/bundle/macos/Caelum.app
-```
+1. verify both smoke cities are listed;
+2. use Continue once;
+3. explicitly Load `Native Smoke A`;
+4. verify the first road is still visible, budget is `$119,700`, and clock is non-zero;
+5. add road `(1,2) -> (3,2)` and Save Now again;
+6. rename inactive `Native Smoke B`;
+7. delete B using the existing two-click confirmation;
+8. verify A remains active and usable.
 
-Then:
+**Step 5: Record coarse size/latency only**
 
-1. Verify both native smoke cities appear in City Library.
-2. Use Continue and confirm a saved city opens.
-3. Open the City panel and explicitly Load `Native Smoke A`.
-4. Verify the saved road is still present, budget is `$119,700`, and the clock is non-zero.
-5. Add a second short road `(1,2) -> (3,2)` and Save Now again.
-6. Rename inactive `Native Smoke B`.
-7. Delete `Native Smoke B` with the existing two-click confirmation.
-8. Verify `Native Smoke A` remains active and usable.
-
-**Step 5: Record only coarse size/latency evidence**
-
-Inspect the native city directory after the saves. On the current macOS bundle, the Tauri application-data root is derived from identifier `com.caelum.app`, with committed records under its `cities/` child.
-
-A useful read-only check is:
+Inspect committed files under the resolved `app_data_dir()/cities` path. On the current macOS bundle, a useful read-only check is:
 
 ```bash
 ls -lh "$HOME/Library/Application Support/com.caelum.app/cities"
 ```
 
-If the platform resolver uses a different physical path, inspect the actual `app_data_dir()/cities` path; do not change production path logic for the smoke.
+If the OS resolver places the directory elsewhere, inspect the actual resolved path; do not change production path logic for the smoke.
 
-Record in the implementation PR body:
+Record in the implementation PR:
 
-- approximate size of a committed smoke city JSON file;
-- whether Save Now was effectively immediate, around 1 s, or visibly slower;
-- whether relaunch -> City Library and Load were effectively immediate, around 1–2 s, or visibly slower.
+- approximate committed city JSON size;
+- Save Now as effectively immediate / around 1 s / visibly slower;
+- relaunch + Load as effectively immediate / around 1–2 s / visibly slower.
 
-Do not add timers, tracing, telemetry, indexes, or performance work unless the observed result is clearly problematic.
+Do not add timers, tracing, telemetry, indexes, or optimization work without an observed problem.
 
-**Step 6: Clean up only the smoke records**
+**Step 6: Clean up only smoke records**
 
-Delete the remaining smoke city through the normal UI if practical. Do not wipe the whole application-data directory.
+Delete the remaining smoke city through the normal UI if practical. Do not wipe unrelated application data.
 
 ---
 
-### Task 4: If a smoke exposes a real defect, pin and fix only that defect
+### Task 4: Only if a smoke exposes a product defect, pin and fix that defect
 
-**Files:** depend on the failing seam. Do this task only when Task 1 or Task 3 demonstrates a product failure.
+**Files:** depend on the failing seam.
 
 **Step 1: Classify the seam**
 
-Use this mapping:
-
 ```text
-Svelte flow / disabled action / city row -> tests/ui/appShell.test.ts
-working-save state transition -> tests/runtime/workingSaveRuntime.test.ts
-browser store -> tests/runtime/persistence/indexedDbCitySaveStore.test.ts
-Tauri TS adapter -> tests/runtime/persistence/tauriCitySaveStore.test.ts
-host store selection -> tests/runtime/persistence/citySaveStoreSelection.test.ts
-native command/file behavior -> src-tauri/src/city_store.rs
-shared gameplay restore -> crates/caelum-core tests near the failing contract
+Svelte flow / disabled action -> tests/ui/appShell.test.ts
+working-save transition       -> tests/runtime/workingSaveRuntime.test.ts
+browser store                 -> tests/runtime/persistence/indexedDbCitySaveStore.test.ts
+Tauri TS adapter              -> tests/runtime/persistence/tauriCitySaveStore.test.ts
+host selection                -> tests/runtime/persistence/citySaveStoreSelection.test.ts
+native command/file behavior  -> src-tauri/src/city_store.rs
+shared gameplay restore       -> nearest caelum-core test
 ```
 
 **Step 2: Write the smallest failing regression first**
 
-Run only that regression and confirm it fails for the observed reason.
+Run it alone and confirm it fails for the observed reason.
 
-**Step 3: Implement the minimum product correction**
+**Step 3: Make the minimum correction**
 
-Do not add a new abstraction unless the fix has at least two current callers that need it.
+Do not introduce an abstraction unless two current callers actually need it.
 
-**Step 4: Re-run the focused regression and the affected representative smoke**
+**Step 4: Re-run the focused regression and the representative smoke that failed**
 
-A native defect is not closed by a unit test alone; repeat the packaged Tauri step that originally failed.
+A native bug is not closed by a unit test alone; repeat the packaged step that demonstrated it.
 
-**Step 5: Commit the defect fix separately from the smoke test**
+**Step 5: Commit the fix separately from the browser smoke test**
 
-Use a descriptive commit such as:
+Use a message naming the actual defect, for example:
 
-```bash
-git commit -m "fix: preserve native city save across restart"
+```text
+fix: preserve native city update across restart
 ```
 
-Use the actual defect in the message; do not use this example verbatim when it is not the defect.
+Do not use the example if it is not the defect encountered.
 
 ---
 
 ### Task 5: Run the final Phase 1 gate and record evidence
 
-**Files:**
-- No additional source changes expected.
-- Update the implementation PR description with the evidence table.
+**Files:** No further source change expected. Update the implementation PR description with results.
 
 **Step 1: Run the complete automated gate**
-
-Run:
 
 ```bash
 cargo test --workspace
@@ -412,42 +305,37 @@ bun run test:e2e
 bun run tauri:build
 ```
 
-Do not run a duplicate standalone `bun run build`; `tauri:build` already invokes the configured frontend build through Tauri's `beforeBuildCommand`.
+Do not run a duplicate standalone `bun run build`; `tauri:build` already executes the configured frontend `beforeBuildCommand`.
 
-**Step 2: Confirm the diff stayed scoped**
+**Step 2: Review scope**
 
-If all smoke paths were green without a product defect, the implementation diff should be test-only (normally `tests/e2e/cityLibrary.spec.ts`).
+If the product was already correct, the implementation diff should normally be test-only (`tests/e2e/cityLibrary.spec.ts`).
 
-If production code changed, every production line should point to a concrete smoke failure and a focused regression from Task 4.
+If production code changed, every production line must trace to a concrete smoke failure and focused regression from Task 4.
 
-**Step 3: Put the acceptance evidence in the implementation PR**
-
-Use a compact table like:
+**Step 3: Put one evidence table in the implementation PR**
 
 ```markdown
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Browser multi-city Playwright journey | PASS | New -> road/tick -> Save -> second city -> reload -> Continue/Load -> exact map/budget/time -> continue -> rename/delete |
-| IndexedDB failed update preservation | PASS | focused Vitest |
+| Browser multi-city Playwright journey | PASS | New -> road/tick -> Save -> second city -> reload -> Continue/Load -> map/budget/time -> continue -> rename/delete |
+| IndexedDB failed-update preservation | PASS | focused Vitest |
 | Invalid-load active-game preservation | PASS | focused Vitest |
 | Busy + rename/delete shared UI/runtime | PASS | focused Vitest |
 | Native failed-update + reopen + IPC | PASS | Rust/Tauri tests |
-| Packaged Tauri restart journey | PASS | operator run on packaged `Caelum.app` |
+| Packaged Tauri restart journey | PASS | observed in packaged `Caelum.app` |
 | Native save size | ~N KB | application-data city JSON |
 | Native Save Now | ~... | coarse observation |
 | Native relaunch + Load | ~... | coarse observation |
 ```
 
-Do not claim the packaged Tauri row passes until the actual second-process load was observed.
+Do not mark the packaged row PASS until the second-process load was actually observed.
 
-**Step 4: Phase 1 close condition**
+**Step 4: Close condition**
 
-HPA-349 can be marked complete after:
+HPA-349 is complete when the automated gate is green, the packaged restart journey is recorded as passed, and any smoke-discovered blocker has a focused regression/minimal fix.
 
-- the full automated gate is green;
-- the packaged Tauri restart journey is explicitly recorded as passed;
-- any smoke-discovered blocker has a focused regression and minimal fix;
-- no extra checkpoint/autosave/recovery/migration/security/multi-instance scope was added.
+Do not add checkpoint/autosave/recovery/migration/security/multi-instance scope to close Phase 1.
 
 ---
 
@@ -459,6 +347,4 @@ Only one code/test commit is expected:
 test: expand browser multi-city smoke
 ```
 
-The packaged native smoke and acceptance measurements belong in the implementation PR evidence, not in a synthetic code commit.
-
-If a defect is found, add one focused fix commit after its regression rather than restructuring the existing persistence architecture.
+The packaged-native smoke and measurements belong in implementation PR evidence, not in a synthetic code commit.
