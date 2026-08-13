@@ -195,6 +195,36 @@ fn adjacent_opposing_lanes_do_not_connect_mid_block() {
 }
 
 #[test]
+fn restored_road_endpoint_connects_to_new_adjacent_stroke() {
+    let mut engine = GameEngine::new();
+    let first = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(1, 1), point(2, 1), point(3, 1)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(first.applied);
+
+    let saved = engine.snapshot_for_save();
+    let mut restored = GameEngine::from_snapshot(saved).expect("saved road snapshot restores");
+    let second = restored.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(1, 2), point(2, 2), point(3, 2)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(second.applied);
+
+    let map = &restored.snapshot().map;
+    assert!(map
+        .tile(point(1, 1))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::South));
+    assert!(map
+        .tile(point(1, 2))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::North));
+}
+
+#[test]
 fn removing_one_crossing_arm_regenerates_or_dissolves_the_junction() {
     let (mut engine, original_id) = crossing_engine();
     remove_points(&mut engine, &[point(14, 7), point(15, 7)]);

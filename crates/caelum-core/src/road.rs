@@ -406,7 +406,12 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
                 continue;
             }
         }
-        if neighbor.road_connections.len() >= 2 {
+        if neighbor.road_connections.len() >= 2
+            && !neighbor
+                .road_connections
+                .iter()
+                .any(|existing| same_axis(*existing, heading))
+        {
             continue;
         }
         connect(map, point, heading);
@@ -711,7 +716,19 @@ fn refresh_automatic_junctions(map: &mut GameMap) -> GameplayResult<()> {
                     }
                 }
                 let has_cycle = internal_directed_edges >= footprint.len() * 2;
-                if has_cycle && !was_former_junction {
+                // A reciprocal two-tile bridge whose ends each retain an
+                // authored connection is a valid endpoint-to-endpoint join
+                // (for example, the ends of two parallel two-way strokes),
+                // not a lateral mid-block lane link. Preserve it alongside
+                // authored cycles; only incomplete junction remnants and
+                // incidental longer trees should be pruned.
+                let is_endpoint_join = footprint.len() == 2
+                    && internal_directed_edges == 2
+                    && footprint.iter().all(|point| {
+                        map.tile(*point)
+                            .is_some_and(|tile| tile.road_connections.len() >= 2)
+                    });
+                if (has_cycle || is_endpoint_join) && !was_former_junction {
                     continue;
                 }
                 for point in &footprint {
