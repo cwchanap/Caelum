@@ -264,14 +264,14 @@ Native Smoke B 20260812-1918
 
 ### Step 3 — first process
 
-1. Create unique Native Smoke A as Standard Crossroads.
+1. Create unique Native Smoke A as Standard Crossroads and record its city ID (visible in the City panel row, e.g. via webview devtools `data-testid="city-row-<id>"`).
 2. Select Two Way Road and drag `(1,1) -> (3,1)`.
 3. Before release, visually confirm the live road-preview overlay is visible.
 4. Release and verify `$119,700`.
 5. Resume until the visible clock changes from `Day 1 00:00`.
 6. Click Pause and **wait until the button label becomes `Resume`** before noting the saved clock or opening City.
 7. Save Now and verify the dirty indicator clears.
-8. From the clean City panel create unique Native Smoke B.
+8. From the clean City panel create unique Native Smoke B and record its city ID the same way.
 9. Quit fully with **Cmd+Q**; closing only the window is not a process-restart proof.
 
 ### Step 4 — second process
@@ -290,21 +290,24 @@ Do not spend manual-gate time re-proving rename/delete; their shared UI/runtime 
 
 ### Step 5 — record coarse size/latency only
 
-Read the application-data files without modifying unrelated records:
+Application-data filenames are opaque (`city-<hex-id>.json`), so locate each smoke city's file by the ID recorded in Step 3, not by listing the whole directory:
 
 ```bash
-ls -lh "$HOME/Library/Application Support/com.caelum.app/cities"
+cities_dir="$HOME/Library/Application Support/com.caelum.app/cities"
+id_a="<Native Smoke A id>"; id_b="<Native Smoke B id>"
+ls -lh "$cities_dir/city-$(printf '%s' "$id_a" | xxd -p).json" \
+       "$cities_dir/city-$(printf '%s' "$id_b" | xxd -p).json"
 ```
 
 Record only:
 
-- approximate smoke-city JSON size;
+- each smoke city's application-data file path and approximate JSON size;
 - Save Now as effectively immediate / around 1 s / visibly slower;
 - relaunch + Load as effectively immediate / around 1–2 s / visibly slower.
 
 Do not add timers, tracing, telemetry, indexes, or optimization work without an observed problem.
 
-Clean up only the smoke records if practical.
+Clean up only the two smoke records, by ID: prefer the app's Delete UI on Native Smoke A and B; if removing files directly, delete only the two `city-<hex-id>.json` paths above and never wipe the cities directory.
 
 ---
 
@@ -386,13 +389,13 @@ Use one compact table; do not create a permanent smoke-results artifact:
 | IndexedDB failed update | PASS | existing focused test via `bun run test` |
 | Invalid load / busy / rename-delete | PASS | existing focused tests via `bun run test` |
 | Native failed update + reopen + IPC | PASS | existing Rust/Tauri tests via `cargo test --workspace` |
-| Packaged Tauri restart/load | PASS | unique A/B -> visual preview -> dispatch/tick -> committed Pause -> Save -> Cmd+Q -> relaunch -> list -> explicit Load A -> road/$119,700/non-zero clock |
+| Packaged Tauri restart/load | PASS | unique A/B -> visual preview -> dispatch/tick -> committed Pause -> Save -> Cmd+Q -> relaunch -> list -> explicit Load A -> road/$119,700/non-zero clock -> adjacent road/$119,400 |
 | Native save size | ~N KB | application-data city JSON |
 | Native Save Now | ~... | coarse observation |
 | Native relaunch + Load | ~... | coarse observation |
 ```
 
-Do not mark the packaged row PASS until the second process explicitly loads A and proves the saved road, budget, and non-zero clock.
+Do not mark the packaged row PASS until the second process explicitly loads A and proves the saved road, `$119,700`, a non-zero clock, then the adjacent road and `$119,400`.
 
 ### Close condition
 
