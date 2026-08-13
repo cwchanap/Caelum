@@ -201,11 +201,19 @@ impl CityFileStore {
         let bytes = serde_json::to_vec(record).map_err(failed)?;
         let temp = self.temp_path(id);
 
-        let _ = fs::remove_file(&temp);
+        // Remove any stale temp authoritatively. A leftover temp can be a hard
+        // link to the committed record (see `create_city`): silently ignoring a
+        // removal failure would let the `create_new` open below truncate the
+        // shared inode and corrupt the committed save on a later failed write.
+        match fs::remove_file(&temp) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(failed(error)),
+        }
+
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(&temp)
             .map_err(failed)?;
 
