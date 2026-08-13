@@ -15,6 +15,7 @@ Phase 1 is complete in GitHub, and HPA-332 explicitly calls for one vertical chi
 - `building_catalog.rs` has `citizen_count`; `buildings.rs` uses it to create all residents immediately.
 - `assign_workplaces` treats destination footprint tiles as unlimited workplaces.
 - `Sim.home` and `Sim.workplace` are already the point-based inputs used by `trips.rs`.
+- `growth.rs` reuses `place_building_core`, so campaign growth currently creates the same immediate residents as player placement.
 - `transit.rs` already owns building demolition and destination cleanup.
 - the current Select inspector already stores a clicked tile but only renders transit nodes.
 
@@ -54,7 +55,19 @@ For this slice:
 | Supermarket | 0 | 4 |
 | all other current buildings | 0 | 0 |
 
-The Rust catalog stays gameplay authority. Capacity is copied into each placed building so both hosts and the UI consume the authoritative snapshot. Remove `citizenCount` from the TypeScript catalog instead of duplicating the new constants there.
+The Rust catalog stays gameplay authority. Capacity is copied into a **player-placed** building so both hosts and the UI consume authoritative per-instance values. Remove `citizenCount` from the TypeScript catalog instead of duplicating the new constants there.
+
+### Keep dormant world growth inert
+
+HPA-332 says this first slice populates only player-built housing. Do not add a persisted `playerBuilt`/source flag just to enforce that rule.
+
+Instead, split the existing placement seam narrowly:
+
+- normal/player `place_building_core` copies the catalog capacities;
+- a new internal `place_world_building_core` reuses the same validation/footprint logic but stores both capacities as zero;
+- `growth.rs` uses the world variant.
+
+Campaign growth waves can still zone/place their authored buildings, but those buildings do not create residents or jobs in this slice. Update their tests to assert inert buildings rather than preserving the old immediate 4-citizen behavior. This is the minimum cleanup required to prevent dormant campaign state from entering the player-controlled occupancy loop.
 
 Remove the dormant single-value `moveInRate: "paused"` sandbox setting/request/error branch in the same schema break. It conflicts with an active fixed rule and has no player control to preserve. Old local development saves may be cleared; do not add migration or compatibility readers.
 
@@ -68,7 +81,7 @@ pub const MOVE_IN_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 24.0;
 
 That is 50 simulation seconds per in-game hour today.
 
-For a house with occupancy `n`, the next slot is due at:
+For a player-built house with occupancy `n`, the next slot is due at:
 
 ```text
 placed_at + n * MOVE_IN_INTERVAL_SECONDS
@@ -93,7 +106,7 @@ A coarse tick therefore observes residents at the same timestamps as equivalent 
 
 Keep `buildings.rs::assign_workplaces` as the assignment seam.
 
-- only buildings with `job_capacity > 0` provide jobs;
+- only placed buildings with `job_capacity > 0` provide jobs;
 - preserve valid existing assignments and count them against capacity;
 - process unassigned workers and workplace buildings in stable ID order;
 - map each occupied slot to a point in the workplace footprint so `Sim.workplace` remains usable by the current router;
@@ -109,19 +122,17 @@ For occupied Small House removal, remove residents whose `home` is in the footpr
 
 ## UI
 
-Make `ShellInspectorState` a small discriminated union:
+Make `ShellInspectorState` a small discriminated union with the existing transit fields under `kind: "transit"` and this building branch:
 
 ```ts
-type ShellInspectorState =
-  | { kind: "transit"; /* existing platform fields */ }
-  | {
-      kind: "building";
-      buildingId: string;
-      buildingLabel: string;
-      metricLabel: "Residents" | "Jobs";
-      occupancy: number;
-      capacity: number;
-    };
+{
+  kind: "building";
+  buildingId: string;
+  buildingLabel: string;
+  metricLabel: "Residents" | "Jobs";
+  occupancy: number;
+  capacity: number;
+}
 ```
 
 Transit inspection keeps priority. Otherwise find the selected placed building and return a building inspector only for nonzero resident/job capacity.
@@ -137,14 +148,15 @@ Derive presentation occupancy from the authoritative snapshot:
 
 Rust coverage proves:
 
-1. Small House placement while paused creates zero sims.
+1. Small House player placement while paused creates zero sims.
 2. the first running tick creates one deterministic resident;
 3. hourly boundaries fill to four and stop;
 4. coarse/fine ticks produce equivalent population/workplace state;
-5. one Supermarket accepts four workers and no more;
+5. one player-built Supermarket accepts four workers and no more;
 6. `sim-001` reaches the existing outbound commute spawn path at its deterministic departure time;
-7. workplace demolition clears/reassigns safely;
-8. housing demolition leaves no resident/trip/vehicle reference to removed residents.
+7. world/campaign Small Houses remain capacity-zero and do not enter move-in;
+8. workplace demolition clears/reassigns safely;
+9. housing demolition leaves no resident/trip/vehicle reference to removed residents.
 
 Update old tests that assert immediate `citizen_count` spawning. Update current schema/wire/host fixtures directly; do not add schema-v4 compatibility cases.
 
@@ -152,4 +164,4 @@ UI coverage extends `runtimeSelectors.test.ts` and the existing `tests/e2e/smoke
 
 ## Non-goals
 
-Additional building capacities, configurable/random move-in, households, job categories, shopping/school/leisure/visitor trips, citywide growth controls, new overlays, cars/congestion, service/headway planning, campaign redesign, save migration, and pre-release hardening are outside this slice.
+Additional building capacities, configurable/random move-in, households, job categories, shopping/school/leisure/visitor trips, citywide growth controls, new overlays, cars/congestion, service/headway planning, campaign redesign beyond keeping existing growth inert, save migration, and pre-release hardening are outside this slice.
