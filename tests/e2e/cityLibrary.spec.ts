@@ -44,7 +44,7 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   expect(beforeSave.budget).toBe(115_700);
 
   await openCommandDestination(page, "city");
-  let cityPanel = page.getByTestId("panel-city");
+  const cityPanel = page.getByTestId("panel-city");
 
   await cityPanel.getByRole("button", { name: "Save Now" }).click();
   await expect(cityPanel.getByTestId("city-save-status")).toHaveAttribute(
