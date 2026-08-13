@@ -1,52 +1,44 @@
 # HPA-349 Phase 1 Cross-Host Smoke Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task-by-task using the existing test/runtime seams. Do not create a new cross-host test platform.
 
-**Goal:** Close Phase 1 by proving one representative multi-city save/restore/continue journey in the browser and in the packaged Tauri app, without introducing new persistence or desktop-test architecture.
-
-**Architecture:** Keep the existing Svelte UI and working-save runtime as the shared workflow. Browser proof runs through Playwright + WASM + IndexedDB; packaged-native proof runs through the real Tauri app + native `GameEngine` + application-data file store. Existing focused tests remain authoritative for preview, failure, busy-state, and storage semantics.
-
-**Tech Stack:** Svelte 5, TypeScript, Playwright, Vitest, Rust, Tauri 2, `caelum-core`, WASM, IndexedDB.
-
-## Global Constraints
-
-- Keep one browser journey in `tests/e2e/cityLibrary.spec.ts`; do not add a host-parity layer or template/preset matrix.
-- Do not add `tauri-driver`, WebDriver/Appium, native UI automation infrastructure, test-only persistence commands, telemetry, migration/recovery infrastructure, or compatibility work.
-- Do not change production code unless a representative smoke exposes a concrete product defect; pin that defect in the nearest existing seam first.
-- Reuse `runtimeSnapshot()` from `tests/e2e/helpers.ts`; do not add another `window.__caelumRuntime` accessor. That hook is development-only and is not available in the packaged app.
-- Browser/native byte-for-byte save parity is not a contract. Each host restores through `caelum-core` and verifies its own player-visible authored state, budget, and saved time.
-- Keep coarse native size/duration observations in the implementation PR; do not add instrumentation.
+**Goal:** Close Phase 1 by proving one representative multi-city save/restore/continue journey in the browser and one real packaged Tauri restart/load journey.
 
 **Design:** `docs/superpowers/specs/2026-08-12-phase1-cross-host-smoke-design.md`
 
+## Scope guard
+
+- Keep one browser Playwright journey in `tests/e2e/cityLibrary.spec.ts`.
+- Reuse `runtimeSnapshot()` from `tests/e2e/helpers.ts`; do not add another `window.__caelumRuntime` accessor. The hook is development-only and is unavailable in the packaged bundle.
+- Keep road-preview, failed-update, invalid-load, busy-state, rename/delete, host-selection, IPC, and disk-reopen semantics in their existing focused tests.
+- Do not add `tauri-driver`, WebDriver/Appium, UI failure injection, telemetry, migration/recovery infrastructure, or a host-parity abstraction.
+- Do not change production code unless a representative smoke first exposes a concrete product defect; pin that defect in the nearest existing seam before fixing it.
+- Browser/native byte-for-byte save parity is not a contract. Each host restores through `caelum-core` and checks its own player-visible state.
+
 ---
 
-### Task 1: Expand the existing browser persistence E2E into the Phase 1 multi-city journey
+## Task 1: Expand the existing browser persistence E2E
 
-**Files:**
-- Modify: `tests/e2e/cityLibrary.spec.ts`
-- Reuse unchanged: `tests/e2e/helpers.ts`
+**Modify:** `tests/e2e/cityLibrary.spec.ts`  
+**Reuse unchanged:** `tests/e2e/helpers.ts`
 
-**Interfaces:**
-- Consumes: existing `createDefaultCity`, `dragMapTiles`, `openCommandDestination`, `runtimeSnapshot`, and `selectBuildLeaf` helpers.
-- Produces: one browser smoke proving two-slot persistence, reload, Continue/Load, authored-road restoration, saved budget/time, continued gameplay, rename, and delete.
+The existing test already provides the only browser reload proof for zoning + a placed building. Preserve that coverage while widening the journey to two city slots and adding a higher-value road-topology restore probe.
 
-- [ ] **Step 1: Run the existing browser baseline**
-
-Run:
+### Step 1 — baseline
 
 ```bash
 bunx playwright test tests/e2e/cityLibrary.spec.ts --project=chromium
 ```
 
-Expected: the current one-city Save Now -> reload -> Continue flow passes.
+Expected: current one-city Save -> reload -> Continue flow passes.
 
-- [ ] **Step 2: Reuse the existing browser runtime accessor**
+### Step 2 — imports
 
-Add `runtimeSnapshot` to the existing import only:
+Keep `clickMapTile`; add `runtimeSnapshot`:
 
 ```ts
 import {
+  clickMapTile,
   createDefaultCity,
   dragMapTiles,
   openCommandDestination,
@@ -55,32 +47,41 @@ import {
 } from "./helpers";
 ```
 
-Do not add another helper or another `window.__caelumRuntime` access path.
+Do not add another browser-runtime accessor.
 
-- [ ] **Step 3: Create City A and commit one deterministic road stroke**
-
-Create the first city once with the existing helper:
+### Step 3 — create City A and retain zoning/building round-trip coverage
 
 ```ts
 await createDefaultCity(page, "Browser Smoke A");
-```
 
-Then build three two-way road tiles:
-
-```ts
 const topbar = page.getByTestId("topbar");
 const canvas = page.locator("canvas[data-runtime-canvas='true']");
 
-await selectBuildLeaf(page, "roads", "road-twoWay");
-await dragMapTiles(page, canvas, { x: 1, y: 1 }, { x: 3, y: 1 });
-await expect(topbar.getByText("$119,700")).toBeVisible();
+await selectBuildLeaf(page, "zones", "residential");
+await dragMapTiles(page, canvas, { x: 5, y: 1 }, { x: 6, y: 1 });
+
+await selectBuildLeaf(page, "buildings", "smallHouse");
+await clickMapTile(canvas, { x: 5, y: 1 });
+await expect(topbar.getByText("$116,000")).toBeVisible();
 ```
 
-This persistence E2E proves the committed dispatch result. It does **not** independently prove road preview; preview behavior remains owned by `tests/runtime/gameRuntime.test.ts`.
+Use `(5,1)..(6,1)` for the house footprint so it does not overlap the road probe.
 
-- [ ] **Step 4: Advance the visible clock, pause, and capture the save fingerprint**
+### Step 4 — add the road restore probe
 
-Reuse the visible-clock polling shape already used by `tests/e2e/smoke.spec.ts`:
+```ts
+await selectBuildLeaf(page, "roads", "road-twoWay");
+await dragMapTiles(page, canvas, { x: 1, y: 1 }, { x: 3, y: 1 });
+await expect(topbar.getByText("$115,700")).toBeVisible();
+```
+
+The drag proves committed dispatch/persistence in this E2E. It does **not** independently prove browser preview; existing `tests/runtime/gameRuntime.test.ts` remains the preview owner.
+
+Roads are deliberately part of the persistence fingerprint because `RoadTopology` is non-serialized and is rebuilt from authored `roadConnections` during restore. Checking the authored edges therefore probes a more failure-prone restore seam than checking `kind: "road"` alone.
+
+### Step 5 — advance time, then wait for committed pause before capturing
+
+Reuse the visible-clock poll already used by `tests/e2e/smoke.spec.ts`:
 
 ```ts
 const timeReadout = topbar.locator(".readout", { hasText: "Time" });
@@ -90,19 +91,19 @@ await page.getByRole("button", { name: "Resume" }).click();
 await expect
   .poll(async () => (await clockValue.textContent())?.trim() ?? "")
   .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
+
 await page.getByRole("button", { name: "Pause" }).click();
+await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
 
 const beforeSave = (await runtimeSnapshot(page)).state;
 const savedTime = beforeSave.time;
 expect(savedTime).toBeGreaterThan(0);
-expect(beforeSave.budget).toBe(119_700);
+expect(beforeSave.budget).toBe(115_700);
 ```
 
-Do not use a one-shot `time > 0` read as the wait condition; wait for the same visible clock signal the packaged operator can observe.
+The `Resume` label is the synchronization point: it is rendered from the committed paused state after the queued pause intent has drained. Do not read `savedTime` immediately after clicking Pause.
 
-- [ ] **Step 5: Save A until it is clean, then create B through the active City panel**
-
-Open the City panel, Save Now, and wait for the clean state:
+### Step 6 — Save A clean, then create B through the active City panel
 
 ```ts
 await openCommandDestination(page, "city");
@@ -112,11 +113,7 @@ await expect(cityPanel.getByTestId("city-save-status")).toHaveAttribute(
   "data-dirty",
   "false",
 );
-```
 
-Create B through the in-game multi-city path:
-
-```ts
 await cityPanel.getByRole("button", { name: "New City" }).click();
 await page.getByLabel("City name").fill("Browser Smoke B");
 await page.getByRole("button", { name: "Create City" }).click();
@@ -125,9 +122,9 @@ await openCommandDestination(page, "city");
 await expect(page.getByTestId("active-city-name")).toHaveText("Browser Smoke B");
 ```
 
-**Do not call `createDefaultCity()` again after City A exists.** It navigates to `/` and would bypass the City-panel New City UX and its dirty gate.
+**Do not call `createDefaultCity()` a second time.** It navigates to `/` and would bypass the active-city New City dirty gate.
 
-- [ ] **Step 6: Reload, prove both slots exist, Continue B, then explicitly Load A**
+### Step 7 — reload, verify both slots, Continue B, then explicitly Load A
 
 ```ts
 await page.reload();
@@ -139,6 +136,8 @@ await expect(
   page.getByRole("textbox", { name: "Rename Browser Smoke B" }),
 ).toBeVisible();
 
+// Continue intentionally checks the current city ordering policy:
+// savedAt descending, then id ascending.
 await page.getByRole("button", { name: "Continue" }).click();
 await openCommandDestination(page, "city");
 await expect(page.getByTestId("active-city-name")).toHaveText("Browser Smoke B");
@@ -148,243 +147,170 @@ await openCommandDestination(page, "city");
 await expect(page.getByTestId("active-city-name")).toHaveText("Browser Smoke A");
 ```
 
-`Continue` intentionally checks the existing newest-`savedAt` ordering; explicit Load then proves slot switching back to A.
+### Step 8 — assert the useful restore fingerprint
 
-- [ ] **Step 7: Assert authored tiles, budget, and saved time—not whole-map equality**
+Do not compare the entire live pre-save map to the restored map. Save capture normalizes a clone and restore normalizes the candidate, so whole-map live-vs-restored equality crosses a persistence-normalization boundary and produces an unhelpful 504-tile failure.
 
-Read the restored state and check only the player contract that matters:
+Instead assert the authored layers that matter:
 
 ```ts
 const restoredA = (await runtimeSnapshot(page)).state;
-const tileKindAt = (x: number, y: number) =>
-  restoredA.map.tiles.find((tile) => tile.x === x && tile.y === y)?.kind;
+const tileAt = (x: number, y: number) =>
+  restoredA.map.tiles.find((tile) => tile.x === x && tile.y === y);
 
-expect(tileKindAt(1, 1)).toBe("road");
-expect(tileKindAt(2, 1)).toBe("road");
-expect(tileKindAt(3, 1)).toBe("road");
-expect(restoredA.budget).toBe(119_700);
+expect(tileAt(1, 1)?.kind).toBe("road");
+expect(tileAt(2, 1)?.kind).toBe("road");
+expect(tileAt(3, 1)?.kind).toBe("road");
+expect([...(tileAt(2, 1)?.roadConnections ?? [])].sort()).toEqual([
+  "east",
+  "west",
+]);
+
+expect(tileAt(5, 1)?.area).toBe("residential");
+expect(
+  restoredA.buildings.some(
+    (building) =>
+      building.type === "smallHouse" &&
+      building.origin.x === 5 &&
+      building.origin.y === 1,
+  ),
+).toBe(true);
+
+expect(restoredA.budget).toBe(115_700);
 expect(restoredA.time).toBe(savedTime);
 ```
 
-Do **not** use `expect(restoredA.map).toEqual(beforeSave.map)`. Save capture normalizes a clone and restore normalizes the persisted candidate; whole-map live-vs-restored equality crosses that normalization boundary and produces an unhelpful 504-tile failure dump.
+This keeps the existing unique zone/building storage round-trip and adds the road connectivity field from which routing topology is reconstructed.
 
-- [ ] **Step 8: Continue gameplay, then rename and delete B**
+### Step 9 — continue gameplay and prove the restored road participates in new authoring
 
 ```ts
 await selectBuildLeaf(page, "roads", "road-twoWay");
 await dragMapTiles(page, canvas, { x: 1, y: 2 }, { x: 3, y: 2 });
-await expect(page.getByTestId("topbar").getByText("$119,400")).toBeVisible();
+await expect(page.getByTestId("topbar").getByText("$115,400")).toBeVisible();
 
-await openCommandDestination(page, "city");
-const bName = page.getByRole("textbox", { name: "Rename Browser Smoke B" });
-await bName.fill("Browser Smoke B Renamed");
-await bName.press("Enter");
-
-const renamedB = page.getByRole("textbox", {
-  name: "Rename Browser Smoke B Renamed",
-});
-const bRow = page.getByTestId("city-list").locator("article").filter({ has: renamedB });
-const deleteB = bRow.locator("button").filter({ hasText: "Delete" });
-await deleteB.click();
-await deleteB.click();
-
-await expect(renamedB).toHaveCount(0);
-await expect(page.getByTestId("active-city-name")).toHaveText("Browser Smoke A");
+const continued = (await runtimeSnapshot(page)).state;
+const continuedTileAt = (x: number, y: number) =>
+  continued.map.tiles.find((tile) => tile.x === x && tile.y === y);
+expect(continuedTileAt(1, 1)?.roadConnections).toContain("south");
+expect(continuedTileAt(1, 2)?.roadConnections).toContain("north");
 ```
 
-- [ ] **Step 9: Run the widened browser smoke before touching production code**
+The adjacent stroke attaches to the restored road endpoint, giving a cheap post-restore connectivity/topology probe rather than only another budget arithmetic check.
 
-Run:
+Do **not** add browser rename/delete here. Those behaviors already have direct focused coverage in `appShell.test.ts` and `workingSaveRuntime.test.ts`; keeping them in this Playwright journey would duplicate coverage while making the smoke longer.
+
+### Step 10 — run and commit
 
 ```bash
 bunx playwright test tests/e2e/cityLibrary.spec.ts --project=chromium
-```
-
-Expected: PASS with only the browser test changed.
-
-If it fails, distinguish a selector/timing mistake from a real product defect. Do not weaken a valid persistence assertion to make the smoke green.
-
-- [ ] **Step 10: Commit the browser smoke**
-
-```bash
 git add tests/e2e/cityLibrary.spec.ts
 git commit -m "test: expand browser multi-city smoke"
 ```
 
----
+If the smoke exposes a real defect, stop broadening the E2E. Add a focused regression at the closest existing seam first.
 
-### Task 2: Run the focused contracts that already own HPA-349's preview and failure bullets
+### Review note — focused ownership stays unchanged
 
-**Files:**
-- Verify: `tests/runtime/gameRuntime.test.ts`
-- Verify: `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`
-- Verify: `tests/runtime/workingSaveRuntime.test.ts`
-- Verify: `tests/ui/appShell.test.ts`
-- Verify: `tests/runtime/persistence/tauriCitySaveStore.test.ts`
-- Verify: `tests/runtime/persistence/citySaveStoreSelection.test.ts`
-- Verify: `src-tauri/src/city_store.rs`
-
-**Interfaces:**
-- Consumes: existing focused tests only.
-- Produces: evidence for preview, failed-update preservation, invalid-load preservation, busy gating, rename/delete, host selection, native IPC, and disk reopen without E2E failure injection.
-
-- [ ] **Step 1: Run the focused TypeScript tests**
-
-```bash
-bunx vitest run \
-  tests/runtime/gameRuntime.test.ts \
-  tests/runtime/persistence/indexedDbCitySaveStore.test.ts \
-  tests/runtime/workingSaveRuntime.test.ts \
-  tests/ui/appShell.test.ts \
-  tests/runtime/persistence/tauriCitySaveStore.test.ts \
-  tests/runtime/persistence/citySaveStoreSelection.test.ts
-```
-
-Confirm current tests still prove:
-
-- road mutation preview is published/invalidated correctly in `gameRuntime.test.ts`;
-- a failed IndexedDB update leaves the prior record unchanged;
-- returned `invalidSnapshot` load leaves the prior active city installed;
-- persistence actions are disabled while busy;
-- rename/delete preserve correct active-city semantics;
-- the Tauri adapter maps only the intended six commands;
-- browser selects IndexedDB and native selects the Tauri store.
-
-- [ ] **Step 2: Run Rust tests**
-
-```bash
-cargo test --workspace
-```
-
-Confirm the native city-file suite still proves:
-
-- `failed_update_preserves_committed_record`;
-- `second_store_instance_reopens_same_directory`;
-- `from_app_uses_app_data_cities_child`;
-- the Tauri mock-runtime IPC story using production command registration.
-
-Do not replay these failures through browser/native UI injection.
-
-- [ ] **Step 3: Add a focused assertion only if a listed acceptance behavior is genuinely missing**
-
-Use the nearest existing seam:
+No separate implementation task is needed just to rerun selected focused files. The final `bun run test` and `cargo test --workspace` already contain them. Before implementation, confirm the ownership map remains true:
 
 ```text
-road preview                -> tests/runtime/gameRuntime.test.ts
-IndexedDB record semantics  -> indexedDbCitySaveStore.test.ts
-working-save active/busy    -> workingSaveRuntime.test.ts
-Svelte busy/rename/delete   -> appShell.test.ts
-Tauri invoke mapping        -> tauriCitySaveStore.test.ts
-host selection              -> citySaveStoreSelection.test.ts
-native file replacement     -> src-tauri/src/city_store.rs
+browser road preview          -> tests/runtime/gameRuntime.test.ts
+IndexedDB failed update       -> tests/runtime/persistence/indexedDbCitySaveStore.test.ts
+invalid load / busy runtime   -> tests/runtime/workingSaveRuntime.test.ts
+busy + rename/delete UI       -> tests/ui/appShell.test.ts
+Tauri invoke mapping          -> tests/runtime/persistence/tauriCitySaveStore.test.ts
+host store selection          -> tests/runtime/persistence/citySaveStoreSelection.test.ts
+native failed update/reopen   -> src-tauri/src/city_store.rs
 ```
 
-If nothing is missing, make no Task 2 commit.
+Only add a focused assertion if this audit finds a genuine gap.
 
 ---
 
-### Task 3: Build and run one real packaged Tauri restart smoke
+## Task 2: Build and run one real packaged Tauri restart smoke
 
-**Files:** No source change expected. Record evidence in the implementation PR body.
+**Source changes expected:** none.  
+**Evidence destination:** implementation PR body.
 
-**Interfaces:**
-- Consumes: packaged `Caelum.app`, existing Svelte UI, native gameplay host, and native file store.
-- Produces: one operator-observed proof of production bootstrap, visual native road preview, dispatch, tick, real app-data persistence, process restart, Load, and continued gameplay.
+This is an operator gate. Build/unit/mock-runtime success cannot substitute for it.
 
-This is a human/operator gate. Do not infer PASS from build, unit, or mock-runtime success.
-
-- [ ] **Step 1: Build the packaged app**
+### Step 1 — build once
 
 ```bash
 bun run tauri:build
 ```
 
-Expected on macOS:
+Expected macOS bundle:
 
 ```text
 src-tauri/target/release/bundle/macos/Caelum.app
 ```
 
-- [ ] **Step 2: Launch without requiring or clearing an empty application-data directory**
+### Step 2 — launch without clearing real app data
 
 ```bash
 open src-tauri/target/release/bundle/macos/Caelum.app
 ```
 
-Packaged and development builds share the `com.caelum.app` application-data identity. Existing development cities may legitimately be present.
+Packaged and development runs share the `com.caelum.app` application-data identity. Existing cities are allowed. Use unique smoke names and ignore unrelated rows; never wipe Application Support to manufacture an empty library.
 
-Choose unique names, for example:
+Example:
 
 ```text
-Native Smoke A 20260812-1847
-Native Smoke B 20260812-1847
+Native Smoke A 20260812-1918
+Native Smoke B 20260812-1918
 ```
 
-Ignore unrelated rows. Do not wipe Application Support to manufacture an empty library.
+### Step 3 — first process
 
-- [ ] **Step 3: First process—create A, observe preview, dispatch/tick, save, and create B**
-
-Through the real UI:
-
-1. Create the uniquely named Native Smoke A as Standard Crossroads.
+1. Create unique Native Smoke A as Standard Crossroads.
 2. Select Two Way Road and drag `(1,1) -> (3,1)`.
-3. **Before mouse release, visually confirm the live road preview overlay is visible.** This is the packaged-native preview proof.
-4. Release the drag and verify budget becomes `$119,700`.
-5. Resume and wait until the visible clock changes from `Day 1 00:00`; pause and note the non-zero clock.
-6. Open City, Save Now, and confirm the dirty indicator clears.
-7. From that clean City panel choose New City and create uniquely named Native Smoke B.
-8. Quit fully with **Cmd+Q**. Do not treat closing the window as a process restart.
+3. Before release, visually confirm the live road-preview overlay is visible.
+4. Release and verify `$119,700`.
+5. Resume until the visible clock changes from `Day 1 00:00`.
+6. Click Pause and **wait until the button label becomes `Resume`** before noting the saved clock or opening City.
+7. Save Now and verify the dirty indicator clears.
+8. From the clean City panel create unique Native Smoke B.
+9. Quit fully with **Cmd+Q**; closing only the window is not a process-restart proof.
 
-- [ ] **Step 4: Second process—list both smoke cities, explicitly Load A, and prove restoration**
+### Step 4 — second process
 
-Relaunch the same packaged app. Do not require unrelated existing cities to disappear.
-
-1. Verify **both unique smoke names** are listed.
-2. Use Continue once to exercise the shared default resume path.
-3. Explicitly Load Native Smoke A.
-4. Do not mark PASS until A visibly shows:
-   - the road stroke across `(1,1)`, `(2,1)`, `(3,1)`;
-   - budget `$119,700`;
+1. Relaunch the same packaged app.
+2. Verify both unique smoke names are listed among any unrelated rows.
+3. Use Continue once to exercise the shared default resume path.
+4. Explicitly Load Native Smoke A.
+5. Do not mark PASS until A visibly shows:
+   - the saved road across `(1,1)..(3,1)`;
+   - `$119,700`;
    - a non-zero saved clock.
-5. Add road `(1,2) -> (3,2)` and verify `$119,400` to prove continued native gameplay.
-6. Rename inactive Native Smoke B and delete it with the existing two-click confirmation.
-7. Verify A remains active and usable.
+6. Add road `(1,2) -> (3,2)` and verify `$119,400` to prove continued native gameplay.
 
-Rename/delete are included because the operator is already in the flow; the unique native gap is still production bootstrap + real app-data restart/load.
+Do not spend manual-gate time re-proving rename/delete; their shared UI/runtime semantics are already owned by focused automated tests. The unique native gap is production bootstrap + real app-data write + true process restart/load.
 
-- [ ] **Step 5: Record coarse size/latency only**
+### Step 5 — record coarse size/latency only
 
-Inspect committed files read-only:
+Read the application-data files without modifying unrelated records:
 
 ```bash
 ls -lh "$HOME/Library/Application Support/com.caelum.app/cities"
 ```
 
-If macOS resolves the directory elsewhere, inspect the actual resolved path; do not change production path logic for this smoke.
+Record only:
 
-Record in the implementation PR:
-
-- approximate committed smoke-city JSON size;
+- approximate smoke-city JSON size;
 - Save Now as effectively immediate / around 1 s / visibly slower;
 - relaunch + Load as effectively immediate / around 1–2 s / visibly slower.
 
-Do not add timers, tracing, telemetry, indexes, or optimization work without evidence.
+Do not add timers, tracing, telemetry, indexes, or optimization work without an observed problem.
 
-- [ ] **Step 6: Clean up only the smoke records**
-
-Delete the remaining smoke city through the normal UI if practical. Do not remove unrelated application data.
+Clean up only the smoke records if practical.
 
 ---
 
-### Task 4: Only if a smoke exposes a product defect, pin and fix that defect
+## Task 3: If a smoke exposes a defect, pin and fix it narrowly
 
-**Files:** Depend on the failing seam.
-
-**Interfaces:**
-- Consumes: the observed smoke failure.
-- Produces: one focused regression and the smallest product correction necessary for HPA-349.
-
-- [ ] **Step 1: Classify the seam**
+Classify the failing seam first:
 
 ```text
 Svelte flow / disabled action -> tests/ui/appShell.test.ts
@@ -393,38 +319,26 @@ browser store                 -> tests/runtime/persistence/indexedDbCitySaveStor
 Tauri TS adapter              -> tests/runtime/persistence/tauriCitySaveStore.test.ts
 host selection                -> tests/runtime/persistence/citySaveStoreSelection.test.ts
 native command/file behavior  -> src-tauri/src/city_store.rs
-shared gameplay restore       -> nearest caelum-core persistence test
+shared gameplay restore       -> nearest caelum-core persistence/topology test
 ```
 
-- [ ] **Step 2: Write and run the smallest failing regression first**
+Then:
 
-Run the focused test alone and confirm it fails for the observed reason.
+1. write the smallest focused failing regression;
+2. confirm it fails for the observed reason;
+3. make the minimum correction;
+4. rerun the focused regression and the representative smoke that exposed it;
+5. commit the defect separately from the browser smoke.
 
-- [ ] **Step 3: Make the minimum correction**
+Do not introduce a new abstraction unless two current callers actually need it.
 
-Do not introduce an abstraction unless two current callers actually require it.
-
-- [ ] **Step 4: Re-run the focused regression and the representative smoke that exposed it**
-
-A packaged-native bug is not closed by a unit test alone; repeat the packaged step that demonstrated it.
-
-- [ ] **Step 5: Commit the defect fix separately**
-
-Use a message naming the observed defect, not a generic HPA-349 message.
+If a native defect changes `src-tauri`, the store, or the working-save/runtime path, rebuild the packaged app as part of repeating Task 2. There is no need for a second unconditional build later.
 
 ---
 
-### Task 5: Run the final Phase 1 gate, close the architecture ownership sentence, and record evidence
+## Task 4: Final Phase 1 gate and ownership cleanup
 
-**Files:**
-- Modify after packaged PASS: `docs/architecture.md`
-- No additional source change expected.
-
-**Interfaces:**
-- Consumes: Tasks 1–4 and the packaged operator result.
-- Produces: final automated evidence, packaged PASS evidence, and architecture documentation that no longer describes HPA-349 as future work.
-
-- [ ] **Step 1: Run the complete automated gate**
+### Step 1 — automated gate
 
 ```bash
 cargo test --workspace
@@ -433,65 +347,54 @@ bun run check
 bun run lint
 bun run format:check
 bun run test:e2e
-bun run tauri:build
 ```
 
-Do not run a duplicate standalone `bun run build`; `tauri:build` already runs the configured frontend `beforeBuildCommand`.
+Do **not** run another unconditional `tauri:build`: Task 2 built the exact bundle used for the operator smoke. If a later defect fix affected native/runtime composition, Task 3 already requires rebuilding and repeating the packaged journey.
 
-- [ ] **Step 2: Update the stale architecture ownership sentence only after the packaged smoke passes**
+### Step 2 — update the stale architecture sentence after packaged PASS
 
-In `docs/architecture.md`, replace the future-tense HPA-349 ownership sentence:
+Only after Task 2 passes, change the current future-tense ownership sentence in `docs/architecture.md`:
 
 ```text
 HPA-349 owns the packaged native/browser UI journey and real-bundle application-data permission.
 ```
 
-with completed-state guidance such as:
+to completed-state guidance such as:
 
 ```text
 HPA-349 closes the remaining packaged composition gate with the representative browser Playwright multi-city journey and one operator-run packaged Tauri restart/load smoke; no permanent native UI automation layer is required for the current Phase 1 architecture.
 ```
 
-Keep the preceding HPA-344 IPC/disk ownership sentence intact.
+Preserve the preceding HPA-344 IPC/disk ownership sentence.
 
-- [ ] **Step 3: Commit the architecture cleanup**
+Commit:
 
 ```bash
 git add docs/architecture.md
 git commit -m "docs: record HPA-349 smoke ownership"
 ```
 
-- [ ] **Step 4: Review implementation scope**
+### Step 3 — implementation PR evidence
 
-When no defect is found, the expected implementation diff is:
-
-```text
-tests/e2e/cityLibrary.spec.ts
-docs/architecture.md
-```
-
-If production code changed, every production line must trace to a concrete smoke failure and focused regression from Task 4.
-
-- [ ] **Step 5: Put one compact evidence table in the implementation PR**
+Use one compact table; do not create a permanent smoke-results artifact:
 
 ```markdown
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Browser multi-city Playwright journey | PASS | A -> road/tick -> Save -> City-panel B -> reload -> Continue/Load -> authored tiles/$119,700/saved time -> continue -> rename/delete |
-| Browser road preview behavior | PASS | existing `gameRuntime.test.ts` focused coverage |
-| IndexedDB failed-update preservation | PASS | focused Vitest |
-| Invalid-load active-game preservation | PASS | focused Vitest |
-| Busy + rename/delete shared UI/runtime | PASS | focused Vitest |
-| Native failed-update + reopen + IPC | PASS | Rust/Tauri tests |
-| Packaged Tauri restart journey | PASS | unique A/B -> visual preview -> dispatch/tick/Save -> Cmd+Q -> relaunch -> list -> explicit Load A -> road/$119,700/non-zero clock |
+| Browser multi-city Playwright journey | PASS | zone/house + road/tick -> committed Pause -> Save -> City-panel B -> reload -> Continue/Load A -> area/building + road edges + $115,700 + saved time -> adjacent road seam |
+| Browser road preview | PASS | existing `gameRuntime.test.ts` coverage |
+| IndexedDB failed update | PASS | existing focused test via `bun run test` |
+| Invalid load / busy / rename-delete | PASS | existing focused tests via `bun run test` |
+| Native failed update + reopen + IPC | PASS | existing Rust/Tauri tests via `cargo test --workspace` |
+| Packaged Tauri restart/load | PASS | unique A/B -> visual preview -> dispatch/tick -> committed Pause -> Save -> Cmd+Q -> relaunch -> list -> explicit Load A -> road/$119,700/non-zero clock |
 | Native save size | ~N KB | application-data city JSON |
 | Native Save Now | ~... | coarse observation |
 | Native relaunch + Load | ~... | coarse observation |
 ```
 
-Do not mark the packaged row PASS until the second process explicitly loads A and verifies the saved road, budget, and non-zero clock.
+Do not mark the packaged row PASS until the second process explicitly loads A and proves the saved road, budget, and non-zero clock.
 
-- [ ] **Step 6: Close condition**
+### Close condition
 
 HPA-349 is complete only when:
 
@@ -502,8 +405,6 @@ HPA-349 is complete only when:
 
 Do not add checkpoint/autosave/recovery/migration/security/multi-instance scope to close Phase 1.
 
----
-
 ## Expected implementation commits when no defects are found
 
 ```text
@@ -511,4 +412,4 @@ test: expand browser multi-city smoke
 docs: record HPA-349 smoke ownership
 ```
 
-The packaged-native smoke and coarse measurements belong in implementation PR evidence, not in a synthetic results file or telemetry system.
+The packaged result and coarse measurements belong in the implementation PR evidence, not a synthetic code/results commit.
