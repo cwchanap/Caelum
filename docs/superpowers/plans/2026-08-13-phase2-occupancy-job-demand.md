@@ -2,130 +2,59 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make player-built Small Houses fill deterministically into four resident slots, cap player-built Supermarket employment at four jobs, feed those workers into the existing commute engine, and expose both occupancy values through the current Select inspector.
+**Goal:** Replace immediate housing population and unlimited destination jobs with deterministic move-in and finite per-type capacity while preserving all current building demand behavior and showing occupancy through Select.
 
-**Architecture:** Keep `Sim.home`/`workplace` point-based. Schema v5 stores placement time plus resident/job capacities on each placed building. The existing placement function receives explicit capacities, the existing trip substep scheduler processes move-ins, commute/workplace membership comes only from placed `jobCapacity > 0`, demolition removes occupied-house residents and retires the old home-fallback path, and the shell derives occupancy from the snapshot.
+**Architecture:** Keep `Sim.home` / `Sim.workplace` as points. Schema v5 persists only `PlacedBuilding.placedAt`; capacities stay in the existing Rust building catalog with the existing TypeScript catalog as a presentation mirror. A focused `population.rs` joins the six current trip-substep event passes; assignment stays in `buildings.rs`, demolition in `transit.rs`, and the UI derives occupancy from snapshot sims.
 
 **Tech Stack:** Rust `caelum-core`, Serde, TypeScript, Svelte 5, Vitest, Playwright, Bun.
 
-## Global Constraints
+## Global constraints
 
-- Player Small House resident capacity is exactly `4`.
-- Player Supermarket job capacity is exactly `4`.
-- Every other current player building has zero resident/job capacity for this slice.
-- Growth/campaign placement passes explicit `0, 0` capacities through the existing placement function; do not add a world-placement API or persisted source flag.
-- Move-in cadence is exactly one resident slot per in-game hour: `GAME_DAY_SECONDS / 24.0`.
-- A due move-in is processed when `due_time <= state.time`.
-- Keep `Sim.home: Point` and `Sim.workplace: Option<Point>`; do not add building relationship IDs.
-- The sole workplace membership rule is placed `job_capacity > 0`; commute code must not use catalog `effect == "destination"`.
-- Remove `moveInRate`, `citizenCount`, and obsolete home-fallback behavior directly; no migration, dual reader, aliases, or compatibility fixtures.
-- No generic population/job framework, scheduler service, event bus, ECS, citywide occupancy control, visitor demand, cars, or campaign redesign.
-
----
+- Schema v5 adds only `placed_at/placedAt` to `PlacedBuilding`.
+- Replace `citizen_count/citizenCount` with per-type resident/job capacity in the existing catalogs; do not persist capacity.
+- Small House = 4 residents; Large House = 10 residents.
+- Preserve every current destination as a workplace with footprint-area job capacity: Supermarket 4, Cinema 6, Factory 6, Warehouse 6, Office Tower 4, Business Park 6, Clinic 4, School 6, Park Plaza 4.
+- Transit buildings = 0 residents / 0 jobs.
+- Workplace membership is `building_definition(type).job_capacity > 0`; commute code must stop using `effect == "destination"`.
+- Move-in interval is `GAME_DAY_SECONDS / 24.0`; due means `due_time <= state.time`.
+- Population move-in applies only in the shipped Sandbox workflow. Do not modify `growth.rs` or add source/player-built state for dormant Campaign growth.
+- A worker moving in after today's outbound departure does not receive a retroactive commute; normal commuting starts after the next day reset.
+- Remove `moveInRate`, home-fallback, and schema-v4 compatibility directly.
+- No relationship IDs, job entities, scheduler service, ECS, event bus, migration, or compatibility layer.
 
 ## File map
 
-**Create**
+**Create:**
+- `crates/caelum-core/src/population.rs`
+- `crates/caelum-core/tests/population.rs`
 
-- `crates/caelum-core/src/population.rs` — fixed move-in cadence, resident occupancy/boundaries, resident cleanup.
-- `crates/caelum-core/tests/population.rs` — vertical population/job/demolition determinism tests.
-
-**Modify**
-
-- `crates/caelum-core/src/model.rs`
-- `crates/caelum-core/src/building_catalog.rs`
-- `crates/caelum-core/src/buildings.rs`
-- `crates/caelum-core/src/growth.rs`
-- `crates/caelum-core/src/trips.rs`
-- `crates/caelum-core/src/transit.rs`
-- `crates/caelum-core/src/sandbox.rs`
-- `crates/caelum-core/src/lib.rs`
-- `crates/caelum-core/tests/areas_buildings.rs`
-- `crates/caelum-core/tests/golden_sequences.rs`
-- `crates/caelum-core/tests/model_wire_format.rs`
-- `crates/caelum-core/tests/sandbox_factory.rs`
-- `crates/caelum-core/tests/sandbox_coverage.rs`
-- `crates/caelum-core/tests/trip_lifecycle.rs`
-- `crates/caelum-core/tests/transit_build.rs`
-- `src/domain/types.ts`
-- `src/domain/catalog/buildings.ts`
-- `src/runtime/backend/types.ts`
-- `src/runtime/workingSaveRuntime.ts`
-- `src/runtime/backend/sandboxErrors.ts`
-- `src/runtime/types.ts`
-- `src/runtime/runtimeSelectors.ts`
-- `src/components/hud/panels/InspectPanel.svelte`
-- `tests/helpers/gameState.ts`
-- `tests/fixtures/rustSnapshot.ts`
-- `tests/runtime/wasmBackend.test.ts`
-- `tests/runtime/tauriBackend.test.ts`
-- `tests/runtime/workingSaveRuntime.test.ts`
-- `tests/runtime/runtimeSelectors.test.ts`
-- `tests/e2e/smoke.spec.ts`
-- `docs/architecture.md`
+**Modify:**
+- Core: `model.rs`, `building_catalog.rs`, `buildings.rs`, `trips.rs`, `transit.rs`, `sandbox.rs`, `lib.rs`
+- Rust tests: `areas_buildings.rs`, `golden_sequences.rs`, `model_wire_format.rs`, `sandbox_factory.rs`, `sandbox_coverage.rs`, `trip_lifecycle.rs`, `transit_build.rs`
+- TS: `src/domain/types.ts`, `src/domain/catalog/buildings.ts`, `src/runtime/backend/types.ts`, `src/runtime/workingSaveRuntime.ts`, `src/runtime/backend/sandboxErrors.ts`, `src/runtime/types.ts`, `src/runtime/runtimeSelectors.ts`, `src/components/hud/panels/InspectPanel.svelte`
+- TS fixtures/tests: `tests/helpers/gameState.ts`, `tests/fixtures/rustSnapshot.ts`, `tests/runtime/wasmBackend.test.ts`, `tests/runtime/tauriBackend.test.ts`, `tests/runtime/workingSaveRuntime.test.ts`, `tests/runtime/gameRuntime.test.ts`, `tests/runtime/runtimeSelectors.test.ts`, `tests/render/overlayRenderer.test.ts`, `tests/e2e/smoke.spec.ts`
+- Docs: `docs/architecture.md`
 
 ---
 
-### Task 1: Land a compile-ready schema/placement/workplace authority break
+### Task 1: Schema v5 + complete capacity catalog + one workplace definition
 
-**Files:**
-- Modify: `crates/caelum-core/src/model.rs`
-- Modify: `crates/caelum-core/src/building_catalog.rs`
-- Modify: `crates/caelum-core/src/buildings.rs`
-- Modify: `crates/caelum-core/src/growth.rs`
-- Modify: `crates/caelum-core/src/trips.rs`
-- Modify: `crates/caelum-core/src/transit.rs`
-- Modify: `crates/caelum-core/src/sandbox.rs`
-- Test/fixture: `crates/caelum-core/tests/areas_buildings.rs`
-- Test/fixture: `crates/caelum-core/tests/model_wire_format.rs`
-- Test/fixture: `crates/caelum-core/tests/sandbox_factory.rs`
-- Test/fixture: `crates/caelum-core/tests/sandbox_coverage.rs`
-- Test/fixture: `crates/caelum-core/tests/trip_lifecycle.rs`
-- Test/fixture: `crates/caelum-core/tests/transit_build.rs`
-- Modify: `src/domain/types.ts`
-- Modify: `src/domain/catalog/buildings.ts`
-- Modify: `src/runtime/backend/types.ts`
-- Modify: `src/runtime/workingSaveRuntime.ts`
-- Modify: `src/runtime/backend/sandboxErrors.ts`
-- Test/fixture: `tests/helpers/gameState.ts`
-- Test/fixture: `tests/fixtures/rustSnapshot.ts`
-- Test: `tests/runtime/wasmBackend.test.ts`
-- Test: `tests/runtime/tauriBackend.test.ts`
-- Test: `tests/runtime/workingSaveRuntime.test.ts`
+**Produces:** `PlacedBuilding.placed_at`, Rust/TS resident/job catalog metadata, and one workplace-membership helper.
 
-**Interfaces:**
-- Produces schema `5` with required `PlacedBuilding.placed_at/placedAt`, `resident_capacity/residentCapacity`, and `job_capacity/jobCapacity`.
-- Replaces `BuildingDefinition.citizen_count` with `resident_capacity` and `job_capacity`.
-- Changes `place_building_core` to receive explicit resident/job capacities; player placement passes catalog values and growth passes `0, 0`.
-- Replaces effect-based `destination_points` with placed-capacity workplace membership.
-- Removes `move_in_rate/moveInRate` and `citizenCount`.
-- Keeps player Small House spawning immediately only for this intermediate task so all existing player-commute tests stay runnable until Task 2 replaces that loop.
-
-- [ ] **Step 1: Write the failing schema/wire assertions.**
-
-Update the existing wire test to expect the new required fields and removed sandbox field:
+- [ ] **1. Add failing schema/catalog assertions.**
 
 ```rust
 assert_eq!(SNAPSHOT_SCHEMA_VERSION, 5);
 let json = serde_json::to_value(snapshot).unwrap();
-assert!(json["rules"]["sandbox"].get("moveInRate").is_none());
 assert_eq!(json["buildings"][0]["placedAt"], 0.0);
-assert_eq!(json["buildings"][0]["residentCapacity"], 4);
-assert_eq!(json["buildings"][0]["jobCapacity"], 0);
+assert!(json["buildings"][0].get("residentCapacity").is_none());
+assert!(json["buildings"][0].get("jobCapacity").is_none());
+assert!(json["rules"]["sandbox"].get("moveInRate").is_none());
 ```
 
-Update `tests/fixtures/rustSnapshot.ts` expectations to schema 5 and remove `moveInRate`.
+Pin representative catalog values in Rust and TS: Small House `4/0`, Large House `10/0`, Supermarket `0/4`, Factory `0/6`.
 
-- [ ] **Step 2: Run the focused tests and confirm the old schema fails.**
-
-```bash
-cargo test -p caelum-core --test model_wire_format --test sandbox_factory --test sandbox_coverage
-bun run test:unit -- tests/runtime/wasmBackend.test.ts tests/runtime/tauriBackend.test.ts tests/runtime/workingSaveRuntime.test.ts
-```
-
-- [ ] **Step 3: Change the model/catalog and make the only construction site compile in the same step.**
-
-Use this shape:
+- [ ] **2. Implement the direct schema break.**
 
 ```rust
 pub const SNAPSHOT_SCHEMA_VERSION: u16 = 5;
@@ -133,202 +62,103 @@ pub const SNAPSHOT_SCHEMA_VERSION: u16 = 5;
 pub struct PlacedBuilding {
     // existing fields
     pub placed_at: f64,
-    pub resident_capacity: u16,
-    pub job_capacity: u16,
     // transit_node_id remains
 }
 
 pub struct BuildingDefinition {
-    // existing fields
+    // existing static fields
     pub resident_capacity: u16,
     pub job_capacity: u16,
 }
 ```
 
-Set Small House to `(4, 0)`, Supermarket to `(0, 4)`, and every other current catalog definition to `(0, 0)`.
+At the existing `place_building_core` construction site write `placed_at: state.time`. Keep the function's current four arguments. For this Task-1 intermediate gate, keep immediate spawning but replace the loop bound with `definition.resident_capacity`; Task 2 deletes that loop.
 
-Change the existing core placement function rather than adding a world-named API:
+Fill the exact capacity table from Global constraints in Rust and mirror it in `src/domain/catalog/buildings.ts` as `residentCapacity` / `jobCapacity` for UI presentation.
 
-```rust
-pub fn place_building_core(
-    state: &GameSnapshot,
-    building_type: &str,
-    origin: &Point,
-    rotation: u16,
-    resident_capacity: u16,
-    job_capacity: u16,
-) -> GameplayResult<GameSnapshot> {
-    // keep current validation/node setup
-    next.buildings.push(PlacedBuilding {
-        id: building_id,
-        building_type: building_type.to_string(),
-        origin: *origin,
-        rotation,
-        occupied_tiles: occupied_tiles.clone(),
-        placed_at: state.time,
-        resident_capacity,
-        job_capacity,
-        transit_node_id,
-    });
-
-    // Intermediate Task-1 behavior only. Task 2 deletes this loop.
-    for index in 0..usize::from(resident_capacity) {
-        // keep the current deterministic Sim construction body
-    }
-
-    // existing return path
-}
-```
-
-`place_building_costed` passes `definition.resident_capacity, definition.job_capacity`. `growth.rs` passes `0, 0` at its one placement call. Do not introduce `enable_player_capacities: bool` or `place_world_building_core`.
-
-- [ ] **Step 4: Replace workplace membership authority now, before finite capacity accounting.**
-
-Rename the point helper and derive it from placed data only:
+- [ ] **3. Replace effect-based workplace authority.**
 
 ```rust
 pub fn workplace_points(state: &GameSnapshot) -> Vec<Point> {
-    state
-        .buildings
-        .iter()
-        .filter(|building| building.job_capacity > 0)
+    state.buildings.iter()
+        .filter(|building| building_definition(&building.building_type)
+            .is_some_and(|definition| definition.job_capacity > 0))
         .flat_map(|building| building.occupied_tiles.iter().copied())
         .collect()
 }
 ```
 
-Use `workplace_points` in the current unlimited `assign_workplaces` implementation and `trips.rs::has_valid_workplace_destination`. In `transit.rs`, build removed-workplace tiles only when the removed building footprint is represented by this same helper. No commute/workplace path may consult `BuildingDefinition.effect` after this step.
+Use it in current `assign_workplaces`, `trips.rs::has_valid_workplace_destination`, and removed-workplace tile collection in `transit.rs`. Do not use `effect == "destination"` for commute/workplace behavior afterward.
 
-This makes growth buildings with stored `job_capacity == 0` inert immediately; Task 4 later changes assignment from unlimited to finite.
+- [ ] **4. Remove `moveInRate` and update every required literal.**
 
-- [ ] **Step 5: Remove `moveInRate` and update every required placed-building literal.**
-
-Delete `MoveInRateSelection`, the sandbox setting/request/validated field, `UnknownMoveInRate`, its parser, and the hard-coded TypeScript values. Remove `citizenCount` from the TS catalog.
-
-Run this inventory before editing fixtures:
+Run both inventories:
 
 ```bash
-rg -n 'PlacedBuilding \{' crates/caelum-core tests
+rg -n 'PlacedBuilding \{' crates/caelum-core
+rg -n 'occupiedTiles' src tests
 ```
 
-At minimum update literals/builders in `areas_buildings.rs`, `trip_lifecycle.rs`, `transit_build.rs`, `model_wire_format.rs`, `tests/helpers/gameState.ts`, and `tests/fixtures/rustSnapshot.ts`. Rust fixtures that represent a valid commute destination must set `job_capacity > 0`; generic/non-workplace fixtures may use zero. Give every literal a finite `placed_at` (normally `0.0`).
+Add `placed_at: 0.0` / `placedAt: 0` to every actual `PlacedBuilding` literal/builder. This explicitly includes direct literals in `tests/runtime/gameRuntime.test.ts`, `tests/render/overlayRenderer.test.ts`, shared fixture builders, and all Rust commute/transit fixtures. Do not add capacity fields to placed-building literals.
 
-- [ ] **Step 6: Update growth expectations and run a full compile/test gate.**
-
-Growth-wave Small Houses should still place but store zero capacity and create zero sims because growth passes `0, 0`:
-
-```rust
-assert_eq!(next.buildings.len(), 5);
-assert!(next.buildings.iter().all(|building| building.resident_capacity == 0));
-assert!(next.sims.is_empty());
-```
-
-Run:
+- [ ] **5. Verify the compile-ready gate and commit.**
 
 ```bash
 cargo test --workspace
 bun run test:unit
 bun run check
 cargo clippy --workspace --all-targets -- -D warnings
-```
 
-This gate is intentionally broad: Task 1 adds required struct fields and must prove no construction site or fixture was missed.
-
-- [ ] **Step 7: Commit.**
-
-```bash
 git add crates/caelum-core src tests
-git commit -m "refactor(core): define phase 2 building capacity authority"
+git commit -m "refactor(core): define phase 2 building capacity catalog"
 ```
 
 ---
 
-### Task 2: Replace immediate player population with deterministic move-in
+### Task 2: Deterministic Sandbox move-in, including missed departures
 
-**Files:**
-- Create: `crates/caelum-core/src/population.rs`
-- Create: `crates/caelum-core/tests/population.rs`
-- Modify: `crates/caelum-core/src/lib.rs`
-- Modify: `crates/caelum-core/src/buildings.rs`
-- Modify: `crates/caelum-core/src/trips.rs`
-- Modify: `crates/caelum-core/tests/areas_buildings.rs`
-- Modify: `crates/caelum-core/tests/golden_sequences.rs`
+**Produces:** `population.rs` due processing; removes immediate resident spawning.
 
-**Interfaces:**
-- Produces `population::MOVE_IN_INTERVAL_SECONDS`.
-- Produces focused resident occupancy, next-boundary, remaining-slot, due-application, and later demolition-cleanup helpers.
-- Deletes the intermediate immediate resident loop from `place_building_core`.
+- [ ] **1. Write failing move-in tests.**
 
-- [ ] **Step 1: Write the failing move-in tests and update the pinned no-tick golden.**
+Small House while paused has zero sims. First running tick creates `sim-001`. Compare one `150.0` tick with three `50.0` ticks and require identical sims with four Small House residents. Add Large House coverage proving it fills to 10 and stops.
 
-In `population.rs` integration coverage:
+Change the no-tick golden in `golden_sequences.rs` from 4 sims to 0.
 
-```rust
-let placed = place_player_small_house(&mut engine);
-assert!(placed.snapshot.sims.is_empty());
+- [ ] **2. Add a missed-departure regression.**
 
-engine.dispatch(GameIntent::SetPaused { paused: false });
-let first = engine.tick(0.001);
-assert_eq!(first.snapshot.sims.len(), 1);
-assert_eq!(first.snapshot.sims[0].id, "sim-001");
-```
+Build a Sandbox state after `sim-001`'s deterministic outbound departure, place housing + a valid workplace, run the due first move-in, and assert no current-day outbound trip is spawned. Advance through next day reset to that worker's next outbound time and assert a normal commute can spawn.
 
-For granularity:
+Calculate the departure with existing `departure_minute_for_sim`; do not hard-code a clock time.
 
-```rust
-coarse.tick(150.0);
-for _ in 0..3 {
-    fine.tick(50.0);
-}
-assert_eq!(coarse.snapshot().sims, fine.snapshot().sims);
-assert_eq!(coarse.snapshot().sims.len(), 4);
-```
-
-In `golden_sequences.rs::zone_build_and_route_sequence_has_stable_counts`, change the no-tick population expectation from `4` to `0`. Keep the 900-second commute goldens and use them as the regression that the four residents have arrived before standard departures.
-
-- [ ] **Step 2: Run and confirm current Task-1 immediate spawning fails the new contract.**
-
-```bash
-cargo test -p caelum-core --test population --test areas_buildings --test golden_sequences
-```
-
-- [ ] **Step 3: Implement occupancy-derived due processing with `<=`.**
-
-Use:
+- [ ] **3. Implement occupancy-derived due processing.**
 
 ```rust
 pub const MOVE_IN_INTERVAL_SECONDS: f64 = crate::clock::GAME_DAY_SECONDS / 24.0;
 
 pub fn resident_occupancy(state: &GameSnapshot, building: &PlacedBuilding) -> usize {
-    state
-        .sims
-        .iter()
+    state.sims.iter()
         .filter(|sim| building.occupied_tiles.contains(&sim.home))
         .count()
 }
 ```
 
-Inside `apply_due_move_ins`, process resident-capacity buildings in stable ID order. For each building:
+Population helpers no-op outside `GameMode::Sandbox`. For each housing building in stable ID order, resolve `resident_capacity` from `building_definition` and process slots while:
 
 ```rust
-let mut occupancy = resident_occupancy(state, &building);
-while occupancy < usize::from(building.resident_capacity) {
-    let due = building.placed_at + occupancy as f64 * MOVE_IN_INTERVAL_SECONDS;
-    if due > state.time {
-        break;
-    }
-    // allocate next deterministic sim using next_entity_id,
-    // worker_profile_for_id, shift_template_for_id, and
-    // building.occupied_tiles[occupancy % building.occupied_tiles.len()]
-    occupancy += 1;
-}
+let due = building.placed_at + occupancy as f64 * MOVE_IN_INTERVAL_SECONDS;
+if due > state.time { break; } // therefore due <= state.time is applied
 ```
 
-The comparison is deliberately `due <= state.time` via the `if due > state.time { break; }` form. Call `assign_workplaces` once after all due residents are added.
+Reuse `next_entity_id`, `worker_profile_for_id`, `shift_template_for_id`, and footprint rotation. Delete the placement-time resident loop.
 
-- [ ] **Step 4: Replace all six growth-event calls in `tick_trips_substepped`.**
+- [ ] **4. Initialize new workers against today's departure.**
 
-Add:
+Set `commute_day = state.day`. Compute today's outbound timestamp from the existing deterministic departure minute. If `state.time` is strictly after it, initialize `outbound_resolved_today = true`, `outbound_arrived_today = false`; otherwise leave outbound unresolved. Leave return flags false. At exact departure, the current-time spawn remains allowed.
+
+After adding due residents, call `assign_workplaces` once.
+
+- [ ] **5. Reuse all six trip current-time passes.**
 
 ```rust
 fn apply_due_world_events(state: &mut GameSnapshot) {
@@ -337,292 +167,119 @@ fn apply_due_world_events(state: &mut GameSnapshot) {
 }
 ```
 
-Replace every `crate::growth::apply_due_growth_waves(&mut next)` in `tick_trips_substepped`: initial prepass, normal-loop prepass, normal post-substep, fallback-loop prepass, fallback post-substep, and final pass.
-
-Verify the replacement inventory:
+Replace all six direct growth calls inside `tick_trips_substepped`. Verify:
 
 ```bash
 rg -n 'apply_due_growth_waves\(&mut next\)' crates/caelum-core/src/trips.rs
 ```
 
-Expected after the edit: no direct call remains inside `tick_trips_substepped`; the helper is the only path there.
+Expected inside that function: zero direct calls. Add only future Sandbox move-in timestamps to `next_boundary_after`, add remaining resident slots to `max_tick_substeps`, and retain sim-count cap widening.
 
-Add `population::next_move_in_boundary_after(state)` to `next_boundary_after`. That helper should return only future candidates; already-due slots are handled by the six current-time passes. Add:
+- [ ] **6. Keep golden semantics, not incidental float bits.**
 
-```rust
-.saturating_add(crate::population::remaining_move_in_slots(state))
-```
+Require coarse/fine equivalence and the same spawned/served commute set. If added 50/100/150-second boundaries change only exact float metrics in the last digits, refresh those float goldens with a one-line note rather than forcing the previous partition.
 
-to `max_tick_substeps`, and keep the existing post-event sim-count cap widening.
-
-- [ ] **Step 5: Update immediate-spawn tests without weakening the existing long goldens.**
-
-Change `areas_buildings.rs` housing coverage to assert zero while paused, then Resume/tick to prove deterministic filling. Keep `full_day_commute_trace_has_stable_golden_metrics` and `large_tick_matches_stepped_tick_for_full_commute`; do not replace their expected commute metrics merely because move-in became gradual. By 150 seconds the Small House must already contain four residents, well before `sim-001`'s standard outbound departure.
-
-- [ ] **Step 6: Run deterministic + integrated commute gates.**
+- [ ] **7. Verify and commit.**
 
 ```bash
 cargo test -p caelum-core --test population --test areas_buildings --test golden_sequences --test trip_lifecycle
 cargo test -p caelum-core growth::tests
 cargo clippy -p caelum-core --all-targets -- -D warnings
-```
 
-- [ ] **Step 7: Commit.**
-
-```bash
 git add crates/caelum-core/src/population.rs crates/caelum-core/src/lib.rs crates/caelum-core/src/buildings.rs crates/caelum-core/src/trips.rs crates/caelum-core/tests/population.rs crates/caelum-core/tests/areas_buildings.rs crates/caelum-core/tests/golden_sequences.rs
-git commit -m "feat(core): add deterministic player housing move-in"
+git commit -m "feat(core): add deterministic Sandbox housing move-in"
 ```
 
 ---
 
-### Task 3: Remove occupied-house residents and retire home-fallback
+### Task 3: Occupied-house cleanup, freed-job refill, home-fallback deletion
 
-**Files:**
-- Modify: `crates/caelum-core/src/population.rs`
-- Modify: `crates/caelum-core/src/transit.rs`
-- Modify: `crates/caelum-core/src/buildings.rs`
-- Modify: `crates/caelum-core/src/trips.rs`
-- Modify: `crates/caelum-core/tests/population.rs`
-- Modify: `crates/caelum-core/tests/areas_buildings.rs`
-- Modify: `crates/caelum-core/tests/trip_lifecycle.rs`
+- [ ] **1. Add demolition regressions.**
 
-**Interfaces:**
-- Produces `population::remove_residents_for_building(&mut GameSnapshot, &PlacedBuilding)` for the authoritative building-removal path.
-- Deletes the supported `workplace == home` fallback contract because the lifecycle that created it no longer exists.
+A demolished occupied house removes every resident whose `home` is in its footprint, their active trips, and those trip IDs from vehicle passengers.
 
-- [ ] **Step 1: Add the failing occupied-house demolition regression.**
+Add the load-bearing case: two filled Small Houses + one Supermarket. Four workers are employed and four surplus. Demolish the house containing the employed workers; assert the four surviving workers immediately refill the Supermarket to four jobs.
 
-Create/fill a Small House, attach an active trip plus a vehicle passenger reference for `sim-001`, demolish any tile in the house footprint, then assert:
+- [ ] **2. Implement resident cleanup and exactly one refill pass.**
+
+Collect resident IDs by home-footprint membership, collect their trip IDs, retain sims/trips/passengers, then call:
 
 ```rust
-assert!(!snapshot.sims.iter().any(|sim| sim.id == "sim-001"));
-assert!(!snapshot.active_trips.iter().any(|trip| trip.sim_id == "sim-001"));
-assert!(snapshot.transit.vehicles.iter().all(|vehicle|
-    !vehicle.passenger_ids.iter().any(|id| id == "trip-001")
-));
+crate::buildings::assign_workplaces(state);
 ```
 
-Also assert all residents whose homes lie in that same footprint are removed, not only the clicked tile's resident.
+exactly once at the end of resident removal. Invoke this path when the removed building's Rust definition has `resident_capacity > 0`.
 
-- [ ] **Step 2: Run and confirm current demolition leaves residents behind.**
+- [ ] **3. Delete home-fallback.**
 
-```bash
-cargo test -p caelum-core --test population --test areas_buildings --test trip_lifecycle
-```
-
-- [ ] **Step 3: Implement resident/trip/passenger cleanup.**
-
-Use footprint membership to collect removed sim IDs and their active trip IDs:
-
-```rust
-let removed_sim_ids: HashSet<String> = state
-    .sims
-    .iter()
-    .filter(|sim| building.occupied_tiles.contains(&sim.home))
-    .map(|sim| sim.id.clone())
-    .collect();
-let removed_trip_ids: HashSet<String> = state
-    .active_trips
-    .iter()
-    .filter(|trip| removed_sim_ids.contains(&trip.sim_id))
-    .map(|trip| trip.id.clone())
-    .collect();
-
-state.sims.retain(|sim| !removed_sim_ids.contains(&sim.id));
-state.active_trips.retain(|trip| !removed_trip_ids.contains(&trip.id));
-for vehicle in &mut state.transit.vehicles {
-    vehicle
-        .passenger_ids
-        .retain(|trip_id| !removed_trip_ids.contains(trip_id));
-}
-```
-
-Call this from `transit::remove_at_tile` when the removed placed building has `resident_capacity > 0`.
-
-- [ ] **Step 4: Delete home-fallback production behavior and its obsolete regression tests.**
-
-After occupied-housing demolition removes the sims, a supported snapshot cannot free a resident's home tile and leave that resident alive. Remove:
-
-- `buildings.rs` logic that treats `workplace == home` as an assignment state to revisit;
-- the placement-time `retarget_home_fallback_trips` call;
-- `trips.rs::is_home_fallback_trip` and `retarget_home_fallback_trips`;
-- the call/comment in `transit.rs::cleanup_removed_destination_references`;
-- tests in `areas_buildings.rs` / `trip_lifecycle.rs` that exist only to preserve orphaned-resident home-fallback behavior.
-
-Inventory the removal:
+Remove `workplace == home` assignment special handling, `is_home_fallback_trip`, `retarget_home_fallback_trips`, their placement/workplace-cleanup calls/comments, and regressions that exist only because demolished housing previously left residents alive.
 
 ```bash
 rg -n 'home.?fallback|retarget_home_fallback|is_home_fallback' crates/caelum-core/src crates/caelum-core/tests
 ```
 
-Expected: no live source/test contract remains for home fallback after this task.
+Expected after Task 3: no supported home-fallback contract remains.
 
-- [ ] **Step 5: Run demolition + commute regressions.**
+- [ ] **4. Verify and commit.**
 
 ```bash
 cargo test -p caelum-core --test population --test areas_buildings --test trip_lifecycle --test golden_sequences
 cargo test --workspace
-```
 
-- [ ] **Step 6: Commit.**
-
-```bash
 git add crates/caelum-core/src/population.rs crates/caelum-core/src/transit.rs crates/caelum-core/src/buildings.rs crates/caelum-core/src/trips.rs crates/caelum-core/tests/population.rs crates/caelum-core/tests/areas_buildings.rs crates/caelum-core/tests/trip_lifecycle.rs
 git commit -m "refactor(core): remove orphaned housing fallback"
 ```
 
 ---
 
-### Task 4: Enforce finite Supermarket jobs and keep one workplace cleanup path
+### Task 4: Finite stable-order job assignment for all current workplaces
 
-**Files:**
-- Modify: `crates/caelum-core/src/buildings.rs`
-- Modify: `crates/caelum-core/src/transit.rs`
-- Modify: `crates/caelum-core/tests/population.rs`
-- Modify: `crates/caelum-core/tests/trip_lifecycle.rs` only if the existing workplace fixtures need capacity-specific expectations.
+- [ ] **1. Add finite-capacity tests.**
 
-**Interfaces:**
-- `assign_workplaces(&mut GameSnapshot)` remains the only assignment function.
-- The Task-1 placed-capacity workplace helper remains the only membership authority.
-- `cleanup_removed_destination_references` may be renamed to `cleanup_removed_workplace_references`, but it keeps its existing single `assign_workplaces(state)` call; do not wrap it with another assignment pass.
+Two Small Houses + one Supermarket must assign at most four workers. Add Factory coverage proving it remains a functioning workplace with capacity six. Keep workplace-demolition coverage proving cleared workers are reassigned only up to surviving capacity.
 
-- [ ] **Step 1: Add failing finite-capacity and commute tests.**
+- [ ] **2. Rewrite `assign_workplaces`.**
 
-Fill two player Small Houses (eight worker sims in this range), place one player Supermarket, then assert exactly four workers hold a workplace:
+Sort current `job_capacity > 0` placed buildings by ID. Preserve existing assignments only while the matching building still has an unused slot; clear stale/over-capacity assignments. Then fill open slots in stable sim order. Map slot `used` to:
 
 ```rust
-let assigned = snapshot
-    .sims
-    .iter()
-    .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
-    .count();
-assert_eq!(assigned, 4);
+workplace.occupied_tiles[used % workplace.occupied_tiles.len()]
 ```
 
-Prove the existing commute handoff for the first worker:
+Excess workers remain unassigned. There is no same-home exception after Task 3.
 
-```rust
-let minute = departure_minute_for_sim("sim-001", "standard", "outbound");
-let departure = f64::from(minute) / f64::from(MINUTES_PER_DAY) * GAME_DAY_SECONDS;
-engine.tick(departure);
-assert!(engine.snapshot().active_trips.iter().any(|trip|
-    trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound
-));
-```
+- [ ] **3. Keep one workplace-demolition reassignment.**
 
-Build the Supermarket before Resume so each due resident can be assigned as they arrive.
-
-- [ ] **Step 2: Add the failing workplace-demolition test.**
-
-Create workers plus two player Supermarkets, confirm both carry assignments, demolish one, and assert:
-
-- no sim retains a workplace point in the removed footprint;
-- survivors are reassigned through the existing cleanup to the other Supermarket only up to its capacity;
-- no second assignment pass is needed by the caller.
-
-- [ ] **Step 3: Rewrite `assign_workplaces` around stable finite placed-building slots.**
-
-Clone the placed buildings with `job_capacity > 0`, sort by building ID, and maintain one used-count per building. Walk workers in stable existing sim order twice:
-
-1. preserve an existing assignment only if it still belongs to a current workplace with an unused slot; otherwise set it to `None`;
-2. assign each remaining worker to the first workplace with capacity.
-
-For slot `used`:
-
-```rust
-sim.workplace = Some(
-    workplace.occupied_tiles[used % workplace.occupied_tiles.len()]
-);
-used += 1;
-```
-
-Workers beyond current capacity remain unassigned. There is no same-home exception after Task 3.
-
-- [ ] **Step 4: Keep commute validity and demolition on the same Task-1 workplace authority.**
-
-Do not reintroduce `effect == "destination"`. `has_valid_workplace_destination` continues to validate against the placed-capacity workplace helper. The demolition cleanup's removed tile set continues to use that same helper/placed `job_capacity > 0` authority.
-
-Inside the existing cleanup function, keep this sequence:
+The existing cleanup remains:
 
 ```text
-clear affected sim.workplace
-assign_workplaces(state)   // exactly once
-retarget/drop affected outbound trips using the resulting workplace map
-remove invalidated passenger trip IDs from vehicles
+clear affected workplace
+assign_workplaces(state)   // once
+retarget/drop affected outbound trips
+strip invalidated passenger trip IDs
 ```
 
-The home-fallback retarget call is already gone from Task 3. Do not add `assign_workplaces` before or after this cleanup in `remove_at_tile`.
+Do not add another assignment before or after it.
 
-- [ ] **Step 5: Run assignment, demolition, and commute regressions.**
+- [ ] **4. Verify and commit.**
 
 ```bash
 cargo test -p caelum-core --test population --test trip_lifecycle --test golden_sequences --test router_planning
 cargo test --workspace
-```
 
-- [ ] **Step 6: Commit.**
-
-```bash
 git add crates/caelum-core/src/buildings.rs crates/caelum-core/src/transit.rs crates/caelum-core/tests/population.rs crates/caelum-core/tests/trip_lifecycle.rs
-git commit -m "feat(core): cap player Supermarket jobs"
+git commit -m "feat(core): add finite building job capacity"
 ```
 
 ---
 
-### Task 5: Show capacity in Select and splice it into the existing smoke
+### Task 5: Building inspector + race-free existing E2E smoke
 
-**Files:**
-- Modify: `src/runtime/types.ts`
-- Modify: `src/runtime/runtimeSelectors.ts`
-- Modify: `src/components/hud/panels/InspectPanel.svelte`
-- Modify: `tests/runtime/runtimeSelectors.test.ts`
-- Modify: `tests/e2e/smoke.spec.ts`
-- Modify: `docs/architecture.md`
+- [ ] **1. Add selector tests and discriminated inspector.**
 
-**Interfaces:** `ShellInspectorState` becomes a discriminated `transit | building` union. No backend API and no persisted occupancy counters are added.
+`ShellInspectorState` becomes `kind: "transit" | "building"`. Building inspector includes `buildingId`, label, `Residents | Jobs`, derived occupancy, and capacity from the existing TS building catalog. Transit resolution keeps priority. No backend query or persisted occupancy/capacity field.
 
-- [ ] **Step 1: Add failing selector tests.**
-
-Use a fixture with one resident-capacity Small House and one job-capacity Supermarket. Select each footprint and assert:
-
-```ts
-expect(shell.inspector).toEqual({
-  kind: "building",
-  buildingId: "building-001",
-  buildingLabel: "Small House",
-  metricLabel: "Residents",
-  occupancy: 1,
-  capacity: 4,
-});
-```
-
-Add the corresponding `Jobs` assertion. Update an existing transit-node assertion to include `kind: "transit"`.
-
-- [ ] **Step 2: Run and confirm the current selector returns no building inspector.**
-
-```bash
-bun run test:unit -- tests/runtime/runtimeSelectors.test.ts
-```
-
-- [ ] **Step 3: Implement the inspector union and rendering.**
-
-Add the building branch:
-
-```ts
-{
-  kind: "building";
-  buildingId: string;
-  buildingLabel: string;
-  metricLabel: "Residents" | "Jobs";
-  occupancy: number;
-  capacity: number;
-}
-```
-
-In `runtimeSelectors.ts`, keep transit-node resolution first. Otherwise find the selected placed building by `occupiedTiles`, choose its nonzero capacity, and derive occupancy from matching `sim.home` / `sim.workplace` points. Return `null` for zero-capacity buildings.
-
-In `InspectPanel.svelte`, preserve current platform markup under `inspector.kind === "transit"`; render the building branch as:
+- [ ] **2. Render the building branch.**
 
 ```svelte
 <span class="building-occupancy">
@@ -630,33 +287,13 @@ In `InspectPanel.svelte`, preserve current platform markup under `inspector.kind
 </span>
 ```
 
-- [ ] **Step 4: Splice occupancy assertions into the current `smoke.spec.ts`; keep its tail.**
+- [ ] **3. Splice into `tests/e2e/smoke.spec.ts`; do not replace its tail.**
 
-Immediately after the existing Supermarket + Small House placements, replace the current population-`4` contract with paused state:
+While paused after current Supermarket + Small House placement, assert population `0`, `Residents 0 / 4`, and `Jobs 0 / 4`. Keep the existing road and bus-terminal steps.
 
-```ts
-await expect(populationReadout.getByText("0")).toBeVisible();
-await page.getByTestId("command-tool-select").click();
-await clickMapTile(canvas, { x: 1, y: 1 });
-await expect(page.getByTestId("panel-inspect")).toContainText("Residents 0 / 4");
-await clickMapTile(canvas, { x: 5, y: 1 });
-await expect(page.getByTestId("panel-inspect")).toContainText("Jobs 0 / 4");
-```
+At the existing Resume point, poll population to `1`, then immediately Pause and wait until the control reads Resume again. Only then inspect `Residents 1 / 4` / `Jobs 1 / 4`. Resume again if needed for the existing visible-clock assertion. Keep the road, bus-terminal, and clock coverage intact.
 
-Then continue the **existing** road placement and bus-terminal rotation portion unchanged. At the existing Resume point, poll the first move-in:
-
-```ts
-await page.getByRole("button", { name: "Resume" }).click();
-await expect.poll(async () =>
-  (await populationReadout.locator(".readout-value").textContent())?.trim()
-).toBe("1");
-```
-
-Inspect the house and supermarket again for `Residents 1 / 4` / `Jobs 1 / 4`, then keep the existing visible-clock assertion. Do not replace the road, bus-terminal, or clock tail with occupancy-only coverage.
-
-- [ ] **Step 5: Update architecture docs and run the user-facing/full gates.**
-
-Document schema v5, Rust-owned placed capacity, fixed move-in, finite jobs, one workplace definition, occupied-house deletion, and derived UI occupancy. Remove stale schema-4 / `moveInRate` / immediate-citizen statements.
+- [ ] **4. Update architecture docs, run full gates, commit.**
 
 ```bash
 bun run test:unit
@@ -665,30 +302,26 @@ bun run test:e2e -- tests/e2e/smoke.spec.ts
 bun run format:check
 bun run lint
 cargo test --workspace
-```
 
-- [ ] **Step 6: Commit.**
-
-```bash
-git add src/runtime src/components/hud/panels/InspectPanel.svelte tests/runtime/runtimeSelectors.test.ts tests/e2e/smoke.spec.ts docs/architecture.md
-git commit -m "feat(ui): show player building occupancy in Select"
+git add src/domain/catalog/buildings.ts src/runtime src/components/hud/panels/InspectPanel.svelte tests/runtime/runtimeSelectors.test.ts tests/e2e/smoke.spec.ts docs/architecture.md
+git commit -m "feat(ui): show building occupancy in Select"
 ```
 
 ---
 
-## Final self-review / release gate
+## Final verification checklist
 
-- [ ] Task 1 compiles with every required `PlacedBuilding` field/literal updated.
-- [ ] player Small House is the only resident-capacity building and never exceeds four sims.
-- [ ] player Supermarket is the only job-capacity building and never exceeds four assigned workers.
-- [ ] growth placements pass `0, 0` through the existing placement function; no world-specific API/source field exists.
-- [ ] no commute/workplace path uses catalog `effect == "destination"`.
-- [ ] all six tick growth-event sites also apply due move-ins, and due comparison is `<= state.time`.
-- [ ] no immediate placement-time resident loop remains after Task 2.
-- [ ] occupied-house demolition removes resident/trip/passenger references.
-- [ ] home-fallback production code/tests are removed after occupied-house cleanup makes them unreachable.
-- [ ] workplace demolition performs exactly one reassignment through the existing cleanup.
-- [ ] the no-tick golden expects zero residents while the 900-second golden still proves the same commute behavior.
-- [ ] the existing E2E keeps its road/bus-terminal/clock coverage and adds paused/first-move-in occupancy assertions.
-- [ ] `moveInRate` and `citizenCount` are deleted rather than deprecated.
-- [ ] no home/workplace building IDs, household/job entities, scheduler service, ECS, event bus, migration, or compatibility path was introduced.
+- [ ] schema v5 persists `placedAt` only; no capacity/source fields are persisted.
+- [ ] Small House 4 and Large House 10 remain functional housing.
+- [ ] all nine current destinations remain functional workplaces with footprint-area finite capacity.
+- [ ] no commute/workplace path uses `effect == "destination"`.
+- [ ] all six current-time growth sites also apply due Sandbox move-ins using `<= state.time`.
+- [ ] mid-day move-in does not backfill a missed outbound commute and normal next-day commuting is proven.
+- [ ] occupied-house demolition removes resident/trip/passenger references and performs one freed-job refill.
+- [ ] home-fallback source/tests are gone.
+- [ ] workplace demolition still performs one reassignment only.
+- [ ] both Rust and TS placed-building inventories were run; direct `gameRuntime.test.ts` and `overlayRenderer.test.ts` literals compile with `placedAt`.
+- [ ] long commute tests protect coarse/fine + trip semantics, allowing justified float-golden refresh.
+- [ ] E2E pauses after the first move-in before reading `1 / 4` and retains road/bus-terminal/clock coverage.
+- [ ] `moveInRate` and `citizenCount` are removed, not deprecated.
+- [ ] no relationship IDs, job entities, scheduler service, ECS, event bus, migration, or compatibility path was added.
