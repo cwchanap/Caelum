@@ -8,7 +8,7 @@
 
 ## 1. Decision
 
-Close Phase 1 with one representative multi-city player journey on each shipping host, using the test seams that already exist.
+Close Phase 1 with one representative multi-city player journey on each current host, using existing seams rather than building a cross-host testing platform.
 
 ```text
 browser smoke
@@ -25,220 +25,272 @@ native smoke
         -> application-data city files
 ```
 
-The implementation is verification-first:
+The implementation remains verification-first:
 
-- expand the existing browser Playwright persistence journey to cover two city slots, reload, Continue/Load, restored map/budget/time, continued gameplay, rename, and delete;
-- reuse existing focused tests for failed updates, invalid loads, busy-state gating, host selection, and store contracts;
-- build the real packaged macOS app and perform one short create -> mutate/preview/tick -> save -> second city -> quit -> reopen -> list/load -> continue -> rename/delete smoke;
-- record only approximate save size and user-visible operation duration in the implementation PR;
-- do not add production code unless the smoke exposes a concrete product defect.
+- expand the existing browser Playwright city-library test into one two-city Standard Crossroads journey;
+- reuse existing focused tests for road preview, failed updates, invalid loads, busy-state gating, host selection, and store contracts;
+- perform one operator-run packaged macOS Tauri create -> dispatch/tick -> Save -> second city -> Cmd+Q -> relaunch -> list/Continue/Load -> continue smoke;
+- visually confirm the packaged native road-preview overlay before committing the first road stroke;
+- record only approximate native save size and user-visible Save/Load duration in the implementation PR;
+- make no production change unless a smoke first exposes a concrete defect;
+- after the gate passes, update `docs/architecture.md` so it no longer describes HPA-349 as pending ownership.
 
-Do **not** add `tauri-driver`, WebDriver, a desktop automation framework, a host-parity abstraction, telemetry, benchmarks, a persistence migration layer, or a new test-only storage API for this ticket.
+Do **not** add `tauri-driver`, WebDriver/Appium, a desktop automation framework, a host-parity abstraction, telemetry, benchmarks, a persistence migration/recovery layer, or new test-only storage APIs.
 
 ## 2. Why HPA-349 is next
 
-Linear still shows HPA-349 blocked by HPA-344, but GitHub PR #38 (`HPA-344: persist Tauri city saves`) merged on 2026-08-12. HPA-346 is already complete. That makes HPA-349 the highest-priority remaining Phase 1 gate and effectively unblocked.
+Linear still reflects HPA-344 as a blocker, but GitHub PR #38 (`HPA-344: persist Tauri city saves`) has merged. HPA-346 is also complete. HPA-349 is therefore the remaining High-priority Phase 1 composition gate.
 
-HPA-344 deliberately stopped at the native command/disk seam. It already proves production command registration through Tauri's mock runtime, application-data path construction, error serialization, native file replacement semantics, and reopen through a second file-store instance. Its design explicitly leaves packaged desktop UI/permission verification to HPA-349.
+HPA-344 deliberately stopped below packaged desktop UI. It already proves:
 
-HPA-349 therefore should verify the thin composition rather than rebuild lower-layer coverage.
+- production command registration through Tauri's mock runtime;
+- application-data path construction;
+- exact native storage wire/error mapping;
+- failed-update preservation;
+- stateless disk reopen through a second store instance;
+- Tauri-vs-IndexedDB store selection;
+- packaged buildability.
 
-## 3. Current evidence and the remaining gap
+HPA-349 should prove the remaining composition boundary, not duplicate those lower layers.
 
-### Browser already has
+## 3. Approaches considered
 
-- `tests/e2e/cityLibrary.spec.ts`: New City -> gameplay mutation -> Save Now -> browser reload -> City Library -> Continue, including restored budget;
-- `tests/ui/appShell.test.ts`: New City request shape, busy-state disabling, multi-city list, Load, rename, delete, active-city behavior, and generic persistence copy;
-- `tests/runtime/workingSaveRuntime.test.ts`: save/load/create ordering, dirty/busy ownership, returned invalid-snapshot loads preserving the prior active city, rename/delete semantics, and runtime race guards;
-- `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`: the shared store contract, reopen through a second adapter instance, a real WASM snapshot payload, and failed IndexedDB update preserving the prior record.
+### A. Existing Playwright + one packaged desktop operator smoke — selected
 
-The browser gap is only that the Playwright journey currently stops at one city. HPA-349 should make that one journey representative of the complete Phase 1 multi-city UX instead of adding another test matrix.
+Use browser automation where the repository already has it and one real packaged-native restart/load journey for the remaining host boundary.
 
-### Native already has
+Advantages:
 
-HPA-344 added:
+- proves the actual gaps without creating new infrastructure;
+- keeps failures localizable through existing focused tests;
+- costs almost no ongoing maintenance during active development;
+- matches HPA-349's smoke-gate purpose rather than turning it into release certification.
 
-- `src-tauri/src/city_store.rs` filesystem tests, including `failed_update_preserves_committed_record` and `second_store_instance_reopens_same_directory`;
-- production app-data path verification through `tauri::test::mock_app()`;
-- production handler IPC coverage through Tauri's mock runtime;
-- `src/persistence/tauriCitySaveStore.ts` command/error mapping tests;
-- tested Tauri-vs-IndexedDB store selection in `src/persistence/createCitySaveStore.ts`;
-- a real packaged-app build gate.
+### B. Add `tauri-driver` / WebDriver now — rejected
 
-The native gap is intentionally small: prove that the packaged app boots with the native gameplay host and native save adapter, can write its real application-data directory, and survives an actual process restart through the shared Svelte workflow.
+The current need is one packaged journey. Driver installation, lifecycle orchestration, platform-specific CI, and a second selector harness have no second current consumer.
 
-## 4. Approaches considered
+### C. Treat existing unit/IPC coverage as sufficient — rejected
 
-### A. Existing Playwright + one packaged desktop manual smoke — selected
+That would leave packaged bootstrap, real application-data permission, and a real process restart unproven—the exact gap HPA-344 handed to HPA-349.
 
-Use browser automation where the repository already has stable automation, and use one explicit operator-run packaged Tauri journey for the remaining host boundary.
+### D. Make both flows manual — rejected
 
-Why:
+Browser Playwright already exists. Replacing it with a checklist would reduce proof without simplifying the codebase.
 
-- directly proves the two gaps HPA-349 owns;
-- reuses current helpers and contracts;
-- no production architecture changes;
-- no long-lived test harness to maintain during active development;
-- failures still have focused lower-layer tests to localize the broken seam.
+## 4. Browser representative flow
 
-### B. Add `tauri-driver` / WebDriver automation now — rejected
+Extend only `tests/e2e/cityLibrary.spec.ts`. Keep Standard + Crossroads for both slots; Creative and Blank Grid remain focused unit/characterization coverage.
 
-This would require desktop driver installation, platform-specific CI setup, app lifecycle orchestration, selectors/window management, and a second E2E harness. HPA-349 has one representative native journey and no second current consumer for that infrastructure.
+### City A
 
-If repeated packaged-native regressions later justify automation, add it in a separate ticket with evidence from this smoke or future failures.
+1. Start in Playwright's fresh browser context.
+2. Call `createDefaultCity(page, "Browser Smoke A")` once for the initial city.
+3. Select Two Way Road and drag `(1,1) -> (3,1)`.
+4. Assert the committed result through the `$119,700` budget.
+5. Resume and reuse the existing visible-clock poll until the topbar is no longer `Day 1 00:00`.
+6. Pause, capture the runtime `time`, and Save Now.
+7. Wait until City panel `data-dirty="false"`.
 
-### C. Declare existing unit/IPC tests sufficient and skip packaged Tauri UI — rejected
+The road drag in this persistence E2E proves the dispatch/persisted result only. It does **not** become a second browser-preview test. Existing `tests/runtime/gameRuntime.test.ts` road-preview coverage remains authoritative for browser preview publication/invalidation.
 
-HPA-344 intentionally did not prove packaged app permissions, real production bootstrap selection, or the process-restart UI journey. Skipping that would leave HPA-349's only meaningful native gap untested.
+### City B must use the City-panel path
 
-### D. Make both browser and native flows manual — rejected
+After A is clean:
 
-The browser persistence path already has Playwright. Replacing automated browser proof with a checklist would reduce coverage without simplifying the codebase.
+1. keep/open the active City panel;
+2. click **New City**;
+3. fill `Browser Smoke B`;
+4. click **Create City**;
+5. verify B becomes active through the City panel.
 
-## 5. Browser representative flow
+Do **not** call `createDefaultCity()` for B. That helper navigates to `/`; using it a second time would reload before the intended reload and bypass the active-city New City dirty gate that this ticket is meant to exercise.
 
-Extend `tests/e2e/cityLibrary.spec.ts`; do not create a second browser persistence suite.
+### Browser reopen and restoration
 
-Use **Standard + Crossroads** for the full flow. The second city is also Standard + Crossroads because HPA-349 explicitly avoids an every-template/every-preset E2E matrix. Creative and Blank Grid remain covered by existing focused unit/characterization tests.
+1. Reload the page once after B exists.
+2. Verify both A and B are listed.
+3. Use **Continue** and verify B opens as the newest saved city.
+4. Explicitly **Load A** through the City panel/list.
+5. Verify only the useful persistence fingerprint:
+   - `(1,1)`, `(2,1)`, `(3,1)` are road tiles;
+   - budget is exactly `119_700`;
+   - `time` equals the paused pre-save time captured for A.
+6. Add road `(1,2) -> (3,2)` and verify `$119,400`, proving restored gameplay continues.
+7. Rename inactive B, two-click Delete it, and verify A remains active.
 
-The flow is:
+Do **not** compare the full live pre-save map to the restored map. `snapshot_for_save()` normalizes a clone for persistence and restore normalizes the candidate before installing it; the save copy is not written back into the live engine. Whole-map live-vs-restored equality therefore crosses a normalization boundary and would yield a noisy 504-tile diff for no additional player-contract value.
 
-1. Start in Playwright's fresh browser context with an empty city library.
-2. Create `Browser Smoke A` using the default Standard Crossroads choices.
-3. Select the two-way road tool and drag `(1,1) -> (3,1)`.
-   - This is deterministic and uses three previously empty Crossroads tiles.
-   - It exercises road preview before commit and gameplay dispatch on commit.
-   - Expected budget becomes `$119,700` from the `$120,000` default.
-4. Resume briefly and poll until simulation time advances; pause again.
-5. Capture the runtime snapshot immediately before Save Now, then save and verify the city becomes clean.
-6. Open the City panel, choose New City, and create `Browser Smoke B` with the same default settings.
-7. Reload the page.
-8. Verify both city names appear in the City Library.
-9. Use **Continue** and verify the most-recent city (`Browser Smoke B`) opens.
-10. From the City panel, explicitly **Load `Browser Smoke A`**.
-11. Compare the loaded snapshot's map, budget, and time to the snapshot captured before Save Now. This is stronger and less brittle than checking only one rendered tile.
-12. Apply one more deterministic road mutation, proving restored gameplay continues normally.
-13. Rename inactive `Browser Smoke B`, then delete it through the existing two-click confirmation. Verify `Browser Smoke A` remains active.
+`runtimeSnapshot()` remains the one browser test accessor. `src/main.ts` exposes `window.__caelumRuntime` only in development, so no packaged-native step may depend on it.
 
-No debug-only persistence hooks are required. `tests/e2e/helpers.ts::runtimeSnapshot()` is already an accepted browser test seam and can compare the restored canonical runtime state.
+## 5. Browser preview ownership
+
+HPA-349 does not add a mid-drag Playwright helper just to prove road preview.
+
+The existing runtime tests already assert `ui.roadMutationPreview` publication, invalidation, stale-response behavior, and host failures. HPA-349 includes `tests/runtime/gameRuntime.test.ts` in the focused gate and treats that as browser-preview proof.
+
+The browser persistence journey therefore claims:
+
+```text
+road drag -> committed dispatch -> saved authored tiles -> restored authored tiles
+```
+
+not:
+
+```text
+road drag -> independently asserted preview
+```
+
+This avoids turning a green dispatch into a misleading preview claim.
 
 ## 6. Packaged Tauri representative flow
 
-Use the repository's current macOS app bundle because `src-tauri/tauri.conf.json` targets an application bundle and the current development host is macOS. This is not an OS matrix.
-
-Build with:
+Use the current macOS bundle from:
 
 ```bash
 bun run tauri:build
+open src-tauri/target/release/bundle/macos/Caelum.app
 ```
 
-Then launch the produced app bundle (`src-tauri/target/release/bundle/macos/Caelum.app`) and perform the same player-level proof with unique smoke names such as `Native Smoke A` and `Native Smoke B`.
+### No empty-library prerequisite
+
+The app identifier is `com.caelum.app`; packaged and development runs may share real application data. The operator must not clear or wipe Application Support just to manufacture an empty library.
+
+Use unique names, for example:
+
+```text
+Native Smoke A 20260812-1847
+Native Smoke B 20260812-1847
+```
+
+Ignore unrelated existing rows and clean up only the smoke records.
 
 ### First process
 
-1. Confirm the app opens normally with an empty/usable City Library.
-2. Create `Native Smoke A` as Standard Crossroads.
-3. Drag a two-way road `(1,1) -> (3,1)`.
-   - the live road preview exercises the native preview path;
-   - releasing the drag exercises native dispatch;
-   - verify the visible budget becomes `$119,700`.
-4. Resume until the visible clock advances, then pause. This exercises native tick.
-5. Save Now and verify dirty state clears.
-6. Create `Native Smoke B` as a second city.
-7. Quit the application fully, not merely close a window.
+1. Create unique Native Smoke A as Standard Crossroads.
+2. Select Two Way Road and drag `(1,1) -> (3,1)`.
+3. Before release, visually confirm the live road-preview overlay is visible.
+4. Release and verify `$119,700`.
+5. Resume until the **visible** clock changes from `Day 1 00:00`, then pause and note the non-zero clock.
+6. Save Now and verify the dirty indicator clears.
+7. From the clean City panel create unique Native Smoke B.
+8. Quit the application with **Cmd+Q**. Closing only the window is not a process-restart proof.
 
 ### Second process
 
-1. Relaunch the packaged app.
-2. Verify both city records are listed.
-3. Continue/load a city, then explicitly load `Native Smoke A`.
-4. Verify the saved road is present, budget is `$119,700`, and the saved clock is non-zero.
-5. Add one more deterministic road mutation and Save Now again.
-6. Rename inactive `Native Smoke B`, then delete it.
-7. Verify the active first city remains usable.
+1. Relaunch the same packaged app.
+2. Verify both unique smoke names are listed among any unrelated rows.
+3. Use Continue once.
+4. Explicitly Load Native Smoke A.
+5. Do not mark PASS until A shows:
+   - the saved road across `(1,1)`, `(2,1)`, `(3,1)`;
+   - `$119,700`;
+   - a non-zero saved clock.
+6. Add `(1,2) -> (3,2)` and verify `$119,400` to prove continued native gameplay.
+7. Rename/delete B if practical; this is cheap shared-UI confirmation, not the unique native gap.
 
-This proves the packaged UI, production host selection, native gameplay command path, native file adapter, real application-data permission, and process restart as one composition.
+This one operator flow owns the packaged-native preview, production bootstrap, real app-data writes, full process restart, and player-visible Load proof. It does not create a permanent native automation subsystem.
 
-## 7. Failure and concurrency coverage: reuse, do not duplicate
+## 7. Focused acceptance ownership
 
-HPA-349's shared-behavior bullets are already owned by focused automated tests. Keep them as part of the HPA-349 gate instead of re-injecting failures through browser/native E2E.
+Keep HPA-349's failure/concurrency bullets in their existing tests instead of injecting corruption or failures through E2E.
 
 | Acceptance behavior | Existing proof to run |
 | --- | --- |
-| Browser failed update preserves prior record | `tests/runtime/persistence/indexedDbCitySaveStore.test.ts` — uncloneable update aborts and prior record is unchanged |
+| Browser road-preview behavior | `tests/runtime/gameRuntime.test.ts` |
+| Browser failed update preserves prior record | `tests/runtime/persistence/indexedDbCitySaveStore.test.ts` |
 | Native failed update preserves prior file | `src-tauri/src/city_store.rs` — `failed_update_preserves_committed_record` |
-| Returned invalid load preserves active gameplay | `tests/runtime/workingSaveRuntime.test.ts` — returned `invalidSnapshot` keeps the active identity and installs nothing |
-| Persistence actions disabled while busy | `tests/ui/appShell.test.ts` busy-state UI coverage + working-save runtime exclusive-operation tests |
+| Returned invalid load preserves active gameplay | `tests/runtime/workingSaveRuntime.test.ts` |
+| Persistence actions disabled while busy | `tests/ui/appShell.test.ts` + working-save exclusive-operation tests |
 | Rename/Delete through shared runtime/UI | `tests/ui/appShell.test.ts` + `tests/runtime/workingSaveRuntime.test.ts` |
-| Browser host uses IndexedDB, native host uses Tauri store | `tests/runtime/persistence/citySaveStoreSelection.test.ts` |
-| Native command/file contract survives reopen | HPA-344 Tauri IPC test + `second_store_instance_reopens_same_directory` |
+| Browser uses IndexedDB; native uses Tauri store | `tests/runtime/persistence/citySaveStoreSelection.test.ts` |
+| Native command/file contract survives reopen | HPA-344 Tauri IPC coverage + `second_store_instance_reopens_same_directory` |
 
-Do not create an E2E corruption/failure injection API just to replay these cases through the UI.
+No UI failure-injection API is justified.
 
 ## 8. Snapshot equivalence boundary
 
-HPA-349 does not need byte-for-byte browser/native persistence parity.
+Browser/native byte-for-byte save parity is explicitly **not** a contract.
 
-The contract is:
+The useful contract is:
 
-- both hosts restore current-schema snapshots through the same `caelum-core` validation path;
-- equivalent player actions produce equivalent gameplay state under `caelum-core`;
-- host-specific wrapper diagnostics and storage encoding may differ;
-- the representative browser and native flows each verify their own restored map/budget/time and continued gameplay.
+- both hosts restore current-schema data through `caelum-core`;
+- each host independently restores the authored road state used by this smoke;
+- each host independently restores the expected budget and saved time/clock;
+- both can continue gameplay after restoration;
+- host-specific storage encoding and wrapper diagnostics may differ.
 
-No browser-to-native file transfer or exact error-wire parity is required.
+No browser-to-native transfer, whole-snapshot wire equality, or exact error-serialization parity is required by HPA-349.
 
 ## 9. Performance sanity check
 
-Do not instrument the runtime or add telemetry.
+Do not instrument the runtime.
 
-For the packaged native smoke, record in the implementation PR:
+For the packaged smoke, record only:
 
-- approximate committed city-file size from `<app_data_dir>/cities` (on the current macOS bundle this is under the app's `com.caelum.app` application-data directory);
-- approximate user-visible Save Now completion time;
-- approximate relaunch -> City Library and Load completion time.
+- approximate committed smoke-city JSON size from the real app-data `cities` directory;
+- Save Now as effectively immediate / around 1 s / visibly slower;
+- relaunch + Load as effectively immediate / around 1–2 s / visibly slower.
 
-For browser, record only obviously slow behavior if observed during Playwright/manual inspection. HPA-349 is not a benchmark ticket.
-
-Only open optimization work if the measured result is clearly problematic.
+These notes belong in the implementation PR, not a telemetry system or benchmark artifact. Optimize only if the smoke shows an obvious issue.
 
 ## 10. Defect policy
 
 No production change is planned.
 
-If either smoke fails:
+If either representative smoke fails:
 
-1. identify the narrowest seam that failed;
-2. reproduce it in the closest focused automated test when practical;
-3. make the smallest product fix required for HPA-349 acceptance;
-4. rerun the focused regression and the representative smoke;
-5. do not generalize the fix into a new platform, storage, recovery, or compatibility abstraction.
+1. identify the narrowest existing seam;
+2. add the smallest focused regression there when practical;
+3. confirm it fails for the observed reason;
+4. make the minimum product fix;
+5. rerun the focused regression and the representative smoke;
+6. do not generalize the fix into a new platform, persistence, recovery, or compatibility abstraction.
 
-A larger architectural or release-hardening issue becomes a separate follow-up rather than expanding this Phase 1 gate.
+Larger hardening work becomes a separate follow-up.
 
-## 11. Acceptance evidence
+## 11. Architecture ownership after PASS
 
-The implementation PR should contain one compact evidence table rather than a new permanent results database:
+`docs/architecture.md` currently ends the persistence ownership paragraph by saying HPA-349 *owns* the packaged journey. Once the implementation gate is actually green, that future-tense sentence becomes stale.
+
+The HPA-349 implementation PR must update it to completed-state guidance, preserving HPA-344's lower-layer ownership. The intended meaning is:
+
+> HPA-349 closes the remaining packaged composition gate with the representative browser Playwright multi-city journey and one operator-run packaged Tauri restart/load smoke; no permanent native UI automation layer is required for the current Phase 1 architecture.
+
+Do not update that sentence before the packaged smoke passes.
+
+## 12. Acceptance evidence
+
+The implementation PR should contain one compact evidence table, not a third results document:
 
 ```text
-Browser Playwright multi-city journey       PASS / FAIL
+Browser multi-city Playwright journey       PASS / FAIL
+Browser road preview focused tests          PASS / FAIL
 IndexedDB failed-update preservation        PASS / FAIL
 Working-save invalid-load preservation      PASS / FAIL
 Busy + rename/delete focused tests          PASS / FAIL
-Native city-file failed-update/reopen tests PASS / FAIL
-Packaged Tauri multi-city restart journey   PASS / FAIL
+Native city-file failed-update/reopen/IPC   PASS / FAIL
+Packaged Tauri restart/load journey         PASS / FAIL
 Native save size                            ~N KB
-Native Save Now                             ~N ms / <1 s / obvious delay
-Native relaunch + Load                      ~N s / obvious delay
+Native Save Now                             coarse observation
+Native relaunch + Load                      coarse observation
 ```
 
-The planning/design documents already preserve the repeatable manual procedure; no third smoke-report document is needed.
+The packaged row is PASS only after the **second process** lists both unique smoke names and explicit Load A visibly proves the road, `$119,700`, and non-zero clock.
 
-## 12. Non-goals
+When no defect is found, the expected implementation diff is intentionally small:
+
+```text
+tests/e2e/cityLibrary.spec.ts
+docs/architecture.md
+```
+
+## 13. Non-goals
 
 - every-template/every-preset/every-error E2E matrix;
 - Windows/Linux native smoke in this ticket;
 - desktop WebDriver automation;
+- browser/native byte-for-byte persistence parity;
 - exact Tauri/WASM diagnostics parity;
 - browser/native save transfer;
 - checkpoints, autosave, history, recovery, repair, import/export, or migration;
@@ -247,10 +299,10 @@ The planning/design documents already preserve the repeatable manual procedure; 
 - performance redesign, worker migration, or telemetry;
 - security hardening beyond the already-shipped native store boundaries.
 
-## 13. Review focus
+## 14. Review focus
 
-1. Does the plan prove the only remaining packaged-native gap without creating a desktop automation platform?
-2. Is one strengthened browser Playwright journey enough for Phase 1 multi-city UX coverage?
-3. Are existing focused failure tests being reused rather than duplicated through brittle E2E injection?
-4. Does the native smoke exercise preview, dispatch, tick, native file persistence, restart, Load, rename, and delete through production bootstrap?
-5. If the smoke is green, can HPA-349 close with test/documentation changes only?
+1. Does the browser journey exercise the real City-panel second-city path without using `createDefaultCity()` twice?
+2. Are authored roads + budget + time a clearer persistence fingerprint than full live-map equality across save normalization?
+3. Does the native smoke coexist safely with real development app data and prove a true Cmd+Q/relaunch boundary?
+4. Is browser preview correctly owned by the existing runtime tests while packaged preview remains a visual operator check?
+5. If the gate is green, can Phase 1 close with one browser test change, one architecture sentence update, and PR evidence only?
