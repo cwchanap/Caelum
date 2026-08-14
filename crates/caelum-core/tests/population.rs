@@ -177,6 +177,125 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
 }
 
 #[test]
+fn two_small_houses_and_supermarket_assign_only_four_workers() {
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for origin in [(2, 3), (2, 7)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: "smallHouse".to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let snapshot = engine.tick(600.0).snapshot;
+    let workers: Vec<_> = snapshot
+        .sims
+        .iter()
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
+        .collect();
+    assert_eq!(
+        workers.len(),
+        8,
+        "fixture must contain more than four workers"
+    );
+
+    let supermarket_tiles = snapshot
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "supermarket")
+        .expect("supermarket")
+        .occupied_tiles
+        .clone();
+    let assigned: Vec<_> = workers.iter().filter_map(|sim| sim.workplace).collect();
+    assert_eq!(assigned.len(), 4);
+    assert_eq!(assigned, supermarket_tiles);
+}
+
+#[test]
+fn factory_assigns_six_workers_when_more_than_capacity() {
+    let mut engine = zoned_engine("largeHouse", (2, 3), (4, 4));
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "industrial".to_string(),
+                start: (8, 3).into(),
+                end: (10, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "factory".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let snapshot = engine.tick(600.0).snapshot;
+    let workers: Vec<_> = snapshot
+        .sims
+        .iter()
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
+        .collect();
+    assert_eq!(
+        workers.len(),
+        9,
+        "fixture must contain more than six workers"
+    );
+
+    let factory_tiles = snapshot
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "factory")
+        .expect("factory")
+        .occupied_tiles
+        .clone();
+    let assigned: Vec<_> = workers.iter().filter_map(|sim| sim.workplace).collect();
+    assert_eq!(assigned.len(), 6);
+    assert_eq!(assigned, factory_tiles);
+}
+
+#[test]
 fn sandbox_move_ins_start_on_first_running_tick() {
     let mut engine = zoned_engine("smallHouse", (2, 3), (3, 3));
 

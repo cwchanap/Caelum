@@ -330,39 +330,68 @@ pub fn place_building_core(
 }
 
 pub fn assign_workplaces(state: &mut GameSnapshot) {
-    let destinations = workplace_points(state);
-    if destinations.is_empty() {
-        return;
-    }
-
-    // Keep assignment deterministic as residents arrive over time. The
-    // placement path used to create every resident in one batch, so a local
-    // cursor naturally spread workers across destination tiles. Gradual
-    // Sandbox move-ins call this helper once per due boundary; derive the same
-    // cursor from each worker's stable position in the sim list so late arrivals
-    // continue that round-robin instead of all taking the first destination.
-    let worker_ids: Vec<String> = state
-        .sims
+    let mut workplaces: Vec<(String, Vec<Point>, usize)> = state
+        .buildings
         .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
-        .map(|sim| sim.id.clone())
+        .filter_map(|building| {
+            let definition = building_definition(&building.building_type)?;
+            (definition.job_capacity > 0).then(|| {
+                (
+                    building.id.clone(),
+                    building.occupied_tiles.clone(),
+                    usize::from(definition.job_capacity),
+                )
+            })
+        })
         .collect();
+    workplaces.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut destination_index = 0;
+    // First preserve existing assignments while each matching workplace has an
+    // unused slot. Anything stale or over capacity is cleared before filling
+    // the remaining slots, including when no workplaces exist at all.
+    let mut used = vec![0usize; workplaces.len()];
     for sim in &mut state.sims {
         if sim.worker_profile != WorkerProfile::Worker {
             continue;
         }
-        if sim.workplace.is_some() {
+
+        let Some(current) = sim.workplace else {
+            continue;
+        };
+        let Some(workplace_index) = workplaces
+            .iter()
+            .position(|(_, occupied_tiles, _)| occupied_tiles.contains(&current))
+        else {
+            sim.workplace = None;
+            continue;
+        };
+        if used[workplace_index] < workplaces[workplace_index].2 {
+            used[workplace_index] += 1;
+        } else {
+            sim.workplace = None;
+        }
+    }
+
+    // Fill open slots in the existing stable sim order. Workplaces are already
+    // sorted by ID, and each slot maps deterministically onto its footprint.
+    for sim in &mut state.sims {
+        if sim.worker_profile != WorkerProfile::Worker || sim.workplace.is_some() {
             continue;
         }
 
-        let worker_index = worker_ids
+        let Some(workplace_index) = workplaces
             .iter()
-            .position(|id| id == &sim.id)
-            .unwrap_or(destination_index);
-        let workplace = &destinations[worker_index % destinations.len()];
-        sim.workplace = Some(*workplace);
-        destination_index += 1;
+            .enumerate()
+            .find(|(index, (_, occupied_tiles, capacity))| {
+                used[*index] < *capacity && !occupied_tiles.is_empty()
+            })
+            .map(|(index, _)| index)
+        else {
+            continue;
+        };
+
+        let occupied_tiles = &workplaces[workplace_index].1;
+        sim.workplace = Some(occupied_tiles[used[workplace_index] % occupied_tiles.len()]);
+        used[workplace_index] += 1;
     }
 }
