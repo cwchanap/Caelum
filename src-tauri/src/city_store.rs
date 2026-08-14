@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-const CITY_DIRECTORY: &str = "cities";
+const CITY_DIRECTORY: &str = "cities-v5";
 const CITY_PREFIX: &str = "city-";
 const CITY_SUFFIX: &str = ".json";
 const TEMP_SUFFIX: &str = ".tmp";
@@ -676,16 +676,28 @@ mod tests {
     }
 
     #[test]
-    fn from_app_uses_app_data_cities_child() {
+    fn from_app_uses_app_data_schema_v5_cities_child() {
         let app = tauri::test::mock_app();
         let expected = app
             .handle()
             .path()
             .app_data_dir()
             .expect("app data dir")
-            .join(CITY_DIRECTORY);
+            .join("cities-v5");
 
         let store = CityFileStore::from_app(app.handle()).expect("store path");
         assert_eq!(store.root, expected);
+    }
+
+    #[test]
+    fn schema_v5_store_ignores_the_prior_cities_directory() {
+        let temp = tempdir().expect("temp dir");
+        let legacy = CityFileStore::new(temp.path().join("cities"));
+        legacy
+            .create_city(record("legacy", "Legacy"))
+            .expect("seed legacy");
+
+        let fresh = CityFileStore::new(temp.path().join(CITY_DIRECTORY));
+        assert_eq!(fresh.list_cities().expect("list succeeds"), Vec::new());
     }
 }

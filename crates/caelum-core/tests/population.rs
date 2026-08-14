@@ -177,6 +177,123 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
 }
 
 #[test]
+fn demolishing_housing_runs_one_refill_pass_after_over_capacity_first_workplace() {
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+        ("commercial", (8, 5), (10, 6)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for (building_type, origin) in [
+        ("smallHouse", (2, 3)),
+        ("smallHouse", (2, 7)),
+        ("supermarket", (8, 3)),
+        ("cinema", (8, 5)),
+    ] {
+        let placed = engine.dispatch(GameIntent::PlaceBuilding {
+            building_type: building_type.to_string(),
+            origin: origin.into(),
+            rotation: 0,
+        });
+        assert!(placed.applied, "{building_type}: {placed:?}");
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let filled = engine.tick(600.0).snapshot;
+    assert_eq!(filled.sims.len(), 8);
+
+    let first_workplace_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "supermarket")
+        .expect("first workplace")
+        .occupied_tiles
+        .clone();
+    let first_house_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.origin == Point { x: 2, y: 3 })
+        .expect("first house")
+        .occupied_tiles
+        .clone();
+    let second_workplace_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "cinema")
+        .expect("second workplace")
+        .occupied_tiles
+        .clone();
+    assert_eq!(first_workplace_tiles.len(), 4);
+    assert_eq!(second_workplace_tiles.len(), 6);
+
+    // Deliberately make the first workplace over capacity. The first house's
+    // residents occupy its four valid slots; the surviving house's residents
+    // are stale over-capacity assignments. A housing demolition must remove
+    // the first four residents, then perform exactly one refill pass: the
+    // survivors should take the first workplace's four slots rather than being
+    // diverted to the second workplace by an earlier pass.
+    let mut prepared = filled;
+    for sim in &mut prepared.sims {
+        sim.workplace = Some(first_workplace_tiles[0]);
+    }
+    let mut expected = prepared.clone();
+    let first_house_id = expected
+        .buildings
+        .iter()
+        .find(|building| building.origin == Point { x: 2, y: 3 })
+        .expect("first house")
+        .id
+        .clone();
+    expected
+        .buildings
+        .retain(|building| building.id != first_house_id);
+    expected
+        .sims
+        .retain(|sim| !first_house_tiles.contains(&sim.home));
+    caelum_core::buildings::assign_workplaces(&mut expected);
+    let expected_workplaces: Vec<_> = expected
+        .sims
+        .iter()
+        .filter_map(|sim| sim.workplace)
+        .collect();
+    engine = GameEngine::from_snapshot(prepared).expect("prepared over-capacity snapshot");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 3).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+    assert_eq!(removed.snapshot.sims.len(), 4);
+    assert_eq!(
+        removed
+            .snapshot
+            .sims
+            .iter()
+            .filter_map(|sim| sim.workplace)
+            .collect::<Vec<_>>(),
+        expected_workplaces,
+        "survivors match one post-removal assignment pass"
+    );
+    assert!(removed.snapshot.sims.iter().all(|sim| {
+        sim.workplace
+            .is_some_and(|workplace| !second_workplace_tiles.contains(&workplace))
+    }));
+}
+
+#[test]
 fn two_small_houses_and_supermarket_assign_only_four_workers() {
     let mut engine = GameEngine::new();
     for (area, start, end) in [
