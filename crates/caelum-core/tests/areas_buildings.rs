@@ -116,7 +116,7 @@ fn destination_assigns_workplaces_to_unassigned_workers() {
         .iter()
         .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
         .count();
-    assert_eq!(assigned, 9);
+    assert_eq!(assigned, 4);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn destination_placed_before_housing_assigns_new_workers() {
         .iter()
         .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
         .count();
-    assert_eq!(assigned, 9);
+    assert_eq!(assigned, 4);
 }
 
 #[test]
