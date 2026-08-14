@@ -1,5 +1,5 @@
 use caelum_core::commute::departure_minute_for_sim;
-use caelum_core::model::TripPurpose;
+use caelum_core::model::{GameSnapshot, TripPurpose};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
@@ -28,6 +28,42 @@ fn zoned_engine(building_type: &str, origin: (i32, i32), end: (i32, i32)) -> Gam
             .applied
     );
     engine
+}
+
+fn assigned_workplace_engine() -> GameEngine {
+    let mut engine = zoned_engine("smallHouse", (2, 3), (3, 3));
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (4, 3).into(),
+                end: (5, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (4, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine
+}
+
+fn active_trip_identity(state: &GameSnapshot) -> Vec<(String, String, TripPurpose)> {
+    state
+        .active_trips
+        .iter()
+        .map(|trip| (trip.id.clone(), trip.sim_id.clone(), trip.purpose))
+        .collect()
 }
 
 #[test]
@@ -67,6 +103,50 @@ fn sandbox_move_ins_are_partition_independent_for_small_house() {
 
     assert_eq!(coarse_snapshot.sims.len(), 4);
     assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
+}
+
+#[test]
+fn sandbox_move_ins_preserve_commute_set_across_coarse_and_fine_ticks() {
+    let mut coarse = assigned_workplace_engine();
+    let mut fine = assigned_workplace_engine();
+
+    let coarse_snapshot = coarse.tick(900.0).snapshot;
+    let mut fine_snapshot = fine.tick(0.0).snapshot;
+    for _ in 0..18 {
+        fine_snapshot = fine.tick(50.0).snapshot;
+    }
+
+    assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
+    assert_eq!(
+        active_trip_identity(&coarse_snapshot),
+        active_trip_identity(&fine_snapshot)
+    );
+    assert_eq!(
+        (
+            coarse_snapshot.metrics.completed_trips,
+            coarse_snapshot.metrics.late_trips,
+            coarse_snapshot.metrics.unserved_trips,
+        ),
+        (
+            fine_snapshot.metrics.completed_trips,
+            fine_snapshot.metrics.late_trips,
+            fine_snapshot.metrics.unserved_trips,
+        )
+    );
+    assert_eq!(
+        coarse_snapshot
+            .metrics
+            .trip_outcomes
+            .iter()
+            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
+            .collect::<Vec<_>>(),
+        fine_snapshot
+            .metrics
+            .trip_outcomes
+            .iter()
+            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -151,4 +231,69 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
         .active_trips
         .iter()
         .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound }));
+}
+
+#[test]
+fn move_in_at_exact_departure_spawns_today() {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    let scheduled = scheduled_time_seconds(0, departure);
+    assert!(engine.tick(scheduled).applied);
+
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: (2, 3).into(),
+                end: (3, 3).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (8, 3).into(),
+                end: (9, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+
+    let due = engine.tick(0.0).snapshot;
+    let sim = due
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-001")
+        .expect("exact-departure move-in creates sim-001");
+    assert!(!sim.outbound_resolved_today);
+    assert!(!sim.outbound_arrived_today);
+    assert!(due.active_trips.iter().any(|trip| {
+        trip.sim_id == "sim-001"
+            && trip.purpose == TripPurpose::CommuteOutbound
+            && trip.status == caelum_core::model::TripStatus::Idle
+    }));
 }
