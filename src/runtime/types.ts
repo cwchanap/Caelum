@@ -92,12 +92,26 @@ export interface ShellPlatform {
   routes: ShellPlatformRoute[];
 }
 
-export interface ShellInspectorState {
+export interface ShellTransitInspectorState {
+  kind: "transit";
   nodeId: string;
   nodeLabel: string;
   canReassign: boolean;
   platforms: ShellPlatform[];
 }
+
+export interface ShellBuildingInspectorState {
+  kind: "building";
+  buildingId: string;
+  buildingLabel: string;
+  metricLabel: "Residents" | "Jobs";
+  occupancy: number;
+  capacity: number;
+}
+
+export type ShellInspectorState =
+  | ShellTransitInspectorState
+  | ShellBuildingInspectorState;
 
 export interface RouteEditorWaypointView {
   id: string;

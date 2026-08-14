@@ -5,6 +5,7 @@ import {
   createDefaultCity,
   dragMapTiles,
   openCommandDestination,
+  selectTool,
 } from "./helpers";
 
 test("loads the svelte shell and supports area painting and zoned buildings", async ({
@@ -47,7 +48,16 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await clickMapTile(canvas, { x: 1, y: 1 });
 
   await expect(topbar.getByText("$108,000")).toBeVisible();
-  await expect(populationReadout.getByText("4")).toBeVisible();
+  await expect(populationReadout.getByText("0")).toBeVisible();
+
+  await selectTool(page, "select");
+  await clickMapTile(canvas, { x: 5, y: 1 });
+  const inspector = page.getByTestId("panel-inspect");
+  await expect(inspector.getByTestId("building-panel")).toBeVisible();
+  await expect(inspector.getByText("Jobs 0 / 4")).toBeVisible();
+
+  await clickMapTile(canvas, { x: 1, y: 1 });
+  await expect(inspector.getByText("Residents 0 / 4")).toBeVisible();
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 1, y: 0 }, { x: 3, y: 0 });
@@ -60,6 +70,20 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
       .getByTestId("command-active-mode")
       .locator(".command-shelf__mode-value"),
   ).toHaveText("BUS TERMINAL 90");
+
+  await page.getByRole("button", { name: "Resume" }).click();
+  const populationValue = populationReadout.locator(".readout-value");
+  await expect
+    .poll(async () => (await populationValue.textContent())?.trim() ?? "")
+    .toBe("1");
+  await page.getByRole("button", { name: "Pause" }).click();
+  await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
+
+  await selectTool(page, "select");
+  await clickMapTile(canvas, { x: 1, y: 1 });
+  await expect(inspector.getByText("Residents 1 / 4")).toBeVisible();
+  await clickMapTile(canvas, { x: 5, y: 1 });
+  await expect(inspector.getByText("Jobs 1 / 4")).toBeVisible();
 
   await page.getByRole("button", { name: "Resume" }).click();
   const clockValue = timeReadout.locator(".readout-value");
