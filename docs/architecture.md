@@ -64,8 +64,9 @@ the host normalizes it to `null`.
 `scenario.growthWaves` is also required and may be empty. Omitting either key,
 omitting `startingCapital`, omitting a placed building's required `placedAt`, or
 supplying any other malformed schema-v5 content,
-rejects the snapshot. Schema-v3 and older snapshots are never heuristically
-migrated.
+rejects the snapshot. Hosts reject every snapshot whose schema is not
+5—including schema-v4 and older; development saves are disposable and are
+cleared rather than migrated.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
@@ -213,6 +214,13 @@ is exactly Crossroads, Standard economy, `$120,000` starting capital, demand
 multiplier `1`, and paused move-in. `GameEngine::new()` delegates to that
 request, so the browser and Tauri defaults share the factory rather than
 maintaining separate startup snapshots.
+
+Sandbox ticking owns deterministic housing demand. A newly placed house stays
+empty while paused; once running, due residents move in from the building's
+`placedAt` time at the fixed schedule until the Rust catalog capacity is full
+(Small House 4, Large House 10). Rust then assigns worker sims to workplace
+buildings in stable order, filling only the finite `job_capacity` declared by
+the same catalog; destination buildings never provide unlimited jobs.
 
 Both host adapters use the pure factory for New City candidates:
 `WasmGameEngine.build_sandbox_snapshot()` calls `create_sandbox_snapshot`
