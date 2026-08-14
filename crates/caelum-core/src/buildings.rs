@@ -324,14 +324,6 @@ pub fn place_building_core(
 
     if definition.resident_capacity > 0 || definition.job_capacity > 0 {
         assign_workplaces(&mut next);
-        // `assign_workplaces` may promote a home-fallback worker (workplace ==
-        // home) to a real non-home workplace when this placement adds one. The
-        // worker's stale dormant outbound trip still targets home, so retarget
-        // it onto the new workplace — otherwise `is_home_fallback_trip` keeps
-        // it dormant and its id blocks any fresh outbound spawn. Mirrors the TS
-        // `retargetCitizens(..., isHomeFallbackCitizen)` flow invoked when a
-        // destination is placed (src/simulation/buildings.ts).
-        crate::trips::retarget_home_fallback_trips(&mut next);
     }
 
     Ok(next)
@@ -361,51 +353,15 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
         if sim.worker_profile != WorkerProfile::Worker {
             continue;
         }
-        // A workplace equal to home is the documented home-fallback (the only
-        // destination at assignment time was the home tile — e.g. housing was
-        // bulldozed and the footprint later rezoned as a destination). Revisit
-        // it so a later non-home destination can promote the worker out of the
-        // dormant fallback; otherwise the worker stays on a zero-distance home
-        // workplace forever; its outbound trips are held dormant by
-        // `is_home_fallback_trip` and it never commutes even after a real
-        // destination is built. Mirrors the TS
-        // `retargetCitizens(..., isHomeFallbackCitizen)` flow invoked when a
-        // destination is placed (src/simulation/buildings.ts). The companion
-        // `crate::trips::retarget_home_fallback_trips` rewrites the stale
-        // dormant trip onto the promoted workplace.
-        if sim
-            .workplace
-            .as_ref()
-            .is_some_and(|workplace| *workplace != sim.home)
-        {
+        if sim.workplace.is_some() {
             continue;
         }
 
-        // Avoid assigning a workplace that equals the sim's home when any
-        // alternative destination exists. A same-home workplace would produce a
-        // zero-distance commute that completes instantly, inflating served
-        // metrics (and survival wins) without any actual travel. This arises
-        // after housing is bulldozed (sims retain `home` on the now-empty
-        // tiles) and the same footprint is later rezoned as a destination,
-        // breaking the "housing and destinations cannot overlap" assumption.
-        // Mirrors the per-citizen filter in
-        // `src/simulation/buildingSelectors.ts` `retargetCitizens`; if every
-        // remaining destination equals home (degenerate: the only destination
-        // IS home), fall through to the home destination rather than leaving
-        // the sim unassigned.
-        let eligible: Vec<&Point> = destinations
+        let worker_index = worker_ids
             .iter()
-            .filter(|destination| *destination != &sim.home)
-            .collect();
-        let workplace = if eligible.is_empty() {
-            &destinations[destination_index % destinations.len()]
-        } else {
-            let worker_index = worker_ids
-                .iter()
-                .position(|id| id == &sim.id)
-                .unwrap_or(destination_index);
-            eligible[worker_index % eligible.len()]
-        };
+            .position(|id| id == &sim.id)
+            .unwrap_or(destination_index);
+        let workplace = &destinations[worker_index % destinations.len()];
         sim.workplace = Some(*workplace);
         destination_index += 1;
     }

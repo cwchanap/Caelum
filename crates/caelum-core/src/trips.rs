@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::building_catalog::building_definition;
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
@@ -792,7 +792,6 @@ fn track_active_trip_boundary(
     max_average_wait: Option<f64>,
 ) {
     if is_terminal_status(trip.status)
-        || is_home_fallback_trip(state, trip)
         || (trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id))
     {
         return;
@@ -990,7 +989,7 @@ fn tick_trip(
     delta_seconds: f64,
     tick_start_time: f64,
 ) -> TripTickResult {
-    if is_terminal_status(trip.status) || is_home_fallback_trip(state, trip) {
+    if is_terminal_status(trip.status) {
         return unchanged(trip);
     }
 
@@ -1370,23 +1369,6 @@ fn is_trip_on_vehicle(state: &GameSnapshot, trip_id: &str) -> bool {
         .any(|vehicle| vehicle.passenger_ids.iter().any(|id| id == trip_id))
 }
 
-fn is_home_fallback_trip(state: &GameSnapshot, trip: &ActiveTrip) -> bool {
-    let Some(sim) = state.sims.iter().find(|sim| sim.id == trip.sim_id) else {
-        return false;
-    };
-
-    if trip.destination != sim.home || trip.purpose == TripPurpose::CommuteReturn {
-        return false;
-    }
-
-    if trip.purpose == TripPurpose::CommuteOutbound && !has_valid_workplace_destination(state, sim)
-    {
-        return true;
-    }
-
-    trip.origin == sim.home && same_position_and_point(&trip.position, &sim.home)
-}
-
 fn has_valid_workplace_destination(state: &GameSnapshot, sim: &Sim) -> bool {
     let Some(workplace) = sim.workplace.as_ref() else {
         return false;
@@ -1395,93 +1377,6 @@ fn has_valid_workplace_destination(state: &GameSnapshot, sim: &Sim) -> bool {
     crate::buildings::workplace_points(state)
         .iter()
         .any(|destination| destination == workplace)
-}
-
-/// Retarget active outbound trips left dormant on a home-fallback destination
-/// once their sim has been promoted to a real (non-home) workplace by
-/// `buildings::assign_workplaces`.
-///
-/// A home-fallback trip has `destination == sim.home` and is held dormant by
-/// `is_home_fallback_trip`: it neither progresses nor resolves. When a real
-/// destination later appears, `assign_workplaces` reassigns the sim's
-/// `workplace` away from home, but the stale trip still targets home and —
-/// because it is dormant and never terminal — its id keeps
-/// `has_trip_for_sim_day` true, blocking any fresh outbound spawn. The worker
-/// is therefore stuck non-commuting despite now holding a valid workplace.
-///
-/// This rewrites each such trip onto the sim's current workplace, resetting the
-/// route plan, status, patience/deadline window, and id so the commute resumes
-/// from the sim's current position (home). Mirrors the legacy `retargetCitizens`
-/// destination/timer reset in `src/simulation/buildingSelectors.ts`.
-///
-/// The id is regenerated for the current day because it encodes the service day
-/// (`trip-day-{day}-trip-{n}`), which `has_trip_for_sim_day`,
-/// `apply_arrival_to_sim`, and `apply_commute_resolution_to_sim` all parse back
-/// out. A dormant home-fallback trip can survive across day boundaries (it is
-/// non-terminal and `tick_trip` returns it unchanged), so a trip spawned on day
-/// N that is retargeted on day M would otherwise keep its day-N id: the stale
-/// prefix makes `has_trip_for_sim_day(_, _, M)` miss it and allow a duplicate
-/// same-day outbound spawn, and `trip_service_day != state.day` prevents the
-/// retargeted arrival/resolution from setting today's commute flags.
-///
-/// Home-fallback trips are dormant at home and never aboard a vehicle, so no
-/// passenger-id cleanup is required (unlike the bulldoze retarget in
-/// `transit::cleanup_removed_destination_references`).
-pub fn retarget_home_fallback_trips(state: &mut GameSnapshot) {
-    // Collect sims promoted out of a home-fallback to a real (non-home, valid)
-    // workplace up front, so the trip loop can mutate `active_trips` without
-    // aliasing the immutable `sims` borrow used by `has_valid_workplace_destination`.
-    let promoted: HashMap<String, (Point, Point)> = state
-        .sims
-        .iter()
-        .filter_map(|sim| {
-            let workplace = sim.workplace.as_ref()?;
-            if workplace == &sim.home || !has_valid_workplace_destination(state, sim) {
-                return None;
-            }
-            Some((sim.id.clone(), (sim.home, *workplace)))
-        })
-        .collect();
-
-    if promoted.is_empty() {
-        return;
-    }
-
-    // Collect the indices of stale home-fallback trips first. The retarget must
-    // regenerate each trip's id via `next_trip_id_for_day(state)`, which borrows
-    // the trip-sequence counters on `state`; doing that inside a `&mut
-    // state.active_trips` loop would alias the borrow. Index collection decouples
-    // the selection pass from the mutation pass.
-    let mut to_retarget: Vec<(usize, Point)> = Vec::new();
-    for (index, trip) in state.active_trips.iter().enumerate() {
-        if trip.purpose != TripPurpose::CommuteOutbound || trip.status == TripStatus::Riding {
-            continue;
-        }
-        let Some((home, workplace)) = promoted.get(&trip.sim_id) else {
-            continue;
-        };
-        // Only stale home-fallback trips: still targeting home while the sim
-        // now holds a real non-home workplace.
-        if trip.destination != *home {
-            continue;
-        }
-        to_retarget.push((index, *workplace));
-    }
-
-    for (index, workplace) in to_retarget {
-        // Regenerate the id for the current day so the day-encoded prefix matches
-        // `state.day` (see function doc). This also advances `next_trip_sequence`
-        // exactly as a freshly-spawned trip would.
-        let new_id = next_trip_id_for_day(state);
-        let trip = &mut state.active_trips[index];
-        trip.id = new_id;
-        trip.status = TripStatus::Idle;
-        trip.route_plan = None;
-        trip.current_leg_index = 0;
-        trip.destination = workplace;
-        trip.deadline = trip_deadline_seconds(state.time);
-        trip.patience_remaining = WAIT_PATIENCE_SECONDS;
-    }
 }
 
 fn snap_position_to_point(position: &TripPosition) -> Point {
