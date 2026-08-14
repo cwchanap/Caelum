@@ -52,7 +52,6 @@ export function createRustSnapshot(
         templateId: "crossroads",
         startingCapital: 120_000,
         demandMultiplier: 1,
-        moveInRate: "paused",
       },
     },
     time: 0,
@@ -130,7 +129,6 @@ export function previewBackendStubs(): Pick<
               request.templateId === "blankGrid" ? "blankGrid" : "crossroads",
             startingCapital: request.startingCapital,
             demandMultiplier: request.demandMultiplier,
-            moveInRate: "paused",
           },
         },
       });

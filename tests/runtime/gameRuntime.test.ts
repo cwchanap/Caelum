@@ -432,6 +432,7 @@ function applyIntent(
           origin: intent.origin,
           rotation: intent.rotation,
           occupiedTiles: [intent.origin],
+          placedAt: 0,
         },
       ],
     };
@@ -3010,6 +3011,7 @@ describe("route creation and management", () => {
             { x: 15, y: 8 },
             { x: 16, y: 8 },
           ],
+          placedAt: 0,
           transitNodeId: "stop-001",
         },
       ],

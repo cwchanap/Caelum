@@ -78,6 +78,7 @@ fn destination_building(point: Point) -> PlacedBuilding {
         origin: point,
         rotation: 0,
         occupied_tiles: vec![point],
+        placed_at: 0.0,
         transit_node_id: None,
     }
 }
@@ -866,6 +867,7 @@ fn retarget_home_fallback_trips_repoints_stale_dormant_outbound_onto_promoted_wo
             origin: workplace,
             rotation: 0,
             occupied_tiles: vec![workplace],
+            placed_at: 0.0,
             transit_node_id: None,
         },
     ];
@@ -925,6 +927,7 @@ fn retarget_home_fallback_trips_refreshes_stale_cross_day_trip_id() {
             origin: workplace,
             rotation: 0,
             occupied_tiles: vec![workplace],
+            placed_at: 0.0,
             transit_node_id: None,
         },
     ];

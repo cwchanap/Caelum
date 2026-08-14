@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    DemandMultiplier, EconomyPreset, GameMode, Heading, MoveInRateSelection, MovementKind, Point,
-    SandboxTemplateId, StartingCapital,
+    DemandMultiplier, EconomyPreset, GameMode, Heading, MovementKind, Point, SandboxTemplateId,
+    StartingCapital,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
 use caelum_core::{create_sandbox_snapshot, SandboxCreationRequest};
@@ -12,7 +12,6 @@ fn request(template_id: &str) -> SandboxCreationRequest {
         economy_preset: "creative".to_string(),
         starting_capital: Some(0.0),
         demand_multiplier: Some(1.5),
-        move_in_rate: "paused".to_string(),
     }
 }
 
@@ -76,7 +75,6 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
             economy_preset: "standard".to_string(),
             starting_capital: Some(120_000.0),
             demand_multiplier: Some(1.0),
-            move_in_rate: "paused".to_string(),
         })
         .unwrap();
 
@@ -86,7 +84,6 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
                 economy_preset: economy.to_string(),
                 starting_capital: Some(f64::from(starting_capital)),
                 demand_multiplier: Some(demand_multiplier),
-                move_in_rate: "paused".to_string(),
             };
             let first = create_sandbox_snapshot(settings_request.clone()).unwrap();
             let second = create_sandbox_snapshot(settings_request).unwrap();
@@ -117,10 +114,6 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
             assert_eq!(
                 first.rules.sandbox.demand_multiplier,
                 DemandMultiplier::new(demand_multiplier).unwrap()
-            );
-            assert_eq!(
-                first.rules.sandbox.move_in_rate,
-                MoveInRateSelection::Paused
             );
         }
     }
@@ -297,7 +290,6 @@ fn template_review(template_id: &str) -> Value {
         economy_preset: "standard".to_string(),
         starting_capital: Some(120_000.0),
         demand_multiplier: Some(1.0),
-        move_in_rate: "paused".to_string(),
     })
     .unwrap();
     let snapshot_json = serde_json::to_value(&snapshot).unwrap();

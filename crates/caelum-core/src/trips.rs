@@ -1337,7 +1337,7 @@ fn has_valid_workplace_destination(state: &GameSnapshot, sim: &Sim) -> bool {
         return false;
     };
 
-    crate::buildings::destination_points(state)
+    crate::buildings::workplace_points(state)
         .iter()
         .any(|destination| destination == workplace)
 }

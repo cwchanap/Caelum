@@ -214,6 +214,7 @@ function withBuildingAt(
         origin: points[0] ?? { x: 0, y: 0 },
         rotation: 0 as const,
         occupiedTiles: points,
+        placedAt: 0,
       },
     ],
   };

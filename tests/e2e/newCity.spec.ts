@@ -18,7 +18,6 @@ test("creates a default city through real WASM and IndexedDB", async ({
     budget: before.state.budget,
     startingCapital: before.state.rules.sandbox.startingCapital,
     demandMultiplier: before.state.rules.sandbox.demandMultiplier,
-    moveInRate: before.state.rules.sandbox.moveInRate,
   };
 
   const cityName = "IndexedDB Smoke";
@@ -35,7 +34,6 @@ test("creates a default city through real WASM and IndexedDB", async ({
     budget: after.state.budget,
     startingCapital: after.state.rules.sandbox.startingCapital,
     demandMultiplier: after.state.rules.sandbox.demandMultiplier,
-    moveInRate: after.state.rules.sandbox.moveInRate,
   }).toEqual(rustDefaults);
 
   const cityId = after.persistence.activeCity!.id;

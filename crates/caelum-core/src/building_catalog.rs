@@ -6,7 +6,8 @@ pub struct BuildingDefinition {
     pub cost: i32,
     pub allowed_area: Option<&'static str>,
     pub effect: &'static str,
-    pub citizen_count: u16,
+    pub resident_capacity: u16,
+    pub job_capacity: u16,
 }
 
 pub const BUILDINGS: &[BuildingDefinition] = &[
@@ -18,7 +19,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 2_000,
         allowed_area: None,
         effect: "busStop",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 0,
     },
     BuildingDefinition {
         building_type: "busTerminal",
@@ -28,7 +30,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 12_000,
         allowed_area: None,
         effect: "busTerminal",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 0,
     },
     BuildingDefinition {
         building_type: "metroStation",
@@ -38,7 +41,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 25_000,
         allowed_area: None,
         effect: "metroStation",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 0,
     },
     BuildingDefinition {
         building_type: "smallHouse",
@@ -48,7 +52,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 4_000,
         allowed_area: Some("residential"),
         effect: "housing",
-        citizen_count: 4,
+        resident_capacity: 4,
+        job_capacity: 0,
     },
     BuildingDefinition {
         building_type: "largeHouse",
@@ -58,7 +63,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 10_000,
         allowed_area: Some("residential"),
         effect: "housing",
-        citizen_count: 10,
+        resident_capacity: 10,
+        job_capacity: 0,
     },
     BuildingDefinition {
         building_type: "supermarket",
@@ -68,7 +74,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 8_000,
         allowed_area: Some("commercial"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 4,
     },
     BuildingDefinition {
         building_type: "cinema",
@@ -78,7 +85,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 14_000,
         allowed_area: Some("commercial"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 6,
     },
     BuildingDefinition {
         building_type: "factory",
@@ -88,7 +96,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 16_000,
         allowed_area: Some("industrial"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 6,
     },
     BuildingDefinition {
         building_type: "warehouse",
@@ -98,7 +107,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 12_000,
         allowed_area: Some("industrial"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 6,
     },
     BuildingDefinition {
         building_type: "officeTower",
@@ -108,7 +118,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 18_000,
         allowed_area: Some("office"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 4,
     },
     BuildingDefinition {
         building_type: "businessPark",
@@ -118,7 +129,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 15_000,
         allowed_area: Some("office"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 6,
     },
     BuildingDefinition {
         building_type: "clinic",
@@ -128,7 +140,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 12_000,
         allowed_area: Some("civic"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 4,
     },
     BuildingDefinition {
         building_type: "school",
@@ -138,7 +151,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 18_000,
         allowed_area: Some("civic"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 6,
     },
     BuildingDefinition {
         building_type: "parkPlaza",
@@ -148,7 +162,8 @@ pub const BUILDINGS: &[BuildingDefinition] = &[
         cost: 6_000,
         allowed_area: Some("park"),
         effect: "destination",
-        citizen_count: 0,
+        resident_capacity: 0,
+        job_capacity: 4,
     },
 ];
 

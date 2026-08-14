@@ -598,6 +598,7 @@ export function placeTestBuilding(
     origin: clonePoint(origin),
     rotation,
     occupiedTiles: occupiedTiles.map(clonePoint),
+    placedAt: 0,
     ...(transitNodeId === undefined ? {} : { transitNodeId }),
   };
 

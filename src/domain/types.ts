@@ -1,9 +1,8 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 4 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 5 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads";
-export type MoveInRateSelection = "paused";
 
 export interface GameRules {
   gameMode: GameMode;
@@ -12,7 +11,6 @@ export interface GameRules {
     templateId: SandboxTemplateId;
     startingCapital: number;
     demandMultiplier: number;
-    moveInRate: MoveInRateSelection;
   };
 }
 
@@ -217,6 +215,7 @@ export interface PlacedBuilding {
   origin: Point;
   rotation: BuildingRotation;
   occupiedTiles: Point[];
+  placedAt: number;
   transitNodeId?: string;
 }
 

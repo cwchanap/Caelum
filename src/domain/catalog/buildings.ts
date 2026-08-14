@@ -15,7 +15,8 @@ export interface BuildingDefinition {
   cost: number;
   effect: BuildingEffect;
   allowedArea?: AreaKind;
-  citizenCount?: number;
+  residentCapacity: number;
+  jobCapacity: number;
 }
 
 export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
@@ -26,6 +27,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     height: 1,
     cost: 2_000,
     effect: "busStop",
+    residentCapacity: 0,
+    jobCapacity: 0,
   },
   busTerminal: {
     type: "busTerminal",
@@ -34,6 +37,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     height: 2,
     cost: 12_000,
     effect: "busTerminal",
+    residentCapacity: 0,
+    jobCapacity: 0,
   },
   metroStation: {
     type: "metroStation",
@@ -42,6 +47,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     height: 1,
     cost: 25_000,
     effect: "metroStation",
+    residentCapacity: 0,
+    jobCapacity: 0,
   },
   smallHouse: {
     type: "smallHouse",
@@ -51,7 +58,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 4_000,
     effect: "housing",
     allowedArea: "residential",
-    citizenCount: 4,
+    residentCapacity: 4,
+    jobCapacity: 0,
   },
   largeHouse: {
     type: "largeHouse",
@@ -61,7 +69,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 10_000,
     effect: "housing",
     allowedArea: "residential",
-    citizenCount: 10,
+    residentCapacity: 10,
+    jobCapacity: 0,
   },
   supermarket: {
     type: "supermarket",
@@ -71,6 +80,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 8_000,
     effect: "destination",
     allowedArea: "commercial",
+    residentCapacity: 0,
+    jobCapacity: 4,
   },
   cinema: {
     type: "cinema",
@@ -80,6 +91,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 14_000,
     effect: "destination",
     allowedArea: "commercial",
+    residentCapacity: 0,
+    jobCapacity: 6,
   },
   factory: {
     type: "factory",
@@ -89,6 +102,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 16_000,
     effect: "destination",
     allowedArea: "industrial",
+    residentCapacity: 0,
+    jobCapacity: 6,
   },
   warehouse: {
     type: "warehouse",
@@ -98,6 +113,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 12_000,
     effect: "destination",
     allowedArea: "industrial",
+    residentCapacity: 0,
+    jobCapacity: 6,
   },
   officeTower: {
     type: "officeTower",
@@ -107,6 +124,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 18_000,
     effect: "destination",
     allowedArea: "office",
+    residentCapacity: 0,
+    jobCapacity: 4,
   },
   businessPark: {
     type: "businessPark",
@@ -116,6 +135,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 15_000,
     effect: "destination",
     allowedArea: "office",
+    residentCapacity: 0,
+    jobCapacity: 6,
   },
   clinic: {
     type: "clinic",
@@ -125,6 +146,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 12_000,
     effect: "destination",
     allowedArea: "civic",
+    residentCapacity: 0,
+    jobCapacity: 4,
   },
   school: {
     type: "school",
@@ -134,6 +157,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 18_000,
     effect: "destination",
     allowedArea: "civic",
+    residentCapacity: 0,
+    jobCapacity: 6,
   },
   parkPlaza: {
     type: "parkPlaza",
@@ -143,6 +168,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     cost: 6_000,
     effect: "destination",
     allowedArea: "park",
+    residentCapacity: 0,
+    jobCapacity: 4,
   },
 };
 

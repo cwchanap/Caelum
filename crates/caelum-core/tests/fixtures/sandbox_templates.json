@@ -17,7 +17,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 4,
+      "schemaVersion": 5,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -549,7 +549,6 @@
       "gameMode": "sandbox",
       "sandbox": {
         "demandMultiplier": 1.0,
-        "moveInRate": "paused",
         "startingCapital": 120000,
         "templateId": "blankGrid"
       }
@@ -578,7 +577,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 4,
+      "schemaVersion": 5,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -2168,7 +2167,6 @@
       "gameMode": "sandbox",
       "sandbox": {
         "demandMultiplier": 1.0,
-        "moveInRate": "paused",
         "startingCapital": 120000,
         "templateId": "crossroads"
       }

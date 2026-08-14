@@ -6,11 +6,7 @@ import type {
   CitySummary,
 } from "../persistence/citySaveStore";
 import { citySaveStoreError } from "../persistence/citySaveStore";
-import type {
-  EconomyPreset,
-  MoveInRateSelection,
-  SandboxTemplateId,
-} from "../domain/types";
+import type { EconomyPreset, SandboxTemplateId } from "../domain/types";
 import type {
   GameBackend,
   RustGameSnapshot,
@@ -37,7 +33,6 @@ export interface NewCityRequest {
 // Chromium New City smoke; Rust's strict missing/null validation remains intact.
 const NEW_CITY_STARTING_CAPITAL = 120_000;
 const NEW_CITY_DEMAND_MULTIPLIER = 1;
-const NEW_CITY_MOVE_IN_RATE: MoveInRateSelection = "paused";
 
 export type WorkingSaveError =
   | { kind: "busy" }
@@ -291,7 +286,6 @@ export function createWorkingSaveRuntime(
         economyPreset: request.economyPreset,
         startingCapital: NEW_CITY_STARTING_CAPITAL,
         demandMultiplier: NEW_CITY_DEMAND_MULTIPLIER,
-        moveInRate: NEW_CITY_MOVE_IN_RATE,
       });
       if (!candidate.ok) {
         return {

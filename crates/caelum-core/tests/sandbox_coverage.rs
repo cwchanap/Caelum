@@ -56,7 +56,6 @@ fn request(template_id: &str, starting_capital: f64) -> SandboxCreationRequest {
         economy_preset: "standard".to_string(),
         starting_capital: Some(starting_capital),
         demand_multiplier: Some(1.0),
-        move_in_rate: "paused".to_string(),
     }
 }
 
@@ -180,16 +179,6 @@ fn validate_request_surfaces_typed_field_errors_for_each_invalid_field() {
         SandboxCreationErrorCode::InvalidDemandMultiplier
     );
     assert_eq!(null_demand.context.attempted_value.as_deref(), Some("null"));
-
-    let unknown_move_in = {
-        let mut req = request("blankGrid", 0.0);
-        req.move_in_rate = "nope".to_string();
-        validate_request(req).unwrap_err()
-    };
-    assert_eq!(
-        unknown_move_in.code,
-        SandboxCreationErrorCode::UnknownMoveInRate
-    );
 }
 
 /// `validate_request` accepts a canonical default request end-to-end, covering
@@ -205,9 +194,5 @@ fn validate_request_accepts_canonical_default_request() {
     assert_eq!(
         validated.economy_preset,
         caelum_core::model::EconomyPreset::Standard
-    );
-    assert_eq!(
-        validated.move_in_rate,
-        caelum_core::model::MoveInRateSelection::Paused
     );
 }

@@ -7,6 +7,7 @@
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
 
+use caelum_core::building_catalog::building_definition;
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
@@ -250,7 +251,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(4)
+        json!(5)
     );
 }
 
@@ -258,7 +259,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(4));
+    assert_eq!(value["schemaVersion"], json!(5));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
@@ -266,10 +267,10 @@ fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
         json!({
             "templateId": "crossroads",
             "startingCapital": 120000,
-            "demandMultiplier": 1.0,
-            "moveInRate": "paused"
+            "demandMultiplier": 1.0
         })
     );
+    assert!(value["rules"]["sandbox"].get("moveInRate").is_none());
     assert_eq!(value["scenario"]["objectives"], json!(null));
     assert_eq!(value["scenario"]["growthWaves"], json!([]));
 }
@@ -329,7 +330,6 @@ fn snapshot_rejects_unknown_rule_enum_values() {
         &["rules", "gameMode"][..],
         &["rules", "economyPreset"][..],
         &["rules", "sandbox", "templateId"][..],
-        &["rules", "sandbox", "moveInRate"][..],
     ] {
         let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
         let mut nested = &mut value;
@@ -358,8 +358,7 @@ fn campaign_rules_and_scenario_round_trip() {
                 "sandbox": {
                 "templateId": "crossroads",
                 "startingCapital": 120000,
-                "demandMultiplier": 1.0,
-                "moveInRate": "paused"
+                "demandMultiplier": 1.0
             }
         })
     );
@@ -384,7 +383,7 @@ fn campaign_rules_and_scenario_round_trip() {
 }
 
 #[test]
-fn snapshot_requires_schema_v4_rules_and_scenario_fields() {
+fn snapshot_requires_current_rules_and_scenario_fields() {
     for field in ["rules", "scenario", "objectives", "growthWaves"] {
         let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
         if matches!(field, "objectives" | "growthWaves") {
@@ -395,7 +394,7 @@ fn snapshot_requires_schema_v4_rules_and_scenario_fields() {
 
         assert!(
             serde_json::from_value::<GameSnapshot>(value).is_err(),
-            "schema-v4 field {field} must be required"
+            "current field {field} must be required"
         );
     }
 }
@@ -1176,6 +1175,7 @@ fn placed_building_serializes_type_to_legacy_field() {
         origin: Point { x: 2, y: 3 },
         rotation: 90,
         occupied_tiles: vec![Point { x: 2, y: 3 }],
+        placed_at: 0.0,
         transit_node_id: None,
     };
     let value = serde_json::to_value(&building).expect("building should serialize");
@@ -1188,6 +1188,9 @@ fn placed_building_serializes_type_to_legacy_field() {
         value.get("buildingType").is_none(),
         "PlacedBuilding must not serialize `buildingType`; TS reads `building.type`"
     );
+    assert_eq!(value["placedAt"], json!(0.0));
+    assert!(value.get("residentCapacity").is_none());
+    assert!(value.get("jobCapacity").is_none());
     assert_eq!(value["occupiedTiles"], json!([{ "x": 2, "y": 3 }]));
     assert_eq!(value["rotation"], json!(90));
 
@@ -1198,10 +1201,27 @@ fn placed_building_serializes_type_to_legacy_field() {
         "type": "largeHouse",
         "origin": { "x": 2, "y": 3 },
         "rotation": 90,
-        "occupiedTiles": [{ "x": 2, "y": 3 }]
+        "occupiedTiles": [{ "x": 2, "y": 3 }],
+        "placedAt": 0.0
     }))
     .expect("TS-shaped building JSON should deserialize");
     assert_eq!(back, building);
+}
+
+#[test]
+fn building_catalog_exposes_phase_two_resident_and_job_capacity() {
+    let expected = [
+        ("smallHouse", 4, 0),
+        ("largeHouse", 10, 0),
+        ("supermarket", 0, 4),
+        ("factory", 0, 6),
+    ];
+
+    for (building_type, residents, jobs) in expected {
+        let definition = building_definition(building_type).expect("catalog entry");
+        assert_eq!(definition.resident_capacity, residents, "{building_type}");
+        assert_eq!(definition.job_capacity, jobs, "{building_type}");
+    }
 }
 
 #[test]

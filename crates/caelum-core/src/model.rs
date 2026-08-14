@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 4;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,12 +21,6 @@ pub enum EconomyPreset {
 pub enum SandboxTemplateId {
     BlankGrid,
     Crossroads,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum MoveInRateSelection {
-    Paused,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,7 +99,6 @@ pub struct SandboxSettings {
     pub template_id: SandboxTemplateId,
     pub starting_capital: StartingCapital,
     pub demand_multiplier: DemandMultiplier,
-    pub move_in_rate: MoveInRateSelection,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -603,6 +596,7 @@ pub struct PlacedBuilding {
     pub origin: Point,
     pub rotation: u16,
     pub occupied_tiles: Vec<Point>,
+    pub placed_at: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transit_node_id: Option<String>,
 }
