@@ -16,7 +16,6 @@ fn request(
         economy_preset: economy_preset.to_string(),
         starting_capital: Some(starting_capital),
         demand_multiplier: Some(demand_multiplier),
-        move_in_rate: "paused".to_string(),
     }
 }
 

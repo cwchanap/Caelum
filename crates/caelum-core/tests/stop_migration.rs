@@ -45,7 +45,7 @@ fn from_snapshot_rejects_unsupported_schema_before_semantic_validation() {
 }
 
 #[test]
-fn schema_v3_json_missing_starting_capital_is_rejected_before_full_deserialization() {
+fn old_schema_json_missing_starting_capital_is_rejected_before_full_deserialization() {
     let mut value =
         serde_json::to_value(engine_with_stop().snapshot()).expect("snapshot serializes");
     value["schemaVersion"] = serde_json::json!(3);
@@ -59,7 +59,7 @@ fn schema_v3_json_missing_starting_capital_is_rejected_before_full_deserializati
     let wire = serde_json::to_value(error).expect("persistence error serializes");
 
     assert_eq!(wire["code"], serde_json::json!("unsupportedSchema"));
-    assert_eq!(wire["context"]["expected"], serde_json::json!(4));
+    assert_eq!(wire["context"]["expected"], serde_json::json!(5));
     assert_eq!(wire["context"]["actual"], serde_json::json!(3));
 }
 

@@ -5,8 +5,8 @@ use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MoveInRateSelection, MovementKind, Point, SandboxSettings, SandboxTemplateId,
-    ScenarioConfig, StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
+    MetricsState, MovementKind, Point, SandboxSettings, SandboxTemplateId, ScenarioConfig,
+    StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
 };
 use crate::road::{author_scenario_road_line, refresh_all_automatic_junctions};
 use crate::road_topology::{RoadState, RoadTopology};
@@ -23,7 +23,6 @@ pub struct SandboxCreationRequest {
     pub economy_preset: String,
     pub starting_capital: Option<f64>,
     pub demand_multiplier: Option<f64>,
-    pub move_in_rate: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,7 +31,6 @@ pub struct ValidatedSandboxCreationRequest {
     pub economy_preset: EconomyPreset,
     pub starting_capital: StartingCapital,
     pub demand_multiplier: DemandMultiplier,
-    pub move_in_rate: MoveInRateSelection,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +40,6 @@ pub enum SandboxCreationErrorCode {
     UnknownEconomyPreset,
     InvalidStartingCapital,
     InvalidDemandMultiplier,
-    UnknownMoveInRate,
     TemplateInvariantViolation,
 }
 
@@ -142,7 +139,6 @@ pub fn canonical_default_request() -> SandboxCreationRequest {
         economy_preset: "standard".to_string(),
         starting_capital: Some(f64::from(DEFAULT_STARTING_CAPITAL)),
         demand_multiplier: Some(1.0),
-        move_in_rate: "paused".to_string(),
     }
 }
 
@@ -158,7 +154,6 @@ fn sandbox_settings_from_validated(validated: &ValidatedSandboxCreationRequest) 
         template_id: validated.template_id,
         starting_capital: validated.starting_capital,
         demand_multiplier: validated.demand_multiplier,
-        move_in_rate: validated.move_in_rate,
     }
 }
 
@@ -169,14 +164,12 @@ pub fn validate_request(
     let economy_preset = parse_economy_preset(&request.economy_preset)?;
     let starting_capital = parse_starting_capital(request.starting_capital)?;
     let demand_multiplier = parse_demand_multiplier(request.demand_multiplier)?;
-    let move_in_rate = parse_move_in_rate(&request.move_in_rate)?;
 
     Ok(ValidatedSandboxCreationRequest {
         template_id,
         economy_preset,
         starting_capital,
         demand_multiplier,
-        move_in_rate,
     })
 }
 
@@ -272,10 +265,6 @@ pub(crate) fn sandbox_candidate_from_persisted_rules(
         .to_string(),
         starting_capital: Some(f64::from(rules.sandbox.starting_capital.value())),
         demand_multiplier: Some(rules.sandbox.demand_multiplier.value()),
-        move_in_rate: match rules.sandbox.move_in_rate {
-            MoveInRateSelection::Paused => "paused",
-        }
-        .to_string(),
     };
 
     create_sandbox_candidate(request)
@@ -551,17 +540,6 @@ fn parse_demand_multiplier(value: Option<f64>) -> Result<DemandMultiplier, Sandb
     })
 }
 
-fn parse_move_in_rate(value: &str) -> Result<MoveInRateSelection, SandboxCreationError> {
-    match value {
-        "paused" => Ok(MoveInRateSelection::Paused),
-        _ => Err(creation_error(
-            SandboxCreationErrorCode::UnknownMoveInRate,
-            "moveInRate",
-            value,
-        )),
-    }
-}
-
 fn canonical_numeric(value: Option<f64>) -> String {
     match value {
         None => "null".to_string(),
@@ -602,7 +580,6 @@ mod tests {
             economy_preset: "standard".to_string(),
             starting_capital: Some(120_000.0),
             demand_multiplier: Some(1.0),
-            move_in_rate: "paused".to_string(),
         }
     }
 
@@ -619,11 +596,6 @@ mod tests {
                 "unknown",
                 SandboxCreationErrorCode::UnknownEconomyPreset,
             ),
-            (
-                "moveInRate",
-                "unknown",
-                SandboxCreationErrorCode::UnknownMoveInRate,
-            ),
         ];
 
         for (field, attempted, code) in cases {
@@ -631,7 +603,6 @@ mod tests {
             match field {
                 "templateId" => request.template_id = attempted.to_string(),
                 "economyPreset" => request.economy_preset = attempted.to_string(),
-                "moveInRate" => request.move_in_rate = attempted.to_string(),
                 _ => unreachable!(),
             }
             let error = validate_request(request).unwrap_err();

@@ -160,7 +160,6 @@ fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_dedu
         economy_preset: "creative".to_string(),
         starting_capital: Some(0.0),
         demand_multiplier: Some(1.0),
-        move_in_rate: "paused".to_string(),
     })
     .expect("Creative Blank Grid request should construct directly");
     let snapshot = direct.snapshot();

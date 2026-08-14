@@ -63,15 +63,15 @@ pub fn footprint(
     Some(points)
 }
 
-pub fn destination_points(state: &GameSnapshot) -> Vec<Point> {
+pub fn workplace_points(state: &GameSnapshot) -> Vec<Point> {
     state
         .buildings
         .iter()
         .filter(|building| {
             building_definition(&building.building_type)
-                .is_some_and(|definition| definition.effect == "destination")
+                .is_some_and(|definition| definition.job_capacity > 0)
         })
-        .flat_map(|building| building.occupied_tiles.iter().cloned())
+        .flat_map(|building| building.occupied_tiles.iter().copied())
         .collect()
 }
 
@@ -319,11 +319,12 @@ pub fn place_building_core(
         origin: *origin,
         rotation,
         occupied_tiles: occupied_tiles.clone(),
+        placed_at: state.time,
         transit_node_id,
     });
 
-    if definition.effect == "housing" {
-        for index in 0..usize::from(definition.citizen_count) {
+    if definition.resident_capacity > 0 {
+        for index in 0..usize::from(definition.resident_capacity) {
             let sim_id = next_entity_id("sim", next.sims.iter().map(|sim| sim.id.clone()));
             let home = occupied_tiles[index % occupied_tiles.len()];
             let worker_profile = worker_profile_for_id(&sim_id);
@@ -343,7 +344,7 @@ pub fn place_building_core(
         }
     }
 
-    if matches!(definition.effect, "housing" | "destination") {
+    if definition.resident_capacity > 0 || definition.job_capacity > 0 {
         assign_workplaces(&mut next);
         // `assign_workplaces` may promote a home-fallback worker (workplace ==
         // home) to a real non-home workplace when this placement adds one. The
@@ -359,7 +360,7 @@ pub fn place_building_core(
 }
 
 pub fn assign_workplaces(state: &mut GameSnapshot) {
-    let destinations = destination_points(state);
+    let destinations = workplace_points(state);
     if destinations.is_empty() {
         return;
     }

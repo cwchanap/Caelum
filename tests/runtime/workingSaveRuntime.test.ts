@@ -826,7 +826,6 @@ describe("working save runtime new cities", () => {
         economyPreset: "creative",
         startingCapital: 120_000,
         demandMultiplier: 1,
-        moveInRate: "paused",
       },
     ]);
   });

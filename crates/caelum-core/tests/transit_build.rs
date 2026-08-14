@@ -528,6 +528,7 @@ fn destination_building(
         origin: occupied_tiles[0],
         rotation: 0,
         occupied_tiles,
+        placed_at: 0.0,
         transit_node_id: None,
     }
 }

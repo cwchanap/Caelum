@@ -328,6 +328,7 @@ fn destination_on(id: &str, building_type: &str, tiles: Vec<Point>) -> PlacedBui
         origin: tiles[0],
         rotation: 0,
         occupied_tiles: tiles,
+        placed_at: 0.0,
         transit_node_id: None,
     }
 }

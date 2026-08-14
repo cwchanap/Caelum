@@ -111,7 +111,7 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Schema-v4 raw snapshots always include scenario identity, growth waves, and
+/// Schema-v5 raw snapshots always include scenario identity, growth waves, and
 /// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
 /// or present WASM `undefined`; both host encodings of Rust `None` normalize
 /// to canonical `null`. Non-null thresholds remain authoritative core data.
@@ -285,7 +285,6 @@ export interface SandboxCreationRequest {
   economyPreset: string;
   startingCapital: number;
   demandMultiplier: number;
-  moveInRate: string;
 }
 
 export type SandboxCreationErrorCode =
@@ -293,7 +292,6 @@ export type SandboxCreationErrorCode =
   | "unknownEconomyPreset"
   | "invalidStartingCapital"
   | "invalidDemandMultiplier"
-  | "unknownMoveInRate"
   | "templateInvariantViolation";
 
 export interface SandboxCreationError {

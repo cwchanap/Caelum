@@ -187,7 +187,7 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
     let removed_destination_tiles: HashSet<String> = removed_building
         .filter(|building| {
             building_definition(&building.building_type)
-                .is_some_and(|definition| definition.effect == "destination")
+                .is_some_and(|definition| definition.job_capacity > 0)
         })
         .into_iter()
         .flat_map(|building| building.occupied_tiles.iter().map(point_key))

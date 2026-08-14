@@ -7,7 +7,6 @@ const request = {
   economyPreset: "standard",
   startingCapital: 120_000,
   demandMultiplier: 1,
-  moveInRate: "paused",
 } as const;
 
 describe("WASM backend", () => {

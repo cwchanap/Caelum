@@ -10,7 +10,6 @@ const SANDBOX_CREATION_ERROR_CODES = new Set<SandboxCreationErrorCode>([
   "unknownEconomyPreset",
   "invalidStartingCapital",
   "invalidDemandMultiplier",
-  "unknownMoveInRate",
   "templateInvariantViolation",
 ]);
 
