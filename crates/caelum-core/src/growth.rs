@@ -98,17 +98,19 @@ mod tests {
     }
 
     #[test]
-    fn seed_wave_zones_places_houses_and_spawns_sims() {
+    fn seed_wave_zones_places_houses_without_immediate_sims() {
         let start = seeded();
         let budget_before = start.budget;
         let next = trips::tick_trips(&start, 1.0);
 
         assert_eq!(next.buildings.len(), 5, "5 smallHouse units placed");
-        assert_eq!(next.sims.len(), 20, "5 units * 4 citizens");
+        assert_eq!(
+            next.sims.len(),
+            0,
+            "Campaign growth places housing without Sandbox move-ins"
+        );
         assert!(next.scenario.growth_waves[0].applied);
         assert_eq!(next.budget, budget_before, "budget-exempt world growth");
-        assert_eq!(next.sims[0].id, "sim-001");
-        assert_eq!(next.sims[19].id, "sim-020");
 
         let anchor = next
             .map
@@ -240,9 +242,9 @@ mod tests {
         assert!(next.scenario.growth_waves[1].applied, "wave-b applied");
         assert!(next.scenario.growth_waves[2].applied, "wave-c applied");
 
-        // Three buildings placed, 12 sims spawned (3 * 4 citizens per house).
+        // Three buildings placed; Campaign growth does not run Sandbox move-ins.
         assert_eq!(next.buildings.len(), 3, "3 smallHouse units placed");
-        assert_eq!(next.sims.len(), 12, "3 units * 4 citizens");
+        assert_eq!(next.sims.len(), 0, "Campaign growth has no immediate sims");
 
         // The tick was not truncated — reached the full 300s.
         assert_eq!(

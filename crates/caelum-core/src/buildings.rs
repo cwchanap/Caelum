@@ -1,9 +1,8 @@
 use crate::building_catalog::{building_definition, BuildingDefinition};
-use crate::commute::{shift_template_for_id, worker_profile_for_id};
 use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::ids::next_entity_id;
 use crate::model::{
-    BusStopKind, GameSnapshot, PlacedBuilding, Point, Sim, Station, Stop, TransitNodeStatus,
+    BusStopKind, GameSnapshot, PlacedBuilding, Point, Station, Stop, TransitNodeStatus,
     WorkerProfile,
 };
 use crate::platforms::{bus_platforms, metro_platforms};
@@ -323,27 +322,6 @@ pub fn place_building_core(
         transit_node_id,
     });
 
-    if definition.resident_capacity > 0 {
-        for index in 0..usize::from(definition.resident_capacity) {
-            let sim_id = next_entity_id("sim", next.sims.iter().map(|sim| sim.id.clone()));
-            let home = occupied_tiles[index % occupied_tiles.len()];
-            let worker_profile = worker_profile_for_id(&sim_id);
-            next.sims.push(Sim {
-                id: sim_id.clone(),
-                home,
-                position: home,
-                worker_profile,
-                shift_template: shift_template_for_id(&sim_id).map(str::to_string),
-                workplace: None,
-                commute_day: 0,
-                outbound_resolved_today: false,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
-            });
-        }
-    }
-
     if definition.resident_capacity > 0 || definition.job_capacity > 0 {
         assign_workplaces(&mut next);
         // `assign_workplaces` may promote a home-fallback worker (workplace ==
@@ -364,6 +342,19 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
     if destinations.is_empty() {
         return;
     }
+
+    // Keep assignment deterministic as residents arrive over time. The
+    // placement path used to create every resident in one batch, so a local
+    // cursor naturally spread workers across destination tiles. Gradual
+    // Sandbox move-ins call this helper once per due boundary; derive the same
+    // cursor from each worker's stable position in the sim list so late arrivals
+    // continue that round-robin instead of all taking the first destination.
+    let worker_ids: Vec<String> = state
+        .sims
+        .iter()
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
+        .map(|sim| sim.id.clone())
+        .collect();
 
     let mut destination_index = 0;
     for sim in &mut state.sims {
@@ -409,7 +400,11 @@ pub fn assign_workplaces(state: &mut GameSnapshot) {
         let workplace = if eligible.is_empty() {
             &destinations[destination_index % destinations.len()]
         } else {
-            eligible[destination_index % eligible.len()]
+            let worker_index = worker_ids
+                .iter()
+                .position(|id| id == &sim.id)
+                .unwrap_or(destination_index);
+            eligible[worker_index % eligible.len()]
         };
         sim.workplace = Some(*workplace);
         destination_index += 1;

@@ -36,6 +36,7 @@ pub mod network;
 pub mod objectives;
 pub(crate) mod persistence;
 pub mod platforms;
+pub mod population;
 pub mod preview;
 pub mod rejection;
 pub mod road;

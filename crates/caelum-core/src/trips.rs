@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::building_catalog::building_definition;
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
 use crate::model::{
@@ -8,6 +9,7 @@ use crate::model::{
     TripStatus, WorkerProfile,
 };
 use crate::objectives;
+use crate::population;
 use crate::router;
 use crate::transit;
 
@@ -71,6 +73,11 @@ pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> G
     })
 }
 
+fn apply_due_world_events(state: &mut GameSnapshot) {
+    crate::growth::apply_due_growth_waves(state);
+    population::apply_due_move_ins(state);
+}
+
 fn tick_trips_substepped(
     state: &GameSnapshot,
     delta_seconds: f64,
@@ -94,7 +101,7 @@ fn tick_trips_substepped(
     // independence invariant. Process due events (growth, daily flags, trip
     // spawning) first so the evaluation sees the correct state at the current
     // time, then evaluate. If terminal, return immediately.
-    crate::growth::apply_due_growth_waves(&mut next);
+    apply_due_world_events(&mut next);
     reset_daily_commute_flags(&mut next);
     spawn_due_commute_trips(&mut next);
     if on_substep(&mut next) {
@@ -115,6 +122,7 @@ fn tick_trips_substepped(
     // boundaries — see `next_boundary_after`).
     let mut cap = max_tick_substeps(&next, final_time);
     let mut last_sim_count = next.sims.len();
+    let mut last_move_in_slots = remaining_move_in_slots(&next);
     let campaign_mode = next.rules.game_mode == GameMode::Campaign;
     let mut last_outcome_count = if campaign_mode {
         next.metrics.trip_outcomes.len()
@@ -126,7 +134,7 @@ fn tick_trips_substepped(
             break;
         }
 
-        crate::growth::apply_due_growth_waves(&mut next);
+        apply_due_world_events(&mut next);
         let sim_count = next.sims.len();
         if sim_count > last_sim_count {
             let start_day = clock::day_index(next.time);
@@ -139,6 +147,11 @@ fn tick_trips_substepped(
             cap = cap.saturating_add(additional);
             last_sim_count = sim_count;
         }
+        let move_in_slots = remaining_move_in_slots(&next);
+        if move_in_slots > last_move_in_slots {
+            cap = cap.saturating_add(move_in_slots - last_move_in_slots);
+        }
+        last_move_in_slots = move_in_slots;
         if campaign_mode {
             let outcome_count = next.metrics.trip_outcomes.len();
             if outcome_count > last_outcome_count {
@@ -166,7 +179,7 @@ fn tick_trips_substepped(
         // break the loop, and the wave would remain permanently unapplied in the
         // terminal snapshot (growth is otherwise applied only at the top of the
         // next iteration, which never runs).
-        crate::growth::apply_due_growth_waves(&mut next);
+        apply_due_world_events(&mut next);
         if on_substep(&mut next) {
             early_termination = true;
             break;
@@ -190,7 +203,7 @@ fn tick_trips_substepped(
         );
 
         while final_time - next.time > EPSILON {
-            crate::growth::apply_due_growth_waves(&mut next);
+            apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
             spawn_due_commute_trips(&mut next);
 
@@ -210,7 +223,7 @@ fn tick_trips_substepped(
             next = advance_tick_substep(&next, substep_delta);
             // Same post-substep growth application as the main loop — see the
             // comment there for why this must precede `on_substep`.
-            crate::growth::apply_due_growth_waves(&mut next);
+            apply_due_world_events(&mut next);
             if on_substep(&mut next) {
                 early_termination = true;
                 break;
@@ -218,7 +231,7 @@ fn tick_trips_substepped(
         }
 
         if !early_termination {
-            crate::growth::apply_due_growth_waves(&mut next);
+            apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
             spawn_due_commute_trips(&mut next);
         }
@@ -247,7 +260,9 @@ fn tick_trips_substepped(
 ///   union of arrival events over the tick is at most
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
 /// - campaign `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
-///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`).
+///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`); and
+/// - sandbox remaining resident slots — one boundary per due housing move-in, so a coarse tick
+///   can process every deterministic occupancy timestamp without exhausting the cap.
 /// - campaign `trip_outcomes.len()` — one boundary per in-window outcome expiry, since
 ///   `next_boundary_after` breaks at the instant each outcome falls out of the rolling
 ///   evaluation window so a coarse tick samples the loss gates there (see
@@ -279,6 +294,7 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     } else {
         0
     };
+    let move_in_bound = remaining_move_in_slots(state);
     let outcome_expiry_bound = if state.rules.game_mode == GameMode::Campaign {
         state.metrics.trip_outcomes.len()
     } else {
@@ -290,8 +306,28 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
         .saturating_add(growth_wave_bound)
+        .saturating_add(move_in_bound)
         .saturating_add(outcome_expiry_bound)
         .saturating_add(1)
+}
+
+fn remaining_move_in_slots(state: &GameSnapshot) -> usize {
+    if state.rules.game_mode != GameMode::Sandbox {
+        return 0;
+    }
+
+    state
+        .buildings
+        .iter()
+        .filter_map(|building| {
+            let definition = building_definition(&building.building_type)?;
+            if definition.resident_capacity == 0 {
+                return None;
+            }
+            let occupancy = population::resident_occupancy(state, building);
+            Some(usize::from(definition.resident_capacity).saturating_sub(occupancy))
+        })
+        .sum()
 }
 
 fn advance_tick_substep(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
@@ -629,6 +665,25 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         for wave in &state.scenario.growth_waves {
             if !wave.applied {
                 track_next_boundary(&mut next, wave.trigger_time, state.time);
+            }
+        }
+    }
+
+    if state.rules.game_mode == GameMode::Sandbox {
+        for building in &state.buildings {
+            let Some(definition) = building_definition(&building.building_type) else {
+                continue;
+            };
+            if definition.resident_capacity == 0 {
+                continue;
+            }
+            let occupancy = population::resident_occupancy(state, building);
+            if occupancy >= usize::from(definition.resident_capacity) {
+                continue;
+            }
+            let due = building.placed_at + occupancy as f64 * population::MOVE_IN_INTERVAL_SECONDS;
+            if due > state.time {
+                track_next_boundary(&mut next, due, state.time);
             }
         }
     }
