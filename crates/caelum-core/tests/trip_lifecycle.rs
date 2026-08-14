@@ -84,7 +84,7 @@ fn destination_building(point: Point) -> PlacedBuilding {
     }
 }
 
-fn workplace_building(id: &str, building_type: &str, occupied_tiles: Vec<Point>) -> PlacedBuilding {
+fn placed_building(id: &str, building_type: &str, occupied_tiles: Vec<Point>) -> PlacedBuilding {
     PlacedBuilding {
         id: id.to_string(),
         building_type: building_type.to_string(),
@@ -99,7 +99,7 @@ fn workplace_building(id: &str, building_type: &str, occupied_tiles: Vec<Point>)
 #[test]
 fn assign_workplaces_clears_stale_assignments_when_no_workplaces_remain() {
     let mut state = create_initial_snapshot();
-    state.buildings = vec![workplace_building(
+    state.buildings = vec![placed_building(
         "building-001",
         "smallHouse",
         vec![Point { x: 2, y: 3 }],
@@ -135,8 +135,8 @@ fn assign_workplaces_sorts_buildings_and_fills_slots_in_sim_order() {
     // Deliberately reverse the vector order: assignment must sort by building
     // ID, not by insertion order.
     state.buildings = vec![
-        workplace_building("building-002", "factory", factory_tiles.clone()),
-        workplace_building("building-001", "supermarket", supermarket_tiles.clone()),
+        placed_building("building-002", "factory", factory_tiles.clone()),
+        placed_building("building-001", "supermarket", supermarket_tiles.clone()),
     ];
     state.sims = (1..=11)
         .map(|index| sim(&format!("sim-2{index:02}"), Point { x: 2, y: 3 }, None))
