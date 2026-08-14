@@ -42,7 +42,7 @@ fn zone_build_and_route_sequence_has_stable_counts() {
     assert!(supermarket.applied);
 
     assert_eq!(supermarket.snapshot.buildings.len(), 2);
-    assert_eq!(supermarket.snapshot.sims.len(), 4);
+    assert_eq!(supermarket.snapshot.sims.len(), 0);
     assert_eq!(supermarket.snapshot.budget, 108_000);
 }
 
@@ -84,7 +84,11 @@ fn nearby_walker_engine() -> GameEngine {
 }
 
 fn nearby_walker_campaign_engine() -> GameEngine {
-    let engine = nearby_walker_engine();
+    let mut engine = nearby_walker_engine();
+    // Sandbox occupancy is tick-driven. Fill the housing before switching the
+    // fixture into campaign mode, whose growth pipeline intentionally does not
+    // apply Sandbox move-ins.
+    engine.tick(500.0);
     let mut snapshot = engine.snapshot();
     let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
     snapshot.rules = rules;

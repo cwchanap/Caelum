@@ -65,17 +65,19 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
 
     assert!(placed.applied);
     assert_eq!(placed.snapshot.buildings.len(), 1);
-    assert_eq!(placed.snapshot.sims.len(), 10);
-    assert_eq!(placed.snapshot.sims[0].id, "sim-001");
-    assert_eq!(placed.snapshot.sims[0].home.x, 2);
-    assert_eq!(
-        placed.snapshot.sims[0].worker_profile,
-        WorkerProfile::Worker
+    assert!(placed.snapshot.sims.is_empty());
+
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
     );
-    assert_eq!(
-        placed.snapshot.sims[9].worker_profile,
-        WorkerProfile::NonWorker
-    );
+    let moved_in = engine.tick(500.0).snapshot;
+    assert_eq!(moved_in.sims.len(), 10);
+    assert_eq!(moved_in.sims[0].id, "sim-001");
+    assert_eq!(moved_in.sims[0].home.x, 2);
+    assert_eq!(moved_in.sims[0].worker_profile, WorkerProfile::Worker);
+    assert_eq!(moved_in.sims[9].worker_profile, WorkerProfile::NonWorker);
 }
 
 #[test]
@@ -91,6 +93,8 @@ fn destination_assigns_workplaces_to_unassigned_workers() {
         origin: (2, 3).into(),
         rotation: 0,
     });
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+    engine.tick(500.0);
     engine.dispatch(GameIntent::PaintAreaRectangle {
         area: "commercial".to_string(),
         start: (8, 3).into(),
@@ -140,8 +144,13 @@ fn destination_placed_before_housing_assigns_new_workers() {
     });
 
     assert!(housing.applied);
-    let assigned = housing
-        .snapshot
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let assigned_snapshot = engine.tick(500.0).snapshot;
+    let assigned = assigned_snapshot
         .sims
         .iter()
         .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
@@ -587,7 +596,7 @@ fn place_building_core_is_budget_exempt_but_place_building_charges() {
                 .expect("core placement succeeds");
         assert_eq!(core.budget, 0, "world growth must not charge the player");
         assert_eq!(core.buildings.len(), 1);
-        assert_eq!(core.sims.len(), 4);
+        assert!(core.sims.is_empty());
     }
 
     let charged = buildings::place_building(&zoned, "smallHouse", &Point { x: 2, y: 3 }, 0)
