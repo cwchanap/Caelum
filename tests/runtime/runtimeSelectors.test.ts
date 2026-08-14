@@ -27,6 +27,7 @@ import {
   addTestMetroLine,
   addTestMetroStation,
   createTestGameState,
+  placeTestBuilding,
 } from "../helpers/gameState";
 import {
   pointsOnColumn,
@@ -71,6 +72,84 @@ function waitingBusTrip(
 }
 
 describe("selectShellState inspector", () => {
+  function inspectAt(selectedId: string) {
+    return {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId,
+    };
+  }
+
+  function testSim(
+    id: string,
+    home: { x: number; y: number },
+    workplace?: { x: number; y: number },
+  ) {
+    return {
+      id,
+      home,
+      position: home,
+      workerProfile: "worker" as const,
+      shiftTemplate: null,
+      workplace,
+      commuteDay: 0,
+      outboundResolvedToday: false,
+      outboundArrivedToday: false,
+      returnResolvedToday: false,
+      returnedHomeToday: false,
+    };
+  }
+
+  it("emits a residents building inspector from snapshot membership", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
+    const building = state.buildings[0];
+    state = {
+      ...state,
+      sims: [testSim("sim-001", { x: 2, y: 1 })],
+    };
+
+    const inspector = selectShellState(state, inspectAt("1,1")).inspector;
+
+    expect(inspector).toEqual({
+      kind: "building",
+      buildingId: building.id,
+      buildingLabel: "Small House",
+      metricLabel: "Residents",
+      occupancy: 1,
+      capacity: 4,
+    });
+  });
+
+  it("emits a jobs building inspector from snapshot membership", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
+    const building = state.buildings[0];
+    state = {
+      ...state,
+      sims: [testSim("sim-001", { x: 1, y: 1 }, { x: 6, y: 2 })],
+    };
+
+    const inspector = selectShellState(state, inspectAt("5,1")).inspector;
+
+    expect(inspector).toEqual({
+      kind: "building",
+      buildingId: building.id,
+      buildingLabel: "Supermarket",
+      metricLabel: "Jobs",
+      occupancy: 1,
+      capacity: 4,
+    });
+  });
+
+  it("returns no inspector for a zero-capacity building without a node", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "busStop", { x: 4, y: 4 }, 0);
+    state = { ...state, transit: { ...state.transit, stops: [] } };
+
+    expect(selectShellState(state, inspectAt("4,4")).inspector).toBeNull();
+  });
+
   it("emits an inspector block for a selected terminal with route chips", () => {
     let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withRoads(state, pointsOnColumn(14, 7, 8));
@@ -90,15 +169,18 @@ describe("selectShellState inspector", () => {
     };
     const shell = selectShellState(state, ui);
 
-    expect(shell.inspector).not.toBeNull();
-    expect(shell.inspector!.nodeId).toBe(terminal.id);
-    expect(shell.inspector!.canReassign).toBe(true);
-    const routeIds = shell.inspector!.platforms.flatMap((p) =>
+    const inspector = shell.inspector;
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+    expect(inspector.nodeId).toBe(terminal.id);
+    expect(inspector.canReassign).toBe(true);
+    const routeIds = inspector.platforms.flatMap((p) =>
       p.routes.map((r) => r.id),
     );
     expect(routeIds).toContain(routeId);
-    const routeChip = shell
-      .inspector!.platforms.flatMap((p) => p.routes)
+    const routeChip = inspector.platforms
+      .flatMap((p) => p.routes)
       .find((r) => r.id === routeId)!;
     expect(routeChip.moveTargets.map((t) => t.label).sort()).toEqual([
       "B",
@@ -131,8 +213,11 @@ describe("selectShellState inspector", () => {
     };
     const shell = selectShellState(state, ui);
 
-    expect(shell.inspector).not.toBeNull();
-    const routedPlatforms = shell.inspector!.platforms.filter((p) =>
+    const inspector = shell.inspector;
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+    const routedPlatforms = inspector.platforms.filter((p) =>
       p.routes.some((r) => r.id === routeId),
     );
     // Non-vacuous: the route lives on exactly one platform.
@@ -164,17 +249,34 @@ describe("selectShellState inspector", () => {
     };
     const shell = selectShellState(state, ui);
 
-    expect(shell.inspector).not.toBeNull();
-    expect(shell.inspector!.nodeId).toBe(station.id);
-    expect(shell.inspector!.nodeLabel).toBe("Metro Station");
-    expect(shell.inspector!.canReassign).toBe(true);
+    const inspector = shell.inspector;
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+    expect(inspector.nodeId).toBe(station.id);
+    expect(inspector.nodeLabel).toBe("Metro Station");
+    expect(inspector.canReassign).toBe(true);
 
-    const lineChip = shell
-      .inspector!.platforms.flatMap((p) => p.routes)
+    const lineChip = inspector.platforms
+      .flatMap((p) => p.routes)
       .find((r) => r.id === line.id);
     expect(lineChip).toBeDefined();
     expect(lineChip!.name).toBe(line.name);
     expect(lineChip!.color).toBe(line.color);
+  });
+
+  it("keeps transit inspection first when a building overlaps its tile", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "busTerminal", { x: 14, y: 7 }, 0);
+    state = placeTestBuilding(state, "smallHouse", { x: 14, y: 7 }, 0);
+    const terminal = state.transit.stops[0];
+
+    const inspector = selectShellState(state, inspectAt("14,7")).inspector;
+
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+    expect(inspector.nodeId).toBe(terminal.id);
   });
 
   it("emits null inspector for an empty tile", () => {

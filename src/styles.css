@@ -791,6 +791,15 @@ body {
   color: var(--ink-mid);
 }
 
+.building-occupancy {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-mid);
+}
+
 .platform-empty {
   margin: 4px 0 0;
   font-family: var(--font-mono);

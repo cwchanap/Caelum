@@ -2251,7 +2251,11 @@ describe("Game Runtime", () => {
 
     expect(selected.ui.selectedId).toBe("7,8");
     expect(selected.ui.selectedNodeKind).toBe("station");
-    expect(selected.shell.inspector?.nodeLabel).toBe("Metro Station");
+    const inspector = selected.shell.inspector;
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+    expect(inspector.nodeLabel).toBe("Metro Station");
   });
 
   it("opens and closes one command destination", async () => {

@@ -7,6 +7,7 @@ import type {
   RouteLegPath,
   SandboxTemplateId,
   Tool,
+  Point,
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
@@ -116,6 +117,10 @@ function routeNameAndColor(
     : { name: routeId, color: "#888888" };
 }
 
+function includesPoint(points: Point[], target: Point): boolean {
+  return points.some((point) => point.x === target.x && point.y === target.y);
+}
+
 function buildInspector(
   state: GameState,
   ui: UiState,
@@ -130,36 +135,80 @@ function buildInspector(
     point,
     ui.selectedNodeKind ?? undefined,
   );
-  if (resolved === null) {
+  if (resolved !== null) {
+    const node = resolved.node;
+    const occupancy = selectPlatformOccupancy(state);
+
+    const platforms: ShellPlatform[] = node.platforms.map((platform) => ({
+      id: platform.id,
+      label: platform.label,
+      occupancy: occupancy.get(platform.id)?.count ?? 0,
+      capacity: platform.capacity,
+      routes: platform.routeIds.map((routeId) => {
+        const { name, color } = routeNameAndColor(state, routeId);
+        return {
+          id: routeId,
+          name,
+          color,
+          moveTargets: node.platforms
+            .filter((other) => other.id !== platform.id)
+            .map((other) => ({ platformId: other.id, label: other.label })),
+        };
+      }),
+    }));
+
+    return {
+      kind: "transit",
+      nodeId: node.id,
+      nodeLabel: nodeLabel(state, node.id),
+      canReassign: node.platforms.length > 1,
+      platforms,
+    };
+  }
+
+  // Transit nodes are resolved first because a transit building can share its
+  // selected tile with another building footprint. Only a building with a
+  // non-zero catalog capacity has a useful inspector branch.
+  const building = state.buildings.find((candidate) =>
+    includesPoint(candidate.occupiedTiles, point),
+  );
+  if (building === undefined) {
     return null;
   }
 
-  const node = resolved.node;
-  const occupancy = selectPlatformOccupancy(state);
+  const definition = BUILDING_CATALOG[building.type];
+  const metricLabel =
+    definition.residentCapacity > 0
+      ? ("Residents" as const)
+      : definition.jobCapacity > 0
+        ? ("Jobs" as const)
+        : null;
+  if (metricLabel === null) {
+    return null;
+  }
 
-  const platforms: ShellPlatform[] = node.platforms.map((platform) => ({
-    id: platform.id,
-    label: platform.label,
-    occupancy: occupancy.get(platform.id)?.count ?? 0,
-    capacity: platform.capacity,
-    routes: platform.routeIds.map((routeId) => {
-      const { name, color } = routeNameAndColor(state, routeId);
-      return {
-        id: routeId,
-        name,
-        color,
-        moveTargets: node.platforms
-          .filter((other) => other.id !== platform.id)
-          .map((other) => ({ platformId: other.id, label: other.label })),
-      };
-    }),
-  }));
+  const membershipPoint =
+    metricLabel === "Residents"
+      ? (sim: NonNullable<GameState["sims"]>[number]) => sim.home
+      : (sim: NonNullable<GameState["sims"]>[number]) => sim.workplace;
+  const occupancy = (state.sims ?? []).filter((sim) => {
+    const memberPoint = membershipPoint(sim);
+    return (
+      memberPoint !== undefined &&
+      includesPoint(building.occupiedTiles, memberPoint)
+    );
+  }).length;
 
   return {
-    nodeId: node.id,
-    nodeLabel: nodeLabel(state, node.id),
-    canReassign: node.platforms.length > 1,
-    platforms,
+    kind: "building",
+    buildingId: building.id,
+    buildingLabel: definition.label,
+    metricLabel,
+    occupancy,
+    capacity:
+      metricLabel === "Residents"
+        ? definition.residentCapacity
+        : definition.jobCapacity,
   };
 }
 

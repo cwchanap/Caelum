@@ -54,7 +54,7 @@ contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
 operation, or mutating sandbox operation.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 4`. Every snapshot carries
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 5`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
 must restore; it is an integer from `0` through `i32::MAX`.
@@ -62,11 +62,19 @@ must restore; it is an integer from `0` through `i32::MAX`.
 explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
 the host normalizes it to `null`.
 `scenario.growthWaves` is also required and may be empty. Omitting either key,
-omitting `startingCapital`, or supplying any other malformed schema-v4 content,
+omitting `startingCapital`, omitting a placed building's required `placedAt`, or
+supplying any other malformed schema-v5 content,
 rejects the snapshot. Schema-v3 and older snapshots are never heuristically
 migrated.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
+
+The contextual Select inspector keeps transit-node resolution first. When no
+transit node occupies the selected tile, it derives a building view from the
+snapshot's placed-building footprint and the read-only TypeScript building
+catalog: resident membership uses each sim's `home`, workplace membership uses
+`workplace`, and the catalog supplies the capacity. Occupancy and capacity are
+not persisted or queried through a backend method.
 
 Linear road, track, remove, and area strokes may partially apply in authored order where their intent allows skipped tiles. Direction changes, route creation/updates, and roundabout placement/removal are atomic mutations. A tile owned by any road structure blocks every other infrastructure or zoning operation until that structure is removed through its owning mutation.
 
@@ -198,7 +206,7 @@ adopted and causes observable jank.
 
 Rust owns sandbox construction through `create_sandbox_snapshot()` and
 `GameEngine::from_sandbox_request()`. The raw request contains `templateId`,
-`economyPreset`, `startingCapital`, `demandMultiplier`, and `moveInRate`;
+`economyPreset`, `startingCapital`, and `demandMultiplier`;
 validation returns typed `SandboxCreationError` values for unsupported or
 invalid fields before any engine state changes. The canonical default request
 is exactly Crossroads, Standard economy, `$120,000` starting capital, demand
