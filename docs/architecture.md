@@ -65,7 +65,7 @@ the host normalizes it to `null`.
 omitting `startingCapital`, omitting a placed building's required `placedAt`, or
 supplying any other malformed schema-v5 content,
 rejects the snapshot. Hosts reject every snapshot whose schema is not
-5—including schema-v4 and older; development saves are disposable and are
+5—including every non-v5 schema; development saves are disposable and are
 cleared rather than migrated.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
@@ -81,8 +81,8 @@ Linear road, track, remove, and area strokes may partially apply in authored ord
 
 ### Persistence host boundary
 
-`snapshotForSave` returns an infallible, paused, normalized clone of the live
-snapshot without mutating the engine. `restoreSnapshot(snapshot)` is
+`snapshotForSave` returns an infallible, normalized clone whose snapshot is
+paused, without mutating the engine. `restoreSnapshot(snapshot)` is
 candidate-first: each host decodes the candidate, constructs a complete
 `GameEngine` with `from_snapshot`, and replaces the active engine only after
 construction succeeds. A definitive `{ ok: false }` therefore leaves active
@@ -132,8 +132,9 @@ one dirty boolean, one current persistence error, and the six-operation
 no multi-window workflow, so persistence needs no ownership handoff or
 cross-runtime coordination.
 
-The browser persistence adapter is `indexedDbCitySaveStore.ts`: one
-`caelum-city-saves-v1` IndexedDB database, one `cities` object store, and full
+The browser persistence adapter is `indexedDbCitySaveStore.ts`: one fresh
+`caelum-city-saves-v5` IndexedDB database (version `5`), one `cities` object
+store, and full
 `CitySaveRecord` values keyed by opaque city ID. It implements the six
 `CitySaveStore` operations directly, derives/sorts list summaries from the same
 records, lets IndexedDB clone values at `add`/`put`, and has no metadata index,
@@ -143,7 +144,7 @@ transaction remains active.
 
 The native persistence adapter is `tauriCitySaveStore.ts`: six narrow Tauri
 commands own application-data JSON files under
-`<app_data_dir>/cities/city-<hex-id>.json`. Create payloads are written to a
+`<app_data_dir>/cities-v5/city-<hex-id>.json`. Create payloads are written to a
 sibling temporary file first and committed with a create-only hard link;
 update and rename payloads are likewise temp-first and replace the committed
 file only after the complete payload is written. Listing ignores malformed,
@@ -174,7 +175,7 @@ Tauri startup:
   createTauriBackend
   -> createTauriCitySaveStore
        -> city_store_* Tauri commands
-       -> <app_data_dir>/cities/city-<hex-id>.json
+       -> <app_data_dir>/cities-v5/city-<hex-id>.json
   -> same city-list/create-city/runtime flow
 ```
 
@@ -211,7 +212,7 @@ Rust owns sandbox construction through `create_sandbox_snapshot()` and
 validation returns typed `SandboxCreationError` values for unsupported or
 invalid fields before any engine state changes. The canonical default request
 is exactly Crossroads, Standard economy, `$120,000` starting capital, demand
-multiplier `1`, and paused move-in. `GameEngine::new()` delegates to that
+multiplier `1`, with the initial snapshot paused. `GameEngine::new()` delegates to that
 request, so the browser and Tauri defaults share the factory rather than
 maintaining separate startup snapshots.
 
@@ -255,7 +256,7 @@ entity-ID collections.
 persisted sandbox rules, then swaps snapshot and compiled topology together
 only after successful construction. Reset therefore discards every player
 mutation and restores the exact active template, economy, starting capital,
-demand multiplier, and paused move-in setting; Blank Grid cannot reset to
+demand multiplier, and paused snapshot state; Blank Grid cannot reset to
 Crossroads or vice versa. Campaign reset is deliberately unsupported: it
 returns `SandboxResetError { code: "unsupportedGameMode", context:
 { gameMode: "campaign" } }` and leaves the complete campaign state unchanged.
@@ -295,7 +296,7 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
 The fresh game is the canonical Standard Crossroads sandbox: `$120,000`
-starting capital, demand multiplier `1.0`, paused move-in, no campaign
+starting capital, demand multiplier `1.0`, an initially paused snapshot, no campaign
 objectives, and no growth waves.
 Sandbox ticks continue trips and metrics but never newly win, lose, or apply
 authored growth. Explicit campaign snapshots may independently attach

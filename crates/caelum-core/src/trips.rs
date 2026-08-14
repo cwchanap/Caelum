@@ -122,7 +122,6 @@ fn tick_trips_substepped(
     // boundaries — see `next_boundary_after`).
     let mut cap = max_tick_substeps(&next, final_time);
     let mut last_sim_count = next.sims.len();
-    let mut last_move_in_slots = remaining_move_in_slots(&next);
     let campaign_mode = next.rules.game_mode == GameMode::Campaign;
     let mut last_outcome_count = if campaign_mode {
         next.metrics.trip_outcomes.len()
@@ -147,11 +146,6 @@ fn tick_trips_substepped(
             cap = cap.saturating_add(additional);
             last_sim_count = sim_count;
         }
-        let move_in_slots = remaining_move_in_slots(&next);
-        if move_in_slots > last_move_in_slots {
-            cap = cap.saturating_add(move_in_slots - last_move_in_slots);
-        }
-        last_move_in_slots = move_in_slots;
         if campaign_mode {
             let outcome_count = next.metrics.trip_outcomes.len();
             if outcome_count > last_outcome_count {

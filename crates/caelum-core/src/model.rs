@@ -249,8 +249,7 @@ pub struct GameSnapshot {
 /// (serde ignores the unknown remaining fields), compare against
 /// [`SNAPSHOT_SCHEMA_VERSION`], and reject with
 /// [`crate::persistence::PersistenceError::UnsupportedSchema`] on mismatch —
-/// so a legacy schema-v3 save that lacks the required v4
-/// `rules.sandbox.startingCapital` field gets a typed persistence error instead
+/// so a snapshot from any non-v5 schema gets a typed persistence error instead
 /// of a generic missing-field serde error from the full deserialize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

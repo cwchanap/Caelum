@@ -232,7 +232,9 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         next.buildings
             .retain(|candidate| candidate.id != building.id);
     }
-    cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
+    if !removed_destination_tiles.is_empty() {
+        cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
+    }
     if !removed_resident_tiles.is_empty() {
         cleanup_removed_resident_references(&mut next, &removed_resident_tiles);
     }
@@ -957,10 +959,6 @@ fn cleanup_removed_destination_references(
     state: &mut GameSnapshot,
     removed_destination_tiles: &HashSet<String>,
 ) {
-    if removed_destination_tiles.is_empty() {
-        return;
-    }
-
     let mut cleared_sim_ids = HashSet::new();
     for sim in &mut state.sims {
         if sim

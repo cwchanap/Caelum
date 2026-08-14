@@ -33,6 +33,33 @@ const summary = {
 defineCitySaveStoreContract("IndexedDbCitySaveStore", () => createStore());
 
 describe("IndexedDbCitySaveStore persistence", () => {
+  it("uses a fresh v5 namespace instead of reading the prior city database", async () => {
+    const legacyRequest = fakeIndexedDB.open("caelum-city-saves-v1", 1);
+    const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
+      legacyRequest.onupgradeneeded = () => {
+        legacyRequest.result.createObjectStore("cities");
+      };
+      legacyRequest.onsuccess = () => resolve(legacyRequest.result);
+      legacyRequest.onerror = () => reject(legacyRequest.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = legacyDatabase.transaction("cities", "readwrite");
+      const legacyRecord = {
+        ...citySaveRecord(summary),
+        snapshot: { schemaVersion: 4 },
+      };
+      transaction.objectStore("cities").add(legacyRecord, summary.id);
+      transaction.oncomplete = () => {
+        legacyDatabase.close();
+        resolve();
+      };
+      transaction.onerror = () => reject(transaction.error);
+    });
+
+    const store = createIndexedDbCitySaveStore({ indexedDB: fakeIndexedDB });
+    expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
+  });
+
   it("reopens a Rust-shaped record through a second adapter instance", async () => {
     const databaseName = nextDatabaseName();
     const saved = citySaveRecord(summary);
