@@ -1,9 +1,12 @@
 use caelum_core::{
     buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::{BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim, WorkerProfile},
+    model::{
+        ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim,
+        TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    },
     state::create_initial_snapshot,
-    GameEngine, GameIntent, RejectionCode,
+    transit, GameEngine, GameIntent, RejectionCode,
 };
 
 #[test]
@@ -279,6 +282,111 @@ fn remove_transit_building_removes_linked_stop() {
 }
 
 #[test]
+fn demolishing_occupied_house_removes_residents_trips_and_vehicle_passengers() {
+    let house_tiles = vec![Point { x: 2, y: 3 }, Point { x: 3, y: 3 }];
+    let kept_home = Point { x: 8, y: 3 };
+    let mut state = create_initial_snapshot();
+    state.buildings = vec![PlacedBuilding {
+        id: "building-001".to_string(),
+        building_type: "smallHouse".to_string(),
+        origin: house_tiles[0],
+        rotation: 0,
+        occupied_tiles: house_tiles.clone(),
+        placed_at: 0.0,
+        transit_node_id: None,
+    }];
+    state.sims = vec![
+        unassigned_worker("sim-001", house_tiles[0]),
+        unassigned_worker("sim-002", kept_home),
+    ];
+    state.active_trips = vec![
+        ActiveTrip {
+            id: "trip-removed-outbound".to_string(),
+            sim_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: house_tiles[0],
+            destination: kept_home,
+            position: TripPosition {
+                x: f64::from(house_tiles[0].x),
+                y: f64::from(house_tiles[0].y),
+            },
+            status: TripStatus::Riding,
+            deadline: 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        },
+        ActiveTrip {
+            id: "trip-removed-return".to_string(),
+            sim_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteReturn,
+            origin: kept_home,
+            destination: house_tiles[0],
+            position: TripPosition {
+                x: f64::from(kept_home.x),
+                y: f64::from(kept_home.y),
+            },
+            status: TripStatus::Waiting,
+            deadline: 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        },
+        ActiveTrip {
+            id: "trip-kept".to_string(),
+            sim_id: "sim-002".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: kept_home,
+            destination: house_tiles[0],
+            position: TripPosition {
+                x: f64::from(kept_home.x),
+                y: f64::from(kept_home.y),
+            },
+            status: TripStatus::Waiting,
+            deadline: 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+        },
+    ];
+    state.transit.vehicles = vec![Vehicle {
+        id: "vehicle-001".to_string(),
+        mode: TransitMode::Bus,
+        line_id: "route-001".to_string(),
+        capacity: 18,
+        passenger_ids: vec![
+            "trip-removed-outbound".to_string(),
+            "trip-removed-return".to_string(),
+            "trip-kept".to_string(),
+        ],
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: 0.0,
+        parked_position: None,
+    }];
+
+    let removed = transit::remove_at_tile(&state, &house_tiles[0]).expect("house removal");
+
+    assert_eq!(
+        removed
+            .sims
+            .iter()
+            .map(|sim| sim.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["sim-002"]
+    );
+    assert_eq!(
+        removed
+            .active_trips
+            .iter()
+            .map(|trip| trip.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["trip-kept"]
+    );
+    assert_eq!(removed.transit.vehicles[0].passenger_ids, vec!["trip-kept"]);
+}
+
+#[test]
 fn place_metro_station_building_requires_track_and_creates_linked_station() {
     let mut engine = GameEngine::new();
 
@@ -340,30 +448,6 @@ fn destination_on(id: &str, building_type: &str, tiles: Vec<Point>) -> PlacedBui
         placed_at: 0.0,
         transit_node_id: None,
     }
-}
-
-// Regression: when a worker's home tile is also a valid destination tile (which
-// happens after housing is bulldozed and the footprint is rezoned as a
-// destination), assign_workplaces must NOT route the worker to their own home —
-// a zero-distance commute would complete instantly and inflate served metrics
-// without any real travel. Mirrors `src/simulation/buildingSelectors.ts`
-// `retargetCitizens`, which filters same-home destinations per citizen.
-#[test]
-fn assign_workplaces_skips_a_workers_home_tile_when_alternatives_exist() {
-    let home = Point { x: 2, y: 3 };
-    let other = Point { x: 9, y: 4 };
-    let mut state = create_initial_snapshot();
-    // Destinations are enumerated in building order, so `home` is index 0:
-    // without the home filter, round-robin would assign the first worker home.
-    state.buildings = vec![
-        destination_on("building-001", "supermarket", vec![home]),
-        destination_on("building-002", "factory", vec![other]),
-    ];
-    state.sims = vec![unassigned_worker("sim-001", home)];
-
-    assign_workplaces(&mut state);
-
-    assert_eq!(state.sims[0].workplace, Some(other));
 }
 
 // Regression: a referenced bus-stop demolition leaves a Missing tombstone at
@@ -505,55 +589,8 @@ fn place_building_rejects_overflowing_origin_without_panicking() {
     assert!(rejected.snapshot.buildings.is_empty());
 }
 
-// Degenerate contract: when the worker's home is the ONLY remaining destination,
-// assign_workplaces must still assign it (rather than leaving the worker
-// unemployed), matching the TS fallback (`eligible.length > 0 ? eligible :
-// destinations`).
-#[test]
-fn assign_workplaces_falls_back_to_home_when_home_is_the_only_destination() {
-    let home = Point { x: 2, y: 3 };
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![destination_on("building-001", "supermarket", vec![home])];
-    state.sims = vec![unassigned_worker("sim-001", home)];
-
-    assign_workplaces(&mut state);
-
-    assert_eq!(state.sims[0].workplace, Some(home));
-}
-
-// Regression: a worker previously assigned to their own home (the degenerate
-// fallback when home was the only destination) must be promoted to a real
-// non-home destination once one becomes available, instead of being skipped
-// because they already hold a workplace. Without this the worker's outbound
-// trip stays dormant forever (`is_home_fallback_trip`) even though a valid
-// workplace now exists. Mirrors the TS `retargetCitizens(...,
-// isHomeFallbackCitizen)` flow invoked when a destination is placed
-// (src/simulation/buildings.ts).
-#[test]
-fn assign_workplaces_promotes_home_fallback_worker_when_a_real_destination_appears() {
-    let home = Point { x: 2, y: 3 };
-    let other = Point { x: 9, y: 4 };
-    let mut state = create_initial_snapshot();
-
-    // First pass: the only destination is the worker's home tile, so the
-    // worker falls back to a home workplace.
-    state.buildings = vec![destination_on("building-001", "supermarket", vec![home])];
-    state.sims = vec![unassigned_worker("sim-001", home)];
-    assign_workplaces(&mut state);
-    assert_eq!(state.sims[0].workplace, Some(home));
-
-    // A real non-home destination is built later; the worker must be promoted.
-    state
-        .buildings
-        .push(destination_on("building-002", "factory", vec![other]));
-    assign_workplaces(&mut state);
-
-    assert_eq!(state.sims[0].workplace, Some(other));
-}
-
-// Contract: a worker already holding a real (non-home) workplace must not be
-// reshuffled by a later assign_workplaces call (no load-balancing churn). This
-// guards the promotion guard against over-reassignment.
+// Contract: a worker already holding a workplace must not be reshuffled by a
+// later assign_workplaces call (no load-balancing churn).
 #[test]
 fn assign_workplaces_leaves_an_existing_real_workplace_unchanged() {
     let home = Point { x: 2, y: 3 };

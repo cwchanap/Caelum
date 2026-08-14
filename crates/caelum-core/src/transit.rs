@@ -192,6 +192,14 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         .into_iter()
         .flat_map(|building| building.occupied_tiles.iter().map(point_key))
         .collect();
+    let removed_resident_tiles: HashSet<String> = removed_building
+        .filter(|building| {
+            building_definition(&building.building_type)
+                .is_some_and(|definition| definition.resident_capacity > 0)
+        })
+        .into_iter()
+        .flat_map(|building| building.occupied_tiles.iter().map(point_key))
+        .collect();
 
     if let Some(building) = removed_building {
         if let Some(transit_node_id) = &building.transit_node_id {
@@ -225,6 +233,9 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
             .retain(|candidate| candidate.id != building.id);
     }
     cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
+    if !removed_resident_tiles.is_empty() {
+        cleanup_removed_resident_references(&mut next, &removed_resident_tiles);
+    }
     for stop_id in removed_stop_ids {
         next = remove_or_tombstone_node(&next, &stop_id);
     }
@@ -964,15 +975,6 @@ fn cleanup_removed_destination_references(
 
     crate::buildings::assign_workplaces(state);
 
-    // `assign_workplaces` may also promote a home-fallback worker (workplace ==
-    // home) to a real non-home workplace when a non-home destination survives
-    // the removal. Retarget any stale dormant trip left targeting home so the
-    // worker is not stuck dormant despite now having a valid workplace. Run
-    // before the bulldoze trip-retarget loop: it touches a disjoint trip set
-    // (outbound trips targeting home with a promoted workplace) that the
-    // bulldoze logic (removed-tile / cleared-workplace trips) does not cover.
-    crate::trips::retarget_home_fallback_trips(state);
-
     let workplace_by_sim_id: HashMap<String, Point> = state
         .sims
         .iter()
@@ -1000,12 +1002,9 @@ fn cleanup_removed_destination_references(
             .cloned();
 
         // An outbound trip whose destination was bulldozed with no replacement
-        // workplace cannot be retargeted. Drop it outright instead of rewriting its
-        // destination to home: that produces a dormant home-fallback trip which
-        // `is_home_fallback_trip` keeps alive forever, and whose id lets
-        // `has_trip_for_sim_day` block any same-day retry once a new destination is
-        // placed. Removing it leaves the sim unassigned and free to spawn a fresh
-        // outbound trip when a workplace reappears.
+        // workplace cannot be retargeted. Drop it outright so the sim is left
+        // unassigned and free to spawn a fresh outbound trip when a workplace
+        // reappears.
         if trip.purpose == TripPurpose::CommuteOutbound
             && destination_removed
             && replacement_workplace.is_none()
@@ -1052,6 +1051,38 @@ fn cleanup_removed_destination_references(
             .passenger_ids
             .retain(|passenger_id| !invalidated_trip_ids.contains(passenger_id));
     }
+}
+
+fn cleanup_removed_resident_references(
+    state: &mut GameSnapshot,
+    removed_resident_tiles: &HashSet<String>,
+) {
+    let removed_resident_ids: HashSet<String> = state
+        .sims
+        .iter()
+        .filter(|sim| removed_resident_tiles.contains(&point_key(&sim.home)))
+        .map(|sim| sim.id.clone())
+        .collect();
+    let removed_trip_ids: HashSet<String> = state
+        .active_trips
+        .iter()
+        .filter(|trip| removed_resident_ids.contains(&trip.sim_id))
+        .map(|trip| trip.id.clone())
+        .collect();
+
+    state
+        .sims
+        .retain(|sim| !removed_resident_ids.contains(&sim.id));
+    state
+        .active_trips
+        .retain(|trip| !removed_trip_ids.contains(&trip.id));
+    for vehicle in &mut state.transit.vehicles {
+        vehicle
+            .passenger_ids
+            .retain(|passenger_id| !removed_trip_ids.contains(passenger_id));
+    }
+
+    crate::buildings::assign_workplaces(state);
 }
 
 fn reassign_within_node<T>(

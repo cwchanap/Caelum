@@ -1,5 +1,5 @@
 use caelum_core::commute::departure_minute_for_sim;
-use caelum_core::model::{GameSnapshot, TripPurpose};
+use caelum_core::model::{GameSnapshot, Point, TripPurpose, WorkerProfile};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
@@ -64,6 +64,116 @@ fn active_trip_identity(state: &GameSnapshot) -> Vec<(String, String, TripPurpos
         .iter()
         .map(|trip| (trip.id.clone(), trip.sim_id.clone(), trip.purpose))
         .collect()
+}
+
+#[test]
+fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 7).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let filled = engine.tick(600.0).snapshot;
+    assert_eq!(filled.sims.len(), 8);
+
+    // Task 4 owns finite workplace allocation. Set the intended precondition
+    // directly: the four residents of the house being demolished are employed,
+    // while the four residents in the surviving house are unassigned surplus.
+    let first_house_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.origin == Point { x: 2, y: 3 })
+        .expect("first house")
+        .occupied_tiles
+        .clone();
+    let second_house_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.origin == Point { x: 2, y: 7 })
+        .expect("second house")
+        .occupied_tiles
+        .clone();
+    let supermarket_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "supermarket")
+        .expect("supermarket")
+        .occupied_tiles
+        .clone();
+    let supermarket_tile = supermarket_tiles[0];
+    let mut prepared = filled;
+    for sim in &mut prepared.sims {
+        if first_house_tiles.contains(&sim.home) {
+            sim.workplace = Some(supermarket_tile);
+        } else if second_house_tiles.contains(&sim.home) {
+            sim.workplace = None;
+        }
+    }
+    engine = GameEngine::from_snapshot(prepared).expect("prepared occupancy snapshot");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 3).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+    assert_eq!(removed.snapshot.sims.len(), 4);
+    assert!(removed.snapshot.sims.iter().all(|sim| {
+        second_house_tiles.contains(&sim.home) && sim.worker_profile == WorkerProfile::Worker
+    }));
+    assert_eq!(
+        removed
+            .snapshot
+            .sims
+            .iter()
+            .filter(|sim| {
+                sim.workplace
+                    .is_some_and(|workplace| supermarket_tiles.contains(&workplace))
+            })
+            .count(),
+        4
+    );
 }
 
 #[test]

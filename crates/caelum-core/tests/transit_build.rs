@@ -1773,9 +1773,8 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         .expect("sim remains");
     assert!(sim.workplace.is_none());
 
-    // ...and the orphaned outbound trip is gone entirely — not converted into a
-    // dormant home-fallback trip (destination == home, purpose CommuteOutbound)
-    // that would live forever and block same-day retries via has_trip_for_sim_day.
+    // ...and the orphaned outbound trip is gone entirely, leaving the sim free
+    // to retry when a new destination is placed.
     assert!(next
         .active_trips
         .iter()
