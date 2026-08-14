@@ -7,7 +7,7 @@
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
 
-use caelum_core::building_catalog::building_definition;
+use caelum_core::building_catalog::{building_definition, BUILDINGS};
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
@@ -1211,11 +1211,27 @@ fn placed_building_serializes_type_to_legacy_field() {
 #[test]
 fn building_catalog_exposes_phase_two_resident_and_job_capacity() {
     let expected = [
+        ("busStop", 0, 0),
+        ("busTerminal", 0, 0),
+        ("metroStation", 0, 0),
         ("smallHouse", 4, 0),
         ("largeHouse", 10, 0),
         ("supermarket", 0, 4),
+        ("cinema", 0, 6),
         ("factory", 0, 6),
+        ("warehouse", 0, 6),
+        ("officeTower", 0, 4),
+        ("businessPark", 0, 6),
+        ("clinic", 0, 4),
+        ("school", 0, 6),
+        ("parkPlaza", 0, 4),
     ];
+
+    assert_eq!(
+        BUILDINGS.len(),
+        expected.len(),
+        "catalog entry count must match the parity table"
+    );
 
     for (building_type, residents, jobs) in expected {
         let definition = building_definition(building_type).expect("catalog entry");

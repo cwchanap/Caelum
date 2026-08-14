@@ -63,6 +63,13 @@ Keep the TypeScript `BUILDING_CATALOG` as the existing UI metadata mirror: repla
 
 Remove the dormant single-value `moveInRate: "paused"` contract in the same schema break. Old development saves may be cleared; no migration or dual reader.
 
+### v5 loading contract
+
+Both hosts read from the v5 namespace and reject any other schema before full deserialization:
+
+- The Rust core exposes `SNAPSHOT_SCHEMA_VERSION = 5` and a `SnapshotSchemaProbe` that reads only `schemaVersion`. `check_schema_version` / `check_snapshot_schema` return `SnapshotLoadError::UnsupportedSchema` for any `schema_version != 5`. The Tauri host (via `serde_json`) calls `check_snapshot_schema`; the WASM host probes via `serde_wasm_bindgen` and calls `check_schema_version`. Both reject before attempting a full `GameSnapshot` deserialize, so a non-v5 payload gets a typed `unsupportedSchema` error instead of a generic missing-field serde error.
+- The browser host mirrors this in `src/runtime/backend/persistence.ts`: `runSnapshotOperation` / `runRestoreOperation` return `unsupportedSchema` when `value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION`, and `snapshotView.ts` guards the same way. No dual reader, no fallback parse, no `serde(default)` for removed fields.
+
 ## Preserve current building content
 
 Do not make existing buildings inert merely to keep the first vertical slice small.
@@ -242,6 +249,7 @@ Rust coverage must prove:
 9. occupied-house demolition removes sim/trip/passenger references and immediately reassigns newly freed jobs once.
 10. workplace demolition reassigns at most once through the existing cleanup.
 11. home-fallback production code/tests are gone.
+12. full catalog parity: every `BuildingType` (all 14 entries) has matching `residentCapacity` and `jobCapacity` across the Rust `building_catalog` and the TypeScript `BUILDING_CATALOG`. A parity test asserts both capacities for every entry against the shared expected table, subsuming the representative Small House / Large House / Supermarket / Factory checks above while keeping those four assertions as the representative subset.
 
 Task 1 inventory must cover both languages:
 
