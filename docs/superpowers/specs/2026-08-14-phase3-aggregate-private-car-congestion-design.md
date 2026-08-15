@@ -5,54 +5,41 @@
 
 ## Goal
 
-Deliver one Phase 3 player-visible traffic slice without turning Caelum into a microscopic car simulator:
+Deliver one Phase 3 player-visible traffic slice:
 
-> A due worker commute can choose a private-car path when the existing road network makes it the fastest deterministic option. Active car commutes contribute aggregate road load. That load increases road travel time through one small congestion rule shared by cars and buses. The Data panel exposes one Traffic overlay so the player can see where the load is.
+> A due worker commute can choose a private-car road path when it is the fastest deterministic option. Active car commutes contribute aggregate road load. That load increases road travel time through one small congestion rule shared by private cars and buses. The Data panel exposes one Traffic overlay.
 
-The slice must preserve the current product direction: city systems exist to create transport-operating problems. Cars matter because they compete for road capacity with buses, not because Caelum needs lane-changing AI, parking, or vehicle physics.
+Cars matter here because they compete with buses for road capacity. This slice does not turn Caelum into a microscopic car simulator.
 
-## Current seams that matter
+## Current seams to reuse
 
-The repository already has nearly all of the structural pieces this feature needs:
+The repository already has the right boundaries:
 
-- `GameEngine` owns a compiled `RoadTopology` and already passes one authoritative snapshot through every tick and accepted mutation.
-- `RoadTopology::find_path_between_access_tiles` resolves deterministic road paths with the same one-way, junction, and roundabout rules used by buses.
-- `stop_access::derive_stop_access_for_footprint` already turns a multi-tile footprint into one usable adjacent road access point.
-- `router::find_route_plan` already chooses the best deterministic walk/transit plan by `estimated_seconds`, with stable tie-breaking.
-- `TransitPath::Road` and `RoadPathStep` already carry the road geometry and free-flow `travel_seconds` used by bus movement.
-- `transit::tick_vehicles` and `seconds_until_next_vehicle_stop` already advance buses through those path steps and expose the next stop boundary to the trip substep scheduler.
-- `trips::tick_trips_substepped` already breaks a coarse tick at commute departures, vehicle arrivals, move-ins, day boundaries, and other deterministic events.
-- `UiState.activeOverlay`, `DataPanel.svelte`, and `overlayRenderer.ts` already support one-at-a-time map overlays.
+- `GameEngine` owns the authoritative `GameSnapshot` plus a compiled `RoadTopology`.
+- `RoadTopology::find_path_between_access_tiles` already resolves deterministic one-way/junction/roundabout-aware road paths.
+- `stop_access::derive_stop_access_for_footprint` already resolves usable road access beside a multi-tile footprint.
+- `router::find_route_plan` already selects the best deterministic walk/transit plan by `estimated_seconds`.
+- `TransitPath::Road` and `RoadPathStep` already carry the exact structural road path used by buses.
+- `transit::tick_vehicles` and `seconds_until_next_vehicle_stop` already use the path cursor and feed vehicle-arrival boundaries into the trip scheduler.
+- `trips::tick_trips_substepped` already breaks coarse ticks at commute departures, move-ins, vehicle arrivals, day boundaries, and other deterministic events.
+- `UiState.activeOverlay`, `DataPanel.svelte`, and `overlayRenderer.ts` already implement one-at-a-time map overlays.
 
-Reuse those seams. Do not create a second traffic graph, road-state cache, scheduler, or vehicle system.
+Reuse those seams. Do not add a second traffic graph, top-level traffic cache, scheduler service, or second vehicle system.
 
-## Alternatives considered
+## Chosen representation: aggregate car state on `ActiveTrip`
 
-### A. Aggregate car state on existing `ActiveTrip` — chosen
+Represent a private-car commute as the existing `ActiveTrip` plus one small payload containing the captured road path and fixed arrival timestamp.
 
-Represent a private-car commute as the existing `ActiveTrip` plus one small `PrivateCarTrip` payload containing the resolved road path and its fixed arrival timestamp. While that trip is active, its path contributes one unit of aggregate flow to each road step it uses.
+```rust
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateCarTrip {
+    pub path: TransitPath,
+    pub arrival_time: f64,
+}
+```
 
-This is the smallest approach that gives us:
-
-- deterministic mode choice;
-- a real car commute lifecycle with an arrival boundary;
-- aggregate road load without car entities or positions;
-- enough snapshot data for the Traffic overlay;
-- one place for buses to read congestion from the same authoritative state.
-
-### B. Persist a top-level traffic matrix — rejected for now
-
-A `TrafficState { roadLoads, speeds, ... }` cache would make the overlay easy, but every road edit, building edit, move-in, workplace reassignment, trip departure, trip arrival, and load would need cache invalidation/rebuild rules. It would duplicate information already derivable from active car paths and would create a second state lifecycle before there is a second traffic feature.
-
-### C. Simulate individual cars along road steps — rejected
-
-Adding car entities, path cursors, positions, lane occupancy, or per-step replanning would produce a more literal traffic simulation but directly violates the Phase 3 first-slice boundary. It also duplicates the bus vehicle machinery without a current player need.
-
-## Schema v6: add only active private-car trip state
-
-HPA-622 is a breaking development-save change. Bump `SNAPSHOT_SCHEMA_VERSION` from 5 to 6 and update the browser/native save namespaces directly. Old development cities disappear; there is no migration, dual reader, compatibility default, or fallback parser.
-
-Add one trip status:
+Add one lifecycle state:
 
 ```rust
 pub enum TripStatus {
@@ -67,26 +54,14 @@ pub enum TripStatus {
 }
 ```
 
-Add one small payload:
+and one required nullable field:
 
 ```rust
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PrivateCarTrip {
-    pub path: TransitPath,
-    pub arrival_time: f64,
+pub struct ActiveTrip {
+    // existing fields
+    pub private_car_trip: Option<PrivateCarTrip>,
 }
 ```
-
-and one required nullable field on `ActiveTrip`:
-
-```rust
-pub private_car_trip: Option<PrivateCarTrip>,
-```
-
-TypeScript mirrors the wire shape as `CitizenStatus = ... | "driving"` and `privateCarTrip: PrivateCarTrip | null`.
-
-Do **not** add a `Car` variant to `TransitMode`. `TransitMode` describes the existing route-plan legs (`walk`, `bus`, `metro`). A private car is intentionally not modelled as another transit line leg; it bypasses `RoutePlan` and uses the road payload above. This avoids forcing every transit-only match, renderer, route editor, platform rule, and route validator to understand a fake transit mode.
 
 A valid driving trip has:
 
@@ -94,31 +69,50 @@ A valid driving trip has:
 - `route_plan == None`;
 - `current_leg_index == 0`;
 - `private_car_trip == Some(...)`;
-- no vehicle passenger membership;
-- `position == origin` until arrival because cars are not rendered/moved individually.
+- no transit-vehicle passenger membership;
+- `position == origin` until arrival because cars have no rendered/authoritative intermediate position.
 
-When the trip reaches `arrival_time`, clear `private_car_trip`, move `position` to the trip destination, and reuse the existing arrived/late completion path and commute-flag updates. Terminal trips therefore do not retain a stale car path.
+When the car arrives, the payload is cleared before normal arrival scoring. Terminal trips never retain stale road-load state.
 
-## Private-car access and routing
+### Why not `TransitMode::Car`
 
-Create `crates/caelum-core/src/traffic.rs`. Keep the module small and functional.
+Keep `TransitMode` as `Walk | Bus | Metro`. It describes route-plan legs attached to transit services. A private car has no line, platform, boarding/alighting indexes, or transit vehicle. Adding `Car` would force transit-only matches, validators, route editors, and renderers to understand a fake line mode.
 
-### Endpoint access
+### Alternatives rejected
 
-For each commute endpoint (`home` or `workplace` point):
+A top-level `TrafficState { roadLoads, ... }` cache is rejected because every road edit, building edit, move-in, trip departure, trip arrival, and restore would need invalidation rules for data already derivable from active driving trips.
+
+Individual car entities/path cursors are rejected because lane position, car-following, parking, and per-step movement are not required to make congestion affect transit operations.
+
+## Schema v6 is a direct development break
+
+HPA-622 bumps the disposable development snapshot schema from 5 to 6 because `ActiveTrip` gains required wire state.
+
+Update directly:
+
+- Rust `SNAPSHOT_SCHEMA_VERSION = 6`;
+- TypeScript `SNAPSHOT_SCHEMA_VERSION = 6`;
+- IndexedDB default database `caelum-city-saves-v6`, version `6`;
+- native application-data directory `cities-v6`.
+
+Old development cities disappear. Do not add migration, alias fields, serde defaults for the new car payload, dual readers, or fallback namespaces.
+
+## Private-car endpoint access and routing
+
+Create `crates/caelum-core/src/traffic.rs` and keep it functional rather than manager-based.
+
+For each commute endpoint (`home` or `workplace`):
 
 1. find the placed building whose `occupied_tiles` contains the point;
-2. call the existing `derive_stop_access_for_footprint(&state.map, &building.occupied_tiles)`;
-3. use the resulting `StopRoadAccess.road_point` and `preferred_heading`.
+2. reuse `derive_stop_access_for_footprint(&state.map, &building.occupied_tiles)`;
+3. use its `road_point` and `preferred_heading`.
 
-If either endpoint has no matching placed building or no usable adjacent road access, there is no private-car candidate. Do not invent curb searching, driveway objects, parking lots, or a fallback to arbitrary nearby roads.
+If either endpoint is not inside a placed building or has no usable adjacent road, no car candidate exists. Do not search arbitrary nearby roads, add driveways, or model parking.
 
-### Road path
-
-Use the engine's existing compiled `RoadTopology`:
+Use the engine's existing compiled topology:
 
 ```rust
-road_topology.find_path_between_access_tiles(
+routing.road_topology.find_path_between_access_tiles(
     &state.map,
     from_access.road_point,
     to_access.road_point,
@@ -127,13 +121,9 @@ road_topology.find_path_between_access_tiles(
 )
 ```
 
-Accept only a non-empty `TransitPath::Road`. A same-access-point/zero-step result does not create a private-car candidate; the existing walk/transit plan remains the fallback.
+Accept only a non-empty `TransitPath::Road`. A zero-step/same-access result leaves the existing walk/transit candidate in control.
 
-This keeps one-way roads, automatic junctions, roundabouts, and terminal road rules aligned with bus routing without a second graph or Dijkstra implementation.
-
-## Aggregate road flow
-
-There is no persisted traffic cache. Aggregate flow is derived from the current active driving trips.
+## Aggregate flow is derived, not persisted
 
 Use one fixed capacity for the current single road class:
 
@@ -142,207 +132,226 @@ pub const ROAD_FLOW_CAPACITY: u16 = 4;
 pub const MAX_CONGESTION_MULTIPLIER: f64 = 3.0;
 ```
 
-For a road point, flow is the count of `status == Driving` trips whose `private_car_trip.path` contains that `RoadPathStep.position`.
+Current road flow is derived from active `Driving` trips. For one driving trip, gather the unique `RoadPathStep.position` values in its captured road path and add one flow unit to each point. Repeated visits to the same point by one path count once.
 
-A single car counts at most once per road point even if a path happens to revisit the same step position. Implement path point collection through a small unique-point helper rather than incrementing once per transition.
+Use `BTreeSet<Point>` / `BTreeMap<Point, u16>`; `Point` already has stable ordering. Saturate pathological counts instead of panicking.
 
-For the first slice, structure transitions are charged to their existing `RoadPathStep.position`; do not expand automatic-junction or roundabout footprints into artificial per-tile traffic cells. Revisit this only if the Traffic overlay or congestion behavior around structures is visibly misleading.
+For the first slice, structure transitions are charged to their existing `RoadPathStep.position`. Do not expand junction or roundabout footprints into synthetic traffic cells.
 
-## One congestion function
+### One congestion function
 
-Use one monotonic, bounded multiplier for both private-car ETA and bus road-step timing:
+Use the same bounded multiplier everywhere road traffic matters:
 
 ```rust
 pub fn congestion_multiplier(flow: u16) -> f64 {
-    let utilization = f64::from(flow) / f64::from(ROAD_FLOW_CAPACITY);
-    utilization.clamp(1.0, MAX_CONGESTION_MULTIPLIER)
+    (f64::from(flow) / f64::from(ROAD_FLOW_CAPACITY))
+        .clamp(1.0, MAX_CONGESTION_MULTIPLIER)
 }
 ```
 
 Semantics:
 
-- `flow <= 4`: `1.0x` free-flow;
-- `flow == 6`: `1.5x`;
-- `flow >= 12`: capped at `3.0x`.
+- flow `0..=4`: `1.0x` free-flow;
+- flow `6`: `1.5x`;
+- flow `>= 12`: capped at `3.0x`.
 
-Use the existing road step's `travel_seconds` as the free-flow base:
+Effective road-step time is:
 
 ```text
-effective step seconds = step.travel_seconds * congestion_multiplier(flow_at_step)
+step.travel_seconds * congestion_multiplier(flow_at_step)
 ```
 
-Do not add BPR curves, queue lengths, density, signal delay, stochastic noise, road classes, or tunable parameters in this slice.
+Do not add BPR curves, queues, density, signals, road classes, or tunable traffic parameters yet.
 
-## Candidate flow includes the departing car
+## A departing car counts itself during mode choice
 
-When estimating a new private-car candidate, compute current active flow first, then add one unit on each unique point in the candidate path before applying the congestion multiplier.
+When estimating a new private-car candidate:
 
-This gives stable simultaneous-departure behavior without a fixed-point solver:
+1. derive current active-car flow;
+2. for each unique point in the candidate path, evaluate that step with `current_flow + 1`;
+3. sum the effective step seconds.
 
-- the first due worker sees the currently active load plus itself;
-- after it is accepted as a car trip, it becomes part of snapshot flow;
-- the next due worker in stable sim order sees that extra load;
-- exact same-time departures therefore produce the same result under coarse and fine ticks.
+This avoids a fixed-point/equilibrium solver while keeping simultaneous departures deterministic:
 
-Do not repeatedly re-run mode choice to find a traffic equilibrium. That is a future model decision, not a first-slice requirement.
+- the first due worker sees current flow plus itself;
+- if it chooses car, the trip is pushed immediately;
+- the next due worker in stable sim order sees the earlier chosen car in active flow.
 
-## Deterministic mode choice
+Do not repeatedly rerun mode choice to converge traffic assignment.
 
-Keep the current walk/transit planner intact. At each due outbound or return worker commute, before pushing the new trip:
+## Deterministic commute mode choice
 
-1. ask `router::find_route_plan(state, origin, destination)` for the current best walk/transit candidate;
-2. ask `traffic::private_car_candidate(state, routing_context, origin, destination)` for the car path and congestion-adjusted ETA;
-3. choose private car only when its ETA is **strictly less** than the existing plan's `estimated_seconds`;
-4. if the times are equal, keep the existing walk/transit behavior;
+At each due outbound/return worker commute:
+
+1. get the current best walk/transit candidate from `router::find_route_plan`;
+2. get the private-car candidate from `traffic::private_car_candidate` using the existing `RoutingContext`;
+3. choose private car only if its ETA is **strictly less** than the walk/transit `estimated_seconds`;
+4. exact ties keep existing walk/transit behavior;
 5. if only one candidate exists, use it;
-6. if neither exists, keep the existing unserved lifecycle.
+6. if neither exists, preserve the existing unserved lifecycle.
 
-Do not persist a resident-level preferred mode. Mode choice happens when each commute is due, using the road/transit state at that departure. Outbound and return trips may therefore choose differently if the network changed during the day.
+Do not persist resident-level preferred mode or car ownership. Outbound and return trips may choose differently if the network changed.
 
-The current sim iteration order is the tie/order authority. Do not add random choice, percentages, household car ownership, or preferences.
+When walk/transit wins, keep the current spawned-trip shape (`Idle`, no route plan) and let `tick_trip` perform its existing plan/advance flow. A temporary plan may be calculated for comparison without refactoring the established lifecycle merely to eliminate one small repeat calculation.
 
-### Preserve the existing transit trip path
-
-When walk/transit wins, leave the newly spawned trip in the same state the current code expects (`Idle`, `route_plan == None`) and let `tick_trip` use the existing planner. The comparison may compute a temporary route plan once at spawn, but do not rewrite the established walk/transit lifecycle solely to avoid that small duplicate calculation.
-
-When car wins, initialize:
+When car wins:
 
 ```text
 status = Driving
-private_car_trip.path = chosen road path
-private_car_trip.arrival_time = state.time + candidate estimated seconds
 route_plan = None
 current_leg_index = 0
+private_car_trip.path = chosen road path
+private_car_trip.arrival_time = state.time + chosen ETA
 ```
 
-There is no car boarding time, parking penalty, or building-to-road walk penalty in this first slice. Those are mode-choice refinements to add only if the simple model is confusing in playtests.
+No boarding time, parking penalty, or building-to-road walking penalty is included in the first slice.
 
-## Car arrival is a normal substep boundary
+## Car arrival uses the existing substep scheduler
 
-Extend `next_boundary_after` to track every active driving trip's future `arrival_time`.
+Do not add a car timer loop.
 
-A driving trip remains unchanged until `state.time` reaches that boundary. At the boundary:
-
-- set its position to the destination;
-- clear `private_car_trip`;
-- resolve arrived vs late from the same deadline rule used by existing trips;
-- emit the existing `TripOutcome`/metric delta;
-- update the sim's outbound/return completion flags through the same existing completion code path.
-
-Do not add a second car timer loop. The existing substep scheduler already exists to make coarse and fine ticks equivalent.
-
-Persistence validation should enforce only cheap local invariants:
-
-- `arrival_time` is finite and non-negative;
-- driving trips have `PrivateCarTrip` and no `RoutePlan`;
-- non-driving active trips do not carry `PrivateCarTrip`;
-- the private-car path is a non-empty `TransitPath::Road`;
-- every road-step position is within map bounds;
-- driving trips are not present in any transit vehicle passenger list.
-
-Do not re-run the road router during save validation or reject a local save because a historical car path no longer matches the current topology. Player mutations already operate through the single engine and an active car finishes from its captured departure path.
-
-## Buses share the same congestion helper
-
-Congestion must affect bus timing without mutating or rebuilding stored route paths.
-
-The existing `RouteLegPath.current_path` remains structural/free-flow data. Do not rewrite `RoadPathStep.travel_seconds` every time traffic changes.
-
-Instead, route all runtime bus road-step timing through the traffic helper:
+Teach `track_active_trip_boundary` to recognize `Driving` before it attempts route-plan/wait handling:
 
 ```rust
-traffic::effective_road_step_seconds(state, step)
+if trip.status == TripStatus::Driving {
+    if let Some(car) = &trip.private_car_trip {
+        track_next_boundary(next, car.arrival_time, state.time);
+    }
+    return;
+}
 ```
 
-Use it in both places that must agree:
+At or after the arrival boundary, `tick_trip` handles `Driving` before current riding/planning logic. It must be panic-free: a malformed driving trip with no car payload is marked unserved rather than calling `expect`.
 
-1. bus movement inside `transit::tick_vehicles` / its step-advance helper;
-2. `transit::seconds_until_next_vehicle_stop`, which feeds `trips::next_boundary_after`.
+For a valid arrival:
 
-If one path uses congestion and the other keeps free-flow time, the scheduler will break at the wrong timestamp and coarse/fine ticks can diverge. Treat these two edits as one atomic task.
+1. set trip position to destination;
+2. clear `private_car_trip`;
+3. call the existing `score_arrival(trip, state.time)`.
 
-Metro `TrackPathStep` timing remains unchanged.
+`advance_active_trips_with_zero_delta_ids` already uses `TripTickResult` to update metrics, apply commute resolution/arrival to the sim, and remove terminal trips, so no second completion pipeline is needed.
 
-Also make current bus ride estimates used by `router::find_route_plan` sum effective road-step seconds from the snapshot rather than the stored free-flow total. This keeps private-car mode choice comparing against the bus time the runtime will actually experience. Metro estimates remain the existing static path time.
+The existing per-second safety net already upper-bounds one arrival boundary per active car; add another cap term only if a focused test proves the current cap can exhaust.
 
-Do not change route-preview structural path resolution in this slice. Congestion is runtime travel time, not route connectivity.
+## Trip invalidation must clear captured car state
+
+Existing gameplay mutations can reset an active trip to `Idle` when its destination is removed/reassigned. Any path that makes a trip non-driving must also clear `private_car_trip`.
+
+In particular, `transit.rs::cleanup_removed_destination_references` currently retargets an affected outbound trip by setting `status = Idle`, clearing `route_plan`, and changing destination. Add `trip.private_car_trip = None` in that same reset block.
+
+Inventory all production resets with:
+
+```bash
+rg -n 'status = TripStatus::Idle|route_plan = None' crates/caelum-core/src
+```
+
+Only update paths that can receive a driving trip. Route-line invalidation paths that operate exclusively on trips whose `route_plan` references the changed line naturally do not match driving trips and need no new car-specific branch.
+
+Resident demolition already removes the whole sim/trip, so no special traffic cleanup is needed: derived flow disappears with the trip.
+
+A road removed under an already-driving car does **not** dynamically replan or cancel that car in this slice. The car completes from its captured departure path. This is deliberate to avoid dynamic assignment machinery.
+
+## Buses use the same congestion cost at runtime
+
+Stored `RouteLegPath.current_path` remains structural/free-flow data. Do not rewrite route paths when traffic changes.
+
+Add one helper in `traffic.rs`:
+
+```rust
+pub fn effective_road_step_seconds(
+    state: &GameSnapshot,
+    step: &RoadPathStep,
+) -> f64;
+```
+
+and use it for bus road steps in both runtime clocks:
+
+1. `transit::advance_vehicle_by_seconds` movement;
+2. `transit::seconds_until_next_vehicle_stop`, which feeds `next_boundary_after`.
+
+These must agree. If movement uses congestion but the boundary estimator uses free-flow time, coarse/fine ticks diverge.
+
+`TransitPathStepRef` already distinguishes `Road` and `Track`; use that existing enum. Metro track steps remain unchanged.
+
+Also make current bus ride estimates in `router::find_route_plan` sum congestion-adjusted road-step seconds from the snapshot. That lets mode choice compare a car ETA with the bus time the runtime will actually experience. Metro estimates remain current static path time.
+
+Do not rebuild route connectivity or re-run route path resolution because of congestion; only runtime travel time changes.
 
 ## Traffic overlay
 
-Add `"traffic"` to the TypeScript `Overlay` union and one `Traffic` button to the existing Data panel.
+Add `"traffic"` to `Overlay` and one `Traffic` button to the existing Data panel.
 
-Create a small `src/domain/traffic.ts` selector that derives current per-point flow from `state.activeTrips` using only `status === "driving"` and each `privateCarTrip.path`'s road steps. Keep aggregation out of `overlayRenderer.ts` so the renderer only paints selected values.
+Create `src/domain/traffic.ts` to derive presentation flow from `state.activeTrips` using the same simple rule:
 
-The overlay should shade road points by flow intensity, normalized against a presentation mirror of the current fixed road capacity (`4`) and capped at full intensity. This mirror is display metadata only; Rust remains the congestion authority.
+- include only `status === "driving"`;
+- require `privateCarTrip.path.kind === "road"`;
+- unique a trip's road points before incrementing the global count.
 
-No legend panel, history chart, route heatmap, speed text, hover inspector, or multiple traffic overlays yet.
+The selector or renderer must filter against the **current** map and paint only tiles whose current `kind === "road"`. A captured car path can outlive a later road removal; the overlay must not paint an empty/non-road tile because of that historical path.
 
-Driving trips are not drawn by `citizenRenderer.ts`. The Traffic overlay is the only new car visualization in this slice.
+Normalize presentation intensity against a TS display mirror of capacity `4`, capped at full intensity. TypeScript does not implement the congestion multiplier or mode choice; Rust remains gameplay authority.
 
-## Save namespaces
+Driving trips are skipped by `citizenRenderer.ts`. The Traffic overlay is the only new car visualization.
 
-Schema v6 is intentionally disposable:
-
-- Rust `SNAPSHOT_SCHEMA_VERSION = 6`;
-- TypeScript `SNAPSHOT_SCHEMA_VERSION = 6`;
-- IndexedDB default database becomes `caelum-city-saves-v6` and database version `6`;
-- native application-data directory becomes `cities-v6`;
-- schema-related tests/fixtures move directly to v6.
-
-Do not migrate v5 saves or retain the old namespace as a fallback.
+No legend, history, text labels, hover inspector, or second traffic overlay is part of HPA-622.
 
 ## Verification ownership
 
-### Rust core
+### Rust
 
-Focused tests must prove:
+Focused tests prove:
 
-1. a car candidate is absent when either endpoint has no building-road access;
-2. a car candidate is absent when the access points have no legal road path;
-3. the private-car path reuses one-way/roundabout-aware `RoadTopology` output rather than a separate graph;
-4. `congestion_multiplier(0..=4) == 1.0`, `6 -> 1.5`, and high flow caps at `3.0`;
-5. one driving trip contributes one unit per unique road point in its captured path;
-6. candidate ETA includes the candidate itself in flow;
-7. exact equal estimated time keeps the existing walk/transit candidate;
-8. multiple same-time workers choose deterministically in stable sim order as earlier car choices increase later candidate load;
-9. a driving trip resolves at `arrival_time`, clears its car payload, and records the normal arrived/late result;
-10. `next_boundary_after` breaks at a future car arrival so one coarse tick and equivalent fine ticks produce the same active trips, sim flags, traffic flow, and metrics;
-11. a bus road step at flow 6 takes `1.5x` its free-flow step time and `seconds_until_next_vehicle_stop` reports the same delayed boundary;
-12. metro timing is unchanged;
-13. current route-plan bus estimates include congestion while metro estimates do not;
-14. v6 persistence accepts a well-formed driving trip and rejects mismatched driving/route-plan/private-car state without introducing a broad adversarial matrix.
+1. no car candidate without building road access at either endpoint;
+2. no car candidate without a legal road path;
+3. one-way/roundabout legality comes from the existing `RoadTopology`;
+4. multiplier values: `0..=4 -> 1.0`, `6 -> 1.5`, high flow -> `3.0` cap;
+5. one driving trip counts once per unique road point;
+6. candidate ETA includes the candidate itself;
+7. exact time ties keep walk/transit;
+8. same-time workers choose deterministically in stable sim order;
+9. driving trips resolve exactly at the arrival boundary, clear car state, and reuse normal arrived/late metrics;
+10. coarse/fine ticks produce equivalent modes, car flow, sim flags, and metrics;
+11. destination retarget resets captured car state;
+12. bus movement and next-stop boundary use the same delayed road-step time;
+13. metro timing is unchanged;
+14. bus route-plan ETA includes current congestion;
+15. v6 persistence accepts the valid driving shape and rejects the representative mismatches without a broad adversarial matrix.
 
 ### TypeScript/UI
 
-Unit tests must prove:
+Focused unit tests prove:
 
-1. `traffic` is accepted as an overlay and the Data panel exposes `Traffic`;
-2. the traffic selector ignores non-driving trips and counts each driving path once per road point;
-3. `overlayRenderer` shades the road points produced by the selector and leaves unrelated tiles untouched;
-4. `citizenRenderer` does not draw a driving trip as a pedestrian/transit passenger;
-5. v6 snapshot fixtures and save-adapter expectations use the new namespace/version.
+1. the traffic selector ignores non-driving trips and deduplicates one trip's repeated point;
+2. multiple driving trips aggregate predictably;
+3. a historical captured point that is no longer a current road is not painted;
+4. `Traffic` toggles through the existing overlay UI;
+5. `citizenRenderer` does not draw driving trips;
+6. v6 snapshot/save fixtures use the new namespace/version.
 
 ### Real sandbox smoke
 
-Extend the existing `tests/e2e/smoke.spec.ts` rather than creating a second end-to-end suite.
+Extend the existing `tests/e2e/smoke.spec.ts` only enough to prove real UI wiring:
 
-Keep the current area/building/occupancy flow. Add the minimum road access needed by the existing Small House and Supermarket, resume until the commute system has had a chance to create a real worker trip, open Data, toggle `Traffic`, and assert the overlay control is active while the game remains responsive. Rust and renderer unit tests own exact flow math/pixel behavior; Playwright owns the real player wiring.
+- keep the current Small House + Supermarket + occupancy flow;
+- extend the existing two-way road so both building footprints have connected road access;
+- verify the Data panel exposes `Traffic` and its button toggles `aria-pressed`;
+- keep the existing Resume/Pause/clock journey responsive.
 
-Do not turn this into a long simulation scenario or screenshot-diff suite.
+Do **not** wait several real minutes for a specific worker departure or inspect traffic pixels in Playwright. Rust tests own deterministic car selection/congestion, and renderer tests own exact overlay behavior from a driving fixture. This keeps E2E fast and stable.
 
 ## Non-goals
 
-- Per-car entities, sprites, path cursors, or authoritative positions.
-- Lane changing, acceleration, car following, collision avoidance, queues, or signals.
-- Parking supply/search, driveways, ownership, fuel, tolls, emissions, or congestion pricing.
-- Random/probabilistic mode choice or preference models.
+- Individual car entities, sprites, path cursors, or positions.
+- Lane changing, acceleration, car-following, collision avoidance, queues, or signals.
+- Parking, driveways, ownership, fuel, tolls, emissions, or congestion pricing.
+- Random/probabilistic mode choice or preference profiles.
 - Local/collector/arterial classes or editable road capacity.
-- Traffic assignment equilibrium or repeated mode-choice convergence.
-- Dynamic re-timing of a car already in flight when later cars enter/leave its path.
-- Multiple traffic overlays, historical charts, traffic dashboards, or diagnostics.
-- Transit headways, schedules, fleet plans, or service bands (HPA-334).
+- Traffic assignment equilibrium or repeated route/mode convergence.
+- Dynamic re-timing or replanning of an already-driving car.
+- Multiple traffic overlays, history, dashboards, or diagnostics.
+- Transit schedules/headways/fleet operations (HPA-334).
 - Campaign redesign, save migration, compatibility readers, or pre-release hardening.
 
 ## Exit criteria
 
-HPA-622 is complete when one real sandbox commute can choose a private car, active car paths create deterministic aggregate road load, that load increases both new-car ETA and bus road-step time through the same helper, coarse/fine ticks agree at car-arrival boundaries, the Traffic overlay exposes the load in the shared Svelte UI, and the implementation adds no generalized traffic framework beyond the small seams above.
+HPA-622 is complete when a deterministic commute can choose a captured private-car road path, active cars derive aggregate load without a second traffic state store, that load increases both car ETA and bus road-step time through the same helper, car arrival remains coarse/fine deterministic, destination retargeting clears stale car state, and the shared UI exposes one current-road-only Traffic overlay without introducing microscopic traffic simulation infrastructure.
