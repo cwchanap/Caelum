@@ -61,6 +61,7 @@ export function normalizeRustSnapshot(
     activeTrips: snapshot.activeTrips.map((trip) => ({
       ...trip,
       routePlan: normalizeRoutePlan(trip.routePlan),
+      privateCarTrip: trip.privateCarTrip ?? null,
     })),
     metrics: {
       ...snapshot.metrics,

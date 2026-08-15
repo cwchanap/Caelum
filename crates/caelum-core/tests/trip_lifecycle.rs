@@ -39,6 +39,7 @@ fn trip(id: &str, status: TripStatus, position: TripPosition, destination: Point
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }
 }
 
@@ -583,6 +584,7 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         route_plan: Some(bus_plan((2, 4).into(), (12, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
@@ -657,6 +659,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         )),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
@@ -737,6 +740,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         )),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     // Vehicle starts at the boarding stop with a free seat.
     assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
@@ -812,6 +816,7 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         route_plan: Some(bus_plan((2, 4).into(), (5, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
@@ -861,6 +866,7 @@ fn cursor_resets_progress_at_path_step_boundary() {
         route_plan: Some(bus_plan((2, 4).into(), (7, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
@@ -905,6 +911,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         route_plan: Some(walk_plan(workplace, workplace, 0.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let arrived = trips::advance_active_trips(&state, 0.0);
@@ -1000,6 +1007,7 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
         )),
         current_leg_index: 0,
         patience_remaining: 1.0,
+        private_car_trip: None,
     }];
 
     let next = trips::tick_trips(&state, 2.0);
@@ -1049,6 +1057,7 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         route_plan: Some(bus_plan(workplace, Point { x: 7, y: 8 }, "route-001")),
         current_leg_index: 0,
         patience_remaining: 1.0,
+        private_car_trip: None,
     }];
 
     let next = trips::tick_trips(&state, 2.0);
@@ -1173,6 +1182,7 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
         route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let next = trips::tick_trips(&state, 1.0);
@@ -1245,6 +1255,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
         route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     // Drive the tick to just past the day-1 return departure so the return
@@ -1323,6 +1334,7 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
         route_plan: Some(walk_plan((8, 3).into(), (9, 3).into(), 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let next = trips::tick_trips(&state, 0.0);

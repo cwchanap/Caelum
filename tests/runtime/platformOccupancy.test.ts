@@ -66,6 +66,7 @@ function waitingTrip(
     },
     currentLegIndex: 0,
     patienceRemaining: 100,
+    privateCarTrip: null,
   };
 }
 

@@ -12,10 +12,10 @@ use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
     ActiveTrip, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, RoadPathStep, RoadPort,
-    RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus,
-    RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim, Station, Stop,
-    StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
+    MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip, RoadPathStep,
+    RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegPath,
+    RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim, Station,
+    Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
     TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
@@ -251,7 +251,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(5)
+        json!(6)
     );
 }
 
@@ -259,7 +259,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(5));
+    assert_eq!(value["schemaVersion"], json!(6));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
@@ -444,6 +444,46 @@ fn transit_path_struct_variant_fields_use_camel_case() {
 }
 
 #[test]
+fn driving_trip_serializes_private_car_payload_with_road_path() {
+    let road_path = TransitPath::Road {
+        steps: vec![RoadPathStep {
+            position: point(1, 1),
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: (1, 1).into(),
+                to: (2, 1).into(),
+            },
+            travel_seconds: 2.5,
+        }],
+        total_travel_seconds: 2.5,
+    };
+    let trip = ActiveTrip {
+        id: "trip-day-0-trip-1".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: point(1, 1),
+        destination: point(2, 1),
+        position: (1, 1).into(),
+        status: TripStatus::Driving,
+        deadline: 200.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        private_car_trip: Some(PrivateCarTrip {
+            path: road_path,
+            arrival_time: 101.25,
+        }),
+    };
+
+    let value = serde_json::to_value(trip).expect("driving trip should serialize");
+    assert_eq!(value["status"], json!("driving"));
+    assert_eq!(value["privateCarTrip"]["path"]["kind"], json!("road"));
+    assert_eq!(value["privateCarTrip"]["arrivalTime"], json!(101.25));
+}
+
+#[test]
 fn gameplay_rejection_uses_stable_camel_case_wire_names() {
     let rejection = GameplayRejection {
         code: RejectionCode::InsufficientBudget,
@@ -502,6 +542,7 @@ fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 0.0,
+        private_car_trip: None,
     }
 }
 
@@ -512,6 +553,7 @@ fn active_trip_status_serializes_to_legacy_strings() {
         (TripStatus::Walking, "walking"),
         (TripStatus::Waiting, "waiting"),
         (TripStatus::Riding, "riding"),
+        (TripStatus::Driving, "driving"),
         (TripStatus::Arrived, "arrived"),
         (TripStatus::Late, "late"),
         (TripStatus::Unserved, "unserved"),

@@ -58,6 +58,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         }),
         current_leg_index: 0,
         patience_remaining: 30.0,
+        private_car_trip: None,
     });
 
     let boarded = transit::tick_vehicles(&snapshot, 0.0);

@@ -315,6 +315,7 @@ fn demolishing_occupied_house_removes_residents_trips_and_vehicle_passengers() {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            private_car_trip: None,
         },
         ActiveTrip {
             id: "trip-removed-return".to_string(),
@@ -331,6 +332,7 @@ fn demolishing_occupied_house_removes_residents_trips_and_vehicle_passengers() {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            private_car_trip: None,
         },
         ActiveTrip {
             id: "trip-kept".to_string(),
@@ -347,6 +349,7 @@ fn demolishing_occupied_house_removes_residents_trips_and_vehicle_passengers() {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            private_car_trip: None,
         },
     ];
     state.transit.vehicles = vec![Vehicle {

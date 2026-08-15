@@ -9,8 +9,8 @@ import {
   type CitySaveStoreResult,
 } from "./citySaveStore";
 
-const DEFAULT_DATABASE_NAME = "caelum-city-saves-v5";
-const DATABASE_VERSION = 5;
+const DEFAULT_DATABASE_NAME = "caelum-city-saves-v6";
+const DATABASE_VERSION = 6;
 const CITY_STORE_NAME = "cities";
 
 export interface IndexedDbCitySaveStoreOptions {

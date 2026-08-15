@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, Heading, MovementKind, PathGeometry,
-    PlacedBuilding, Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind,
-    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
+    PlacedBuilding, Point, PrivateCarTrip, RoadPathStep, RoundaboutSize, Route, RouteLeg,
+    RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
     TransitNodeStatus, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::network::resolve_route_legs;
@@ -170,6 +170,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let candidate = transit::remove_at_tile(&state, &(8, 5).into()).unwrap();
@@ -1512,6 +1513,13 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         }),
         current_leg_index: 0,
         patience_remaining: 30.0,
+        private_car_trip: Some(PrivateCarTrip {
+            path: TransitPath::Road {
+                steps: Vec::new(),
+                total_travel_seconds: 0.0,
+            },
+            arrival_time: 101.25,
+        }),
     }];
     state.transit.vehicles = vec![Vehicle {
         id: "vehicle-001".to_string(),
@@ -1539,6 +1547,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
 
     assert_eq!(trip.status, TripStatus::Idle);
     assert!(trip.route_plan.is_none());
+    assert!(trip.private_car_trip.is_none());
     assert_eq!(trip.current_leg_index, 0);
     assert_eq!(Some(&trip.destination), sim.workplace.as_ref());
     assert!(!removed_tiles.contains(&trip.destination));
@@ -1615,6 +1624,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
         }),
         current_leg_index: 0,
         patience_remaining: 2.0,
+        private_car_trip: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -1681,6 +1691,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
@@ -1750,6 +1761,7 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles = vec![Vehicle {
         id: "vehicle-001".to_string(),
@@ -1883,6 +1895,7 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
         }),
         current_leg_index: 1,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let next = transit::delete_route(&state, "route-A").expect("route-A deletes");
@@ -1964,6 +1977,7 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
 
     let next = transit::delete_route(&state, "route-B").expect("route-B deletes");

@@ -1,5 +1,13 @@
-use caelum_core::model::{Point, RoadStructure, RoundaboutSize, Station, TransitNodeStatus};
+use caelum_core::model::{
+    ActiveTrip, Heading, MovementKind, PathGeometry, Point, PrivateCarTrip, RoadPathStep,
+    RoadStructure, RoundaboutSize, RoutePlan, Station, TransitNodeStatus, TransitPath,
+    TripPosition, TripPurpose, TripStatus,
+};
 use caelum_core::{GameEngine, GameIntent, RoadPreset, SnapshotLoadError};
+
+mod common;
+
+use common::persistence_fixtures::worker_sim;
 
 fn invalid_snapshot(error: SnapshotLoadError) {
     assert!(
@@ -12,6 +20,147 @@ fn from_snapshot_error(snapshot: caelum_core::GameSnapshot) -> SnapshotLoadError
     match GameEngine::from_snapshot(snapshot) {
         Ok(_) => panic!("expected snapshot construction to fail"),
         Err(error) => error,
+    }
+}
+
+fn driving_path() -> TransitPath {
+    TransitPath::Road {
+        steps: vec![RoadPathStep {
+            position: Point { x: 1, y: 1 },
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: (1, 1).into(),
+                to: (2, 1).into(),
+            },
+            travel_seconds: 2.5,
+        }],
+        total_travel_seconds: 2.5,
+    }
+}
+
+fn driving_trip() -> ActiveTrip {
+    ActiveTrip {
+        id: "trip-driving".to_string(),
+        sim_id: "sim-driving".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: Point { x: 1, y: 1 },
+        destination: Point { x: 2, y: 1 },
+        position: TripPosition { x: 1.0, y: 1.0 },
+        status: TripStatus::Driving,
+        deadline: 200.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        private_car_trip: Some(PrivateCarTrip {
+            path: driving_path(),
+            arrival_time: 101.25,
+        }),
+    }
+}
+
+fn valid_driving_snapshot() -> caelum_core::GameSnapshot {
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot
+        .sims
+        .push(worker_sim("sim-driving", Point { x: 1, y: 1 }, None));
+    snapshot.active_trips.push(driving_trip());
+    snapshot
+}
+
+fn assert_invalid_trip_field(snapshot: caelum_core::GameSnapshot, field: &str) {
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(snapshot) else {
+        panic!("expected invalid snapshot diagnostic");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["context"]["field"], serde_json::json!(field));
+}
+
+fn assert_invalid_transit_membership(snapshot: caelum_core::GameSnapshot) {
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(snapshot) else {
+        panic!("expected invalid snapshot diagnostic");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidAssignment"));
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!("passengerNotRiding")
+    );
+}
+
+#[test]
+fn valid_driving_trip_is_persistence_valid() {
+    GameEngine::from_snapshot(valid_driving_snapshot())
+        .expect("captured road path should survive save/load");
+}
+
+#[test]
+fn driving_trip_requires_a_private_car_payload() {
+    let mut snapshot = valid_driving_snapshot();
+    snapshot.active_trips[0].private_car_trip = None;
+
+    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+}
+
+#[test]
+fn driving_trip_rejects_a_route_plan() {
+    let mut snapshot = valid_driving_snapshot();
+    snapshot.active_trips[0].route_plan = Some(RoutePlan {
+        legs: Vec::new(),
+        estimated_seconds: 0.0,
+    });
+
+    assert_invalid_trip_field(snapshot, "tripRoutePlan");
+}
+
+#[test]
+fn non_driving_trip_rejects_a_private_car_payload() {
+    let mut snapshot = valid_driving_snapshot();
+    snapshot.active_trips[0].status = TripStatus::Idle;
+
+    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+}
+
+#[test]
+fn driving_trip_rejects_transit_vehicle_membership() {
+    let mut snapshot = engine_with_bus_route().snapshot();
+    snapshot
+        .sims
+        .push(worker_sim("sim-driving", Point { x: 1, y: 1 }, None));
+    snapshot.active_trips.push(driving_trip());
+    snapshot.transit.vehicles[0].passenger_ids = vec!["trip-driving".to_string()];
+
+    assert_invalid_transit_membership(snapshot);
+}
+
+#[test]
+fn driving_trip_requires_a_road_private_car_path() {
+    let mut snapshot = valid_driving_snapshot();
+    snapshot.active_trips[0].private_car_trip = Some(PrivateCarTrip {
+        path: TransitPath::Track {
+            steps: Vec::new(),
+            total_travel_seconds: 0.0,
+        },
+        arrival_time: 101.25,
+    });
+
+    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+}
+
+#[test]
+fn driving_trip_rejects_negative_or_nonfinite_arrival_time() {
+    for arrival_time in [-1.0, f64::NAN, f64::INFINITY] {
+        let mut snapshot = valid_driving_snapshot();
+        snapshot.active_trips[0]
+            .private_car_trip
+            .as_mut()
+            .expect("fixture car payload")
+            .arrival_time = arrival_time;
+
+        assert_invalid_trip_field(snapshot, "tripPrivateCarArrivalTime");
     }
 }
 

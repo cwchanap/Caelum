@@ -131,6 +131,7 @@ function createNullishWireSnapshot(
         },
         currentLegIndex: 0,
         patienceRemaining: 120,
+        privateCarTrip: none,
       },
       {
         id: "trip-002",
@@ -144,6 +145,7 @@ function createNullishWireSnapshot(
         routePlan: none,
         currentLegIndex: 0,
         patienceRemaining: 120,
+        privateCarTrip: none,
       },
     ],
     metrics: {

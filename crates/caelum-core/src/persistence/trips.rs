@@ -1,5 +1,5 @@
 use crate::commute;
-use crate::model::{ActiveTrip, GameSnapshot, Point, TransitMode, TripStatus};
+use crate::model::{ActiveTrip, GameSnapshot, Point, TransitMode, TransitPath, TripStatus};
 use crate::trips;
 
 use super::entities::{parse_trip_id, EntityIndexes};
@@ -52,6 +52,7 @@ pub(super) fn validate_trips(
             trips::WAIT_PATIENCE_SECONDS,
         )?;
         validate_world_position(snapshot, trip, entity.clone())?;
+        validate_private_car_trip(snapshot, trip, entity.clone())?;
         validate_route_plan(snapshot, trip, entity.clone())?;
         validate_vehicle_membership(indexes, trip, entity)?;
     }
@@ -130,6 +131,53 @@ fn validate_world_position(
     Ok(())
 }
 
+fn validate_private_car_trip(
+    snapshot: &GameSnapshot,
+    trip: &ActiveTrip,
+    entity: EntityRef,
+) -> PersistenceResult<()> {
+    let Some(private_car_trip) = trip.private_car_trip.as_ref() else {
+        if trip.status == TripStatus::Driving {
+            return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
+        }
+        return Ok(());
+    };
+
+    if trip.status != TripStatus::Driving {
+        return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
+    }
+    if trip.route_plan.is_some() {
+        return Err(invalid_entity_field(entity, SnapshotField::TripRoutePlan));
+    }
+    if trip.current_leg_index != 0 {
+        return Err(trip_state_error(
+            SnapshotField::TripCurrentLegIndex,
+            entity.clone(),
+        ));
+    }
+
+    let TransitPath::Road { steps, .. } = &private_car_trip.path else {
+        return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
+    };
+    if steps.is_empty() {
+        return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
+    }
+    super::finite_non_negative(
+        Some(entity.clone()),
+        SnapshotField::TripPrivateCarArrivalTime,
+        private_car_trip.arrival_time,
+    )?;
+    for step in steps {
+        validate_point(
+            snapshot,
+            &entity,
+            SnapshotField::TripPrivateCar,
+            step.position,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_route_plan(
     snapshot: &GameSnapshot,
     trip: &ActiveTrip,
@@ -137,7 +185,10 @@ fn validate_route_plan(
 ) -> PersistenceResult<()> {
     let Some(plan) = &trip.route_plan else {
         if trip.current_leg_index != 0
-            || !matches!(trip.status, TripStatus::Idle | TripStatus::Unserved)
+            || !matches!(
+                trip.status,
+                TripStatus::Idle | TripStatus::Driving | TripStatus::Unserved
+            )
         {
             return Err(trip_state_error(SnapshotField::TripCurrentLegIndex, entity));
         }
@@ -172,6 +223,7 @@ fn validate_route_plan(
         TripStatus::Idle => false,
         TripStatus::Walking => current_mode == TransitMode::Walk,
         TripStatus::Waiting | TripStatus::Riding => current_mode != TransitMode::Walk,
+        TripStatus::Driving => false,
         TripStatus::Arrived | TripStatus::Late => {
             trip.current_leg_index + 1 == plan.legs.len()
                 && trip.position == crate::model::TripPosition::from(trip.destination)

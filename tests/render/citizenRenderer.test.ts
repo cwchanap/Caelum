@@ -55,6 +55,7 @@ function trip(
     routePlan: null,
     currentLegIndex: 0,
     patienceRemaining: 100,
+    privateCarTrip: null,
   };
 }
 

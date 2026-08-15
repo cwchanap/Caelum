@@ -11,6 +11,7 @@ import type {
   LegFailureReason,
   MetroLine,
   PlacedBuilding,
+  PrivateCarTrip,
   Point,
   RoundaboutSize,
   Route,
@@ -87,8 +88,10 @@ export interface RustRoutePlan extends Omit<RoutePlan, "legs"> {
   legs: RustRoutePlanLeg[];
 }
 
-export interface RustActiveTrip extends Omit<ActiveTrip, "routePlan"> {
+export interface RustActiveTrip
+  extends Omit<ActiveTrip, "routePlan" | "privateCarTrip"> {
   routePlan: RustRoutePlan | null | undefined;
+  privateCarTrip: PrivateCarTrip | null | undefined;
 }
 
 export interface RustMetrics {
@@ -111,7 +114,7 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Schema-v5 raw snapshots always include scenario identity, growth waves, and
+/// Schema-v6 raw snapshots always include scenario identity, growth waves, and
 /// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
 /// or present WASM `undefined`; both host encodings of Rust `None` normalize
 /// to canonical `null`. Non-null thresholds remain authoritative core data.
