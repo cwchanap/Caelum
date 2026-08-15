@@ -169,6 +169,50 @@ fn exact_multi_step_stop_boundary_arrives_with_zero_step_progress() {
     );
 }
 
+/// Regression: when a long road step precedes a short one and the vehicle
+/// starts with fractional progress, the ulp-scale residual from the
+/// association mismatch between `seconds_until_next_vehicle_stop` and
+/// `advance_vehicle_by_seconds` is larger than a machine-epsilon-scaled
+/// tolerance on the short final step. Advancing by exactly the reported
+/// boundary must still consume the final step and advance the cursor with
+/// `step_progress == 0.0` rather than stalling at ~0.9999999999999994.
+#[test]
+fn exact_mixed_duration_stop_boundary_advances_cursor_from_fractional_progress() {
+    let mut state = bus_single_step_state();
+    // 8.0s followed by 1.5625s: the ulp error of the 8.0s step (~1.8e-15)
+    // exceeds the 1.5625s step's epsilon-scaled tolerance (~6.9e-16), so a
+    // machine-epsilon tolerance leaves a residual on the final step.
+    let steps = [
+        one_step_road_path((2, 5).into(), 8.0).road_steps()[0].clone(),
+        one_step_road_path((3, 5).into(), 1.5625).road_steps()[0].clone(),
+    ];
+    let path = TransitPath::Road {
+        total_travel_seconds: steps.iter().map(|step| step.travel_seconds).sum(),
+        steps: steps.to_vec(),
+    };
+    state.transit.routes[0].legs[0].current_path = Some(path.clone());
+    state.transit.routes[0].legs[0].last_valid_path = Some(path);
+    state.transit.vehicles[0].path_step_index = 0;
+    state.transit.vehicles[0].step_progress = 0.1;
+
+    let flow = RoadFlow::new();
+    let seconds =
+        transit::seconds_until_next_vehicle_stop(&state, &flow, &state.transit.vehicles[0])
+            .expect("bus has a next stop");
+
+    let next = transit::tick_vehicles(&state, &flow, seconds);
+    let vehicle = &next.transit.vehicles[0];
+    assert_eq!(
+        vehicle.itinerary_index, 1,
+        "exact mixed-duration boundary must advance the cursor to the next leg"
+    );
+    assert_eq!(vehicle.path_step_index, 0);
+    assert_eq!(
+        vehicle.step_progress, 0.0,
+        "exact boundary arrival must not leave residual progress"
+    );
+}
+
 #[test]
 fn metro_vehicle_keeps_stored_track_time_when_road_is_congested() {
     let point = Point { x: 2, y: 4 };

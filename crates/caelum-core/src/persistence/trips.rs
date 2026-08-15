@@ -146,15 +146,12 @@ fn validate_private_car_trip(
     if trip.status != TripStatus::Driving {
         return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
     }
-    if trip.route_plan.is_some() {
-        return Err(invalid_entity_field(entity, SnapshotField::TripRoutePlan));
-    }
-    if trip.current_leg_index != 0 {
-        return Err(trip_state_error(
-            SnapshotField::TripCurrentLegIndex,
-            entity.clone(),
-        ));
-    }
+    // Driving persistence is structural only: the runtime Driving branch in
+    // `tick_trip` handles the trip from `private_car_trip` and `arrival_time`
+    // alone, never reading `route_plan` or `current_leg_index`, so rejecting
+    // a stale route plan or non-zero leg index here would harden an
+    // engine-internal invariant into the save contract without protecting the
+    // simulation. Keep validation to the payload shape below.
 
     let TransitPath::Road { steps, .. } = &private_car_trip.path else {
         return Err(invalid_entity_field(entity, SnapshotField::TripPrivateCar));
@@ -183,12 +180,17 @@ fn validate_route_plan(
     trip: &ActiveTrip,
     entity: EntityRef,
 ) -> PersistenceResult<()> {
+    // Driving trips use a private-car payload, not a route plan; the runtime
+    // Driving branch in `tick_trip` never reads `route_plan` or
+    // `current_leg_index`, so validating them here would harden an
+    // engine-internal invariant into the save contract rather than check
+    // structural save shape. Skip route-plan validation for Driving trips.
+    if trip.status == TripStatus::Driving {
+        return Ok(());
+    }
     let Some(plan) = &trip.route_plan else {
         if trip.current_leg_index != 0
-            || !matches!(
-                trip.status,
-                TripStatus::Idle | TripStatus::Driving | TripStatus::Unserved
-            )
+            || !matches!(trip.status, TripStatus::Idle | TripStatus::Unserved)
         {
             return Err(trip_state_error(SnapshotField::TripCurrentLegIndex, entity));
         }

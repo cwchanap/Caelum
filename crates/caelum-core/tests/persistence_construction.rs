@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, Heading, MovementKind, PathGeometry, Point, PrivateCarTrip, RoadPathStep,
-    RoadStructure, RoundaboutSize, RoutePlan, Station, TransitNodeStatus, TransitPath,
-    TripPosition, TripPurpose, TripStatus,
+    RoadStructure, RoundaboutSize, Station, TransitNodeStatus, TransitPath, TripPosition,
+    TripPurpose, TripStatus,
 };
 use caelum_core::{GameEngine, GameIntent, RoadPreset, SnapshotLoadError};
 
@@ -150,17 +150,6 @@ fn driving_trip_requires_a_private_car_payload() {
     snapshot.active_trips[0].private_car_trip = None;
 
     assert_invalid_trip_field(snapshot, "tripPrivateCar", "invalidStaticShape");
-}
-
-#[test]
-fn driving_trip_rejects_a_route_plan() {
-    let mut snapshot = valid_driving_snapshot();
-    snapshot.active_trips[0].route_plan = Some(RoutePlan {
-        legs: Vec::new(),
-        estimated_seconds: 0.0,
-    });
-
-    assert_invalid_trip_field(snapshot, "tripRoutePlan", "invalidStaticShape");
 }
 
 #[test]

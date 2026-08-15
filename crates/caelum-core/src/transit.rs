@@ -33,6 +33,23 @@ pub const TRACK_COST: i32 = 500;
 pub const BUS_TILES_PER_SECOND: f64 = 0.8;
 pub const METRO_TILES_PER_SECOND: f64 = 1.6;
 
+/// Tolerance for treating a vehicle's remaining step time as fully consumed
+/// when advancing by a delta returned by `seconds_until_next_vehicle_stop`.
+///
+/// `seconds_until_next_vehicle_stop` sums remaining step times in a different
+/// association than the sequential subtraction inside
+/// `advance_vehicle_by_seconds`, so an exact boundary delta can differ from the
+/// consumed time by a few ulps of the largest step duration. A
+/// machine-epsilon-scaled tolerance is too small to absorb that residual once a
+/// long step precedes a short one (the ulp error of the long step exceeds the
+/// short step's epsilon-scaled tolerance), leaving the cursor at ~0.9999
+/// progress instead of advancing. This absolute seconds-scale tolerance is far
+/// above floating-point association error for any realistic path duration, far
+/// below the smallest meaningful step time, and smaller than the trip
+/// scheduler's 1e-6 boundary epsilon so a residual boundary cannot disappear
+/// between the two layers.
+const STOP_BOUNDARY_TOLERANCE_SECONDS: f64 = 1e-9;
+
 fn route_rejection(code: RejectionCode, route_id: &str) -> GameplayRejection {
     GameplayRejection {
         code,
@@ -1451,11 +1468,13 @@ where
         // `seconds_until_next_vehicle_stop` sums the remaining steps in a
         // different association than this sequential subtraction, so an exact
         // boundary delta can differ from the consumed time by a few ulps of
-        // the step duration — more than the absolute `f64::EPSILON` once
-        // durations grow. Scale the tolerance by the remaining step time and
-        // the leg's step count, and clamp ulp-scale residuals to zero so the
-        // next step starts at exactly 0.0 progress.
-        let tolerance = remaining_step * f64::EPSILON * path.step_count().max(1) as f64;
+        // the largest step duration. A machine-epsilon-scaled tolerance is
+        // too small to absorb that residual once a long step precedes a short
+        // one (the ulp error of the long step exceeds the short step's
+        // epsilon-scaled tolerance), leaving the cursor at ~0.9999 progress
+        // instead of advancing. Use the absolute seconds-scale tolerance
+        // declared above so the next step starts at exactly 0.0 progress.
+        let tolerance = STOP_BOUNDARY_TOLERANCE_SECONDS;
 
         if remaining_seconds + tolerance < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
