@@ -1,7 +1,7 @@
 use caelum_core::model::{
-    ActiveTrip, Heading, LegFailureReason, MovementKind, Point, RouteLeg, RouteLegKind,
-    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TripPurpose,
-    TripStatus,
+    ActiveTrip, Heading, LegFailureReason, MovementKind, PathGeometry, Point, PrivateCarTrip,
+    RoadPathStep, RouteLeg, RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection,
+    ServicePattern, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::preview::RoutePreviewRequest;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset};
@@ -12,6 +12,144 @@ fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
             point: (x, y).into(),
         });
     }
+}
+
+fn one_step_road_path(position: Point, travel_seconds: f64) -> TransitPath {
+    TransitPath::Road {
+        steps: vec![RoadPathStep {
+            position,
+            entering_heading: Heading::East,
+            leaving_heading: Heading::East,
+            movement: MovementKind::Straight,
+            geometry: PathGeometry::Line {
+                from: TripPosition::from(position),
+                to: TripPosition::from((position.x + 1, position.y)),
+            },
+            travel_seconds,
+        }],
+        total_travel_seconds: travel_seconds,
+    }
+}
+
+fn driving_car(id: usize, path: TransitPath) -> ActiveTrip {
+    ActiveTrip {
+        id: format!("car-trip-{id:03}"),
+        sim_id: format!("car-sim-{id:03}"),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (1, 1).into(),
+        destination: (8, 1).into(),
+        position: (1, 1).into(),
+        status: TripStatus::Driving,
+        deadline: 300.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        private_car_trip: Some(PrivateCarTrip {
+            path,
+            arrival_time: 100.0,
+        }),
+    }
+}
+
+fn bus_single_step_state() -> caelum_core::GameSnapshot {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 5, 2, 12);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (2, 4).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (12, 4).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(route.applied, "bus fixture route should apply: {route:?}");
+    let mut state = route.snapshot;
+    let path = one_step_road_path((2, 1).into(), 1.25);
+    state.transit.routes[0].legs[0].current_path = Some(path.clone());
+    state.transit.routes[0].legs[0].last_valid_path = Some(path);
+    state
+}
+
+fn metro_single_step_state() -> caelum_core::GameSnapshot {
+    let mut engine = GameEngine::new();
+    for x in 2..=12 {
+        engine.dispatch(GameIntent::LayTrack {
+            point: (x, 4).into(),
+        });
+    }
+    engine.dispatch(GameIntent::AddMetroStation {
+        point: (2, 4).into(),
+    });
+    engine.dispatch(GameIntent::AddMetroStation {
+        point: (12, 4).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(route.applied, "metro fixture route should apply: {route:?}");
+    let mut state = route.snapshot;
+    let path = TransitPath::Track {
+        steps: vec![caelum_core::model::TrackPathStep {
+            position: (2, 1).into(),
+            heading: Heading::East,
+            geometry: PathGeometry::Line {
+                from: (2, 1).into(),
+                to: (3, 1).into(),
+            },
+            travel_seconds: 1.25,
+        }],
+        total_travel_seconds: 1.25,
+    };
+    state.transit.metro_lines[0].legs[0].current_path = Some(path.clone());
+    state.transit.metro_lines[0].legs[0].last_valid_path = Some(path);
+    state
+}
+
+#[test]
+fn bus_vehicle_uses_congested_road_time_for_boundary_and_motion() {
+    let point = Point { x: 2, y: 1 };
+    let mut state = bus_single_step_state();
+    state.active_trips = (0..6)
+        .map(|id| driving_car(id, one_step_road_path(point, 1.0)))
+        .collect();
+
+    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
+        .expect("bus has a next stop");
+    assert!((seconds - 1.875).abs() < 1e-9, "seconds={seconds}");
+
+    let after_free_flow_delta = transit::tick_vehicles(&state, 1.25);
+    assert!(after_free_flow_delta.transit.vehicles[0].step_progress > 0.0);
+    assert!(after_free_flow_delta.transit.vehicles[0].step_progress < 1.0);
+
+    let after_congested_remainder = transit::tick_vehicles(&after_free_flow_delta, 0.625);
+    let vehicle = &after_congested_remainder.transit.vehicles[0];
+    assert_eq!(vehicle.path_step_index, 0);
+    assert_eq!(vehicle.step_progress, 0.0);
+    assert_eq!(vehicle.itinerary_index, 1);
+}
+
+#[test]
+fn metro_vehicle_keeps_stored_track_time_when_road_is_congested() {
+    let point = Point { x: 2, y: 1 };
+    let mut state = metro_single_step_state();
+    state.active_trips = (0..6)
+        .map(|id| driving_car(id, one_step_road_path(point, 1.0)))
+        .collect();
+
+    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
+        .expect("metro has a next stop");
+    assert!((seconds - 1.25).abs() < 1e-9);
+
+    let next = transit::tick_vehicles(&state, seconds);
+    let vehicle = &next.transit.vehicles[0];
+    assert_eq!(vehicle.path_step_index, 0);
+    assert_eq!(vehicle.step_progress, 0.0);
+    assert_eq!(vehicle.itinerary_index, 1);
 }
 
 #[test]

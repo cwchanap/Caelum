@@ -7,8 +7,8 @@ use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, BusStopKind, GameMap, GameSnapshot, Platform, Point, RouteLegKind, RouteLegPath,
-    Tile, TransitMode, TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus,
-    Vehicle,
+    Tile, TransitMode, TransitNodeStatus, TransitPath, TransitPathStepRef, TripPosition,
+    TripPurpose, TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -562,6 +562,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         let completion_events_changed = advance_vehicle_by_seconds(
             &mut next_vehicle,
             &itinerary,
+            state,
             delta_seconds,
             |candidate, completed_itinerary_index| {
                 let mut event_changed = false;
@@ -674,19 +675,32 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
         // Found a real (non-empty) leg. Sum remaining time in the current step
         // plus all later steps in this leg.
         let remaining_current = if let Some(current_step) = path.step(path_step_index) {
-            (1.0 - step_progress).max(0.0) * current_step.travel_seconds()
+            (1.0 - step_progress).max(0.0) * vehicle_step_seconds(state, vehicle.mode, current_step)
         } else {
             0.0
         };
         let remaining_later: f64 = (path_step_index + 1..path.step_count())
             .filter_map(|index| path.step(index))
-            .map(|step| step.travel_seconds())
+            .map(|step| vehicle_step_seconds(state, vehicle.mode, step))
             .sum();
         total += remaining_current + remaining_later;
         return Some(total);
     }
     // Every leg is zero-step or missing a path: no real stop arrival ahead.
     None
+}
+
+fn vehicle_step_seconds(
+    state: &GameSnapshot,
+    mode: TransitMode,
+    step: TransitPathStepRef<'_>,
+) -> f64 {
+    match (mode, step) {
+        (TransitMode::Bus, TransitPathStepRef::Road(step)) => {
+            crate::traffic::effective_road_step_seconds(state, step)
+        }
+        (_, step) => step.travel_seconds(),
+    }
 }
 
 pub fn cycle_road_direction(state: &GameSnapshot, point: &Point) -> GameplayResult<GameSnapshot> {
@@ -1362,6 +1376,7 @@ fn assigned_line_data<'a>(
 fn advance_vehicle_by_seconds<F>(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
+    state: &GameSnapshot,
     mut remaining_seconds: f64,
     mut on_itinerary_leg_completed: F,
 ) -> bool
@@ -1418,7 +1433,7 @@ where
             vehicle.step_progress = 0.0;
             return completion_events_changed;
         };
-        let step_seconds = step.travel_seconds();
+        let step_seconds = vehicle_step_seconds(state, vehicle.mode, step);
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
             if vehicle.itinerary_index != original_itinerary_index {
@@ -1433,12 +1448,12 @@ where
         consecutive_zero_steps = 0;
         let remaining_step = step_seconds * (1.0 - vehicle.step_progress);
 
-        if remaining_seconds < remaining_step {
+        if remaining_seconds + f64::EPSILON < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
             return completion_events_changed;
         }
 
-        remaining_seconds -= remaining_step;
+        remaining_seconds = (remaining_seconds - remaining_step).max(0.0);
         advance_vehicle_cursor(vehicle, itinerary);
         if vehicle.itinerary_index != original_itinerary_index {
             completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);

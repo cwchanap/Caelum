@@ -1602,6 +1602,35 @@ mod tests {
     }
 
     #[test]
+    fn strict_car_choice_switches_when_live_non_car_eta_becomes_slower() {
+        let free_flow_non_car_plan = RoutePlan {
+            legs: Vec::new(),
+            estimated_seconds: 100.0,
+        };
+        let congested_non_car_plan = RoutePlan {
+            legs: Vec::new(),
+            estimated_seconds: 110.0,
+        };
+        let car = crate::traffic::PrivateCarCandidate {
+            path: TransitPath::Road {
+                steps: Vec::new(),
+                total_travel_seconds: 0.0,
+            },
+            estimated_seconds: 105.0,
+        };
+
+        assert!(private_car_trip_if_faster(
+            Some(&free_flow_non_car_plan),
+            Some(car.clone()),
+            100.0
+        )
+        .is_none());
+        assert!(
+            private_car_trip_if_faster(Some(&congested_non_car_plan), Some(car), 100.0).is_some()
+        );
+    }
+
+    #[test]
     fn sandbox_mid_tick_growth_wave_does_not_schedule_or_apply_growth() {
         let mut sandbox_with_wave = create_initial_snapshot();
         sandbox_with_wave.paused = false;
