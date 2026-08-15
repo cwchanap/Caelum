@@ -712,7 +712,11 @@ pub fn seconds_until_next_vehicle_stop(
     None
 }
 
-fn vehicle_step_seconds(flow: &RoadFlow, mode: TransitMode, step: TransitPathStepRef<'_>) -> f64 {
+pub(crate) fn vehicle_step_seconds(
+    flow: &RoadFlow,
+    mode: TransitMode,
+    step: TransitPathStepRef<'_>,
+) -> f64 {
     match (mode, step) {
         (TransitMode::Bus, TransitPathStepRef::Road(step)) => {
             crate::traffic::effective_road_step_seconds(flow, step)

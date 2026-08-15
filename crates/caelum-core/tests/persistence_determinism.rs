@@ -117,7 +117,10 @@ fn restored_engine_has_identical_future_results_and_topology() {
     let saved = original.snapshot_for_save();
     let mut restored = GameEngine::from_snapshot(saved.clone()).unwrap();
 
-    assert_eq!(restored.snapshot(), saved);
+    // `snapshot()` publishes derived bus service metrics while
+    // `snapshot_for_save()` strips them, so restore fidelity is compared on
+    // the normalized save form.
+    assert_eq!(restored.snapshot_for_save(), saved);
     assert_eq!(
         original.road_topology_for_test(),
         restored.road_topology_for_test()

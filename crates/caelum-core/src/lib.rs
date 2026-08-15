@@ -23,6 +23,7 @@
 pub mod areas;
 pub mod building_catalog;
 pub mod buildings;
+pub(crate) mod bus_service;
 pub mod clock;
 pub mod commute;
 pub(crate) mod cost_policy;
@@ -55,6 +56,7 @@ pub mod transit;
 pub mod transit_nodes;
 pub mod trips;
 
+pub use bus_service::MIN_BUS_HEADWAY_SECONDS;
 pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchResult, GameIntent, RoadPreset};
 pub use model::{

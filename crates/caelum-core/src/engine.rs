@@ -248,7 +248,9 @@ impl GameEngine {
     }
 
     pub fn snapshot(&self) -> GameSnapshot {
-        self.snapshot.clone()
+        let mut snapshot = self.snapshot.clone();
+        crate::bus_service::populate_snapshot_metrics(&mut snapshot);
+        snapshot
     }
 
     pub fn snapshot_for_save(&self) -> GameSnapshot {
