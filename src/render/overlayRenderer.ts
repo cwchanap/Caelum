@@ -33,6 +33,11 @@ import {
   isBuildingAffordableForPresentation,
   isAreaPaintable,
 } from "./placementValidation";
+import {
+  MAX_CONGESTION_MULTIPLIER,
+  ROAD_FLOW_CAPACITY,
+  selectTrafficFlow,
+} from "../domain/traffic";
 
 const previewStrokeInset = 2;
 
@@ -674,6 +679,18 @@ export function renderOverlays(
         fillTile(ctx, trip.destination);
       }
     }
+  }
+
+  if (ui.activeOverlay === "traffic") {
+    const fullScaleFlow = ROAD_FLOW_CAPACITY * MAX_CONGESTION_MULTIPLIER;
+
+    ctx.save();
+    for (const { point, flow } of selectTrafficFlow(state)) {
+      ctx.globalAlpha = Math.min(flow / fullScaleFlow, 1);
+      ctx.fillStyle = colors.traffic;
+      fillTile(ctx, point);
+    }
+    ctx.restore();
   }
 
   if (ui.activeOverlay === "crowding") {

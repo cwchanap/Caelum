@@ -40,6 +40,7 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   crowding: "Crowding",
   demand: "Demand",
   lateness: "Lateness",
+  traffic: "Traffic",
   growth: "Growth",
 };
 

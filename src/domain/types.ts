@@ -88,6 +88,7 @@ export type Overlay =
   | "crowding"
   | "demand"
   | "lateness"
+  | "traffic"
   | "growth";
 
 export interface Point {

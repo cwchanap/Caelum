@@ -60,8 +60,17 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await expect(inspector.getByText("Residents 0 / 4")).toBeVisible();
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
-  await dragMapTiles(page, canvas, { x: 1, y: 0 }, { x: 3, y: 0 });
-  await expect(topbar.getByText("$107,700")).toBeVisible();
+  await dragMapTiles(page, canvas, { x: 1, y: 0 }, { x: 7, y: 0 });
+  await expect(topbar.getByText("$107,300")).toBeVisible();
+
+  await openCommandDestination(page, "data");
+  const data = page.getByTestId("panel-data");
+  const traffic = data.getByRole("button", { name: "Traffic" });
+  await expect(traffic).toBeVisible();
+  await traffic.click();
+  await expect(traffic).toHaveAttribute("aria-pressed", "true");
+  await traffic.click();
+  await expect(traffic).toHaveAttribute("aria-pressed", "false");
 
   await selectBuildLeaf(page, "transit", "busTerminal");
   await page.keyboard.press("r");

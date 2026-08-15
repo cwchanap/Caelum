@@ -77,6 +77,19 @@ describe("renderCitizens", () => {
     expect(arcCalls).toHaveLength(0);
   });
 
+  it("skips driving trips so private cars are not drawn as citizen dots", () => {
+    const { ctx: c, fillStyles, arcCalls } = ctx();
+    const state = {
+      ...createTestGameState(),
+      activeTrips: [trip("driving", { x: 2, y: 2 })],
+    };
+
+    renderCitizens(c, state);
+
+    expect(fillStyles).toHaveLength(0);
+    expect(arcCalls).toHaveLength(0);
+  });
+
   it("draws a dot for each non-arrived trip at the tile offset", () => {
     const { ctx: c, arcCalls } = ctx();
     const state = {

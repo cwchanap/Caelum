@@ -15,6 +15,7 @@
     { id: "crowding", label: "Crowding" },
     { id: "demand", label: "Demand" },
     { id: "lateness", label: "Lateness" },
+    { id: "traffic", label: "Traffic" },
   ];
 </script>
 
