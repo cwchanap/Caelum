@@ -19,8 +19,8 @@ The repository already has the right boundaries:
 - `RoadTopology::find_path_between_access_tiles` already resolves deterministic one-way/junction/roundabout-aware road paths.
 - `stop_access::derive_stop_access_for_footprint` already resolves usable road access beside a multi-tile footprint.
 - `router::find_route_plan` already selects the best deterministic walk/transit plan by `estimated_seconds`.
-- `TransitPath::Road` and `RoadPathStep` already carry the exact structural road path used by buses.
-- `transit::tick_vehicles` and `seconds_until_next_vehicle_stop` already use the path cursor and feed vehicle-arrival boundaries into the trip scheduler.
+- `TransitPath::Road` and `RoadPathStep` already carry the structural/free-flow road path used by buses.
+- `transit::tick_vehicles` and `seconds_until_next_vehicle_stop` already share the path cursor and feed vehicle-arrival boundaries into the trip scheduler.
 - `trips::tick_trips_substepped` already breaks coarse ticks at commute departures, move-ins, vehicle arrivals, day boundaries, and other deterministic events.
 - `UiState.activeOverlay`, `DataPanel.svelte`, and `overlayRenderer.ts` already implement one-at-a-time map overlays.
 
@@ -72,7 +72,7 @@ A valid driving trip has:
 - no transit-vehicle passenger membership;
 - `position == origin` until arrival because cars have no rendered/authoritative intermediate position.
 
-When the car arrives, the payload is cleared before normal arrival scoring. Terminal trips never retain stale road-load state.
+When the car leaves `Driving`, the payload is cleared at the lifecycle helper that changes the status. Terminal and reset trips never retain stale road-load state.
 
 ### Why not `TransitMode::Car`
 
@@ -93,7 +93,8 @@ Update directly:
 - Rust `SNAPSHOT_SCHEMA_VERSION = 6`;
 - TypeScript `SNAPSHOT_SCHEMA_VERSION = 6`;
 - IndexedDB default database `caelum-city-saves-v6`, version `6`;
-- native application-data directory `cities-v6`.
+- native application-data directory `cities-v6`;
+- `GameEngine::from_snapshot` documentation must say schema v6.
 
 Old development cities disappear. Do not add migration, alias fields, serde defaults for the new car payload, dual readers, or fallback namespaces.
 
@@ -138,6 +139,8 @@ Use `BTreeSet<Point>` / `BTreeMap<Point, u16>`; `Point` already has stable order
 
 For the first slice, structure transitions are charged to their existing `RoadPathStep.position`. Do not expand junction or roundabout footprints into synthetic traffic cells.
 
+Buses do **not** contribute to aggregate flow in HPA-622. Adding them later is a small extension to the derived-flow loop, not a reason to build another state store now.
+
 ### One congestion function
 
 Use the same bounded multiplier everywhere road traffic matters:
@@ -152,6 +155,7 @@ pub fn congestion_multiplier(flow: u16) -> f64 {
 Semantics:
 
 - flow `0..=4`: `1.0x` free-flow;
+- flow `5`: `1.25x`;
 - flow `6`: `1.5x`;
 - flow `>= 12`: capped at `3.0x`.
 
@@ -226,26 +230,36 @@ At or after the arrival boundary, `tick_trip` handles `Driving` before current r
 For a valid arrival:
 
 1. set trip position to destination;
-2. clear `private_car_trip`;
-3. call the existing `score_arrival(trip, state.time)`.
+2. pass the trip through existing `score_arrival`;
+3. `score_arrival` clears `private_car_trip` before setting `Arrived`/`Late`.
+
+For malformed driving state, existing `mark_unserved` clears `private_car_trip` before setting `Unserved`. This keeps every terminal transition persistence-valid and prevents stale flow if later code derives load from the payload.
 
 `advance_active_trips_with_zero_delta_ids` already uses `TripTickResult` to update metrics, apply commute resolution/arrival to the sim, and remove terminal trips, so no second completion pipeline is needed.
 
 The existing per-second safety net already upper-bounds one arrival boundary per active car; add another cap term only if a focused test proves the current cap can exhaust.
 
+## Exact bus/car clock semantics
+
+The bus clock is live; the car clock is frozen.
+
+Lock these rules because the current cursor and substep pipeline already imply them:
+
+1. **Cars keep their captured arrival timestamp.** `PrivateCarTrip.arrival_time` is computed once at departure from then-current flow including the candidate itself. Later congestion changes do not re-time or re-route an active car in this slice.
+2. **Bus `step_progress` remains a fraction of the current effective step duration.** If road flow changes between substeps, the stored fraction is unchanged and the remaining wall-clock time becomes `(1 - step_progress) * new_effective_step_seconds`. Do not add a stored remaining-seconds field.
+3. **Boundary ordering stays deterministic.** Due commute departures are spawned at the existing top-of-loop seam before the next substep is advanced. Within `advance_tick_substep`, vehicles advance before active trips resolve. Therefore a car that arrives at a substep end still contributes flow to that substep's bus movement; after its terminal trip is removed, the next `next_boundary_after` observes the reduced flow.
+
+This means a coarse tick that crosses a scheduled car departure/arrival must match an equivalent tick explicitly split at that boundary. Do not invert vehicle/trip order or make cars share the bus's live re-timing behavior.
+
 ## Trip invalidation must clear captured car state
 
-Existing gameplay mutations can reset an active trip to `Idle` when its destination is removed/reassigned. Any path that makes a trip non-driving must also clear `private_car_trip`.
+There are three intentional places that can leave `Driving` in HPA-622:
 
-In particular, `transit.rs::cleanup_removed_destination_references` currently retargets an affected outbound trip by setting `status = Idle`, clearing `route_plan`, and changing destination. Add `trip.private_car_trip = None` in that same reset block.
+- `score_arrival`: clear `private_car_trip`, then set `Arrived`/`Late`;
+- `mark_unserved`: clear `private_car_trip`, then set `Unserved`;
+- `transit.rs::cleanup_removed_destination_references`: when retargeting an affected trip to `Idle`, clear `route_plan` and `private_car_trip` together.
 
-Inventory all production resets with:
-
-```bash
-rg -n 'status = TripStatus::Idle|route_plan = None' crates/caelum-core/src
-```
-
-Only update paths that can receive a driving trip. Route-line invalidation paths that operate exclusively on trips whose `route_plan` references the changed line naturally do not match driving trips and need no new car-specific branch.
+Do not grow a broad reset abstraction. Route-line invalidation paths operate on trips whose `route_plan` references a changed line; a Driving trip has no route plan and cannot enter those paths.
 
 Resident demolition already removes the whole sim/trip, so no special traffic cleanup is needed: derived flow disappears with the trip.
 
@@ -269,7 +283,7 @@ and use it for bus road steps in both runtime clocks:
 1. `transit::advance_vehicle_by_seconds` movement;
 2. `transit::seconds_until_next_vehicle_stop`, which feeds `next_boundary_after`.
 
-These must agree. If movement uses congestion but the boundary estimator uses free-flow time, coarse/fine ticks diverge.
+Both use the same current effective duration and the existing fractional `step_progress` semantics described above.
 
 `TransitPathStepRef` already distinguishes `Road` and `Track`; use that existing enum. Metro track steps remain unchanged.
 
@@ -289,7 +303,20 @@ Create `src/domain/traffic.ts` to derive presentation flow from `state.activeTri
 
 The selector or renderer must filter against the **current** map and paint only tiles whose current `kind === "road"`. A captured car path can outlive a later road removal; the overlay must not paint an empty/non-road tile because of that historical path.
 
-Normalize presentation intensity against a TS display mirror of capacity `4`, capped at full intensity. TypeScript does not implement the congestion multiplier or mode choice; Rust remains gameplay authority.
+Mirror only the two display constants in TypeScript:
+
+```ts
+export const ROAD_FLOW_CAPACITY = 4;
+export const MAX_CONGESTION_MULTIPLIER = 3;
+```
+
+Normalize presentation intensity to the gameplay cap rather than the free-flow threshold:
+
+```text
+alpha = min(flow / (ROAD_FLOW_CAPACITY * MAX_CONGESTION_MULTIPLIER), 1)
+```
+
+So flow `4` is one-third intensity and flow `12` is full intensity. TypeScript does not implement congestion math or mode choice; Rust remains gameplay authority.
 
 Driving trips are skipped by `citizenRenderer.ts`. The Traffic overlay is the only new car visualization.
 
@@ -304,29 +331,36 @@ Focused tests prove:
 1. no car candidate without building road access at either endpoint;
 2. no car candidate without a legal road path;
 3. one-way/roundabout legality comes from the existing `RoadTopology`;
-4. multiplier values: `0..=4 -> 1.0`, `6 -> 1.5`, high flow -> `3.0` cap;
+4. multiplier values: `0..=4 -> 1.0`, `5 -> 1.25`, `6 -> 1.5`, high flow -> `3.0` cap;
 5. one driving trip counts once per unique road point;
 6. candidate ETA includes the candidate itself;
 7. exact time ties keep walk/transit;
 8. same-time workers choose deterministically in stable sim order;
 9. driving trips resolve exactly at the arrival boundary, clear car state, and reuse normal arrived/late metrics;
-10. coarse/fine ticks produce equivalent modes, car flow, sim flags, and metrics;
-11. destination retarget resets captured car state;
-12. bus movement and next-stop boundary use the same delayed road-step time;
-13. metro timing is unchanged;
-14. bus route-plan ETA includes current congestion;
-15. v6 persistence accepts the valid driving shape and rejects the representative mismatches without a broad adversarial matrix.
+10. malformed Driving becomes `Unserved` with `private_car_trip == None`, and the resulting snapshot can pass save validation;
+11. coarse/fine ticks produce equivalent modes, car flow, sim flags, and metrics;
+12. destination retarget resets captured car state;
+13. bus movement and next-stop boundary use the same delayed road-step time;
+14. fractional bus progress is reinterpreted against new live flow at a substep boundary: with four existing cars on a 1.25s road step, a bus at `step_progress = 0.5`, and a fifth car departing on that tile, flow becomes `5`, effective duration becomes `1.5625s`, remaining time becomes `0.78125s`, and a coarse tick crossing that departure matches ticks split at the departure;
+15. a car arriving at a substep end still congests that substep's bus movement, while the next boundary calculation sees the reduced flow;
+16. metro timing is unchanged;
+17. bus route-plan ETA includes current congestion;
+18. v6 persistence accepts the valid driving shape and rejects the representative mismatches without a broad adversarial matrix.
+
+Task 3 mode-choice tests stay car-vs-walk/no-plan only. Car-vs-congested-bus belongs in Task 4 after bus ETA has become congestion-aware, so no Task 3 fixture encodes a temporary free-flow bus assumption.
 
 ### TypeScript/UI
 
 Focused unit tests prove:
 
-1. the traffic selector ignores non-driving trips and deduplicates one trip's repeated point;
-2. multiple driving trips aggregate predictably;
-3. a historical captured point that is no longer a current road is not painted;
-4. `Traffic` toggles through the existing overlay UI;
-5. `citizenRenderer` does not draw driving trips;
-6. v6 snapshot/save fixtures use the new namespace/version.
+1. `tests/runtime/traffic.test.ts` is included by the existing Vitest runtime project;
+2. the traffic selector ignores non-driving trips and deduplicates one trip's repeated point;
+3. multiple driving trips aggregate predictably;
+4. a historical captured point that is no longer a current road is not painted;
+5. overlay intensity reaches full only at flow `12`, not at the free-flow threshold `4`;
+6. `Traffic` toggles through the existing overlay UI;
+7. `citizenRenderer` does not draw driving trips;
+8. v6 snapshot/save fixtures use the new namespace/version.
 
 ### Real sandbox smoke
 
@@ -354,4 +388,4 @@ Do **not** wait several real minutes for a specific worker departure or inspect 
 
 ## Exit criteria
 
-HPA-622 is complete when a deterministic commute can choose a captured private-car road path, active cars derive aggregate load without a second traffic state store, that load increases both car ETA and bus road-step time through the same helper, car arrival remains coarse/fine deterministic, destination retargeting clears stale car state, and the shared UI exposes one current-road-only Traffic overlay without introducing microscopic traffic simulation infrastructure.
+HPA-622 is complete when a deterministic commute can choose a captured private-car road path, active cars derive aggregate load without a second traffic state store, that load increases both car ETA and live bus road-step time through the same helper, car timers remain frozen while bus step fractions rescale at deterministic substep boundaries, every transition out of Driving clears private-car state, destination retargeting clears stale car state, and the shared UI exposes one current-road-only Traffic overlay scaled to the actual congestion cap without introducing microscopic traffic simulation infrastructure.
