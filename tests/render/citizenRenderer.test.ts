@@ -88,6 +88,7 @@ describe("renderCitizens", () => {
 
     expect(fillStyles).toHaveLength(0);
     expect(arcCalls).toHaveLength(0);
+    expect(c.fill).not.toHaveBeenCalled();
   });
 
   it("draws a dot for each non-arrived trip at the tile offset", () => {

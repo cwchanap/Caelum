@@ -88,8 +88,10 @@ export interface RustRoutePlan extends Omit<RoutePlan, "legs"> {
   legs: RustRoutePlanLeg[];
 }
 
-export interface RustActiveTrip
-  extends Omit<ActiveTrip, "routePlan" | "privateCarTrip"> {
+export interface RustActiveTrip extends Omit<
+  ActiveTrip,
+  "routePlan" | "privateCarTrip"
+> {
   routePlan: RustRoutePlan | null | undefined;
   privateCarTrip: PrivateCarTrip | null | undefined;
 }
