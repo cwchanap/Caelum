@@ -17,6 +17,14 @@ fn ids(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
 
+fn assign_bus(engine: &mut GameEngine, line_id: &str) {
+    let result = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: line_id.to_string(),
+    });
+    assert!(result.applied, "fixture vehicle should apply: {result:?}");
+}
+
 #[test]
 fn shuttle_builds_outbound_reversal_return_reversal_in_order() {
     let specs = build_service_itinerary(ServicePattern::Shuttle, &ids(&["A", "B", "C"]));
@@ -133,6 +141,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
     });
+    assign_bus(&mut engine, "route-001");
     let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
     let waypoint_ids = state.transit.routes[0].stop_ids.clone();
@@ -208,6 +217,7 @@ fn shuttle_break_then_restore_preserves_return_itinerary_index() {
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
     });
+    assign_bus(&mut engine, "route-001");
     let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
     let waypoint_ids = state.transit.routes[0].stop_ids.clone();
@@ -567,6 +577,7 @@ fn two_stop_bus_engine() -> GameEngine {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
+    assign_bus(&mut engine, "route-001");
     engine
 }
 
@@ -722,7 +733,7 @@ fn adds_bus_stop_on_empty_roadside_anchor_and_charges_budget() {
 }
 
 #[test]
-fn creates_active_bus_route_and_assigns_vehicle() {
+fn creates_active_bus_route_after_explicit_assignment() {
     let engine = two_stop_bus_engine();
     let snapshot = engine.snapshot();
     let route = &snapshot.transit.routes[0];
@@ -1362,6 +1373,7 @@ fn vehicle_time_through_roundabout_matches_authoritative_path_duration() {
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
+    assign_bus(&mut engine, "route-001");
     let placed = engine.dispatch(GameIntent::PlaceRoundabout {
         origin: (5, 4).into(),
         size: RoundaboutSize::Standard3x3,

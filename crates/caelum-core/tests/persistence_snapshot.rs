@@ -50,6 +50,13 @@ fn save_accepts_last_tick_waiting_metrics_after_route_deletion() {
     );
     apply(
         &mut engine,
+        GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        },
+    );
+    apply(
+        &mut engine,
         GameIntent::PaintAreaRectangle {
             area: "residential".to_string(),
             start: Point { x: 2, y: 2 },

@@ -6,7 +6,7 @@ use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
 };
 use caelum_core::road::RoadMutation;
-use caelum_core::transit::{BUS_COST, ROAD_COST};
+use caelum_core::transit::{METRO_COST, ROAD_COST};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -41,6 +41,40 @@ fn editable_network_engine() -> GameEngine {
     engine
 }
 
+fn editable_metro_network_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::LayTrackLine {
+            points: (2..=10).map(|x| point(x, 5)).collect(),
+        },
+    );
+    for x in [2, 10] {
+        dispatch(
+            &mut engine,
+            GameIntent::AddMetroStation { point: point(x, 5) },
+        );
+    }
+    engine
+}
+
+fn disconnected_metro_network_engine() -> GameEngine {
+    let mut engine = editable_metro_network_engine();
+    dispatch(
+        &mut engine,
+        GameIntent::LayTrackLine {
+            points: (2..=10).map(|x| point(x, 12)).collect(),
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::AddMetroStation {
+            point: point(2, 12),
+        },
+    );
+    engine
+}
+
 fn engine_for(
     snapshot: &caelum_core::GameSnapshot,
     preset: EconomyPreset,
@@ -71,6 +105,17 @@ fn valid_route_preview(generation: u64) -> RoutePreviewRequest {
         mode: TransitMode::Bus,
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002"]),
+        route_id: None,
+        expected_revision: None,
+        generation,
+    }
+}
+
+fn valid_metro_route_preview(generation: u64) -> RoutePreviewRequest {
+    RoutePreviewRequest {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["station-001", "station-002"]),
         route_id: None,
         expected_revision: None,
         generation,
@@ -578,15 +623,15 @@ fn route_preview_returns_typed_validation_with_generation() {
 
 #[test]
 fn route_preview_reports_cost_affordability_and_revision_context() {
-    let mut engine = editable_network_engine();
-    engine.set_budget_for_test(BUS_COST - 1);
+    let mut engine = editable_metro_network_engine();
+    engine.set_budget_for_test(METRO_COST - 1);
     let response = engine.preview_route(RoutePreviewRequest {
         expected_revision: Some(4),
         generation: 31,
-        ..valid_route_preview(31)
+        ..valid_metro_route_preview(31)
     });
 
-    assert_eq!(response.initial_vehicle_cost, BUS_COST);
+    assert_eq!(response.initial_vehicle_cost, METRO_COST);
     assert!(!response.affordable);
     assert_eq!(
         response
@@ -600,21 +645,13 @@ fn route_preview_reports_cost_affordability_and_revision_context() {
 
 #[test]
 fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
-    let mut engine = editable_network_engine();
-    // A second, disconnected road island with its own stop.
-    road_line(&mut engine, (2..=10).map(|x| point(x, 11)).collect());
-    dispatch(
-        &mut engine,
-        GameIntent::AddBusStop {
-            point: point(2, 10),
-        },
-    );
-    engine.set_budget_for_test(BUS_COST - 1);
+    let mut engine = disconnected_metro_network_engine();
+    engine.set_budget_for_test(METRO_COST - 1);
 
     let response = engine.preview_route(RoutePreviewRequest {
-        waypoint_ids: ids(&["stop-001", "stop-003"]),
+        waypoint_ids: ids(&["station-001", "station-003"]),
         generation: 40,
-        ..valid_route_preview(40)
+        ..valid_metro_route_preview(40)
     });
 
     // The disconnected leg is the blocking rejection; affordability is not dropped.
@@ -625,20 +662,23 @@ fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
         .iter()
         .find(|warning| warning.code == WarningCode::InsufficientBudget)
         .expect("insufficient budget warning");
-    assert_eq!(budget_warning.context.required_budget, Some(BUS_COST));
-    assert_eq!(budget_warning.context.available_budget, Some(BUS_COST - 1));
+    assert_eq!(budget_warning.context.required_budget, Some(METRO_COST));
+    assert_eq!(
+        budget_warning.context.available_budget,
+        Some(METRO_COST - 1)
+    );
 }
 
 #[test]
 fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
-    let prepared = editable_network_engine().snapshot();
-    let standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
-    let creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
-    let standard_preview = standard.preview_route(valid_route_preview(61));
-    let creative_preview = creative.preview_route(valid_route_preview(61));
+    let prepared = editable_metro_network_engine().snapshot();
+    let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
+    let standard_preview = standard.preview_route(valid_metro_route_preview(61));
+    let creative_preview = creative.preview_route(valid_metro_route_preview(61));
 
-    assert_eq!(standard_preview.initial_vehicle_cost, BUS_COST);
-    assert_eq!(creative_preview.initial_vehicle_cost, BUS_COST);
+    assert_eq!(standard_preview.initial_vehicle_cost, METRO_COST);
+    assert_eq!(creative_preview.initial_vehicle_cost, METRO_COST);
     assert!(!standard_preview.affordable);
     assert!(creative_preview.affordable);
     assert_eq!(
@@ -651,14 +691,14 @@ fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
     assert!(creative_preview.rejection.is_none(), "{creative_preview:?}");
 
     let standard_early = standard.preview_route(RoutePreviewRequest {
-        waypoint_ids: ids(&["stop-001"]),
+        waypoint_ids: ids(&["station-001"]),
         generation: 62,
-        ..valid_route_preview(62)
+        ..valid_metro_route_preview(62)
     });
     let creative_early = creative.preview_route(RoutePreviewRequest {
-        waypoint_ids: ids(&["stop-001"]),
+        waypoint_ids: ids(&["station-001"]),
         generation: 62,
-        ..valid_route_preview(62)
+        ..valid_metro_route_preview(62)
     });
     assert!(!standard_early.affordable);
     assert!(creative_early.affordable);
@@ -674,27 +714,19 @@ fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
 
 #[test]
 fn route_preview_suppresses_only_creative_budget_feedback_and_keeps_edits_free() {
-    let mut disconnected = editable_network_engine();
-    road_line(&mut disconnected, (2..=10).map(|x| point(x, 11)).collect());
-    dispatch(
-        &mut disconnected,
-        GameIntent::AddBusStop {
-            point: point(2, 10),
-        },
-    );
-    let prepared = disconnected.snapshot();
-    let standard = engine_for(&prepared, EconomyPreset::Standard, BUS_COST - 1);
-    let creative = engine_for(&prepared, EconomyPreset::Creative, BUS_COST - 1);
+    let prepared = disconnected_metro_network_engine().snapshot();
+    let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
     let request = RoutePreviewRequest {
-        waypoint_ids: ids(&["stop-001", "stop-003"]),
+        waypoint_ids: ids(&["station-001", "station-003"]),
         generation: 63,
-        ..valid_route_preview(63)
+        ..valid_metro_route_preview(63)
     };
     let standard_preview = standard.preview_route(request.clone());
     let creative_preview = creative.preview_route(request);
 
-    assert_eq!(standard_preview.initial_vehicle_cost, BUS_COST);
-    assert_eq!(creative_preview.initial_vehicle_cost, BUS_COST);
+    assert_eq!(standard_preview.initial_vehicle_cost, METRO_COST);
+    assert_eq!(creative_preview.initial_vehicle_cost, METRO_COST);
     assert!(!standard_preview.affordable);
     assert!(creative_preview.affordable);
     assert_eq!(

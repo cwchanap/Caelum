@@ -41,6 +41,30 @@ fn assign_vehicle_intent_uses_camel_case_json_fields() {
 }
 
 #[test]
+fn bus_service_intents_use_camel_case_json_fields() {
+    assert_intent_json(
+        GameIntent::SetBusTargetHeadway {
+            route_id: "route-001".to_string(),
+            target_headway_seconds: 60,
+        },
+        serde_json::json!({
+            "type": "setBusTargetHeadway",
+            "routeId": "route-001",
+            "targetHeadwaySeconds": 60
+        }),
+    );
+    assert_intent_json(
+        GameIntent::DeployBusFleet {
+            route_id: "route-001".to_string(),
+        },
+        serde_json::json!({
+            "type": "deployBusFleet",
+            "routeId": "route-001"
+        }),
+    );
+}
+
+#[test]
 fn transit_intents_use_camel_case_json_fields() {
     assert_intent_json(
         GameIntent::LayRoad {

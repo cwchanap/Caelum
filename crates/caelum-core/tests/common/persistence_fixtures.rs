@@ -31,6 +31,11 @@ pub fn fixture_with_bus_route() -> GameSnapshot {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(result.applied, "fixture route should apply: {result:?}");
+    let result = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(result.applied, "fixture vehicle should apply: {result:?}");
     // Engine starts paused; snapshot_for_save enforces paused state.
     engine.snapshot_for_save()
 }

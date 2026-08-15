@@ -913,6 +913,24 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             vec![("mode", json!("bus")), ("lineId", json!("route-001"))],
         ),
         (
+            GameIntent::SetBusTargetHeadway {
+                route_id: "route-001".to_string(),
+                target_headway_seconds: 60,
+            },
+            "setBusTargetHeadway",
+            vec![
+                ("routeId", json!("route-001")),
+                ("targetHeadwaySeconds", json!(60)),
+            ],
+        ),
+        (
+            GameIntent::DeployBusFleet {
+                route_id: "route-001".to_string(),
+            },
+            "deployBusFleet",
+            vec![("routeId", json!("route-001"))],
+        ),
+        (
             GameIntent::LayRoad { point: p(1, 2) },
             "layRoad",
             vec![("point", json!({ "x": 1, "y": 2 }))],
@@ -1094,6 +1112,8 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::SetPaused { .. } => "setPaused",
             GameIntent::SetSpeed { .. } => "setSpeed",
             GameIntent::AssignVehicle { .. } => "assignVehicle",
+            GameIntent::SetBusTargetHeadway { .. } => "setBusTargetHeadway",
+            GameIntent::DeployBusFleet { .. } => "deployBusFleet",
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
@@ -1544,7 +1564,7 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
     let route_value = serde_json::to_value(route_response).unwrap();
     assert_eq!(route_value["generation"], json!(61));
     assert_eq!(route_value["rejection"], json!(null));
-    assert_eq!(route_value["initialVehicleCost"], json!(8_000));
+    assert_eq!(route_value["initialVehicleCost"], json!(0));
     assert!(route_value.get("total_travel_seconds").is_none());
 
     let road_response = engine.preview_road_mutation(RoadMutationPreviewRequest {
@@ -1589,6 +1609,9 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
     fn expected_camel(code: &RejectionCode) -> &'static str {
         match code {
             RejectionCode::InsufficientBudget => "insufficientBudget",
+            RejectionCode::InvalidHeadway => "invalidHeadway",
+            RejectionCode::HeadwayNotSet => "headwayNotSet",
+            RejectionCode::FleetAlreadyAssigned => "fleetAlreadyAssigned",
             RejectionCode::InvalidSpeed => "invalidSpeed",
             RejectionCode::BlockedTile => "blockedTile",
             RejectionCode::OutOfBounds => "outOfBounds",
@@ -1619,6 +1642,9 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
 
     let all_codes = [
         RejectionCode::InsufficientBudget,
+        RejectionCode::InvalidHeadway,
+        RejectionCode::HeadwayNotSet,
+        RejectionCode::FleetAlreadyAssigned,
         RejectionCode::InvalidSpeed,
         RejectionCode::BlockedTile,
         RejectionCode::OutOfBounds,

@@ -259,8 +259,16 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "bus fixture route should apply: {route:?}");
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "bus fixture vehicle should apply: {assigned:?}"
+    );
 
-    let mut state = route.snapshot;
+    let mut state = assigned.snapshot;
     state.buildings = vec![
         commute_endpoint("home", "supermarket", home),
         commute_endpoint("work", "supermarket", workplace),
@@ -318,8 +326,16 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "bus fixture route should apply: {route:?}");
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "bus fixture vehicle should apply: {assigned:?}"
+    );
 
-    let mut state = route.snapshot;
+    let mut state = assigned.snapshot;
     state.paused = false;
     state.sims.clear();
     let bus_path = state.transit.routes[0].legs[0]

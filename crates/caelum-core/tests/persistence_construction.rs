@@ -226,6 +226,14 @@ fn engine_with_bus_route() -> GameEngine {
             })
             .applied
     );
+    assert!(
+        engine
+            .dispatch(GameIntent::AssignVehicle {
+                mode: "bus".to_string(),
+                line_id: "route-001".to_string(),
+            })
+            .applied
+    );
     engine
 }
 
