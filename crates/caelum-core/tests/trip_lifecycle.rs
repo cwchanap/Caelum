@@ -2,8 +2,8 @@ use caelum_core::buildings::assign_workplaces;
 use caelum_core::model::{
     ActiveTrip, GameSnapshot, Heading, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
     PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ServicePattern, Sim, TransitMode, TransitNetwork, TransitPath, TripOutcome, TripOutcomeKind,
+    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -282,6 +282,55 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     (state, topology)
 }
 
+fn bus_congestion_mode_choice_fixture() -> (GameSnapshot, RoadTopology, TransitPath) {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 1, 1, 7);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (1, 0).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (7, 0).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(route.applied, "bus fixture route should apply: {route:?}");
+
+    let mut state = route.snapshot;
+    let bus_path = state.transit.routes[0].legs[0]
+        .current_path
+        .clone()
+        .expect("bus route has a captured path");
+    state.buildings = vec![
+        commute_endpoint("home", "supermarket", (1, 0).into()),
+        commute_endpoint("work", "supermarket", (7, 0).into()),
+    ];
+    state.sims = vec![sim("sim-001", (1, 0).into(), Some((7, 0).into()))];
+
+    // Keep the captured bus shortcut while the current road topology takes a
+    // long detour. This makes the live car-vs-bus comparison cross only when
+    // congestion slows the bus path.
+    clear_roads(&mut state);
+    let mut detour = vec![Point { x: 1, y: 1 }];
+    detour.extend((2..=16).map(|y| Point { x: 1, y }));
+    detour.extend((2..=27).map(|x| Point { x, y: 16 }));
+    detour.extend((2..=15).rev().map(|y| Point { x: 27, y }));
+    detour.extend((7..=26).rev().map(|x| Point { x, y: 2 }));
+    detour.push(Point { x: 7, y: 1 });
+    two_way_corridor(&mut state, &detour);
+
+    let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
+    state.time =
+        f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY) * clock::GAME_DAY_SECONDS;
+    state.day = 0;
+    state.clock_minutes = departure_minute;
+    state.paused = false;
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology, bus_path)
+}
+
 fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 10, y: 3 };
@@ -426,10 +475,8 @@ fn car_mode_choice_uses_driving_when_car_eta_is_strictly_faster_than_walk() {
     let (state, topology) = car_commute_fixture(&["sim-001"]);
 
     let next = tick_trips(&state, &topology, 0.0);
-    let outbound = next
-        .active_trips
-        .first()
-        .expect("outbound trip spawned at its due boundary");
+    assert_eq!(next.active_trips.len(), 1);
+    let outbound = &next.active_trips[0];
 
     assert_eq!(outbound.status, TripStatus::Driving);
     assert!(outbound.private_car_trip.is_some());
@@ -443,10 +490,8 @@ fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
     let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
     let next = tick_trips(&state, &topology, 0.0);
-    let outbound = next
-        .active_trips
-        .first()
-        .expect("outbound trip spawned at its due boundary");
+    assert_eq!(next.active_trips.len(), 1);
+    let outbound = &next.active_trips[0];
 
     assert_eq!(outbound.status, TripStatus::Idle);
     assert!(outbound.private_car_trip.is_none());
@@ -462,8 +507,11 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     let (mut state, topology) = car_commute_fixture(&["sim-001", "sim-485"]);
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 10, y: 3 };
-    let free_flow = traffic::private_car_candidate(&state, &topology, home, workplace)
-        .expect("car fixture has a free-flow candidate");
+    let free_flow = traffic::private_car_candidate(&state, &topology, home, workplace);
+    assert!(free_flow.is_some(), "car fixture has a free-flow candidate");
+    let Some(free_flow) = free_flow else {
+        return;
+    };
     let seed_arrival_time = state.time + free_flow.estimated_seconds;
     state.active_trips = (0..4)
         .map(|index| ActiveTrip {
@@ -487,26 +535,50 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
 
     let next = tick_trips(&state, &topology, 0.0);
 
-    let first_worker = next
+    assert_eq!(
+        next.active_trips
+            .iter()
+            .filter(|trip| trip.sim_id == "sim-001")
+            .count(),
+        1
+    );
+    assert_eq!(
+        next.active_trips
+            .iter()
+            .filter(|trip| trip.sim_id == "sim-485")
+            .count(),
+        1
+    );
+    let Some(first_worker) = next
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001")
-        .expect("first same-time worker spawned");
-    let second_worker = next
+    else {
+        return;
+    };
+    let Some(second_worker) = next
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-485")
-        .expect("second same-time worker spawned");
+    else {
+        return;
+    };
     let first_arrival_time = first_worker
         .private_car_trip
         .as_ref()
-        .expect("first worker chose car")
-        .arrival_time;
+        .map(|car| car.arrival_time);
     let second_arrival_time = second_worker
         .private_car_trip
         .as_ref()
-        .expect("second worker chose car")
-        .arrival_time;
+        .map(|car| car.arrival_time);
+    assert!(first_arrival_time.is_some(), "first worker chose car");
+    assert!(second_arrival_time.is_some(), "second worker chose car");
+    let Some(first_arrival_time) = first_arrival_time else {
+        return;
+    };
+    let Some(second_arrival_time) = second_arrival_time else {
+        return;
+    };
 
     assert_eq!(first_worker.status, TripStatus::Driving);
     assert_eq!(second_worker.status, TripStatus::Driving);
@@ -542,6 +614,64 @@ fn car_mode_choice_is_identical_for_coarse_and_fine_ticks() {
 }
 
 #[test]
+fn due_commute_uses_direct_bus_at_zero_flow_and_car_after_bus_congestion() {
+    let (state, topology, bus_path) = bus_congestion_mode_choice_fixture();
+
+    let free_flow = tick_trips(&state, &topology, 1.0);
+    assert_eq!(free_flow.active_trips.len(), 1);
+    assert_eq!(free_flow.active_trips[0].status, TripStatus::Waiting);
+    assert_eq!(free_flow.active_trips[0].private_car_trip, None);
+    assert!(traffic::active_car_flow(&free_flow).is_empty());
+    assert_eq!(
+        free_flow.active_trips[0]
+            .route_plan
+            .as_ref()
+            .map(|plan| plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>()),
+        Some(vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk])
+    );
+
+    let mut congested_state = state;
+    congested_state.active_trips = (0..12)
+        .map(|index| ActiveTrip {
+            id: format!("seed-car-trip-{index:03}"),
+            sim_id: format!("seed-car-sim-{index:03}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: (1, 0).into(),
+            destination: (7, 0).into(),
+            position: (1, 0).into(),
+            status: TripStatus::Driving,
+            deadline: congested_state.time + 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: bus_path.clone(),
+                arrival_time: congested_state.time + 10_000.0,
+            }),
+        })
+        .collect();
+
+    let congested = tick_trips(&congested_state, &topology, 1.0);
+    assert_eq!(congested.active_trips.len(), 13);
+    assert_eq!(
+        congested
+            .active_trips
+            .iter()
+            .find(|trip| trip.sim_id == "sim-001")
+            .map(|trip| trip.status),
+        Some(TripStatus::Driving)
+    );
+    assert_eq!(
+        congested
+            .active_trips
+            .iter()
+            .find(|trip| trip.sim_id == "sim-001")
+            .map(|trip| trip.private_car_trip.is_some()),
+        Some(true)
+    );
+}
+
+#[test]
 fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
     let (state, topology, departure_time) = bus_fractional_progress_fixture();
     let departure_delta = departure_time - state.time;
@@ -572,12 +702,16 @@ fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
 #[test]
 fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
     let (state, topology) = bus_arrival_order_fixture();
-    let current_point = state.transit.routes[0].legs[0]
-        .current_path
-        .as_ref()
-        .expect("bus route has a path")
-        .road_steps()[0]
-        .position;
+    let current_path = state.transit.routes[0].legs[0].current_path.as_ref();
+    assert!(current_path.is_some(), "bus route has a path");
+    let Some(current_path) = current_path else {
+        return;
+    };
+    let current_point = current_path.road_steps().first().map(|step| step.position);
+    assert!(current_point.is_some(), "bus route has a road step");
+    let Some(current_point) = current_point else {
+        return;
+    };
 
     let at_arrival = tick_trips(&state, &topology, 1.25);
     let bus = &at_arrival.transit.vehicles[0];
@@ -590,9 +724,11 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
         .iter()
         .all(|trip| trip.private_car_trip.is_some()));
 
-    let next_stop_seconds =
-        transit::seconds_until_next_vehicle_stop(&at_arrival, bus).expect("bus has a next stop");
-    assert!((next_stop_seconds - 6.5).abs() < 1e-9);
+    let next_stop_seconds = transit::seconds_until_next_vehicle_stop(&at_arrival, bus);
+    assert!(next_stop_seconds.is_some(), "bus has a next stop");
+    if let Some(next_stop_seconds) = next_stop_seconds {
+        assert!((next_stop_seconds - 6.5).abs() < 1e-9);
+    }
 
     let coarse = tick_trips(&state, &topology, 1.5);
     let split = tick_trips(&at_arrival, &topology, 0.25);
@@ -608,17 +744,19 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
 fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
     let (state, topology) = car_commute_fixture(&["sim-001"]);
     let spawned = tick_trips(&state, &topology, 0.0);
+    assert_eq!(spawned.active_trips.len(), 1);
     let arrival_time = spawned.active_trips[0]
         .private_car_trip
         .as_ref()
-        .expect("car trip payload")
-        .arrival_time;
+        .map(|car| car.arrival_time);
+    assert!(arrival_time.is_some(), "car trip payload");
+    let Some(arrival_time) = arrival_time else {
+        return;
+    };
 
     let before_arrival = tick_trips(&spawned, &topology, 1.0);
-    let active = before_arrival
-        .active_trips
-        .first()
-        .expect("car remains active before arrival");
+    assert_eq!(before_arrival.active_trips.len(), 1);
+    let active = &before_arrival.active_trips[0];
     assert_eq!(active.status, TripStatus::Driving);
     assert!(active.private_car_trip.is_some());
     assert!(!caelum_core::traffic::active_car_flow(&before_arrival).is_empty());
@@ -661,9 +799,12 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
         TripOutcomeKind::Unserved
     );
 
-    let engine = GameEngine::from_snapshot(next).expect("unserved result is persistence-valid");
-    let saved = engine.snapshot_for_save();
-    assert!(saved.active_trips.is_empty());
+    let engine = GameEngine::from_snapshot(next);
+    assert!(engine.is_ok(), "unserved result is persistence-valid");
+    if let Ok(engine) = engine {
+        let saved = engine.snapshot_for_save();
+        assert!(saved.active_trips.is_empty());
+    }
 }
 
 #[test]

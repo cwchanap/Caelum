@@ -253,10 +253,15 @@ fn private_car_rejects_disconnected_access_roads() {
 fn private_car_uses_connected_two_way_road() {
     let (state, topology) = endpoint_fixture(None);
 
-    let candidate = private_car_candidate(&state, &topology, point(3, 5), point(9, 5))
-        .expect("connected two-way road should produce a car candidate");
-    assert!(matches!(candidate.path, TransitPath::Road { ref steps, .. } if !steps.is_empty()));
-    assert!(candidate.estimated_seconds > 0.0);
+    let candidate = private_car_candidate(&state, &topology, point(3, 5), point(9, 5));
+    assert!(
+        candidate.is_some(),
+        "connected two-way road should produce a car candidate"
+    );
+    if let Some(candidate) = candidate {
+        assert!(matches!(candidate.path, TransitPath::Road { ref steps, .. } if !steps.is_empty()));
+        assert!(candidate.estimated_seconds > 0.0);
+    }
 }
 
 #[test]
@@ -285,8 +290,14 @@ fn effective_road_path_seconds_uses_current_flow_per_transition() {
 #[test]
 fn private_car_candidate_eta_includes_its_own_flow_unit() {
     let (empty_state, topology) = endpoint_fixture(None);
-    let free_flow = private_car_candidate(&empty_state, &topology, point(3, 5), point(9, 5))
-        .expect("connected two-way road should produce a free-flow candidate");
+    let free_flow = private_car_candidate(&empty_state, &topology, point(3, 5), point(9, 5));
+    assert!(
+        free_flow.is_some(),
+        "connected two-way road should produce a free-flow candidate"
+    );
+    let Some(free_flow) = free_flow else {
+        return;
+    };
     let road_positions: Vec<_> = free_flow
         .path
         .road_steps()
@@ -304,12 +315,17 @@ fn private_car_candidate_eta_includes_its_own_flow_unit() {
         })
         .collect();
 
-    let congested = private_car_candidate(&state, &topology, point(3, 5), point(9, 5))
-        .expect("active flow should not invalidate the captured candidate");
-    assert_eq!(
-        congested.estimated_seconds,
-        free_flow.estimated_seconds * 1.25
+    let congested = private_car_candidate(&state, &topology, point(3, 5), point(9, 5));
+    assert!(
+        congested.is_some(),
+        "active flow should not invalidate the captured candidate"
     );
+    if let Some(congested) = congested {
+        assert_eq!(
+            congested.estimated_seconds,
+            free_flow.estimated_seconds * 1.25
+        );
+    }
 }
 
 #[test]
