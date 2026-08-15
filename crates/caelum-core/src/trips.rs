@@ -1529,14 +1529,20 @@ mod tests {
         }
     }
 
-    fn tick_for_test(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        super::tick_trips(state, &topology, delta_seconds)
+    fn tick_for_test(
+        state: &GameSnapshot,
+        topology: &RoadTopology,
+        delta_seconds: f64,
+    ) -> GameSnapshot {
+        super::tick_trips(state, topology, delta_seconds)
     }
 
-    fn tick_with_objectives_for_test(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        super::tick_trips_with_objectives(state, &topology, delta_seconds)
+    fn tick_with_objectives_for_test(
+        state: &GameSnapshot,
+        topology: &RoadTopology,
+        delta_seconds: f64,
+    ) -> GameSnapshot {
+        super::tick_trips_with_objectives(state, topology, delta_seconds)
     }
 
     fn trip_with_private_car_payload() -> ActiveTrip {
@@ -1617,8 +1623,10 @@ mod tests {
             "sandbox waves do not consume the substep budget"
         );
 
-        let next = tick_for_test(&sandbox_with_wave, 300.0);
-        let baseline = tick_for_test(&sandbox_without_wave, 300.0);
+        let topology =
+            RoadTopology::compile(&sandbox_with_wave.map).expect("fixture topology compiles");
+        let next = tick_for_test(&sandbox_with_wave, &topology, 300.0);
+        let baseline = tick_for_test(&sandbox_without_wave, &topology, 300.0);
 
         assert_eq!(next.time, baseline.time, "sandbox tick timing is unchanged");
         assert_eq!(next.buildings, baseline.buildings);
@@ -1659,7 +1667,8 @@ mod tests {
             .collect();
 
         // Coarse tick from t=10 to t=20 — spans past the unserved expiry at t=15.
-        let next = tick_with_objectives_for_test(&state, 10.0);
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        let next = tick_with_objectives_for_test(&state, &topology, 10.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1699,7 +1708,8 @@ mod tests {
         state.clock_minutes = clock::clock_minutes(state.time);
         state.metrics.completed_trips = 1;
 
-        let next = tick_with_objectives_for_test(&state, 2.0);
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        let next = tick_with_objectives_for_test(&state, &topology, 2.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1726,7 +1736,8 @@ mod tests {
         state.clock_minutes = clock::clock_minutes(state.time);
         state.metrics.completed_trips = 1;
 
-        let next = tick_with_objectives_for_test(&state, 1.0);
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        let next = tick_with_objectives_for_test(&state, &topology, 1.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1761,7 +1772,8 @@ mod tests {
         state.metrics.completed_trips = 1;
 
         // Coarse: one 300s tick spanning well past the survival boundary.
-        let coarse = tick_with_objectives_for_test(&state, 300.0);
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        let coarse = tick_with_objectives_for_test(&state, &topology, 300.0);
 
         // Fine: 300 × 1s ticks; the survival boundary fires inside the first.
         let mut fine = state.clone();
@@ -1769,7 +1781,7 @@ mod tests {
             if fine.metrics.state != MetricsState::Running {
                 break;
             }
-            fine = tick_with_objectives_for_test(&fine, 1.0);
+            fine = tick_with_objectives_for_test(&fine, &topology, 1.0);
         }
 
         assert_eq!(
@@ -1814,7 +1826,8 @@ mod tests {
         state.metrics.completed_trips = 1;
 
         // Coarse: one 300s tick spanning past the trigger.
-        let coarse = tick_with_objectives_for_test(&state, 300.0);
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        let coarse = tick_with_objectives_for_test(&state, &topology, 300.0);
 
         // Fine: 300 × 1s ticks; the wave fires inside the first.
         let mut fine = state.clone();
@@ -1822,7 +1835,7 @@ mod tests {
             if fine.metrics.state != MetricsState::Running {
                 break;
             }
-            fine = tick_with_objectives_for_test(&fine, 1.0);
+            fine = tick_with_objectives_for_test(&fine, &topology, 1.0);
         }
 
         assert!(

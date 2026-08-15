@@ -74,9 +74,12 @@ mod tests {
         campaign_with_waves(growing_suburb_growth_waves())
     }
 
-    fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        trips::tick_trips(state, &topology, delta_seconds)
+    fn tick_trips(
+        state: &GameSnapshot,
+        topology: &RoadTopology,
+        delta_seconds: f64,
+    ) -> GameSnapshot {
+        trips::tick_trips(state, topology, delta_seconds)
     }
 
     #[test]
@@ -84,8 +87,9 @@ mod tests {
         let mut start = create_initial_snapshot();
         start.paused = false;
         start.scenario.growth_waves = growing_suburb_growth_waves();
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
-        let next = tick_trips(&start, 1.0);
+        let next = tick_trips(&start, &topology, 1.0);
 
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
@@ -96,8 +100,9 @@ mod tests {
     fn campaign_without_objectives_still_applies_growth() {
         let mut start = campaign_with_waves(growing_suburb_growth_waves());
         start.scenario.objectives = None;
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
-        let next = tick_trips(&start, 1.0);
+        let next = tick_trips(&start, &topology, 1.0);
 
         assert_eq!(next.buildings.len(), 5);
         assert!(next.scenario.growth_waves[0].applied);
@@ -107,7 +112,8 @@ mod tests {
     fn seed_wave_zones_places_houses_without_immediate_sims() {
         let start = seeded();
         let budget_before = start.budget;
-        let next = tick_trips(&start, 1.0);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let next = tick_trips(&start, &topology, 1.0);
 
         assert_eq!(next.buildings.len(), 5, "5 smallHouse units placed");
         assert_eq!(
@@ -129,8 +135,10 @@ mod tests {
 
     #[test]
     fn application_is_idempotent() {
-        let once = tick_trips(&seeded(), 1.0);
-        let twice = tick_trips(&once, 1.0);
+        let start = seeded();
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let once = tick_trips(&start, &topology, 1.0);
+        let twice = tick_trips(&once, &topology, 1.0);
         assert_eq!(twice.buildings.len(), once.buildings.len());
         assert_eq!(twice.sims.len(), once.sims.len());
     }
@@ -139,7 +147,8 @@ mod tests {
     fn empty_growth_waves_is_a_noop() {
         let mut start = create_initial_snapshot();
         start.paused = false;
-        let next = tick_trips(&start, 1.0);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let next = tick_trips(&start, &topology, 1.0);
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
     }
@@ -147,10 +156,11 @@ mod tests {
     #[test]
     fn coarse_and_fine_ticks_produce_identical_growth() {
         let start = seeded();
-        let coarse = tick_trips(&start, 5.0);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let coarse = tick_trips(&start, &topology, 5.0);
         let mut fine = start.clone();
         for _ in 0..5 {
-            fine = tick_trips(&fine, 1.0);
+            fine = tick_trips(&fine, &topology, 1.0);
         }
         assert_eq!(coarse.buildings, fine.buildings);
         assert_eq!(coarse.sims, fine.sims);
@@ -170,7 +180,8 @@ mod tests {
                 rotation: 0,
             }],
         }]);
-        let next = tick_trips(&start, 1.0);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let next = tick_trips(&start, &topology, 1.0);
         assert!(next.buildings.is_empty(), "unzoned placement skipped");
         assert!(next.scenario.growth_waves[0].applied);
     }
@@ -241,7 +252,8 @@ mod tests {
             },
         ]);
 
-        let next = tick_trips(&start, 300.0);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+        let next = tick_trips(&start, &topology, 300.0);
 
         // All three waves fired.
         assert!(next.scenario.growth_waves[0].applied, "wave-a applied");
@@ -272,14 +284,15 @@ mod tests {
         seed_waves[0].trigger_time = 120.0;
 
         let start = campaign_with_waves(seed_waves);
+        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
         // Coarse: one 300s tick spanning well past the 120s trigger.
-        let coarse = tick_trips(&start, 300.0);
+        let coarse = tick_trips(&start, &topology, 300.0);
 
         // Fine: 300 × 1s ticks; the wave fires on the 120th tick.
         let mut fine = start.clone();
         for _ in 0..300 {
-            fine = tick_trips(&fine, 1.0);
+            fine = tick_trips(&fine, &topology, 1.0);
         }
 
         assert!(
