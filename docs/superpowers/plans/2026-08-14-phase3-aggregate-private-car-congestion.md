@@ -133,7 +133,7 @@ pub struct PrivateCarTrip {
 }
 ```
 
-Add `Driving` to `TripStatus` and:
+Add `Driving` to `TripStatus` and add:
 
 ```rust
 pub private_car_trip: Option<PrivateCarTrip>,
