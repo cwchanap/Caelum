@@ -2,100 +2,115 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Separate bus route geometry from service operation by letting a new bus route exist with zero fleet, setting one target headway, deriving required fleet from current congestion-aware round-trip time, and atomically deploying an evenly time-spaced initial fleet from the existing Lines panel.
+**Goal:** Separate bus route geometry from service startup: persist one pre-deployment target headway, derive all service/fleet numbers in Rust, make new bus routes fleet-free only when the replacement deployment flow exists, and let the existing Lines panel deploy one deterministically spaced initial fleet.
 
-**Architecture:** Keep authority in `caelum-core`: a bus-only `bus_service` module owns headway validation, live round-trip/fleet math, and initial deployment. Persist only `Route.targetHeadwaySeconds`; derive round-trip/required/current-headway values from current route paths instead of caching them. Reuse `transit::vehicle_step_seconds` so loop and shuttle service math exactly matches live bus cursor timing. TypeScript ports that current-path step walk for display only; Rust remains authoritative for count, cost, and placement. Preserve the existing structural route-edit rebase and the low-level `AssignVehicle` intent; neither becomes player-facing fleet management.
+**Architecture:** `caelum-core` remains authoritative. A small `bus_service` module reuses live `vehicle_step_seconds` to derive cycle time, required fleet, nominal headway, and deterministic placement. `GameEngine::snapshot()` exposes these numbers as serialize-only derived route output; persistence clears/ignores them. TypeScript only normalizes/formats the Rust values and dispatches two intents. Metro creation remains unchanged and no general service-plan/fleet framework is introduced.
 
-**Tech Stack:** Rust (`caelum-core`, serde), Svelte 5 + TypeScript, existing runtime/backend intent bridge, Vitest, Playwright, Bun, Tauri/IndexedDB persistence.
+**Tech Stack:** Rust (`caelum-core`, serde), Svelte 5 + TypeScript, existing WASM/Tauri `GameBackend.dispatch`, Vitest, Playwright, Bun, IndexedDB/native Tauri persistence.
 
 ## Global Constraints
 
-- Implement HPA-624 only; HPA-334 remains the coordination parent.
-- Bus only: do not add Metro headway/service-plan behavior.
-- New bus routes have zero vehicles; new Metro lines retain the current initial vehicle.
-- Persist one required-nullable `targetHeadwaySeconds` on bus `Route` only.
-- Snapshot/database namespace becomes v7 directly; do not add migration or compatibility code.
+- HPA-624 only; HPA-334 remains the coordination parent.
+- Bus-only service controls; Metro headway/service-plan behavior stays unchanged.
+- Persist only `Route.targetHeadwaySeconds`; service metrics are derived output and never trusted from saves.
+- Direct schema/storage break to v7; no migration or compatibility reader.
+- Minimum target headway is `60s`; no upper bound in this slice.
+- Headway is a **pre-deployment setup control**; once any bus exists, do not edit target in HPA-624.
 - Required fleet is `max(1, ceil(roundTripSeconds / targetHeadwaySeconds))`.
-- Round-trip and spacing walk `Route.legs[*].current_path` only and use the same effective per-step timing as live buses.
-- Empty/zero-step shuttle reversals contribute zero; U-turn/multi-step reversals contribute their real current-path step durations.
-- Initial fleet deployment is one-shot from zero vehicles and atomic under `CostPolicy`.
-- Structural route edits keep the existing vehicle/rider rebase; do not suppress it and do not re-space by headway afterward.
-- Keep `GameIntent::AssignVehicle` as the existing unspaced engine/test add; do not expose a plus-one Lines-panel control and do not reject it in this slice.
-- TypeScript bus-service metrics are presentation-only and must match Rust on the same vectors; never use `estimatedSeconds` or `lastValidPath` as fallback timing.
-- Do not add service bands, timetables, holding, bunching, fleet resizing/withdrawal/reassignment, depots, vehicle inventories, or generic scheduler/fleet/service-plan abstractions.
+- UI calls `roundTrip / assignedFleet` **Nominal headway**, never Current/Actual.
+- Cycle math and placement use live `vehicle_step_seconds` over `current_path` only.
+- Initial deployment is one-shot, zero-fleet only, and atomic under `CostPolicy`.
+- Keep existing low-level `AssignVehicle`; add no player plus-one control.
+- Preserve structural route-edit rebase; do not re-space/resize after edits.
+- No TypeScript congestion/service timing implementation.
+- No service bands, timetable/departure history, top-up/withdrawal/reassignment, holding/bunching, depots, fleet inventory, or generic scheduler/fleet/service-plan abstraction.
 
 ## File structure
 
 **Create**
 
-- `crates/caelum-core/src/bus_service.rs` — bus-only current service metrics, headway mutation, time-offset cursor placement, and atomic initial deployment.
-- `crates/caelum-core/tests/bus_service.rs` — loop/shuttle service math, headway, deployment, spacing, cost, and edit-rebase coverage.
-- `src/domain/busService.ts` — presentation-only port of current bus service timing.
+- `crates/caelum-core/src/bus_service.rs` — Rust-only cycle/fleet math, target validation, derived metrics population, and initial fleet placement.
+- `crates/caelum-core/tests/bus_service.rs` — focused service-math/deployment tests.
 
-**Modify**
+**Modify — Rust core**
 
+- `crates/caelum-core/src/model.rs` — v7, required target field, serialize-only derived `BusServiceMetrics`.
 - `crates/caelum-core/src/lib.rs` — register `bus_service`.
-- `crates/caelum-core/src/model.rs` — schema v7 and required-nullable `Route.target_headway_seconds`.
-- `crates/caelum-core/src/intent.rs` — `SetBusTargetHeadway` and `DeployBusFleet`.
-- `crates/caelum-core/src/engine.rs` — dispatch the two intents and update active schema-v6 documentation to v7.
-- `crates/caelum-core/src/route_editor.rs` — bus creation inserts zero vehicles; Metro creation remains current behavior; keep edit rebase unchanged.
-- `crates/caelum-core/src/preview.rs` — new bus preview has zero initial vehicle cost; Metro preview remains current behavior.
-- `crates/caelum-core/src/router.rs` — zero-fleet bus routes are not passenger services.
+- `crates/caelum-core/src/transit.rs` — expose existing `vehicle_step_seconds`; keep `AssignVehicle` unchanged.
+- `crates/caelum-core/src/router.rs` — zero-fleet bus passenger gate.
+- `crates/caelum-core/src/engine.rs` — derived snapshot output + new intent dispatch; v7 comment.
+- `crates/caelum-core/src/persistence/entities.rs` — clear derived service metrics during normalization.
+- `crates/caelum-core/src/route_editor.rs` — fleet-free bus creation in Task 3 only.
+- `crates/caelum-core/src/preview.rs` — bus creation preview cost becomes zero in Task 3.
+- `crates/caelum-core/src/intent.rs` — `SetBusTargetHeadway`, `DeployBusFleet`.
 - `crates/caelum-core/src/rejection.rs` — `InvalidHeadway`, `HeadwayNotSet`, `FleetAlreadyAssigned`.
-- `crates/caelum-core/src/transit.rs` — expose the existing `vehicle_step_seconds` helper as `pub(crate)`; do not move ticking or change its semantics.
-- `crates/caelum-core/tests/model_wire_format.rs` — v7 route wire contract.
-- `crates/caelum-core/tests/route_editing.rs` — fleet-free bus create, unchanged Metro create/preview, and existing edit semantics.
-- `crates/caelum-core/tests/economy_cost_policy.rs` — zero-cost bus creation and atomic fleet cost.
-- `crates/caelum-core/tests/transit_router.rs` — zero-fleet exclusion and explicit `AssignVehicle` eligibility.
-- Existing Rust fixtures that instantiate `Route` — explicit `target_headway_seconds: None`.
-- `src/domain/types.ts` — schema v7, route field, new rejection codes.
-- `src/domain/traffic.ts` — export the existing congestion multiplier semantics for presentation math.
-- `src/runtime/backend/types.ts` — v7 active comment plus two new intent variants.
-- `src/runtime/types.ts` — bus service row state, `noFleet`, runtime controller methods.
-- `src/runtime/createGameRuntime.ts` — dispatch headway/deployment commands.
-- `src/runtime/runtimeSelectors.ts` — derive bus service row metrics/status.
-- `src/runtime/rejectionMessages.ts` — user-facing service-control failures.
-- `src/components/hud/panels/LinesPanel.svelte` — compact target/current/fleet controls for buses only.
-- `src/App.svelte` — pass callbacks to LinesPanel.
-- `src/styles.css` — minimal service-block layout.
-- `src/persistence/indexedDbCitySaveStore.ts` — v7 browser namespace.
-- `src-tauri/src/city_store.rs` — `cities-v7` native namespace.
-- `tests/fixtures/rustSnapshot.ts` and route fixtures — v7 + required nullable bus route field.
-- `tests/runtime/persistence/indexedDbCitySaveStore.test.ts` and native city-store tests — v7 namespace expectations.
-- `tests/runtime/runtimeSelectors.test.ts`, `tests/runtime/gameRuntime.test.ts` — exact display/runtime behavior.
-- `tests/ui/linesPanel.test.ts`, `tests/ui/appShell.test.ts` — bus-only service controls.
-- `tests/e2e/smoke.spec.ts` — real create -> headway -> deploy smoke.
-- `docs/architecture.md` — active schema version contract moves to v7 in Task 1.
+- `crates/caelum-core/tests/model_wire_format.rs`, `route_editing.rs`, `transit_router.rs`, `economy_cost_policy.rs`, `golden_sequences.rs`, `shuttle_service.rs`, `route_resilience.rs`, and all bus-service fixtures discovered by the Task 3 inventory.
+
+**Modify — TypeScript/UI/hosts**
+
+- `src/domain/types.ts` — v7 target + canonical derived service-metrics types/rejection codes.
+- `src/runtime/backend/types.ts` — raw Rust route metrics + two intent variants.
+- `src/runtime/snapshotView.ts` — normalize missing/undefined derived metrics to `null`.
+- `src/runtime/types.ts` — route-row service display + runtime controller methods.
+- `src/runtime/createGameRuntime.ts` — dispatch existing backend intents.
+- `src/runtime/runtimeSelectors.ts` — read Rust metrics; `noFleet` status; no timing math.
+- `src/runtime/rejectionMessages.ts` — service-control rejection copy.
+- `src/components/hud/panels/LinesPanel.svelte`, `src/App.svelte`, `src/styles.css` — compact setup/display UI.
+- `src/persistence/indexedDbCitySaveStore.ts`, `src-tauri/src/city_store.rs` — v7 namespaces.
+- `docs/architecture.md` — active v7 host/persistence description.
+- `tests/fixtures/rustSnapshot.ts`, runtime/UI/persistence tests, and `tests/e2e/routes.spec.ts`.
 
 ---
 
-### Task 1: Make bus route creation fleet-free and complete the direct schema-v7 break
+### Task 1: Make the v7 wire/storage break without changing bus creation behavior
 
 **Files:**
 - Modify: `crates/caelum-core/src/model.rs`
-- Modify: `crates/caelum-core/src/engine.rs`
-- Modify: `crates/caelum-core/src/route_editor.rs`
-- Modify: `crates/caelum-core/src/preview.rs`
+- Modify: `crates/caelum-core/src/engine.rs` documentation only
+- Modify: `crates/caelum-core/src/persistence/entities.rs`
 - Modify: `crates/caelum-core/tests/model_wire_format.rs`
-- Modify: `crates/caelum-core/tests/route_editing.rs`
-- Modify: `crates/caelum-core/tests/economy_cost_policy.rs`
 - Modify: direct Rust `Route { ... }` fixtures reported by compile
 - Modify: `src/domain/types.ts`
-- Modify: `src/runtime/backend/types.ts` active schema comment
+- Modify: `src/runtime/backend/types.ts` schema/raw-route types
+- Modify: `src/runtime/snapshotView.ts`
 - Modify: `src/persistence/indexedDbCitySaveStore.ts`
 - Modify: `src-tauri/src/city_store.rs`
 - Modify: `tests/fixtures/rustSnapshot.ts`
-- Modify: `tests/runtime/persistence/indexedDbCitySaveStore.test.ts`
-- Modify: native city-store namespace assertions
+- Modify: persistence/snapshot-view tests
 - Modify: `docs/architecture.md`
 
 **Interfaces:**
-- Produces: Rust `Route.target_headway_seconds: Option<u32>` serialized as required `targetHeadwaySeconds: number | null`.
-- Produces: active snapshot/storage version `7` everywhere that describes current behavior.
-- Produces: new bus route `vehicle_ids == []`; new Metro line behavior unchanged.
-- Preserves: `RoutePreviewResponse.initial_vehicle_cost` and `affordable` wire fields.
 
-- [ ] **Step 1: Write/adjust failing Rust wire and route-creation tests**
+Rust persisted target:
+
+```rust
+#[serde(deserialize_with = "deserialize_required_option")]
+pub target_headway_seconds: Option<u32>,
+```
+
+Rust derived runtime output placeholder:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusServiceMetrics {
+    pub round_trip_seconds: f64,
+    pub assigned_fleet: usize,
+    pub required_fleet: Option<usize>,
+    pub nominal_headway_seconds: Option<f64>,
+}
+
+#[serde(
+    skip_deserializing,
+    default,
+    skip_serializing_if = "Option::is_none"
+)]
+pub service_metrics: Option<BusServiceMetrics>,
+```
+
+Task 1 does **not** populate metrics yet and does **not** remove the implicit first bus. Existing gameplay stays green while the wire/storage contract moves to v7.
+
+- [ ] **Step 1: Write failing v7/required-nullable tests**
 
 Add assertions equivalent to:
 
@@ -103,54 +118,85 @@ Add assertions equivalent to:
 assert_eq!(SNAPSHOT_SCHEMA_VERSION, 7);
 
 let route_json = serde_json::to_value(&snapshot.transit.routes[0]).unwrap();
+assert!(route_json.get("targetHeadwaySeconds").is_some());
 assert_eq!(route_json["targetHeadwaySeconds"], serde_json::Value::Null);
-
-let created_bus = create_test_bus_route(&state);
-assert!(created_bus.transit.routes[0].vehicle_ids.is_empty());
-assert!(created_bus.transit.vehicles.is_empty());
-assert_eq!(created_bus.budget, state.budget);
-
-let created_metro = create_test_metro_line(&state);
-assert_eq!(created_metro.transit.metro_lines[0].vehicle_ids.len(), 1);
-assert_eq!(created_metro.transit.vehicles.len(), 1);
 ```
 
-In preview tests, assert a new bus route reports `initial_vehicle_cost == 0` and cannot fail solely for bus purchase budget, while equivalent Metro preview still reports `METRO_COST`.
+Deserialize a v7 route with the target key omitted and assert it fails. Deserialize one with `targetHeadwaySeconds: null` and assert it succeeds.
 
-- [ ] **Step 2: Run focused tests and confirm the old coupling fails**
+For `serviceMetrics`, prove incoming JSON cannot become authority: provide a forged object and assert the deserialized route has `service_metrics == None`.
+
+- [ ] **Step 2: Run focused tests to prove the old schema fails**
 
 ```bash
-cargo test -p caelum-core --test model_wire_format --test route_editing --test economy_cost_policy
+cargo test -p caelum-core --test model_wire_format
 ```
 
-Expected before implementation: failures around schema version/required field and bus creation still inserting/charging one vehicle.
+Expected before implementation: v6/schema/field assertions fail.
 
-- [ ] **Step 3: Add the required nullable route field and direct v7 storage break**
+- [ ] **Step 3: Add the v7 model fields and explicit fixture values**
 
-Rust:
+Set:
 
 ```rust
 pub const SNAPSHOT_SCHEMA_VERSION: u16 = 7;
-
-pub struct Route {
-    // existing fields...
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub target_headway_seconds: Option<u32>,
-}
 ```
 
-TypeScript:
+Every engine/test-created bus `Route` literal gets:
+
+```rust
+target_headway_seconds: None,
+service_metrics: None,
+```
+
+Do not add a serde default to `target_headway_seconds`.
+
+Canonical TS shape:
 
 ```ts
 export const SNAPSHOT_SCHEMA_VERSION = 7 as const;
 
+export interface BusServiceMetrics {
+  roundTripSeconds: number;
+  assignedFleet: number;
+  requiredFleet: number | null;
+  nominalHeadwaySeconds: number | null;
+}
+
 export interface Route {
-  // existing fields...
+  // existing fields
   targetHeadwaySeconds: number | null;
+  serviceMetrics: BusServiceMetrics | null;
 }
 ```
 
-Storage namespaces:
+Raw Rust route type may declare `serviceMetrics?: BusServiceMetrics | null` because serde may omit `None`.
+
+- [ ] **Step 4: Make persistence explicitly discard derived service metrics**
+
+In the existing entity derived-state normalization path, clear:
+
+```rust
+for route in &mut snapshot.transit.routes {
+    route.service_metrics = None;
+}
+```
+
+This protects direct Rust `GameSnapshot` restore in addition to serde's `skip_deserializing` behavior. Do not calculate service metrics in persistence.
+
+`normalizeRustSnapshot` canonicalizes runtime output:
+
+```ts
+routes: snapshot.transit.routes.map((route) => ({
+  ...route,
+  serviceMetrics: route.serviceMetrics ?? null,
+  legs: route.legs.map(normalizeRouteLegPath),
+})),
+```
+
+- [ ] **Step 5: Update storage namespaces and every active v6 assertion**
+
+Use:
 
 ```ts
 const DEFAULT_DATABASE_NAME = "caelum-city-saves-v7";
@@ -161,116 +207,59 @@ const DATABASE_VERSION = 7;
 const CITY_DIRECTORY: &str = "cities-v7";
 ```
 
-Every engine-created bus route starts with `target_headway_seconds: None`. Update direct fixtures explicitly; do not add `#[serde(default)]`, fallback readers, aliases, or migration.
-
-- [ ] **Step 4: Decouple only bus creation from the initial vehicle**
-
-Change `insert_route` to accept a concrete vector:
-
-```rust
-fn insert_route(
-    snapshot: &mut GameSnapshot,
-    mode: TransitMode,
-    route_id: String,
-    pattern: ServicePattern,
-    waypoint_ids: Vec<String>,
-    legs: Vec<RouteLegPath>,
-    vehicle_ids: Vec<String>,
-) -> GameplayResult<()> {
-    // bus Route stores vehicle_ids + target_headway_seconds: None
-    // MetroLine keeps current vehicle_ids semantics
-}
-```
-
-In `create_route_costed`, create/charge the initial vehicle only for `TransitMode::Metro`. For `TransitMode::Bus`, quote zero vehicle cost, insert `vehicle_ids: vec![]`, and do not push a vehicle.
-
-Make preview use the same mode-specific policy:
-
-```rust
-let initial_vehicle_cost = if request.route_id.is_none() && request.mode == TransitMode::Metro {
-    transit::vehicle_cost(TransitMode::Metro)
-} else {
-    0
-};
-```
-
-Do not change `update_route`'s call to `rebase_edited_route_vehicles_and_riders`.
-
-- [ ] **Step 5: Compile and make every current v6 assertion explicit in Task 1**
-
-Run:
-
-```bash
-cargo test -p caelum-core --no-run
-bun run check
-```
-
-For every compiler-reported Rust `Route { ... }`, add:
-
-```rust
-target_headway_seconds: None,
-```
-
-For each TypeScript bus-route fixture, add:
-
-```ts
-targetHeadwaySeconds: null,
-```
-
-Then inventory active v6 wording/namespace assertions:
+Inventory current code/tests/docs:
 
 ```bash
 rg -n 'schema[- ]?v?6|schema.?6|cities-v6|caelum-city-saves-v6|SNAPSHOT_SCHEMA_VERSION.?=.?6' \
   crates src src-tauri tests docs/architecture.md
 ```
 
-Update **current code/tests/architecture only**, including `GameEngine::from_snapshot` and `src/runtime/backend/types.ts` comments. Do not rewrite historical specs/plans merely because they document the completed v6 change.
+Update active references including `GameEngine::from_snapshot`, backend comments, fixtures, IndexedDB/native tests, and architecture. Do not rewrite historical specs/plans.
 
-- [ ] **Step 6: Run focused + persistence contract tests**
+- [ ] **Step 6: Compile every Route literal and run contract checks**
 
 ```bash
-cargo test -p caelum-core --test model_wire_format --test route_editing --test economy_cost_policy
-bun run test:unit -- tests/runtime/persistence/indexedDbCitySaveStore.test.ts
-cargo test -p caelum-tauri city_store
+cargo test -p caelum-core --no-run
+bun run check
+cargo test -p caelum-core --test model_wire_format
+bun run test:unit -- tests/runtime/snapshotView.test.ts tests/runtime/persistence/indexedDbCitySaveStore.test.ts
+cargo test -p caelum_lib city_store
 ```
 
-If the Tauri package name differs, use the existing targeted city-store test command from the repository. Expected: bus creation fleet-free, Metro behavior unchanged, and active persistence contracts on v7.
+If the targeted Tauri package/test spelling differs, use the repository's existing `city_store` test invocation. Fix only current v7/field fallout.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add crates/caelum-core src src-tauri tests docs/architecture.md
-git commit -m "feat: separate bus route creation from fleet"
+git commit -m "feat: add bus headway v7 contract"
 ```
 
 ---
 
-### Task 2: Add bus-only live service math and zero-fleet passenger gating
+### Task 2: Derive bus service metrics in Rust and publish them through snapshots
 
 **Files:**
 - Create: `crates/caelum-core/src/bus_service.rs`
+- Create: `crates/caelum-core/tests/bus_service.rs`
 - Modify: `crates/caelum-core/src/lib.rs`
 - Modify: `crates/caelum-core/src/transit.rs`
 - Modify: `crates/caelum-core/src/router.rs`
-- Create: `crates/caelum-core/tests/bus_service.rs`
+- Modify: `crates/caelum-core/src/engine.rs`
 - Modify: `crates/caelum-core/tests/transit_router.rs`
+- Modify: `crates/caelum-core/tests/shuttle_service.rs` only if an existing fixture is the cleanest real reversal source
 
 **Interfaces:**
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct BusServiceMetrics {
-    pub round_trip_seconds: f64,
-    pub assigned_fleet: usize,
-    pub required_fleet: Option<usize>,
-    pub current_headway_seconds: Option<f64>,
-}
+pub const MIN_BUS_HEADWAY_SECONDS: u32 = 60;
 
 pub(crate) fn metrics(route: &Route, flow: &RoadFlow) -> Option<BusServiceMetrics>;
 pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u32) -> usize;
+pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot);
 ```
 
-Reuses exactly:
+Reuse the existing helper, made crate-visible without changing behavior:
 
 ```rust
 pub(crate) fn vehicle_step_seconds(
@@ -280,79 +269,59 @@ pub(crate) fn vehicle_step_seconds(
 ) -> f64;
 ```
 
-- [ ] **Step 1: Write failing loop/headway boundary tests**
+- [ ] **Step 1: Write failing formula/current-path tests**
 
-Lock basic formula vectors:
-
-```text
-round trip 600s, target 300s -> required 2
-round trip 601s, target 300s -> required 3
-round trip 600s, target unset -> required None
-```
-
-Build an unequal-duration loop fixture and assert the cycle is the sum of effective current path step times, not stop or leg count.
-
-- [ ] **Step 2: Add the required shuttle timing vectors**
-
-Use one synthetic shuttle `Route.legs` sequence with current road paths:
+Lock:
 
 ```text
-leg 0 outbound service:  one step, 100s
-leg 1 reversal:          zero steps, 0s
-leg 2 return service:    one step, 200s
-leg 3 reversal:          one U-turn step, 2s
+600s cycle, target 300s -> required 2
+601s cycle, target 300s -> required 3
+target unset -> required None
+assigned 0 -> nominal None
+600s / 2 assigned -> nominal 300s
 ```
 
-Assert:
+Build a route whose `estimated_seconds` and `last_valid_path` deliberately disagree with `current_path`; assert metrics use `current_path` only.
 
-```rust
-assert_eq!(metrics(...).unwrap().round_trip_seconds, 302.0);
+- [ ] **Step 2: Add explicit shuttle reversal vectors**
+
+Use current-path legs:
+
+```text
+outbound service  100s
+empty reversal      0s
+return service    200s
+U-turn reversal      2s
+cycle              302s
 ```
 
-Then set `RoadFlow` to `8` at the outbound step position. Existing capacity `4` gives `2.0x`, so the same route becomes:
+Assert `302s` at free flow. Set flow `8` on the outbound point (existing capacity `4`) and assert `402s`.
 
-```rust
-assert_eq!(metrics(...).unwrap().round_trip_seconds, 402.0);
-```
+This locks empty-reversal skip behavior and timed U-turn behavior without a shuttle-specific algorithm.
 
-This proves empty reversals contribute zero while U-turn reversal steps participate in live timing. Add a second fixture only if needed to cover an existing multi-step roundabout reversal; do not create a shuttle-specific abstraction.
+- [ ] **Step 3: Add zero-fleet passenger eligibility tests**
 
-- [ ] **Step 3: Add zero-fleet + `AssignVehicle` passenger-routing tests**
+Construct an active connected bus route with `vehicle_ids = []` and assert passenger planning does not return it.
 
-In `transit_router.rs`:
+Then use the existing low-level `AssignVehicle` seam once and assert the same route becomes eligible. This proves `AssignVehicle` remains valid and `is_route_operational` stays structural.
 
-1. create an active connected bus route with `vehicle_ids = []`;
-2. assert `find_route_plan` does not return that bus line;
-3. dispatch or apply the existing `AssignVehicle` seam once;
-4. assert the route becomes passenger-service eligible.
-
-This locks the policy that `AssignVehicle` remains a valid low-level unspaced add even though the intended player setup uses headway + deployment.
-
-- [ ] **Step 4: Run the new tests and confirm failures**
+- [ ] **Step 4: Run tests and confirm missing service behavior**
 
 ```bash
 cargo test -p caelum-core --test bus_service --test transit_router
 ```
 
-Expected before implementation: missing `bus_service` API and zero-fleet bus still appears in `active_services`.
+Expected before implementation: missing module/metrics and zero-fleet route still participates.
 
-- [ ] **Step 5: Expose the live per-step timing seam unchanged**
+- [ ] **Step 5: Expose the exact live step timing helper**
 
-Make the existing private helper in `transit.rs` crate-visible:
+Change only visibility of `transit::vehicle_step_seconds` to `pub(crate)`.
 
-```rust
-pub(crate) fn vehicle_step_seconds(
-    flow: &RoadFlow,
-    mode: TransitMode,
-    step: TransitPathStepRef<'_>,
-) -> f64
-```
+Do not call `traffic::effective_road_path_seconds` for cycle math: empty synthetic paths have different stored-total semantics there.
 
-Do not route service-cycle math through `traffic::effective_road_path_seconds`: empty synthetic paths keep a stored total there, while live movement skips zero-step legs. `bus_service` must match live step semantics.
+- [ ] **Step 6: Implement cycle/required/nominal math**
 
-- [ ] **Step 6: Implement current-path round-trip and required/current headway**
-
-In `bus_service.rs`:
+Core walk:
 
 ```rust
 fn bus_round_trip_seconds(route: &Route, flow: &RoadFlow) -> Option<f64> {
@@ -366,19 +335,41 @@ fn bus_round_trip_seconds(route: &Route, flow: &RoadFlow) -> Option<f64> {
             }
         }
     }
-    (total > 0.0 && total.is_finite()).then_some(total)
+    (total.is_finite() && total > 0.0).then_some(total)
 }
 
-pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u32) -> usize {
-    ((round_trip_seconds / f64::from(target_headway_seconds)).ceil() as usize).max(1)
+pub(crate) fn required_fleet(round_trip_seconds: f64, target: u32) -> usize {
+    ((round_trip_seconds / f64::from(target)).ceil() as usize).max(1)
 }
 ```
 
-Do not inspect `last_valid_path` or `estimated_seconds`. `metrics` uses `route.vehicle_ids.len()` for assigned fleet and derives current headway only when assigned fleet is non-zero.
+`metrics` reads assigned count from `route.vehicle_ids.len()`, derives required only when target exists, and nominal only when assigned count is non-zero.
 
-- [ ] **Step 7: Gate passenger routing on actual bus fleet**
+- [ ] **Step 7: Publish metrics only on output snapshots**
 
-In `router::active_services`, keep the existing structural check and add only:
+Change `GameEngine::snapshot()` from a bare clone to:
+
+```rust
+pub fn snapshot(&self) -> GameSnapshot {
+    let mut snapshot = self.snapshot.clone();
+    bus_service::populate_snapshot_metrics(&mut snapshot);
+    snapshot
+}
+```
+
+`populate_snapshot_metrics` derives `RoadFlow` once and fills every bus route's `service_metrics` on the clone.
+
+Keep internal `self.snapshot` metrics `None`. Do not make commit/equality logic depend on presentation metrics.
+
+Add tests that prove:
+
+- `engine.snapshot()` returns expected `service_metrics`;
+- a forged direct/input metric is cleared by normalization;
+- `snapshot_for_save()` clears/omits `serviceMetrics` after its existing normalization pass.
+
+- [ ] **Step 8: Gate only bus passenger planning on fleet presence**
+
+In the bus branch of `router::active_services`:
 
 ```rust
 if route.vehicle_ids.is_empty() {
@@ -386,36 +377,42 @@ if route.vehicle_ids.is_empty() {
 }
 ```
 
-Do not change `is_route_operational`.
+Do not change Metro or `is_route_operational`.
 
-- [ ] **Step 8: Run focused tests**
+- [ ] **Step 9: Run focused timing/router/persistence regressions**
 
 ```bash
-cargo test -p caelum-core --test bus_service --test transit_router --test router_planning --test router_estimate_branches --test shuttle_service
+cargo test -p caelum-core --test bus_service --test transit_router --test router_planning --test router_estimate_branches --test shuttle_service --test persistence_snapshot --test persistence_determinism
 ```
 
-Expected: loop/shuttle current-path timing and passenger eligibility are deterministic.
+Expected: Rust is the single source of service numbers; zero-fleet buses are not passenger services.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add crates/caelum-core/src/bus_service.rs crates/caelum-core/src/lib.rs crates/caelum-core/src/transit.rs crates/caelum-core/src/router.rs crates/caelum-core/tests/bus_service.rs crates/caelum-core/tests/transit_router.rs
-git commit -m "feat: derive bus service metrics"
+git add crates/caelum-core/src crates/caelum-core/tests
+git commit -m "feat: derive bus service metrics in core"
 ```
 
 ---
 
-### Task 3: Add authoritative headway setting and atomic deterministic initial deployment
+### Task 3: Add replacement deployment flow, then make bus creation fleet-free
+
+This task intentionally owns **both sides of the behavior break**. Do not remove the implicit first bus in an earlier commit and leave the suite/service fixtures without a replacement startup path.
 
 **Files:**
 - Modify: `crates/caelum-core/src/intent.rs`
 - Modify: `crates/caelum-core/src/engine.rs`
 - Modify: `crates/caelum-core/src/rejection.rs`
 - Modify: `crates/caelum-core/src/bus_service.rs`
+- Modify: `crates/caelum-core/src/route_editor.rs`
+- Modify: `crates/caelum-core/src/preview.rs`
 - Modify: `crates/caelum-core/tests/bus_service.rs`
+- Modify: `crates/caelum-core/tests/route_editing.rs`
 - Modify: `crates/caelum-core/tests/economy_cost_policy.rs`
-- Modify: `crates/caelum-core/tests/engine_smoke.rs`
-- Modify: `crates/caelum-core/tests/route_editing.rs` if the existing structural-edit rebase regression belongs there instead of `bus_service.rs`
+- Modify: `crates/caelum-core/tests/golden_sequences.rs`
+- Modify: every bus-service fixture found by the inventory below
+- Modify: `tests/e2e/routes.spec.ts`
 
 **Interfaces:**
 
@@ -424,7 +421,7 @@ SetBusTargetHeadway { route_id: String, target_headway_seconds: u32 }
 DeployBusFleet { route_id: String }
 ```
 
-Produces rejection codes:
+Rejections:
 
 ```text
 InvalidHeadway
@@ -432,62 +429,96 @@ HeadwayNotSet
 FleetAlreadyAssigned
 ```
 
-Deployment reuses `BUS_COST`, `CostPolicy`, `initial_vehicle`, and Task 2 metrics.
+- [ ] **Step 1: Inventory the real bus-creation blast radius before editing behavior**
 
-- [ ] **Step 1: Add failing headway/dispatch/cost tests**
+Run:
+
+```bash
+rg -l 'GameIntent::CreateRoute|create_route\(' crates/caelum-core/tests
+rg -n 'vehicle_ids|transit\.vehicles|AssignVehicle' crates/caelum-core/tests
+rg -n 'finishing a bus route assigns a vehicle|vehicleIds' tests/e2e
+```
+
+At minimum review these current service-heavy files:
+
+```text
+transit_build.rs
+trip_lifecycle.rs
+transit_router.rs
+route_resilience.rs
+route_editing.rs
+golden_sequences.rs
+shuttle_service.rs
+router_planning.rs
+engine_smoke.rs
+route_preview.rs
+dual_road_routing.rs
+persistence_* fixtures/tests
+areas_buildings.rs
+```
+
+Classify each fixture:
+
+- **needs live bus service** -> explicitly call existing `AssignVehicle` after route creation;
+- **tests geometry/editor/lifecycle without movement** -> keep the new zero-fleet route;
+- **tests HPA-624 deployment behavior** -> use Set target + Deploy, not `AssignVehicle`.
+
+Do not weaken assertions merely to accommodate the new default.
+
+- [ ] **Step 2: Write failing target validation/setup-only tests**
 
 Assert:
 
 ```rust
-let before_revision = route.revision;
-let result = engine.dispatch(GameIntent::SetBusTargetHeadway {
-    route_id: route.id.clone(),
-    target_headway_seconds: 300,
-});
-assert!(result.applied);
-assert_eq!(result.snapshot.transit.routes[0].target_headway_seconds, Some(300));
-assert_eq!(result.snapshot.transit.routes[0].revision, before_revision);
+SetBusTargetHeadway { target_headway_seconds: 60 } // applies
+SetBusTargetHeadway { target_headway_seconds: 59 } // InvalidHeadway
 ```
 
-Also assert:
+Also prove:
 
-- headway `0` -> `InvalidHeadway`;
-- deploy without target -> `HeadwayNotSet`;
-- Standard budget exactly `required * BUS_COST` reaches zero;
-- one unit below -> `InsufficientBudget` and zero vehicles added;
-- Creative deploys same count with budget unchanged;
-- second deploy -> `FleetAlreadyAssigned` with unchanged budget/fleet.
+- target set does not bump structural `revision`;
+- same target is unchanged/no-op;
+- after any vehicle is assigned, changing target rejects `FleetAlreadyAssigned`.
 
-- [ ] **Step 2: Add failing unequal-loop spacing test**
+- [ ] **Step 3: Write failing deployment/cost tests**
 
-Use a 400-second cycle with `N = 2`. Vehicle 0 starts at offset `0`; vehicle 1 resolves at offset `200` inside the longer leg rather than merely at a stop boundary. Assert stable vehicle IDs/cursors from two identical source snapshots.
+Cover:
 
-- [ ] **Step 3: Add failing shuttle spacing test**
+- no target -> `HeadwayNotSet`;
+- inactive/broken route -> existing route rejection;
+- exact Standard budget `required * BUS_COST` -> full fleet, budget reaches expected value;
+- one unit short -> `InsufficientBudget`, zero buses added;
+- Creative -> same fleet count, budget unchanged;
+- second deploy -> `FleetAlreadyAssigned`;
+- checked conversion/multiplication is used before cost authorization.
 
-Reuse Task 2's exact 302-second shuttle vector. For `N = 2`, vehicle 1 offset is `151s`:
+- [ ] **Step 4: Write deterministic placement tests**
+
+Unequal loop: use a 400s cycle and `N=2`; second bus must land at offset `200s` inside the long step, not by stop/leg index.
+
+Shuttle: reuse the `302s` vector and `N=2`:
 
 ```text
-151 - 100 outbound - 0 empty reversal = 51s into the 200s return step
-stepProgress = 51 / 200 = 0.255
+offset = 151s
+151 - 100 - 0 = 51s into 200s return step
+step_progress = 0.255
 ```
 
-Assert the second vehicle lands on the return service leg at `step_progress == 0.255` (within the repository's normal float tolerance), not on the empty reversal and not at a stop-index approximation.
+Assert stable IDs/cursors from identical source snapshots.
 
-- [ ] **Step 4: Add a structural-edit policy regression**
+- [ ] **Step 5: Write structural-edit preservation regression**
 
-Create/deploy a multi-bus route, perform an existing structural route edit, and assert the normal `rebase_edited_route_vehicles_and_riders` outcome still occurs: vehicles are parked/rebased with valid reset cursors. Do **not** assert preservation of deployment spacing.
+Deploy multiple buses, make an existing structural route edit, and assert:
 
-Also assert the edit does not add/delete fleet and does not invoke automatic headway re-spacing. Assigned/required mismatch after the edit is allowed.
+- current `rebase_edited_route_vehicles_and_riders` still parks/rebases cursors safely;
+- vehicle count is unchanged;
+- no deployment re-spacing runs;
+- target stays persisted;
+- derived nominal headway may change.
 
-- [ ] **Step 5: Run focused tests and confirm missing behavior**
+Do not assert preservation of initial spacing after edit.
 
-```bash
-cargo test -p caelum-core --test bus_service --test economy_cost_policy --test engine_smoke --test route_editing
-```
-
-Expected before implementation: missing intents/rejections/deployment.
-
-- [ ] **Step 6: Implement headway mutation**
+- [ ] **Step 6: Implement target mutation**
 
 ```rust
 pub(crate) fn set_target_headway(
@@ -497,11 +528,19 @@ pub(crate) fn set_target_headway(
 ) -> GameplayResult<GameSnapshot>
 ```
 
-Reject zero with `InvalidHeadway`; reject non-bus IDs with `RouteNotFound`; clone once; set the field; return unchanged when identical. Do not touch route revision, fleet, or route-edit rebase behavior.
+Rules:
 
-- [ ] **Step 7: Implement a pure time-offset-to-cursor helper**
+```text
+route exists
+vehicle_ids empty
+headway >= MIN_BUS_HEADWAY_SECONDS (60)
+```
 
-Local shape:
+Reject `<60` with `InvalidHeadway`; reject already-running fleet with `FleetAlreadyAssigned`; do not bump route revision or alter fleet.
+
+- [ ] **Step 7: Implement time-offset cursor resolution and atomic deployment**
+
+Local cursor:
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -512,174 +551,194 @@ struct ServiceCursor {
 }
 ```
 
-Walk `current_path` steps in itinerary order. For each effective duration `d` from `vehicle_step_seconds`:
+Walk current path steps in itinerary order using `vehicle_step_seconds`:
 
 ```text
 if d <= 0: skip
 if remaining < d:
     progress = remaining / d
-    return current cursor
+    return cursor
 remaining -= d
 ```
 
-Zero-step legs naturally contribute nothing. Do not use `estimated_seconds`, `last_valid_path`, stop count, or leg count.
+Deployment order:
 
-- [ ] **Step 8: Implement atomic initial deployment**
+1. find bus route;
+2. require active + connected;
+3. require target;
+4. require zero fleet;
+5. derive one `RoadFlow`;
+6. derive cycle/required fleet once;
+7. checked-convert/multiply `required * BUS_COST`;
+8. authorize full cost before mutation;
+9. clone snapshot;
+10. create buses in stable ID order with `initial_vehicle` against growing candidate;
+11. set each cursor to `cycle * i / N`;
+12. append route IDs + vehicles;
+13. apply cost once.
 
-In `deploy_initial_fleet`:
+Do not loop through `assign_vehicle_costed` and do not implement top-up.
 
-1. locate the bus route;
-2. require `active` and all connected legs;
-3. require positive target headway;
-4. require `vehicle_ids.is_empty()`;
-5. derive `RoadFlow` once from the source snapshot;
-6. derive current round trip and `required_fleet` once;
-7. compute cost with checked integer conversion/multiplication and quote `required_fleet * BUS_COST` before mutation;
-8. clone the snapshot;
-9. create buses in stable index order with `initial_vehicle` against the growing candidate;
-10. set each cursor from `round_trip * i / required_fleet`;
-11. append IDs to the route and vehicles to the network;
-12. apply authorized cost once;
-13. return the candidate.
+- [ ] **Step 8: Add intent/rejection dispatch without changing `AssignVehicle`**
 
-Do not call `assign_vehicle_costed` in a loop and do not partially deploy affordable buses.
+Extend `GameIntent` and `GameEngine::dispatch` using the existing mutation channel.
 
-- [ ] **Step 9: Preserve existing `AssignVehicle` unchanged**
+Keep `GameIntent::AssignVehicle` bus behavior unchanged. No new `GameBackend` method.
 
-Do not delete or reject the bus variant. Its policy remains:
+- [ ] **Step 9: Only now remove the implicit bus from creation/preview**
 
-- low-level engine/test add;
-- unspaced cursor;
-- immediately makes a valid bus route passenger-service eligible;
-- makes later `DeployBusFleet` fail `FleetAlreadyAssigned`;
-- not exposed as a player plus-one control by HPA-624.
+Change route insertion to accept explicit vehicle IDs:
 
-Run existing `route_resilience` coverage because its fixtures already dispatch `AssignVehicle` after creating a bus route.
-
-- [ ] **Step 10: Dispatch the new intents through `GameEngine`**
-
-Add direct match arms following existing gameplay mutation handling. Do not add a new host method or command channel.
-
-- [ ] **Step 11: Prove live movement determinism after deployment**
-
-Clone one deployed snapshot, advance one copy with a coarse tick and the other with equivalent fine ticks, then compare bus cursor state. Use the real HPA-622 road-flow timing path.
-
-Run:
-
-```bash
-cargo test -p caelum-core --test bus_service --test economy_cost_policy --test engine_smoke --test route_editing --test route_resilience --test golden_sequences --test shuttle_service
+```rust
+fn insert_route(
+    snapshot: &mut GameSnapshot,
+    mode: TransitMode,
+    route_id: String,
+    pattern: ServicePattern,
+    waypoint_ids: Vec<String>,
+    legs: Vec<RouteLegPath>,
+    vehicle_ids: Vec<String>,
+) -> GameplayResult<()>;
 ```
 
-Expected: PASS.
+Creation policy:
 
-- [ ] **Step 12: Commit**
+```text
+Bus   -> vehicle_ids [], no vehicle push, nominal creation vehicle cost 0
+Metro -> existing one initial vehicle + existing cost
+```
+
+Preview uses the same mode-specific creation cost:
+
+```rust
+let initial_vehicle_cost = if request.route_id.is_none() && request.mode == TransitMode::Metro {
+    transit::vehicle_cost(TransitMode::Metro)
+} else {
+    0
+};
+```
+
+Do not alter `update_route`'s rebase call.
+
+- [ ] **Step 10: Migrate every service-dependent Rust fixture in the same task**
+
+Apply the Step-1 classification. Existing tests that simply need the pre-HPA-624 “route is running” fixture should explicitly dispatch:
+
+```rust
+GameIntent::AssignVehicle {
+    mode: "bus".to_string(),
+    line_id: route_id.to_string(),
+}
+```
+
+Do not convert ordinary resilience/router fixtures to Deploy unless they are testing service setup itself.
+
+- [ ] **Step 11: Re-point the existing route E2E regression immediately**
+
+In `tests/e2e/routes.spec.ts`, replace the old guard:
+
+```text
+"finishing a bus route assigns a vehicle and runs live transit"
+```
+
+with a fleet-free creation guard that proves:
+
+```text
+Save bus route
+route exists
+vehicleIds == []
+transit.vehicles has no bus for that route
+Lines row reports No fleet once Task 4/5 UI exists; before that, state assertion is sufficient
+```
+
+Remove the old comment that protects the dropped `assignVehicle` step. The actual Set -> Deploy -> running-service E2E is Task 6.
+
+- [ ] **Step 12: Put deployed-fleet granularity coverage beside the existing invariant**
+
+Add the coarse-vs-fine deployed bus case in `crates/caelum-core/tests/golden_sequences.rs`, next to existing granularity-independent vehicle goldens.
+
+Do not duplicate the same invariant in `bus_service.rs` tests.
+
+- [ ] **Step 13: Run the full core suite now, not at the end**
 
 ```bash
-git add crates/caelum-core/src crates/caelum-core/tests
-git commit -m "feat: deploy bus fleet from target headway"
+cargo test -p caelum-core
+```
+
+Then run the focused route E2E regression:
+
+```bash
+bun run test:e2e -- tests/e2e/routes.spec.ts
+```
+
+Expected: no hidden implicit-vehicle assumptions remain in core; route creation is fleet-free and Metro still creates its first vehicle.
+
+- [ ] **Step 14: Commit**
+
+```bash
+git add crates/caelum-core tests/e2e/routes.spec.ts
+git commit -m "feat: start bus service from headway"
 ```
 
 ---
 
-### Task 4: Port current-path service metrics to TypeScript and wire runtime commands
+### Task 4: Wire Rust-derived service metrics through runtime selectors
+
+There is **no** `src/domain/busService.ts` and no TypeScript congestion multiplier in this task.
 
 **Files:**
-- Create: `src/domain/busService.ts`
-- Modify: `src/domain/traffic.ts`
-- Modify: `src/domain/types.ts`
+- Modify: `src/domain/types.ts` rejection additions if not already present
 - Modify: `src/runtime/backend/types.ts`
 - Modify: `src/runtime/types.ts`
 - Modify: `src/runtime/createGameRuntime.ts`
 - Modify: `src/runtime/runtimeSelectors.ts`
 - Modify: `src/runtime/rejectionMessages.ts`
-- Create or modify: focused `src/domain/busService.ts` unit test under the existing runtime/ui Vitest layout
 - Modify: `tests/runtime/runtimeSelectors.test.ts`
 - Modify: `tests/runtime/gameRuntime.test.ts`
+- Modify: `tests/runtime/snapshotView.test.ts` if raw `serviceMetrics` normalization needs coverage
 
 **Interfaces:**
-
-```ts
-export interface BusServiceMetrics {
-  roundTripSeconds: number;
-  targetHeadwaySeconds: number | null;
-  assignedFleet: number;
-  requiredFleet: number | null;
-  currentHeadwaySeconds: number | null;
-}
-
-export function selectBusServiceMetrics(
-  state: GameState,
-  route: Route,
-): BusServiceMetrics | null;
-```
-
-Runtime controller additions:
 
 ```ts
 setBusTargetHeadway(routeId: string, targetHeadwaySeconds: number): RuntimeCommandResult;
 deployBusFleet(routeId: string): RuntimeCommandResult;
 ```
 
-- [ ] **Step 1: Write failing cross-language-equivalent metric vectors**
+Route row consumes Rust-derived:
 
-Use the same values as Rust, not approximate alternatives:
+```ts
+route.serviceMetrics?.requiredFleet
+route.serviceMetrics?.nominalHeadwaySeconds
+route.serviceMetrics?.assignedFleet
+```
+
+- [ ] **Step 1: Write failing runtime/selector tests**
+
+Cover:
+
+- active connected bus + zero assigned -> `status.primary === "noFleet"`;
+- row uses supplied Rust `serviceMetrics` verbatim rather than recomputing path timing;
+- pre-deployment target + `requiredFleet` is available to UI state;
+- post-deployment nominal + assigned fleet is available;
+- Metro row has no bus service state.
+
+Add one deliberate fixture where route path timing would disagree with supplied `serviceMetrics`; assert selector displays the supplied Rust values. This protects against accidentally reintroducing TS timing math.
+
+- [ ] **Step 2: Re-point stale unaffordable-route selector coverage to Metro**
+
+Current selector coverage that expects:
 
 ```text
-600 / target 300 -> required 2
-601 / target 300 -> required 3
-shuttle: 100 + 0 + 200 + 2 = 302
-shuttle with flow 8 on 100s outbound point -> 200 + 0 + 200 + 2 = 402
+Need $8,000.
 ```
 
-Add a fixture where `estimatedSeconds` and/or `lastValidPath` deliberately disagree with `currentPath`; assert the helper still returns the current-path result.
+from a bus draft becomes unreachable after bus creation cost becomes zero. Keep the affordability behavior test, but construct a Metro draft and expect the current Metro cost instead.
 
-Add zero-fleet expectation `currentHeadwaySeconds: null`.
+Do not retain a stub-only “unaffordable bus creation” scenario.
 
-- [ ] **Step 2: Run focused TS tests**
+- [ ] **Step 3: Extend backend/runtime intent types**
 
-```bash
-bun run test:unit -- tests/runtime/runtimeSelectors.test.ts tests/runtime/gameRuntime.test.ts
-```
-
-Also run the new bus-service helper test path explicitly if it is not selected by those files. Expected before implementation: missing helper/field/controller commands.
-
-- [ ] **Step 3: Export the existing TypeScript congestion multiplier semantics**
-
-```ts
-export function congestionMultiplier(flow: number): number {
-  return Math.min(
-    MAX_CONGESTION_MULTIPLIER,
-    Math.max(1, flow / ROAD_FLOW_CAPACITY),
-  );
-}
-```
-
-Do not add new traffic tuning values.
-
-- [ ] **Step 4: Implement `selectBusServiceMetrics` as a port of live step timing**
-
-Build a point->flow lookup once from `selectTrafficFlow(state)`. For every route leg:
-
-```ts
-const path = leg.currentPath;
-if (path === null) return null;
-
-for (const step of path.steps) {
-  const seconds =
-    path.kind === "road"
-      ? step.travelSeconds * congestionMultiplier(flowAt(step.position))
-      : step.travelSeconds;
-  if (seconds > 0) roundTripSeconds += seconds;
-}
-```
-
-For this bus-only helper, route paths should be road paths; keep the code panic-free if malformed data supplies another path kind, but do not fall back to `lastValidPath`, `estimatedSeconds`, or stored empty-path totals.
-
-Compute required/current headway with the exact same formulas as Rust. This file must not mutate state or dispatch intents.
-
-- [ ] **Step 5: Extend runtime/backend contracts**
-
-Add intent variants:
+Add:
 
 ```ts
 | {
@@ -690,7 +749,7 @@ Add intent variants:
 | { type: "deployBusFleet"; routeId: string }
 ```
 
-Add rejection codes:
+Add rejection strings:
 
 ```text
 invalidHeadway
@@ -698,13 +757,11 @@ headwayNotSet
 fleetAlreadyAssigned
 ```
 
-Add `ShellBusServiceState` and optional/null bus-service state to route rows; Metro rows use `null`. Add `noFleet` to `RouteServiceStatus.primary`.
+No new `GameBackend` method: both use `dispatch`.
 
-No new `GameBackend` method is required because both mutations go through `dispatch`.
+- [ ] **Step 4: Add runtime controller methods through existing serialized dispatch**
 
-- [ ] **Step 6: Wire controller methods through the existing serialized dispatch path**
-
-Follow existing route mutation methods:
+Follow the current route mutation pattern:
 
 ```ts
 setBusTargetHeadway(routeId, targetHeadwaySeconds) {
@@ -720,9 +777,9 @@ deployBusFleet(routeId) {
 },
 ```
 
-Use the actual helper name in `createGameRuntime.ts`; do not create a parallel queue or optimistic local mutation.
+Use the actual existing dispatch helper name in `createGameRuntime.ts`. No optimistic local mutation or second queue.
 
-- [ ] **Step 7: Derive row status/service metrics and rejection copy**
+- [ ] **Step 5: Derive only presentation state**
 
 Status precedence:
 
@@ -730,26 +787,40 @@ Status precedence:
 broken -> paused -> noFleet(bus only) -> running
 ```
 
-Messages:
+Selector maps route-owned Rust values into a small row shape, for example:
 
-```text
-invalidHeadway -> "Headway must be greater than zero."
-headwayNotSet -> "Set a target headway before deploying buses."
-fleetAlreadyAssigned -> "This route already has its initial fleet."
+```ts
+interface ShellBusServiceState {
+  targetHeadwaySeconds: number | null;
+  roundTripSeconds: number | null;
+  assignedFleet: number;
+  requiredFleet: number | null;
+  nominalHeadwaySeconds: number | null;
+}
 ```
 
-Budget rejection continues through existing copy.
+No route-leg walk, flow lookup, congestion multiplier, or required-fleet formula exists in TypeScript.
 
-- [ ] **Step 8: Run focused runtime tests and type checking**
+- [ ] **Step 6: Add concise rejection copy**
+
+```text
+invalidHeadway -> "Headway must be at least 1 minute."
+headwayNotSet -> "Set a target headway before deploying buses."
+fleetAlreadyAssigned -> "This route already has a bus fleet."
+```
+
+Existing budget copy handles unaffordable deployment.
+
+- [ ] **Step 7: Run focused runtime tests and type checking**
 
 ```bash
-bun run test:unit -- tests/runtime/runtimeSelectors.test.ts tests/runtime/gameRuntime.test.ts
+bun run test:unit -- tests/runtime/runtimeSelectors.test.ts tests/runtime/gameRuntime.test.ts tests/runtime/snapshotView.test.ts
 bun run check
 ```
 
-Run the bus-service helper test explicitly and require the 302/402 shuttle vectors to pass before proceeding.
+Expected: UI state is a pure projection of Rust metrics.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/domain src/runtime tests/runtime
@@ -758,7 +829,7 @@ git commit -m "feat: expose bus service controls to runtime"
 
 ---
 
-### Task 5: Add the compact Lines-panel player setup loop
+### Task 5: Add the compact pre-deployment Lines-panel setup flow
 
 **Files:**
 - Modify: `src/components/hud/panels/LinesPanel.svelte`
@@ -768,59 +839,80 @@ git commit -m "feat: expose bus service controls to runtime"
 - Modify: `tests/ui/appShell.test.ts`
 
 **Interfaces:**
-- Consumes: `ShellRouteListItem.busService` from Task 4.
-- Consumes callbacks:
 
 ```ts
 onSetBusTargetHeadway(routeId: string, targetHeadwaySeconds: number): void;
 onDeployBusFleet(routeId: string): void;
 ```
 
-- [ ] **Step 1: Write failing LinesPanel tests**
+- [ ] **Step 1: Write failing pre-deployment UI tests**
 
-For a zero-fleet bus row, assert:
+For a zero-fleet bus with Rust-derived `requiredFleet = 3`, assert:
 
 ```text
 No fleet
 Target
-Current
-Fleet
-0 / <required>
+Required
+3 buses
 Set
-Deploy <required> buses
+Deploy 3 buses
 ```
 
-Entering `6` minutes and pressing Set invokes:
+Enter `6` minutes and Set; assert:
 
 ```ts
 onSetBusTargetHeadway(route.id, 360)
 ```
 
-Deploy invokes `onDeployBusFleet(route.id)`.
+Deploy asserts:
 
-Assert Metro rows render none of these bus-service controls. Also assert no player-facing `Assign vehicle`/`Add bus` plus-one control appears; HPA-624's player path is Set -> Deploy only.
+```ts
+onDeployBusFleet(route.id)
+```
 
-- [ ] **Step 2: Run UI tests and confirm failure**
+Input properties must include whole-minute guardrails (`min=1`, `step=1`).
+
+- [ ] **Step 2: Write failing post-deployment/Metro UI tests**
+
+For a bus with assigned fleet:
+
+```text
+Target 6 min
+Nominal 5.8 min
+Fleet 3
+```
+
+Assert there is **no** editable headway input, Deploy button, `assigned / required` control, or plus-one AssignVehicle button after fleet exists.
+
+Assert Metro rows render none of the bus service block.
+
+- [ ] **Step 3: Run focused UI tests**
 
 ```bash
 bun run test:unit -- tests/ui/linesPanel.test.ts tests/ui/appShell.test.ts
 ```
 
-Expected before implementation: missing controls/callbacks.
+Expected before implementation: missing service block/callbacks.
 
-- [ ] **Step 3: Add local headway-minute draft state**
+- [ ] **Step 4: Add route-keyed headway minute draft only for zero-fleet routes**
 
-Follow the existing route-name draft pattern:
+Reuse the route-name local draft style:
 
 ```ts
 let headwayMinuteDrafts = $state<Record<string, string>>({});
 ```
 
-Display canonical target minutes when no local draft exists. On Set, parse a finite positive number, convert with `Math.round(minutes * 60)`, and dispatch. Do not add global form state or a form library.
+Set input:
 
-- [ ] **Step 4: Render the service block inside the existing bus row**
+```html
+<input type="number" min="1" step="1" ... />
+```
 
-Use one local formatter:
+Parse a positive whole minute and dispatch `minutes * 60`. UI validation is convenience; Rust's 60s floor is authoritative.
+
+- [ ] **Step 5: Render Rust-derived values without transport math**
+
+Only formatting is allowed:
 
 ```ts
 function formatHeadway(seconds: number | null): string {
@@ -828,30 +920,19 @@ function formatHeadway(seconds: number | null): string {
 }
 ```
 
-Display `assigned / required` when required is available; show `—` before a target is set.
+Pre-deployment button label uses `requiredFleet` supplied by Rust. Do not calculate it in Svelte.
 
-Deploy enablement is presentation-only and requires:
+Post-deployment hides setup controls and shows Target/Nominal/Fleet only.
 
-```text
-bus row
-active
-not broken
-assignedFleet == 0
-requiredFleet != null
-requiredFleet > 0
-```
+- [ ] **Step 6: Pass callbacks from App.svelte**
 
-Backend remains authoritative if the snapshot changes before click.
+Follow existing rename/recolor/toggle route actions. No new context/store.
 
-- [ ] **Step 5: Pass callbacks from App.svelte**
+- [ ] **Step 7: Add minimal CSS only**
 
-Follow existing route actions; do not introduce a new context/store.
+Reuse route-row button/input tokens. No new component hierarchy or operations screen.
 
-- [ ] **Step 6: Add minimal CSS**
-
-Reuse existing route-row/button/input tokens. Add only layout/typography required for the compact service block.
-
-- [ ] **Step 7: Run UI tests, check, and lint**
+- [ ] **Step 8: Run UI checks**
 
 ```bash
 bun run test:unit -- tests/ui/linesPanel.test.ts tests/ui/appShell.test.ts
@@ -861,52 +942,54 @@ bun run lint:svelte
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/App.svelte src/components/hud/panels/LinesPanel.svelte src/styles.css tests/ui
-git commit -m "feat: control bus headway from lines panel"
+git commit -m "feat: configure bus service from lines panel"
 ```
 
 ---
 
-### Task 6: Prove the player-visible loop and run regression verification
+### Task 6: Prove the real setup loop and run full regression verification
 
 **Files:**
-- Modify: `tests/e2e/smoke.spec.ts`
+- Modify: `tests/e2e/routes.spec.ts` (extend/add the player-visible deployment flow)
+- Modify other files only for verified regressions discovered by full-suite execution
 
 **Interfaces:**
-- Verifies the complete HPA-624 player path through the real browser runtime.
-- Does not own schema documentation; all active v6 -> v7 wording belongs to Task 1.
+- Verifies the browser/WASM player path using the same shared Svelte runtime as desktop.
+- Owns verification, not schema cleanup or hidden fixture migration.
 
-- [ ] **Step 1: Add one focused Playwright smoke**
+- [ ] **Step 1: Add/extend one real bus-service E2E**
 
-Reuse existing sandbox/build/route helpers:
+Reuse the existing route setup in `routes.spec.ts`:
 
 ```text
-open/create sandbox
-build/connect the minimum bus route fixture
+create/open sandbox
+build road + bus stops
 save bus route
-assert No fleet and Fleet 0 / — before target
-set whole-minute target headway
-assert required fleet is a positive integer
-click Deploy <N> buses
-assert Fleet N / N and Current is not —
-pause/resume
-assert clock advances after resume
+assert No fleet / zero vehicle IDs
+set target to a whole-minute value
+assert Required N uses the Rust-derived row value
+click Deploy N buses
+assert runtime route has N vehicleIds
+assert UI shows Target, Nominal, Fleet N and no setup controls
+Resume
+assert clock advances
 ```
 
-Do not wait for a passenger trip, inspect exact bus pixels, or manufacture traffic load in E2E.
+Do not wait for a commute, inspect vehicle pixels, or manufacture congestion in E2E. Timing correctness belongs to Rust tests.
 
-- [ ] **Step 2: Run focused E2E**
+- [ ] **Step 2: Run focused route E2E**
 
 ```bash
-bun run test:e2e -- tests/e2e/smoke.spec.ts
+bun run test:e2e -- tests/e2e/routes.spec.ts
 ```
 
-Expected: PASS.
+Expected: fleet-free creation plus Set -> Deploy -> running service works end-to-end.
 
-- [ ] **Step 3: Run complete Rust/TS verification**
+- [ ] **Step 3: Run complete Rust/TS/build-quality verification**
 
 ```bash
 cargo test --workspace
@@ -916,58 +999,65 @@ bun run format:check
 bun run lint
 ```
 
-Expected: all commands PASS. If generated WASM is stale, use the repository's normal `ensure-wasm`/pre-script flow; do not commit unrelated generated churn unless normal build tooling requires it.
+Expected: all pass.
 
-- [ ] **Step 4: Run full E2E once**
+- [ ] **Step 4: Run the full E2E suite once**
 
 ```bash
 bun run test:e2e
 ```
 
-Expected: PASS, including route editing, persistence, shuttle, traffic, and new headway/fleet smoke coverage.
+Expected: existing route editing, persistence, traffic, shuttle, and new service startup flows pass.
 
-- [ ] **Step 5: Final active-v7 inventory**
-
-Run:
+- [ ] **Step 5: Verify no active v6 leftovers**
 
 ```bash
 rg -n 'schema[- ]?v?6|schema.?6|cities-v6|caelum-city-saves-v6|SNAPSHOT_SCHEMA_VERSION.?=.?6' \
   crates src src-tauri tests docs/architecture.md
 ```
 
-Any remaining matches in active code/tests/architecture are Task-1 misses and must be fixed before completion. Historical specs/plans are intentionally excluded from this check.
+Any active match is a Task-1 miss. Historical specs/plans are intentionally outside this inventory.
 
-- [ ] **Step 6: Self-review against HPA-624 non-goals and clarified policies**
+- [ ] **Step 6: Verify scope stayed lean**
 
-Final diff must contain none of:
+Final diff must not contain:
 
 ```text
-Metro headway fields/intents/UI
-service-band arrays
-timetable/departure-history storage
-player-facing plus-one AssignVehicle control
-vehicle withdrawal/reassignment
-auto-resizing or headway re-spacing after route edits
+src/domain/busService.ts
+TypeScript congestion/service timing formula
+Metro headway/service fields or UI
+service bands/timetable/departure history
+post-deployment headway editing
+fleet top-up/withdrawal/reassignment
+auto-resize/re-spacing
 holding/bunching logic
-generic fleet/service manager classes
-migration/fallback readers
-new map-layer controls
+player plus-one AssignVehicle control
+generic fleet/service manager
+migration/fallback reader
+new route visibility layer
 ```
 
-Also verify the diff still **contains/preserves** the existing structural route-edit rebase and existing low-level `AssignVehicle` support.
+Also verify it still preserves:
 
-- [ ] **Step 7: Commit smoke coverage**
+```text
+existing structural route-edit rebase
+existing low-level AssignVehicle support
+Metro initial vehicle behavior
+```
+
+- [ ] **Step 7: Commit E2E/final regression fixes**
 
 ```bash
-git add tests/e2e/smoke.spec.ts
-git commit -m "test: cover bus headway fleet loop"
+git add tests/e2e/routes.spec.ts
+git commit -m "test: cover bus service startup loop"
 ```
 
 ## Plan self-review
 
-- **Spec coverage:** Tasks 1-6 cover v7 as one direct break, zero-vehicle bus creation, unchanged Metro creation, current-path congestion-aware round trip, loop + shuttle reversal semantics, required/current headway, zero-fleet passenger exclusion, headway persistence, atomic deployment, unequal-loop + shuttle time spacing, runtime/UI wiring, existing edit rebase, existing `AssignVehicle`, and one real sandbox smoke.
-- **Review-feedback closure:** Structural edit rebase is explicitly preserved; shuttle vectors cover empty and U-turn reversals; TypeScript is specified as an exact current-path step port; `AssignVehicle` remains off the player path but valid for core/tests; every active v6 assertion belongs to Task 1 rather than Task 6.
-- **YAGNI check:** No Metro service plan, multi-period schedule, vehicle resizing/withdrawal, holding/bunching, departure history, fleet inventory, generic operations abstraction, migration, or pre-release hardening is introduced.
-- **Type consistency:** Rust `target_headway_seconds`, `SetBusTargetHeadway`, and `DeployBusFleet` map to TS `targetHeadwaySeconds`, `setBusTargetHeadway`, and `deployBusFleet`.
-- **Timing consistency:** Rust and TypeScript both walk `current_path` steps only. The shared semantic vectors are `600/300 -> 2`, `601/300 -> 3`, shuttle `302s`, and congested shuttle `402s`.
-- **Authority check:** Rust alone mutates headway/fleet and charges cost. TypeScript only derives display metrics and dispatches intents.
+- **Review finding 1:** TypeScript timing port removed. Rust fills serialize-only `Route.serviceMetrics` on output snapshots; persistence clears/ignores it.
+- **Review finding 2:** Implicit bus removal moved to Task 3 beside the replacement deployment flow; fixture migration and full core suite happen there.
+- **Review finding 3:** UX concern accepted, but incremental top-up rejected as out of slice. Target is pre-deployment only; after deployment UI shows Target/Nominal/Fleet without an unreachable required-fleet control.
+- **Review finding 4:** `MIN_BUS_HEADWAY_SECONDS = 60`, backed by Rust and `min=1/step=1` whole-minute UI.
+- **Review finding 5:** `Nominal` replaces Current/Actual; deployed-fleet granularity lives in `golden_sequences.rs`; unaffordable creation selector coverage moves from bus to Metro.
+- **Authority:** Rust alone owns timing, required fleet, deployment count/cost, and placement. TypeScript normalizes/formats and dispatches.
+- **YAGNI:** No Metro service plan, repeated fleet management, scheduler, history, holding/bunching, or migration work enters HPA-624.
