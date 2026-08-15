@@ -98,6 +98,30 @@ fn valid_driving_trip_is_persistence_valid() {
 }
 
 #[test]
+fn restored_driving_trip_survives_tick_save_and_reload() {
+    let mut engine =
+        GameEngine::from_snapshot(valid_driving_snapshot()).expect("driving snapshot loads");
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let tick = engine.tick(1.0);
+    assert!(tick.applied, "running engine should advance the clock");
+
+    let saved = engine.snapshot_for_save();
+    let saved_trip = &saved.active_trips[0];
+    assert_eq!(saved_trip.status, TripStatus::Driving);
+    assert!(saved_trip.private_car_trip.is_some());
+
+    let reloaded = GameEngine::from_snapshot(saved).expect("ticked driving save reloads");
+    let reloaded_trip = &reloaded.snapshot().active_trips[0];
+    assert_eq!(reloaded_trip.status, TripStatus::Driving);
+    assert!(reloaded_trip.private_car_trip.is_some());
+}
+
+#[test]
 fn driving_trip_requires_a_private_car_payload() {
     let mut snapshot = valid_driving_snapshot();
     snapshot.active_trips[0].private_car_trip = None;

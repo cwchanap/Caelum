@@ -86,3 +86,33 @@ All commands were run from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-6
 
 - The requested old-schema grep still reports v5 strings in immutable historical planning documents under `docs/superpowers/plans/`; no active code, current fixture, or `docs/architecture.md` v5 contract remains.
 - Browser Playwright was not run because Task 1 specifies unit/check verification; browser persistence coverage remains represented by the existing unit suite and updated e2e fixture namespace.
+
+## Review fix: preserve Driving trips across ticks
+
+### Implementation summary
+
+- Added an early `TripStatus::Driving` guard in `crates/caelum-core/src/trips.rs::tick_trip`.
+- The guard leaves the restored trip, captured `privateCarTrip`, and planless state untouched until the dedicated private-car traffic lifecycle is implemented.
+- Added `restored_driving_trip_survives_tick_save_and_reload` to `crates/caelum-core/tests/persistence_construction.rs`, covering load → resume/tick → save → reload.
+
+### TDD evidence
+
+- RED: `rtk cargo test -p caelum-core --test persistence_construction restored_driving_trip_survives_tick_save_and_reload` failed as expected before the guard. The assertion observed `left: Walking`, `right: Driving` after the tick, proving transit planning had taken over the restored Driving trip.
+- GREEN: the same command passed with `1 passed, 18 filtered out` after the guard.
+
+### Focused verification
+
+All commands ran from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-622`.
+
+| Covering test/file or command | Outcome |
+| --- | --- |
+| `crates/caelum-core/tests/persistence_construction.rs`; `rtk cargo test -p caelum-core --test persistence_construction` | PASS; 19 tests |
+| `crates/caelum-core/tests/trip_lifecycle.rs`; `rtk cargo test -p caelum-core --test trip_lifecycle` | PASS; 39 tests |
+| `rtk cargo fmt --all --check` | PASS |
+| `rtk git diff --check` | PASS |
+
+### Self-review and concerns
+
+- The fix is a single status guard at the existing trip-tick boundary; it does not add traffic calculation, routing, bus timing, or overlay behavior.
+- The regression asserts both the status and payload before reload and after reload, so a future transit takeover or payload loss fails before an invalid save can be accepted.
+- No additional concerns beyond the historical v5 planning-document references and unrun Playwright coverage noted above.

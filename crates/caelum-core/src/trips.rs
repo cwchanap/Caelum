@@ -988,6 +988,13 @@ fn tick_trip(
         return unchanged(trip);
     }
 
+    // Private-car traffic owns this lifecycle once it lands. Until then, keep
+    // a restored driving trip and its captured path untouched by transit
+    // planning so the v6 snapshot remains persistence-valid across ticks.
+    if trip.status == TripStatus::Driving {
+        return unchanged(trip);
+    }
+
     if trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id) {
         return unchanged(trip);
     }
