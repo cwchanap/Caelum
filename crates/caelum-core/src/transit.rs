@@ -1914,6 +1914,8 @@ mod tests {
             revision: 0,
             legs: vec![leg],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         };
         snapshot.transit.routes = vec![route];
 

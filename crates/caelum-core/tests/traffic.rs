@@ -147,6 +147,8 @@ fn non_driving_trips_and_buses_do_not_contribute_to_flow() {
             failure_reason: None,
         }],
         path_broken: false,
+        target_headway_seconds: None,
+        service_metrics: None,
     });
     state.transit.vehicles.push(Vehicle {
         id: "vehicle-001".to_string(),

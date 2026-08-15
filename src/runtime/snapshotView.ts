@@ -45,6 +45,7 @@ export function normalizeRustSnapshot(
       ...snapshot.transit,
       routes: snapshot.transit.routes.map((route) => ({
         ...route,
+        serviceMetrics: route.serviceMetrics ?? null,
         legs: route.legs.map(normalizeRouteLegPath),
       })),
       metroLines: snapshot.transit.metroLines.map((line) => ({

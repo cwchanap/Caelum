@@ -856,6 +856,8 @@ mod tests {
             revision: 0,
             legs: Vec::new(),
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
 
         let riding_trip = ActiveTrip {
@@ -966,6 +968,8 @@ mod tests {
             revision: 0,
             legs: Vec::new(),
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
 
         // A metro passenger waiting at the shared coordinate. Their current
@@ -1070,6 +1074,8 @@ mod tests {
                 service_leg("stop-B", "stop-A"),
             ],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
 
         // A passenger waiting at the shared coordinate for stop-B
@@ -1193,6 +1199,8 @@ mod tests {
                 service_leg("stop-B", "stop-A"),
             ],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
 
         // A passenger waiting at the shared coordinate with null itinerary
@@ -1313,6 +1321,8 @@ mod tests {
                 service_leg("stop-B", "stop-A"),
             ],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
 
         // A passenger waiting at the shared coordinate with null itinerary
@@ -1474,6 +1484,8 @@ mod tests {
             revision: 0,
             legs: Vec::new(),
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }];
         // Bus parked at the shared old road coordinate.
         snapshot.transit.vehicles = vec![Vehicle {
@@ -1607,6 +1619,8 @@ mod tests {
                 service_leg("stop-002", "stop-001"),
             ],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         };
         snapshot.transit.routes = vec![route];
         snapshot.transit.vehicles = vec![Vehicle {
@@ -1698,6 +1712,8 @@ mod tests {
                 service_leg("stop-B", "stop-A"),
             ],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         };
         snapshot.transit.routes = vec![route];
         // Vehicle parked at the shared tile (4,5) for stop-B (itinerary_index=1).
@@ -1784,6 +1800,8 @@ mod tests {
             revision: 0,
             legs: vec![],
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         };
         snapshot.transit.routes = vec![route];
         // Bus parked at the legacy on-road stop position (4,5).

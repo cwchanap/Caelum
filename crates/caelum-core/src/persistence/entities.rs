@@ -108,6 +108,7 @@ pub(super) fn normalize_direct_fields(snapshot: &mut GameSnapshot, topology: &Ro
     *snapshot = stop_access::normalize_snapshot_stops(snapshot.clone());
     normalize_platform_values(snapshot);
     normalize_vehicle_capacities(snapshot);
+    normalize_route_service_metrics(snapshot);
     normalize_route_states(snapshot, topology);
 }
 
@@ -256,6 +257,16 @@ fn normalize_platform_values(snapshot: &mut GameSnapshot) {
 fn normalize_vehicle_capacities(snapshot: &mut GameSnapshot) {
     for vehicle in &mut snapshot.transit.vehicles {
         vehicle.capacity = vehicle_capacity(vehicle.mode);
+    }
+}
+
+/// Derived service metrics are runtime output, never persisted authority.
+/// Clearing here (in addition to serde's `skip_deserializing`) protects
+/// direct Rust `GameSnapshot` restoration from smuggling stale values into
+/// the authoritative engine snapshot.
+fn normalize_route_service_metrics(snapshot: &mut GameSnapshot) {
+    for route in &mut snapshot.transit.routes {
+        route.service_metrics = None;
     }
 }
 

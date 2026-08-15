@@ -40,7 +40,7 @@ test("creates a default city through real WASM and IndexedDB", async ({
   const stored = await page.evaluate(
     async ({ cityId, cityName }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("caelum-city-saves-v6", 6);
+        const request = indexedDB.open("caelum-city-saves-v7", 7);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });

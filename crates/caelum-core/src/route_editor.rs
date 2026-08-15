@@ -418,6 +418,8 @@ fn insert_route(
             revision: 0,
             legs,
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }),
         TransitMode::Metro => snapshot.transit.metro_lines.push(MetroLine {
             id: route_id,

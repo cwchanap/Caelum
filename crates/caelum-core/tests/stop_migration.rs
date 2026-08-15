@@ -59,7 +59,10 @@ fn old_schema_json_missing_starting_capital_is_rejected_before_full_deserializat
     let wire = serde_json::to_value(error).expect("persistence error serializes");
 
     assert_eq!(wire["code"], serde_json::json!("unsupportedSchema"));
-    assert_eq!(wire["context"]["expected"], serde_json::json!(6));
+    assert_eq!(
+        wire["context"]["expected"],
+        serde_json::json!(SNAPSHOT_SCHEMA_VERSION)
+    );
     assert_eq!(wire["context"]["actual"], serde_json::json!(3));
 }
 

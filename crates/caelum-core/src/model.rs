@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 6;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -251,7 +251,7 @@ pub struct GameSnapshot {
 /// (serde ignores the unknown remaining fields), compare against
 /// [`SNAPSHOT_SCHEMA_VERSION`], and reject with
 /// [`crate::persistence::PersistenceError::UnsupportedSchema`] on mismatch —
-/// so a snapshot from any non-v6 schema gets a typed persistence error instead
+/// so a snapshot from any non-v7 schema gets a typed persistence error instead
 /// of a generic missing-field serde error from the full deserialize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -849,6 +849,15 @@ pub struct Platform {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BusServiceMetrics {
+    pub round_trip_seconds: f64,
+    pub assigned_fleet: usize,
+    pub required_fleet: Option<usize>,
+    pub nominal_headway_seconds: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Route {
     pub id: String,
     pub name: String,
@@ -864,6 +873,15 @@ pub struct Route {
     pub legs: Vec<RouteLegPath>,
     #[serde(default)]
     pub path_broken: bool,
+    /// Persisted headway authority. Required-nullable on the wire: the key
+    /// must be present (no serde default), `null` while unset.
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub target_headway_seconds: Option<u32>,
+    /// Runtime-derived, non-authoritative service output. Serialize-only:
+    /// serde never deserializes it (incoming JSON cannot become authority)
+    /// and omits it while `None`.
+    #[serde(skip_deserializing, default, skip_serializing_if = "Option::is_none")]
+    pub service_metrics: Option<BusServiceMetrics>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

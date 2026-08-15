@@ -11,11 +11,11 @@ use caelum_core::building_catalog::{building_definition, BUILDINGS};
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip, RoadPathStep,
-    RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegPath,
-    RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim, Station,
-    Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
+    ActiveTrip, BusServiceMetrics, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading,
+    Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip,
+    RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
+    RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim,
+    Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
     TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
@@ -248,10 +248,83 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 7);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(6)
+        json!(7)
+    );
+}
+
+#[test]
+fn bus_route_target_headway_is_required_nullable_on_the_wire() {
+    let route = bus_route_fixture();
+    let route_json = serde_json::to_value(&route).unwrap();
+
+    // Required-nullable: the key is always present and serializes as null while unset.
+    assert!(route_json.get("targetHeadwaySeconds").is_some());
+    assert_eq!(route_json["targetHeadwaySeconds"], serde_json::Value::Null);
+
+    // Omitting the key must reject — no serde default for persisted authority.
+    let mut missing = route_json.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("targetHeadwaySeconds");
+    assert!(
+        serde_json::from_value::<Route>(missing).is_err(),
+        "schema-v7 Route must reject a missing targetHeadwaySeconds key"
+    );
+
+    // Explicit null deserializes to None.
+    let restored: Route = serde_json::from_value(route_json.clone()).unwrap();
+    assert_eq!(restored.target_headway_seconds, None);
+
+    // An explicit target round-trips.
+    let mut targeted = route_json;
+    targeted["targetHeadwaySeconds"] = json!(240);
+    let restored: Route = serde_json::from_value(targeted).unwrap();
+    assert_eq!(restored.target_headway_seconds, Some(240));
+}
+
+#[test]
+fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
+    let route = bus_route_fixture();
+    assert_eq!(route.service_metrics, None);
+
+    // Unset derived metrics are omitted from the wire entirely.
+    let route_json = serde_json::to_value(&route).unwrap();
+    assert!(route_json.get("serviceMetrics").is_none());
+
+    // A forged incoming serviceMetrics object cannot become authority: serde
+    // skips deserializing the field entirely.
+    let mut forged = route_json.clone();
+    forged["serviceMetrics"] = json!({
+        "roundTripSeconds": 1.0,
+        "assignedFleet": 99,
+        "requiredFleet": 42,
+        "nominalHeadwaySeconds": 30.0
+    });
+    let restored: Route = serde_json::from_value(forged).unwrap();
+    assert_eq!(restored.service_metrics, None);
+
+    // When Rust does derive metrics, they serialize as camelCase TS-parity keys.
+    let mut derived = route;
+    derived.service_metrics = Some(BusServiceMetrics {
+        round_trip_seconds: 600.0,
+        assigned_fleet: 2,
+        required_fleet: Some(3),
+        nominal_headway_seconds: Some(300.0),
+    });
+    let value = serde_json::to_value(&derived).unwrap();
+    assert_eq!(
+        value["serviceMetrics"],
+        json!({
+            "roundTripSeconds": 600.0,
+            "assignedFleet": 2,
+            "requiredFleet": 3,
+            "nominalHeadwaySeconds": 300.0
+        })
     );
 }
 
@@ -259,7 +332,7 @@ fn snapshot_carries_the_authoritative_schema_version() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(6));
+    assert_eq!(value["schemaVersion"], json!(7));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
