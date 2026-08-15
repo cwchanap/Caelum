@@ -2,32 +2,64 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let current worker commutes choose an aggregate private-car road path, derive deterministic road congestion from active car trips, apply the same road delay to buses, and expose one Traffic overlay.
+**Goal:** Let current worker commutes naturally choose walk/transit or an aggregate private-car road path, derive deterministic road congestion from active car trips, apply that live road delay to buses, and expose one Traffic overlay.
 
-**Architecture:** Reuse the compiled `RoadTopology`, existing `ActiveTrip` lifecycle, trip substep scheduler, precomputed transit paths, and current overlay UI. Add one functional `traffic.rs` module. A private car is an `ActiveTrip` payload with a captured `TransitPath::Road` and frozen arrival timestamp; there are no car entities, lane positions, or traffic caches. Buses keep the existing fractional path cursor but read the current congestion-adjusted duration at each substep.
+**Architecture:** Reuse compiled `RoadTopology`, the existing `ActiveTrip` lifecycle, trip substep scheduler, precomputed transit paths, and current overlay UI. Add one functional `traffic.rs` module. A private car remains an `ActiveTrip` payload with captured `TransitPath::Road` + frozen arrival timestamp. Road load is an ephemeral `RoadFlow` derived once per scheduling iteration/substep boundary and borrowed by router/transit timing; it is never persisted or stored on `GameEngine`.
 
 **Tech Stack:** Rust `caelum-core`, Serde, TypeScript, Svelte 5, Vitest, Playwright, Bun, Tauri.
 
 ## Global constraints
 
 - Implement only HPA-622, the first child of HPA-333.
-- `ROAD_FLOW_CAPACITY = 4` and `MAX_CONGESTION_MULTIPLIER = 3.0`.
+- `CAR_ACCESS_SECONDS = 120.0` is the only new private-car generalized cost constant.
+- Reuse the existing `20 s/tile` walk cost for car endpoint access; move that existing constant to a shared commute timing constant rather than duplicating it.
+- `ROAD_FLOW_CAPACITY = 4`, `MAX_CONGESTION_MULTIPLIER = 3.0`.
 - `congestion_multiplier(flow) = (flow / 4).clamp(1.0, 3.0)`; flow `0..=4` is free-flow, flow `5` is `1.25x`, flow `12+` is `3.0x`.
-- Derive road flow from active `Driving` trips; do not persist a traffic/load cache.
-- Count one driving trip once per unique `RoadPathStep.position`.
-- Buses do not contribute to flow in this slice.
-- Reuse `derive_stop_access_for_footprint` and `RoadTopology::find_path_between_access_tiles`.
-- Private car wins only when strictly faster than the existing walk/transit plan; exact ties keep walk/transit.
-- Keep `TransitMode = Walk | Bus | Metro`; do not add `Car`.
-- Cars store only path + frozen arrival timestamp; no car entity, path cursor, intermediate position, parking, or rendering.
-- Bus movement and `seconds_until_next_vehicle_stop` must use the same live effective road-step duration.
-- Bus `step_progress` remains a fraction of the current effective step duration; flow changes rescale remaining wall-clock time rather than preserving free-flow seconds.
-- Due commute departures stay at the existing top-of-loop spawn seam. Within `advance_tick_substep`, vehicles advance before active trips resolve.
-- A car arriving at a substep end still congests that substep's bus movement; the next boundary calculation sees reduced flow after the terminal trip is removed.
-- Metro/walking timing stays unchanged.
-- Schema v6 is a direct disposable-save break; no migration, compatibility defaults, or fallback namespace.
-- Add one Traffic overlay only, scaled to full intensity at flow `12`, not flow `4`.
-- Production paths added by this work remain panic-free; `expect` is permitted only in test fixture setup.
+- `RoadFlow` is ephemeral derived data, not `GameSnapshot`/`GameEngine` state.
+- One driving trip contributes once per unique `RoadPathStep.position` for the entire driving-trip lifetime.
+- `ROAD_FLOW_CAPACITY = 4` therefore means four overlapping active commute routes, not four physical cars currently on one tile.
+- Every event that changes flow must already be a substep boundary: car departure or car arrival/removal.
+- Buses do not contribute to `RoadFlow` in this slice; bus path-step movement is not currently a scheduler boundary.
+- Reuse `derive_stop_access_for_footprint` and `RoadTopology::find_path_between_access_tiles`; no second BFS/topology compile.
+- Private car wins only when strictly faster than current best walk/transit; exact ties keep walk/transit.
+- Keep `TransitMode = Walk | Bus | Metro`; no `Car` variant.
+- Cars have no entity, cursor, intermediate position, parking model, or sprite.
+- Private-car `arrival_time` is frozen at departure.
+- Bus `step_progress` remains a fraction of the current effective duration; flow changes between substeps rescale remaining wall-clock time.
+- Due commute departures remain at the current top-of-loop spawn seam; within a substep vehicles advance before active trips resolve.
+- A car arriving at a substep end still congests that substep; the next scheduling iteration rebuilds flow without it.
+- Schema v6 is a direct disposable-save break; no migration/default/fallback reader.
+- New persistence validation stays structural; runtime Driving handling stays panic-free.
+- Traffic overlay reaches full intensity at flow `12`, not free-flow threshold `4`.
+- Production paths added by this work remain panic-free; `expect` is only for test fixture construction.
+
+## Cost sanity contract
+
+Before behavior tests are written, lock the arithmetic that prevents car from becoming the universal winner.
+
+For one-tile access at each end and 12 road steps:
+
+```text
+walk-only = 12 * 20 = 240s
+car free-flow = 20 + 120 + (12 * 1.25) + 20 = 175s
+direct bus free-flow = 20 + 90 + (12 * 1.25) + 20 = 145s
+```
+
+Expected behavior:
+
+- short six-tile trip: walk can beat car;
+- long trip with no useful transit: car can beat walk;
+- good direct bus service: bus can beat car;
+- poor/detouring bus service: car can beat bus.
+
+Do not require a synthetic congestion-triggered mode-flip fixture. Router/bus tests must use topology-produced path times; separately prove that bus ETA responds to car flow.
+
+## Risks / blast radius
+
+1. **Mode-choice behavior changes existing commute fixtures.** `golden_sequences.rs`, `commute_requirements.rs`, `population.rs`, `objectives_metrics.rs`, and `trip_lifecycle.rs` already assert commute timing/arrival/wait behavior. Task 3 inventories them before changing expectations.
+2. **Road-flow derivation can become accidentally quadratic.** Never call `derive_road_flow` from a road-step helper. Derive once per scheduling iteration and pass `&RoadFlow` through router/transit paths.
+3. **Granularity independence depends on flow-change boundaries.** Car departure/arrival are boundaries; bus path-step completions are not. Do not later count buses in flow without revisiting scheduler boundaries.
+4. **Whole-path occupancy is deliberately coarse.** Capacity is an aggregate overlap threshold, not physical lane occupancy. Do not tune it as if it were vehicles-per-tile.
 
 ## File map
 
@@ -38,23 +70,23 @@
 - `tests/runtime/traffic.test.ts`
 
 **Modify**
-- Core: `crates/caelum-core/src/model.rs`, `lib.rs`, `engine.rs`, `trips.rs`, `router.rs`, `transit.rs`, `growth.rs`
+- Core: `crates/caelum-core/src/model.rs`, `lib.rs`, `commute.rs`, `engine.rs`, `trips.rs`, `router.rs`, `transit.rs`, `growth.rs`
 - Persistence: `crates/caelum-core/src/persistence/error.rs`, `persistence/trips.rs`, current persistence/wire tests
 - Saves: `src/persistence/indexedDbCitySaveStore.ts`, `src-tauri/src/city_store.rs`, current adapter tests
 - Frontend: `src/domain/types.ts`, `src/components/hud/panels/DataPanel.svelte`, `src/render/overlayRenderer.ts`, `citizenRenderer.ts`, `colors.ts`
-- Fixtures/tests: existing `tests/helpers`, `tests/fixtures`, runtime/render/save tests, `tests/e2e/smoke.spec.ts`
+- Fixtures/tests: current Rust commute/router/transit tests, `tests/helpers`, `tests/fixtures`, runtime/render/save tests, `tests/e2e/smoke.spec.ts`
 - Docs: `docs/architecture.md`
 
 ---
 
-### Task 1: Schema v6, driving-trip invariants, and payload-clear hygiene
+### Task 1: Schema v6, lean Driving validation, and payload-clear hygiene
 
-**Produces:** the minimal wire representation and persistence rules used by later tasks.
+**Produces:** the minimal wire shape and lifecycle safety used by later tasks.
 
 - [ ] **Step 1: Inventory schema and trip literals.**
 
 ```bash
-rg -n 'SNAPSHOT_SCHEMA_VERSION|schemaVersion[^\n]*5|caelum-city-saves-v5|DATABASE_VERSION = 5|cities-v5' crates src src-tauri tests docs
+rg -n 'SNAPSHOT_SCHEMA_VERSION|schemaVersion[^\n]*5|caelum-city-saves-v5|DATABASE_VERSION = 5|cities-v5|schema-v5' crates src src-tauri tests docs
 rg -n 'ActiveTrip \{' crates/caelum-core
 rg -n 'activeTrips:|routePlan:|patienceRemaining:' src tests
 ```
@@ -63,7 +95,7 @@ Every active-trip literal becomes explicit about the new nullable car field.
 
 - [ ] **Step 2: Add failing wire-format tests for one valid Driving trip.**
 
-Use a one-step road path and assert JSON contains:
+Use a non-empty one-step road path and assert JSON contains:
 
 ```text
 status: "driving"
@@ -71,27 +103,20 @@ privateCarTrip.path.kind: "road"
 privateCarTrip.arrivalTime: 101.25
 ```
 
-The Rust fixture shape is:
+- [ ] **Step 3: Add only structural persistence rejection tests.**
 
-```rust
-private_car_trip: Some(PrivateCarTrip {
-    path: road_path,
-    arrival_time: 101.25,
-}),
-```
-
-- [ ] **Step 3: Add only representative invalid persistence cases.**
+Cover representative failures:
 
 ```text
 Driving + privateCarTrip null            -> reject
-Driving + routePlan Some                 -> reject
-non-Driving + privateCarTrip Some        -> reject
-Driving listed in a transit vehicle      -> reject
-Driving + Track privateCarTrip path      -> reject
-negative/non-finite arrivalTime          -> reject
+Driving + empty/Track car path           -> reject
+Driving + negative/non-finite arrivalTime -> reject
+Driving + out-of-bounds captured point   -> reject
 ```
 
-Do not add a combinatorial hostile-save matrix.
+Do **not** add new rejection cases for Driving + route plan, nonzero current leg, or a dedicated Driving passenger-membership case.
+
+The existing generic `validate_vehicle_membership` remains unchanged; do not weaken or duplicate it.
 
 - [ ] **Step 4: Implement the direct model break.**
 
@@ -108,7 +133,7 @@ pub struct PrivateCarTrip {
 }
 ```
 
-Add `Driving` to `TripStatus` and add:
+Add `Driving` to `TripStatus` and:
 
 ```rust
 pub private_car_trip: Option<PrivateCarTrip>,
@@ -116,81 +141,53 @@ pub private_car_trip: Option<PrivateCarTrip>,
 
 Do not add `serde(default)`.
 
-Mirror in TypeScript:
+Mirror in TypeScript with `"driving"` and required nullable `privateCarTrip`.
 
-```ts
-export type CitizenStatus =
-  | "idle"
-  | "walking"
-  | "waiting"
-  | "riding"
-  | "driving"
-  | "arrived"
-  | "late"
-  | "unserved";
+- [ ] **Step 5: Implement lean Driving persistence handling.**
 
-export interface PrivateCarTrip {
-  path: TransitPath;
-  arrivalTime: number;
+`validate_route_plan` currently rejects any no-plan status except Idle/Unserved, so `validate_trips` needs a narrow Driving branch:
+
+```rust
+if trip.status == TripStatus::Driving {
+    validate_private_car_trip(snapshot, trip, entity.clone())?;
+} else {
+    validate_route_plan(snapshot, trip, entity.clone())?;
 }
-
-export interface ActiveTrip {
-  // existing fields stay required
-  privateCarTrip: PrivateCarTrip | null;
-}
+validate_vehicle_membership(indexes, trip, entity)?;
 ```
 
-Update every existing literal with `private_car_trip: None` / `privateCarTrip: null`.
+`validate_private_car_trip` checks only:
 
-- [ ] **Step 5: Add explicit persistence validation.**
+- car payload exists;
+- `TransitPath::Road` and non-empty steps;
+- finite non-negative `arrival_time`;
+- every captured step position is inside map bounds.
 
-Add `TripPrivateCar` and `TripPrivateCarArrivalTime` to `SnapshotField`.
+Do not require captured points to still be road tiles; an active car may outlive a road edit.
 
-For `Driving` require:
+Do not enforce `route_plan == None` / `current_leg_index == 0` in persistence. Those remain production construction invariants, while runtime Driving handling is defensive.
 
-- car payload present;
-- `route_plan == None`;
-- `current_leg_index == 0`;
-- non-empty `TransitPath::Road`;
-- finite non-negative arrival time;
-- every captured road-step point inside map bounds;
-- zero transit-vehicle passenger memberships.
+- [ ] **Step 6: Clear car payload at the three existing lifecycle exits.**
 
-For non-Driving, reject a non-null car payload.
-
-Do not require captured road-step tiles to still be current roads; a road may be bulldozed after departure and the captured path remains savable.
-
-- [ ] **Step 6: Centralize the three payload-clear exits without a new abstraction.**
-
-In `trips.rs`, change existing terminal helpers:
+In `trips.rs`:
 
 ```rust
 fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
     trip.private_car_trip = None;
-    // existing Arrived/Late scoring continues
+    // existing Arrived/Late logic
 }
 
 fn mark_unserved(mut trip: ActiveTrip) -> ActiveTrip {
     trip.private_car_trip = None;
-    // existing Unserved handling continues
+    // existing Unserved logic
 }
 ```
 
-In `transit.rs::cleanup_removed_destination_references`, the existing retarget reset becomes:
+In `transit.rs::cleanup_removed_destination_references`, add `trip.private_car_trip = None` beside the existing Idle/route-plan reset.
 
-```rust
-trip.status = TripStatus::Idle;
-trip.route_plan = None;
-trip.private_car_trip = None;
-trip.current_leg_index = 0;
-trip.destination = replacement;
-trip.deadline = trip_deadline_seconds(state.time);
-trip.patience_remaining = WAIT_PATIENCE_SECONDS;
-```
+Do not create a reset abstraction.
 
-Do not add car handling to line-invalidation paths that require a route plan referencing the changed line; Driving has no route plan and cannot enter those paths.
-
-- [ ] **Step 7: Move save namespaces and documentation directly to v6.**
+- [ ] **Step 7: Move save namespaces/documentation directly to v6.**
 
 Browser:
 
@@ -201,7 +198,7 @@ const DATABASE_VERSION = 6;
 
 Native directory: `cities-v6`.
 
-Update `GameEngine::from_snapshot`'s `schema-v5` documentation to `schema-v6` and update current adapter/schema fixtures. Do not read v5 as fallback.
+Update `GameEngine::from_snapshot` documentation from schema v5 to v6. No v5 fallback.
 
 - [ ] **Step 8: Verify Task 1 and commit.**
 
@@ -212,136 +209,185 @@ cargo test -p caelum-core --test transit_build --test trip_lifecycle
 bun run test:unit
 bun run check
 cargo clippy -p caelum-core --all-targets -- -D warnings
-
 rg -n 'caelum-city-saves-v5|cities-v5|SNAPSHOT_SCHEMA_VERSION: u16 = 5|schema-v5' crates src src-tauri tests docs
 
 git add crates/caelum-core src src-tauri tests docs
- git commit -m "refactor(core): add schema v6 private car trip state"
+git commit -m "refactor(core): add schema v6 private car trip state"
 ```
 
 ---
 
-### Task 2: Traffic core—access, car path, derived flow, congestion math
+### Task 2: Traffic core—shared walk cost, car generalized cost, RoadFlow, and routing
 
-**Produces:** the only traffic-domain module used by trip, router, transit, and tests.
+**Produces:** the only traffic-domain module and cost rules used by trip/router/transit code.
 
-- [ ] **Step 1: Write failing congestion and flow tests.**
+- [ ] **Step 1: Write failing pure cost/flow tests.**
+
+Lock constants:
 
 ```rust
+assert_eq!(commute::WALK_SECONDS_PER_TILE, 20.0);
+assert_eq!(CAR_ACCESS_SECONDS, 120.0);
 assert_eq!(congestion_multiplier(0), 1.0);
 assert_eq!(congestion_multiplier(4), 1.0);
 assert_eq!(congestion_multiplier(5), 1.25);
 assert_eq!(congestion_multiplier(6), 1.5);
 assert_eq!(congestion_multiplier(12), 3.0);
-assert_eq!(congestion_multiplier(u16::MAX), 3.0);
 ```
 
-Add fixtures proving:
+Add flow fixtures proving:
 
-- one Driving trip counts once per unique road point;
-- duplicate path positions inside one car still count once;
+- one Driving trip counts once per unique point;
+- repeated positions in one car path count once;
 - non-Driving trips count zero;
 - two cars sharing a point produce flow two;
 - buses do not contribute flow.
 
-- [ ] **Step 2: Implement aggregate flow without snapshot cache state.**
+- [ ] **Step 2: Move the existing walking cost to shared commute timing.**
 
-Create `traffic.rs` with:
+In `commute.rs`:
 
 ```rust
+pub const WALK_SECONDS_PER_TILE: f64 = 20.0;
+```
+
+Replace `trips.rs`'s private 20s constant and `router.rs`'s `* 20.0` literal with this existing shared value. This is not a new tuning knob; it prevents car access cost from silently drifting away from current walking behavior.
+
+- [ ] **Step 3: Add the ephemeral RoadFlow type and derivation.**
+
+In `traffic.rs`:
+
+```rust
+pub type RoadFlow = BTreeMap<Point, u16>;
+
+pub const CAR_ACCESS_SECONDS: f64 = 120.0;
 pub const ROAD_FLOW_CAPACITY: u16 = 4;
 pub const MAX_CONGESTION_MULTIPLIER: f64 = 3.0;
 
-pub fn congestion_multiplier(flow: u16) -> f64 {
-    (f64::from(flow) / f64::from(ROAD_FLOW_CAPACITY))
-        .clamp(1.0, MAX_CONGESTION_MULTIPLIER)
-}
+pub fn derive_road_flow(state: &GameSnapshot) -> RoadFlow;
+pub fn add_car_path_to_flow(flow: &mut RoadFlow, path: &TransitPath);
 ```
 
-Implement `active_car_flow(state) -> BTreeMap<Point, u16>` by iterating only `status == Driving` + `private_car_trip: Some`, deduplicating each trip's road positions with `BTreeSet`, and incrementing with `saturating_add(1)`.
+`derive_road_flow` iterates only `status == Driving` + car payload, deduplicates positions per trip with `BTreeSet`, and saturating-adds to the map.
 
-- [ ] **Step 3: Add failing endpoint/path tests.**
+`add_car_path_to_flow` uses the same per-trip dedupe rule. It exists only so same-time departures can update the already-derived local map after a selected car is pushed.
 
-Use existing area/building/road helpers to prove:
+Do not store `RoadFlow` in snapshot/engine state.
+
+- [ ] **Step 4: Add failing endpoint/path tests.**
+
+Using existing area/building/road helpers, prove:
 
 ```text
-home has no usable adjacent road          -> no candidate
-workplace has no usable adjacent road     -> no candidate
-disconnected access roads                 -> no candidate
-connected two-way road                    -> Road candidate
-one-way direction forbids the trip        -> no candidate
+home lacks adjacent usable road      -> no car candidate
+workplace lacks adjacent usable road -> no car candidate
+disconnected accesses                -> no car candidate
+connected two-way road               -> road candidate
+one-way direction forbids trip       -> no car candidate
 ```
 
-The legality comes from the compiled `RoadTopology`; do not build a second BFS.
+Path legality comes only from compiled `RoadTopology`.
 
-- [ ] **Step 4: Reuse building footprint access and compiled topology.**
+- [ ] **Step 5: Implement private-car candidate with endpoint cost.**
 
-Implement:
+Signature:
 
 ```rust
 pub fn private_car_candidate(
     state: &GameSnapshot,
     road_topology: &RoadTopology,
+    flow: &RoadFlow,
     origin: Point,
     destination: Point,
 ) -> Option<PrivateCarCandidate>
 ```
 
-For each endpoint, find the containing placed building and call `derive_stop_access_for_footprint`. Call only `find_path_between_access_tiles`. Accept a non-empty `TransitPath::Road`; reject zero-step/Track results.
+For each endpoint, find its containing placed building and call `derive_stop_access_for_footprint`.
 
-- [ ] **Step 5: Include the candidate itself in ETA.**
+Resolve one non-empty `TransitPath::Road` through `find_path_between_access_tiles`.
 
-Start from `active_car_flow(state)`. For every candidate road step:
+ETA:
 
-```rust
-let flow_with_candidate = flow
-    .get(&step.position)
-    .copied()
-    .unwrap_or(0)
-    .saturating_add(1);
-let seconds = step.travel_seconds * congestion_multiplier(flow_with_candidate);
+```text
+manhattan(origin, from_access.road_point) * WALK_SECONDS_PER_TILE
++ CAR_ACCESS_SECONDS
++ road path seconds using current flow + candidate itself
++ manhattan(to_access.road_point, destination) * WALK_SECONDS_PER_TILE
 ```
 
-One car adds only one flow unit per unique point, but a path that structurally revisits a point pays that point's candidate-adjusted multiplier on each transition.
+No driveway/parking search and no dynamic car reroute.
 
-- [ ] **Step 6: Expose shared runtime timing helpers.**
+- [ ] **Step 6: Prove car is not a universal winner.**
+
+Use topology-produced path steps and natural endpoint distances.
+
+Required assertions:
+
+```text
+short ~6-tile commute, no transit -> walk ETA < car ETA
+long ~12-tile commute, no transit -> car ETA < walk ETA
+```
+
+Task 4 will add the good-bus case after bus ETA reads `RoadFlow`.
+
+Do not hand-write impossible road-step times to force a result.
+
+- [ ] **Step 7: Make road timing helpers borrow RoadFlow.**
 
 ```rust
-pub fn road_flow_at(state: &GameSnapshot, point: Point) -> u16;
-
 pub fn effective_road_step_seconds(
-    state: &GameSnapshot,
+    flow: &RoadFlow,
     step: &RoadPathStep,
 ) -> f64;
 
 pub fn effective_road_path_seconds(
-    state: &GameSnapshot,
+    flow: &RoadFlow,
     path: &TransitPath,
 ) -> f64;
 ```
 
-Road helpers use current derived flow; Track returns stored/free-flow time unchanged.
+No public `road_flow_at(state, point)` helper. No road-step helper may derive flow from `GameSnapshot`.
 
-Do not optimize with a persisted or engine-owned flow cache unless profiling later proves this derivation is a bottleneck.
-
-- [ ] **Step 7: Verify Task 2 and commit.**
+- [ ] **Step 8: Verify Task 2 and commit.**
 
 ```bash
 cargo test -p caelum-core --test traffic
 cargo test -p caelum-core --test road_topology --test router_planning
 cargo clippy -p caelum-core --all-targets -- -D warnings
 
-git add crates/caelum-core/src/traffic.rs crates/caelum-core/src/lib.rs crates/caelum-core/tests/traffic.rs
-git commit -m "feat(core): add aggregate private car congestion"
+git add crates/caelum-core/src/commute.rs crates/caelum-core/src/traffic.rs crates/caelum-core/src/lib.rs crates/caelum-core/src/router.rs crates/caelum-core/src/trips.rs crates/caelum-core/tests/traffic.rs
+git commit -m "feat(core): add aggregate private car cost and road flow"
 ```
 
 ---
 
-### Task 3: Deterministic car-vs-walk choice and car-arrival boundary
+### Task 3: Deterministic mode choice, RoadFlow threading, and car-arrival boundaries
 
-**Produces:** end-to-end private-car commute lifecycle while reusing existing arrival metrics/sim flags.
+**Produces:** end-to-end private-car commute lifecycle without hidden fixture churn or repeated flow scans.
 
-Task 3 deliberately avoids bus-based mode-choice assertions. Bus ETA is still free-flow until Task 4; encoding a bus comparison here would create a test that is supposed to change one task later.
+Task 3 mode-choice tests use walk/no-plan only. Bus-specific choice lands in Task 4 after router bus ETA becomes congestion-aware.
+
+- [ ] **Step 0: Inventory existing commute-fixture impact before behavior changes.**
+
+Run:
+
+```bash
+rg -n 'tick_trips|tick\(|CommuteOutbound|CommuteReturn|completed_trips|late_trips|unserved_trips|average_wait|outbound_arrived_today|returned_home_today' \
+  crates/caelum-core/tests/golden_sequences.rs \
+  crates/caelum-core/tests/commute_requirements.rs \
+  crates/caelum-core/tests/population.rs \
+  crates/caelum-core/tests/objectives_metrics.rs \
+  crates/caelum-core/tests/trip_lifecycle.rs
+```
+
+Record the number of affected fixtures in the implementation PR/task notes.
+
+For each affected fixture choose one of two intentional outcomes:
+
+1. **Feature expectation changes:** the fixture is about real commute behavior and should now allow car selection; update expected time/mode/metrics.
+2. **Preserve old test intent:** the fixture is testing waiting, transit, objective, or failure behavior; remove/deny building road access so private car is unavailable rather than rewriting unrelated expected behavior.
+
+Do not bulk-update snapshots/timings without classifying fixture intent.
 
 - [ ] **Step 1: Inventory direct trip-tick callsites.**
 
@@ -349,23 +395,11 @@ Task 3 deliberately avoids bus-based mode-choice assertions. Bus ETA is still fr
 rg -n 'tick_trips(_with_objectives)?\(' crates/caelum-core
 ```
 
-Every caller passes the already-compiled topology. Do not add an overload that recompiles topology.
+Every production caller passes the engine's already-compiled `&RoadTopology`.
 
-- [ ] **Step 2: Add failing mode-choice tests using walk/no-plan only.**
+- [ ] **Step 2: Thread `&RoadTopology` and one RoadFlow through scheduling.**
 
-Prove:
-
-```text
-car unavailable + walk available          -> current non-car lifecycle
-car ETA strictly smaller than walk        -> Driving + car payload
-car ETA exactly equal to walk             -> walk
-same-time worker #2                       -> sees worker #1 car flow if #1 chose car
-coarse vs fine ticks                       -> identical chosen modes/flow
-```
-
-Use stable sim order; no randomization or preference field.
-
-- [ ] **Step 3: Thread `&RoadTopology` through trip ticking.**
+Change public trip ticking:
 
 ```rust
 pub fn tick_trips(
@@ -381,48 +415,97 @@ pub fn tick_trips_with_objectives(
 ) -> GameSnapshot;
 ```
 
-Thread through `tick_trips_substepped` and `spawn_due_commute_trips`.
+At each current-time processing site in `tick_trips_substepped` (initial pre-loop, main loop, fallback loop, final current-time processing):
 
-`GameEngine::tick` passes `&self.road_topology`. Direct tests/growth tests compile topology once in fixture setup and pass the borrow; production tick code never recompiles it.
+```rust
+let mut road_flow = traffic::derive_road_flow(&next);
+spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
+```
+
+Then use that same post-spawn map for:
+
+```rust
+next_boundary_after(&next, &road_flow)
+advance_tick_substep(&next, &road_flow, substep_delta)
+```
+
+Do not rederive flow inside `next_boundary_after`, router, or vehicle step loops.
+
+`advance_tick_substep` passes the same immutable `&RoadFlow` to transit movement and active-trip planning for the whole substep. Flow changes only after the substep ends and the next scheduling iteration rebuilds it.
+
+- [ ] **Step 3: Thread RoadFlow through planning paths.**
+
+Change the internal route-planning seam:
+
+```rust
+router::find_route_plan(state, flow, origin, destination)
+```
+
+and thread `&RoadFlow` through:
+
+- `next_boundary_after` -> `track_active_trip_boundary` -> `plan_route`;
+- `advance_active_trips_with_zero_delta_ids` -> `tick_trip`;
+- due commute mode comparison.
+
+No wrapper that silently derives flow.
 
 - [ ] **Step 4: Initialize the base-trip field.**
 
-`build_trip` adds only:
+`build_trip` adds:
 
 ```rust
 private_car_trip: None,
 ```
 
-- [ ] **Step 5: Choose car at the existing due-departure seam.**
+- [ ] **Step 5: Choose car at the existing due-departure seam and update local flow immediately.**
 
-Before pushing each outbound/return trip:
+For each due outbound/return:
 
 ```rust
-let non_car_plan = router::find_route_plan(state, &origin, &destination);
-let car = traffic::private_car_candidate(state, road_topology, origin, destination);
-
-let chosen_car = car.filter(|car| {
-    non_car_plan
-        .as_ref()
-        .map_or(true, |plan| car.estimated_seconds < plan.estimated_seconds)
-});
+let non_car_plan = router::find_route_plan(state, flow, &origin, &destination);
+let car = traffic::private_car_candidate(
+    state,
+    road_topology,
+    flow,
+    origin,
+    destination,
+);
 ```
 
-If car wins:
+Car wins only with strict `<`.
+
+If selected:
 
 ```rust
 trip.status = TripStatus::Driving;
 trip.private_car_trip = Some(PrivateCarTrip {
-    path: car.path,
+    path: car.path.clone(),
     arrival_time: state.time + car.estimated_seconds,
 });
+state.active_trips.push(trip);
+traffic::add_car_path_to_flow(flow, &car.path);
 ```
 
-Otherwise leave the existing `Idle`/no-plan shape and let `tick_trip` plan normally.
+If non-car wins, keep the existing Idle/no-plan shape.
 
-Push immediately in existing sim iteration order so later same-time candidates see earlier selected cars.
+Push/update in existing stable sim order so worker #2 sees worker #1's chosen car.
 
-- [ ] **Step 6: Track Driving before route-plan boundary logic.**
+- [ ] **Step 6: Add failing mode-choice tests using natural walk/car costs.**
+
+Prove:
+
+```text
+car unavailable + walk available -> existing non-car lifecycle
+short trip                       -> walk wins
+long trip                        -> car wins
+exact cost tie                   -> walk/transit wins
+same-time worker #2              -> sees worker #1 updated local flow
+coarse vs fine                   -> same selected modes + flow
+```
+
+No bus comparison in Task 3.
+
+- [ ] **Step 7: Track and resolve Driving before route-plan logic.**
 
 At the top of `track_active_trip_boundary` after terminal handling:
 
@@ -435,16 +518,12 @@ if trip.status == TripStatus::Driving {
 }
 ```
 
-Do not allow Driving to enter the existing `route_plan.is_none()` branch.
-
-- [ ] **Step 7: Resolve Driving through existing terminal helpers.**
-
-At the top of `tick_trip`, before Riding/planning:
+At the top of `tick_trip` before Riding/planning:
 
 ```rust
 if trip.status == TripStatus::Driving {
     let Some(car) = &trip.private_car_trip else {
-        return unserved_result(mark_unserved(trip.clone()), state.time);
+        return /* existing unserved result using mark_unserved */;
     };
 
     if state.time + EPSILON < car.arrival_time {
@@ -457,198 +536,234 @@ if trip.status == TripStatus::Driving {
 }
 ```
 
-Use the repository's existing result construction rather than introducing `unserved_result` if no such helper exists; the important rule is that `mark_unserved` and `score_arrival` themselves clear `private_car_trip`.
+`score_arrival` / `mark_unserved` own payload clearing from Task 1.
 
-Do not create another completion pipeline. `advance_active_trips_with_zero_delta_ids` keeps applying metrics, sim resolution/arrival, and terminal removal.
+- [ ] **Step 8: Lock max-substep accounting instead of relying on per-second safety net.**
 
-- [ ] **Step 8: Add arrival, malformed-state, persistence, and coarse/fine regressions.**
+Update `max_tick_substeps`'s doc comment:
 
 ```text
-before arrival boundary -> Driving, payload/flow retained
-at arrival boundary     -> terminal, payload cleared, flow removed
-coarse past arrival     -> same sim flags + metrics as ticks split at arrival
-Driving + missing car   -> Unserved + payload null; snapshot_for_save accepts result
+SIM_SHIFT_BOUNDARIES_PER_DAY = 6 covers outbound spawn + outbound resolution
++ return spawn + return resolution + two headroom boundaries. A Driving arrival
+is the existing commute-resolution boundary, not an additional per-sim category.
 ```
 
-Keep `max_tick_substeps` unchanged unless these focused tests demonstrate cap exhaustion.
+Add a focused test with many active Driving trips whose `arrival_time`s are staggered within one coarse tick. Assert:
 
-- [ ] **Step 9: Verify Task 3 and commit.**
+- final snapshot reaches the requested final time;
+- all due cars resolve;
+- coarse result matches equivalent explicitly split ticks;
+- no extra cap term is required.
+
+If this test disproves the counting argument, add an explicit car-arrival bound then; do not wait for a silent truncation in later tests.
+
+- [ ] **Step 9: Add malformed-state and destination-reset regressions.**
+
+```text
+Driving + missing payload -> Unserved, no panic
+workplace retarget         -> Idle + privateCarTrip null
+road removed under car     -> captured car still resolves at frozen arrival time
+```
+
+The malformed result must remain saveable under Task 1's structural validation.
+
+- [ ] **Step 10: Verify Task 3 and commit.**
 
 ```bash
-cargo test -p caelum-core --test traffic --test trip_lifecycle --test golden_sequences
+cargo test -p caelum-core --test traffic --test trip_lifecycle --test golden_sequences --test commute_requirements --test population --test objectives_metrics
 cargo test -p caelum-core growth::tests
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
-git add crates/caelum-core/src/engine.rs crates/caelum-core/src/trips.rs crates/caelum-core/src/growth.rs crates/caelum-core/tests
+git add crates/caelum-core/src/engine.rs crates/caelum-core/src/trips.rs crates/caelum-core/src/growth.rs crates/caelum-core/src/router.rs crates/caelum-core/tests
 git commit -m "feat(core): add deterministic private car commute trips"
 ```
 
 ---
 
-### Task 4: Apply one live congestion clock to bus ETA, movement, and boundaries
+### Task 4: Apply borrowed RoadFlow to bus ETA, movement, and scheduler boundaries
 
-**Produces:** one road delay used consistently by bus planning and runtime while private-car timers remain frozen.
+**Produces:** live bus congestion using the same immutable flow snapshot for one substep, while private-car timers remain frozen.
 
 - [ ] **Step 1: Add failing static bus/metro timing tests.**
 
-Use a bus road step at `(2,1)` with `travel_seconds: 1.25` and six active cars on that point. Assert effective time is `1.875`.
-
-For a bus at step progress zero:
+Use a bus road step at `(2,1)` with `travel_seconds: 1.25` and a prebuilt `RoadFlow` of six on that point:
 
 ```text
-seconds_until_next_vehicle_stop == 1.875
-advance 1.25 seconds             -> step not complete
-advance another 0.625 seconds    -> step completes
+effective road step = 1.875s
+seconds_until_next_vehicle_stop at progress 0 = 1.875s
+advance 1.25s -> step incomplete
+advance another 0.625s -> completes
 ```
 
-Use an equivalent metro Track step and assert its duration is unchanged by car flow.
+Equivalent metro Track timing remains unchanged.
 
-- [ ] **Step 2: Lock the fractional-progress rescale rule with a threshold-crossing regression.**
+- [ ] **Step 2: Make router bus ETA consume borrowed RoadFlow.**
 
-Use a bus on a 1.25s road step at `step_progress = 0.5`.
+Change:
 
-Start with four existing Driving trips using that road point, so the bus is still at free-flow (`1.0x`). Schedule a fifth worker car to depart on the same point at a deterministic commute boundary. After that departure:
+```rust
+pub fn find_route_plan(
+    state: &GameSnapshot,
+    flow: &RoadFlow,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan>
+```
+
+Thread `flow` through one-service/two-transfer candidate helpers.
+
+For Bus + `current_path`, use:
+
+```rust
+traffic::effective_road_path_seconds(flow, path)
+```
+
+Metro keeps stored path time. Do not rebuild connectivity because of congestion.
+
+- [ ] **Step 3: Prove useful bus service is not dominated by car.**
+
+Build a topology-valid fixture with one-tile access at each endpoint and comparable direct road/bus path lengths.
+
+Assert the natural cost ordering from the design:
 
 ```text
-flow = 5
-congestion_multiplier(5) = 1.25
-effective step duration = 1.25 * 1.25 = 1.5625s
-remaining bus time = (1 - 0.5) * 1.5625 = 0.78125s
+direct bus ~145s < direct car ~175s < long walk ~240s
 ```
 
-Assert:
+Use actual topology-produced `RoadPathStep.travel_seconds`; do not override them to force the result.
 
-- the existing `step_progress == 0.5` is not rewritten;
-- no separate remaining-seconds field is introduced;
-- a coarse tick crossing the scheduled fifth-car departure produces the same bus cursor/stop result as ticks explicitly split at that departure.
+Add a second naturally poor bus fixture (extra access walk and/or itinerary detour) where car wins. This proves both modes are reachable without a congestion-specific synthetic flip.
 
-The one-car case is insufficient because flow `1` is still free-flow under capacity `4` and would not prove rescaling.
-
-- [ ] **Step 3: Lock vehicle-before-trip arrival ordering.**
-
-Create a case where a Driving trip is due to arrive exactly at a substep end while its captured path covers the bus's current road point.
-
-Assert:
-
-1. bus movement during that substep uses flow including the arriving car;
-2. active-trip resolution then removes/terminalizes the car and clears its payload;
-3. the next `next_boundary_after` calculation uses the reduced flow.
-
-Also compare coarse vs explicitly split ticks across that arrival boundary.
-
-- [ ] **Step 4: Make bus route-plan ETA congestion-aware.**
-
-Change router helpers to take `&GameSnapshot` and, for Bus + Road path, call `traffic::effective_road_path_seconds(state, path)`. Metro continues using stored path time.
-
-Do not rebuild route paths because of congestion.
-
-- [ ] **Step 5: Reuse `TransitPathStepRef` for vehicle timing.**
+- [ ] **Step 4: Reuse `TransitPathStepRef` for vehicle timing.**
 
 In `transit.rs`:
 
 ```rust
 fn vehicle_step_seconds(
-    state: &GameSnapshot,
+    flow: &RoadFlow,
     mode: TransitMode,
     step: TransitPathStepRef<'_>,
 ) -> f64 {
     match (mode, step) {
         (TransitMode::Bus, TransitPathStepRef::Road(step)) => {
-            crate::traffic::effective_road_step_seconds(state, step)
+            crate::traffic::effective_road_step_seconds(flow, step)
         }
         (_, step) => step.travel_seconds(),
     }
 }
 ```
 
-Do not introduce another path-step enum or a stored congestion clock.
+No new path-step enum or stored congestion clock.
 
-- [ ] **Step 6: Use the same helper in movement and boundary estimation.**
+- [ ] **Step 5: Pass the same flow into vehicle movement and next-stop estimation.**
 
-Pass the snapshot into `advance_vehicle_by_seconds` and replace its free-flow `step.travel_seconds()` with `vehicle_step_seconds(...)`.
+Change `tick_vehicles`, `advance_vehicle_by_seconds`, and `seconds_until_next_vehicle_stop` to accept `&RoadFlow`.
 
-In `seconds_until_next_vehicle_stop`, current-step remaining time stays fractional:
+Current-step remaining time remains:
 
 ```rust
-let remaining_current = if let Some(current_step) = path.step(path_step_index) {
-    (1.0 - step_progress).max(0.0)
-        * vehicle_step_seconds(state, vehicle.mode, current_step)
-} else {
-    0.0
-};
+(1.0 - step_progress).max(0.0)
+    * vehicle_step_seconds(flow, vehicle.mode, current_step)
 ```
 
 Later steps sum the same helper.
 
-Movement and boundary estimation land in the same task/commit.
+Movement and boundary estimation must land in the same commit.
 
-- [ ] **Step 7: Add the first car-vs-congested-bus mode-choice regression.**
+- [ ] **Step 6: Lock fractional-progress rescaling across a 4 -> 5 flow boundary.**
 
-Now that router bus ETA is congestion-aware, create a case where bus is faster at zero road load but slower after active-car flow increases its ETA. Assert `router::find_route_plan` exposes the congested bus ETA and the commute's strict car-vs-non-car comparison chooses accordingly.
+Bus road step: free-flow `1.25s`, `step_progress = 0.5`.
 
-Metro remains unchanged.
+Before departure: flow 4 => `1.0x`.
 
-- [ ] **Step 8: Verify Task 4 and commit.**
+After fifth car is selected at the scheduled departure boundary:
+
+```text
+flow = 5
+multiplier = 1.25
+effective duration = 1.5625s
+remaining = 0.5 * 1.5625 = 0.78125s
+```
+
+Assert coarse tick crossing the departure equals ticks explicitly split there. `step_progress` remains `0.5`; no remaining-seconds field is added.
+
+- [ ] **Step 7: Lock vehicle-before-trip arrival ordering.**
+
+Create a Driving trip due exactly at substep end whose captured path covers the bus's current road point.
+
+Assert:
+
+1. bus movement in that substep uses flow including the arriving car;
+2. active-trip resolution then clears/removes the car;
+3. next scheduling iteration derives lower flow;
+4. coarse and explicitly split ticks agree.
+
+- [ ] **Step 8: Prove bus ETA responds to active car flow without a fake mode-flip fixture.**
+
+Using topology-valid route paths, compare `router::find_route_plan` for the same bus route with:
+
+```text
+empty RoadFlow -> free-flow bus ETA
+nonzero RoadFlow on route -> strictly larger bus ETA
+```
+
+Also assert the commute mode comparison consumes that returned ETA.
+
+Do **not** require "bus wins at zero flow, car wins after congestion" in one fixture. The design arithmetic establishes the crossover scale; a topology test should not hand-author impossible travel times merely to force a flip.
+
+- [ ] **Step 9: Verify Task 4 and commit.**
 
 ```bash
-cargo test -p caelum-core --test traffic --test router_planning --test transit_router --test trip_lifecycle --test shuttle_service
+cargo test -p caelum-core --test traffic --test router_planning --test router_estimate_branches --test transit_router --test trip_lifecycle --test shuttle_service
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
 git add crates/caelum-core/src/router.rs crates/caelum-core/src/transit.rs crates/caelum-core/src/trips.rs crates/caelum-core/tests
-git commit -m "feat(core): apply car congestion to bus travel time"
+git commit -m "feat(core): apply aggregate car flow to bus travel time"
 ```
 
 ---
 
 ### Task 5: Traffic overlay, no car sprites, and lean real-UI smoke
 
-**Produces:** one useful player-facing traffic view without turning E2E into a long simulation scenario.
+**Produces:** one useful player-facing traffic view without turning E2E into a simulation-duration test.
 
 - [ ] **Step 1: Add failing runtime selector tests in the Vitest-included path.**
 
-Create `tests/runtime/traffic.test.ts`, not `tests/domain/traffic.test.ts`. `vite.config.ts` includes `tests/runtime/**/*.test.ts` but has no domain project.
+Create `tests/runtime/traffic.test.ts`, not `tests/domain/traffic.test.ts`.
 
-Use a Driving trip whose road steps visit `(1,0)`, `(2,0)`, `(2,0)` and assert flow one at each unique point. Add a second Driving trip sharing `(2,0)` and assert flow two. Add a Waiting trip with `privateCarTrip: null` and assert it contributes zero.
+Use a Driving trip whose road steps visit `(1,0)`, `(2,0)`, `(2,0)` and assert flow one at each unique point. Add a second Driving trip sharing `(2,0)` and assert flow two. Add a Waiting trip with no car payload and assert zero contribution.
 
-Change current tile `(2,0)` to `kind: "empty"` and assert that point is omitted.
+Change current tile `(2,0)` to `kind: "empty"` and assert the historical captured point is omitted.
 
 - [ ] **Step 2: Implement presentation-only current-road flow selection.**
 
-Create `src/domain/traffic.ts` with:
+Create `src/domain/traffic.ts` with display mirrors:
 
 ```ts
 export const ROAD_FLOW_CAPACITY = 4;
 export const MAX_CONGESTION_MULTIPLIER = 3;
-
-export interface TrafficFlowPoint {
-  point: Point;
-  flow: number;
-}
 ```
 
 `selectTrafficFlow(state)`:
 
-- iterates only `status === "driving"` with a road private-car path;
+- iterates `status === "driving"` + road car path only;
 - deduplicates points within each trip;
-- aggregates multiple cars;
-- returns only points that are still current road tiles;
-- sorts deterministically by y then x.
+- aggregates trips;
+- filters to current road tiles;
+- sorts y then x.
 
-Do not implement congestion/mode choice in TypeScript.
+Do not port mode choice or Rust congestion logic into TypeScript.
 
 - [ ] **Step 3: Add exactly one Traffic overlay control.**
 
 Add `"traffic"` to `Overlay`, add `{ id: "traffic", label: "Traffic" }` to `DataPanel.svelte`, and add one traffic fill color.
 
-- [ ] **Step 4: Scale presentation to the actual congestion cap and restore canvas alpha.**
-
-In `overlayRenderer.ts`:
+- [ ] **Step 4: Scale presentation to aggregate cap and restore canvas alpha.**
 
 ```ts
 const fullScaleFlow = ROAD_FLOW_CAPACITY * MAX_CONGESTION_MULTIPLIER;
-
 ctx.save();
 for (const { point, flow } of selectTrafficFlow(state)) {
   ctx.globalAlpha = Math.min(flow / fullScaleFlow, 1);
@@ -658,32 +773,22 @@ for (const { point, flow } of selectTrafficFlow(state)) {
 ctx.restore();
 ```
 
-Add tests proving:
+Tests:
 
 ```text
-flow 4  -> alpha 1/3, not full
+flow 4  -> alpha 1/3
 flow 12 -> alpha 1
-flow >12 -> alpha remains 1
+flow >12 -> alpha 1
 historical non-road point -> not painted
 ```
 
-The TS constants are display mirrors only; do not port the Rust congestion function into frontend code.
+- [ ] **Step 5: Do not draw Driving as an individual citizen/car.**
 
-- [ ] **Step 5: Do not draw Driving as a citizen/car.**
-
-In `citizenRenderer.ts`:
-
-```ts
-if (entity.status === "arrived" || entity.status === "driving") {
-  continue;
-}
-```
-
-Add a render test proving Driving produces no `arc`/`fill`, while Walking/Waiting/Riding behavior remains unchanged.
+In `citizenRenderer.ts` skip `"driving"` alongside existing `"arrived"` rendering exclusion. Add a render regression.
 
 - [ ] **Step 6: Extend existing E2E only for wiring.**
 
-Keep the existing Small House + Supermarket + occupancy flow. Extend the current two-way road stroke so both building footprints have connected road access; update the budget assertion by the actual added road-tile count.
+Keep Small House + Supermarket + occupancy flow. Extend the authored two-way road so both footprints have road access and update the exact budget assertion by actual additional road-tile count.
 
 Then verify only:
 
@@ -700,7 +805,7 @@ await expect(traffic).toHaveAttribute("aria-pressed", "false");
 
 Retain current Resume/Pause/population/clock assertions.
 
-Do not wait for a specific commute departure or inspect traffic canvas pixels in Playwright. Rust owns traffic determinism; runtime/render tests own presentation semantics.
+Do not wait for a real commute or inspect traffic canvas pixels in Playwright.
 
 - [ ] **Step 7: Record the narrow architecture boundary.**
 
@@ -708,16 +813,18 @@ Add to `docs/architecture.md`:
 
 ```text
 Private cars are active commute-trip payloads, not vehicle entities.
-Aggregate road flow is derived from active private-car paths in traffic.rs.
+CAR_ACCESS_SECONDS is one generalized fixed car access cost; walking remains shared 20s/tile.
+RoadFlow is ephemeral derived data rebuilt at scheduling boundaries, never persisted.
+Every RoadFlow change is a car departure/arrival substep boundary.
 Private-car arrival timestamps are frozen at departure.
-Bus runtime road-step time reads live congestion while preserving fractional step_progress.
+Bus runtime road-step time consumes one borrowed RoadFlow while preserving fractional step_progress.
 Stored route paths remain structural/free-flow.
 TypeScript derives only the Traffic overlay from snapshot trip state.
 ```
 
-Do not document unimplemented road classes, traffic managers, or service planning.
+Do not document road classes, traffic managers, or service-planning machinery.
 
-- [ ] **Step 8: Run the full implementation gate and commit.**
+- [ ] **Step 8: Run full implementation gate and commit.**
 
 ```bash
 bun run test:unit
@@ -738,26 +845,31 @@ git commit -m "feat(ui): add aggregate traffic overlay"
 
 - [ ] Rust/TS schema is v6; browser/native stores use only v6 namespaces; `from_snapshot` docs say v6.
 - [ ] `TransitMode` remains Walk/Bus/Metro.
-- [ ] Driving requires car payload, no route plan, no transit passenger membership.
-- [ ] `score_arrival`, `mark_unserved`, and destination retarget clear the car payload when leaving Driving.
-- [ ] Malformed Driving can become Unserved without producing an unsavable snapshot.
-- [ ] No traffic/load cache is persisted.
-- [ ] Car access/pathfinding reuse existing footprint access and compiled `RoadTopology`.
-- [ ] One car contributes one flow unit per unique road point; buses do not contribute flow.
-- [ ] Capacity/multiplier constants and exact test values match the spec.
-- [ ] Candidate ETA counts the departing car itself.
-- [ ] Exact ETA ties keep walk/transit; simultaneous workers remain stable-order deterministic.
-- [ ] Task 3 mode-choice tests do not encode free-flow bus ETA assumptions.
-- [ ] Private-car `arrival_time` remains frozen after departure.
-- [ ] Bus `step_progress` remains a fraction of current live effective duration.
-- [ ] Crossing flow 4 -> 5 mid-step rescales bus remaining time and coarse/fine ticks match.
-- [ ] Vehicles advance before trip arrival resolution, so an arriving car congests that substep and the next boundary sees reduced flow.
-- [ ] Bus movement, bus next-stop boundary, and bus route-plan ETA use the shared live congestion cost.
+- [ ] Engine-produced Driving trips use car payload + frozen arrival timestamp and no microscopic car state.
+- [ ] New persistence checks are limited to Driving payload structure/time/bounds; existing generic vehicle-membership validation is unchanged.
+- [ ] `score_arrival`, `mark_unserved`, and destination retarget clear car payload.
+- [ ] `WALK_SECONDS_PER_TILE == 20` is shared; `CAR_ACCESS_SECONDS == 120`.
+- [ ] Natural topology fixtures prove short-walk, long-car, good-bus, and poor-bus outcomes are all reachable.
+- [ ] No persisted traffic/load cache exists.
+- [ ] `RoadFlow` is derived once per scheduling iteration and borrowed by router/transit code.
+- [ ] Same-time selected cars update local flow immediately in stable sim order.
+- [ ] No road-step timing helper scans `GameSnapshot.active_trips`.
+- [ ] One car contributes once per unique captured road point for its whole trip; capacity 4 is documented as route-overlap units.
+- [ ] Every flow-changing event is a known departure/arrival substep boundary; buses do not contribute flow.
+- [ ] Car candidate ETA includes endpoint walks + fixed access overhead + self-inclusive road load.
+- [ ] Exact ETA ties keep walk/transit.
+- [ ] Task 3 fixture-impact inventory is classified before expectation rewrites.
+- [ ] Driving arrival is counted as an existing per-sim commute-resolution boundary in `max_tick_substeps` docs and stress-tested with staggered arrivals.
+- [ ] Private-car timers stay frozen after departure.
+- [ ] Bus `step_progress` remains a fraction of current effective duration.
+- [ ] Crossing flow 4 -> 5 at a departure boundary rescales remaining bus time and coarse/fine ticks match.
+- [ ] Vehicles advance before car arrival resolution; next scheduling iteration sees reduced flow.
+- [ ] Bus movement, next-stop boundary, and route-plan ETA all consume the same borrowed flow map.
 - [ ] Metro/walking timing is unchanged and stored route paths remain structural/free-flow.
-- [ ] Traffic selector tests live under `tests/runtime/` and run under `bun run test:unit`.
-- [ ] Traffic overlay paints only current road tiles and reaches full intensity at flow 12, not flow 4.
-- [ ] Driving trips are not rendered as individual entities.
-- [ ] No road classes, signals, parking, lane physics, random mode choice, equilibrium solver, or compatibility layer was added.
+- [ ] Traffic selector tests live under `tests/runtime/`.
+- [ ] Traffic overlay paints current road tiles only and reaches full intensity at flow 12.
+- [ ] Driving trips are not rendered individually.
+- [ ] No road classes, signals, parking subsystem, lane physics, random preferences, assignment solver, or compatibility layer was added.
 
 ## Final commands
 
