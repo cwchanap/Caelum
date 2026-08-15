@@ -282,6 +282,116 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     (state, topology)
 }
 
+fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 10, y: 3 };
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 3, 9);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (3, 2).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (9, 2).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(route.applied, "bus fixture route should apply: {route:?}");
+
+    let mut state = route.snapshot;
+    state.buildings = vec![
+        commute_endpoint("home", "supermarket", home),
+        commute_endpoint("work", "supermarket", workplace),
+    ];
+    state.sims = vec![sim("sim-001", home, Some(workplace))];
+    let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
+    let departure_time =
+        f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY) * clock::GAME_DAY_SECONDS;
+    state.time = departure_time - 0.25;
+    state.day = 0;
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.paused = false;
+
+    let bus_path = state.transit.routes[0].legs[0]
+        .current_path
+        .clone()
+        .expect("bus route has a path");
+    state.transit.vehicles[0].step_progress = 0.5;
+    state.active_trips = (0..4)
+        .map(|id| ActiveTrip {
+            id: format!("seed-car-trip-{id:03}"),
+            sim_id: format!("seed-car-sim-{id:03}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: home,
+            destination: workplace,
+            position: home.into(),
+            status: TripStatus::Driving,
+            deadline: departure_time + 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: bus_path.clone(),
+                arrival_time: departure_time + 100.0,
+            }),
+        })
+        .collect();
+
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology, departure_time)
+}
+
+fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
+    let mut engine = GameEngine::new();
+    road_line(&mut engine, 3, 3, 9);
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (3, 2).into(),
+    });
+    engine.dispatch(GameIntent::AddBusStop {
+        point: (9, 2).into(),
+    });
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(route.applied, "bus fixture route should apply: {route:?}");
+
+    let mut state = route.snapshot;
+    state.paused = false;
+    state.sims.clear();
+    let bus_path = state.transit.routes[0].legs[0]
+        .current_path
+        .clone()
+        .expect("bus route has a path");
+    let make_car = |id: usize, arrival_time: f64| ActiveTrip {
+        id: format!("arrival-car-trip-{id:03}"),
+        sim_id: format!("arrival-car-sim-{id:03}"),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (2, 3).into(),
+        destination: (10, 3).into(),
+        position: (2, 3).into(),
+        status: TripStatus::Driving,
+        deadline: 900.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        private_car_trip: Some(PrivateCarTrip {
+            path: bus_path.clone(),
+            arrival_time,
+        }),
+    };
+    state.active_trips = (0..4)
+        .map(|id| make_car(id, 100.0))
+        .chain(std::iter::once(make_car(4, 1.25)))
+        .collect();
+
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology)
+}
+
 fn driving_trip_without_payload() -> ActiveTrip {
     ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -428,6 +538,69 @@ fn car_mode_choice_is_identical_for_coarse_and_fine_ticks() {
     assert_eq!(
         caelum_core::traffic::active_car_flow(&coarse),
         caelum_core::traffic::active_car_flow(&fine)
+    );
+}
+
+#[test]
+fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
+    let (state, topology, departure_time) = bus_fractional_progress_fixture();
+    let departure_delta = departure_time - state.time;
+    let total_delta = departure_delta + 0.4;
+
+    let coarse = tick_trips(&state, &topology, total_delta);
+    let at_departure = tick_trips(&state, &topology, departure_delta);
+    assert_eq!(
+        at_departure.transit.vehicles[0].step_progress, 0.7,
+        "fractional progress stays in normalized coordinates at the flow boundary"
+    );
+    assert_eq!(traffic::road_flow_at(&at_departure, (3, 3).into()), 5);
+
+    let split = tick_trips(&at_departure, &topology, total_delta - departure_delta);
+    assert_eq!(coarse.transit.vehicles[0], split.transit.vehicles[0]);
+    assert_eq!(
+        coarse.transit.vehicles[0].itinerary_index, 0,
+        "0.4s after departure is shorter than the rescaled 0.46875s remaining"
+    );
+    assert!(
+        coarse.transit.vehicles[0].step_progress > 0.95,
+        "progress={}",
+        coarse.transit.vehicles[0].step_progress
+    );
+    assert!(coarse.transit.vehicles[0].step_progress < 1.0);
+}
+
+#[test]
+fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
+    let (state, topology) = bus_arrival_order_fixture();
+    let current_point = state.transit.routes[0].legs[0]
+        .current_path
+        .as_ref()
+        .expect("bus route has a path")
+        .road_steps()[0]
+        .position;
+
+    let at_arrival = tick_trips(&state, &topology, 1.25);
+    let bus = &at_arrival.transit.vehicles[0];
+    assert_eq!(bus.path_step_index, 0);
+    assert!((bus.step_progress - 0.8).abs() < 1e-9);
+    assert_eq!(traffic::road_flow_at(&at_arrival, current_point), 4);
+    assert_eq!(at_arrival.metrics.completed_trips, 1);
+    assert!(at_arrival
+        .active_trips
+        .iter()
+        .all(|trip| trip.private_car_trip.is_some()));
+
+    let next_stop_seconds =
+        transit::seconds_until_next_vehicle_stop(&at_arrival, bus).expect("bus has a next stop");
+    assert!((next_stop_seconds - 6.5).abs() < 1e-9);
+
+    let coarse = tick_trips(&state, &topology, 1.5);
+    let split = tick_trips(&at_arrival, &topology, 0.25);
+    assert_eq!(coarse.transit.vehicles[0], split.transit.vehicles[0]);
+    assert_eq!(coarse.active_trips, split.active_trips);
+    assert_eq!(
+        coarse.metrics.completed_trips,
+        split.metrics.completed_trips
     );
 }
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::model::{GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode};
+use crate::model::{
+    GameSnapshot, Point, RouteLeg, RouteLegPath, RoutePlan, TransitMode, TransitPath,
+};
 use crate::route_lifecycle::is_route_operational;
 use crate::service_itinerary::{enumerate_ride_edges, service_visits, RideEdge};
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
@@ -41,7 +43,7 @@ pub fn find_route_plan(
                     walk_leg(alight_at, destination),
                 ],
                 estimated_seconds: walk_seconds(origin, board_at)
-                    + ride_seconds(service.mode, &service.legs, edge)
+                    + ride_seconds(state, service.mode, &service.legs, edge)
                     + walk_seconds(alight_at, destination),
             });
         }
@@ -75,9 +77,9 @@ pub fn find_route_plan(
                             walk_leg(second_end, destination),
                         ],
                         estimated_seconds: walk_seconds(origin, first_start)
-                            + ride_seconds(first.mode, &first.legs, first_edge)
+                            + ride_seconds(state, first.mode, &first.legs, first_edge)
                             + walk_seconds(transfer_first, transfer_second)
-                            + ride_seconds(second.mode, &second.legs, second_edge)
+                            + ride_seconds(state, second.mode, &second.legs, second_edge)
                             + walk_seconds(second_end, destination),
                     });
                 }
@@ -188,7 +190,12 @@ fn plan_identity_key(plan: &RoutePlan) -> Vec<(String, Option<usize>, Option<usi
         .collect()
 }
 
-fn ride_seconds(mode: TransitMode, legs: &[RouteLegPath], edge: &RideEdge) -> f64 {
+fn ride_seconds(
+    state: &GameSnapshot,
+    mode: TransitMode,
+    legs: &[RouteLegPath],
+    edge: &RideEdge,
+) -> f64 {
     if legs.is_empty() {
         return boarding_seconds(mode);
     }
@@ -196,14 +203,24 @@ fn ride_seconds(mode: TransitMode, legs: &[RouteLegPath], edge: &RideEdge) -> f6
         + edge
             .itinerary_leg_indexes
             .iter()
-            .map(|index| leg_travel_seconds(mode, &legs[*index]))
+            .map(|index| leg_travel_seconds(state, mode, &legs[*index]))
             .sum::<f64>()
 }
 
-fn leg_travel_seconds(mode: TransitMode, leg: &RouteLegPath) -> f64 {
+fn leg_travel_seconds(state: &GameSnapshot, mode: TransitMode, leg: &RouteLegPath) -> f64 {
     leg.current_path
         .as_ref()
-        .map(|path| path.total_travel_seconds())
+        .map(|path| match (mode, path) {
+            (TransitMode::Bus, TransitPath::Road { .. }) => {
+                let effective_seconds = crate::traffic::effective_road_path_seconds(state, path);
+                if path.step_count() == 0 {
+                    path.total_travel_seconds()
+                } else {
+                    effective_seconds
+                }
+            }
+            (_, path) => path.total_travel_seconds(),
+        })
         .or(leg.estimated_seconds)
         .unwrap_or_else(|| {
             1.0 / if mode == TransitMode::Bus {

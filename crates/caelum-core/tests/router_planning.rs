@@ -1,5 +1,6 @@
 use caelum_core::model::{
-    GameSnapshot, ServicePattern, TransitMode, TransitNodeStatus, TransitPath,
+    ActiveTrip, GameSnapshot, PrivateCarTrip, ServicePattern, TransitMode, TransitNodeStatus,
+    TransitPath, TripPurpose, TripStatus,
 };
 use caelum_core::{router, GameEngine, GameIntent};
 
@@ -126,6 +127,53 @@ fn transit_plan_estimate_equals_the_authoritative_leg_duration() {
     assert_eq!(plan.legs[1].mode, TransitMode::Bus);
     let transit_seconds = plan.estimated_seconds - 90.0;
     assert!((transit_seconds - authoritative_leg_duration).abs() < 1e-9);
+}
+
+#[test]
+fn bus_route_plan_eta_reflects_current_car_flow_without_rebuilding_path() {
+    let engine = bus_route_state();
+    let mut snapshot = engine.snapshot();
+    let path = snapshot.transit.routes[0].legs[0]
+        .current_path
+        .clone()
+        .expect("bus route has a captured path");
+    let stored_path_seconds = path.total_travel_seconds();
+    snapshot.active_trips = (0..6)
+        .map(|id| ActiveTrip {
+            id: format!("car-trip-{id:03}"),
+            sim_id: format!("car-sim-{id:03}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: (1, 1).into(),
+            destination: (13, 1).into(),
+            position: (1, 1).into(),
+            status: TripStatus::Driving,
+            deadline: 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: path.clone(),
+                arrival_time: 900.0,
+            }),
+        })
+        .collect();
+
+    let plan = router::find_route_plan(&snapshot, &(1, 4).into(), &(13, 4).into())
+        .expect("bus route remains available under flow");
+
+    assert_eq!(plan.legs[1].mode, TransitMode::Bus);
+    assert_eq!(
+        plan.estimated_seconds,
+        40.0 + 90.0 + stored_path_seconds * 1.5
+    );
+    assert_eq!(
+        snapshot.transit.routes[0].legs[0]
+            .current_path
+            .as_ref()
+            .expect("captured route path remains")
+            .total_travel_seconds(),
+        stored_path_seconds
+    );
 }
 
 #[test]
