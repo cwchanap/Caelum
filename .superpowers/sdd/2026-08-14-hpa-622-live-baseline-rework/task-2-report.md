@@ -6,7 +6,8 @@ Complete. This slice adds topology-valid natural mode-choice coverage, explicit 
 
 ## Commit SHA(s)
 
-- Pending the task commit; this report is included in the commit created after verification.
+- `1183853b9498d21fb31a701666e79f1db7973df4` — implementation, focused acceptance coverage, architecture note, and this report.
+- A follow-up report-only commit records this SHA in the committed report; its SHA is supplied in the handoff.
 
 ## Changed files
 
