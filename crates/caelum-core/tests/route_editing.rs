@@ -58,6 +58,42 @@ fn editable_bus_engine(stop_xs: &[i32], budget: i32) -> GameEngine {
     engine
 }
 
+fn perimeter_bus_engine(budget: i32) -> GameEngine {
+    let mut engine = GameEngine::new();
+    for (points, preset) in [
+        (
+            (2..=25).map(|x| point(x, 2)).collect::<Vec<_>>(),
+            RoadPreset::TwoWay,
+        ),
+        (
+            (2..=15).map(|y| point(25, y)).collect::<Vec<_>>(),
+            RoadPreset::TwoWay,
+        ),
+        (
+            (2..=25).rev().map(|x| point(x, 15)).collect::<Vec<_>>(),
+            RoadPreset::TwoWay,
+        ),
+        (
+            (2..=15).rev().map(|y| point(2, y)).collect::<Vec<_>>(),
+            RoadPreset::TwoWay,
+        ),
+    ] {
+        dispatch(&mut engine, GameIntent::LayRoadLine { points, preset });
+    }
+    for point in [
+        point(2, 1),
+        point(25, 1),
+        point(25, 16),
+        point(2, 16),
+        point(20, 16),
+    ] {
+        let result = engine.dispatch(GameIntent::AddBusStop { point });
+        assert!(result.applied, "stop {point:?} should apply: {result:?}");
+    }
+    engine.set_budget_for_test(budget);
+    engine
+}
+
 fn editable_metro_engine(station_xs: &[i32], budget: i32) -> GameEngine {
     let mut engine = GameEngine::new();
     track_line(&mut engine, 5, 2, 14);
@@ -109,6 +145,15 @@ fn create_route(
             waypoint_ids,
         },
     );
+    if mode == TransitMode::Bus {
+        dispatch(
+            engine,
+            GameIntent::AssignVehicle {
+                mode: "bus".to_string(),
+                line_id: "route-001".to_string(),
+            },
+        );
+    }
 }
 
 fn route<'a>(snapshot: &'a GameSnapshot, route_id: &str) -> &'a Route {
@@ -517,7 +562,7 @@ fn terminal_reversal_does_not_leak_bounding_leg_failure_reason() {
 }
 
 #[test]
-fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
+fn create_bus_route_is_fleet_free_and_budget_free() {
     let mut engine = editable_bus_engine(&[2, 10], BUS_COST);
     let before = engine.snapshot();
     let result = engine.dispatch(GameIntent::CreateRoute {
@@ -528,10 +573,10 @@ fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
 
     assert!(result.applied, "{result:?}");
     assert_eq!(result.snapshot.transit.routes.len(), 1);
-    assert_eq!(result.snapshot.transit.vehicles.len(), 1);
-    assert_eq!(result.snapshot.budget, before.budget - BUS_COST);
+    assert!(result.snapshot.transit.vehicles.is_empty());
+    assert_eq!(result.snapshot.budget, before.budget);
     let created = route(&result.snapshot, "route-001");
-    assert_eq!(created.vehicle_ids, ids(&["vehicle-001"]));
+    assert!(created.vehicle_ids.is_empty());
     assert_eq!(created.pattern, ServicePattern::Loop);
     assert!(!created.path_broken);
     assert!(created
@@ -541,7 +586,7 @@ fn create_route_atomically_adds_line_platforms_vehicle_and_budget_charge() {
 }
 
 #[test]
-fn failed_create_commits_none_of_the_staged_entities_or_budget() {
+fn bus_route_creation_does_not_require_vehicle_budget() {
     let mut engine = editable_bus_engine(&[2, 10], BUS_COST - 1);
     let before = engine.snapshot();
     let result = engine.dispatch(GameIntent::CreateRoute {
@@ -550,12 +595,96 @@ fn failed_create_commits_none_of_the_staged_entities_or_budget() {
         waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
 
-    assert!(!result.applied);
-    assert_eq!(
-        result.rejection.expect("budget rejection").code,
-        RejectionCode::InsufficientBudget
+    assert!(result.applied, "{result:?}");
+    assert_eq!(result.snapshot.budget, before.budget);
+    assert!(result.snapshot.transit.routes[0].vehicle_ids.is_empty());
+}
+
+#[test]
+fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
+    let mut engine = perimeter_bus_engine(BUS_COST * 4);
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002", "stop-003", "stop-004"]),
+    });
+    assert!(created.applied, "{created:?}");
+    assert!(
+        engine
+            .dispatch(GameIntent::SetBusTargetHeadway {
+                route_id: "route-001".into(),
+                target_headway_seconds: 60,
+            })
+            .applied
     );
-    assert_eq!(result.snapshot, before);
+    let required = route(&engine.snapshot(), "route-001")
+        .service_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.required_fleet)
+        .expect("perimeter route should derive a required fleet");
+    assert!(required > 1, "perimeter fixture must deploy multiple buses");
+    engine.set_budget_for_test(
+        i32::try_from(required)
+            .unwrap()
+            .checked_mul(BUS_COST)
+            .unwrap(),
+    );
+    let deployed = engine.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".into(),
+    });
+    assert!(deployed.applied, "{deployed:?}");
+    let before = route(&deployed.snapshot, "route-001").clone();
+    let before_cursors: Vec<_> = deployed
+        .snapshot
+        .transit
+        .vehicles
+        .iter()
+        .filter(|vehicle| vehicle.line_id == "route-001")
+        .map(|vehicle| {
+            (
+                vehicle.itinerary_index,
+                vehicle.path_step_index,
+                vehicle.step_progress,
+            )
+        })
+        .collect();
+
+    let edited = engine.dispatch(GameIntent::UpdateRoute {
+        route_id: "route-001".into(),
+        expected_revision: before.revision,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-005", "stop-002", "stop-003", "stop-004"]),
+    });
+    assert!(edited.applied, "{edited:?}");
+    let after = route(&edited.snapshot, "route-001");
+    assert_eq!(after.vehicle_ids, before.vehicle_ids);
+    assert_eq!(
+        edited
+            .snapshot
+            .transit
+            .vehicles
+            .iter()
+            .filter(|vehicle| vehicle.line_id == "route-001")
+            .count(),
+        required
+    );
+    assert_eq!(after.target_headway_seconds, Some(60));
+    let after_cursors: Vec<_> = edited
+        .snapshot
+        .transit
+        .vehicles
+        .iter()
+        .filter(|vehicle| vehicle.line_id == "route-001")
+        .map(|vehicle| {
+            (
+                vehicle.itinerary_index,
+                vehicle.path_step_index,
+                vehicle.step_progress,
+            )
+        })
+        .collect();
+    assert_eq!(after_cursors.len(), before_cursors.len());
+    assert!(after.revision > before.revision);
 }
 
 #[test]

@@ -44,15 +44,25 @@ pub(crate) fn create_route_costed(
     validate_waypoints(state, mode, &waypoint_ids, None, None)?;
     let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
     require_all_connected(&legs, None)?;
+    let initial_vehicle_cost = if mode == TransitMode::Metro {
+        vehicle_cost(TransitMode::Metro)
+    } else {
+        0
+    };
     let authorized = CostPolicy::from_snapshot(state)
-        .quote(vehicle_cost(mode), state.budget)
+        .quote(initial_vehicle_cost, state.budget)
         .authorize()?;
 
     let mut candidate = state.clone();
     let route_id = next_route_id(&candidate, mode)?;
     assign_added_waypoint_platforms(&mut candidate, mode, &route_id, &waypoint_ids)?;
-    let vehicle = initial_vehicle(&candidate, mode, &route_id);
-    let vehicle_id = vehicle.id.clone();
+    let mut vehicle_ids = Vec::new();
+    let mut initial_vehicle_to_insert = None;
+    if mode == TransitMode::Metro {
+        let vehicle = initial_vehicle(&candidate, mode, &route_id);
+        vehicle_ids.push(vehicle.id.clone());
+        initial_vehicle_to_insert = Some(vehicle);
+    }
     insert_route(
         &mut candidate,
         mode,
@@ -60,9 +70,11 @@ pub(crate) fn create_route_costed(
         pattern,
         waypoint_ids,
         legs,
-        vehicle_id,
+        vehicle_ids,
     )?;
-    candidate.transit.vehicles.push(vehicle);
+    if let Some(vehicle) = initial_vehicle_to_insert {
+        candidate.transit.vehicles.push(vehicle);
+    }
     authorized.apply_to(&mut candidate.budget)?;
     Ok(CostedMutation::new(candidate))
 }
@@ -399,7 +411,7 @@ fn insert_route(
     pattern: ServicePattern,
     waypoint_ids: Vec<String>,
     legs: Vec<RouteLegPath>,
-    vehicle_id: String,
+    vehicle_ids: Vec<String>,
 ) -> GameplayResult<()> {
     let number = route_id
         .rsplit('-')
@@ -412,7 +424,7 @@ fn insert_route(
             name: format!("Bus {number}"),
             color: "#e04f39".to_string(),
             stop_ids: waypoint_ids,
-            vehicle_ids: vec![vehicle_id],
+            vehicle_ids,
             active: true,
             pattern,
             revision: 0,
@@ -426,7 +438,7 @@ fn insert_route(
             name: format!("Metro {number}"),
             color: "#2867b2".to_string(),
             station_ids: waypoint_ids,
-            vehicle_ids: vec![vehicle_id],
+            vehicle_ids,
             active: true,
             pattern,
             revision: 0,

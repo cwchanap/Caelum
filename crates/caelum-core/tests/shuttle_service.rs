@@ -38,7 +38,15 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
         pattern: ServicePattern::Loop,
         waypoint_ids: ids(&["stop-001", "stop-002", "stop-003"]),
     });
-    let mut state = engine.snapshot();
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
+    let mut state = assigned.snapshot;
     let topology = RoadTopology::compile(&state.map).unwrap();
     let stop_ids = state.transit.routes[0].stop_ids.clone();
     state.transit.routes[0].pattern = ServicePattern::Shuttle;
@@ -52,18 +60,6 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
         ServicePattern::Shuttle,
     );
     state.transit.routes[0].path_broken = false;
-    state.transit.routes[0].vehicle_ids = vec!["vehicle-001".to_string()];
-    state.transit.vehicles = vec![Vehicle {
-        id: "vehicle-001".to_string(),
-        mode: TransitMode::Bus,
-        line_id: "route-001".to_string(),
-        capacity: 18,
-        passenger_ids: Vec::new(),
-        itinerary_index: 0,
-        path_step_index: 0,
-        step_progress: 0.0,
-        parked_position: None,
-    }];
     state
 }
 

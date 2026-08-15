@@ -67,7 +67,15 @@ fn bus_single_step_state() -> caelum_core::GameSnapshot {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "bus fixture route should apply: {route:?}");
-    let mut state = route.snapshot;
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "bus fixture vehicle should apply: {assigned:?}"
+    );
+    let mut state = assigned.snapshot;
     let path = one_step_road_path((2, 5).into(), 1.25);
     state.transit.routes[0].legs[0].current_path = Some(path.clone());
     state.transit.routes[0].legs[0].last_valid_path = Some(path);
@@ -251,10 +259,18 @@ fn bus_route_vehicle_carries_commute_trip() {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "{route:?}");
-    assert!(!route.snapshot.transit.routes[0].path_broken);
-    assert_eq!(route.snapshot.transit.vehicles.len(), 1);
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "bus fixture vehicle should apply: {assigned:?}"
+    );
+    assert!(!assigned.snapshot.transit.routes[0].path_broken);
+    assert_eq!(assigned.snapshot.transit.vehicles.len(), 1);
 
-    let mut snapshot = route.snapshot;
+    let mut snapshot = assigned.snapshot;
     snapshot.active_trips.push(ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),

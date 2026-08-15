@@ -8,6 +8,9 @@ pub type GameplayResult<T> = Result<T, GameplayRejection>;
 #[serde(rename_all = "camelCase")]
 pub enum RejectionCode {
     InsufficientBudget,
+    InvalidHeadway,
+    HeadwayNotSet,
+    FleetAlreadyAssigned,
     InvalidSpeed,
     BlockedTile,
     OutOfBounds,

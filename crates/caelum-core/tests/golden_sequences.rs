@@ -9,7 +9,7 @@ use caelum_core::traffic::RoadFlow;
 use caelum_core::{
     clock,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
-    transit, trips, GameEngine, GameIntent,
+    transit, trips, GameEngine, GameIntent, RoadPreset,
 };
 
 fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
@@ -317,6 +317,109 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
     assert!((lv.step_progress - sv.step_progress).abs() < 1e-9);
 }
 
+/// A deployed, time-spaced multi-bus route used by the granularity regression.
+/// Its perimeter is long enough that the authoritative 60s floor requires more
+/// than one bus, so every deployed cursor participates in the comparison.
+fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
+    let mut engine = GameEngine::new();
+    for points in [
+        (2..=25).map(|x| (x, 2).into()).collect::<Vec<_>>(),
+        (2..=15).map(|y| (25, y).into()).collect::<Vec<_>>(),
+        (2..=25).rev().map(|x| (x, 15).into()).collect::<Vec<_>>(),
+        (2..=15).rev().map(|y| (2, y).into()).collect::<Vec<_>>(),
+    ] {
+        let result = engine.dispatch(GameIntent::LayRoadLine {
+            points,
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(result.applied, "perimeter road should apply: {result:?}");
+    }
+    for point in [(2, 1), (25, 1), (25, 16), (2, 16)] {
+        let result = engine.dispatch(GameIntent::AddBusStop {
+            point: point.into(),
+        });
+        assert!(result.applied, "perimeter stop should apply: {result:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: (1..=4).map(|index| format!("stop-{index:03}")).collect(),
+    });
+    assert!(
+        created.applied,
+        "perimeter bus route should create: {created:?}"
+    );
+    let targeted = engine.dispatch(GameIntent::SetBusTargetHeadway {
+        route_id: "route-001".to_string(),
+        target_headway_seconds: 60,
+    });
+    assert!(
+        targeted.applied,
+        "perimeter target should apply: {targeted:?}"
+    );
+    let required = targeted.snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.required_fleet)
+        .expect("perimeter route should have required fleet");
+    assert!(
+        required > 1,
+        "granularity fixture must deploy multiple buses"
+    );
+    engine.set_budget_for_test(
+        i32::try_from(required)
+            .unwrap()
+            .checked_mul(transit::BUS_COST)
+            .unwrap(),
+    );
+    let deployed = engine.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".to_string(),
+    });
+    assert!(
+        deployed.applied,
+        "perimeter fleet should deploy: {deployed:?}"
+    );
+    let mut state = deployed.snapshot;
+    state.paused = false;
+    state
+}
+
+#[test]
+fn deployed_bus_fleet_is_granularity_independent() {
+    let start = deployed_bus_snapshot();
+    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+    let large = tick_trips(&start, &topology, 200.0);
+    let leg_count = start.transit.routes[0].legs.len();
+
+    let mut stepped = start;
+    for _ in 0..200 {
+        stepped = tick_trips(&stepped, &topology, 1.0);
+    }
+
+    assert!((large.time - stepped.time).abs() < 1e-6);
+    assert_eq!(large.transit.vehicles.len(), stepped.transit.vehicles.len());
+    for (large_vehicle, stepped_vehicle) in
+        large.transit.vehicles.iter().zip(&stepped.transit.vehicles)
+    {
+        assert_eq!(large_vehicle.id, stepped_vehicle.id);
+        assert_eq!(
+            large_vehicle.itinerary_index % leg_count,
+            stepped_vehicle.itinerary_index % leg_count
+        );
+        assert_eq!(
+            large_vehicle.path_step_index,
+            stepped_vehicle.path_step_index
+        );
+        assert!(
+            (large_vehicle.step_progress - stepped_vehicle.step_progress).abs() < 1e-9,
+            "vehicle {} diverged: large={} stepped={}",
+            large_vehicle.id,
+            large_vehicle.step_progress,
+            stepped_vehicle.step_progress
+        );
+    }
+}
+
 // --- Roundabout route goldens ------------------------------------------------
 //
 // These pin the roundabout routing/circulation path that the earlier goldens
@@ -358,9 +461,14 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
+    assert!(created.applied, "roundabout bus route should create");
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
     assert!(
-        created.applied,
-        "roundabout bus route should create its vehicle"
+        assigned.applied,
+        "roundabout bus fixture should assign: {assigned:?}"
     );
     let placed = engine.dispatch(GameIntent::PlaceRoundabout {
         origin: (5, 4).into(),

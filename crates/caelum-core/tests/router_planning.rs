@@ -124,8 +124,16 @@ fn bus_commute_fixture(detour: bool) -> (GameSnapshot, RoadTopology, Point, Poin
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "fixture route should apply: {route:?}");
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
 
-    let mut state = route.snapshot;
+    let mut state = assigned.snapshot;
     state.buildings = vec![
         commute_building("home", home),
         commute_building("work", workplace),
@@ -148,6 +156,14 @@ fn bus_route_state() -> GameEngine {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
     engine
 }
 

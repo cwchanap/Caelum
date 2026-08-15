@@ -277,7 +277,7 @@ async function pollNewestBusRoute(
 // `import.meta.env.DEV`, so this helper depends on the Playwright webServer
 // running the Vite dev server (`bun run dev` in `playwright.config.ts`).
 // Used to assert gameplay facts the DOM does not surface — here, that
-// finishing a route actually assigned a vehicle in the core.
+// finishing a bus route leaves deployment explicit in the core.
 async function readRuntimeTransit(
   page: import("@playwright/test").Page,
 ): Promise<{
@@ -494,12 +494,9 @@ test("create a metro line on laid track", async ({ page }) => {
   await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
 });
 
-test("finishing a bus route assigns a vehicle and runs live transit", async ({
-  page,
-}) => {
+test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
   await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
-  const topbar = page.getByTestId("topbar");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
@@ -523,43 +520,24 @@ test("finishing a bus route assigns a vehicle and runs live transit", async ({
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByRole("button", { name: "Save route" }).click();
 
-  // The route must appear AND the core must have assigned a vehicle to it.
-  // This is the regression guard for the dropped `assignVehicle` step: without
-  // it the route would have `vehicleIds: []` forever and transit could never
-  // move a single citizen.
+  // Route creation is intentionally fleet-free. Poll for the async runtime
+  // commit, then assert no bus vehicle was implicitly created.
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
-
-  // Poll for the vehicle assignment — the Save-route dispatch is async and
-  // the runtime commit may lag the DOM appearance of the route name.
   await expect
     .poll(async () => {
       const transit = await readRuntimeTransit(page);
-      return (
-        transit.vehicles.length >= 1 &&
-        transit.vehicles[0].lineId === "route-001" &&
-        transit.vehicles[0].mode === "bus" &&
-        (transit.routes.find((r) => r.id === "route-001")?.vehicleIds.length ??
-          0) >= 1
+      const route = transit.routes.find(
+        (candidate) => candidate.id === "route-001",
       );
+      return route !== undefined && route.vehicleIds.length === 0;
     })
     .toBe(true);
   const transit = await readRuntimeTransit(page);
-  expect(transit.vehicles).toHaveLength(1);
-  expect(transit.vehicles[0].lineId).toBe("route-001");
-  expect(transit.vehicles[0].mode).toBe("bus");
-  const route = transit.routes.find((r) => r.id === "route-001");
-  expect(route?.vehicleIds).toHaveLength(1);
-
-  // Unpause into a live tick and confirm the clock advances — the vehicle is
-  // now part of the running simulation, not a dead route-creation artifact.
-  await page.getByRole("button", { name: "Resume" }).click();
-  const clockValue = topbar
-    .locator(".readout", { hasText: "Time" })
-    .locator(".readout-value");
-  await expect
-    .poll(async () => (await clockValue.textContent())?.trim() ?? "")
-    .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
+  expect(transit.vehicles).toEqual([]);
+  expect(
+    transit.routes.find((route) => route.id === "route-001")?.vehicleIds,
+  ).toEqual([]);
 });
 
 test("turns between paired roads and edits the committed route", async ({

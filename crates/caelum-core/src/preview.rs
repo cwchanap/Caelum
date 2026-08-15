@@ -125,8 +125,8 @@ pub fn preview_route(
     context: RoutingContext<'_>,
     request: RoutePreviewRequest,
 ) -> RoutePreviewResponse {
-    let initial_vehicle_cost = if request.route_id.is_none() {
-        crate::transit::vehicle_cost(request.mode)
+    let initial_vehicle_cost = if request.route_id.is_none() && request.mode == TransitMode::Metro {
+        crate::transit::vehicle_cost(TransitMode::Metro)
     } else {
         0
     };

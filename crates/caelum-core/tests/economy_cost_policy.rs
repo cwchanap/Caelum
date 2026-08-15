@@ -436,46 +436,118 @@ fn funded_transit_nodes_tracks_and_buildings_have_nominal_cost_parity() {
 }
 
 #[test]
-fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
-    for (mode, creation_cost, creation_intent, assignment_mode, line_id) in [
-        (
-            TransitMode::Bus,
-            BUS_COST,
-            GameIntent::CreateRoute {
+fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
+    let prepared = prepared_bus_route_network();
+    let mut setup = engine_for(&prepared, EconomyPreset::Standard, 0);
+    assert!(
+        setup
+            .dispatch(GameIntent::CreateRoute {
                 mode: TransitMode::Bus,
                 pattern: ServicePattern::Loop,
                 waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
-            },
-            "bus",
-            "route-001",
-        ),
-        (
-            TransitMode::Metro,
-            METRO_COST,
-            GameIntent::CreateRoute {
-                mode: TransitMode::Metro,
-                pattern: ServicePattern::Loop,
-                waypoint_ids: vec!["station-001".into(), "station-002".into()],
-            },
-            "metro",
-            "metro-001",
-        ),
-    ] {
-        let network = match mode {
-            TransitMode::Bus => prepared_bus_route_network(),
-            TransitMode::Metro => prepared_metro_route_network(),
-            TransitMode::Walk => unreachable!("fixtures only prepare purchasable service modes"),
-        };
-        assert_low_budget_pair(&network, creation_intent.clone(), creation_cost);
-        assert_funded_pair(&network, creation_intent, creation_cost);
+            })
+            .applied
+    );
+    assert!(
+        setup
+            .dispatch(GameIntent::SetBusTargetHeadway {
+                route_id: "route-001".into(),
+                target_headway_seconds: 60,
+            })
+            .applied
+    );
+    let required = setup.snapshot().transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.required_fleet)
+        .expect("targeted bus route should derive required fleet");
+    let fleet_cost = i32::try_from(required)
+        .expect("fixture fleet count fits i32")
+        .checked_mul(BUS_COST)
+        .expect("fixture fleet cost fits i32");
 
+    let mut exact = engine_for(
+        &setup.snapshot_for_save(),
+        EconomyPreset::Standard,
+        fleet_cost,
+    );
+    let funded = exact.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".into(),
+    });
+    assert!(funded.applied, "exact budget buys all buses: {funded:?}");
+    assert_eq!(
+        funded.snapshot.transit.routes[0].vehicle_ids.len(),
+        required
+    );
+    assert_eq!(funded.snapshot.budget, 0);
+
+    let mut short = engine_for(
+        &setup.snapshot_for_save(),
+        EconomyPreset::Standard,
+        fleet_cost - 1,
+    );
+    let rejected = short.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".into(),
+    });
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InsufficientBudget),
+    );
+    assert!(rejected.snapshot.transit.routes[0].vehicle_ids.is_empty());
+    assert!(rejected.snapshot.transit.vehicles.is_empty());
+    assert_eq!(rejected.snapshot.budget, fleet_cost - 1);
+
+    let mut creative = engine_for(&setup.snapshot_for_save(), EconomyPreset::Creative, 0);
+    let free = creative.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".into(),
+    });
+    assert!(
+        free.applied,
+        "creative buys the same fleet for free: {free:?}"
+    );
+    assert_eq!(free.snapshot.transit.routes[0].vehicle_ids.len(), required);
+    assert_eq!(free.snapshot.budget, 0);
+}
+
+#[test]
+fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
+    let bus_network = prepared_bus_route_network();
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let mut engine = engine_for(&bus_network, preset, 0);
+        let result = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".into(), "stop-002".into()],
+        });
+        assert!(
+            result.applied,
+            "bus creation is free in {preset:?}: {result:?}"
+        );
+        assert!(result.snapshot.transit.routes[0].vehicle_ids.is_empty());
+        assert!(result.snapshot.transit.vehicles.is_empty());
+        assert_eq!(result.snapshot.budget, 0);
+    }
+
+    let metro_network = prepared_metro_route_network();
+    let metro_creation = GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".into(), "station-002".into()],
+    };
+    assert_low_budget_pair(&metro_network, metro_creation.clone(), METRO_COST);
+    assert_funded_pair(&metro_network, metro_creation, METRO_COST);
+
+    for (mode, assignment_mode, line_id, assignment_cost) in [
+        (TransitMode::Bus, "bus", "route-001", BUS_COST),
+        (TransitMode::Metro, "metro", "metro-001", METRO_COST),
+    ] {
         let route = prepared_route(mode);
         let assignment_intent = GameIntent::AssignVehicle {
             mode: assignment_mode.into(),
             line_id: line_id.into(),
         };
-        assert_low_budget_pair(&route, assignment_intent.clone(), creation_cost);
-        assert_funded_pair(&route, assignment_intent, creation_cost);
+        assert_low_budget_pair(&route, assignment_intent.clone(), assignment_cost);
+        assert_funded_pair(&route, assignment_intent, assignment_cost);
     }
 }
 
