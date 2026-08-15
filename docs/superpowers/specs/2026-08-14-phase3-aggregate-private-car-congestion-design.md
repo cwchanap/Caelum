@@ -109,10 +109,10 @@ For each commute endpoint (`home` or `workplace`):
 
 If either endpoint is not inside a placed building or has no usable adjacent road, no car candidate exists. Do not search arbitrary nearby roads, add driveways, or model parking.
 
-Use the engine's existing compiled topology:
+Use `GameEngine`'s already-compiled `RoadTopology`; thread a borrowed topology through the trip tick instead of recompiling or making `traffic.rs` depend on the engine facade:
 
 ```rust
-routing.road_topology.find_path_between_access_tiles(
+road_topology.find_path_between_access_tiles(
     &state.map,
     from_access.road_point,
     to_access.road_point,
@@ -184,7 +184,7 @@ Do not repeatedly rerun mode choice to converge traffic assignment.
 At each due outbound/return worker commute:
 
 1. get the current best walk/transit candidate from `router::find_route_plan`;
-2. get the private-car candidate from `traffic::private_car_candidate` using the existing `RoutingContext`;
+2. get the private-car candidate from `traffic::private_car_candidate` using the same borrowed compiled `RoadTopology` supplied to the trip tick;
 3. choose private car only if its ETA is **strictly less** than the walk/transit `estimated_seconds`;
 4. exact ties keep existing walk/transit behavior;
 5. if only one candidate exists, use it;
