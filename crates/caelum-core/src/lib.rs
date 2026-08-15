@@ -50,6 +50,7 @@ pub mod scenario;
 pub mod service_itinerary;
 pub mod state;
 pub(crate) mod stop_access;
+pub mod traffic;
 pub mod transit;
 pub mod transit_nodes;
 pub mod trips;
