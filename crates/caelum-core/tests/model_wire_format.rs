@@ -477,10 +477,25 @@ fn driving_trip_serializes_private_car_payload_with_road_path() {
         }),
     };
 
-    let value = serde_json::to_value(trip).expect("driving trip should serialize");
+    let value = serde_json::to_value(&trip).expect("driving trip should serialize");
     assert_eq!(value["status"], json!("driving"));
     assert_eq!(value["privateCarTrip"]["path"]["kind"], json!("road"));
     assert_eq!(value["privateCarTrip"]["arrivalTime"], json!(101.25));
+    let restored: ActiveTrip = serde_json::from_value(value).expect("driving trip round-trips");
+    assert_eq!(restored, trip);
+
+    let mut without_car = trip;
+    without_car.private_car_trip = None;
+    let without_car_value =
+        serde_json::to_value(&without_car).expect("planless trip should serialize");
+    assert_eq!(
+        without_car_value["privateCarTrip"],
+        json!(null),
+        "privateCarTrip is serialized as an explicit null, not omitted"
+    );
+    let restored_without_car: ActiveTrip =
+        serde_json::from_value(without_car_value).expect("null payload round-trips");
+    assert_eq!(restored_without_car, without_car);
 }
 
 #[test]

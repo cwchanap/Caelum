@@ -116,10 +116,21 @@ pub fn effective_road_step_seconds(flow: &RoadFlow, step: &RoadPathStep) -> f64 
 
 pub fn effective_road_path_seconds(flow: &RoadFlow, path: &TransitPath) -> f64 {
     match path {
-        TransitPath::Road { steps, .. } => steps
-            .iter()
-            .map(|step| effective_road_step_seconds(flow, step))
-            .sum(),
+        // An empty road path is a synthetic terminal/reversal path: it keeps
+        // its stored total duration instead of collapsing to a free 0.0.
+        TransitPath::Road {
+            steps,
+            total_travel_seconds,
+        } => {
+            if steps.is_empty() {
+                *total_travel_seconds
+            } else {
+                steps
+                    .iter()
+                    .map(|step| effective_road_step_seconds(flow, step))
+                    .sum()
+            }
+        }
         TransitPath::Track {
             total_travel_seconds,
             ..

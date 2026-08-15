@@ -68,7 +68,7 @@ fn bus_single_step_state() -> caelum_core::GameSnapshot {
     });
     assert!(route.applied, "bus fixture route should apply: {route:?}");
     let mut state = route.snapshot;
-    let path = one_step_road_path((2, 1).into(), 1.25);
+    let path = one_step_road_path((2, 5).into(), 1.25);
     state.transit.routes[0].legs[0].current_path = Some(path.clone());
     state.transit.routes[0].legs[0].last_valid_path = Some(path);
     state
@@ -96,11 +96,11 @@ fn metro_single_step_state() -> caelum_core::GameSnapshot {
     let mut state = route.snapshot;
     let path = TransitPath::Track {
         steps: vec![caelum_core::model::TrackPathStep {
-            position: (2, 1).into(),
+            position: (2, 4).into(),
             heading: Heading::East,
             geometry: PathGeometry::Line {
-                from: (2, 1).into(),
-                to: (3, 1).into(),
+                from: (2, 4).into(),
+                to: (3, 4).into(),
             },
             travel_seconds: 1.25,
         }],
@@ -113,7 +113,7 @@ fn metro_single_step_state() -> caelum_core::GameSnapshot {
 
 #[test]
 fn bus_vehicle_uses_congested_road_time_for_boundary_and_motion() {
-    let point = Point { x: 2, y: 1 };
+    let point = Point { x: 2, y: 5 };
     let mut state = bus_single_step_state();
     state.active_trips = (0..6)
         .map(|id| driving_car(id, one_step_road_path(point, 1.0)))
@@ -136,9 +136,42 @@ fn bus_vehicle_uses_congested_road_time_for_boundary_and_motion() {
     assert_eq!(vehicle.itinerary_index, 1);
 }
 
+/// Regression: `seconds_until_next_vehicle_stop` sums the remaining steps in a
+/// different association than the sequential subtraction inside
+/// `advance_vehicle_by_seconds`, so advancing by exactly the reported boundary
+/// can leave an ulp-scale residual. That residual must clamp to zero instead
+/// of smearing onto the next step as ~1e-16 progress.
+#[test]
+fn exact_multi_step_stop_boundary_arrives_with_zero_step_progress() {
+    let mut state = bus_single_step_state();
+    let steps = (2..=4)
+        .map(|x| one_step_road_path((x, 5).into(), 0.1).road_steps()[0].clone())
+        .collect::<Vec<_>>();
+    let path = TransitPath::Road {
+        total_travel_seconds: steps.iter().map(|step| step.travel_seconds).sum(),
+        steps,
+    };
+    state.transit.routes[0].legs[0].current_path = Some(path.clone());
+    state.transit.routes[0].legs[0].last_valid_path = Some(path);
+    let flow = RoadFlow::new();
+
+    let seconds =
+        transit::seconds_until_next_vehicle_stop(&state, &flow, &state.transit.vehicles[0])
+            .expect("bus has a next stop");
+
+    let next = transit::tick_vehicles(&state, &flow, seconds);
+    let vehicle = &next.transit.vehicles[0];
+    assert_eq!(vehicle.itinerary_index, 1);
+    assert_eq!(vehicle.path_step_index, 0);
+    assert_eq!(
+        vehicle.step_progress, 0.0,
+        "exact boundary arrival must not leave residual progress"
+    );
+}
+
 #[test]
 fn metro_vehicle_keeps_stored_track_time_when_road_is_congested() {
-    let point = Point { x: 2, y: 1 };
+    let point = Point { x: 2, y: 4 };
     let mut state = metro_single_step_state();
     state.active_trips = (0..6)
         .map(|id| driving_car(id, one_step_road_path(point, 1.0)))

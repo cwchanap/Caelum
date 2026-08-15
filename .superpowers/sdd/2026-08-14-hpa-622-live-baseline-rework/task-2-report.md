@@ -38,7 +38,7 @@ rtk proxy rg -n 'tick_trips|tick\(|CommuteOutbound|CommuteReturn|completed_trips
 
 Exact output:
 
-```
+```text
 crates/caelum-core/tests/objectives_metrics.rs:19:    let result = engine.tick(1_201.0);
 crates/caelum-core/tests/objectives_metrics.rs:28:    state.metrics.completed_trips = 1;
 crates/caelum-core/tests/objectives_metrics.rs:39:    below_gate.metrics.unserved_trips = 9;
@@ -366,5 +366,5 @@ No production edit was required. The new acceptance cases did not expose a Task 
 
 ## Concerns and deviations
 
-- The initial Playwright invocation was sandbox-blocked by localhost bind permissions; the exact command passed when retried with the required elevated local-server permission.
+- The initial Playwright invocation was sandbox-blocked by localhost bind permissions; the exact command passed when retried with permission to run the local server with elevation.
 - The report's commit SHA is filled after the task commit is created.

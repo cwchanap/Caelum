@@ -171,8 +171,10 @@ fn ticking_exactly_to_scheduled_departure_spawns_outbound_without_moving() {
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
         .unwrap();
 
-    assert_eq!(trip.status, TripStatus::Idle);
-    assert_eq!(trip.route_plan, None);
+    // The spawn stores the winning non-car plan and its implied status; the
+    // trip has not moved yet (position assertions below).
+    assert_eq!(trip.status, TripStatus::Walking);
+    assert!(trip.route_plan.is_some());
     assert!((trip.position.x - 2.0).abs() < 0.000_001);
     assert!((trip.position.y - 3.0).abs() < 0.000_001);
 }

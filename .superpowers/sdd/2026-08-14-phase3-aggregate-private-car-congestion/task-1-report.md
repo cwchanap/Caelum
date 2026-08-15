@@ -53,7 +53,7 @@ Host, persistence, documentation, and TypeScript fixtures:
 
 ## Verification
 
-All commands were run from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-622`.
+All commands were run from the repository root.
 
 | Command | Outcome |
 | --- | --- |
@@ -101,8 +101,6 @@ All commands were run from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-6
 - GREEN: the same command passed with `1 passed, 18 filtered out` after the guard.
 
 ### Focused verification
-
-All commands ran from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-622`.
 
 | Covering test/file or command | Outcome |
 | --- | --- |

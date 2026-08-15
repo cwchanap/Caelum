@@ -28,7 +28,7 @@ Complete. Task 1 now has one explicit borrowed `RoadFlow` shared by private-car 
 
 - RED: `cargo test -p caelum-core --test traffic` failed to compile because the new `RoadFlow`, derivation/mutation helpers, shared constants, and explicit-flow function arities were absent.
 - GREEN: the same focused traffic target passed with 15 tests after the primitives were implemented.
-- GREEN: the final Task 1 focused target passed with 169 tests across all eight requested integration targets.
+- GREEN: the final Task 1-focused target passed with 169 tests across all eight requested integration targets.
 
 ## Test commands and results
 

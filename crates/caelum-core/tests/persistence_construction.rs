@@ -69,13 +69,36 @@ fn valid_driving_snapshot() -> caelum_core::GameSnapshot {
     snapshot
 }
 
-fn assert_invalid_trip_field(snapshot: caelum_core::GameSnapshot, field: &str) {
+fn assert_invalid_trip_field(snapshot: caelum_core::GameSnapshot, field: &str, reason_kind: &str) {
     let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(snapshot) else {
         panic!("expected invalid snapshot diagnostic");
     };
     let value: serde_json::Value =
         serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidEntity"));
     assert_eq!(value["context"]["field"], serde_json::json!(field));
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!(reason_kind)
+    );
+}
+
+fn assert_invalid_numeric_field(
+    snapshot: caelum_core::GameSnapshot,
+    field: &str,
+    reason_kind: &str,
+) {
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(snapshot) else {
+        panic!("expected invalid snapshot diagnostic");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidNumericValue"));
+    assert_eq!(value["context"]["field"], serde_json::json!(field));
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!(reason_kind)
+    );
 }
 
 fn assert_invalid_transit_membership(snapshot: caelum_core::GameSnapshot) {
@@ -126,7 +149,7 @@ fn driving_trip_requires_a_private_car_payload() {
     let mut snapshot = valid_driving_snapshot();
     snapshot.active_trips[0].private_car_trip = None;
 
-    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+    assert_invalid_trip_field(snapshot, "tripPrivateCar", "invalidStaticShape");
 }
 
 #[test]
@@ -137,7 +160,7 @@ fn driving_trip_rejects_a_route_plan() {
         estimated_seconds: 0.0,
     });
 
-    assert_invalid_trip_field(snapshot, "tripRoutePlan");
+    assert_invalid_trip_field(snapshot, "tripRoutePlan", "invalidStaticShape");
 }
 
 #[test]
@@ -145,7 +168,7 @@ fn non_driving_trip_rejects_a_private_car_payload() {
     let mut snapshot = valid_driving_snapshot();
     snapshot.active_trips[0].status = TripStatus::Idle;
 
-    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+    assert_invalid_trip_field(snapshot, "tripPrivateCar", "invalidStaticShape");
 }
 
 #[test]
@@ -171,12 +194,16 @@ fn driving_trip_requires_a_road_private_car_path() {
         arrival_time: 101.25,
     });
 
-    assert_invalid_trip_field(snapshot, "tripPrivateCar");
+    assert_invalid_trip_field(snapshot, "tripPrivateCar", "invalidStaticShape");
 }
 
 #[test]
 fn driving_trip_rejects_negative_or_nonfinite_arrival_time() {
-    for arrival_time in [-1.0, f64::NAN, f64::INFINITY] {
+    for (arrival_time, reason_kind) in [
+        (-1.0, "negative"),
+        (f64::NAN, "notFinite"),
+        (f64::INFINITY, "notFinite"),
+    ] {
         let mut snapshot = valid_driving_snapshot();
         snapshot.active_trips[0]
             .private_car_trip
@@ -184,7 +211,7 @@ fn driving_trip_rejects_negative_or_nonfinite_arrival_time() {
             .expect("fixture car payload")
             .arrival_time = arrival_time;
 
-        assert_invalid_trip_field(snapshot, "tripPrivateCarArrivalTime");
+        assert_invalid_numeric_field(snapshot, "tripPrivateCarArrivalTime", reason_kind);
     }
 }
 

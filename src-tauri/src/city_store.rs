@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn schema_v6_store_ignores_the_prior_cities_directory() {
         let temp = tempdir().expect("temp dir");
-        let legacy = CityFileStore::new(temp.path().join("cities"));
+        let legacy = CityFileStore::new(temp.path().join("cities-v5"));
         legacy
             .create_city(record("legacy", "Legacy"))
             .expect("seed legacy");
