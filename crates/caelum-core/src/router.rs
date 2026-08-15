@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::route_lifecycle::is_route_operational;
 use crate::service_itinerary::{enumerate_ride_edges, service_visits, RideEdge};
+use crate::traffic::RoadFlow;
 use crate::transit::{BUS_TILES_PER_SECOND, METRO_TILES_PER_SECOND};
 use crate::transit_nodes::is_present_node;
 
@@ -19,6 +20,7 @@ pub(crate) struct TransitService {
 
 pub fn find_route_plan(
     state: &GameSnapshot,
+    flow: &RoadFlow,
     origin: &Point,
     destination: &Point,
 ) -> Option<RoutePlan> {
@@ -43,7 +45,7 @@ pub fn find_route_plan(
                     walk_leg(alight_at, destination),
                 ],
                 estimated_seconds: walk_seconds(origin, board_at)
-                    + ride_seconds(state, service.mode, &service.legs, edge)
+                    + ride_seconds(flow, service.mode, &service.legs, edge)
                     + walk_seconds(alight_at, destination),
             });
         }
@@ -77,9 +79,9 @@ pub fn find_route_plan(
                             walk_leg(second_end, destination),
                         ],
                         estimated_seconds: walk_seconds(origin, first_start)
-                            + ride_seconds(state, first.mode, &first.legs, first_edge)
+                            + ride_seconds(flow, first.mode, &first.legs, first_edge)
                             + walk_seconds(transfer_first, transfer_second)
-                            + ride_seconds(state, second.mode, &second.legs, second_edge)
+                            + ride_seconds(flow, second.mode, &second.legs, second_edge)
                             + walk_seconds(second_end, destination),
                     });
                 }
@@ -94,8 +96,13 @@ pub fn find_route_plan(
 ///
 /// Uses precomputed `leg.current_path` steps from the snapshot's route/metro-line
 /// legs — no live topology compilation is needed.
-pub fn plan_route(state: &GameSnapshot, origin: &Point, destination: &Point) -> Option<RoutePlan> {
-    find_route_plan(state, origin, destination)
+pub fn plan_route(
+    state: &GameSnapshot,
+    flow: &RoadFlow,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan> {
+    find_route_plan(state, flow, origin, destination)
 }
 
 pub(crate) fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
@@ -190,12 +197,7 @@ fn plan_identity_key(plan: &RoutePlan) -> Vec<(String, Option<usize>, Option<usi
         .collect()
 }
 
-fn ride_seconds(
-    state: &GameSnapshot,
-    mode: TransitMode,
-    legs: &[RouteLegPath],
-    edge: &RideEdge,
-) -> f64 {
+fn ride_seconds(flow: &RoadFlow, mode: TransitMode, legs: &[RouteLegPath], edge: &RideEdge) -> f64 {
     if legs.is_empty() {
         return boarding_seconds(mode);
     }
@@ -203,16 +205,16 @@ fn ride_seconds(
         + edge
             .itinerary_leg_indexes
             .iter()
-            .map(|index| leg_travel_seconds(state, mode, &legs[*index]))
+            .map(|index| leg_travel_seconds(flow, mode, &legs[*index]))
             .sum::<f64>()
 }
 
-fn leg_travel_seconds(state: &GameSnapshot, mode: TransitMode, leg: &RouteLegPath) -> f64 {
+fn leg_travel_seconds(flow: &RoadFlow, mode: TransitMode, leg: &RouteLegPath) -> f64 {
     leg.current_path
         .as_ref()
         .map(|path| match (mode, path) {
             (TransitMode::Bus, TransitPath::Road { .. }) => {
-                let effective_seconds = crate::traffic::effective_road_path_seconds(state, path);
+                let effective_seconds = crate::traffic::effective_road_path_seconds(flow, path);
                 if path.step_count() == 0 {
                     path.total_travel_seconds()
                 } else {
@@ -240,7 +242,7 @@ fn boarding_seconds(mode: TransitMode) -> f64 {
 }
 
 fn walk_seconds(from: &Point, to: &Point) -> f64 {
-    f64::from(manhattan_distance(from, to)) * 20.0
+    f64::from(manhattan_distance(from, to)) * crate::commute::WALK_SECONDS_PER_TILE
 }
 
 fn manhattan_distance(from: &Point, to: &Point) -> i32 {

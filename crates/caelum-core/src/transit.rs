@@ -15,6 +15,7 @@ use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, Rejecti
 use crate::road::{apply_road_mutation, RoadMutation};
 use crate::route_lifecycle::is_route_operational;
 use crate::stop_access::derive_stop_access;
+use crate::traffic::RoadFlow;
 use crate::transit_nodes::{
     canonical_node_anchor, garbage_collect_missing_nodes, is_present_node,
     matching_present_node_id, remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
@@ -487,7 +488,7 @@ pub(crate) fn initial_vehicle(state: &GameSnapshot, mode: TransitMode, route_id:
 ///
 /// Vehicles travel along precomputed `leg.current_path` steps stored in the
 /// snapshot's route/metro-line legs — no live topology compilation is needed.
-pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+pub fn tick_vehicles(state: &GameSnapshot, flow: &RoadFlow, delta_seconds: f64) -> GameSnapshot {
     let mut active_trips = state.active_trips.clone();
     let mut occupied_passenger_ids: HashSet<String> = state
         .transit
@@ -562,7 +563,7 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
         let completion_events_changed = advance_vehicle_by_seconds(
             &mut next_vehicle,
             &itinerary,
-            state,
+            flow,
             delta_seconds,
             |candidate, completed_itinerary_index| {
                 let mut event_changed = false;
@@ -634,7 +635,11 @@ pub fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
     next
 }
 
-pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) -> Option<f64> {
+pub fn seconds_until_next_vehicle_stop(
+    state: &GameSnapshot,
+    flow: &RoadFlow,
+    vehicle: &Vehicle,
+) -> Option<f64> {
     let itinerary = vehicle_itinerary(state, vehicle)?;
     if itinerary.is_empty() {
         return None;
@@ -675,13 +680,13 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
         // Found a real (non-empty) leg. Sum remaining time in the current step
         // plus all later steps in this leg.
         let remaining_current = if let Some(current_step) = path.step(path_step_index) {
-            (1.0 - step_progress).max(0.0) * vehicle_step_seconds(state, vehicle.mode, current_step)
+            (1.0 - step_progress).max(0.0) * vehicle_step_seconds(flow, vehicle.mode, current_step)
         } else {
             0.0
         };
         let remaining_later: f64 = (path_step_index + 1..path.step_count())
             .filter_map(|index| path.step(index))
-            .map(|step| vehicle_step_seconds(state, vehicle.mode, step))
+            .map(|step| vehicle_step_seconds(flow, vehicle.mode, step))
             .sum();
         total += remaining_current + remaining_later;
         return Some(total);
@@ -690,14 +695,10 @@ pub fn seconds_until_next_vehicle_stop(state: &GameSnapshot, vehicle: &Vehicle) 
     None
 }
 
-fn vehicle_step_seconds(
-    state: &GameSnapshot,
-    mode: TransitMode,
-    step: TransitPathStepRef<'_>,
-) -> f64 {
+fn vehicle_step_seconds(flow: &RoadFlow, mode: TransitMode, step: TransitPathStepRef<'_>) -> f64 {
     match (mode, step) {
         (TransitMode::Bus, TransitPathStepRef::Road(step)) => {
-            crate::traffic::effective_road_step_seconds(state, step)
+            crate::traffic::effective_road_step_seconds(flow, step)
         }
         (_, step) => step.travel_seconds(),
     }
@@ -1376,7 +1377,7 @@ fn assigned_line_data<'a>(
 fn advance_vehicle_by_seconds<F>(
     vehicle: &mut Vehicle,
     itinerary: &[RouteLegPath],
-    state: &GameSnapshot,
+    flow: &RoadFlow,
     mut remaining_seconds: f64,
     mut on_itinerary_leg_completed: F,
 ) -> bool
@@ -1433,7 +1434,7 @@ where
             vehicle.step_progress = 0.0;
             return completion_events_changed;
         };
-        let step_seconds = vehicle_step_seconds(state, vehicle.mode, step);
+        let step_seconds = vehicle_step_seconds(flow, vehicle.mode, step);
         if step_seconds <= f64::EPSILON {
             advance_vehicle_cursor(vehicle, itinerary);
             if vehicle.itinerary_index != original_itinerary_index {
@@ -1899,7 +1900,7 @@ mod tests {
         };
         snapshot.transit.vehicles = vec![vehicle.clone()];
 
-        let result = tick_vehicles(&snapshot, 1.0);
+        let result = tick_vehicles(&snapshot, &RoadFlow::new(), 1.0);
         assert_eq!(result.transit.vehicles.len(), 1);
         assert_eq!(result.transit.vehicles[0], vehicle);
     }

@@ -11,6 +11,7 @@
 mod common;
 
 use caelum_core::model::{ActiveTrip, Point, TransitMode, TripPosition, TripStatus};
+use caelum_core::traffic::RoadFlow;
 use common::persistence_fixtures::{fixture_with_bus_route, worker_sim};
 
 // ===========================================================================
@@ -26,8 +27,9 @@ fn bus_leg_trip_fixture() -> caelum_core::GameSnapshot {
     let mut snapshot = fixture_with_bus_route();
     let origin = Point { x: 1, y: 4 };
     let destination = Point { x: 13, y: 4 };
-    let plan = caelum_core::router::find_route_plan(&snapshot, &origin, &destination)
-        .expect("bus route plan should exist");
+    let plan =
+        caelum_core::router::find_route_plan(&snapshot, &RoadFlow::new(), &origin, &destination)
+            .expect("bus route plan should exist");
     // Confirm the plan actually contains a bus leg so the bus arm is exercised.
     assert!(
         plan.legs.iter().any(|leg| leg.mode == TransitMode::Bus),

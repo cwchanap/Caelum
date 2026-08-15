@@ -5,6 +5,7 @@ use caelum_core::model::{
     WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
+use caelum_core::traffic::RoadFlow;
 use caelum_core::{
     clock,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
@@ -243,8 +244,12 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
 
     // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
     // this setup genuinely exercises the failure mode.
-    let boundary = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
-        .expect("vehicle has a next stop");
+    let boundary = transit::seconds_until_next_vehicle_stop(
+        &state,
+        &RoadFlow::new(),
+        &state.transit.vehicles[0],
+    )
+    .expect("vehicle has a next stop");
     assert!(
         (boundary - 1.0 / transit::METRO_TILES_PER_SECOND).abs() < 1e-9,
         "expected a 0.625s stop boundary, got {boundary}"

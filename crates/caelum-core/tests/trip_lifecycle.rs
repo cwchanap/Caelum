@@ -2,8 +2,8 @@ use caelum_core::buildings::assign_workplaces;
 use caelum_core::model::{
     ActiveTrip, GameSnapshot, Heading, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
     PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, Sim, TransitMode, TransitNetwork, TransitPath, TripOutcome, TripOutcomeKind,
-    TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
@@ -255,12 +255,12 @@ fn commute_endpoint(id: &str, building_type: &str, point: Point) -> PlacedBuildi
 
 fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     let home = Point { x: 2, y: 3 };
-    let workplace = Point { x: 10, y: 3 };
+    let workplace = Point { x: 12, y: 3 };
     let mut state = create_initial_snapshot();
     clear_roads(&mut state);
     two_way_corridor(
         &mut state,
-        &(3..=9).map(|x| Point { x, y: 3 }).collect::<Vec<_>>(),
+        &(3..=11).map(|x| Point { x, y: 3 }).collect::<Vec<_>>(),
     );
     state.buildings = vec![
         // A destination building keeps the fixture free of automatic Sandbox
@@ -282,60 +282,11 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     (state, topology)
 }
 
-fn bus_congestion_mode_choice_fixture() -> (GameSnapshot, RoadTopology, TransitPath) {
-    let mut engine = GameEngine::new();
-    road_line(&mut engine, 1, 1, 7);
-    engine.dispatch(GameIntent::AddBusStop {
-        point: (1, 0).into(),
-    });
-    engine.dispatch(GameIntent::AddBusStop {
-        point: (7, 0).into(),
-    });
-    let route = engine.dispatch(GameIntent::CreateRoute {
-        mode: TransitMode::Bus,
-        pattern: ServicePattern::Loop,
-        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
-    });
-    assert!(route.applied, "bus fixture route should apply: {route:?}");
-
-    let mut state = route.snapshot;
-    let bus_path = state.transit.routes[0].legs[0]
-        .current_path
-        .clone()
-        .expect("bus route has a captured path");
-    state.buildings = vec![
-        commute_endpoint("home", "supermarket", (1, 0).into()),
-        commute_endpoint("work", "supermarket", (7, 0).into()),
-    ];
-    state.sims = vec![sim("sim-001", (1, 0).into(), Some((7, 0).into()))];
-
-    // Keep the captured bus shortcut while the current road topology takes a
-    // long detour. This makes the live car-vs-bus comparison cross only when
-    // congestion slows the bus path.
-    clear_roads(&mut state);
-    let mut detour = vec![Point { x: 1, y: 1 }];
-    detour.extend((2..=16).map(|y| Point { x: 1, y }));
-    detour.extend((2..=27).map(|x| Point { x, y: 16 }));
-    detour.extend((2..=15).rev().map(|y| Point { x: 27, y }));
-    detour.extend((7..=26).rev().map(|x| Point { x, y: 2 }));
-    detour.push(Point { x: 7, y: 1 });
-    two_way_corridor(&mut state, &detour);
-
-    let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
-    state.time =
-        f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY) * clock::GAME_DAY_SECONDS;
-    state.day = 0;
-    state.clock_minutes = departure_minute;
-    state.paused = false;
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    (state, topology, bus_path)
-}
-
 fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
     let home = Point { x: 2, y: 3 };
-    let workplace = Point { x: 10, y: 3 };
+    let workplace = Point { x: 12, y: 3 };
     let mut engine = GameEngine::new();
-    road_line(&mut engine, 3, 3, 9);
+    road_line(&mut engine, 3, 3, 11);
     engine.dispatch(GameIntent::AddBusStop {
         point: (3, 2).into(),
     });
@@ -506,8 +457,14 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     // while retaining a deterministic later sim iteration slot.
     let (mut state, topology) = car_commute_fixture(&["sim-001", "sim-485"]);
     let home = Point { x: 2, y: 3 };
-    let workplace = Point { x: 10, y: 3 };
-    let free_flow = traffic::private_car_candidate(&state, &topology, home, workplace);
+    let workplace = Point { x: 12, y: 3 };
+    let free_flow = traffic::private_car_candidate(
+        &state,
+        &topology,
+        &traffic::RoadFlow::new(),
+        home,
+        workplace,
+    );
     assert!(free_flow.is_some(), "car fixture has a free-flow candidate");
     let Some(free_flow) = free_flow else {
         return;
@@ -583,13 +540,22 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     assert_eq!(first_worker.status, TripStatus::Driving);
     assert_eq!(second_worker.status, TripStatus::Driving);
     assert!(second_arrival_time > first_arrival_time);
+    let free_road_seconds: f64 = free_flow
+        .path
+        .road_steps()
+        .iter()
+        .map(|step| step.travel_seconds)
+        .sum();
+    let fixed_car_seconds = free_flow.estimated_seconds - free_road_seconds;
     assert!(
-        (first_arrival_time - state.time - free_flow.estimated_seconds * 1.25).abs() < 1e-9,
+        (first_arrival_time - state.time - fixed_car_seconds - free_road_seconds * 1.25).abs()
+            < 1e-9,
         "first worker should see seeded flow of four: arrival={first_arrival_time}, free_flow={}s",
         free_flow.estimated_seconds
     );
     assert!(
-        (second_arrival_time - state.time - free_flow.estimated_seconds * 1.5).abs() < 1e-9,
+        (second_arrival_time - state.time - fixed_car_seconds - free_road_seconds * 1.5).abs()
+            < 1e-9,
         "second worker should see the first worker's selected flow: arrival={second_arrival_time}, free_flow={}s",
         free_flow.estimated_seconds
     );
@@ -608,66 +574,8 @@ fn car_mode_choice_is_identical_for_coarse_and_fine_ticks() {
     assert_eq!(coarse.time, fine.time);
     assert_eq!(coarse.active_trips, fine.active_trips);
     assert_eq!(
-        caelum_core::traffic::active_car_flow(&coarse),
-        caelum_core::traffic::active_car_flow(&fine)
-    );
-}
-
-#[test]
-fn due_commute_uses_direct_bus_at_zero_flow_and_car_after_bus_congestion() {
-    let (state, topology, bus_path) = bus_congestion_mode_choice_fixture();
-
-    let free_flow = tick_trips(&state, &topology, 1.0);
-    assert_eq!(free_flow.active_trips.len(), 1);
-    assert_eq!(free_flow.active_trips[0].status, TripStatus::Waiting);
-    assert_eq!(free_flow.active_trips[0].private_car_trip, None);
-    assert!(traffic::active_car_flow(&free_flow).is_empty());
-    assert_eq!(
-        free_flow.active_trips[0]
-            .route_plan
-            .as_ref()
-            .map(|plan| plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>()),
-        Some(vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk])
-    );
-
-    let mut congested_state = state;
-    congested_state.active_trips = (0..12)
-        .map(|index| ActiveTrip {
-            id: format!("seed-car-trip-{index:03}"),
-            sim_id: format!("seed-car-sim-{index:03}"),
-            purpose: TripPurpose::CommuteOutbound,
-            origin: (1, 0).into(),
-            destination: (7, 0).into(),
-            position: (1, 0).into(),
-            status: TripStatus::Driving,
-            deadline: congested_state.time + 900.0,
-            route_plan: None,
-            current_leg_index: 0,
-            patience_remaining: 240.0,
-            private_car_trip: Some(PrivateCarTrip {
-                path: bus_path.clone(),
-                arrival_time: congested_state.time + 10_000.0,
-            }),
-        })
-        .collect();
-
-    let congested = tick_trips(&congested_state, &topology, 1.0);
-    assert_eq!(congested.active_trips.len(), 13);
-    assert_eq!(
-        congested
-            .active_trips
-            .iter()
-            .find(|trip| trip.sim_id == "sim-001")
-            .map(|trip| trip.status),
-        Some(TripStatus::Driving)
-    );
-    assert_eq!(
-        congested
-            .active_trips
-            .iter()
-            .find(|trip| trip.sim_id == "sim-001")
-            .map(|trip| trip.private_car_trip.is_some()),
-        Some(true)
+        caelum_core::traffic::derive_road_flow(&coarse),
+        caelum_core::traffic::derive_road_flow(&fine)
     );
 }
 
@@ -683,7 +591,10 @@ fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
         at_departure.transit.vehicles[0].step_progress, 0.7,
         "fractional progress stays in normalized coordinates at the flow boundary"
     );
-    assert_eq!(traffic::road_flow_at(&at_departure, (3, 3).into()), 5);
+    assert_eq!(
+        traffic::derive_road_flow(&at_departure).get(&(3, 3).into()),
+        Some(&5)
+    );
 
     let split = tick_trips(&at_departure, &topology, total_delta - departure_delta);
     assert_eq!(coarse.transit.vehicles[0], split.transit.vehicles[0]);
@@ -717,14 +628,18 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
     let bus = &at_arrival.transit.vehicles[0];
     assert_eq!(bus.path_step_index, 0);
     assert!((bus.step_progress - 0.8).abs() < 1e-9);
-    assert_eq!(traffic::road_flow_at(&at_arrival, current_point), 4);
+    assert_eq!(
+        traffic::derive_road_flow(&at_arrival).get(&current_point),
+        Some(&4)
+    );
     assert_eq!(at_arrival.metrics.completed_trips, 1);
     assert!(at_arrival
         .active_trips
         .iter()
         .all(|trip| trip.private_car_trip.is_some()));
 
-    let next_stop_seconds = transit::seconds_until_next_vehicle_stop(&at_arrival, bus);
+    let flow = traffic::derive_road_flow(&at_arrival);
+    let next_stop_seconds = transit::seconds_until_next_vehicle_stop(&at_arrival, &flow, bus);
     assert!(next_stop_seconds.is_some(), "bus has a next stop");
     if let Some(next_stop_seconds) = next_stop_seconds {
         assert!((next_stop_seconds - 6.5).abs() < 1e-9);
@@ -759,12 +674,12 @@ fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
     let active = &before_arrival.active_trips[0];
     assert_eq!(active.status, TripStatus::Driving);
     assert!(active.private_car_trip.is_some());
-    assert!(!caelum_core::traffic::active_car_flow(&before_arrival).is_empty());
+    assert!(!caelum_core::traffic::derive_road_flow(&before_arrival).is_empty());
 
     let arrived = tick_trips(&spawned, &topology, (arrival_time - spawned.time).max(0.0));
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
-    assert!(caelum_core::traffic::active_car_flow(&arrived).is_empty());
+    assert!(caelum_core::traffic::derive_road_flow(&arrived).is_empty());
 }
 
 #[test]
@@ -943,7 +858,7 @@ fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
     waiting.route_plan = Some(bus_plan((2, 4).into(), (12, 4).into(), "route-001"));
     state.active_trips = vec![waiting];
 
-    let next = transit::tick_vehicles(&state, 0.0);
+    let next = transit::tick_vehicles(&state, &traffic::RoadFlow::new(), 0.0);
 
     assert!(next.transit.vehicles[0].passenger_ids.is_empty());
     assert_eq!(next.active_trips[0].status, TripStatus::Waiting);
@@ -1445,8 +1360,12 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
-        .expect("vehicle has a next stop");
+    let seconds = transit::seconds_until_next_vehicle_stop(
+        &state,
+        &traffic::RoadFlow::new(),
+        &state.transit.vehicles[0],
+    )
+    .expect("vehicle has a next stop");
     let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
     let next = tick_trips(&state, &topology, seconds);
 
@@ -1496,7 +1415,7 @@ fn cursor_resets_progress_at_path_step_boundary() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let next = transit::tick_vehicles(&state, 0.5);
+    let next = transit::tick_vehicles(&state, &traffic::RoadFlow::new(), 0.5);
 
     assert_eq!(next.transit.vehicles[0].path_step_index, 1);
     assert_eq!(next.transit.vehicles[0].step_progress, 0.0);

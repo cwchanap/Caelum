@@ -2,6 +2,7 @@ use caelum_core::model::{
     ActiveTrip, GameSnapshot, PrivateCarTrip, ServicePattern, TransitMode, TransitNodeStatus,
     TransitPath, TripPurpose, TripStatus,
 };
+use caelum_core::traffic::{derive_road_flow, RoadFlow};
 use caelum_core::{router, GameEngine, GameIntent};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -59,8 +60,13 @@ fn left_turn_trip_fixture() -> GameSnapshot {
 fn creates_walking_route_for_nearby_destinations() {
     let engine = GameEngine::new();
 
-    let plan = router::find_route_plan(&engine.snapshot(), &(2, 3).into(), &(4, 3).into())
-        .expect("inside-map route should exist");
+    let plan = router::find_route_plan(
+        &engine.snapshot(),
+        &RoadFlow::new(),
+        &(2, 3).into(),
+        &(4, 3).into(),
+    )
+    .expect("inside-map route should exist");
 
     assert_eq!(plan.estimated_seconds, 40.0);
     assert_eq!(plan.legs.len(), 1);
@@ -75,16 +81,30 @@ fn returns_none_for_out_of_bounds_points() {
     let engine = GameEngine::new();
     let snapshot = engine.snapshot();
 
-    assert!(router::find_route_plan(&snapshot, &(-1, 3).into(), &(4, 3).into()).is_none());
-    assert!(router::find_route_plan(&snapshot, &(2, 3).into(), &(28, 17).into()).is_none());
+    assert!(
+        router::find_route_plan(&snapshot, &RoadFlow::new(), &(-1, 3).into(), &(4, 3).into())
+            .is_none()
+    );
+    assert!(router::find_route_plan(
+        &snapshot,
+        &RoadFlow::new(),
+        &(2, 3).into(),
+        &(28, 17).into()
+    )
+    .is_none());
 }
 
 #[test]
 fn creates_bus_route_plan_from_connected_stops() {
     let engine = bus_route_state();
 
-    let plan = router::find_route_plan(&engine.snapshot(), &(1, 4).into(), &(13, 4).into())
-        .expect("bus route should be planned");
+    let plan = router::find_route_plan(
+        &engine.snapshot(),
+        &RoadFlow::new(),
+        &(1, 4).into(),
+        &(13, 4).into(),
+    )
+    .expect("bus route should be planned");
 
     assert_eq!(plan.estimated_seconds, 142.5);
     assert_eq!(
@@ -108,8 +128,9 @@ fn missing_node_is_not_enumerated_as_a_router_anchor() {
     snapshot.transit.stops[0].status = TransitNodeStatus::Missing;
     snapshot.transit.routes[0].path_broken = false;
 
-    let plan = router::find_route_plan(&snapshot, &(1, 4).into(), &(13, 4).into())
-        .expect("walking fallback remains available");
+    let plan =
+        router::find_route_plan(&snapshot, &RoadFlow::new(), &(1, 4).into(), &(13, 4).into())
+            .expect("walking fallback remains available");
 
     assert_eq!(plan.legs.len(), 1);
     assert_eq!(plan.legs[0].mode, TransitMode::Walk);
@@ -121,8 +142,9 @@ fn transit_plan_estimate_equals_the_authoritative_leg_duration() {
     let authoritative_leg_duration = snapshot.transit.routes[0].legs[0]
         .estimated_seconds
         .unwrap();
-    let plan = router::find_route_plan(&snapshot, &(2, 4).into(), &(12, 4).into())
-        .expect("bus route should be planned");
+    let plan =
+        router::find_route_plan(&snapshot, &RoadFlow::new(), &(2, 4).into(), &(12, 4).into())
+            .expect("bus route should be planned");
 
     assert_eq!(plan.legs[1].mode, TransitMode::Bus);
     let transit_seconds = plan.estimated_seconds - 90.0;
@@ -158,7 +180,8 @@ fn bus_route_plan_eta_reflects_current_car_flow_without_rebuilding_path() {
         })
         .collect();
 
-    let plan = router::find_route_plan(&snapshot, &(1, 4).into(), &(13, 4).into())
+    let flow = derive_road_flow(&snapshot);
+    let plan = router::find_route_plan(&snapshot, &flow, &(1, 4).into(), &(13, 4).into())
         .expect("bus route remains available under flow");
 
     assert_eq!(plan.legs[1].mode, TransitMode::Bus);
@@ -192,8 +215,13 @@ fn creates_metro_route_plan_from_connected_stations() {
         waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
 
-    let plan = router::find_route_plan(&engine.snapshot(), &(1, 4).into(), &(13, 4).into())
-        .expect("metro line should be planned");
+    let plan = router::find_route_plan(
+        &engine.snapshot(),
+        &RoadFlow::new(),
+        &(1, 4).into(),
+        &(13, 4).into(),
+    )
+    .expect("metro line should be planned");
 
     assert_eq!(plan.estimated_seconds, 166.25);
     assert_eq!(
@@ -210,8 +238,13 @@ fn ignores_inactive_and_path_broken_routes() {
         route_id: "route-001".to_string(),
         active: false,
     });
-    let inactive_plan =
-        router::find_route_plan(&inactive.snapshot(), &(1, 4).into(), &(13, 4).into()).unwrap();
+    let inactive_plan = router::find_route_plan(
+        &inactive.snapshot(),
+        &RoadFlow::new(),
+        &(1, 4).into(),
+        &(13, 4).into(),
+    )
+    .unwrap();
     assert_eq!(inactive_plan.legs.len(), 1);
     assert_eq!(inactive_plan.legs[0].mode, TransitMode::Walk);
 
@@ -220,8 +253,13 @@ fn ignores_inactive_and_path_broken_routes() {
         point: (7, 5).into(),
     });
     assert!(broken.snapshot().transit.routes[0].path_broken);
-    let broken_plan =
-        router::find_route_plan(&broken.snapshot(), &(1, 4).into(), &(13, 4).into()).unwrap();
+    let broken_plan = router::find_route_plan(
+        &broken.snapshot(),
+        &RoadFlow::new(),
+        &(1, 4).into(),
+        &(13, 4).into(),
+    )
+    .unwrap();
     assert_eq!(broken_plan.legs.len(), 1);
     assert_eq!(broken_plan.legs[0].mode, TransitMode::Walk);
 }
