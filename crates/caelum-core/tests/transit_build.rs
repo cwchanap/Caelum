@@ -267,6 +267,8 @@ fn simple_route(id: &str, stop_ids: &[&str]) -> Route {
         revision: 0,
         legs: Vec::new(),
         path_broken: false,
+        target_headway_seconds: None,
+        service_metrics: None,
     }
 }
 

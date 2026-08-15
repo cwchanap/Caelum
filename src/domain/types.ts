@@ -1,5 +1,5 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 6 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 7 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads";
@@ -310,6 +310,13 @@ export interface RouteLegPath {
   failureReason: LegFailureReason | null;
 }
 
+export interface BusServiceMetrics {
+  roundTripSeconds: number;
+  assignedFleet: number;
+  requiredFleet: number | null;
+  nominalHeadwaySeconds: number | null;
+}
+
 export interface Route {
   id: string;
   name: string;
@@ -321,6 +328,8 @@ export interface Route {
   revision: number;
   legs: RouteLegPath[];
   pathBroken: boolean;
+  targetHeadwaySeconds: number | null;
+  serviceMetrics: BusServiceMetrics | null;
 }
 
 export interface MetroLine {

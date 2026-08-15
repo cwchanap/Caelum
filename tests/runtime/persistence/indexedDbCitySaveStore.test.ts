@@ -33,7 +33,7 @@ const summary = {
 defineCitySaveStoreContract("IndexedDbCitySaveStore", () => createStore());
 
 describe("IndexedDbCitySaveStore persistence", () => {
-  it("uses a fresh v6 namespace instead of reading the prior city database", async () => {
+  it("uses a fresh v7 namespace instead of reading the prior city database", async () => {
     const legacyRequest = fakeIndexedDB.open("caelum-city-saves-v1", 1);
     const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
       legacyRequest.onupgradeneeded = () => {

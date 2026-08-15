@@ -233,7 +233,7 @@ impl GameEngine {
         })
     }
 
-    /// Construct an engine from a schema-v6 snapshot, normalizing
+    /// Construct an engine from a schema-v7 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived

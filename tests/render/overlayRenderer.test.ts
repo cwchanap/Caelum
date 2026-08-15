@@ -419,6 +419,8 @@ describe("broken route markers", () => {
               ),
             ],
             pathBroken: true,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
           },
         ],
       },
@@ -491,6 +493,8 @@ describe("broken route markers", () => {
         ),
       ],
       pathBroken: true,
+      targetHeadwaySeconds: null,
+      serviceMetrics: null,
     };
     const shuttleRoute = {
       id: "route-shuttle",
@@ -512,6 +516,8 @@ describe("broken route markers", () => {
         ),
       ],
       pathBroken: true,
+      targetHeadwaySeconds: null,
+      serviceMetrics: null,
     };
     const routeState = {
       ...state,

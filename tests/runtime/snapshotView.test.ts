@@ -52,6 +52,7 @@ function createNullishWireSnapshot(
             },
           ],
           pathBroken: true,
+          targetHeadwaySeconds: null,
         },
       ],
       metroLines: [

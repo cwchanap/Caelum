@@ -17,7 +17,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 6,
+      "schemaVersion": 7,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -577,7 +577,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 6,
+      "schemaVersion": 7,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
