@@ -1,6 +1,6 @@
 use caelum_core::buildings::assign_workplaces;
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, Heading, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
+    ActiveTrip, GameSnapshot, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
     PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection,
     ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
     TripPurpose, TripStatus, Vehicle, WorkerProfile,
@@ -200,47 +200,6 @@ fn clear_roads(state: &mut GameSnapshot) {
     }
 }
 
-fn heading_between(from: Point, to: Point) -> Heading {
-    match (to.x - from.x, to.y - from.y) {
-        (0, -1) => Heading::North,
-        (1, 0) => Heading::East,
-        (0, 1) => Heading::South,
-        (-1, 0) => Heading::West,
-        delta => panic!("fixture points are not adjacent: {delta:?}"),
-    }
-}
-
-fn opposite(heading: Heading) -> Heading {
-    match heading {
-        Heading::North => Heading::South,
-        Heading::East => Heading::West,
-        Heading::South => Heading::North,
-        Heading::West => Heading::East,
-    }
-}
-
-fn two_way_corridor(state: &mut GameSnapshot, points: &[Point]) {
-    for &point in points {
-        let tile = state.map.tile_mut(point).expect("fixture tile exists");
-        tile.kind = "road".to_string();
-    }
-    for pair in points.windows(2) {
-        let heading = heading_between(pair[0], pair[1]);
-        state
-            .map
-            .tile_mut(pair[0])
-            .expect("fixture tile exists")
-            .road_connections
-            .push(heading);
-        state
-            .map
-            .tile_mut(pair[1])
-            .expect("fixture tile exists")
-            .road_connections
-            .push(opposite(heading));
-    }
-}
-
 fn commute_endpoint(id: &str, building_type: &str, point: Point) -> PlacedBuilding {
     PlacedBuilding {
         id: id.to_string(),
@@ -258,9 +217,10 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     let workplace = Point { x: 12, y: 3 };
     let mut state = create_initial_snapshot();
     clear_roads(&mut state);
-    two_way_corridor(
+    common::corridor(
         &mut state,
         &(3..=11).map(|x| Point { x, y: 3 }).collect::<Vec<_>>(),
+        None,
     );
     state.buildings = vec![
         // A destination building keeps the fixture free of automatic Sandbox
@@ -481,8 +441,10 @@ fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
     assert_eq!(next.active_trips.len(), 1);
     let outbound = &next.active_trips[0];
 
-    assert_eq!(outbound.status, TripStatus::Idle);
+    // The walk fallback plan is stored at spawn with its implied status.
+    assert_eq!(outbound.status, TripStatus::Walking);
     assert!(outbound.private_car_trip.is_none());
+    assert!(outbound.route_plan.is_some());
 
     let walking = tick_trips(&next, &topology, 1.0);
     assert_eq!(walking.active_trips[0].status, TripStatus::Walking);
@@ -816,7 +778,7 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
     state.sims = vec![sim("sim-001", (2, 3).into(), None)];
     state.active_trips = vec![driving_trip_without_payload()];
 
-    let next = trips::advance_active_trips(&state, 0.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(
@@ -843,7 +805,7 @@ fn walking_movement_scales_by_simulated_time() {
         (5, 3).into(),
     )];
 
-    let next = trips::advance_active_trips(&state, 1.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 1.0);
     let advanced = &next.active_trips[0];
 
     assert_eq!(advanced.status, TripStatus::Walking);
@@ -864,7 +826,7 @@ fn terminal_trips_are_pruned_without_double_counting() {
         terminal.patience_remaining = 123.0;
         state.active_trips = vec![terminal.clone()];
 
-        let next = trips::advance_active_trips(&state, 20.0);
+        let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 20.0);
 
         assert!(next.active_trips.is_empty());
         assert_eq!(next.metrics.completed_trips, state.metrics.completed_trips);
@@ -897,7 +859,7 @@ fn riding_trips_stay_attached_to_vehicles_until_disembarked() {
         parked_position: None,
     }];
 
-    let next = trips::advance_active_trips(&state, 10.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 10.0);
 
     assert_eq!(next.active_trips[0], riding);
     assert_eq!(
@@ -926,7 +888,7 @@ fn riding_trip_without_vehicle_replans_from_current_position() {
     riding.route_plan = Some(bus_plan((7, 8).into(), (15, 8).into(), "route-001"));
     state.active_trips = vec![riding];
 
-    let next = trips::advance_active_trips(&state, 1.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 1.0);
     let recovered = &next.active_trips[0];
 
     assert_ne!(recovered.status, TripStatus::Riding);
@@ -984,7 +946,7 @@ fn fractional_idle_position_snaps_before_replanning() {
         (23, 8).into(),
     )];
 
-    let next = trips::advance_active_trips(&state, 1.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 1.0);
     let replanned = &next.active_trips[0];
 
     assert_ne!(replanned.status, TripStatus::Unserved);
@@ -1007,7 +969,7 @@ fn waiting_trips_lose_patience_and_update_wait_metrics() {
     waiting.patience_remaining = 1.0;
     state.active_trips = vec![waiting];
 
-    let next = trips::advance_active_trips(&state, 2.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 2.0);
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
@@ -1035,7 +997,7 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
         (2, 3).into(),
         (3, 3).into(),
     )];
-    let arrived = trips::advance_active_trips(&on_time, 20.0);
+    let arrived = trips::advance_active_trips(&on_time, &traffic::RoadFlow::new(), 20.0);
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
@@ -1070,7 +1032,7 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     terminal_leg.route_plan = Some(bus_plan((7, 8).into(), (23, 8).into(), "route-001"));
     terminal_leg.current_leg_index = 1;
     late.active_trips = vec![terminal_leg];
-    let late_next = trips::advance_active_trips(&late, 1.0);
+    let late_next = trips::advance_active_trips(&late, &traffic::RoadFlow::new(), 1.0);
 
     assert!(late_next.active_trips.is_empty());
     assert_eq!(late_next.metrics.completed_trips, 1);
@@ -1107,7 +1069,7 @@ fn empty_route_plan_not_at_destination_is_unserved_not_phantom_arrival() {
     stranded.current_leg_index = 0;
     state.active_trips = vec![stranded];
 
-    let next = trips::advance_active_trips(&state, 1.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 1.0);
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 0);
@@ -1128,7 +1090,7 @@ fn no_route_planning_marks_trip_unserved() {
         (28, 17).into(),
     )];
 
-    let next = trips::advance_active_trips(&state, 1.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 1.0);
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
@@ -1187,7 +1149,7 @@ fn stale_history_pruning_keeps_history_signal_for_empty_window() {
         })
         .collect();
 
-    let next = trips::advance_active_trips(&state, 0.0);
+    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
 
     assert_eq!(next.metrics.trip_outcomes.len(), 1);
     assert_eq!(next.metrics.trip_outcomes[0].time, 109.0);
@@ -1569,7 +1531,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         private_car_trip: None,
     }];
 
-    let arrived = trips::advance_active_trips(&state, 0.0);
+    let arrived = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
     assert!(arrived.active_trips.is_empty());
     assert_eq!(sim.position, workplace);

@@ -637,9 +637,12 @@ fn move_in_at_exact_departure_spawns_today() {
         .expect("exact-departure move-in creates sim-001");
     assert!(!sim.outbound_resolved_today);
     assert!(!sim.outbound_arrived_today);
+    // The spawned trip carries its spawn-time plan and the implied status
+    // (walking toward the workplace) instead of a planless Idle payload.
     assert!(due.active_trips.iter().any(|trip| {
         trip.sim_id == "sim-001"
             && trip.purpose == TripPurpose::CommuteOutbound
-            && trip.status == caelum_core::model::TripStatus::Idle
+            && trip.status == caelum_core::model::TripStatus::Walking
+            && trip.route_plan.is_some()
     }));
 }

@@ -393,10 +393,7 @@ fn bus_route_plan_eta_reflects_current_car_flow_without_rebuilding_path() {
         .expect("bus route remains available under flow");
 
     assert_eq!(plan.legs[1].mode, TransitMode::Bus);
-    assert_eq!(
-        plan.estimated_seconds,
-        40.0 + 90.0 + stored_path_seconds * 1.5
-    );
+    assert!((plan.estimated_seconds - (40.0 + 90.0 + stored_path_seconds * 1.5)).abs() < 1e-9);
     assert_eq!(
         snapshot.transit.routes[0].legs[0]
             .current_path

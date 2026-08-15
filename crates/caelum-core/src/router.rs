@@ -214,12 +214,7 @@ fn leg_travel_seconds(flow: &RoadFlow, mode: TransitMode, leg: &RouteLegPath) ->
         .as_ref()
         .map(|path| match (mode, path) {
             (TransitMode::Bus, TransitPath::Road { .. }) => {
-                let effective_seconds = crate::traffic::effective_road_path_seconds(flow, path);
-                if path.step_count() == 0 {
-                    path.total_travel_seconds()
-                } else {
-                    effective_seconds
-                }
+                crate::traffic::effective_road_path_seconds(flow, path)
             }
             (_, path) => path.total_travel_seconds(),
         })

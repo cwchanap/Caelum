@@ -1448,13 +1448,24 @@ where
         }
         consecutive_zero_steps = 0;
         let remaining_step = step_seconds * (1.0 - vehicle.step_progress);
+        // `seconds_until_next_vehicle_stop` sums the remaining steps in a
+        // different association than this sequential subtraction, so an exact
+        // boundary delta can differ from the consumed time by a few ulps of
+        // the step duration — more than the absolute `f64::EPSILON` once
+        // durations grow. Scale the tolerance by the remaining step time and
+        // the leg's step count, and clamp ulp-scale residuals to zero so the
+        // next step starts at exactly 0.0 progress.
+        let tolerance = remaining_step * f64::EPSILON * path.step_count().max(1) as f64;
 
-        if remaining_seconds + f64::EPSILON < remaining_step {
+        if remaining_seconds + tolerance < remaining_step {
             vehicle.step_progress += remaining_seconds / step_seconds;
             return completion_events_changed;
         }
 
         remaining_seconds = (remaining_seconds - remaining_step).max(0.0);
+        if remaining_seconds <= tolerance {
+            remaining_seconds = 0.0;
+        }
         advance_vehicle_cursor(vehicle, itinerary);
         if vehicle.itinerary_index != original_itinerary_index {
             completion_events_changed |= on_itinerary_leg_completed(vehicle, itinerary_index);

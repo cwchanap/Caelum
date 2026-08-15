@@ -1,9 +1,14 @@
 use std::collections::BTreeMap;
 
+mod common;
+
+use common::corridor;
+
 use caelum_core::commute;
 use caelum_core::model::{
     ActiveTrip, Heading, PathGeometry, PlacedBuilding, Point, PrivateCarTrip, RoadPathStep,
-    TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
+    Route as BusRoute, RouteLegKind, RouteLegPath, RouteLegStatus, ServiceDirection,
+    ServicePattern, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::state::create_initial_snapshot;
@@ -114,11 +119,35 @@ fn add_car_path_to_flow_counts_each_admitted_car_once_per_road_point() {
 #[test]
 fn non_driving_trips_and_buses_do_not_contribute_to_flow() {
     let car_point = point(5, 5);
-    let mut state = flow_fixture(vec![driving_trip(
-        "001",
-        TripStatus::Idle,
-        road_path(&[car_point]),
-    )]);
+    let mut state = flow_fixture(vec![
+        driving_trip("001", TripStatus::Idle, road_path(&[car_point])),
+        driving_trip("002", TripStatus::Driving, road_path(&[car_point])),
+    ]);
+    // The bus serves a route whose captured road path overlaps the car's
+    // point, so the vehicle is present on the congested road yet must still
+    // be excluded from the derived car flow.
+    state.transit.routes.push(BusRoute {
+        id: "route-001".to_string(),
+        name: "R1".to_string(),
+        color: "#f00".to_string(),
+        stop_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        vehicle_ids: vec!["vehicle-001".to_string()],
+        active: true,
+        pattern: ServicePattern::Loop,
+        revision: 0,
+        legs: vec![RouteLegPath {
+            from_waypoint_id: "stop-001".to_string(),
+            to_waypoint_id: "stop-002".to_string(),
+            direction: ServiceDirection::Loop,
+            kind: RouteLegKind::Service,
+            status: RouteLegStatus::Connected,
+            current_path: Some(road_path(&[car_point])),
+            last_valid_path: None,
+            estimated_seconds: Some(1.0),
+            failure_reason: None,
+        }],
+        path_broken: false,
+    });
     state.transit.vehicles.push(Vehicle {
         id: "vehicle-001".to_string(),
         mode: TransitMode::Bus,
@@ -131,7 +160,7 @@ fn non_driving_trips_and_buses_do_not_contribute_to_flow() {
         parked_position: None,
     });
 
-    assert!(derive_road_flow(&state).is_empty());
+    assert_eq!(derive_road_flow(&state), BTreeMap::from([(car_point, 1)]));
 }
 
 #[test]
@@ -183,48 +212,6 @@ fn building(id: &str, tile: Point) -> PlacedBuilding {
         occupied_tiles: vec![tile],
         placed_at: 0.0,
         transit_node_id: None,
-    }
-}
-
-fn heading_between(from: Point, to: Point) -> Heading {
-    match (to.x - from.x, to.y - from.y) {
-        (0, -1) => Heading::North,
-        (1, 0) => Heading::East,
-        (0, 1) => Heading::South,
-        (-1, 0) => Heading::West,
-        delta => panic!("points are not adjacent: {delta:?}"),
-    }
-}
-
-fn opposite(heading: Heading) -> Heading {
-    match heading {
-        Heading::North => Heading::South,
-        Heading::East => Heading::West,
-        Heading::South => Heading::North,
-        Heading::West => Heading::East,
-    }
-}
-
-fn corridor(state: &mut caelum_core::GameSnapshot, points: &[Point], one_way: Option<Heading>) {
-    for &position in points {
-        let tile = state.map.tile_mut(position).expect("fixture tile exists");
-        tile.kind = "road".to_string();
-        tile.one_way = one_way;
-    }
-    for pair in points.windows(2) {
-        let heading = heading_between(pair[0], pair[1]);
-        state
-            .map
-            .tile_mut(pair[0])
-            .expect("fixture tile exists")
-            .road_connections
-            .push(heading);
-        state
-            .map
-            .tile_mut(pair[1])
-            .expect("fixture tile exists")
-            .road_connections
-            .push(opposite(heading));
     }
 }
 
@@ -387,11 +374,23 @@ fn private_car_candidate_eta_includes_its_own_flow_unit() {
             .iter()
             .map(|step| step.travel_seconds)
             .sum();
-        assert_eq!(
-            congested.estimated_seconds,
-            free_flow.estimated_seconds + free_road_seconds * 0.25
+        assert!(
+            (congested.estimated_seconds
+                - (free_flow.estimated_seconds + free_road_seconds * 0.25))
+                .abs()
+                < 1e-9
         );
     }
+}
+
+#[test]
+fn empty_road_path_keeps_its_stored_total_duration() {
+    let path = TransitPath::Road {
+        steps: Vec::new(),
+        total_travel_seconds: 3.75,
+    };
+
+    assert_eq!(effective_road_path_seconds(&RoadFlow::new(), &path), 3.75);
 }
 
 #[test]

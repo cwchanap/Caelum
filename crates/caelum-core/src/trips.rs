@@ -93,6 +93,19 @@ fn apply_due_world_events(state: &mut GameSnapshot) {
     population::apply_due_move_ins(state);
 }
 
+/// Derive the road-flow map for this scheduling iteration and spawn due
+/// commute trips into the same snapshot, admitting same-time cars into the
+/// returned map so planning, boundary estimation, and the substep all see the
+/// post-spawn flow.
+fn derive_flow_and_spawn(
+    state: &mut GameSnapshot,
+    road_topology: &RoadTopology,
+) -> traffic::RoadFlow {
+    let mut road_flow = traffic::derive_road_flow(state);
+    spawn_due_commute_trips(state, road_topology, &mut road_flow);
+    road_flow
+}
+
 fn tick_trips_substepped(
     state: &GameSnapshot,
     road_topology: &RoadTopology,
@@ -119,8 +132,7 @@ fn tick_trips_substepped(
     // time, then evaluate. If terminal, return immediately.
     apply_due_world_events(&mut next);
     reset_daily_commute_flags(&mut next);
-    let mut road_flow = traffic::derive_road_flow(&next);
-    spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
+    derive_flow_and_spawn(&mut next, road_topology);
     if on_substep(&mut next) {
         return next;
     }
@@ -172,8 +184,7 @@ fn tick_trips_substepped(
         }
 
         reset_daily_commute_flags(&mut next);
-        let mut road_flow = traffic::derive_road_flow(&next);
-        spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
+        let road_flow = derive_flow_and_spawn(&mut next, road_topology);
 
         let substep_end = next_boundary_after(&next, &road_flow)
             .map(|boundary| boundary.min(final_time))
@@ -217,8 +228,7 @@ fn tick_trips_substepped(
         while final_time - next.time > EPSILON {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            let mut road_flow = traffic::derive_road_flow(&next);
-            spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
+            let road_flow = derive_flow_and_spawn(&mut next, road_topology);
 
             let substep_end = next_boundary_after(&next, &road_flow)
                 .map(|boundary| boundary.min(final_time))
@@ -246,8 +256,7 @@ fn tick_trips_substepped(
         if !early_termination {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            let mut road_flow = traffic::derive_road_flow(&next);
-            spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
+            derive_flow_and_spawn(&mut next, road_topology);
         }
     }
 
@@ -369,9 +378,12 @@ fn sync_clock(state: &mut GameSnapshot) {
     state.clock_minutes = clock::clock_minutes(state.time);
 }
 
-pub fn advance_active_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    let flow = traffic::RoadFlow::new();
-    advance_active_trips_with_zero_delta_ids(state, &flow, delta_seconds, &HashSet::new())
+pub fn advance_active_trips(
+    state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    advance_active_trips_with_zero_delta_ids(state, flow, delta_seconds, &HashSet::new())
 }
 
 fn advance_active_trips_with_zero_delta_ids(
@@ -601,32 +613,16 @@ fn spawn_due_commute_trips(
                     }
                     continue;
                 }
-                let non_car_plan = router::find_route_plan(state, road_flow, &sim.home, &workplace);
-                let chosen_car = private_car_trip_if_faster(
-                    non_car_plan.as_ref(),
-                    traffic::private_car_candidate(
-                        state,
-                        road_topology,
-                        road_flow,
-                        sim.home,
-                        workplace,
-                    ),
-                    state.time,
-                );
-                let mut trip = build_trip(
+                let trip = build_commute_trip(
                     state,
+                    road_topology,
+                    road_flow,
                     &sim.id,
                     TripPurpose::CommuteOutbound,
                     sim.home,
                     workplace,
-                    sim.position.into(),
                     scheduled_time,
                 );
-                if let Some(car) = chosen_car {
-                    traffic::add_car_path_to_flow(road_flow, &car.path);
-                    trip.status = TripStatus::Driving;
-                    trip.private_car_trip = Some(car);
-                }
                 state.active_trips.push(trip);
             }
         }
@@ -642,32 +638,16 @@ fn spawn_due_commute_trips(
         if state.time + EPSILON >= scheduled_time
             && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
         {
-            let non_car_plan = router::find_route_plan(state, road_flow, &sim.position, &sim.home);
-            let chosen_car = private_car_trip_if_faster(
-                non_car_plan.as_ref(),
-                traffic::private_car_candidate(
-                    state,
-                    road_topology,
-                    road_flow,
-                    sim.position,
-                    sim.home,
-                ),
-                state.time,
-            );
-            let mut trip = build_trip(
+            let trip = build_commute_trip(
                 state,
+                road_topology,
+                road_flow,
                 &sim.id,
                 TripPurpose::CommuteReturn,
                 sim.position,
                 sim.home,
-                sim.position.into(),
                 scheduled_time,
             );
-            if let Some(car) = chosen_car {
-                traffic::add_car_path_to_flow(road_flow, &car.path);
-                trip.status = TripStatus::Driving;
-                trip.private_car_trip = Some(car);
-            }
             state.active_trips.push(trip);
         }
     }
@@ -1009,6 +989,51 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) 
     }
 }
 
+/// Plan one due commute trip: compare the non-car route plan against the
+/// private-car candidate, then build the trip in the chosen mode. A chosen car
+/// is registered into `road_flow` immediately so same-time sims plan against
+/// it. When the non-car plan wins, it is stored on the trip (with the status
+/// and leg index it implies) so `tick_trip` and boundary tracking reuse it
+/// instead of re-planning the same origin/destination.
+#[allow(clippy::too_many_arguments)]
+fn build_commute_trip(
+    state: &mut GameSnapshot,
+    road_topology: &RoadTopology,
+    road_flow: &mut traffic::RoadFlow,
+    sim_id: &str,
+    purpose: TripPurpose,
+    origin: Point,
+    destination: Point,
+    scheduled_time: f64,
+) -> ActiveTrip {
+    let non_car_plan = router::find_route_plan(state, road_flow, &origin, &destination);
+    let chosen_car = private_car_trip_if_faster(
+        non_car_plan.as_ref(),
+        traffic::private_car_candidate(state, road_topology, road_flow, origin, destination),
+        state.time,
+    );
+    let mut trip = build_trip(
+        state,
+        sim_id,
+        purpose,
+        origin,
+        destination,
+        origin.into(),
+        scheduled_time,
+    );
+    if let Some(car) = chosen_car {
+        traffic::add_car_path_to_flow(road_flow, &car.path);
+        trip.status = TripStatus::Driving;
+        trip.private_car_trip = Some(car);
+    } else if let Some(plan) = non_car_plan.filter(|plan| !plan.legs.is_empty()) {
+        // An empty-leg plan would leave the trip Arrived before any tick
+        // scores it; leave planless trips to `tick_trip`'s own handling.
+        trip.status = status_after_leg(&plan, 0);
+        trip.route_plan = Some(plan);
+    }
+    trip
+}
+
 fn build_trip(
     state: &mut GameSnapshot,
     sim_id: &str,
@@ -1094,7 +1119,11 @@ fn tick_trip(
                 late_trips: 0,
                 unserved_trips: 1,
                 wait_seconds: 0.0,
-                outcome: Some(trip_outcome(TripOutcomeKind::Unserved, 0.0, state.time)),
+                outcome: Some(trip_outcome(
+                    TripOutcomeKind::Unserved,
+                    0.0,
+                    tick_start_time,
+                )),
             };
         };
 
@@ -1646,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_car_choice_switches_when_live_non_car_eta_becomes_slower() {
+    fn strict_car_choice_switches_when_non_car_eta_becomes_slower() {
         let free_flow_non_car_plan = RoutePlan {
             legs: Vec::new(),
             estimated_seconds: 100.0,

@@ -20,7 +20,7 @@
 
 ## Verification
 
-All commands ran from `/Users/chanwaichan/workspace/Caelum/.worktrees/hpa-622`.
+All commands ran from the repository root.
 
 | Command | Outcome |
 | --- | --- |

@@ -52,7 +52,7 @@ Schema v6, structural Driving persistence, payload clearing, aggregate-path sele
 
 **Interfaces:**
 
-~~~
+~~~rust
 pub const WALK_SECONDS_PER_TILE: f64 = 20.0;
 pub type RoadFlow = BTreeMap<Point, u16>;
 pub const CAR_ACCESS_SECONDS: f64 = 120.0;
@@ -104,7 +104,7 @@ tick_vehicles, seconds_until_next_vehicle_stop, all private vehicle helpers, and
 
 In tests/traffic.rs, replace active_car_flow and road_flow_at imports with derive_road_flow, add_car_path_to_flow, RoadFlow, and CAR_ACCESS_SECONDS. Preserve the existing unique-road-path fixtures and write assertions such as:
 
-~~~
+~~~rust
 assert_eq!(commute::WALK_SECONDS_PER_TILE, 20.0);
 assert_eq!(CAR_ACCESS_SECONDS, 120.0);
 assert_eq!(derive_road_flow(&state), BTreeMap::from([(shared, 2), (other, 1)]));
@@ -117,7 +117,7 @@ assert_eq!(effective_road_step_seconds(&flow, &step), 1.875);
 
 Update all direct router/transit test callers to pass RoadFlow::new() or derive_road_flow(&state) as appropriate. Run:
 
-~~~
+~~~bash
 cargo test -p caelum-core --test traffic
 ~~~
 
@@ -127,7 +127,7 @@ Expected: compilation fails because the explicit-flow API and shared cost are ab
 
 Add WALK_SECONDS_PER_TILE to commute.rs, use it from router.rs and trips.rs, and remove the old private/literal copies. In traffic.rs, define RoadFlow and use a private helper that deduplicates TransitPath::Road positions in a BTreeSet before saturating increments.
 
-~~~
+~~~rust
 pub fn derive_road_flow(state: &GameSnapshot) -> RoadFlow {
     let mut flow = RoadFlow::new();
     for trip in &state.active_trips {
@@ -149,7 +149,7 @@ Make both public router entry points take RoadFlow; pass it through ride_seconds
 
 Make tick_vehicles, seconds_until_next_vehicle_stop, advance_vehicle_by_seconds, and vehicle_step_seconds take/forward the same map. The bus road arm is:
 
-~~~
+~~~rust
 (TransitMode::Bus, TransitPathStepRef::Road(step)) => {
     crate::traffic::effective_road_step_seconds(flow, step)
 }
@@ -161,7 +161,7 @@ Do not add vehicle state or change fractional step_progress math.
 
 Thread RoadFlow through private trip planning, boundary, active-trip, and vehicle helpers. At every current-time processing site in tick_trips_substepped (initial, main loop, fallback loop, final processing), derive once, admit due trips, then reuse that map for boundary and substep work:
 
-~~~
+~~~rust
 let mut road_flow = traffic::derive_road_flow(&next);
 spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
 let substep_end = next_boundary_after(&next, &road_flow);
@@ -174,7 +174,7 @@ Update SIM_SHIFT_BOUNDARIES_PER_DAY documentation to say the existing six per-si
 
 - [ ] **Step 5: Verify Task 1 and commit.**
 
-~~~
+~~~bash
 cargo test -p caelum-core --test traffic --test router_planning --test router_estimate_branches --test transit_router --test transit_build --test shuttle_service --test golden_sequences --test trip_lifecycle
 cargo clippy -p caelum-core --all-targets -- -D warnings
 cargo fmt --all --check
@@ -204,7 +204,7 @@ git commit -m "refactor(core): share HPA-622 road flow timing"
 
 Run and record exact hits in the report:
 
-~~~
+~~~bash
 rg -n 'tick_trips|tick\(|CommuteOutbound|CommuteReturn|completed_trips|late_trips|unserved_trips|average_wait|outbound_arrived_today|returned_home_today' \
   crates/caelum-core/tests/golden_sequences.rs \
   crates/caelum-core/tests/commute_requirements.rs \
@@ -219,7 +219,7 @@ For each altered fixture, report one explicit rationale: update a real commute e
 
 Delete or rewrite due_commute_uses_direct_bus_at_zero_flow_and_car_after_bus_congestion; it relies on a stale bus shortcut and a hand-built detour and is no longer an acceptance contract. Add topology-produced assertions for:
 
-~~~
+~~~text
 short roughly-six-tile no-transit commute: walk ETA < car ETA
 long roughly-twelve-tile no-transit commute: car ETA < walk ETA
 direct bus with one-tile endpoint access: bus ETA < car ETA < long walk ETA
@@ -232,7 +232,7 @@ Calculate from actual RoadPathStep.travel_seconds, find_route_plan(state, &flow,
 
 Adapt lifecycle fixtures to explicit derive_road_flow assertions and add these focused cases:
 
-~~~
+~~~text
 same-time worker #2 sees worker #1's updated local map;
 flow 4 -> 5 at a scheduled car departure preserves fractional bus progress;
 an arriving car delays that substep's bus movement, then next iteration sees reduced flow;
@@ -245,7 +245,7 @@ For the 4 -> 5 fixture, use free-flow 1.25 seconds, four existing cars, and a fi
 
 Update the private-car paragraph in docs/architecture.md to state:
 
-~~~
+~~~text
 Private cars are active commute-trip payloads, not vehicle entities.
 CAR_ACCESS_SECONDS is one fixed generalized car access cost; walking remains the shared 20s/tile cost.
 RoadFlow is ephemeral data rebuilt at scheduling boundaries, never persisted.
@@ -260,7 +260,7 @@ Do not change the existing selector, Data panel, renderer, or Playwright merely 
 
 - [ ] **Step 5: Verify Task 2 and commit.**
 
-~~~
+~~~bash
 cargo test -p caelum-core --test traffic --test trip_lifecycle --test router_planning --test router_estimate_branches --test transit_router --test shuttle_service --test golden_sequences --test commute_requirements --test population --test objectives_metrics
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -290,7 +290,7 @@ git commit -m "test(core): lock HPA-622 live traffic behavior"
 
 ## Final Commands
 
-~~~
+~~~bash
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
