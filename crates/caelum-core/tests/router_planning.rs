@@ -1,9 +1,10 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, PrivateCarTrip, ServicePattern, TransitMode, TransitNodeStatus,
-    TransitPath, TripPurpose, TripStatus,
+    ActiveTrip, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip, ServicePattern, TransitMode,
+    TransitNodeStatus, TransitPath, TripPurpose, TripStatus,
 };
+use caelum_core::road_topology::RoadTopology;
 use caelum_core::traffic::{derive_road_flow, RoadFlow};
-use caelum_core::{router, GameEngine, GameIntent};
+use caelum_core::{router, GameEngine, GameIntent, SandboxCreationRequest};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
     for x in from_x..=to_x {
@@ -19,6 +20,118 @@ fn track_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
             point: (x, y).into(),
         });
     }
+}
+
+fn commute_building(id: &str, point: Point) -> PlacedBuilding {
+    PlacedBuilding {
+        id: id.to_string(),
+        building_type: "smallHouse".to_string(),
+        origin: point,
+        rotation: 0,
+        occupied_tiles: vec![point],
+        placed_at: 0.0,
+        transit_node_id: None,
+    }
+}
+
+fn walk_seconds(from: Point, to: Point) -> f64 {
+    f64::from((from.x - to.x).abs() + (from.y - to.y).abs())
+        * caelum_core::commute::WALK_SECONDS_PER_TILE
+}
+
+fn road_path_seconds(path: &TransitPath) -> f64 {
+    path.road_steps()
+        .iter()
+        .map(|step| step.travel_seconds)
+        .sum()
+}
+
+fn no_transit_commute_fixture(distance: i32) -> (GameSnapshot, RoadTopology, Point, Point) {
+    let home = Point { x: 1, y: 4 };
+    let workplace = Point {
+        x: home.x + distance,
+        y: home.y,
+    };
+    let mut engine = blank_engine();
+    road_line(&mut engine, 5, home.x, workplace.x);
+    let mut state = engine.snapshot();
+    state.buildings = vec![
+        commute_building("home", home),
+        commute_building("work", workplace),
+    ];
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology, home, workplace)
+}
+
+fn blank_engine() -> GameEngine {
+    GameEngine::from_sandbox_request(SandboxCreationRequest {
+        template_id: "blankGrid".to_string(),
+        economy_preset: "standard".to_string(),
+        starting_capital: Some(120_000.0),
+        demand_multiplier: Some(1.0),
+    })
+    .expect("blank-grid fixture should construct")
+}
+
+fn bus_commute_fixture(detour: bool) -> (GameSnapshot, RoadTopology, Point, Point) {
+    let home = if detour {
+        Point { x: 1, y: 15 }
+    } else {
+        Point { x: 1, y: 4 }
+    };
+    let workplace = if detour {
+        Point { x: 13, y: 15 }
+    } else {
+        Point { x: 13, y: 4 }
+    };
+    let mut engine = blank_engine();
+
+    if detour {
+        road_line(&mut engine, 16, 1, 13);
+        road_line(&mut engine, 2, 2, 26);
+        road_line(&mut engine, 13, 12, 26);
+        for y in 2..=14 {
+            engine.dispatch(GameIntent::LayRoad {
+                point: (2, y).into(),
+            });
+        }
+        for y in 2..=13 {
+            engine.dispatch(GameIntent::LayRoad {
+                point: (26, y).into(),
+            });
+        }
+        for y in 13..=14 {
+            engine.dispatch(GameIntent::LayRoad {
+                point: (12, y).into(),
+            });
+        }
+    } else {
+        road_line(&mut engine, 5, 1, 13);
+    }
+
+    let stop_points = if detour {
+        vec![(2, 15).into(), (12, 15).into()]
+    } else {
+        vec![(2, 4).into(), (12, 4).into()]
+    };
+    for point in &stop_points {
+        let result = engine.dispatch(GameIntent::AddBusStop { point: *point });
+        assert!(result.applied, "fixture stop should apply: {result:?}");
+    }
+    let route = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+    });
+    assert!(route.applied, "fixture route should apply: {route:?}");
+
+    let mut state = route.snapshot;
+    state.buildings = vec![
+        commute_building("home", home),
+        commute_building("work", workplace),
+    ];
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology, home, workplace)
 }
 
 fn bus_route_state() -> GameEngine {
@@ -74,6 +187,101 @@ fn creates_walking_route_for_nearby_destinations() {
     assert_eq!(plan.legs[0].service_direction, None);
     assert_eq!(plan.legs[0].board_itinerary_index, None);
     assert_eq!(plan.legs[0].alight_itinerary_index, None);
+}
+
+#[test]
+fn natural_no_transit_costs_keep_short_walk_and_make_long_car_faster() {
+    let (short_state, short_topology, short_home, short_workplace) = no_transit_commute_fixture(6);
+    let short_walk = router::find_route_plan(
+        &short_state,
+        &RoadFlow::new(),
+        &short_home,
+        &short_workplace,
+    )
+    .expect("short commute should have a walking plan");
+    let short_car = caelum_core::traffic::private_car_candidate(
+        &short_state,
+        &short_topology,
+        &RoadFlow::new(),
+        short_home,
+        short_workplace,
+    )
+    .expect("short commute should have a car candidate");
+
+    assert_eq!(short_walk.legs[0].mode, TransitMode::Walk);
+    assert!(short_walk.estimated_seconds < short_car.estimated_seconds);
+
+    let (long_state, long_topology, long_home, long_workplace) = no_transit_commute_fixture(12);
+    let long_walk =
+        router::find_route_plan(&long_state, &RoadFlow::new(), &long_home, &long_workplace)
+            .expect("long commute should have a walking plan");
+    let long_car = caelum_core::traffic::private_car_candidate(
+        &long_state,
+        &long_topology,
+        &RoadFlow::new(),
+        long_home,
+        long_workplace,
+    );
+    let long_car = long_car.expect("long commute should have a car candidate");
+
+    assert_eq!(long_walk.legs[0].mode, TransitMode::Walk);
+    assert!(long_car.estimated_seconds < long_walk.estimated_seconds);
+}
+
+#[test]
+fn natural_bus_costs_keep_direct_service_ahead_of_car_and_walk() {
+    let (state, topology, home, workplace) = bus_commute_fixture(false);
+    let flow = RoadFlow::new();
+    let mut no_transit = state.clone();
+    no_transit.transit.routes.clear();
+    no_transit.transit.vehicles.clear();
+    let walk = router::find_route_plan(&no_transit, &flow, &home, &workplace)
+        .expect("direct bus fixture should have a route");
+    let car =
+        caelum_core::traffic::private_car_candidate(&state, &topology, &flow, home, workplace)
+            .expect("direct bus fixture should have a car candidate");
+
+    assert_eq!(walk.legs[0].mode, TransitMode::Walk);
+
+    let plan = router::find_route_plan(&state, &flow, &home, &workplace)
+        .expect("direct bus fixture should be routable");
+    assert_eq!(
+        plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>(),
+        vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk]
+    );
+    let service_path = state.transit.routes[0].legs[0]
+        .current_path
+        .as_ref()
+        .expect("direct bus route has a captured path");
+    let service_seconds = road_path_seconds(service_path);
+    assert!(service_seconds > 0.0);
+    assert_eq!(service_path.total_travel_seconds(), service_seconds);
+    assert_eq!(
+        plan.estimated_seconds,
+        walk_seconds(plan.legs[0].from, plan.legs[0].to)
+            + 90.0
+            + service_seconds
+            + walk_seconds(plan.legs[2].from, plan.legs[2].to)
+    );
+    assert!(plan.estimated_seconds < car.estimated_seconds);
+    assert!(car.estimated_seconds < walk.estimated_seconds);
+}
+
+#[test]
+fn natural_detouring_bus_cost_keeps_car_ahead_of_service() {
+    let (state, topology, home, workplace) = bus_commute_fixture(true);
+    let flow = RoadFlow::new();
+    let plan = router::find_route_plan(&state, &flow, &home, &workplace)
+        .expect("detour fixture should be routable");
+    let car =
+        caelum_core::traffic::private_car_candidate(&state, &topology, &flow, home, workplace)
+            .expect("detour fixture should have a car candidate");
+
+    assert_eq!(
+        plan.legs.iter().map(|leg| leg.mode).collect::<Vec<_>>(),
+        vec![TransitMode::Walk, TransitMode::Bus, TransitMode::Walk]
+    );
+    assert!(car.estimated_seconds < plan.estimated_seconds);
 }
 
 #[test]
