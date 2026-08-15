@@ -1,13 +1,20 @@
 mod common;
 
 use caelum_core::model::{
-    MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
+    GameSnapshot, MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode,
+    WorkerProfile,
 };
+use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
     clock,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
     transit, trips, GameEngine, GameIntent,
 };
+
+fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    trips::tick_trips(state, &topology, delta_seconds)
+}
 
 #[test]
 fn zone_build_and_route_sequence_has_stable_counts() {
@@ -177,7 +184,7 @@ fn commute_respawns_across_day_boundary() {
     // Drive the raw tick across the day boundary. This isolates the day-rollover path
     // (reset_daily_commute_flags + spawn_due_commute_trips + sequence/day math); it no
     // longer needs to avoid a default-sandbox win.
-    snapshot = trips::tick_trips(&snapshot, 400.0);
+    snapshot = tick_trips(&snapshot, 400.0);
 
     assert_eq!(snapshot.day, 1);
     // Daily commute flags must reset so residents are eligible to commute again.
@@ -244,7 +251,7 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
     );
 
     let delta = 600.0_f64;
-    let advanced = trips::tick_trips(&state, delta);
+    let advanced = tick_trips(&state, delta);
 
     assert!(
         (advanced.time - state.time - delta).abs() < 1e-6,
@@ -283,11 +290,11 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
         state
     };
 
-    let large = trips::tick_trips(&build(), 200.0);
+    let large = tick_trips(&build(), 200.0);
 
     let mut stepped = build();
     for _ in 0..200 {
-        stepped = trips::tick_trips(&stepped, 1.0);
+        stepped = tick_trips(&stepped, 1.0);
     }
 
     assert!(
@@ -317,7 +324,7 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
 /// roundabout. Mirrors the setup in
 /// `transit_build::vehicle_time_through_roundabout_matches_authoritative_path_duration`,
 /// but returns the post-creation snapshot (unpaused) so tick goldens can drive
-/// it directly through `trips::tick_trips`.
+/// it directly through `tick_trips`.
 fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
     let mut engine = GameEngine::new();
     // Horizontal arterial at y=5 carrying the bus from x=2 to x=10.
@@ -381,11 +388,11 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
 /// entry/circulation/exit block, not just straight segments.
 #[test]
 fn roundabout_bus_large_tick_matches_stepped_tick() {
-    let large = trips::tick_trips(&roundabout_bus_snapshot(), 200.0);
+    let large = tick_trips(&roundabout_bus_snapshot(), 200.0);
 
     let mut stepped = roundabout_bus_snapshot();
     for _ in 0..200 {
-        stepped = trips::tick_trips(&stepped, 1.0);
+        stepped = tick_trips(&stepped, 1.0);
     }
 
     assert!(
@@ -415,7 +422,7 @@ fn roundabout_bus_large_tick_matches_stepped_tick() {
 #[test]
 fn roundabout_bus_vehicle_has_stable_golden_state_after_fixed_duration() {
     let state = roundabout_bus_snapshot();
-    let after = trips::tick_trips(&state, 120.0);
+    let after = tick_trips(&state, 120.0);
     let vehicle = &after.transit.vehicles[0];
 
     // After 120s the bus has completed leg 0 (one stop-to-stop pass through the

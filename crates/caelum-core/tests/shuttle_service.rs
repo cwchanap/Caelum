@@ -1,12 +1,16 @@
 use caelum_core::model::{
-    ActiveTrip, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind, RouteLegStatus,
-    RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath, TripPurpose, TripStatus,
-    Vehicle,
+    ActiveTrip, GameSnapshot, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind,
+    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath,
+    TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{enumerate_ride_edges, service_visits, ServiceVisit};
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset, RoutingContext};
+
+fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
+    caelum_core::trips::tick_trips(state, topology, delta_seconds)
+}
 
 fn ids(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
@@ -813,9 +817,10 @@ fn coarse_tick_through_zero_step_reversal_matches_stepped_ticks() {
     // Total delta: service leg + 10 seconds of walking (0.5 tiles at 20 s/tile).
     let walk_seconds = 10.0;
     let total_delta = service_leg_seconds + walk_seconds;
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
     // Coarse: one big tick through the full trip simulation.
-    let coarse = caelum_core::trips::tick_trips(&state, total_delta);
+    let coarse = tick_trips(&state, &topology, total_delta);
 
     // Stepped: many small ticks summing to the same total.
     let step = 0.5;
@@ -823,7 +828,7 @@ fn coarse_tick_through_zero_step_reversal_matches_stepped_ticks() {
     let mut remaining = total_delta;
     while remaining > 0.0 {
         let delta = remaining.min(step);
-        stepped = caelum_core::trips::tick_trips(&stepped, delta);
+        stepped = tick_trips(&stepped, &topology, delta);
         remaining -= delta;
     }
 

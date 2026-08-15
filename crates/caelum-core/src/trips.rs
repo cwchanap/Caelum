@@ -5,12 +5,14 @@ use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
 use crate::model::{
     ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
-    RoutePlan, Sim, TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
-    TripStatus, WorkerProfile,
+    PrivateCarTrip, RoutePlan, Sim, TransitMode, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus, WorkerProfile,
 };
 use crate::objectives;
 use crate::population;
+use crate::road_topology::RoadTopology;
 use crate::router;
+use crate::traffic;
 use crate::transit;
 
 const WALK_SECONDS_PER_TILE: f64 = 20.0;
@@ -46,8 +48,12 @@ struct TripMetricDelta {
     outcomes: Vec<TripOutcome>,
 }
 
-pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    tick_trips_substepped(state, delta_seconds, |_| false)
+pub fn tick_trips(
+    state: &GameSnapshot,
+    road_topology: &RoadTopology,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    tick_trips_substepped(state, road_topology, delta_seconds, |_| false)
 }
 
 /// Like [`tick_trips`] but evaluates objectives after every substep and stops the
@@ -62,8 +68,12 @@ pub fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
 /// evaluation makes a coarse tick equivalent to a sequence of stepped ticks for
 /// objective detection, preserving the determinism/granularity-independence
 /// invariant.
-pub fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    tick_trips_substepped(state, delta_seconds, |next| {
+pub fn tick_trips_with_objectives(
+    state: &GameSnapshot,
+    road_topology: &RoadTopology,
+    delta_seconds: f64,
+) -> GameSnapshot {
+    tick_trips_substepped(state, road_topology, delta_seconds, |next| {
         // Use the opt variant so the common no-fire path skips the snapshot
         // clone the legacy wrapper would perform on every substep.
         if let Some(evaluated) = objectives::evaluate_objectives_opt(next) {
@@ -80,6 +90,7 @@ fn apply_due_world_events(state: &mut GameSnapshot) {
 
 fn tick_trips_substepped(
     state: &GameSnapshot,
+    road_topology: &RoadTopology,
     delta_seconds: f64,
     mut on_substep: impl FnMut(&mut GameSnapshot) -> bool,
 ) -> GameSnapshot {
@@ -103,7 +114,7 @@ fn tick_trips_substepped(
     // time, then evaluate. If terminal, return immediately.
     apply_due_world_events(&mut next);
     reset_daily_commute_flags(&mut next);
-    spawn_due_commute_trips(&mut next);
+    spawn_due_commute_trips(&mut next, road_topology);
     if on_substep(&mut next) {
         return next;
     }
@@ -155,7 +166,7 @@ fn tick_trips_substepped(
         }
 
         reset_daily_commute_flags(&mut next);
-        spawn_due_commute_trips(&mut next);
+        spawn_due_commute_trips(&mut next, road_topology);
 
         let substep_end = next_boundary_after(&next)
             .map(|boundary| boundary.min(final_time))
@@ -199,7 +210,7 @@ fn tick_trips_substepped(
         while final_time - next.time > EPSILON {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            spawn_due_commute_trips(&mut next);
+            spawn_due_commute_trips(&mut next, road_topology);
 
             let substep_end = next_boundary_after(&next)
                 .map(|boundary| boundary.min(final_time))
@@ -227,7 +238,7 @@ fn tick_trips_substepped(
         if !early_termination {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            spawn_due_commute_trips(&mut next);
+            spawn_due_commute_trips(&mut next, road_topology);
         }
     }
 
@@ -458,7 +469,21 @@ fn reset_daily_commute_flags(state: &mut GameSnapshot) {
     }
 }
 
-fn spawn_due_commute_trips(state: &mut GameSnapshot) {
+fn private_car_trip_if_faster(
+    non_car_plan: Option<&RoutePlan>,
+    car: Option<traffic::PrivateCarCandidate>,
+    current_time: f64,
+) -> Option<PrivateCarTrip> {
+    let car = car.filter(|car| {
+        non_car_plan.map_or(true, |plan| car.estimated_seconds < plan.estimated_seconds)
+    })?;
+    Some(PrivateCarTrip {
+        path: car.path,
+        arrival_time: current_time + car.estimated_seconds,
+    })
+}
+
+fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopology) {
     let sims = state.sims.clone();
 
     for sim in sims {
@@ -550,7 +575,13 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                     }
                     continue;
                 }
-                let trip = build_trip(
+                let non_car_plan = router::find_route_plan(state, &sim.home, &workplace);
+                let chosen_car = private_car_trip_if_faster(
+                    non_car_plan.as_ref(),
+                    traffic::private_car_candidate(state, road_topology, sim.home, workplace),
+                    state.time,
+                );
+                let mut trip = build_trip(
                     state,
                     &sim.id,
                     TripPurpose::CommuteOutbound,
@@ -559,6 +590,10 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                     sim.position.into(),
                     scheduled_time,
                 );
+                if let Some(car) = chosen_car {
+                    trip.status = TripStatus::Driving;
+                    trip.private_car_trip = Some(car);
+                }
                 state.active_trips.push(trip);
             }
         }
@@ -574,7 +609,13 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
         if state.time + EPSILON >= scheduled_time
             && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
         {
-            let trip = build_trip(
+            let non_car_plan = router::find_route_plan(state, &sim.position, &sim.home);
+            let chosen_car = private_car_trip_if_faster(
+                non_car_plan.as_ref(),
+                traffic::private_car_candidate(state, road_topology, sim.position, sim.home),
+                state.time,
+            );
+            let mut trip = build_trip(
                 state,
                 &sim.id,
                 TripPurpose::CommuteReturn,
@@ -583,6 +624,10 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot) {
                 sim.position.into(),
                 scheduled_time,
             );
+            if let Some(car) = chosen_car {
+                trip.status = TripStatus::Driving;
+                trip.private_car_trip = Some(car);
+            }
             state.active_trips.push(trip);
         }
     }
@@ -785,9 +830,18 @@ fn track_active_trip_boundary(
     trip: &ActiveTrip,
     max_average_wait: Option<f64>,
 ) {
-    if is_terminal_status(trip.status)
-        || (trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id))
-    {
+    if is_terminal_status(trip.status) {
+        return;
+    }
+
+    if trip.status == TripStatus::Driving {
+        if let Some(car) = &trip.private_car_trip {
+            track_next_boundary(next, car.arrival_time, state.time);
+        }
+        return;
+    }
+
+    if trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id) {
         return;
     }
 
@@ -988,11 +1042,26 @@ fn tick_trip(
         return unchanged(trip);
     }
 
-    // Private-car traffic owns this lifecycle once it lands. Until then, keep
-    // a restored driving trip and its captured path untouched by transit
-    // planning so the v6 snapshot remains persistence-valid across ticks.
     if trip.status == TripStatus::Driving {
-        return unchanged(trip);
+        let Some(car) = trip.private_car_trip.as_ref() else {
+            let unserved = mark_unserved(trip.clone());
+            return TripTickResult {
+                trip: unserved,
+                completed_trips: 0,
+                late_trips: 0,
+                unserved_trips: 1,
+                wait_seconds: 0.0,
+                outcome: Some(trip_outcome(TripOutcomeKind::Unserved, 0.0, state.time)),
+            };
+        };
+
+        if state.time + EPSILON < car.arrival_time {
+            return unchanged(trip);
+        }
+
+        let mut arrived = trip.clone();
+        arrived.position = arrived.destination.into();
+        return score_arrival(arrived, state.time);
     }
 
     if trip.status == TripStatus::Riding && is_trip_on_vehicle(state, &trip.id) {
@@ -1429,6 +1498,7 @@ mod tests {
         RollingWindowSeconds, SurvivalTimeSeconds, TransitPath, TripOutcome, TripOutcomeKind,
         TripPosition, TripPurpose, TripStatus,
     };
+    use crate::road_topology::RoadTopology;
     use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
     use crate::state::create_initial_snapshot;
 
@@ -1457,6 +1527,16 @@ mod tests {
             survival_time: SurvivalTimeSeconds::new(survival_time)
                 .expect("valid SurvivalTimeSeconds"),
         }
+    }
+
+    fn tick_for_test(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        super::tick_trips(state, &topology, delta_seconds)
+    }
+
+    fn tick_with_objectives_for_test(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        super::tick_trips_with_objectives(state, &topology, delta_seconds)
     }
 
     fn trip_with_private_car_payload() -> ActiveTrip {
@@ -1499,6 +1579,23 @@ mod tests {
     }
 
     #[test]
+    fn equal_private_car_eta_keeps_the_non_car_plan() {
+        let non_car_plan = RoutePlan {
+            legs: Vec::new(),
+            estimated_seconds: 10.0,
+        };
+        let car = crate::traffic::PrivateCarCandidate {
+            path: TransitPath::Road {
+                steps: Vec::new(),
+                total_travel_seconds: 10.0,
+            },
+            estimated_seconds: 10.0,
+        };
+
+        assert!(private_car_trip_if_faster(Some(&non_car_plan), Some(car), 100.0).is_none());
+    }
+
+    #[test]
     fn sandbox_mid_tick_growth_wave_does_not_schedule_or_apply_growth() {
         let mut sandbox_with_wave = create_initial_snapshot();
         sandbox_with_wave.paused = false;
@@ -1520,8 +1617,8 @@ mod tests {
             "sandbox waves do not consume the substep budget"
         );
 
-        let next = tick_trips(&sandbox_with_wave, 300.0);
-        let baseline = tick_trips(&sandbox_without_wave, 300.0);
+        let next = tick_for_test(&sandbox_with_wave, 300.0);
+        let baseline = tick_for_test(&sandbox_without_wave, 300.0);
 
         assert_eq!(next.time, baseline.time, "sandbox tick timing is unchanged");
         assert_eq!(next.buildings, baseline.buildings);
@@ -1562,7 +1659,7 @@ mod tests {
             .collect();
 
         // Coarse tick from t=10 to t=20 — spans past the unserved expiry at t=15.
-        let next = tick_trips_with_objectives(&state, 10.0);
+        let next = tick_with_objectives_for_test(&state, 10.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1602,7 +1699,7 @@ mod tests {
         state.clock_minutes = clock::clock_minutes(state.time);
         state.metrics.completed_trips = 1;
 
-        let next = tick_trips_with_objectives(&state, 2.0);
+        let next = tick_with_objectives_for_test(&state, 2.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1629,7 +1726,7 @@ mod tests {
         state.clock_minutes = clock::clock_minutes(state.time);
         state.metrics.completed_trips = 1;
 
-        let next = tick_trips_with_objectives(&state, 1.0);
+        let next = tick_with_objectives_for_test(&state, 1.0);
 
         assert_eq!(
             next.metrics.state,
@@ -1664,7 +1761,7 @@ mod tests {
         state.metrics.completed_trips = 1;
 
         // Coarse: one 300s tick spanning well past the survival boundary.
-        let coarse = tick_trips_with_objectives(&state, 300.0);
+        let coarse = tick_with_objectives_for_test(&state, 300.0);
 
         // Fine: 300 × 1s ticks; the survival boundary fires inside the first.
         let mut fine = state.clone();
@@ -1672,7 +1769,7 @@ mod tests {
             if fine.metrics.state != MetricsState::Running {
                 break;
             }
-            fine = tick_trips_with_objectives(&fine, 1.0);
+            fine = tick_with_objectives_for_test(&fine, 1.0);
         }
 
         assert_eq!(
@@ -1717,7 +1814,7 @@ mod tests {
         state.metrics.completed_trips = 1;
 
         // Coarse: one 300s tick spanning past the trigger.
-        let coarse = tick_trips_with_objectives(&state, 300.0);
+        let coarse = tick_with_objectives_for_test(&state, 300.0);
 
         // Fine: 300 × 1s ticks; the wave fires inside the first.
         let mut fine = state.clone();
@@ -1725,7 +1822,7 @@ mod tests {
             if fine.metrics.state != MetricsState::Running {
                 break;
             }
-            fine = tick_trips_with_objectives(&fine, 1.0);
+            fine = tick_with_objectives_for_test(&fine, 1.0);
         }
 
         assert!(

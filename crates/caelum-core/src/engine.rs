@@ -338,7 +338,8 @@ impl GameEngine {
         // `road_structures`. If a future tick-time mutation touches any road
         // field, the topology must be recompiled here — the debug_assert below
         // catches that regression by flagging a stale topology.
-        let next = trips::tick_trips_with_objectives(&self.snapshot, delta_seconds);
+        let next =
+            trips::tick_trips_with_objectives(&self.snapshot, &self.road_topology, delta_seconds);
         // O(N) check (tiles are never reordered, so same index = same position):
         // if a future tick-time mutation touches any road field, this fires.
         debug_assert!(
