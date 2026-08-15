@@ -73,7 +73,9 @@ fn bus_route_fixture() -> Route {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    engine.snapshot().transit.routes[0].clone()
+    // Wire-format fixtures describe the persisted form: use the normalized
+    // save snapshot, whose bus routes never carry derived service metrics.
+    engine.snapshot_for_save().transit.routes[0].clone()
 }
 
 #[test]
