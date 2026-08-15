@@ -1,10 +1,11 @@
 use caelum_core::buildings::assign_workplaces;
 use caelum_core::model::{
-    ActiveTrip, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point, RollingWindowSeconds,
-    RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
-    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, GameSnapshot, Heading, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
+    RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern,
+    Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
 };
+use caelum_core::road_topology::RoadTopology;
 use caelum_core::{clock, commute, objectives, state::create_initial_snapshot, transit, trips};
 use caelum_core::{GameEngine, GameIntent};
 
@@ -184,6 +185,260 @@ fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
             point: (x, y).into(),
         });
     }
+}
+
+fn clear_roads(state: &mut GameSnapshot) {
+    state.map.road_structures.clear();
+    for tile in &mut state.map.tiles {
+        tile.kind = "empty".to_string();
+        tile.one_way = None;
+        tile.road_connections.clear();
+        tile.road_structure_id = None;
+        tile.has_track = false;
+    }
+}
+
+fn heading_between(from: Point, to: Point) -> Heading {
+    match (to.x - from.x, to.y - from.y) {
+        (0, -1) => Heading::North,
+        (1, 0) => Heading::East,
+        (0, 1) => Heading::South,
+        (-1, 0) => Heading::West,
+        delta => panic!("fixture points are not adjacent: {delta:?}"),
+    }
+}
+
+fn opposite(heading: Heading) -> Heading {
+    match heading {
+        Heading::North => Heading::South,
+        Heading::East => Heading::West,
+        Heading::South => Heading::North,
+        Heading::West => Heading::East,
+    }
+}
+
+fn two_way_corridor(state: &mut GameSnapshot, points: &[Point]) {
+    for &point in points {
+        let tile = state.map.tile_mut(point).expect("fixture tile exists");
+        tile.kind = "road".to_string();
+    }
+    for pair in points.windows(2) {
+        let heading = heading_between(pair[0], pair[1]);
+        state
+            .map
+            .tile_mut(pair[0])
+            .expect("fixture tile exists")
+            .road_connections
+            .push(heading);
+        state
+            .map
+            .tile_mut(pair[1])
+            .expect("fixture tile exists")
+            .road_connections
+            .push(opposite(heading));
+    }
+}
+
+fn commute_endpoint(id: &str, building_type: &str, point: Point) -> PlacedBuilding {
+    PlacedBuilding {
+        id: id.to_string(),
+        building_type: building_type.to_string(),
+        origin: point,
+        rotation: 0,
+        occupied_tiles: vec![point],
+        placed_at: 0.0,
+        transit_node_id: None,
+    }
+}
+
+fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 10, y: 3 };
+    let mut state = create_initial_snapshot();
+    clear_roads(&mut state);
+    two_way_corridor(
+        &mut state,
+        &(3..=9).map(|x| Point { x, y: 3 }).collect::<Vec<_>>(),
+    );
+    state.buildings = vec![
+        // A destination building keeps the fixture free of automatic Sandbox
+        // move-ins; the commute lifecycle only needs stable building footprints.
+        commute_endpoint("home", "supermarket", home),
+        commute_endpoint("work", "supermarket", workplace),
+    ];
+    state.sims = sim_ids
+        .iter()
+        .map(|id| sim(id, home, Some(workplace)))
+        .collect();
+    let departure_minute = commute::departure_minute_for_sim(sim_ids[0], "standard", "outbound");
+    state.time =
+        f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY) * clock::GAME_DAY_SECONDS;
+    state.day = 0;
+    state.clock_minutes = departure_minute;
+    state.paused = false;
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    (state, topology)
+}
+
+fn driving_trip_without_payload() -> ActiveTrip {
+    ActiveTrip {
+        id: "trip-day-0-trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: (2, 3).into(),
+        destination: (10, 3).into(),
+        position: (2, 3).into(),
+        status: TripStatus::Driving,
+        deadline: 900.0,
+        route_plan: None,
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        private_car_trip: None,
+    }
+}
+
+fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    trips::tick_trips(state, &topology, delta_seconds)
+}
+
+fn tick_trips_with_objectives(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+    trips::tick_trips_with_objectives(state, &topology, delta_seconds)
+}
+
+#[test]
+fn car_mode_choice_uses_driving_when_car_eta_is_strictly_faster_than_walk() {
+    let (state, _topology) = car_commute_fixture(&["sim-001"]);
+
+    let next = tick_trips(&state, 0.0);
+    let outbound = next
+        .active_trips
+        .first()
+        .expect("outbound trip spawned at its due boundary");
+
+    assert_eq!(outbound.status, TripStatus::Driving);
+    assert!(outbound.private_car_trip.is_some());
+    assert!(outbound.route_plan.is_none());
+}
+
+#[test]
+fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
+    let (mut state, _topology) = car_commute_fixture(&["sim-001"]);
+    clear_roads(&mut state);
+    let _topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+
+    let next = tick_trips(&state, 0.0);
+    let outbound = next
+        .active_trips
+        .first()
+        .expect("outbound trip spawned at its due boundary");
+
+    assert_eq!(outbound.status, TripStatus::Idle);
+    assert!(outbound.private_car_trip.is_none());
+
+    let walking = tick_trips(&next, 1.0);
+    assert_eq!(walking.active_trips[0].status, TripStatus::Walking);
+}
+
+#[test]
+fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
+    // Suffix 485 has the same standard-shift departure minute as suffix 001,
+    // while retaining a deterministic later sim iteration slot.
+    let (state, _topology) = car_commute_fixture(&["sim-001", "sim-485"]);
+
+    let next = tick_trips(&state, 0.0);
+
+    assert_eq!(next.active_trips.len(), 2);
+    assert!(next
+        .active_trips
+        .iter()
+        .all(|trip| trip.status == TripStatus::Driving));
+    assert!(next
+        .active_trips
+        .iter()
+        .all(|trip| trip.private_car_trip.is_some()));
+    assert!(!caelum_core::traffic::active_car_flow(&next).is_empty());
+}
+
+#[test]
+fn car_mode_choice_is_identical_for_coarse_and_fine_ticks() {
+    let (state, _topology) = car_commute_fixture(&["sim-001"]);
+    let coarse = tick_trips(&state, 3.0);
+
+    let mut fine = state.clone();
+    for _ in 0..3 {
+        fine = tick_trips(&fine, 1.0);
+    }
+
+    assert_eq!(coarse.time, fine.time);
+    assert_eq!(coarse.active_trips, fine.active_trips);
+    assert_eq!(
+        caelum_core::traffic::active_car_flow(&coarse),
+        caelum_core::traffic::active_car_flow(&fine)
+    );
+}
+
+#[test]
+fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
+    let (state, _topology) = car_commute_fixture(&["sim-001"]);
+    let spawned = tick_trips(&state, 0.0);
+    let arrival_time = spawned.active_trips[0]
+        .private_car_trip
+        .as_ref()
+        .expect("car trip payload")
+        .arrival_time;
+
+    let before_arrival = tick_trips(&spawned, 1.0);
+    let active = before_arrival
+        .active_trips
+        .first()
+        .expect("car remains active before arrival");
+    assert_eq!(active.status, TripStatus::Driving);
+    assert!(active.private_car_trip.is_some());
+    assert!(!caelum_core::traffic::active_car_flow(&before_arrival).is_empty());
+
+    let arrived = tick_trips(&spawned, (arrival_time - spawned.time).max(0.0));
+    assert!(arrived.active_trips.is_empty());
+    assert_eq!(arrived.metrics.completed_trips, 1);
+    assert!(caelum_core::traffic::active_car_flow(&arrived).is_empty());
+}
+
+#[test]
+fn coarse_car_arrival_matches_ticks_split_at_arrival_boundary() {
+    let (state, _topology) = car_commute_fixture(&["sim-001"]);
+    let coarse = tick_trips(&state, 12.0);
+
+    let mut fine = state.clone();
+    for _ in 0..12 {
+        fine = tick_trips(&fine, 1.0);
+    }
+
+    assert_eq!(coarse.time, fine.time);
+    assert_eq!(coarse.active_trips, fine.active_trips);
+    assert_eq!(coarse.sims, fine.sims);
+    assert_eq!(coarse.metrics.completed_trips, fine.metrics.completed_trips);
+    assert_eq!(coarse.metrics.late_trips, fine.metrics.late_trips);
+    assert_eq!(coarse.metrics.unserved_trips, fine.metrics.unserved_trips);
+}
+
+#[test]
+fn missing_driving_payload_becomes_unserved_and_saveable() {
+    let mut state = GameEngine::new().snapshot();
+    state.sims = vec![sim("sim-001", (2, 3).into(), None)];
+    state.active_trips = vec![driving_trip_without_payload()];
+
+    let next = trips::advance_active_trips(&state, 0.0);
+    assert!(next.active_trips.is_empty());
+    assert_eq!(next.metrics.unserved_trips, 1);
+    assert_eq!(
+        next.metrics.trip_outcomes[0].outcome,
+        TripOutcomeKind::Unserved
+    );
+
+    let engine = GameEngine::from_snapshot(next).expect("unserved result is persistence-valid");
+    let saved = engine.snapshot_for_save();
+    assert!(saved.active_trips.is_empty());
 }
 
 #[test]
@@ -513,7 +768,7 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
     waiting.patience_remaining = 5.0;
     state.active_trips = vec![waiting];
 
-    let next = trips::tick_trips(&state, 100.0);
+    let next = tick_trips(&state, 100.0);
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
@@ -588,10 +843,10 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let coarse = trips::tick_trips(&state, 12.5);
+    let coarse = tick_trips(&state, 12.5);
     let mut next = state;
     for _ in 0..10 {
-        next = trips::tick_trips(&next, 1.25);
+        next = tick_trips(&next, 1.25);
     }
 
     assert!(next.active_trips.is_empty());
@@ -663,10 +918,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 
-    let coarse_disembarked = trips::tick_trips(&state, 12.5);
+    let coarse_disembarked = tick_trips(&state, 12.5);
     let mut disembarked = state;
     for _ in 0..10 {
-        disembarked = trips::tick_trips(&disembarked, 1.25);
+        disembarked = tick_trips(&disembarked, 1.25);
     }
     let walking = &disembarked.active_trips[0];
 
@@ -686,7 +941,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         disembarked.metrics.completed_trips
     );
 
-    let arrived = trips::tick_trips(&disembarked, 20.0);
+    let arrived = tick_trips(&disembarked, 20.0);
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
@@ -746,10 +1001,10 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
     assert!(state.transit.vehicles[0].passenger_ids.is_empty());
 
-    let coarse_disembarked = trips::tick_trips(&state, 12.5);
+    let coarse_disembarked = tick_trips(&state, 12.5);
     let mut disembarked = state;
     for _ in 0..10 {
-        disembarked = trips::tick_trips(&disembarked, 1.25);
+        disembarked = tick_trips(&disembarked, 1.25);
     }
     let walking = &disembarked.active_trips[0];
 
@@ -769,7 +1024,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         disembarked.metrics.completed_trips
     );
 
-    let arrived = trips::tick_trips(&disembarked, 20.0);
+    let arrived = tick_trips(&disembarked, 20.0);
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
@@ -822,7 +1077,7 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
 
     let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
         .expect("vehicle has a next stop");
-    let next = trips::tick_trips(&state, seconds);
+    let next = tick_trips(&state, seconds);
 
     assert_eq!(next.transit.vehicles[0].itinerary_index, 1);
     assert_eq!(next.transit.vehicles[0].path_step_index, 0);
@@ -930,7 +1185,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
     after_return_window.clock_minutes = return_minute;
     after_return_window.paused = false;
 
-    let ticked = trips::tick_trips(&after_return_window, 0.0);
+    let ticked = tick_trips(&after_return_window, 0.0);
 
     assert!(!ticked
         .active_trips
@@ -962,7 +1217,7 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
         returned_home_today: false,
     }];
 
-    let arrived = trips::tick_trips(&state, 20.0);
+    let arrived = tick_trips(&state, 20.0);
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(arrived.active_trips.is_empty());
@@ -971,7 +1226,7 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
     assert!(sim.return_resolved_today);
     assert!(sim.returned_home_today);
 
-    let ticked_again = trips::tick_trips(&arrived, 0.0);
+    let ticked_again = tick_trips(&arrived, 0.0);
 
     assert!(ticked_again.active_trips.is_empty());
     assert_eq!(ticked_again.metrics.completed_trips, 1);
@@ -1010,7 +1265,7 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
         private_car_trip: None,
     }];
 
-    let next = trips::tick_trips(&state, 2.0);
+    let next = tick_trips(&state, 2.0);
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(next.active_trips.is_empty());
@@ -1060,7 +1315,7 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         private_car_trip: None,
     }];
 
-    let next = trips::tick_trips(&state, 2.0);
+    let next = tick_trips(&state, 2.0);
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(next.active_trips.is_empty());
@@ -1111,7 +1366,7 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
     }];
     state.active_trips = Vec::new();
 
-    let next = trips::tick_trips(&state, 1.0);
+    let next = tick_trips(&state, 1.0);
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(
@@ -1185,7 +1440,7 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
         private_car_trip: None,
     }];
 
-    let next = trips::tick_trips(&state, 1.0);
+    let next = tick_trips(&state, 1.0);
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     // The stranded guard must not fire while a return trip is in progress.
@@ -1263,7 +1518,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
     let day1_return_time = clock::GAME_DAY_SECONDS
         + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
-    let next = trips::tick_trips(&state, day1_return_time - state.time + 1.0);
+    let next = tick_trips(&state, day1_return_time - state.time + 1.0);
 
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
@@ -1337,7 +1592,7 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
         private_car_trip: None,
     }];
 
-    let next = trips::tick_trips(&state, 0.0);
+    let next = tick_trips(&state, 0.0);
 
     let ids = next
         .active_trips
@@ -1410,7 +1665,7 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
 fn zero_length_walk_leg_accrues_wait_time_under_large_tick() {
     let state = state_with_zero_length_walk_then_bus();
 
-    let next = trips::tick_trips(&state, 60.0);
+    let next = tick_trips(&state, 60.0);
 
     // The zero-length walk must be collapsed so the following bus leg's wait
     // time is accrued for the full substep, not dropped to zero.
@@ -1426,11 +1681,11 @@ fn zero_length_walk_leg_accrues_wait_time_under_large_tick() {
 
 #[test]
 fn zero_length_walk_leg_preserves_large_tick_vs_stepped_tick_equivalence() {
-    let large_snapshot = trips::tick_trips(&state_with_zero_length_walk_then_bus(), 60.0);
+    let large_snapshot = tick_trips(&state_with_zero_length_walk_then_bus(), 60.0);
 
     let mut stepped_snapshot = state_with_zero_length_walk_then_bus();
     for _ in 0..60 {
-        stepped_snapshot = trips::tick_trips(&stepped_snapshot, 1.0);
+        stepped_snapshot = tick_trips(&stepped_snapshot, 1.0);
     }
 
     assert!(
@@ -1486,7 +1741,7 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
 
-    let next = trips::tick_trips(&state, 1.0);
+    let next = tick_trips(&state, 1.0);
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
@@ -1558,7 +1813,7 @@ fn zero_length_transfer_walk_collapses_between_transit_legs() {
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
 
-    let next = trips::tick_trips(&state, 30.0);
+    let next = tick_trips(&state, 30.0);
 
     // The zero-length transfer walk at leg index 1 must collapse, advancing
     // straight to the second bus leg (index 2) and accruing its wait time.
@@ -1587,11 +1842,11 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
         state
     }
 
-    let large = trips::tick_trips(&build(), 100.0);
+    let large = tick_trips(&build(), 100.0);
 
     let mut stepped = build();
     for _ in 0..100 {
-        stepped = trips::tick_trips(&stepped, 1.0);
+        stepped = tick_trips(&stepped, 1.0);
     }
 
     assert_eq!(large.metrics.unserved_trips, stepped.metrics.unserved_trips);
@@ -1642,7 +1897,7 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
     waiting.patience_remaining = 70.0;
     state.active_trips = vec![waiting];
 
-    let next = trips::tick_trips_with_objectives(&state, 70.0);
+    let next = tick_trips_with_objectives(&state, 70.0);
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1691,7 +1946,7 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
     // before Trip A's patience expiry at t=61s. Without the aggregate boundary
     // the crossing is missed and the loss is never detected.
-    let next = trips::tick_trips_with_objectives(&state, 200.0);
+    let next = tick_trips_with_objectives(&state, 200.0);
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1701,8 +1956,8 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
 }
 
 fn assert_average_wait_loss_matches_coarse_and_fine(state: &caelum_core::GameSnapshot) {
-    let coarse = trips::tick_trips_with_objectives(state, 300.0);
-    let fine = trips::tick_trips_with_objectives(state, 1.0);
+    let coarse = tick_trips_with_objectives(state, 300.0);
+    let fine = tick_trips_with_objectives(state, 1.0);
 
     assert_eq!(coarse.metrics.state, MetricsState::Lost);
     assert_eq!(fine.metrics.state, MetricsState::Lost);
@@ -1793,7 +2048,7 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
     // outcomes), then the tick advances 390s past the 300s rolling window. By
     // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
     // start = 100s). Without per-substep evaluation, the loss is missed.
-    let next = trips::tick_trips_with_objectives(&state, 400.0);
+    let next = tick_trips_with_objectives(&state, 400.0);
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1831,7 +2086,7 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
         state
     }
 
-    let coarse = trips::tick_trips_with_objectives(&build(), 700.0);
+    let coarse = tick_trips_with_objectives(&build(), 700.0);
     let mut fine = build();
     // Bound the fine-grained loop so a regression that never reaches a terminal
     // state fails the test instead of hanging CI. 700 seconds of game time at
@@ -1845,7 +2100,7 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
             iterations <= MAX_FINE_TICKS,
             "fine-grained loop did not reach a terminal state within {MAX_FINE_TICKS} ticks"
         );
-        fine = trips::tick_trips_with_objectives(&fine, 1.0);
+        fine = tick_trips_with_objectives(&fine, 1.0);
     }
     assert_ne!(
         fine.metrics.state,
@@ -1901,7 +2156,7 @@ fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
     // The coarse tick spans both expiry instants (arrivals at t=10, unserved at
     // t=15). The substep must break at t=10+eps, prune the arrivals, and
     // evaluate the loss gate on the remaining 10 unserved outcomes.
-    let coarse = trips::tick_trips_with_objectives(&state, 15.0);
+    let coarse = tick_trips_with_objectives(&state, 15.0);
 
     assert_eq!(coarse.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -1920,7 +2175,7 @@ fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
             iterations <= 100,
             "fine-grained loop did not reach a terminal state within 100 ticks"
         );
-        fine = trips::tick_trips_with_objectives(&fine, 1.0);
+        fine = tick_trips_with_objectives(&fine, 1.0);
     }
     assert_eq!(fine.metrics.state, MetricsState::Lost);
     assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);

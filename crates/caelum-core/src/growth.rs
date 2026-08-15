@@ -54,6 +54,7 @@ pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
 #[cfg(test)]
 mod tests {
     use crate::model::{GameSnapshot, GrowthAction, GrowthWave, Point};
+    use crate::road_topology::RoadTopology;
     use crate::scenario::{
         growing_suburb_campaign, growing_suburb_growth_waves, growing_suburb_objectives,
     };
@@ -73,13 +74,18 @@ mod tests {
         campaign_with_waves(growing_suburb_growth_waves())
     }
 
+    fn tick_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        trips::tick_trips(state, &topology, delta_seconds)
+    }
+
     #[test]
     fn sandbox_attached_growth_waves_remain_unapplied() {
         let mut start = create_initial_snapshot();
         start.paused = false;
         start.scenario.growth_waves = growing_suburb_growth_waves();
 
-        let next = trips::tick_trips(&start, 1.0);
+        let next = tick_trips(&start, 1.0);
 
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
@@ -91,7 +97,7 @@ mod tests {
         let mut start = campaign_with_waves(growing_suburb_growth_waves());
         start.scenario.objectives = None;
 
-        let next = trips::tick_trips(&start, 1.0);
+        let next = tick_trips(&start, 1.0);
 
         assert_eq!(next.buildings.len(), 5);
         assert!(next.scenario.growth_waves[0].applied);
@@ -101,7 +107,7 @@ mod tests {
     fn seed_wave_zones_places_houses_without_immediate_sims() {
         let start = seeded();
         let budget_before = start.budget;
-        let next = trips::tick_trips(&start, 1.0);
+        let next = tick_trips(&start, 1.0);
 
         assert_eq!(next.buildings.len(), 5, "5 smallHouse units placed");
         assert_eq!(
@@ -123,8 +129,8 @@ mod tests {
 
     #[test]
     fn application_is_idempotent() {
-        let once = trips::tick_trips(&seeded(), 1.0);
-        let twice = trips::tick_trips(&once, 1.0);
+        let once = tick_trips(&seeded(), 1.0);
+        let twice = tick_trips(&once, 1.0);
         assert_eq!(twice.buildings.len(), once.buildings.len());
         assert_eq!(twice.sims.len(), once.sims.len());
     }
@@ -133,7 +139,7 @@ mod tests {
     fn empty_growth_waves_is_a_noop() {
         let mut start = create_initial_snapshot();
         start.paused = false;
-        let next = trips::tick_trips(&start, 1.0);
+        let next = tick_trips(&start, 1.0);
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
     }
@@ -141,10 +147,10 @@ mod tests {
     #[test]
     fn coarse_and_fine_ticks_produce_identical_growth() {
         let start = seeded();
-        let coarse = trips::tick_trips(&start, 5.0);
+        let coarse = tick_trips(&start, 5.0);
         let mut fine = start.clone();
         for _ in 0..5 {
-            fine = trips::tick_trips(&fine, 1.0);
+            fine = tick_trips(&fine, 1.0);
         }
         assert_eq!(coarse.buildings, fine.buildings);
         assert_eq!(coarse.sims, fine.sims);
@@ -164,7 +170,7 @@ mod tests {
                 rotation: 0,
             }],
         }]);
-        let next = trips::tick_trips(&start, 1.0);
+        let next = tick_trips(&start, 1.0);
         assert!(next.buildings.is_empty(), "unzoned placement skipped");
         assert!(next.scenario.growth_waves[0].applied);
     }
@@ -235,7 +241,7 @@ mod tests {
             },
         ]);
 
-        let next = trips::tick_trips(&start, 300.0);
+        let next = tick_trips(&start, 300.0);
 
         // All three waves fired.
         assert!(next.scenario.growth_waves[0].applied, "wave-a applied");
@@ -268,12 +274,12 @@ mod tests {
         let start = campaign_with_waves(seed_waves);
 
         // Coarse: one 300s tick spanning well past the 120s trigger.
-        let coarse = trips::tick_trips(&start, 300.0);
+        let coarse = tick_trips(&start, 300.0);
 
         // Fine: 300 × 1s ticks; the wave fires on the 120th tick.
         let mut fine = start.clone();
         for _ in 0..300 {
-            fine = trips::tick_trips(&fine, 1.0);
+            fine = tick_trips(&fine, 1.0);
         }
 
         assert!(
