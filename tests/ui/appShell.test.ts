@@ -1135,15 +1135,15 @@ describe("App command shell", () => {
     expect(runtime.stop).toHaveBeenCalled();
   });
 
-  it("renders Data's four overlays, empty hint, and metrics", async () => {
+  it("renders Data's five overlays, empty hint, and metrics", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-data"));
     expect(
       screen.getAllByRole("button", {
-        name: /coverage|crowding|demand|lateness/i,
+        name: /coverage|crowding|demand|lateness|traffic/i,
       }),
-    ).toHaveLength(4);
+    ).toHaveLength(5);
     expect(
       screen.getByText("Choose an overlay to inspect the network."),
     ).toBeVisible();

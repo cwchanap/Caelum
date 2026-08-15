@@ -29,7 +29,7 @@ export function renderCitizens(
   const entities: ActiveTrip[] = state.activeTrips ?? [];
 
   for (const entity of entities) {
-    if (entity.status === "arrived") {
+    if (entity.status === "arrived" || entity.status === "driving") {
       continue;
     }
 

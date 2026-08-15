@@ -622,6 +622,152 @@ function recordingFillCtx() {
   return { ctx, fillStyles };
 }
 
+function trafficCtx() {
+  let fillStyle = "";
+  let globalAlpha = 1;
+  const stack: Array<{ fillStyle: string; globalAlpha: number }> = [];
+  const fills: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fillStyle: string;
+    globalAlpha: number;
+  }> = [];
+  const ctx = {
+    save: vi.fn(() => stack.push({ fillStyle, globalAlpha })),
+    restore: vi.fn(() => {
+      const saved = stack.pop();
+      if (saved === undefined) return;
+      fillStyle = saved.fillStyle;
+      globalAlpha = saved.globalAlpha;
+    }),
+    fillRect: vi.fn((x: number, y: number, width: number, height: number) =>
+      fills.push({ x, y, width, height, fillStyle, globalAlpha }),
+    ),
+    get fillStyle() {
+      return fillStyle;
+    },
+    set fillStyle(next: string) {
+      fillStyle = next;
+    },
+    get globalAlpha() {
+      return globalAlpha;
+    },
+    set globalAlpha(next: number) {
+      globalAlpha = next;
+    },
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, fills };
+}
+
+function roadDrivingTrip(id: string, point: Point): ActiveTrip {
+  return {
+    id,
+    simId: `sim-${id}`,
+    purpose: "commuteOutbound",
+    origin: { x: 0, y: 0 },
+    destination: { x: 9, y: 9 },
+    position: point,
+    status: "driving",
+    deadline: 9_999,
+    routePlan: null,
+    currentLegIndex: 0,
+    patienceRemaining: 100,
+    privateCarTrip: {
+      path: {
+        kind: "road",
+        steps: [
+          {
+            position: point,
+            enteringHeading: "east",
+            leavingHeading: "east",
+            movement: "straight",
+            geometry: {
+              kind: "line",
+              from: point,
+              to: { x: point.x + 1, y: point.y },
+            },
+            travelSeconds: 1,
+          },
+        ],
+        totalTravelSeconds: 1,
+      },
+      arrivalTime: 100,
+    },
+  };
+}
+
+function trafficState(flow: number, point: Point = { x: 2, y: 0 }) {
+  const state = createTestGameState();
+  const map = {
+    ...state.map,
+    tiles: state.map.tiles.map((tile) =>
+      tile.x === point.x && tile.y === point.y
+        ? { ...tile, kind: "road" as const }
+        : tile,
+    ),
+  };
+  return {
+    ...state,
+    map,
+    activeTrips: Array.from({ length: flow }, (_, index) =>
+      roadDrivingTrip(`car-${index}`, point),
+    ),
+  };
+}
+
+describe("traffic overlay", () => {
+  it.each([
+    [4, 1 / 3],
+    [12, 1],
+    [13, 1],
+  ])("scales flow %d to alpha %d", (flow, expectedAlpha) => {
+    const { ctx, fills } = trafficCtx();
+
+    renderOverlays(ctx, trafficState(flow), {
+      ...createUiState(),
+      activeOverlay: "traffic",
+    });
+
+    expect(fills).toEqual([
+      {
+        x: 2 * tileSize,
+        y: 0,
+        width: tileSize,
+        height: tileSize,
+        fillStyle: colors.traffic,
+        globalAlpha: expectedAlpha,
+      },
+    ]);
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("does not paint a historical point after its tile stops being a road", () => {
+    const point = { x: 2, y: 0 };
+    const state = trafficState(1, point);
+    const historicalState = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) =>
+          tile.x === point.x && tile.y === point.y
+            ? { ...tile, kind: "empty" as const }
+            : tile,
+        ),
+      },
+    };
+    const { ctx, fills } = trafficCtx();
+
+    renderOverlays(ctx, historicalState, {
+      ...createUiState(),
+      activeOverlay: "traffic",
+    });
+
+    expect(fills).toHaveLength(0);
+  });
+});
+
 function footprint3x3(origin: Point): Point[] {
   return Array.from({ length: 9 }, (_, index) => ({
     x: origin.x + (index % 3),
