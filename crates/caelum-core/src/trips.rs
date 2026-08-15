@@ -934,6 +934,7 @@ fn build_trip(
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: WAIT_PATIENCE_SECONDS,
+        private_car_trip: None,
     }
 }
 
@@ -1206,6 +1207,7 @@ fn unchanged(trip: &ActiveTrip) -> TripTickResult {
 }
 
 fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
+    trip.private_car_trip = None;
     let late = time > trip.deadline;
     trip.status = if late {
         TripStatus::Late
@@ -1239,6 +1241,7 @@ fn trip_outcome(outcome: TripOutcomeKind, wait_seconds: f64, time: f64) -> TripO
 }
 
 fn mark_unserved(mut trip: ActiveTrip) -> ActiveTrip {
+    trip.private_car_trip = None;
     trip.status = TripStatus::Unserved;
     trip.patience_remaining = trip.patience_remaining.max(0.0);
     trip
@@ -1414,9 +1417,10 @@ fn same_position_and_point(position: &TripPosition, point: &Point) -> bool {
 mod tests {
     use super::*;
     use crate::model::{
-        GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio,
-        MetricsState, ObjectiveThresholds, Point, RollingWindowSeconds, SurvivalTimeSeconds,
-        TripOutcome, TripOutcomeKind,
+        ActiveTrip, GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio,
+        MaxUnservedRatio, MetricsState, ObjectiveThresholds, Point, PrivateCarTrip,
+        RollingWindowSeconds, SurvivalTimeSeconds, TransitPath, TripOutcome, TripOutcomeKind,
+        TripPosition, TripPurpose, TripStatus,
     };
     use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
     use crate::state::create_initial_snapshot;
@@ -1446,6 +1450,45 @@ mod tests {
             survival_time: SurvivalTimeSeconds::new(survival_time)
                 .expect("valid SurvivalTimeSeconds"),
         }
+    }
+
+    fn trip_with_private_car_payload() -> ActiveTrip {
+        ActiveTrip {
+            id: "trip-driving".to_string(),
+            sim_id: "sim-driving".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: Point { x: 1, y: 1 },
+            destination: Point { x: 2, y: 1 },
+            position: TripPosition { x: 1.0, y: 1.0 },
+            status: TripStatus::Driving,
+            deadline: 200.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: TransitPath::Road {
+                    steps: Vec::new(),
+                    total_travel_seconds: 0.0,
+                },
+                arrival_time: 101.25,
+            }),
+        }
+    }
+
+    #[test]
+    fn score_arrival_clears_private_car_payload() {
+        let result = score_arrival(trip_with_private_car_payload(), 101.0);
+
+        assert_eq!(result.trip.status, TripStatus::Arrived);
+        assert!(result.trip.private_car_trip.is_none());
+    }
+
+    #[test]
+    fn mark_unserved_clears_private_car_payload() {
+        let trip = mark_unserved(trip_with_private_car_payload());
+
+        assert_eq!(trip.status, TripStatus::Unserved);
+        assert!(trip.private_car_trip.is_none());
     }
 
     #[test]

@@ -1021,6 +1021,7 @@ fn cleanup_removed_destination_references(
         invalidated_trip_ids.insert(trip.id.clone());
         trip.status = TripStatus::Idle;
         trip.route_plan = None;
+        trip.private_car_trip = None;
         trip.current_leg_index = 0;
         trip.destination = replacement;
         // Refresh the trip timers: retargeting starts a fresh trip (plan nulled,

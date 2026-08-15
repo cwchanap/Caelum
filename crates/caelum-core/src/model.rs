@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 5;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -176,7 +176,8 @@ pub enum BusStopKind {
 }
 
 /// Lifecycle state of an active trip. Serialized as the lowercase TS-parity strings
-/// `idle` / `walking` / `waiting` / `riding` / `arrived` / `late` / `unserved`.
+/// `idle` / `walking` / `waiting` / `riding` / `driving` / `arrived` / `late` /
+/// `unserved`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TripStatus {
@@ -184,6 +185,7 @@ pub enum TripStatus {
     Walking,
     Waiting,
     Riding,
+    Driving,
     Arrived,
     Late,
     Unserved,
@@ -249,7 +251,7 @@ pub struct GameSnapshot {
 /// (serde ignores the unknown remaining fields), compare against
 /// [`SNAPSHOT_SCHEMA_VERSION`], and reject with
 /// [`crate::persistence::PersistenceError::UnsupportedSchema`] on mismatch —
-/// so a snapshot from any non-v5 schema gets a typed persistence error instead
+/// so a snapshot from any non-v6 schema gets a typed persistence error instead
 /// of a generic missing-field serde error from the full deserialize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -933,6 +935,14 @@ pub struct ActiveTrip {
     pub route_plan: Option<RoutePlan>,
     pub current_leg_index: usize,
     pub patience_remaining: f64,
+    pub private_car_trip: Option<PrivateCarTrip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateCarTrip {
+    pub path: TransitPath,
+    pub arrival_time: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

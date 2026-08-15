@@ -164,6 +164,7 @@ fn trip(plan: RoutePlan, status: TripStatus, position: (i32, i32)) -> ActiveTrip
         route_plan: Some(plan),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }
 }
 
@@ -805,6 +806,7 @@ fn coarse_tick_through_zero_step_reversal_matches_stepped_ticks() {
         route_plan: Some(plan),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
 

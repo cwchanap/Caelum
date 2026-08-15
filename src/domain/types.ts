@@ -1,5 +1,5 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 5 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 6 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads";
@@ -67,6 +67,7 @@ export type CitizenStatus =
   | "walking"
   | "waiting"
   | "riding"
+  | "driving"
   | "arrived"
   | "late"
   | "unserved";
@@ -368,6 +369,11 @@ export interface TripPosition {
   y: number;
 }
 
+export interface PrivateCarTrip {
+  path: TransitPath;
+  arrivalTime: number;
+}
+
 export interface ActiveTrip {
   id: string;
   simId: string;
@@ -380,6 +386,7 @@ export interface ActiveTrip {
   routePlan: RoutePlan | null;
   currentLegIndex: number;
   patienceRemaining: number;
+  privateCarTrip: PrivateCarTrip | null;
 }
 
 export interface RouteLeg {
