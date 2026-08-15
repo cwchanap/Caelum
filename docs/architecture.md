@@ -282,11 +282,15 @@ Road occupancy is not connectivity. Rust serializes reciprocal tile-edge connect
 Bus routes use deterministic weighted movement steps (straight, right, left, U-turn, roundabout entry/circulation/exit); metro routes continue to use deterministic track paths. The same Rust-provided step durations drive previews, trip estimates, and vehicle movement.
 
 Private cars are active commute-trip payloads, not vehicle entities.
-Aggregate road flow is derived from active private-car paths in traffic.rs.
-Private-car arrival timestamps are frozen at departure.
-Bus runtime road-step time reads live congestion while preserving fractional step_progress.
-Stored route paths remain structural/free-flow.
-TypeScript derives only the Traffic overlay from snapshot trip state.
+`CAR_ACCESS_SECONDS` is one fixed generalized car access cost; walking remains
+the shared 20-second-per-tile cost.
+`RoadFlow` is ephemeral data rebuilt at scheduling boundaries, never persisted.
+Every `RoadFlow` change is a car departure or arrival boundary. Private-car
+arrival timestamps are frozen at departure.
+Bus runtime road-step time consumes one borrowed `RoadFlow` while preserving
+fractional `step_progress`.
+Stored route paths remain structural/free-flow. TypeScript derives only the
+current-road Traffic overlay from snapshot trip state.
 
 **Plan deviation — arc vs. bezier geometry.** The route-direction-editing plan called for a `PathGeometry::Arc` variant in the Rust wire format for roundabout curves. The implementation replaced it with `PathGeometry::QuadraticBezier` in the Rust model (`crates/caelum-core/src/model.rs`) to avoid transcendental functions in the deterministic step-progress pipeline. The TypeScript `PathGeometry` type (`src/domain/types.ts`) retains an `arc` variant that is **render-only** — `roundaboutRenderer.ts` generates arc geometry locally for circulation-curve drawing, and `routeGeometry.ts` handles it for offset/projection/keying. The Rust wire format never produces `arc`; route and road path steps from Rust only use `line` and `quadraticBezier`.
 

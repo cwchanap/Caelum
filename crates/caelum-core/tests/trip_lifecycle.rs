@@ -392,6 +392,43 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
     (state, topology)
 }
 
+fn staggered_car_arrival_fixture() -> (GameSnapshot, RoadTopology) {
+    let (mut state, topology) = car_commute_fixture(&["sim-001"]);
+    let home = Point { x: 2, y: 3 };
+    let workplace = Point { x: 12, y: 3 };
+    let candidate = traffic::private_car_candidate(
+        &state,
+        &topology,
+        &traffic::RoadFlow::new(),
+        home,
+        workplace,
+    )
+    .expect("staggered arrival fixture has a valid car path");
+    state.sims.clear();
+    state.active_trips = [0.5, 1.0, 1.5, 2.0, 2.5]
+        .into_iter()
+        .enumerate()
+        .map(|(index, offset)| ActiveTrip {
+            id: format!("trip-day-0-trip-{:03}", index + 1),
+            sim_id: format!("arrival-sim-{index:03}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: home,
+            destination: workplace,
+            position: home.into(),
+            status: TripStatus::Driving,
+            deadline: state.time + 900.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: candidate.path.clone(),
+                arrival_time: state.time + offset,
+            }),
+        })
+        .collect();
+    (state, topology)
+}
+
 fn driving_trip_without_payload() -> ActiveTrip {
     ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -540,6 +577,11 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     assert_eq!(first_worker.status, TripStatus::Driving);
     assert_eq!(second_worker.status, TripStatus::Driving);
     assert!(second_arrival_time > first_arrival_time);
+    let admitted_flow = traffic::derive_road_flow(&next);
+    assert_eq!(
+        admitted_flow.get(&free_flow.path.road_steps()[0].position),
+        Some(&6)
+    );
     let free_road_seconds: f64 = free_flow
         .path
         .road_steps()
@@ -611,6 +653,38 @@ fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
 }
 
 #[test]
+fn scheduled_car_departure_updates_flow_before_fractional_bus_boundary_estimate() {
+    let (mut state, topology, departure_time) = bus_fractional_progress_fixture();
+    state.time = departure_time;
+    state.day = 0;
+    state.clock_minutes = clock::clock_minutes(state.time);
+    state.transit.vehicles[0].step_progress = 0.5;
+
+    let spawned = tick_trips(&state, &topology, 0.0);
+    let flow = traffic::derive_road_flow(&spawned);
+    let first_step = spawned.transit.routes[0].legs[0]
+        .current_path
+        .as_ref()
+        .expect("bus route has a captured path")
+        .road_steps()
+        .first()
+        .cloned()
+        .expect("bus path has a road step");
+
+    assert_eq!(first_step.travel_seconds, 1.25);
+    assert_eq!(flow.get(&first_step.position), Some(&5));
+    assert_eq!(traffic::congestion_multiplier(5), 1.25);
+    assert_eq!(
+        traffic::effective_road_step_seconds(&flow, &first_step),
+        1.5625
+    );
+    let remaining_current_step = traffic::effective_road_step_seconds(&flow, &first_step)
+        * (1.0 - spawned.transit.vehicles[0].step_progress);
+    assert!((remaining_current_step - 0.78125).abs() < 1e-9);
+    assert_eq!(spawned.transit.vehicles[0].step_progress, 0.5);
+}
+
+#[test]
 fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
     let (state, topology) = bus_arrival_order_fixture();
     let current_path = state.transit.routes[0].legs[0].current_path.as_ref();
@@ -624,6 +698,17 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
         return;
     };
 
+    let before_flow = traffic::derive_road_flow(&state);
+    assert_eq!(before_flow.get(&current_point), Some(&5));
+    let first_step = current_path
+        .road_steps()
+        .first()
+        .expect("bus route has a first step");
+    assert_eq!(
+        traffic::effective_road_step_seconds(&before_flow, first_step),
+        1.5625
+    );
+
     let at_arrival = tick_trips(&state, &topology, 1.25);
     let bus = &at_arrival.transit.vehicles[0];
     assert_eq!(bus.path_step_index, 0);
@@ -631,6 +716,11 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
     assert_eq!(
         traffic::derive_road_flow(&at_arrival).get(&current_point),
         Some(&4)
+    );
+    let after_arrival_flow = traffic::derive_road_flow(&at_arrival);
+    assert_eq!(
+        traffic::effective_road_step_seconds(&after_arrival_flow, first_step),
+        1.25
     );
     assert_eq!(at_arrival.metrics.completed_trips, 1);
     assert!(at_arrival
@@ -653,6 +743,26 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
         coarse.metrics.completed_trips,
         split.metrics.completed_trips
     );
+}
+
+#[test]
+fn staggered_car_arrivals_resolve_identically_in_coarse_and_split_ticks() {
+    let (state, topology) = staggered_car_arrival_fixture();
+    let coarse = tick_trips(&state, &topology, 3.0);
+
+    let mut split = state.clone();
+    for _ in 0..6 {
+        split = tick_trips(&split, &topology, 0.5);
+    }
+
+    assert_eq!(coarse.time, state.time + 3.0);
+    assert_eq!(coarse.time, split.time);
+    assert!(coarse.active_trips.is_empty());
+    assert!(split.active_trips.is_empty());
+    assert!(traffic::derive_road_flow(&coarse).is_empty());
+    assert!(traffic::derive_road_flow(&split).is_empty());
+    assert_eq!(coarse.metrics.completed_trips, 5);
+    assert_eq!(coarse.metrics, split.metrics);
 }
 
 #[test]
