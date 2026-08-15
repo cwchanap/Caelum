@@ -7,6 +7,7 @@ use caelum_core::model::{
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{build_service_itinerary, ServiceLegSpec};
+use caelum_core::traffic::RoadFlow;
 use caelum_core::{
     route_lifecycle, state::create_initial_snapshot, transit, GameEngine, GameIntent,
     RejectionCode, RoadPreset, RoutingContext,
@@ -592,7 +593,7 @@ fn vehicle<'a>(state: &'a GameSnapshot, vehicle_id: &str) -> &'a Vehicle {
 }
 
 fn tick_vehicles(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    transit::tick_vehicles(state, delta_seconds)
+    transit::tick_vehicles(state, &RoadFlow::new(), delta_seconds)
 }
 
 fn movement_route_fixture(movement: MovementKind, movement_seconds: f64) -> RouteTimingFixture {

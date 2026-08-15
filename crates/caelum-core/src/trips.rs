@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::building_catalog::building_definition;
 use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
+use crate::commute::{departure_minute_for_sim, trip_deadline_seconds, WALK_SECONDS_PER_TILE};
 use crate::model::{
     ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
     PrivateCarTrip, RoutePlan, Sim, TransitMode, TripOutcome, TripOutcomeKind, TripPosition,
@@ -15,18 +15,23 @@ use crate::router;
 use crate::traffic;
 use crate::transit;
 
-const WALK_SECONDS_PER_TILE: f64 = 20.0;
 pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 
-fn plan_route(state: &GameSnapshot, origin: &Point, destination: &Point) -> Option<RoutePlan> {
-    router::find_route_plan(state, origin, destination)
+fn plan_route(
+    state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
+    origin: &Point,
+    destination: &Point,
+) -> Option<RoutePlan> {
+    router::find_route_plan(state, flow, origin, destination)
 }
 
 /// Boundaries per sim per day: outbound spawn + outbound resolution + return
 /// spawn + return resolution, plus headroom for the walk-leg / patience /
-/// deadline boundaries a single commute can generate. Used both in
+/// deadline boundaries a single commute can generate. Driving arrival is an
+/// existing outbound/return resolution boundary, not a seventh category. Used both in
 /// `max_tick_substeps` (initial cap) and in the post-growth cap widening
 /// inside `tick_trips_substepped`.
 const SIM_SHIFT_BOUNDARIES_PER_DAY: usize = 6;
@@ -114,7 +119,8 @@ fn tick_trips_substepped(
     // time, then evaluate. If terminal, return immediately.
     apply_due_world_events(&mut next);
     reset_daily_commute_flags(&mut next);
-    spawn_due_commute_trips(&mut next, road_topology);
+    let mut road_flow = traffic::derive_road_flow(&next);
+    spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
     if on_substep(&mut next) {
         return next;
     }
@@ -166,9 +172,10 @@ fn tick_trips_substepped(
         }
 
         reset_daily_commute_flags(&mut next);
-        spawn_due_commute_trips(&mut next, road_topology);
+        let mut road_flow = traffic::derive_road_flow(&next);
+        spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
 
-        let substep_end = next_boundary_after(&next)
+        let substep_end = next_boundary_after(&next, &road_flow)
             .map(|boundary| boundary.min(final_time))
             .unwrap_or(final_time);
         let substep_delta = (substep_end - next.time).max(0.0);
@@ -176,7 +183,7 @@ fn tick_trips_substepped(
             break;
         }
 
-        next = advance_tick_substep(&next, substep_delta);
+        next = advance_tick_substep(&next, &road_flow, substep_delta);
         steps += 1;
         // Apply growth waves whose trigger time was reached by this substep
         // before evaluating objectives. Without this, a wave due at the same
@@ -210,9 +217,10 @@ fn tick_trips_substepped(
         while final_time - next.time > EPSILON {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            spawn_due_commute_trips(&mut next, road_topology);
+            let mut road_flow = traffic::derive_road_flow(&next);
+            spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
 
-            let substep_end = next_boundary_after(&next)
+            let substep_end = next_boundary_after(&next, &road_flow)
                 .map(|boundary| boundary.min(final_time))
                 .unwrap_or(final_time);
             let mut substep_delta = (substep_end - next.time).max(0.0);
@@ -225,7 +233,7 @@ fn tick_trips_substepped(
                 }
             }
 
-            next = advance_tick_substep(&next, substep_delta);
+            next = advance_tick_substep(&next, &road_flow, substep_delta);
             // Same post-substep growth application as the main loop — see the
             // comment there for why this must precede `on_substep`.
             apply_due_world_events(&mut next);
@@ -238,7 +246,8 @@ fn tick_trips_substepped(
         if !early_termination {
             apply_due_world_events(&mut next);
             reset_daily_commute_flags(&mut next);
-            spawn_due_commute_trips(&mut next, road_topology);
+            let mut road_flow = traffic::derive_road_flow(&next);
+            spawn_due_commute_trips(&mut next, road_topology, &mut road_flow);
         }
     }
 
@@ -335,16 +344,21 @@ fn remaining_move_in_slots(state: &GameSnapshot) -> usize {
         .sum()
 }
 
-fn advance_tick_substep(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
+fn advance_tick_substep(
+    state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
+    delta_seconds: f64,
+) -> GameSnapshot {
     let mut next = state.clone();
     next.time += delta_seconds;
     sync_clock(&mut next);
     reset_daily_commute_flags(&mut next);
 
-    let vehicle_state = transit::tick_vehicles(&next, delta_seconds);
+    let vehicle_state = transit::tick_vehicles(&next, flow, delta_seconds);
     let just_disembarked_trip_ids = just_disembarked_trip_ids(&next, &vehicle_state);
     advance_active_trips_with_zero_delta_ids(
         &vehicle_state,
+        flow,
         delta_seconds,
         &just_disembarked_trip_ids,
     )
@@ -356,11 +370,13 @@ fn sync_clock(state: &mut GameSnapshot) {
 }
 
 pub fn advance_active_trips(state: &GameSnapshot, delta_seconds: f64) -> GameSnapshot {
-    advance_active_trips_with_zero_delta_ids(state, delta_seconds, &HashSet::new())
+    let flow = traffic::RoadFlow::new();
+    advance_active_trips_with_zero_delta_ids(state, &flow, delta_seconds, &HashSet::new())
 }
 
 fn advance_active_trips_with_zero_delta_ids(
     state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
     delta_seconds: f64,
     zero_delta_trip_ids: &HashSet<String>,
 ) -> GameSnapshot {
@@ -373,7 +389,13 @@ fn advance_active_trips_with_zero_delta_ids(
             delta_seconds
         };
         let tick_start_time = (state.time - trip_delta_seconds).max(0.0);
-        results.push(tick_trip(state, trip, trip_delta_seconds, tick_start_time));
+        results.push(tick_trip(
+            state,
+            flow,
+            trip,
+            trip_delta_seconds,
+            tick_start_time,
+        ));
     }
 
     let metric_delta = TripMetricDelta {
@@ -483,7 +505,11 @@ fn private_car_trip_if_faster(
     })
 }
 
-fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopology) {
+fn spawn_due_commute_trips(
+    state: &mut GameSnapshot,
+    road_topology: &RoadTopology,
+    road_flow: &mut traffic::RoadFlow,
+) {
     let sims = state.sims.clone();
 
     for sim in sims {
@@ -575,10 +601,16 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopolog
                     }
                     continue;
                 }
-                let non_car_plan = router::find_route_plan(state, &sim.home, &workplace);
+                let non_car_plan = router::find_route_plan(state, road_flow, &sim.home, &workplace);
                 let chosen_car = private_car_trip_if_faster(
                     non_car_plan.as_ref(),
-                    traffic::private_car_candidate(state, road_topology, sim.home, workplace),
+                    traffic::private_car_candidate(
+                        state,
+                        road_topology,
+                        road_flow,
+                        sim.home,
+                        workplace,
+                    ),
                     state.time,
                 );
                 let mut trip = build_trip(
@@ -591,6 +623,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopolog
                     scheduled_time,
                 );
                 if let Some(car) = chosen_car {
+                    traffic::add_car_path_to_flow(road_flow, &car.path);
                     trip.status = TripStatus::Driving;
                     trip.private_car_trip = Some(car);
                 }
@@ -609,10 +642,16 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopolog
         if state.time + EPSILON >= scheduled_time
             && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
         {
-            let non_car_plan = router::find_route_plan(state, &sim.position, &sim.home);
+            let non_car_plan = router::find_route_plan(state, road_flow, &sim.position, &sim.home);
             let chosen_car = private_car_trip_if_faster(
                 non_car_plan.as_ref(),
-                traffic::private_car_candidate(state, road_topology, sim.position, sim.home),
+                traffic::private_car_candidate(
+                    state,
+                    road_topology,
+                    road_flow,
+                    sim.position,
+                    sim.home,
+                ),
                 state.time,
             );
             let mut trip = build_trip(
@@ -625,6 +664,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopolog
                 scheduled_time,
             );
             if let Some(car) = chosen_car {
+                traffic::add_car_path_to_flow(road_flow, &car.path);
                 trip.status = TripStatus::Driving;
                 trip.private_car_trip = Some(car);
             }
@@ -633,7 +673,7 @@ fn spawn_due_commute_trips(state: &mut GameSnapshot, road_topology: &RoadTopolog
     }
 }
 
-fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
+fn next_boundary_after(state: &GameSnapshot, flow: &traffic::RoadFlow) -> Option<f64> {
     let mut next = None;
     let active_thresholds = active_objective_thresholds(state);
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
@@ -683,6 +723,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
         track_active_trip_boundary(
             &mut next,
             state,
+            flow,
             trip,
             active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
         );
@@ -695,7 +736,7 @@ fn next_boundary_after(state: &GameSnapshot) -> Option<f64> {
     );
 
     for vehicle in &state.transit.vehicles {
-        if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, vehicle) {
+        if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, flow, vehicle) {
             track_next_boundary(&mut next, state.time + seconds, state.time);
         }
     }
@@ -827,6 +868,7 @@ fn track_aggregate_wait_boundary(
 fn track_active_trip_boundary(
     next: &mut Option<f64>,
     state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
     trip: &ActiveTrip,
     max_average_wait: Option<f64>,
 ) {
@@ -847,7 +889,7 @@ fn track_active_trip_boundary(
 
     let route_plan = if trip.route_plan.is_none() || trip.status == TripStatus::Riding {
         let snapped_origin = snap_position_to_point(&trip.position);
-        plan_route(state, &snapped_origin, &trip.destination)
+        plan_route(state, flow, &snapped_origin, &trip.destination)
     } else {
         trip.route_plan.clone()
     };
@@ -1034,6 +1076,7 @@ fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
 
 fn tick_trip(
     state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
     trip: &ActiveTrip,
     delta_seconds: f64,
     tick_start_time: f64,
@@ -1080,7 +1123,8 @@ fn tick_trip(
 
     if route_plan.is_none() {
         let snapped_origin = snap_position_to_point(&next_trip.position);
-        let Some(planned_route) = plan_route(state, &snapped_origin, &next_trip.destination) else {
+        let Some(planned_route) = plan_route(state, flow, &snapped_origin, &next_trip.destination)
+        else {
             return TripTickResult {
                 trip: mark_unserved(next_trip),
                 completed_trips: 0,
@@ -1640,10 +1684,11 @@ mod tests {
 
         let mut sandbox_without_wave = create_initial_snapshot();
         sandbox_without_wave.paused = false;
+        let flow = traffic::RoadFlow::new();
 
         assert_eq!(
-            next_boundary_after(&sandbox_with_wave),
-            next_boundary_after(&sandbox_without_wave),
+            next_boundary_after(&sandbox_with_wave, &flow),
+            next_boundary_after(&sandbox_without_wave, &flow),
             "sandbox waves do not create tick boundaries"
         );
         assert_eq!(

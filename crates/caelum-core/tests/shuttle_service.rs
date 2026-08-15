@@ -6,6 +6,7 @@ use caelum_core::model::{
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{enumerate_ride_edges, service_visits, ServiceVisit};
+use caelum_core::traffic::RoadFlow;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset, RoutingContext};
 
 fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
@@ -176,7 +177,7 @@ fn tick_vehicles(
     state: &caelum_core::model::GameSnapshot,
     delta_seconds: f64,
 ) -> caelum_core::model::GameSnapshot {
-    transit::tick_vehicles(state, delta_seconds)
+    transit::tick_vehicles(state, &RoadFlow::new(), delta_seconds)
 }
 
 #[test]
@@ -378,8 +379,12 @@ fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
     state.transit.vehicles[0].itinerary_index = 0;
 
-    let outbound_seconds =
-        transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0]).unwrap();
+    let outbound_seconds = transit::seconds_until_next_vehicle_stop(
+        &state,
+        &RoadFlow::new(),
+        &state.transit.vehicles[0],
+    )
+    .unwrap();
     let wrong_completion = tick_vehicles(&state, outbound_seconds);
     assert_eq!(
         wrong_completion.transit.vehicles[0].passenger_ids,
@@ -391,9 +396,12 @@ fn alighting_matches_the_completed_itinerary_leg_not_only_the_stop_id() {
     returning.transit.vehicles[0].itinerary_index = 3;
     returning.transit.vehicles[0].path_step_index = 0;
     returning.transit.vehicles[0].step_progress = 0.0;
-    let return_seconds =
-        transit::seconds_until_next_vehicle_stop(&returning, &returning.transit.vehicles[0])
-            .unwrap();
+    let return_seconds = transit::seconds_until_next_vehicle_stop(
+        &returning,
+        &RoadFlow::new(),
+        &returning.transit.vehicles[0],
+    )
+    .unwrap();
     let correct_completion = tick_vehicles(&returning, return_seconds);
     assert!(correct_completion.transit.vehicles[0]
         .passenger_ids
@@ -639,7 +647,8 @@ fn shuttle_plan_estimate_includes_return_and_terminal_reversal_legs() {
         .sum();
     assert_eq!(cross_terminal_seconds, 7.0 + 3.0 + 11.0 + 13.0);
 
-    let plan = router::plan_route(&state, &(12, 4).into(), &(2, 4).into()).unwrap();
+    let plan =
+        router::plan_route(&state, &RoadFlow::new(), &(12, 4).into(), &(2, 4).into()).unwrap();
     let transit_leg = plan
         .legs
         .iter()

@@ -1,5 +1,7 @@
 use crate::model::WorkerProfile;
 
+pub const WALK_SECONDS_PER_TILE: f64 = 20.0;
+
 pub fn numeric_id_suffix(id: &str) -> usize {
     id.rsplit_once('-')
         .and_then(|(_, suffix)| suffix.parse::<usize>().ok())

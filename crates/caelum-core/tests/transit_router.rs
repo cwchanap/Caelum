@@ -4,6 +4,7 @@ use caelum_core::model::{
     ServicePattern, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::preview::RoutePreviewRequest;
+use caelum_core::traffic::{derive_road_flow, RoadFlow};
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset};
 
 fn road_line(engine: &mut GameEngine, y: i32, from_x: i32, to_x: i32) {
@@ -117,16 +118,18 @@ fn bus_vehicle_uses_congested_road_time_for_boundary_and_motion() {
     state.active_trips = (0..6)
         .map(|id| driving_car(id, one_step_road_path(point, 1.0)))
         .collect();
+    let flow = derive_road_flow(&state);
 
-    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
-        .expect("bus has a next stop");
+    let seconds =
+        transit::seconds_until_next_vehicle_stop(&state, &flow, &state.transit.vehicles[0])
+            .expect("bus has a next stop");
     assert!((seconds - 1.875).abs() < 1e-9, "seconds={seconds}");
 
-    let after_free_flow_delta = transit::tick_vehicles(&state, 1.25);
+    let after_free_flow_delta = transit::tick_vehicles(&state, &flow, 1.25);
     assert!(after_free_flow_delta.transit.vehicles[0].step_progress > 0.0);
     assert!(after_free_flow_delta.transit.vehicles[0].step_progress < 1.0);
 
-    let after_congested_remainder = transit::tick_vehicles(&after_free_flow_delta, 0.625);
+    let after_congested_remainder = transit::tick_vehicles(&after_free_flow_delta, &flow, 0.625);
     let vehicle = &after_congested_remainder.transit.vehicles[0];
     assert_eq!(vehicle.path_step_index, 0);
     assert_eq!(vehicle.step_progress, 0.0);
@@ -140,12 +143,14 @@ fn metro_vehicle_keeps_stored_track_time_when_road_is_congested() {
     state.active_trips = (0..6)
         .map(|id| driving_car(id, one_step_road_path(point, 1.0)))
         .collect();
+    let flow = derive_road_flow(&state);
 
-    let seconds = transit::seconds_until_next_vehicle_stop(&state, &state.transit.vehicles[0])
-        .expect("metro has a next stop");
+    let seconds =
+        transit::seconds_until_next_vehicle_stop(&state, &flow, &state.transit.vehicles[0])
+            .expect("metro has a next stop");
     assert!((seconds - 1.25).abs() < 1e-9);
 
-    let next = transit::tick_vehicles(&state, seconds);
+    let next = transit::tick_vehicles(&state, &flow, seconds);
     let vehicle = &next.transit.vehicles[0];
     assert_eq!(vehicle.path_step_index, 0);
     assert_eq!(vehicle.step_progress, 0.0);
@@ -199,7 +204,8 @@ fn bus_route_vehicle_carries_commute_trip() {
         private_car_trip: None,
     });
 
-    let boarded = transit::tick_vehicles(&snapshot, 0.0);
+    let flow = RoadFlow::new();
+    let boarded = transit::tick_vehicles(&snapshot, &flow, 0.0);
     assert!(boarded.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
@@ -211,9 +217,9 @@ fn bus_route_vehicle_carries_commute_trip() {
     assert_eq!(boarded_trip.status, TripStatus::Riding);
 
     let ride_seconds =
-        transit::seconds_until_next_vehicle_stop(&boarded, &boarded.transit.vehicles[0])
+        transit::seconds_until_next_vehicle_stop(&boarded, &flow, &boarded.transit.vehicles[0])
             .expect("vehicle has a next stop");
-    let arrived = transit::tick_vehicles(&boarded, ride_seconds);
+    let arrived = transit::tick_vehicles(&boarded, &flow, ride_seconds);
     assert!(!arrived.transit.vehicles[0]
         .passenger_ids
         .contains(&"trip-001".to_string()));
@@ -273,7 +279,7 @@ fn routing_ignores_a_route_with_any_disconnected_leg() {
     state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
     state.transit.routes[0].legs[0].current_path = None;
 
-    let plan = router::find_route_plan(&state, &(2, 4).into(), &(12, 4).into())
+    let plan = router::find_route_plan(&state, &RoadFlow::new(), &(2, 4).into(), &(12, 4).into())
         .expect("walking fallback remains available");
 
     assert!(plan.legs.iter().all(|leg| leg.mode == TransitMode::Walk));

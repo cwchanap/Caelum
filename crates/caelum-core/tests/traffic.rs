@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use caelum_core::commute;
 use caelum_core::model::{
     ActiveTrip, Heading, PathGeometry, PlacedBuilding, Point, PrivateCarTrip, RoadPathStep,
     TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
@@ -7,8 +8,8 @@ use caelum_core::model::{
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::traffic::{
-    active_car_flow, congestion_multiplier, effective_road_path_seconds,
-    effective_road_step_seconds, private_car_candidate, road_flow_at,
+    add_car_path_to_flow, congestion_multiplier, derive_road_flow, effective_road_path_seconds,
+    effective_road_step_seconds, private_car_candidate, RoadFlow, CAR_ACCESS_SECONDS,
 };
 
 fn point(x: i32, y: i32) -> Point {
@@ -78,7 +79,13 @@ fn congestion_multiplier_is_bounded_by_capacity_and_cap() {
 }
 
 #[test]
-fn active_car_flow_counts_one_driving_trip_once_per_unique_road_point() {
+fn shared_commute_cost_constants_are_explicit() {
+    assert_eq!(commute::WALK_SECONDS_PER_TILE, 20.0);
+    assert_eq!(CAR_ACCESS_SECONDS, 120.0);
+}
+
+#[test]
+fn derive_road_flow_counts_one_driving_trip_once_per_unique_road_point() {
     let repeated = point(5, 5);
     let other = point(6, 5);
     let state = flow_fixture(vec![driving_trip(
@@ -88,9 +95,20 @@ fn active_car_flow_counts_one_driving_trip_once_per_unique_road_point() {
     )]);
 
     assert_eq!(
-        active_car_flow(&state),
+        derive_road_flow(&state),
         BTreeMap::from([(repeated, 1), (other, 1)])
     );
+}
+
+#[test]
+fn add_car_path_to_flow_counts_each_admitted_car_once_per_road_point() {
+    let shared = point(5, 5);
+    let other = point(6, 5);
+    let mut flow = RoadFlow::new();
+
+    add_car_path_to_flow(&mut flow, &road_path(&[shared, shared, other]));
+
+    assert_eq!(flow, BTreeMap::from([(shared, 1), (other, 1)]));
 }
 
 #[test]
@@ -113,7 +131,7 @@ fn non_driving_trips_and_buses_do_not_contribute_to_flow() {
         parked_position: None,
     });
 
-    assert!(active_car_flow(&state).is_empty());
+    assert!(derive_road_flow(&state).is_empty());
 }
 
 #[test]
@@ -128,8 +146,8 @@ fn two_driving_cars_sharing_a_point_produce_flow_two() {
         ),
     ]);
 
-    assert_eq!(road_flow_at(&state, shared), 2);
-    assert_eq!(road_flow_at(&state, point(6, 5)), 1);
+    assert_eq!(derive_road_flow(&state).get(&shared), Some(&2));
+    assert_eq!(derive_road_flow(&state).get(&point(6, 5)), Some(&1));
 }
 
 fn blank_snapshot(width: u8, height: u8) -> caelum_core::GameSnapshot {
@@ -227,7 +245,14 @@ fn private_car_requires_usable_home_access() {
     let (mut state, topology) = endpoint_fixture(None);
     state.buildings[0].occupied_tiles = vec![point(1, 1)];
 
-    assert!(private_car_candidate(&state, &topology, point(1, 1), point(9, 5)).is_none());
+    assert!(private_car_candidate(
+        &state,
+        &topology,
+        &RoadFlow::new(),
+        point(1, 1),
+        point(9, 5)
+    )
+    .is_none());
 }
 
 #[test]
@@ -235,7 +260,14 @@ fn private_car_requires_usable_workplace_access() {
     let (mut state, topology) = endpoint_fixture(None);
     state.buildings[1].occupied_tiles = vec![point(12, 1)];
 
-    assert!(private_car_candidate(&state, &topology, point(3, 5), point(12, 1)).is_none());
+    assert!(private_car_candidate(
+        &state,
+        &topology,
+        &RoadFlow::new(),
+        point(3, 5),
+        point(12, 1)
+    )
+    .is_none());
 }
 
 #[test]
@@ -246,14 +278,27 @@ fn private_car_rejects_disconnected_access_roads() {
     state.buildings = vec![building("home", point(3, 5)), building("work", point(9, 5))];
     let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
-    assert!(private_car_candidate(&state, &topology, point(3, 5), point(9, 5)).is_none());
+    assert!(private_car_candidate(
+        &state,
+        &topology,
+        &RoadFlow::new(),
+        point(3, 5),
+        point(9, 5)
+    )
+    .is_none());
 }
 
 #[test]
 fn private_car_uses_connected_two_way_road() {
     let (state, topology) = endpoint_fixture(None);
 
-    let candidate = private_car_candidate(&state, &topology, point(3, 5), point(9, 5));
+    let candidate = private_car_candidate(
+        &state,
+        &topology,
+        &RoadFlow::new(),
+        point(3, 5),
+        point(9, 5),
+    );
     assert!(
         candidate.is_some(),
         "connected two-way road should produce a car candidate"
@@ -268,7 +313,14 @@ fn private_car_uses_connected_two_way_road() {
 fn private_car_respects_one_way_direction() {
     let (state, topology) = endpoint_fixture(Some(Heading::East));
 
-    assert!(private_car_candidate(&state, &topology, point(9, 5), point(3, 5)).is_none());
+    assert!(private_car_candidate(
+        &state,
+        &topology,
+        &RoadFlow::new(),
+        point(9, 5),
+        point(3, 5)
+    )
+    .is_none());
 }
 
 #[test]
@@ -283,14 +335,21 @@ fn effective_road_path_seconds_uses_current_flow_per_transition() {
     ]);
     let candidate_path = road_path(&[repeated, repeated, other]);
 
-    assert_eq!(road_flow_at(&state, repeated), 4);
-    assert_eq!(effective_road_path_seconds(&state, &candidate_path), 3.0);
+    let flow = derive_road_flow(&state);
+    assert_eq!(flow.get(&repeated), Some(&4));
+    assert_eq!(effective_road_path_seconds(&flow, &candidate_path), 3.0);
 }
 
 #[test]
 fn private_car_candidate_eta_includes_its_own_flow_unit() {
     let (empty_state, topology) = endpoint_fixture(None);
-    let free_flow = private_car_candidate(&empty_state, &topology, point(3, 5), point(9, 5));
+    let free_flow = private_car_candidate(
+        &empty_state,
+        &topology,
+        &RoadFlow::new(),
+        point(3, 5),
+        point(9, 5),
+    );
     assert!(
         free_flow.is_some(),
         "connected two-way road should produce a free-flow candidate"
@@ -315,15 +374,22 @@ fn private_car_candidate_eta_includes_its_own_flow_unit() {
         })
         .collect();
 
-    let congested = private_car_candidate(&state, &topology, point(3, 5), point(9, 5));
+    let flow = derive_road_flow(&state);
+    let congested = private_car_candidate(&state, &topology, &flow, point(3, 5), point(9, 5));
     assert!(
         congested.is_some(),
         "active flow should not invalidate the captured candidate"
     );
     if let Some(congested) = congested {
+        let free_road_seconds: f64 = free_flow
+            .path
+            .road_steps()
+            .iter()
+            .map(|step| step.travel_seconds)
+            .sum();
         assert_eq!(
             congested.estimated_seconds,
-            free_flow.estimated_seconds * 1.25
+            free_flow.estimated_seconds + free_road_seconds * 0.25
         );
     }
 }
@@ -349,7 +415,10 @@ fn effective_track_path_seconds_ignore_road_flow() {
         total_travel_seconds: 2.0,
     };
 
-    assert_eq!(effective_road_path_seconds(&state, &path), 2.0);
+    assert_eq!(
+        effective_road_path_seconds(&derive_road_flow(&state), &path),
+        2.0
+    );
 }
 
 #[test]
@@ -368,5 +437,8 @@ fn effective_road_step_seconds_applies_current_derived_flow() {
     );
     let step = road_step(position, 1.25);
 
-    assert_eq!(effective_road_step_seconds(&state, &step), 1.875);
+    assert_eq!(
+        effective_road_step_seconds(&derive_road_flow(&state), &step),
+        1.875
+    );
 }
