@@ -641,14 +641,10 @@ test("starts a bus service by setting a target headway and deploying the fleet",
 
   // Post-deployment UI shows Target/Nominal/Fleet with the set/derived values and no setup controls.
   await expect(
-    service
-      .getByText("Target")
-      .locator("xpath=following-sibling::span[1]"),
+    service.getByText("Target").locator("xpath=following-sibling::span[1]"),
   ).toHaveText("6.0 min");
   await expect(
-    service
-      .getByText("Nominal")
-      .locator("xpath=following-sibling::span[1]"),
+    service.getByText("Nominal").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
