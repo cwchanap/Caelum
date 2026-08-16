@@ -318,7 +318,7 @@
                   </ul>
                 {/if}
                 {#if route.busService !== null}
-                  {#if route.status.primary === "noFleet"}
+                  {#if route.mode === "bus" && route.busService.assignedFleet === 0}
                     <div
                       class="route-service"
                       data-testid={`route-service-${route.id}`}
@@ -369,7 +369,7 @@
                           Set
                         </button>
                       </div>
-                      {#if route.busService.requiredFleet !== null}
+                      {#if route.status.primary === "noFleet" && route.busService.targetHeadwaySeconds !== null && route.busService.requiredFleet !== null}
                         <button
                           type="button"
                           class="route-toggle"

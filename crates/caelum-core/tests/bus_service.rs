@@ -199,6 +199,84 @@ fn deployment_requires_target_and_existing_route_state() {
 }
 
 #[test]
+fn deployment_rejects_existing_fleet_before_target_or_route_state() {
+    let mut before_target = bus_route_engine();
+    let assigned = before_target.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
+    );
+    let missing_target = before_target.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".to_string(),
+    });
+    assert_eq!(
+        missing_target
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::FleetAlreadyAssigned),
+    );
+
+    let mut paused = bus_route_engine();
+    assert!(
+        paused
+            .dispatch(GameIntent::AssignVehicle {
+                mode: "bus".to_string(),
+                line_id: "route-001".to_string(),
+            })
+            .applied
+    );
+    assert!(
+        paused
+            .dispatch(GameIntent::SetRouteActive {
+                route_id: "route-001".to_string(),
+                active: false,
+            })
+            .applied
+    );
+    let paused_result = paused.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".to_string(),
+    });
+    assert_eq!(
+        paused_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::FleetAlreadyAssigned),
+    );
+
+    let mut broken = bus_route_engine();
+    assert!(
+        broken
+            .dispatch(GameIntent::AssignVehicle {
+                mode: "bus".to_string(),
+                line_id: "route-001".to_string(),
+            })
+            .applied
+    );
+    assert!(
+        broken
+            .dispatch(GameIntent::RemoveAtTile {
+                point: Point { x: 6, y: 5 },
+            })
+            .applied
+    );
+    let broken_result = broken.dispatch(GameIntent::DeployBusFleet {
+        route_id: "route-001".to_string(),
+    });
+    assert_eq!(
+        broken_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::FleetAlreadyAssigned),
+    );
+}
+
+#[test]
 fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     let mut exact = bus_route_engine();
     assert!(

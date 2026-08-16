@@ -25,6 +25,7 @@ import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
   addTestBusRoute,
   addTestBusStop,
+  assignTestVehicle,
   addTestMetroLine,
   addTestMetroStation,
   createTestGameState,
@@ -940,6 +941,21 @@ describe("route selectors", () => {
     });
   });
 
+  it("uses route vehicle IDs for fleet lifecycle when service metrics are unavailable", () => {
+    let state = busRouteWithMetrics(null);
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "running", pausedAfterRepair: false },
+      busService: {
+        assignedFleet: 1,
+        roundTripSeconds: null,
+        requiredFleet: null,
+        nominalHeadwaySeconds: null,
+      },
+    });
+  });
+
   it("keeps noFleet below paused and broken in status precedence", () => {
     const base = busRouteWithMetrics(null);
     const paused = {
@@ -994,7 +1010,7 @@ describe("route selectors", () => {
   });
 
   it("exposes nominal headway and assigned fleet after deployment", () => {
-    const state = busRouteWithMetrics(
+    let state = busRouteWithMetrics(
       {
         roundTripSeconds: 600,
         assignedFleet: 2,
@@ -1003,6 +1019,8 @@ describe("route selectors", () => {
       },
       300,
     );
+    state = assignTestVehicle(state, "bus", "route-001");
+    state = assignTestVehicle(state, "bus", "route-001");
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "running", pausedAfterRepair: false },
       busService: {
@@ -1028,9 +1046,11 @@ describe("route selectors", () => {
   it("displays supplied Rust service metrics verbatim even when leg timing disagrees", () => {
     // Deliberate disagreement fixture: cached leg timing (`estimatedSeconds`)
     // sums to 2s while Rust reports a 600s round trip. The row must show the
-    // Rust-derived values — TypeScript must not recompute path timing.
+    // Rust-derived timing and required values — TypeScript must not recompute
+    // path timing or derive the fleet from serviceMetrics.
     let state = twoStops();
     state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
     state = {
       ...state,
       transit: {

@@ -234,11 +234,7 @@ function routeServiceStatus(
   if (!route.active) {
     return { primary: "paused", pausedAfterRepair: false };
   }
-  if (
-    mode === "bus" &&
-    "serviceMetrics" in route &&
-    (route.serviceMetrics?.assignedFleet ?? 0) === 0
-  ) {
+  if (mode === "bus" && route.vehicleIds.length === 0) {
     // Display-only: an active connected bus with zero assigned fleet offers
     // no passenger service until the player deploys a fleet.
     return { primary: "noFleet", pausedAfterRepair: false };
@@ -529,7 +525,7 @@ function selectBusServiceState(route: Route): ShellBusServiceState {
   return {
     targetHeadwaySeconds: route.targetHeadwaySeconds,
     roundTripSeconds: route.serviceMetrics?.roundTripSeconds ?? null,
-    assignedFleet: route.serviceMetrics?.assignedFleet ?? 0,
+    assignedFleet: route.vehicleIds.length,
     requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
     nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
   };

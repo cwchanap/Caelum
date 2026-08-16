@@ -442,15 +442,12 @@ function applyIntent(
     const id = `route-${(snapshot.transit.routes.length + 1)
       .toString()
       .padStart(3, "0")}`;
-    const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
-      .toString()
-      .padStart(3, "0")}`;
     const route: RustRoute = {
       id,
       name: `Bus ${snapshot.transit.routes.length + 1}`,
       color: "#2563eb",
       stopIds: intent.waypointIds,
-      vehicleIds: [vehicleId],
+      vehicleIds: [],
       active: true,
       pattern: intent.pattern,
       revision: 0,
@@ -463,20 +460,6 @@ function applyIntent(
       transit: {
         ...snapshot.transit,
         routes: [...snapshot.transit.routes, route],
-        vehicles: [
-          ...snapshot.transit.vehicles,
-          {
-            id: vehicleId,
-            mode: "bus",
-            lineId: id,
-            capacity: 18,
-            passengerIds: [],
-            itineraryIndex: 0,
-            pathStepIndex: 0,
-            stepProgress: 0,
-            parkedPosition: null,
-          },
-        ],
       },
     };
   }
@@ -4230,8 +4213,7 @@ describe("route creation and management", () => {
 
     // Two synchronous calls (double-click) both enqueue before either
     // resolves. The second closure must bail when it sees the draft was
-    // cleared by the first — no duplicate route, no double-charge, no second
-    // vehicle.
+    // cleared by the first — no duplicate route and no implicit bus vehicle.
     const first = runtime.saveRouteDraft();
     const second = runtime.saveRouteDraft();
     await Promise.all([first, second]);
@@ -4241,7 +4223,10 @@ describe("route creation and management", () => {
     ).length;
     expect(createRouteCount).toBe(1);
     expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
-    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(1);
+    expect(runtime.getSnapshot().state.transit.routes[0].vehicleIds).toEqual(
+      [],
+    );
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
   it("deduplicates deferred Saves for the same draft", async () => {
