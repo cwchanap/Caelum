@@ -1661,6 +1661,18 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "recolorRoute", routeId, color });
     },
+    setBusTargetHeadway(routeId, targetHeadwaySeconds) {
+      if (dead) return Promise.resolve(getSnapshot());
+      return enqueueDispatch({
+        type: "setBusTargetHeadway",
+        routeId,
+        targetHeadwaySeconds,
+      });
+    },
+    deployBusFleet(routeId) {
+      if (dead) return Promise.resolve(getSnapshot());
+      return enqueueDispatch({ type: "deployBusFleet", routeId });
+    },
     toggleRouteActive(routeId) {
       if (dead) return Promise.resolve(getSnapshot());
       const route =

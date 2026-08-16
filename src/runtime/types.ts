@@ -142,8 +142,21 @@ export interface RouteEditorView {
 }
 
 export interface RouteServiceStatus {
-  primary: "running" | "paused" | "broken";
+  primary: "running" | "paused" | "broken" | "noFleet";
   pausedAfterRepair: boolean;
+}
+
+/**
+ * Bus-only presentation state derived verbatim from Rust-owned route values
+ * (`targetHeadwaySeconds` and the snapshot-published `serviceMetrics`). No
+ * service timing or fleet math exists in TypeScript.
+ */
+export interface ShellBusServiceState {
+  targetHeadwaySeconds: number | null;
+  roundTripSeconds: number | null;
+  assignedFleet: number;
+  requiredFleet: number | null;
+  nominalHeadwaySeconds: number | null;
 }
 
 export interface RouteFailureRow {
@@ -196,6 +209,8 @@ export interface ShellRouteListItem {
   active: boolean;
   selected: boolean;
   status: RouteServiceStatus;
+  /** Present only on bus rows; Metro rows have no bus service state. */
+  busService: ShellBusServiceState | null;
   failures: RouteFailureRow[];
 }
 
@@ -283,6 +298,11 @@ export interface RuntimeController {
   handleEscape: () => RuntimeSnapshot;
   renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
   recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
+  setBusTargetHeadway: (
+    routeId: string,
+    targetHeadwaySeconds: number,
+  ) => RuntimeCommandResult;
+  deployBusFleet: (routeId: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;

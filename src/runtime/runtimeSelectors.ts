@@ -29,9 +29,10 @@ import type {
   RouteEditorView,
   RouteServiceStatus,
   RoadMutationPreviewView,
+  ShellActionFeedback,
+  ShellBusServiceState,
   ShellRouteListItem,
   ShellRouteListState,
-  ShellActionFeedback,
   ShellState,
 } from "./types";
 
@@ -223,12 +224,26 @@ function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
   return [...buses, ...metros];
 }
 
-function routeServiceStatus(route: Route | MetroLine): RouteServiceStatus {
-  return route.pathBroken
-    ? { primary: "broken", pausedAfterRepair: !route.active }
-    : route.active
-      ? { primary: "running", pausedAfterRepair: false }
-      : { primary: "paused", pausedAfterRepair: false };
+function routeServiceStatus(
+  route: Route | MetroLine,
+  mode: "bus" | "metro",
+): RouteServiceStatus {
+  if (route.pathBroken) {
+    return { primary: "broken", pausedAfterRepair: !route.active };
+  }
+  if (!route.active) {
+    return { primary: "paused", pausedAfterRepair: false };
+  }
+  if (
+    mode === "bus" &&
+    "serviceMetrics" in route &&
+    (route.serviceMetrics?.assignedFleet ?? 0) === 0
+  ) {
+    // Display-only: an active connected bus with zero assigned fleet offers
+    // no passenger service until the player deploys a fleet.
+    return { primary: "noFleet", pausedAfterRepair: false };
+  }
+  return { primary: "running", pausedAfterRepair: false };
 }
 
 function alphabeticOrdinal(value: number): string {
@@ -510,6 +525,16 @@ function missingNodeKindForLeg(
   return "stop";
 }
 
+function selectBusServiceState(route: Route): ShellBusServiceState {
+  return {
+    targetHeadwaySeconds: route.targetHeadwaySeconds,
+    roundTripSeconds: route.serviceMetrics?.roundTripSeconds ?? null,
+    assignedFleet: route.serviceMetrics?.assignedFleet ?? 0,
+    requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
+    nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
+  };
+}
+
 function selectRouteRow(
   state: GameState,
   route: Route | MetroLine,
@@ -525,7 +550,8 @@ function selectRouteRow(
       "stopIds" in route ? route.stopIds.length : route.stationIds.length,
     active: route.active,
     selected,
-    status: routeServiceStatus(route),
+    status: routeServiceStatus(route, mode),
+    busService: "stopIds" in route ? selectBusServiceState(route) : null,
     failures: selectRouteFailures(
       state,
       route.pattern,

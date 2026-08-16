@@ -82,6 +82,12 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That building cannot be placed on this footprint.";
     case "blockedFootprint":
       return "The full footprint must contain only empty or replaceable road tiles.";
+    case "invalidHeadway":
+      return "Headway must be at least 1 minute.";
+    case "headwayNotSet":
+      return "Set a target headway before deploying buses.";
+    case "fleetAlreadyAssigned":
+      return "This route already has a bus fleet.";
     default:
       return assertNever(code, "rejection code");
   }
