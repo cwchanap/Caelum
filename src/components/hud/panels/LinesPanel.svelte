@@ -133,6 +133,18 @@
     onSetBusTargetHeadway(routeId, minutes * 60);
   }
 
+  function headwayMinuteValue(
+    routeId: string,
+    targetHeadwaySeconds: number | null,
+  ): string {
+    const draft = headwayMinuteDrafts[routeId];
+    return draft !== undefined
+      ? draft
+      : targetHeadwaySeconds === null
+        ? ""
+        : String(targetHeadwaySeconds / 60);
+  }
+
   function statusLabel(
     primary: "running" | "paused" | "broken" | "noFleet",
   ): string {
@@ -238,7 +250,7 @@
                   </button>
                   <input
                     type="text"
-                    class="route-name"
+                    class="route-name route-input"
                     data-testid={`route-name-${route.id}`}
                     value={routeNameFor(route.id, route.name)}
                     aria-label={`Rename ${route.name}`}
@@ -332,9 +344,12 @@
                           type="number"
                           min="1"
                           step="1"
-                          class="route-headway-input"
+                          class="route-headway-input route-input"
                           data-testid={`route-headway-${route.id}`}
-                          value={headwayMinuteDrafts[route.id] ?? ""}
+                          value={headwayMinuteValue(
+                            route.id,
+                            route.busService.targetHeadwaySeconds,
+                          )}
                           aria-label={`Set target headway for ${route.name}`}
                           oninput={(event) =>
                             handleHeadwayInput(

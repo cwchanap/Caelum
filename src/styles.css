@@ -1085,9 +1085,7 @@ body {
   color: var(--ink-mid);
 }
 
-.route-name {
-  flex: 1;
-  min-width: 0;
+.route-input {
   padding: 4px 6px;
   border: 1px solid var(--line);
   background: var(--surface);
@@ -1097,9 +1095,14 @@ body {
   letter-spacing: 0.02em;
 }
 
-.route-name:focus {
+.route-input:focus {
   outline: none;
   border-color: var(--cyan);
+}
+
+.route-name {
+  flex: 1;
+  min-width: 0;
 }
 
 .route-service {
@@ -1130,17 +1133,6 @@ body {
 
 .route-headway-input {
   width: 56px;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.route-headway-input:focus {
-  outline: none;
-  border-color: var(--cyan);
 }
 
 .route-service-status {
