@@ -698,6 +698,13 @@ git commit -m "test: cover Small Town browser creation"
 
 The first commit is the authoritative gameplay slice, the second is the thin frontend/host contract extension, and the third is the real browser composition proof. Do not split setup-only commits or create a second implementation branch just for the UI.
 
+## Review Feedback Incorporated
+
+- Added the existing exhaustive `SANDBOX_TEMPLATE_LABELS` seam to Task 2 and its commit file list; `bun run check` is used to expose the missing record entry immediately after expanding `SandboxTemplateId`.
+- Replaced opaque `tick(400.0)` guidance with an explicit **08:00 / clock minute 480** target derived from `GAME_DAY_SECONDS` and `MINUTES_PER_DAY`.
+- Made the required construction sequence explicit: roads → junction refresh/topology compile → snapshot shell → area painting → rotation-0 building placement.
+- Explicitly reject a copied `validate_crossroads_candidate`-style production validator for Small Town; structural tests plus `private_car_candidate` own the geometry/access proof.
+
 ## Plan Self-Review
 
 ### Spec coverage
