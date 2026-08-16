@@ -331,7 +331,7 @@ export interface SandboxResetError {
   code: SandboxResetErrorCode;
   context: {
     gameMode?: "sandbox" | "campaign";
-    templateId?: "blankGrid" | "crossroads";
+    templateId?: "blankGrid" | "crossroads" | "smallTown";
     [key: string]: unknown;
   };
 }

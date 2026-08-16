@@ -2,7 +2,7 @@ export type TileKind = "empty" | "road";
 export const SNAPSHOT_SCHEMA_VERSION = 7 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
-export type SandboxTemplateId = "blankGrid" | "crossroads";
+export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
 
 export interface GameRules {
   gameMode: GameMode;

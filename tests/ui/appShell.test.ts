@@ -269,21 +269,28 @@ describe("App command shell", () => {
     const create = await screen.findByRole("button", { name: "Create City" });
     expect(create).toBeDisabled();
 
+    const templateSelect = screen.getByLabelText("Template");
+    expect(
+      within(templateSelect)
+        .getAllByRole("option")
+        .map((option) => (option as HTMLOptionElement).value),
+    ).toEqual(["crossroads", "blankGrid", "smallTown"]);
+
     await fireEvent.input(screen.getByLabelText("City name"), {
       target: { value: "  Maple Junction  " },
     });
     await fireEvent.change(screen.getByLabelText("Economy"), {
       target: { value: "creative" },
     });
-    await fireEvent.change(screen.getByLabelText("Template"), {
-      target: { value: "blankGrid" },
+    await fireEvent.change(templateSelect, {
+      target: { value: "smallTown" },
     });
     await fireEvent.click(create);
 
     expect(runtime.persistence.createCity).toHaveBeenCalledWith({
       name: "Maple Junction",
       economyPreset: "creative",
-      templateId: "blankGrid",
+      templateId: "smallTown",
     });
   });
 

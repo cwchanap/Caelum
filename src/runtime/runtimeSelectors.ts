@@ -48,6 +48,7 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
   blankGrid: "Blank Grid",
   crossroads: "Crossroads",
+  smallTown: "Small Town",
 };
 
 const budgetFormat = new Intl.NumberFormat("en-US");
