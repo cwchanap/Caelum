@@ -50,10 +50,15 @@ export interface RustRouteLegPath extends Omit<
   failureReason?: LegFailureReason;
 }
 
-export interface RustRoute extends Omit<Route, "legs" | "serviceMetrics"> {
+export interface RustRoute extends Omit<
+  Route,
+  "legs" | "serviceMetrics" | "targetHeadwaySeconds"
+> {
   legs: RustRouteLegPath[];
   /** Rust omits derived `None` metrics from the wire; normalize to `null`. */
   serviceMetrics?: BusServiceMetrics | null;
+  /** serde-wasm-bindgen omits `None` as `undefined`; normalize to `null`. */
+  targetHeadwaySeconds?: number | null;
 }
 
 export interface RustMetroLine extends Omit<MetroLine, "legs"> {

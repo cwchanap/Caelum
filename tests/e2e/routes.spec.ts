@@ -540,6 +540,133 @@ test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
   ).toEqual([]);
 });
 
+test("starts a bus service by setting a target headway and deploying the fleet", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // Road + three roadside bus stops beside it.
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
+
+  // Draft + finish a route over all three stops (fleet-free creation).
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await page.getByRole("button", { name: "Save route" }).click();
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+
+  // Saved routes are fleet-free: status reads No fleet and no vehicles exist.
+  await expect(page.getByTestId("route-status-route-001")).toHaveText(
+    "No fleet",
+  );
+  await expect
+    .poll(async () => {
+      const transit = await readRuntimeTransit(page);
+      const route = transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route !== undefined && route.vehicleIds.length === 0;
+    })
+    .toBe(true);
+  expect((await readRuntimeTransit(page)).vehicles).toEqual([]);
+
+  // Set a whole-minute target headway; Rust derives the required fleet.
+  const service = page.getByTestId("route-service-route-001");
+  await expect(service.getByText("—")).toBeVisible(); // Target: no headway yet
+  await page.getByTestId("route-headway-route-001").fill("6");
+  await page.getByTestId("route-headway-set-route-001").click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return (
+        route?.targetHeadwaySeconds === 360 &&
+        route?.serviceMetrics?.requiredFleet != null
+      );
+    })
+    .toBe(true);
+  await expect(service).toContainText("6.0 min");
+
+  // Required N is the Rust-derived row value and drives the Deploy control.
+  const requiredReadout = service
+    .getByText("Required")
+    .locator("xpath=following-sibling::span[1]");
+  await expect(requiredReadout).toHaveText(/^\d+ buses$/);
+  const requiredText = (await requiredReadout.textContent()) ?? "";
+  const requiredFleet = Number(requiredText.match(/^(\d+) buses$/)![1]);
+  expect(requiredFleet).toBeGreaterThan(0);
+  const persisted = (await runtimeSnapshot(page)).state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  )!;
+  expect(persisted.serviceMetrics?.requiredFleet).toBe(requiredFleet);
+  const deploy = page.getByRole("button", {
+    name: `Deploy ${requiredFleet} buses`,
+  });
+  await expect(deploy).toBeVisible();
+
+  // Deploying places exactly the required fleet on the route.
+  await deploy.click();
+  await expect
+    .poll(async () => {
+      const transit = await readRuntimeTransit(page);
+      const route = transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route !== undefined && route.vehicleIds.length === requiredFleet;
+    })
+    .toBe(true);
+  const deployed = await readRuntimeTransit(page);
+  expect(
+    deployed.routes.find((route) => route.id === "route-001")?.vehicleIds,
+  ).toHaveLength(requiredFleet);
+  expect(deployed.vehicles).toHaveLength(requiredFleet);
+  expect(deployed.vehicles.every((vehicle) => vehicle.mode === "bus")).toBe(
+    true,
+  );
+
+  // Post-deployment UI shows Target/Nominal/Fleet and no setup controls.
+  await expect(service.getByText("Target")).toBeVisible();
+  await expect(service.getByText("Nominal")).toBeVisible();
+  await expect(service.getByText("Fleet")).toBeVisible();
+  await expect(service.getByText("Required")).toHaveCount(0);
+  await expect(service.getByText("No fleet")).toHaveCount(0);
+  await expect(page.getByTestId("route-headway-route-001")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Set", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Deploy/, exact: true }),
+  ).toHaveCount(0);
+
+  // Resume the paused sim and confirm the clock advances.
+  await page.getByRole("button", { name: "Resume" }).click();
+  const timeReadout = page.getByTestId("topbar").locator(".readout", {
+    hasText: "Time",
+  });
+  await expect
+    .poll(
+      async () =>
+        (await timeReadout.locator(".readout-value").textContent())?.trim() ??
+        "",
+    )
+    .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
+});
+
 test("turns between paired roads and edits the committed route", async ({
   page,
 }) => {
@@ -702,7 +829,9 @@ test("reroutes when possible, then preserves a dotted last-valid leg until repai
   );
   await rebuildRoadTile(page, canvas, ALTERNATE_ROAD_TILE);
   await openCommandDestination(page, "lines");
+  // The route is connected again, but a bus route is fleet-free until the
+  // player deploys: the status reads No fleet rather than Running.
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
-    "Running",
+    "No fleet",
   );
 });

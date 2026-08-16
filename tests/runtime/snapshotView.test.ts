@@ -52,7 +52,7 @@ function createNullishWireSnapshot(
             },
           ],
           pathBroken: true,
-          targetHeadwaySeconds: null,
+          targetHeadwaySeconds: none,
         },
       ],
       metroLines: [
@@ -181,6 +181,7 @@ describe("normalizeRustSnapshot", () => {
     expect(normalized.scenario.objectives).toBeNull();
     expect(normalized.metrics.lossReason).toBeNull();
     expect(normalized.transit.routes[0].legs[0].failureReason).toBeNull();
+    expect(normalized.transit.routes[0].targetHeadwaySeconds).toBeNull();
     expect(normalized.transit.routes[0].serviceMetrics).toBeNull();
     expect(normalized.activeTrips[0].routePlan?.legs[0]).toMatchObject({
       serviceDirection: null,
