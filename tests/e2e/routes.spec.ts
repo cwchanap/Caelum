@@ -639,10 +639,20 @@ test("starts a bus service by setting a target headway and deploying the fleet",
     true,
   );
 
-  // Post-deployment UI shows Target/Nominal/Fleet and no setup controls.
-  await expect(service.getByText("Target")).toBeVisible();
-  await expect(service.getByText("Nominal")).toBeVisible();
-  await expect(service.getByText("Fleet")).toBeVisible();
+  // Post-deployment UI shows Target/Nominal/Fleet with the set/derived values and no setup controls.
+  await expect(
+    service
+      .getByText("Target")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText("6.0 min");
+  await expect(
+    service
+      .getByText("Nominal")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(/^\d+\.\d min$/);
+  await expect(
+    service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(String(requiredFleet));
   await expect(service.getByText("Required")).toHaveCount(0);
   await expect(service.getByText("No fleet")).toHaveCount(0);
   await expect(page.getByTestId("route-headway-route-001")).toHaveCount(0);
