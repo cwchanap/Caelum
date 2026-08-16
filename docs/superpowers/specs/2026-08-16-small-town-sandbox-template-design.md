@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-16  
 **Issue:** HPA-350  
-**Status:** Approved design, implementation not started
+**Status:** Approved and implemented (`SandboxTemplateId::SmallTown` and `create_small_town_candidate` in `crates/caelum-core`)
 
 ## Outcome
 
