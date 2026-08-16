@@ -4,7 +4,7 @@
 
 **Goal:** Add `smallTown` as a deterministic Rust-owned starting template that opens as a compact four-building town and produces normal move-in/workplace/commute demand after Resume.
 
-**Architecture:** Extend the existing sandbox enum/factory rather than introducing another template layer. Rust authors the fixed roads, areas, and buildings with existing core helpers; the existing simulation creates residents and trips after time resumes. TypeScript only accepts/presents the new identifier, and one real-WASM browser test proves the existing New City path reaches the authored snapshot.
+**Architecture:** Extend the existing sandbox enum/factory rather than introducing another template layer. Rust authors fixed roads, areas, and buildings with existing core helpers; the existing simulation creates residents and trips after time resumes. TypeScript only accepts/presents the new identifier, including the existing exhaustive template-label map, and one real-WASM browser test proves the existing New City path reaches the authored snapshot.
 
 **Tech Stack:** Rust (`caelum-core`, serde, Cargo tests), TypeScript/Svelte 5, Vitest + Testing Library, Playwright, existing WASM/Tauri backend contracts.
 
@@ -14,11 +14,13 @@
 - Keep the existing 28×18 map; do not add map-size configuration.
 - Main Street is a two-way stroke from `(3, 8)` through `(24, 8)`.
 - Cross Street is a two-way stroke from `(14, 2)` through `(14, 15)`.
-- Author exactly 2 Small Houses, 1 Supermarket, and 1 Factory at the approved coordinates; no other buildings.
+- Paint authored areas only after the road topology is compiled and the normal snapshot shell exists; place buildings only after their required areas exist.
+- Author exactly 2 Small Houses, 1 Supermarket, and 1 Factory at the approved coordinates, all with rotation `0`; no other buildings.
 - Start with zero sims, active trips, stops, stations, routes, metro lines, vehicles, objectives, and growth waves.
 - Do not seed `Sim` values. Existing `apply_due_move_ins`, worker-profile/shift assignment, `assign_workplaces`, and commute scheduling remain authoritative.
 - Authored roads/areas/buildings are template content and must not deduct from the requested starting budget.
 - Standard and Creative use identical authored content and preserve the requested starting budget/rules.
+- Do not add a Small Town production validator mirroring `validate_crossroads_candidate`; factory-time failures already map to `TemplateInvariantViolation`, while structural tests own the detailed geometry proof.
 - Do not add a template DSL/builder/registry, resident-seeding API, template-specific scheduler hook, new host API, dependency, save migration, compatibility reader, snapshot/storage version bump, or Phase 4 fleet/timetable machinery.
 - Keep schema/storage at v7. Adding the additive `smallTown` enum value is not a version-bump reason.
 
@@ -36,7 +38,7 @@
 - Modify `crates/caelum-core/tests/sandbox_factory.rs`
   - Extend the existing deterministic/settings/characterization loops and add one structural Small Town test.
 - Modify `crates/caelum-core/tests/sandbox_engine.rs`
-  - Prove reset and real Resume → move-in → workplace → commute behavior through `GameEngine`.
+  - Prove reset and real Resume → move-in → workplace → commute behavior through `GameEngine`, using an explicit clock-minute target derived from the public game-clock constants.
 - Modify `crates/caelum-core/tests/fixtures/sandbox_templates.json`
   - Add the generated reviewed characterization for `smallTown`; do not hand-maintain IDs.
 
@@ -44,6 +46,8 @@
 
 - Modify `src/domain/types.ts`
   - Add `"smallTown"` to `SandboxTemplateId`.
+- Modify `src/runtime/runtimeSelectors.ts`
+  - Extend the existing exhaustive `SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string>` with `smallTown: "Small Town"` so the City shell continues to render the template name and `bun run check` stays exhaustive.
 - Modify `src/runtime/backend/types.ts`
   - Accept `"smallTown"` in `SandboxResetError.context.templateId`; keep `SandboxCreationRequest` stringly typed at the untrusted host boundary.
 - Modify `src/runtime/backend/sandboxErrors.ts`
@@ -78,6 +82,7 @@
   - `areas::paint_area_rectangle(state: &GameSnapshot, area: &str, start: &Point, end: &Point) -> GameplayResult<GameSnapshot>`
   - `buildings::place_building_core(state: &GameSnapshot, building_type: &str, origin: &Point, rotation: u16) -> GameplayResult<GameSnapshot>`
   - `RoadTopology::compile(&GameMap)`
+  - `clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY}` for test-only named clock targets
   - existing `GameEngine::from_sandbox_request`, `GameEngine::dispatch`, `GameEngine::tick`, and `GameEngine::reset`
 - Produces:
   - `SandboxTemplateId::SmallTown`, serialized by the existing camelCase serde rule as `smallTown`
@@ -87,15 +92,17 @@
 
 - [ ] **Step 1: Add failing factory coverage for the third template**
 
-In `crates/caelum-core/tests/sandbox_factory.rs`, extend the two existing template loops and the template-ID match:
+In `crates/caelum-core/tests/sandbox_factory.rs`, extend the existing template loops and template-ID match:
 
 ```rust
 for template in ["blankGrid", "crossroads", "smallTown"] {
-    // Keep the existing repeated-construction/settings assertions unchanged.
+    let first = create_sandbox_snapshot(request(template)).unwrap();
+    let second = create_sandbox_snapshot(request(template)).unwrap();
+    assert_eq!(first, second);
 }
 ```
 
-and:
+and in the settings test:
 
 ```rust
 match template {
@@ -118,13 +125,15 @@ json!({
 
 Do not update the fixture yet.
 
-- [ ] **Step 2: Add a failing Small Town structural test**
+- [ ] **Step 2: Add a failing Small Town structural/access test**
 
-Add one focused test in `sandbox_factory.rs`. Keep the assertions on promised public structure rather than every tile branch:
+Add one focused test in `sandbox_factory.rs`. Keep assertions on promised public structure rather than copying Crossroads’ production validator:
 
 ```rust
+use caelum_core::traffic::{private_car_candidate, RoadFlow};
+
 #[test]
-fn small_town_has_the_authored_roads_zones_buildings_and_no_started_simulation() {
+fn small_town_has_authored_structure_and_connected_building_access() {
     let snapshot = create_sandbox_snapshot(request("smallTown")).unwrap();
     let topology = RoadTopology::compile(&snapshot.map).unwrap();
 
@@ -138,22 +147,31 @@ fn small_town_has_the_authored_roads_zones_buildings_and_no_started_simulation()
         assert_eq!(snapshot.map.tile(Point { x: 14, y }).unwrap().kind, "road");
     }
 
-    assert_eq!(snapshot.map.tile(Point { x: 4, y: 6 }).unwrap().area.as_deref(), Some("residential"));
-    assert_eq!(snapshot.map.tile(Point { x: 18, y: 6 }).unwrap().area.as_deref(), Some("commercial"));
-    assert_eq!(snapshot.map.tile(Point { x: 15, y: 11 }).unwrap().area.as_deref(), Some("industrial"));
+    assert_eq!(
+        snapshot.map.tile(Point { x: 4, y: 6 }).unwrap().area.as_deref(),
+        Some("residential")
+    );
+    assert_eq!(
+        snapshot.map.tile(Point { x: 18, y: 6 }).unwrap().area.as_deref(),
+        Some("commercial")
+    );
+    assert_eq!(
+        snapshot.map.tile(Point { x: 15, y: 11 }).unwrap().area.as_deref(),
+        Some("industrial")
+    );
 
     let authored = snapshot
         .buildings
         .iter()
-        .map(|building| (building.building_type.as_str(), building.origin))
+        .map(|building| (building.building_type.as_str(), building.origin, building.rotation))
         .collect::<Vec<_>>();
     assert_eq!(
         authored,
         vec![
-            ("smallHouse", Point { x: 4, y: 7 }),
-            ("smallHouse", Point { x: 8, y: 7 }),
-            ("supermarket", Point { x: 18, y: 6 }),
-            ("factory", Point { x: 15, y: 11 }),
+            ("smallHouse", Point { x: 4, y: 7 }, 0),
+            ("smallHouse", Point { x: 8, y: 7 }, 0),
+            ("supermarket", Point { x: 18, y: 6 }, 0),
+            ("factory", Point { x: 15, y: 11 }, 0),
         ]
     );
 
@@ -167,17 +185,34 @@ fn small_town_has_the_authored_roads_zones_buildings_and_no_started_simulation()
     assert!(snapshot.scenario.objectives.is_none());
     assert!(snapshot.scenario.growth_waves.is_empty());
 
-    // Successful compilation is the first routing invariant. Representative
-    // building-to-building private-car paths are asserted after implementation.
-    let _ = topology;
+    let flow = RoadFlow::new();
+    for (home, work) in [
+        (Point { x: 4, y: 7 }, Point { x: 18, y: 6 }),
+        (Point { x: 8, y: 7 }, Point { x: 15, y: 11 }),
+    ] {
+        assert!(private_car_candidate(&snapshot, &topology, &flow, home, work).is_some());
+    }
 }
 ```
 
-Do not add a test-only `RoadTopology` inspection API.
+The two private-car candidates cover all four authored buildings and prove both footprint road access and connected road topology through an existing public integration seam. Do not expose `stop_access` or add a test-only topology API.
 
-- [ ] **Step 3: Add failing reset and simulation-behavior coverage**
+- [ ] **Step 3: Add failing reset and named-morning scheduler coverage**
 
-In `sandbox_engine.rs`, add Small Town reset coverage using the existing request helper:
+In `sandbox_engine.rs`, import the public clock constants and `WorkerProfile`:
+
+```rust
+use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
+use caelum_core::model::{GameMode, Point, WorkerProfile};
+
+const MORNING_CLOCK_MINUTE: u16 = 480; // 08:00
+
+fn seconds_at_clock_minute(minute: u16) -> f64 {
+    GAME_DAY_SECONDS * f64::from(minute) / f64::from(MINUTES_PER_DAY)
+}
+```
+
+Add Small Town reset coverage:
 
 ```rust
 #[test]
@@ -187,7 +222,7 @@ fn reset_replays_the_complete_original_small_town_request() {
     let mut engine = GameEngine::from_sandbox_request(request).unwrap();
 
     let _ = engine.dispatch(GameIntent::SetPaused { paused: false });
-    let _ = engine.tick(400.0);
+    let _ = engine.tick(seconds_at_clock_minute(MORNING_CLOCK_MINUTE));
     engine.set_budget_for_test(7);
 
     let reset = engine.reset().unwrap();
@@ -209,7 +244,9 @@ fn run_small_town_morning() -> caelum_core::model::GameSnapshot {
     ))
     .unwrap();
     assert!(engine.dispatch(GameIntent::SetPaused { paused: false }).applied);
-    assert!(engine.tick(400.0).applied);
+    assert!(engine
+        .tick(seconds_at_clock_minute(MORNING_CLOCK_MINUTE))
+        .applied);
     engine.snapshot()
 }
 
@@ -219,15 +256,27 @@ fn small_town_resume_uses_existing_move_in_workplace_and_commute_rules_determini
     let second = run_small_town_morning();
 
     assert_eq!(first, second);
+    assert_eq!(first.clock_minutes, MORNING_CLOCK_MINUTE);
     assert_eq!(first.sims.len(), 8);
-    assert!(first.sims.iter().all(|sim| sim.workplace.is_some()));
-    assert!(first.sims.iter().any(|sim| sim.outbound_resolved_today));
+
+    let workers = first
+        .sims
+        .iter()
+        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
+        .collect::<Vec<_>>();
+    assert!(!workers.is_empty());
+    assert!(workers.iter().all(|sim| sim.workplace.is_some()));
+
+    assert!(
+        !first.active_trips.is_empty()
+            || first.sims.iter().any(|sim| sim.outbound_resolved_today)
+    );
 }
 ```
 
-`400.0` seconds is deliberate: one game day is 1,200 seconds, both four-slot houses finish normal hourly move-in by 150 seconds, and the early/standard morning departure windows have begun by 400 seconds. Do not add a template-specific clock or trip trigger.
+The test names the intended 08:00 clock invariant instead of embedding `400.0`. With the current 1,200-second game day this still advances 400 simulation seconds, but future clock/window changes will make the assumption visible at the test boundary. The two four-slot houses complete their existing 50-second occupancy cadence well before this target; do not add a template-specific clock or trip trigger.
 
-- [ ] **Step 4: Run the focused tests and verify the new identifier is currently rejected**
+- [ ] **Step 4: Run focused Rust tests and verify the new identifier is rejected**
 
 Run:
 
@@ -235,7 +284,7 @@ Run:
 cargo test -p caelum-core --test sandbox_factory --test sandbox_engine
 ```
 
-Expected: FAIL because `smallTown` is not yet parsed/constructed (and Step 1 references the not-yet-defined enum variant).
+Expected: FAIL because `smallTown` is not yet parsed/constructed and the tests reference the not-yet-defined enum variant.
 
 - [ ] **Step 5: Implement `SmallTown` with existing sandbox helpers only**
 
@@ -253,10 +302,10 @@ In `sandbox.rs`:
 
 1. Import the existing `areas` and `buildings` modules/functions needed by the authored factory.
 2. Add `smallTown` to `parse_template`.
-3. Add `SmallTown => "smallTown"` to both persisted-rule and invariant-error string mappings.
-4. Add one private constructor; do not extract a generic template builder.
+3. Add `SmallTown => "smallTown"` to persisted-rule and invariant-error string mappings.
+4. Add one private constructor; do not extract a generic template builder or Small Town validator.
 
-Use this shape:
+Use this exact construction order:
 
 ```rust
 fn create_small_town_candidate(
@@ -279,6 +328,7 @@ fn create_small_town_candidate(
     let road_topology = RoadTopology::compile(&map).map_err(|_| fail())?;
 
     let mut snapshot = snapshot_shell(validated, "Small Town", map);
+
     for (area, start, end) in [
         ("residential", Point { x: 4, y: 6 }, Point { x: 10, y: 7 }),
         ("commercial", Point { x: 18, y: 6 }, Point { x: 19, y: 7 }),
@@ -287,6 +337,7 @@ fn create_small_town_candidate(
         snapshot = areas::paint_area_rectangle(&snapshot, area, &start, &end)
             .map_err(|_| fail())?;
     }
+
     for (building_type, origin) in [
         ("smallHouse", Point { x: 4, y: 7 }),
         ("smallHouse", Point { x: 8, y: 7 }),
@@ -314,27 +365,9 @@ if validated.template_id == SandboxTemplateId::SmallTown {
 // Existing BlankGrid/Crossroads branch stays unchanged.
 ```
 
-Do not charge `CostPolicy`, hand-author building IDs, directly push `PlacedBuilding`, directly push `Sim`, or create transit entities.
+Do not charge `CostPolicy`, hand-author building IDs, directly push `PlacedBuilding`, directly push `Sim`, create transit entities, or duplicate `validate_crossroads_candidate` for this simple plus-shaped topology.
 
-- [ ] **Step 6: Prove current private-car access through public routing behavior**
-
-In the Small Town factory test, use the existing public traffic candidate seam rather than exposing `derive_stop_access_for_footprint` just for tests:
-
-```rust
-use caelum_core::traffic::{private_car_candidate, RoadFlow};
-
-let flow = RoadFlow::new();
-for (home, work) in [
-    (Point { x: 4, y: 7 }, Point { x: 18, y: 6 }),
-    (Point { x: 8, y: 7 }, Point { x: 15, y: 11 }),
-] {
-    assert!(private_car_candidate(&snapshot, &topology, &flow, home, work).is_some());
-}
-```
-
-This simultaneously proves each representative home/workplace footprint can derive usable adjacent road access and that the authored road topology connects them. Do not make the private stop-access helper public.
-
-- [ ] **Step 7: Generate and inspect the Small Town characterization fixture**
+- [ ] **Step 6: Generate and inspect the characterization fixture**
 
 Run only the fixture writer:
 
@@ -352,7 +385,7 @@ cargo test -p caelum-core --test sandbox_factory sandbox_templates_match_the_rev
 
 Expected: PASS.
 
-- [ ] **Step 8: Run the complete Rust task gate**
+- [ ] **Step 7: Run the complete Rust task gate**
 
 Run:
 
@@ -365,7 +398,7 @@ cargo clippy -p caelum-core --all-targets -- -D warnings
 
 Expected: all PASS.
 
-- [ ] **Step 9: Commit the Rust vertical slice**
+- [ ] **Step 8: Commit the Rust vertical slice**
 
 ```bash
 git add \
@@ -383,6 +416,7 @@ git commit -m "feat: add deterministic Small Town sandbox"
 
 **Files:**
 - Modify: `src/domain/types.ts`
+- Modify: `src/runtime/runtimeSelectors.ts`
 - Modify: `src/runtime/backend/types.ts`
 - Modify: `src/runtime/backend/sandboxErrors.ts`
 - Modify: `src/components/NewCityScreen.svelte`
@@ -390,9 +424,10 @@ git commit -m "feat: add deterministic Small Town sandbox"
 - Modify: `tests/runtime/tauriBackend.test.ts`
 
 **Interfaces:**
-- Consumes: existing `NewCityRequest { name, economyPreset, templateId }` and existing `GameBackend.buildSandboxSnapshot(...)`
+- Consumes: existing `NewCityRequest { name, economyPreset, templateId }`, `SANDBOX_TEMPLATE_LABELS`, and existing `GameBackend.buildSandboxSnapshot(...)`
 - Produces:
   - `SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown"`
+  - existing template label map contains `smallTown: "Small Town"`
   - New City sends `{ templateId: "smallTown" }` through the unchanged persistence/runtime path
   - reset error guard recognizes `{ code: "templateInvariantViolation", context: { templateId: "smallTown" } }`
 - No new runtime/backend method and no new Svelte component
@@ -446,9 +481,9 @@ it("preserves a Small Town template-invariant reset error", async () => {
 });
 ```
 
-This must resolve as the typed reset result shown above. A thrown value means `isSandboxResetError()` still rejects the new template ID.
+A thrown value means `isSandboxResetError()` still rejects the new template ID.
 
-- [ ] **Step 3: Run the focused frontend tests and verify they fail**
+- [ ] **Step 3: Run focused frontend tests and verify the new option/guard are red**
 
 Run:
 
@@ -456,14 +491,34 @@ Run:
 bun run test:unit -- tests/ui/appShell.test.ts tests/runtime/tauriBackend.test.ts
 ```
 
-Expected: the form cannot select the unsupported `smallTown` option and/or the reset-error guard rejects `smallTown`.
+Expected: FAIL because the form does not contain the `smallTown` option and/or the reset-error guard rejects the new template ID.
 
-- [ ] **Step 4: Extend the existing type/guard/UI seams only**
+- [ ] **Step 4: Expand the player-facing template union and let exhaustiveness reveal the existing label seam**
 
-In `src/domain/types.ts`:
+In `src/domain/types.ts`, make only this change first:
 
 ```ts
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
+```
+
+Then run:
+
+```bash
+bun run check
+```
+
+Expected: FAIL at the exhaustive `SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string>` in `src/runtime/runtimeSelectors.ts` because `smallTown` is missing. This is an existing compile-time identity seam, not a reason to add a template registry.
+
+- [ ] **Step 5: Extend the existing type/label/guard/UI seams only**
+
+In `src/runtime/runtimeSelectors.ts`:
+
+```ts
+const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
+  blankGrid: "Blank Grid",
+  crossroads: "Crossroads",
+  smallTown: "Small Town",
+};
 ```
 
 In `src/runtime/backend/types.ts`, extend the existing reset context literal union only:
@@ -495,9 +550,9 @@ In `NewCityScreen.svelte`, leave the default state unchanged and add one option:
 </select>
 ```
 
-Do not add a template registry, label map, custom selector component, or template-specific request fields for three static options.
+Do not add another label map or template registry; extend the existing selector and the existing exhaustive presentation map only.
 
-- [ ] **Step 5: Run the frontend task gate**
+- [ ] **Step 6: Run the frontend task gate**
 
 Run:
 
@@ -510,11 +565,12 @@ bun run format:check
 
 Expected: all PASS.
 
-- [ ] **Step 6: Commit the TypeScript/UI boundary**
+- [ ] **Step 7: Commit the TypeScript/UI boundary**
 
 ```bash
 git add \
   src/domain/types.ts \
+  src/runtime/runtimeSelectors.ts \
   src/runtime/backend/types.ts \
   src/runtime/backend/sandboxErrors.ts \
   src/components/NewCityScreen.svelte \
@@ -604,7 +660,7 @@ bun run build
 
 Expected: all PASS.
 
-Do not add a packaged-Tauri manual gate for HPA-350. Tauri and WASM already share the same Rust factory, Task 2 covers native reset-error decoding, and HPA-349 already proved the host composition. A second packaged restart journey would not test a unique Small Town risk.
+Do not add a packaged-Tauri manual gate for HPA-350. Tauri and WASM already share the same Rust factory, Task 2 covers native reset-error decoding, and HPA-349 already owns packaged-host composition evidence. A second packaged restart journey would not test a unique Small Town risk.
 
 - [ ] **Step 4: Review the final diff against the scope boundary**
 
@@ -616,13 +672,14 @@ git diff main...HEAD -- \
   crates/caelum-core/src/model.rs \
   crates/caelum-core/src/sandbox.rs \
   src/domain/types.ts \
+  src/runtime/runtimeSelectors.ts \
   src/runtime/backend/types.ts \
   src/runtime/backend/sandboxErrors.ts \
   src/components/NewCityScreen.svelte \
   tests/e2e/newCity.spec.ts
 ```
 
-Confirm there is no schema/storage version change, no new dependency, no direct `Sim` construction, no public-transit seed, no generic template abstraction, and no unrelated Phase 4 behavior.
+Confirm there is no schema/storage version change, no new dependency, no direct `Sim` construction, no public-transit seed, no generic template abstraction, no copied Small Town production validator, and no unrelated Phase 4 behavior.
 
 - [ ] **Step 5: Commit the browser integration proof**
 
@@ -646,15 +703,18 @@ The first commit is the authoritative gameplay slice, the second is the thin fro
 ### Spec coverage
 
 - Third template ID and reset reconstruction: Task 1.
-- Exact 28×18 roads/zones/four buildings: Task 1 structural test + factory.
+- Exact 28×18 roads/zones/four rotation-0 buildings: Task 1 structural test + factory.
+- Required paint-before-place construction order: Task 1 exact factory sequence.
 - Cost-free authored content and Standard/Creative parity: existing settings test extended to `smallTown` in Task 1.
 - Zero initial residents/transit/scripted growth: Task 1 structural test and Task 3 browser proof.
-- Existing move-in/workplace/commute behavior after Resume: Task 1 `GameEngine` behavior test.
+- Existing move-in/workplace/commute behavior after Resume: Task 1 named-08:00 `GameEngine` behavior test.
 - Usable private-car road access without new metadata: Task 1 public `private_car_candidate` checks.
 - Deterministic initial and replay behavior: existing repeated-construction loop + Task 1 two-engine comparison.
 - New City option/request: Task 2.
+- Existing exhaustive City/template label: Task 2 `SANDBOX_TEMPLATE_LABELS` extension, compile-enforced by `bun run check`.
 - Small Town reset-error decoding: Task 2.
 - Real WASM/browser creation and live game-shell snapshot: Task 3.
+- No copied production Small Town validator: Global Constraints + Task 1 implementation/final diff review.
 - No compatibility/version/framework work: Global Constraints + final scope review.
 
 ### Placeholder scan
@@ -665,6 +725,7 @@ No `TBD`, `TODO`, “implement later”, generic “add validation”, test-only
 
 - Rust uses existing `SandboxCreationRequest.template_id: String` and new `SandboxTemplateId::SmallTown`.
 - Frontend player-facing type uses `SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown"`.
+- Existing `SANDBOX_TEMPLATE_LABELS` remains exhaustive over the same three player-facing values.
 - Raw backend creation request remains `templateId: string` by design.
 - Reset error context is extended to the same three serialized template strings.
 - Svelte submits the unchanged `NewCityRequest` shape; no extra field is introduced.
