@@ -295,8 +295,10 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
 
   await openCommandDestination(page, "lines");
   await page.getByTestId(`route-toggle-${routeId}`).click();
+  // A bus route is fleet-free until the player deploys: an active, connected
+  // route with no vehicles reads No fleet rather than Running.
   await expect(page.getByTestId(`route-status-${routeId}`)).toHaveText(
-    "Running",
+    "No fleet",
   );
   const deleteButton = page.getByTestId(`route-delete-${routeId}`);
   await deleteButton.click();
