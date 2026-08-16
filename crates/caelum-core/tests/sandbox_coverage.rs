@@ -9,7 +9,7 @@
 //!
 //! Uncovered-line analysis (llvm-cov `DA:...,0`):
 //!
-//! - **119-137** (`sandbox_reset_error_from_creation_error`): private helper
+//! - **117-135** (`sandbox_reset_error_from_creation_error`): private helper
 //!   only invoked from `sandbox_candidate_from_persisted_rules`'s `.map_err`
 //!   when `create_sandbox_candidate` returns `Err`. That candidate builder is
 //!   fed a request reconstructed from already-validated `GameRules` fields
@@ -17,27 +17,29 @@
 //!   constructors reject invalid values), so `validate_request` always
 //!   succeeds and the canonical template map always compiles/validates. There
 //!   is no public path that produces a creation error from persisted rules, so
-//!   both the `None` (line 125) and `Some(error.code)` (line 127) arms are
+//!   both the `None` (line 123) and `Some(error.code)` (line 125) arms are
 //!   unreachable. The only reachable reset failure,
-//!   `UnsupportedGameMode`, returns early at line 259 and never enters this
+//!   `UnsupportedGameMode`, returns early at line 300 and never enters this
 //!   function.
-//! - **347** (`let Some(tile) = map.tile(point) else { return Err(fail()); }`):
+//! - **384** (`let Some(tile) = map.tile(point) else { return Err(fail()); }`):
 //!   inside the private `validate_crossroads_candidate`, which is only called
 //!   from `create_sandbox_candidate` with a freshly built 28x18 map. The four
 //!   footprint points (14,8)/(14,9)/(15,8)/(15,9) always exist in that map, so
 //!   `map.tile(...)` always yields `Some`. Not callable from integration tests
 //!   (private function) and not triggerable via the public factory.
-//! - **475** (`SandboxTemplateId::BlankGrid => "blankGrid"` arm of
-//!   `template_invariant_error`): only reached when
-//!   `RoadTopology::compile` fails on a blank grid. A blank grid has no road
-//!   structures, so `compile_structure_transitions` returns `Ok(empty)` and
-//!   compile succeeds; the `?` at line 206 never propagates an error.
-//! - **527-530, 532** (`StartingCapital::new(value as i32).map_err(...)`
+//! - **513, 515** (`SandboxTemplateId::BlankGrid => "blankGrid"` and
+//!   `SandboxTemplateId::SmallTown => "smallTown"` arms of
+//!   `template_invariant_error`): only reached when fixed developer-authored
+//!   construction fails. A blank grid has no road structures, so
+//!   `compile_structure_transitions` returns `Ok(empty)` and compile succeeds;
+//!   the `?` at line 199 never propagates an error. Small Town construction is
+//!   likewise fixed and succeeds for every public valid request.
+//! - **566-572** (`StartingCapital::new(value as i32).map_err(...)`
 //!   closure in `parse_starting_capital`): the value has already been gated at
-//!   line 518 to be finite, `>= 0.0`, integral, and `<= i32::MAX`, so
+//!   line 558 to be finite, `>= 0.0`, integral, and `<= i32::MAX`, so
 //!   `value as i32` is always a non-negative i32 that `StartingCapital::new`
 //!   accepts. The closure can never run.
-//! - **635** (`_ => unreachable!()` arm in the in-crate `tests` module): a
+//! - **657** (`_ => unreachable!()` arm in the in-crate `tests` module): a
 //!   defensive match arm in an existing unit test; covering it would require
 //!   panicking, which the task forbids.
 //!
@@ -61,13 +63,13 @@ fn request(template_id: &str, starting_capital: f64) -> SandboxCreationRequest {
 
 /// The reachable happy path through `sandbox_candidate_from_persisted_rules`
 /// (used by `GameEngine::reset`): persisted sandbox rules reconstruct a
-/// candidate identical to the original factory snapshot, for both templates.
+/// candidate identical to the original factory snapshot, for all templates.
 /// This is the reachable path that *would* feed
-/// `sandbox_reset_error_from_creation_error` (lines 119-137) if the
+/// `sandbox_reset_error_from_creation_error` (lines 117-135) if the
 /// reconstruction could ever fail — it cannot for valid rules.
 #[test]
-fn reset_replays_validated_rules_for_both_templates_without_entering_error_mapper() {
-    for template in ["blankGrid", "crossroads"] {
+fn reset_replays_validated_rules_for_all_templates_without_entering_error_mapper() {
+    for template in ["blankGrid", "crossroads", "smallTown"] {
         let req = request(template, 42_000.0);
         let expected = create_sandbox_snapshot(req.clone()).unwrap();
         let mut engine = GameEngine::from_sandbox_request(req).unwrap();
@@ -85,8 +87,8 @@ fn reset_replays_validated_rules_for_both_templates_without_entering_error_mappe
 }
 
 /// The only reachable reset failure: a non-sandbox `game_mode` returns
-/// `UnsupportedGameMode` early (line 259) and never reaches the
-/// `sandbox_reset_error_from_creation_error` mapper (lines 119-137).
+/// `UnsupportedGameMode` early (line 300) and never reaches the
+/// `sandbox_reset_error_from_creation_error` mapper (lines 117-135).
 #[test]
 fn reset_rejects_non_sandbox_mode_via_unsupported_game_mode_early_return() {
     let mut campaign = create_sandbox_snapshot(request("crossroads", 1_000.0)).unwrap();
@@ -105,8 +107,8 @@ fn reset_rejects_non_sandbox_mode_via_unsupported_game_mode_early_return() {
 }
 
 /// The reachable path through `parse_starting_capital` at the upper boundary:
-/// `i32::MAX` passes the line-518 gate and is accepted by
-/// `StartingCapital::new`, so the `.map_err` closure (lines 527-532) is never
+/// `i32::MAX` passes the line-558 gate and is accepted by
+/// `StartingCapital::new`, so the `.map_err` closure (lines 566-572) is never
 /// entered. Locks in that the boundary value is valid end-to-end.
 #[test]
 fn validate_request_accepts_starting_capital_at_i32_max_boundary() {
@@ -115,8 +117,8 @@ fn validate_request_accepts_starting_capital_at_i32_max_boundary() {
 }
 
 /// The reachable path through `create_sandbox_candidate` for the blank grid:
-/// `RoadTopology::compile` succeeds (line 206 Ok), so
-/// `template_invariant_error(BlankGrid)` (line 475) is never invoked.
+/// `RoadTopology::compile` succeeds (line 199 Ok), so
+/// `template_invariant_error(BlankGrid)` (line 513) is never invoked.
 #[test]
 fn blank_grid_factory_compiles_topology_without_invoking_template_invariant_error() {
     let snapshot = create_sandbox_snapshot(request("blankGrid", 0.0)).unwrap();
@@ -128,7 +130,7 @@ fn blank_grid_factory_compiles_topology_without_invoking_template_invariant_erro
 /// `validate_request` surfaces typed field-level errors for each invalid
 /// field. This exercises the reachable parse-error branches that, in the
 /// reset path, are impossible because persisted rules hold validated values
-/// (hence lines 119-137 are unreachable).
+/// (hence lines 117-135 are unreachable).
 #[test]
 fn validate_request_surfaces_typed_field_errors_for_each_invalid_field() {
     let unknown_template = {
@@ -183,7 +185,7 @@ fn validate_request_surfaces_typed_field_errors_for_each_invalid_field() {
 
 /// `validate_request` accepts a canonical default request end-to-end, covering
 /// the reachable success path through every parser (the path the reset
-/// reconstruction always takes, which is why lines 119-137 stay unreachable).
+/// reconstruction always takes, which is why lines 117-135 stay unreachable).
 #[test]
 fn validate_request_accepts_canonical_default_request() {
     let validated = validate_request(caelum_core::canonical_default_request()).unwrap();

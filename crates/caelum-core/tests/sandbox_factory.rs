@@ -3,6 +3,7 @@ use caelum_core::model::{
     StartingCapital,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
+use caelum_core::traffic::{private_car_candidate, RoadFlow};
 use caelum_core::{create_sandbox_snapshot, SandboxCreationRequest};
 use serde_json::{json, Value};
 
@@ -17,7 +18,7 @@ fn request(template_id: &str) -> SandboxCreationRequest {
 
 #[test]
 fn identical_requests_produce_equal_complete_snapshots() {
-    for template in ["blankGrid", "crossroads"] {
+    for template in ["blankGrid", "crossroads", "smallTown"] {
         let first = create_sandbox_snapshot(request(template)).unwrap();
         let second = create_sandbox_snapshot(request(template)).unwrap();
         assert_eq!(first, second);
@@ -69,7 +70,7 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
         ("standard", i32::MAX, 2.75, EconomyPreset::Standard),
     ];
 
-    for template in ["blankGrid", "crossroads"] {
+    for template in ["blankGrid", "crossroads", "smallTown"] {
         let canonical = create_sandbox_snapshot(SandboxCreationRequest {
             template_id: template.to_string(),
             economy_preset: "standard".to_string(),
@@ -104,6 +105,7 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
                 match template {
                     "blankGrid" => SandboxTemplateId::BlankGrid,
                     "crossroads" => SandboxTemplateId::Crossroads,
+                    "smallTown" => SandboxTemplateId::SmallTown,
                     _ => unreachable!(),
                 }
             );
@@ -221,6 +223,89 @@ fn crossroads_has_the_canonical_automatic_junction_and_required_movements() {
                 .expect("required Crossroads movement");
             assert_eq!(transition.movement, expected_kind);
         }
+    }
+}
+
+#[test]
+fn small_town_has_authored_structure_and_connected_building_access() {
+    let snapshot = create_sandbox_snapshot(request("smallTown")).unwrap();
+    let topology = RoadTopology::compile(&snapshot.map).unwrap();
+
+    assert_eq!((snapshot.map.width, snapshot.map.height), (28, 18));
+    assert_eq!(snapshot.scenario.name, "Small Town");
+
+    for x in 3..=24 {
+        assert_eq!(snapshot.map.tile(Point { x, y: 8 }).unwrap().kind, "road");
+    }
+    for y in 2..=15 {
+        assert_eq!(snapshot.map.tile(Point { x: 14, y }).unwrap().kind, "road");
+    }
+
+    assert_eq!(
+        snapshot
+            .map
+            .tile(Point { x: 4, y: 6 })
+            .unwrap()
+            .area
+            .as_deref(),
+        Some("residential")
+    );
+    assert_eq!(
+        snapshot
+            .map
+            .tile(Point { x: 18, y: 6 })
+            .unwrap()
+            .area
+            .as_deref(),
+        Some("commercial")
+    );
+    assert_eq!(
+        snapshot
+            .map
+            .tile(Point { x: 15, y: 11 })
+            .unwrap()
+            .area
+            .as_deref(),
+        Some("industrial")
+    );
+
+    let authored = snapshot
+        .buildings
+        .iter()
+        .map(|building| {
+            (
+                building.building_type.as_str(),
+                building.origin,
+                building.rotation,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authored,
+        vec![
+            ("smallHouse", Point { x: 4, y: 7 }, 0),
+            ("smallHouse", Point { x: 8, y: 7 }, 0),
+            ("supermarket", Point { x: 18, y: 6 }, 0),
+            ("factory", Point { x: 15, y: 11 }, 0),
+        ]
+    );
+
+    assert!(snapshot.sims.is_empty());
+    assert!(snapshot.active_trips.is_empty());
+    assert!(snapshot.transit.stops.is_empty());
+    assert!(snapshot.transit.stations.is_empty());
+    assert!(snapshot.transit.routes.is_empty());
+    assert!(snapshot.transit.metro_lines.is_empty());
+    assert!(snapshot.transit.vehicles.is_empty());
+    assert!(snapshot.scenario.objectives.is_none());
+    assert!(snapshot.scenario.growth_waves.is_empty());
+
+    let flow = RoadFlow::new();
+    for (home, work) in [
+        (Point { x: 4, y: 7 }, Point { x: 18, y: 6 }),
+        (Point { x: 8, y: 7 }, Point { x: 15, y: 11 }),
+    ] {
+        assert!(private_car_candidate(&snapshot, &topology, &flow, home, work).is_some());
     }
 }
 
@@ -353,6 +438,7 @@ fn sandbox_templates_match_the_reviewed_characterization_fixture() {
     let actual = serde_json::to_string_pretty(&json!({
         "blankGrid": template_review("blankGrid"),
         "crossroads": template_review("crossroads"),
+        "smallTown": template_review("smallTown"),
     }))
     .unwrap()
         + "\n";

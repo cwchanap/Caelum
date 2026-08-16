@@ -21,6 +21,7 @@ pub enum EconomyPreset {
 pub enum SandboxTemplateId {
     BlankGrid,
     Crossroads,
+    SmallTown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

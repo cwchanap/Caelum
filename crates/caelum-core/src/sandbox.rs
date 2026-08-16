@@ -10,6 +10,7 @@ use crate::model::{
 };
 use crate::road::{author_scenario_road_line, refresh_all_automatic_junctions};
 use crate::road_topology::{RoadState, RoadTopology};
+use crate::{areas, buildings};
 
 pub const DEFAULT_STARTING_CAPITAL: i32 = 120_000;
 pub const MAP_WIDTH: u8 = 28;
@@ -238,9 +239,56 @@ pub(crate) fn create_sandbox_candidate(
             validate_crossroads_candidate(&map, &topology)?;
             ("Crossroads", map, topology)
         }
+        SandboxTemplateId::SmallTown => return create_small_town_candidate(validated),
     };
     Ok(SandboxCandidate {
         snapshot: snapshot_shell(validated, name, map),
+        road_topology,
+    })
+}
+
+fn create_small_town_candidate(
+    validated: ValidatedSandboxCreationRequest,
+) -> Result<SandboxCandidate, SandboxCreationError> {
+    let fail = || template_invariant_error(SandboxTemplateId::SmallTown);
+    let mut map = blank_map();
+
+    author_scenario_road_line(
+        &mut map,
+        &(3..=24).map(|x| Point { x, y: 8 }).collect::<Vec<_>>(),
+        RoadPreset::TwoWay,
+    );
+    author_scenario_road_line(
+        &mut map,
+        &(2..=15).map(|y| Point { x: 14, y }).collect::<Vec<_>>(),
+        RoadPreset::TwoWay,
+    );
+    refresh_all_automatic_junctions(&mut map).map_err(|_| fail())?;
+    let road_topology = RoadTopology::compile(&map).map_err(|_| fail())?;
+
+    let mut snapshot = snapshot_shell(validated, "Small Town", map);
+
+    for (area, start, end) in [
+        ("residential", Point { x: 4, y: 6 }, Point { x: 10, y: 7 }),
+        ("commercial", Point { x: 18, y: 6 }, Point { x: 19, y: 7 }),
+        ("industrial", Point { x: 15, y: 11 }, Point { x: 17, y: 12 }),
+    ] {
+        snapshot =
+            areas::paint_area_rectangle(&snapshot, area, &start, &end).map_err(|_| fail())?;
+    }
+
+    for (building_type, origin) in [
+        ("smallHouse", Point { x: 4, y: 7 }),
+        ("smallHouse", Point { x: 8, y: 7 }),
+        ("supermarket", Point { x: 18, y: 6 }),
+        ("factory", Point { x: 15, y: 11 }),
+    ] {
+        snapshot = buildings::place_building_core(&snapshot, building_type, &origin, 0)
+            .map_err(|_| fail())?;
+    }
+
+    Ok(SandboxCandidate {
+        snapshot,
         road_topology,
     })
 }
@@ -256,6 +304,7 @@ pub(crate) fn sandbox_candidate_from_persisted_rules(
         template_id: match rules.sandbox.template_id {
             SandboxTemplateId::BlankGrid => "blankGrid",
             SandboxTemplateId::Crossroads => "crossroads",
+            SandboxTemplateId::SmallTown => "smallTown",
         }
         .to_string(),
         economy_preset: match rules.economy_preset {
@@ -463,6 +512,7 @@ fn template_invariant_error(template_id: SandboxTemplateId) -> SandboxCreationEr
                 match template_id {
                     SandboxTemplateId::BlankGrid => "blankGrid",
                     SandboxTemplateId::Crossroads => "crossroads",
+                    SandboxTemplateId::SmallTown => "smallTown",
                 }
                 .to_string(),
             ),
@@ -474,6 +524,7 @@ fn parse_template(value: &str) -> Result<SandboxTemplateId, SandboxCreationError
     match value {
         "blankGrid" => Ok(SandboxTemplateId::BlankGrid),
         "crossroads" => Ok(SandboxTemplateId::Crossroads),
+        "smallTown" => Ok(SandboxTemplateId::SmallTown),
         _ => Err(creation_error(
             SandboxCreationErrorCode::UnknownTemplateId,
             "templateId",
