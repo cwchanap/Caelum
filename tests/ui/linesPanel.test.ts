@@ -42,6 +42,7 @@ function routeFixtures(): ShellRouteListState {
       active: true,
       selected: false,
       status: { primary: "running", pausedAfterRepair: false },
+      busService: null,
       failures: [],
     },
     {
@@ -53,6 +54,7 @@ function routeFixtures(): ShellRouteListState {
       active: false,
       selected: false,
       status: { primary: "broken", pausedAfterRepair: true },
+      busService: null,
       failures: [
         {
           legIndex: 1,

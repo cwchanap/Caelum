@@ -192,6 +192,8 @@ function createRuntimeHarness(
     startRouteEdit: vi.fn(() => publish()),
     renameRoute: vi.fn(async () => publish()),
     recolorRoute: vi.fn(async () => publish()),
+    setBusTargetHeadway: vi.fn(async () => publish()),
+    deployBusFleet: vi.fn(async () => publish()),
     toggleRouteActive: vi.fn(async () => publish()),
     deleteRoute: vi.fn(async () => publish()),
     selectRoute: vi.fn(() => publish()),

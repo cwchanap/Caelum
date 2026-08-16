@@ -545,6 +545,61 @@ function applyIntent(
       },
     };
   }
+  if (intent.type === "setBusTargetHeadway") {
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((route) =>
+          route.id === intent.routeId
+            ? { ...route, targetHeadwaySeconds: intent.targetHeadwaySeconds }
+            : route,
+        ),
+      },
+    };
+  }
+  if (intent.type === "deployBusFleet") {
+    // Mirrors `caelum-core::bus_service::deploy_bus_fleet`: append the
+    // required fleet and publish derived service metrics on the route.
+    const route = snapshot.transit.routes.find(
+      (candidate) => candidate.id === intent.routeId,
+    );
+    if (route === undefined) return snapshot;
+    const vehicles = [1, 2].map((index) => ({
+      id: `vehicle-${(snapshot.transit.vehicles.length + index)
+        .toString()
+        .padStart(3, "0")}`,
+      mode: "bus" as const,
+      lineId: intent.routeId,
+      capacity: 30,
+      passengerIds: [],
+      itineraryIndex: 0,
+      pathStepIndex: 0,
+      stepProgress: 0,
+      parkedPosition: null,
+    }));
+    return {
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: snapshot.transit.routes.map((candidate) =>
+          candidate.id === intent.routeId
+            ? {
+                ...candidate,
+                vehicleIds: vehicles.map((vehicle) => vehicle.id),
+                serviceMetrics: {
+                  roundTripSeconds: 600,
+                  assignedFleet: 2,
+                  requiredFleet: 2,
+                  nominalHeadwaySeconds: 300,
+                },
+              }
+            : candidate,
+        ),
+        vehicles: [...snapshot.transit.vehicles, ...vehicles],
+      },
+    };
+  }
   if (intent.type === "deleteRoute") {
     return {
       ...snapshot,
@@ -4240,6 +4295,61 @@ describe("route creation and management", () => {
     expect(
       (await runtime.deleteRoute("route-001")).state.transit.routes,
     ).toEqual([]);
+  });
+
+  it("sets a bus target headway and deploys a fleet through dispatch", async () => {
+    const backend = backendSpy(snapshotWithBusRoute());
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    const afterHeadway = await runtime.setBusTargetHeadway("route-001", 360);
+    expect(afterHeadway.state.transit.routes[0].targetHeadwaySeconds).toBe(360);
+    expect(backend.intents).toContainEqual({
+      type: "setBusTargetHeadway",
+      routeId: "route-001",
+      targetHeadwaySeconds: 360,
+    });
+
+    const afterDeploy = await runtime.deployBusFleet("route-001");
+    expect(backend.intents).toContainEqual({
+      type: "deployBusFleet",
+      routeId: "route-001",
+    });
+    expect(afterDeploy.state.transit.routes[0].vehicleIds).toHaveLength(2);
+    expect(afterDeploy.state.transit.routes[0].serviceMetrics).toEqual({
+      roundTripSeconds: 600,
+      assignedFleet: 2,
+      requiredFleet: 2,
+      nominalHeadwaySeconds: 300,
+    });
+  });
+
+  it("surfaces a headwayNotSet rejection from deployBusFleet with player copy", async () => {
+    const backend = deferredDispatchBackend(snapshotWithBusRoute());
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    backend.rejectNextDispatchWith({
+      code: "headwayNotSet",
+      context: { routeId: "route-001", affectedRouteIds: [] },
+    });
+    const deploy = runtime.deployBusFleet("route-001");
+    await flushPromises();
+    await backend.resolveNext();
+    await deploy;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.rejection).toEqual({
+      code: "headwayNotSet",
+      context: { routeId: "route-001", affectedRouteIds: [] },
+    });
+    expect(snapshot.shell.actionFeedback?.message).toBe(
+      "Set a target headway before deploying buses.",
+    );
   });
 
   it("derives rapid route active toggles from the latest queued state", async () => {

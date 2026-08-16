@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type {
   ActiveTrip,
+  BusServiceMetrics,
   LegFailureReason,
   RouteLegPath,
 } from "../../src/domain/types";
@@ -607,18 +608,26 @@ describe("route selectors", () => {
   });
 
   it("blocks Save when unaffordable with a cost hint", () => {
-    const state = { ...twoStops(), budget: 1_000 };
+    // Bus creation is fleet-free (zero creation cost); keep the affordability
+    // gate coverage on the Metro draft, which still buys one vehicle.
+    const state = { ...twoStations(), budget: 1_000 };
     const ui = {
       ...createUiState(),
-      activeTool: "busRoute" as const,
+      activeTool: "metroLine" as const,
       routeDraft: {
-        ...busDraft(["stop-001", "stop-002"], true),
-        preview: routePreview(["stop-001", "stop-002"], false),
+        ...createDraft("metro", 1),
+        waypointIds: ["station-001", "station-002"],
+        generation: 1,
+        previewPending: false,
+        preview: {
+          ...routePreview(["station-001", "station-002"], false),
+          initialVehicleCost: COSTS.metro,
+        },
       },
     };
     const draft = selectShellState(state, ui).routeDraft;
     expect(draft?.canSave).toBe(false);
-    expect(draft?.previewMessage).toBe("Need $8,000.");
+    expect(draft?.previewMessage).toBe("Need $50,000.");
   });
 
   it("offers Reload after a stale edit rejection", () => {
@@ -873,7 +882,14 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: true,
-        status: { primary: "running", pausedAfterRepair: false },
+        status: { primary: "noFleet", pausedAfterRepair: false },
+        busService: {
+          targetHeadwaySeconds: null,
+          roundTripSeconds: null,
+          assignedFleet: 0,
+          requiredFleet: null,
+          nominalHeadwaySeconds: null,
+        },
         failures: [],
       },
       {
@@ -885,9 +901,162 @@ describe("route selectors", () => {
         active: true,
         selected: false,
         status: { primary: "running", pausedAfterRepair: false },
+        busService: null,
         failures: [],
       },
     ]);
+  });
+
+  function busRouteWithMetrics(
+    metrics: BusServiceMetrics | null,
+    targetHeadwaySeconds: number | null = null,
+  ) {
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    return {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          targetHeadwaySeconds,
+          serviceMetrics: metrics,
+        })),
+      },
+    };
+  }
+
+  it("flags an active connected bus with zero assigned fleet as noFleet", () => {
+    const state = busRouteWithMetrics(null);
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      busService: {
+        targetHeadwaySeconds: null,
+        roundTripSeconds: null,
+        assignedFleet: 0,
+        requiredFleet: null,
+        nominalHeadwaySeconds: null,
+      },
+    });
+  });
+
+  it("keeps noFleet below paused and broken in status precedence", () => {
+    const base = busRouteWithMetrics(null);
+    const paused = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: base.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+        })),
+      },
+    };
+    expect(selectShellState(paused, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "paused", pausedAfterRepair: false },
+    });
+
+    const broken = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: base.transit.routes.map((route) => ({
+          ...route,
+          pathBroken: true,
+        })),
+      },
+    };
+    expect(selectShellState(broken, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "broken", pausedAfterRepair: false },
+    });
+  });
+
+  it("exposes target headway and required fleet before deployment", () => {
+    const state = busRouteWithMetrics(
+      {
+        roundTripSeconds: 600,
+        assignedFleet: 0,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: null,
+      },
+      300,
+    );
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      busService: {
+        targetHeadwaySeconds: 300,
+        roundTripSeconds: 600,
+        assignedFleet: 0,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: null,
+      },
+    });
+  });
+
+  it("exposes nominal headway and assigned fleet after deployment", () => {
+    const state = busRouteWithMetrics(
+      {
+        roundTripSeconds: 600,
+        assignedFleet: 2,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: 300,
+      },
+      300,
+    );
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      status: { primary: "running", pausedAfterRepair: false },
+      busService: {
+        targetHeadwaySeconds: 300,
+        roundTripSeconds: 600,
+        assignedFleet: 2,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: 300,
+      },
+    });
+  });
+
+  it("keeps metro rows free of bus service state", () => {
+    let state = twoStations();
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      mode: "metro",
+      status: { primary: "running", pausedAfterRepair: false },
+      busService: null,
+    });
+  });
+
+  it("displays supplied Rust service metrics verbatim even when leg timing disagrees", () => {
+    // Deliberate disagreement fixture: cached leg timing (`estimatedSeconds`)
+    // sums to 2s while Rust reports a 600s round trip. The row must show the
+    // Rust-derived values — TypeScript must not recompute path timing.
+    let state = twoStops();
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          targetHeadwaySeconds: 120,
+          legs: route.legs.map((leg) => ({ ...leg, estimatedSeconds: 1 })),
+          serviceMetrics: {
+            roundTripSeconds: 600,
+            assignedFleet: 1,
+            requiredFleet: 5,
+            nominalHeadwaySeconds: 600,
+          },
+        })),
+      },
+    };
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      busService: {
+        targetHeadwaySeconds: 120,
+        roundTripSeconds: 600,
+        assignedFleet: 1,
+        requiredFleet: 5,
+        nominalHeadwaySeconds: 600,
+      },
+    });
   });
 
   it("prioritizes Broken while preserving paused-after-repair state", () => {
@@ -1104,6 +1273,35 @@ describe("action feedback selector", () => {
       ...overrides,
     };
   }
+
+  it.each([
+    [
+      { code: "invalidHeadway" as const, context: {} },
+      "Headway must be at least 1 minute.",
+    ],
+    [
+      { code: "headwayNotSet" as const, context: {} },
+      "Set a target headway before deploying buses.",
+    ],
+    [
+      { code: "fleetAlreadyAssigned" as const, context: {} },
+      "This route already has a bus fleet.",
+    ],
+  ])("maps bus service rejection %s to player copy", (rejection, message) => {
+    const shell = selectShellState(
+      createTestGameState(),
+      createUiState(),
+      rejection,
+    );
+    expect(shell.actionFeedback).toEqual({
+      source: "rejection",
+      tone: "error",
+      message,
+      details: [],
+      dismissible: true,
+      announce: true,
+    });
+  });
 
   it("prioritizes a global gameplay rejection over every road outcome", () => {
     const state = createTestGameState();

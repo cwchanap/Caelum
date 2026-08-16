@@ -106,7 +106,9 @@
     }
   }
 
-  function statusLabel(primary: "running" | "paused" | "broken"): string {
+  function statusLabel(
+    primary: "running" | "paused" | "broken" | "noFleet",
+  ): string {
     return primary[0].toUpperCase() + primary.slice(1);
   }
 

@@ -181,6 +181,7 @@ describe("normalizeRustSnapshot", () => {
     expect(normalized.scenario.objectives).toBeNull();
     expect(normalized.metrics.lossReason).toBeNull();
     expect(normalized.transit.routes[0].legs[0].failureReason).toBeNull();
+    expect(normalized.transit.routes[0].serviceMetrics).toBeNull();
     expect(normalized.activeTrips[0].routePlan?.legs[0]).toMatchObject({
       serviceDirection: null,
       boardItineraryIndex: null,
@@ -192,5 +193,34 @@ describe("normalizeRustSnapshot", () => {
     );
     expect("shiftTemplate" in normalized.sims[0]).toBe(false);
     expect("workplace" in normalized.sims[0]).toBe(false);
+  });
+
+  it("normalizes a supplied raw serviceMetrics payload verbatim", () => {
+    const snapshot = createNullishWireSnapshot("undefined");
+    const normalized = normalizeRustSnapshot({
+      ...snapshot,
+      transit: {
+        ...snapshot.transit,
+        routes: [
+          {
+            ...snapshot.transit.routes[0],
+            targetHeadwaySeconds: 300,
+            serviceMetrics: {
+              roundTripSeconds: 600,
+              assignedFleet: 2,
+              requiredFleet: 2,
+              nominalHeadwaySeconds: 300,
+            },
+          },
+        ],
+      },
+    });
+    expect(normalized.transit.routes[0].targetHeadwaySeconds).toBe(300);
+    expect(normalized.transit.routes[0].serviceMetrics).toEqual({
+      roundTripSeconds: 600,
+      assignedFleet: 2,
+      requiredFleet: 2,
+      nominalHeadwaySeconds: 300,
+    });
   });
 });

@@ -154,7 +154,10 @@ export type RejectionCode =
   | "invalidPlatform"
   | "invalidBuildingPlacement"
   | "blockedFootprint"
-  | "unsafeRoundaboutPortMapping";
+  | "unsafeRoundaboutPortMapping"
+  | "invalidHeadway"
+  | "headwayNotSet"
+  | "fleetAlreadyAssigned";
 
 export interface RejectionContext {
   routeId?: string;
