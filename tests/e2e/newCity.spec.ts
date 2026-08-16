@@ -68,3 +68,28 @@ test("creates a default city through real WASM and IndexedDB", async ({
   expect(stored!.snapshot.budget).toBe(after.state.budget);
   expect(stored!.snapshot.schemaVersion).toBe(after.state.schemaVersion);
 });
+
+test("creates Small Town through the real WASM New City flow", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+
+  await page.getByLabel("City name").fill("Small Town Smoke");
+  await page.getByLabel("Template").selectOption("smallTown");
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  const snapshot = await runtimeSnapshot(page);
+  expect(snapshot.state.rules.sandbox.templateId).toBe("smallTown");
+  expect(snapshot.state.scenario.name).toBe("Small Town");
+  expect(snapshot.state.paused).toBe(true);
+  expect(snapshot.state.buildings).toHaveLength(4);
+  expect(snapshot.state.sims).toEqual([]);
+  expect(snapshot.state.activeTrips).toEqual([]);
+  expect(snapshot.state.transit.stops).toEqual([]);
+  expect(snapshot.state.transit.stations).toEqual([]);
+  expect(snapshot.state.transit.routes).toEqual([]);
+  expect(snapshot.state.transit.metroLines).toEqual([]);
+  expect(snapshot.state.transit.vehicles).toEqual([]);
+});
