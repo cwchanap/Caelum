@@ -1102,6 +1102,47 @@ body {
   border-color: var(--cyan);
 }
 
+.route-service {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.route-service-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.route-service-label {
+  color: var(--ink-mid);
+}
+
+.route-service-value {
+  color: var(--ink);
+}
+
+.route-headway-input {
+  width: 56px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.route-headway-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
 .route-service-status {
   display: flex;
   align-items: center;
