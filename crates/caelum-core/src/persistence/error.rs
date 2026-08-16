@@ -189,6 +189,7 @@ pub enum SnapshotField {
     RouteEstimatedSeconds,
     RoutePathBroken,
     RouteRevision,
+    RouteTargetHeadway,
     RouteVehicleIds,
     VehicleMode,
     VehicleLineId,

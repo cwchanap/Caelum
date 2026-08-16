@@ -14,7 +14,7 @@
 use caelum_core::model::{EconomyPreset, Point, TransitMode};
 use caelum_core::traffic::RoadFlow;
 use caelum_core::transit::BUS_COST;
-use caelum_core::{router, GameEngine, GameIntent, RejectionCode, RoadPreset};
+use caelum_core::{router, GameEngine, GameIntent, RejectionCode, RoadPreset, SnapshotLoadError};
 
 /// Network used by a connected loop bus route with no assigned vehicles.
 fn bus_network_engine() -> GameEngine {
@@ -415,7 +415,7 @@ fn engine_snapshot_publishes_bus_service_metrics() {
         "fixture assignment should apply: {assigned:?}"
     );
     let mut state = engine.snapshot();
-    state.transit.routes[0].target_headway_seconds = Some(14);
+    state.transit.routes[0].target_headway_seconds = Some(120);
     let engine = GameEngine::from_snapshot(state).expect("targeted state loads");
 
     let cycle = free_flow_cycle_seconds(&engine);
@@ -430,7 +430,7 @@ fn engine_snapshot_publishes_bus_service_metrics() {
     assert_eq!(metrics.assigned_fleet, 1);
     assert_eq!(
         metrics.required_fleet,
-        Some((cycle / 14.0).ceil() as usize),
+        Some((cycle / 120.0).ceil() as usize),
         "required fleet is ceil(cycle / target)"
     );
     assert_eq!(metrics.nominal_headway_seconds, Some(cycle));
@@ -440,6 +440,55 @@ fn engine_snapshot_publishes_bus_service_metrics() {
     let route_json = &value["transit"]["routes"][0];
     assert!(route_json.get("serviceMetrics").is_some(), "{route_json}");
     assert_eq!(route_json["serviceMetrics"]["assignedFleet"], 1);
+}
+
+#[test]
+fn snapshot_restore_rejects_bus_headway_below_floor() {
+    // `MIN_BUS_HEADWAY_SECONDS` (60) is the authoritative floor enforced by
+    // both `SetBusTargetHeadway` and `DeployBusFleet`. A persisted target
+    // below it is a service state the gameplay API cannot create, so
+    // `GameEngine::from_snapshot` must reject it rather than adopt it as
+    // engine authority. 59 is one second below the floor.
+    let engine = bus_route_engine();
+    let mut state = engine.snapshot();
+    state.transit.routes[0].target_headway_seconds = Some(59);
+    let error = match GameEngine::from_snapshot(state) {
+        Ok(_) => panic!("sub-floor headway should be rejected on restore"),
+        Err(error) => error,
+    };
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = error else {
+        panic!("expected an invalid snapshot diagnostic, got {error:?}");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidNumericValue"));
+    assert_eq!(
+        value["context"]["field"],
+        serde_json::json!("routeTargetHeadway")
+    );
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!("outOfRange")
+    );
+    assert_eq!(value["context"]["reason"]["details"]["minimum"], 60.0);
+    assert_eq!(value["context"]["reason"]["details"]["actual"], 59.0);
+    assert_eq!(
+        value["context"]["entity"]["kind"],
+        serde_json::json!("busRoute")
+    );
+}
+
+#[test]
+fn snapshot_restore_accepts_bus_headway_at_floor() {
+    // The floor itself (60) is valid and must load.
+    let engine = bus_route_engine();
+    let mut state = engine.snapshot();
+    state.transit.routes[0].target_headway_seconds = Some(60);
+    let restored = GameEngine::from_snapshot(state).expect("floor headway loads");
+    assert_eq!(
+        restored.snapshot().transit.routes[0].target_headway_seconds,
+        Some(60)
+    );
 }
 
 #[test]

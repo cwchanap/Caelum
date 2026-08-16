@@ -812,6 +812,27 @@ fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             TransitMode::Bus,
             &route.legs,
         )?;
+        // `target_headway_seconds` is the authoritative service target that
+        // both player-facing mutations (`SetBusTargetHeadway`,
+        // `DeployBusFleet`) floor at `MIN_BUS_HEADWAY_SECONDS`. A persisted
+        // value below that floor is a service state the gameplay API cannot
+        // create, and once a fleet exists the Lines UI removes headway editing
+        // so it cannot be corrected either. Reject it at restore so impossible
+        // service state cannot become engine authority.
+        if let Some(target) = route.target_headway_seconds {
+            let floor = crate::bus_service::MIN_BUS_HEADWAY_SECONDS;
+            if target < floor {
+                return Err(PersistenceError::InvalidNumericValue {
+                    entity: Some(entity_ref(EntityKind::BusRoute, &route.id)),
+                    field: SnapshotField::RouteTargetHeadway,
+                    reason: NumericError::OutOfRange {
+                        minimum: f64::from(floor),
+                        maximum: f64::MAX,
+                        actual: f64::from(target),
+                    },
+                });
+            }
+        }
     }
     for line in &snapshot.transit.metro_lines {
         validate_route_shape(
