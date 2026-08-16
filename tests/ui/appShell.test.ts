@@ -1118,9 +1118,7 @@ describe("App command shell", () => {
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
     expect(runtime.setBusTargetHeadway).toHaveBeenCalledWith("route-001", 360);
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Deploy 3 buses" }),
-    );
+    await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
     expect(runtime.deployBusFleet).toHaveBeenCalledWith("route-001");
   });
 

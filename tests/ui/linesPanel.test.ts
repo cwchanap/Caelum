@@ -245,9 +245,7 @@ describe("LinesPanel line workspace", () => {
     expect(input).toHaveAttribute("min", "1");
     expect(input).toHaveAttribute("step", "1");
     expect(screen.getByRole("button", { name: "Set" })).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Deploy 3 buses" }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Deploy fleet" })).toBeVisible();
 
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
@@ -259,9 +257,7 @@ describe("LinesPanel line workspace", () => {
     // Set deleted the draft; the display falls back to the persisted target.
     expect(input).toHaveValue(6);
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Deploy 3 buses" }),
-    );
+    await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
     expect(props.onDeployBusFleet).toHaveBeenCalledTimes(1);
     expect(props.onDeployBusFleet).toHaveBeenCalledWith("route-bus-001");
   });

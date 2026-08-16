@@ -356,7 +356,7 @@ No fleet
 Target      6 min
 Required    3 buses
 [ 6 ] min [Set]
-[Deploy 3 buses]
+[Deploy fleet]
 ```
 
 Rules:
@@ -364,7 +364,7 @@ Rules:
 - input is whole minutes, `min=1`, `step=1`;
 - Set dispatches seconds;
 - Deploy appears/enables only when route is active, connected, zero-fleet, target is set, and Rust-derived `requiredFleet` exists;
-- the button label uses Rust's `serviceMetrics.requiredFleet`, so the count shown is the count Rust will buy.
+- the button label is `Deploy fleet` (no count). `Required` is an informational estimate; the purchased count is whatever Rust derives at execution time. On Tauri a tick in flight when the click queues can change road flow before `deploy_bus_fleet` recomputes `required_fleet`, so the button does not promise a specific count.
 
 ### After deployment
 
