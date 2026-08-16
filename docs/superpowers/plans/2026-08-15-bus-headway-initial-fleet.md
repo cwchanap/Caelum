@@ -855,7 +855,7 @@ Target
 Required
 3 buses
 Set
-Deploy 3 buses
+Deploy fleet
 ```
 
 Enter `6` minutes and Set; assert:
@@ -920,7 +920,7 @@ function formatHeadway(seconds: number | null): string {
 }
 ```
 
-Pre-deployment button label uses `requiredFleet` supplied by Rust. Do not calculate it in Svelte.
+Pre-deployment button label is `Deploy fleet` (no count). `Required` is an informational Rust-derived estimate shown in the readout, not a purchase promise — on Tauri a tick in flight when the click queues can change road flow before `deploy_bus_fleet` recomputes `required_fleet`. Do not calculate the count in Svelte.
 
 Post-deployment hides setup controls and shows Target/Nominal/Fleet only.
 
@@ -972,9 +972,9 @@ save bus route
 assert No fleet / zero vehicle IDs
 set target to a whole-minute value
 assert Required N uses the Rust-derived row value
-click Deploy N buses
-assert runtime route has N vehicleIds
-assert UI shows Target, Nominal, Fleet N and no setup controls
+click Deploy fleet
+assert runtime route has a non-empty vehicleIds list
+assert UI shows Target, Nominal, Fleet <assignedFleet> and no setup controls
 Resume
 assert clock advances
 ```

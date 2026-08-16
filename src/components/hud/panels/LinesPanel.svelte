@@ -381,7 +381,7 @@
                           data-testid={`route-deploy-${route.id}`}
                           onclick={() => onDeployBusFleet(route.id)}
                         >
-                          Deploy {route.busService.requiredFleet} buses
+                          Deploy fleet
                         </button>
                       {/if}
                     </div>
