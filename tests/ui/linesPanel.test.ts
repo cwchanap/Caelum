@@ -240,6 +240,7 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("Required");
     expect(service).toHaveTextContent("3 buses");
     const input = screen.getByTestId("route-headway-route-bus-001");
+    expect(input).toHaveValue(6); // no draft: initialized from 360 / 60
     expect(input).toHaveAttribute("type", "number");
     expect(input).toHaveAttribute("min", "1");
     expect(input).toHaveAttribute("step", "1");
@@ -255,6 +256,8 @@ describe("LinesPanel line workspace", () => {
       "route-bus-001",
       360,
     );
+    // Set deleted the draft; the display falls back to the persisted target.
+    expect(input).toHaveValue(6);
 
     await fireEvent.click(
       screen.getByRole("button", { name: "Deploy 3 buses" }),
