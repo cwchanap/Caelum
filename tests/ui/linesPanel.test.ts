@@ -266,6 +266,59 @@ describe("LinesPanel line workspace", () => {
     expect(props.onDeployBusFleet).toHaveBeenCalledWith("route-bus-001");
   });
 
+  it("shows setup controls for paused or broken zero-fleet bus routes without Deploy", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-paused",
+          name: "Paused Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: false,
+          selected: false,
+          status: { primary: "paused", pausedAfterRepair: false },
+          busService: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: null,
+          },
+          failures: [],
+        },
+        {
+          id: "route-bus-broken",
+          name: "Broken Bus",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "broken", pausedAfterRepair: false },
+          busService: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: null,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    for (const routeId of ["route-bus-paused", "route-bus-broken"]) {
+      const service = screen.getByTestId(`route-service-${routeId}`);
+      expect(service).toHaveTextContent("Target");
+      expect(service).toHaveTextContent("Required");
+      expect(screen.queryByTestId(`route-deploy-${routeId}`)).toBeNull();
+    }
+    expect(screen.getByText("Paused")).toBeVisible();
+    expect(screen.getByText("Broken")).toBeVisible();
+  });
+
   it("shows only Target/Nominal/Fleet after deployment and no setup controls", async () => {
     const props = panelProps({
       routes: [

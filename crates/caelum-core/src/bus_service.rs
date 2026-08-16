@@ -76,6 +76,12 @@ pub(crate) fn deploy_bus_fleet(
         .iter()
         .find(|route| route.id == route_id)
         .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, route_id))?;
+    if !route.vehicle_ids.is_empty() {
+        return Err(route_rejection(
+            RejectionCode::FleetAlreadyAssigned,
+            route_id,
+        ));
+    }
     if !route.active {
         return Err(route_rejection(RejectionCode::InactiveRoute, route_id));
     }
@@ -90,13 +96,6 @@ pub(crate) fn deploy_bus_fleet(
     if target < MIN_BUS_HEADWAY_SECONDS {
         return Err(route_rejection(RejectionCode::InvalidHeadway, route_id));
     }
-    if !route.vehicle_ids.is_empty() {
-        return Err(route_rejection(
-            RejectionCode::FleetAlreadyAssigned,
-            route_id,
-        ));
-    }
-
     let flow = crate::traffic::derive_road_flow(state);
     let round_trip_seconds = bus_round_trip_seconds(route, &flow)
         .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, route_id))?;

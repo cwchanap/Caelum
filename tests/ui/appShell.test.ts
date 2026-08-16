@@ -1124,6 +1124,42 @@ describe("App command shell", () => {
     expect(runtime.deployBusFleet).toHaveBeenCalledWith("route-001");
   });
 
+  it("shows paused zero-fleet bus setup controls without enabling Deploy", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+          targetHeadwaySeconds: 360,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: null,
+          },
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    expect(screen.getByTestId("route-status-route-001")).toHaveTextContent(
+      "Paused",
+    );
+    const service = screen.getByTestId("route-service-route-001");
+    expect(service).toHaveTextContent("Target");
+    expect(service).toHaveTextContent("Required");
+    expect(screen.queryByTestId("route-deploy-route-001")).toBeNull();
+  });
+
   it("keeps route-draft gate IDs unique and scopes shelf descriptions", () => {
     const { runtime } = createRuntimeHarness({
       ui: {
