@@ -88,7 +88,7 @@ Rust persisted target:
 pub target_headway_seconds: Option<u32>,
 ```
 
-Rust derived runtime output placeholder:
+Rust-derived runtime output placeholder:
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

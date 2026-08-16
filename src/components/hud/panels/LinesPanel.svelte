@@ -76,6 +76,9 @@
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
 
+  // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
+  const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
+
   function routeNameFor(routeId: string, canonical: string): string {
     return routeNameDrafts[routeId] ?? canonical;
   }
@@ -130,6 +133,7 @@
     delete headwayMinuteDrafts[routeId];
     // UI validation is convenience; Rust's 60s floor is authoritative.
     if (!Number.isInteger(minutes) || minutes < 1) return;
+    if (minutes > MAX_HEADWAY_MINUTES) return;
     onSetBusTargetHeadway(routeId, minutes * 60);
   }
 
@@ -343,6 +347,7 @@
                         <input
                           type="number"
                           min="1"
+                          max={MAX_HEADWAY_MINUTES}
                           step="1"
                           class="route-headway-input route-input"
                           data-testid={`route-headway-${route.id}`}

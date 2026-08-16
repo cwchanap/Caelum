@@ -137,20 +137,26 @@ fn create_route(
     pattern: ServicePattern,
     waypoint_ids: Vec<String>,
 ) {
-    dispatch(
-        engine,
-        GameIntent::CreateRoute {
-            mode,
-            pattern,
-            waypoint_ids,
-        },
-    );
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode,
+        pattern,
+        waypoint_ids,
+    });
+    assert!(created.applied, "fixture create should apply: {created:?}");
     if mode == TransitMode::Bus {
+        let route_id = created
+            .snapshot
+            .transit
+            .routes
+            .last()
+            .expect("created bus route")
+            .id
+            .clone();
         dispatch(
             engine,
             GameIntent::AssignVehicle {
                 mode: "bus".to_string(),
-                line_id: "route-001".to_string(),
+                line_id: route_id,
             },
         );
     }
@@ -634,20 +640,6 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
     });
     assert!(deployed.applied, "{deployed:?}");
     let before = route(&deployed.snapshot, "route-001").clone();
-    let before_cursors: Vec<_> = deployed
-        .snapshot
-        .transit
-        .vehicles
-        .iter()
-        .filter(|vehicle| vehicle.line_id == "route-001")
-        .map(|vehicle| {
-            (
-                vehicle.itinerary_index,
-                vehicle.path_step_index,
-                vehicle.step_progress,
-            )
-        })
-        .collect();
 
     let edited = engine.dispatch(GameIntent::UpdateRoute {
         route_id: "route-001".into(),
@@ -669,21 +661,24 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
         required
     );
     assert_eq!(after.target_headway_seconds, Some(60));
-    let after_cursors: Vec<_> = edited
+    // UpdateRoute rebases surviving vehicles: itinerary_index is recomputed
+    // while path_step_index and step_progress reset to their parked values.
+    for vehicle in edited
         .snapshot
         .transit
         .vehicles
         .iter()
         .filter(|vehicle| vehicle.line_id == "route-001")
-        .map(|vehicle| {
-            (
-                vehicle.itinerary_index,
-                vehicle.path_step_index,
-                vehicle.step_progress,
-            )
-        })
-        .collect();
-    assert_eq!(after_cursors.len(), before_cursors.len());
+    {
+        assert_eq!(
+            vehicle.path_step_index, 0,
+            "rebase resets path_step_index: {vehicle:?}"
+        );
+        assert_eq!(
+            vehicle.step_progress, 0.0,
+            "rebase resets step_progress: {vehicle:?}"
+        );
+    }
     assert!(after.revision > before.revision);
 }
 

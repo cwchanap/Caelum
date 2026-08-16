@@ -547,7 +547,11 @@ function applyIntent(
     const route = snapshot.transit.routes.find(
       (candidate) => candidate.id === intent.routeId,
     );
-    if (route === undefined) return snapshot;
+    if (route === undefined) {
+      throw new Error(
+        `fake backend deployBusFleet: route "${intent.routeId}" not found — real backend rejects with RouteNotFound`,
+      );
+    }
     const vehicles = [1, 2].map((index) => ({
       id: `vehicle-${(snapshot.transit.vehicles.length + index)
         .toString()

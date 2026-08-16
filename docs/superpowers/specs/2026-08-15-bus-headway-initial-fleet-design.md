@@ -18,7 +18,7 @@ The repository already has the required boundaries:
 
 - `route_editor::create_route_costed` validates route geometry and currently couples creation to the first vehicle purchase.
 - `transit::initial_vehicle` creates the existing bus cursor shape.
-- `transit::assign_vehicle_costed` remains the existing low-level unspaced add used by core tests.
+- `transit::assign_vehicle_costed` remains the existing low-level unspaced vehicle assignment used by core tests.
 - `Route.legs` is the cyclic itinerary used by live vehicle movement for both loop and shuttle services.
 - HPA-622's `traffic::RoadFlow` is the live road-load input.
 - `transit::vehicle_step_seconds` is the exact live per-step timing rule once made `pub(crate)`.
