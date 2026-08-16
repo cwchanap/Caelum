@@ -46,6 +46,7 @@
       <select bind:value={templateId}>
         <option value="crossroads">Crossroads</option>
         <option value="blankGrid">Blank Grid</option>
+        <option value="smallTown">Small Town</option>
       </select>
     </label>
 

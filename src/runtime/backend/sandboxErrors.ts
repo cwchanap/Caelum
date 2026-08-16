@@ -75,6 +75,7 @@ export function isSandboxResetError(
   return (
     !("templateId" in value.context) ||
     value.context.templateId === "blankGrid" ||
-    value.context.templateId === "crossroads"
+    value.context.templateId === "crossroads" ||
+    value.context.templateId === "smallTown"
   );
 }

@@ -82,6 +82,30 @@ describe("Tauri backend", () => {
     });
   });
 
+  it("preserves a Small Town template-invariant reset error", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "game_begin_runtime") {
+        return { runtimeEpoch: 1, snapshot: createRustSnapshot() };
+      }
+      if (command === "game_reset") {
+        throw {
+          code: "templateInvariantViolation",
+          context: { templateId: "smallTown" },
+        };
+      }
+      return createRustSnapshot();
+    });
+
+    const backend = await createTauriBackend();
+    await expect(backend.reset()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "templateInvariantViolation",
+        context: { templateId: "smallTown" },
+      },
+    });
+  });
+
   it("maps an invalid restore response and keeps it definitive", async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === "game_begin_runtime") {
