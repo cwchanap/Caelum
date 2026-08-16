@@ -50,7 +50,7 @@ Do not add a template DSL, generic template builder, resident-seeding API, templ
 | Commutes | existing trip scheduler/router | No template-specific demand code. |
 | Private cars | existing footprint road-access derivation + road topology | Geometry guarantees every authored home/workplace has adjacent usable road access. |
 | New City UI | existing `SandboxTemplateId` selector | Add one `Small Town` option. |
-| Reset error decoding | existing `SandboxResetError` + `isSandboxResetError` | Extend their current template-ID whitelist; no new error type. |
+| City/template presentation | existing exhaustive `SANDBOX_TEMPLATE_LABELS` | Extend with `smallTown: "Small Town"`; do not create another registry. |
 
 ## Player-visible starting state
 
@@ -84,7 +84,7 @@ This shape deliberately leaves the map edges and most quadrants open for player 
 
 ### Zones and buildings
 
-Author the roads first, then paint only empty tiles.
+Author the roads first, then create the normal snapshot shell, then paint only empty tiles, then place buildings with rotation `0`. This order is required because `can_place_building` enforces each catalog building’s `allowed_area`, while zoning/building placement do not mutate road fields and therefore do not invalidate the already-compiled topology.
 
 | Area | Zone rectangle | Building | Origin | Footprint | Road access |
 | --- | --- | --- | --- | --- | --- |
@@ -122,6 +122,8 @@ The Supermarket and Factory already provide 4 and 6 jobs respectively. Existing 
 
 The template does not force a particular transport mode. Its geometry is intentionally large enough that at least some representative commutes can naturally prefer the existing private-car candidate over walking, while public transport remains absent until the player creates it. Mode choice remains entirely authoritative to the existing router.
 
+Behavioral tests should target a named in-game morning time derived from `GAME_DAY_SECONDS` and `MINUTES_PER_DAY` rather than hard-coding an opaque simulation delta. The current plan uses clock minute **480 (08:00)** so the invariant remains visible if game-day length or shift windows change.
+
 ## Factory and reset behavior
 
 Extend the existing template enum/string mapping in all current sandbox seams:
@@ -131,7 +133,8 @@ Extend the existing template enum/string mapping in all current sandbox seams:
 - `create_sandbox_candidate`;
 - persisted-rule reset reconstruction;
 - TypeScript `SandboxTemplateId`;
-- `SandboxResetError.context.templateId` and `isSandboxResetError`'s template whitelist;
+- TypeScript reset-error template-ID union/guard;
+- existing `SANDBOX_TEMPLATE_LABELS` presentation map;
 - New City template selector.
 
 Reset must rebuild Small Town from its persisted rules exactly like Blank Grid and Crossroads. No compatibility alias or fallback template is added.
@@ -150,10 +153,12 @@ A suitable shape is:
 4. compile the road topology;
 5. create the normal snapshot shell with name `Small Town`;
 6. paint the three authored zone rectangles;
-7. place the four buildings through `place_building_core` in the listed order;
+7. place the four buildings through `place_building_core(..., 0)` in the listed order;
 8. return the completed snapshot plus the already-compiled topology.
 
 Any impossible authored operation maps to the existing `TemplateInvariantViolation` for `SmallTown`. Do not introduce per-building/per-zone template error codes; these coordinates are developer-authored constants, not user input.
+
+Do **not** copy `validate_crossroads_candidate` into a new production Small Town validator. Crossroads’ validator exists for its specialized 2×2 automatic-junction contract. Small Town needs only the existing factory failure mapping plus structural/routing tests for its simple two-way plus-shaped network.
 
 ## Determinism
 
@@ -171,7 +176,7 @@ Repeated creation with identical requests must produce equal initial snapshots. 
 
 ## UI and host boundary
 
-No backend API changes are required beyond accepting/serializing the new template identifier through the existing sandbox creation request and reset-error shape.
+No backend API changes are required beyond accepting/serializing the new template identifier through the existing sandbox creation request.
 
 `NewCityScreen.svelte` adds:
 
@@ -180,6 +185,8 @@ Small Town
 ```
 
 alongside Blank Grid and Crossroads. The request still carries only city name, economy preset, and template ID.
+
+The existing exhaustive `SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string>` must also add `smallTown: "Small Town"`; this is existing presentation behavior used by the shell, not a new template registry.
 
 WASM and Tauri continue to call the same Rust factory. No host-specific Small Town code is allowed.
 
@@ -194,8 +201,8 @@ Extend `sandbox_factory.rs` to cover `smallTown` in the existing repeated-constr
 Add one focused Small Town structural test that proves:
 
 - the two expected road strokes exist and topology compiles;
-- the authored zones/building types/origins match this design;
-- representative home→work pairs produce a private-car candidate through the existing footprint access + road topology path;
+- the authored zones/building types/origins/rotation `0` match this design;
+- representative `private_car_candidate` calls cover all four buildings and prove usable road access plus connected topology;
 - exactly four buildings exist;
 - sims, trips, transit, objectives, and growth waves start empty;
 - Standard and Creative requests preserve their requested rules/budget.
@@ -206,26 +213,25 @@ Use the real `GameEngine::from_sandbox_request` path:
 
 1. create Small Town;
 2. unpause through the normal intent;
-3. advance through the existing tick pipeline into the morning commute window;
-4. assert all eight residents were created and assigned to workplaces;
-5. assert at least one worker's outbound commute was resolved through the real scheduler;
-6. repeat the same sequence in a second engine and compare the resulting snapshots.
+3. advance through the existing tick pipeline to in-game clock minute **480 (08:00)**, deriving simulation seconds from `GAME_DAY_SECONDS` and `MINUTES_PER_DAY`;
+4. assert eight residents exist;
+5. assert every current worker has a workplace;
+6. assert real outbound commute processing occurred through either an active trip or `outbound_resolved_today`;
+7. repeat the same sequence in a second engine and compare the relevant snapshot/IDs.
 
-Do not distort production mode-choice constants merely to make the template test demand a particular mode.
+Do not encode the morning target as magic `tick(400.0)`. Do not distort production mode-choice constants merely to make the template test demand a car.
 
 ### Frontend/E2E
 
-Reuse the existing App New City form test to submit `smallTown`, add one typed reset-error guard regression, and add one Chromium New City flow that selects **Small Town**, creates it through the real WASM backend, sees the game canvas, and reads the live runtime snapshot to verify the template ID and four authored buildings.
+Extend the existing TypeScript template union, reset-error whitelist, and `SANDBOX_TEMPLATE_LABELS`, then add the new option to existing New City unit coverage. Extend one Chromium New City flow to select **Small Town**, create it through the real WASM backend, and verify the game shell receives the authored city.
 
-The existing default-city Chromium test already owns the IndexedDB commit proof. Do not duplicate its raw IndexedDB transaction code for Small Town.
-
-Do not add a second E2E suite for Standard versus Creative; Rust request/factory tests already own that contract.
+Do not add a second E2E suite for Standard versus Creative or duplicate the existing raw IndexedDB proof; Rust request/factory tests and the existing default-city browser test already own those contracts.
 
 ## Error handling
 
 Small Town has no runtime-recoverable authoring errors. A failure to paint an authored zone, place an authored building, refresh the junction, or compile the authored road topology is a template invariant bug and returns the existing `TemplateInvariantViolation` with `templateId = smallTown`.
 
-The frontend's existing reset-error decoder must recognize `smallTown` in that context. No new error code, retry, partial template construction, fallback to Crossroads, or repair behavior is added.
+No retry, partial template construction, fallback to Crossroads, or repair behavior is added.
 
 ## Non-goals
 
@@ -238,6 +244,7 @@ The frontend's existing reset-error decoder must recognize `smallTown` in that c
 - Generic template DSL/builder/registry beyond the existing enum + factory match.
 - New building or zoning types.
 - New road primitives, multilane redesign, or intersection framework.
+- A copied production Small Town geometry validator.
 - Template-specific economy rules.
 - Snapshot migration, compatibility readers, or storage-version bump solely for `smallTown`.
 - Phase 4 fleet top-up/withdrawal, layover, holding, bunching, service bands, or timetable work.
@@ -247,13 +254,14 @@ The frontend's existing reset-error decoder must recognize `smallTown` in that c
 HPA-350 is complete when:
 
 1. New City offers Blank Grid, Crossroads, and Small Town.
-2. Small Town construction is fully Rust-owned and deterministic.
-3. The initial paused Small Town contains exactly the authored roads/zones/four buildings and no residents/transit/scripted growth.
-4. Representative authored home/workplace pairs have usable adjacent road access and a connected private-car route under current rules.
-5. Resuming time uses existing move-in/workplace rules to populate the houses and produces real morning commute demand without debug actions.
-6. Standard and Creative preserve the requested starting budget/rules while sharing identical template content.
-7. Reset reconstructs the same Small Town template from persisted rules, and reset errors preserve the typed `smallTown` context.
-8. The real browser New City flow can create Small Town, render the game shell, and expose the expected authored snapshot through the existing runtime test hook.
+2. The City/shell template label renders Small Town through the existing exhaustive template-label map.
+3. Small Town construction is fully Rust-owned and deterministic.
+4. The initial paused Small Town contains exactly the authored roads/zones/four rotation-0 buildings and no residents/transit/scripted growth.
+5. Every authored home/workplace has usable adjacent road access.
+6. Resuming time uses existing move-in/workplace rules to populate the houses and produces real morning commute demand without debug actions.
+7. Standard and Creative preserve the requested starting budget/rules while sharing identical template content.
+8. Reset reconstructs the same Small Town template from persisted rules.
+9. The real browser New City flow can create and render Small Town.
 
 ## Deliberate follow-up boundary
 
