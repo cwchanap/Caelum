@@ -91,7 +91,7 @@ In `crates/caelum-core/tests/sandbox_factory.rs`, extend the two existing templa
 
 ```rust
 for template in ["blankGrid", "crossroads", "smallTown"] {
-    // existing repeated-construction/settings assertions stay unchanged
+    // Keep the existing repeated-construction/settings assertions unchanged.
 }
 ```
 
@@ -167,13 +167,13 @@ fn small_town_has_the_authored_roads_zones_buildings_and_no_started_simulation()
     assert!(snapshot.scenario.objectives.is_none());
     assert!(snapshot.scenario.growth_waves.is_empty());
 
-    // The compiled topology itself is part of the assertion: construction
-    // above must not return a map that cannot be routed.
-    assert!(!topology.is_empty_for_test());
+    // Successful compilation is the first routing invariant. Representative
+    // building-to-building private-car paths are asserted after implementation.
+    let _ = topology;
 }
 ```
 
-If `RoadTopology` has no `is_empty_for_test()` helper on current main, do **not** add one just for this assertion. The successful `RoadTopology::compile(...).unwrap()` plus the private-car checks in Step 5 are the topology proof; omit only that final line.
+Do not add a test-only `RoadTopology` inspection API.
 
 - [ ] **Step 3: Add failing reset and simulation-behavior coverage**
 
@@ -235,7 +235,7 @@ Run:
 cargo test -p caelum-core --test sandbox_factory --test sandbox_engine
 ```
 
-Expected: FAIL because `smallTown` is not yet parsed/constructed (and the enum variant does not yet exist once Step 1 references it).
+Expected: FAIL because `smallTown` is not yet parsed/constructed (and Step 1 references the not-yet-defined enum variant).
 
 - [ ] **Step 5: Implement `SmallTown` with existing sandbox helpers only**
 
@@ -311,7 +311,7 @@ let validated = validate_request(request)?;
 if validated.template_id == SandboxTemplateId::SmallTown {
     return create_small_town_candidate(validated);
 }
-// existing BlankGrid/Crossroads branch stays as-is
+// Existing BlankGrid/Crossroads branch stays unchanged.
 ```
 
 Do not charge `CostPolicy`, hand-author building IDs, directly push `PlacedBuilding`, directly push `Sim`, or create transit entities.
@@ -446,7 +446,7 @@ it("preserves a Small Town template-invariant reset error", async () => {
 });
 ```
 
-Use the exact reset result shape returned by current `createTauriBackend().reset()` if the existing test helper includes an outer diagnostic field; keep the essential assertion that `smallTown` remains a recognized typed reset error rather than being thrown as an unknown host failure.
+This must resolve as the typed reset result shown above. A thrown value means `isSandboxResetError()` still rejects the new template ID.
 
 - [ ] **Step 3: Run the focused frontend tests and verify they fail**
 
@@ -659,7 +659,7 @@ The first commit is the authoritative gameplay slice, the second is the thin fro
 
 ### Placeholder scan
 
-No `TBD`, `TODO`, “implement later”, generic “add validation”, or unspecified test task remains. The one conditional note about `RoadTopology::is_empty_for_test()` explicitly forbids adding a test-only API and states the exact alternative proof.
+No `TBD`, `TODO`, “implement later”, generic “add validation”, test-only helper invention, or unspecified test task remains.
 
 ### Type consistency
 
