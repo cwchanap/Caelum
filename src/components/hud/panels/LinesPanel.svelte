@@ -37,6 +37,11 @@
     onDeleteRoute: (routeId: string) => void;
     onFocusRouteFailure: (routeId: string, legIndex: number) => void;
     onEditRoute: (routeId: string) => void;
+    onSetBusTargetHeadway: (
+      routeId: string,
+      targetHeadwaySeconds: number,
+    ) => void;
+    onDeployBusFleet: (routeId: string) => void;
   }
 
   let {
@@ -61,10 +66,13 @@
     onDeleteRoute,
     onFocusRouteFailure,
     onEditRoute,
+    onSetBusTargetHeadway,
+    onDeployBusFleet,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
   let routeNameDrafts = $state<Record<string, string>>({});
+  let headwayMinuteDrafts = $state<Record<string, string>>({});
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
 
@@ -106,10 +114,31 @@
     }
   }
 
+  function formatHeadway(seconds: number | null): string {
+    return seconds === null ? "—" : `${(seconds / 60).toFixed(1)} min`;
+  }
+
+  function handleHeadwayInput(
+    routeId: string,
+    event: Event & { currentTarget: HTMLInputElement },
+  ): void {
+    headwayMinuteDrafts[routeId] = event.currentTarget.value;
+  }
+
+  function commitHeadway(routeId: string): void {
+    const minutes = Number(headwayMinuteDrafts[routeId]);
+    delete headwayMinuteDrafts[routeId];
+    // UI validation is convenience; Rust's 60s floor is authoritative.
+    if (!Number.isInteger(minutes) || minutes < 1) return;
+    onSetBusTargetHeadway(routeId, minutes * 60);
+  }
+
   function statusLabel(
     primary: "running" | "paused" | "broken" | "noFleet",
   ): string {
-    return primary[0].toUpperCase() + primary.slice(1);
+    return primary === "noFleet"
+      ? "No fleet"
+      : primary[0].toUpperCase() + primary.slice(1);
   }
 
   $effect(() => {
@@ -275,6 +304,96 @@
                       </li>
                     {/each}
                   </ul>
+                {/if}
+                {#if route.busService !== null}
+                  {#if route.status.primary === "noFleet"}
+                    <div
+                      class="route-service"
+                      data-testid={`route-service-${route.id}`}
+                    >
+                      <div class="route-service-row">
+                        <span class="route-service-label">Target</span>
+                        <span class="route-service-value"
+                          >{formatHeadway(
+                            route.busService.targetHeadwaySeconds,
+                          )}</span
+                        >
+                      </div>
+                      {#if route.busService.requiredFleet !== null}
+                        <div class="route-service-row">
+                          <span class="route-service-label">Required</span>
+                          <span class="route-service-value"
+                            >{route.busService.requiredFleet} buses</span
+                          >
+                        </div>
+                      {/if}
+                      <div class="route-service-row">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          class="route-headway-input"
+                          data-testid={`route-headway-${route.id}`}
+                          value={headwayMinuteDrafts[route.id] ?? ""}
+                          aria-label={`Set target headway for ${route.name}`}
+                          oninput={(event) =>
+                            handleHeadwayInput(
+                              route.id,
+                              event as Event & {
+                                currentTarget: HTMLInputElement;
+                              },
+                            )}
+                        />
+                        <span class="route-service-label">min</span>
+                        <button
+                          type="button"
+                          class="route-toggle"
+                          data-testid={`route-headway-set-${route.id}`}
+                          onclick={() => commitHeadway(route.id)}
+                        >
+                          Set
+                        </button>
+                      </div>
+                      {#if route.busService.requiredFleet !== null}
+                        <button
+                          type="button"
+                          class="route-toggle"
+                          data-testid={`route-deploy-${route.id}`}
+                          onclick={() => onDeployBusFleet(route.id)}
+                        >
+                          Deploy {route.busService.requiredFleet} buses
+                        </button>
+                      {/if}
+                    </div>
+                  {:else if route.busService.assignedFleet > 0}
+                    <div
+                      class="route-service"
+                      data-testid={`route-service-${route.id}`}
+                    >
+                      <div class="route-service-row">
+                        <span class="route-service-label">Target</span>
+                        <span class="route-service-value"
+                          >{formatHeadway(
+                            route.busService.targetHeadwaySeconds,
+                          )}</span
+                        >
+                      </div>
+                      <div class="route-service-row">
+                        <span class="route-service-label">Nominal</span>
+                        <span class="route-service-value"
+                          >{formatHeadway(
+                            route.busService.nominalHeadwaySeconds,
+                          )}</span
+                        >
+                      </div>
+                      <div class="route-service-row">
+                        <span class="route-service-label">Fleet</span>
+                        <span class="route-service-value"
+                          >{route.busService.assignedFleet}</span
+                        >
+                      </div>
+                    </div>
+                  {/if}
                 {/if}
                 <div class="route-item-controls">
                   <button

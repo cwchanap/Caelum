@@ -28,6 +28,8 @@ function callbacks() {
     onDeleteRoute: vi.fn(),
     onFocusRouteFailure: vi.fn(),
     onEditRoute: vi.fn(),
+    onSetBusTargetHeadway: vi.fn(),
+    onDeployBusFleet: vi.fn(),
   };
 }
 
@@ -204,6 +206,116 @@ describe("LinesPanel line workspace", () => {
     expect(screen.queryByRole("button", { name: "New Metro" })).toBeNull();
     expect(screen.queryByTestId("lines-list")).toBeNull();
     expect(screen.queryByText("Harbour Bus")).toBeNull();
+  });
+
+  it("shows the pre-deployment bus service block and dispatches target/fleet actions", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-001",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "noFleet", pausedAfterRepair: false },
+          busService: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: null,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(screen.getByText("No fleet")).toBeVisible();
+    const service = screen.getByTestId("route-service-route-bus-001");
+    expect(service).toHaveTextContent("Target");
+    expect(service).toHaveTextContent("6.0 min");
+    expect(service).toHaveTextContent("Required");
+    expect(service).toHaveTextContent("3 buses");
+    const input = screen.getByTestId("route-headway-route-bus-001");
+    expect(input).toHaveAttribute("type", "number");
+    expect(input).toHaveAttribute("min", "1");
+    expect(input).toHaveAttribute("step", "1");
+    expect(screen.getByRole("button", { name: "Set" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Deploy 3 buses" }),
+    ).toBeVisible();
+
+    await fireEvent.input(input, { target: { value: "6" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(props.onSetBusTargetHeadway).toHaveBeenCalledTimes(1);
+    expect(props.onSetBusTargetHeadway).toHaveBeenCalledWith(
+      "route-bus-001",
+      360,
+    );
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Deploy 3 buses" }),
+    );
+    expect(props.onDeployBusFleet).toHaveBeenCalledTimes(1);
+    expect(props.onDeployBusFleet).toHaveBeenCalledWith("route-bus-001");
+  });
+
+  it("shows only Target/Nominal/Fleet after deployment and no setup controls", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-002",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 4,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          busService: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 3,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: 348,
+          },
+          failures: [],
+        },
+        {
+          id: "line-metro-001",
+          name: "North Metro",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "metro",
+          stopCount: 5,
+          active: false,
+          selected: false,
+          status: { primary: "broken", pausedAfterRepair: true },
+          busService: null,
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-002");
+    expect(service).toHaveTextContent("Target");
+    expect(service).toHaveTextContent("6.0 min");
+    expect(service).toHaveTextContent("Nominal");
+    expect(service).toHaveTextContent("5.8 min");
+    expect(service).toHaveTextContent("Fleet");
+    expect(service).toHaveTextContent("3");
+    expect(service.textContent).not.toContain("Required");
+    expect(service.textContent).not.toContain("assigned");
+    expect(screen.queryByTestId("route-headway-route-bus-002")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Deploy/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /AssignVehicle|Assign Vehicle/ }),
+    ).toBeNull();
+    expect(screen.queryByTestId("route-service-line-metro-001")).toBeNull();
   });
 
   it("focuses the Lines list after a draft is canceled", async () => {

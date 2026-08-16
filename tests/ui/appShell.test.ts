@@ -1088,6 +1088,42 @@ describe("App command shell", () => {
     );
   });
 
+  it("sets a bus target headway and deploys a fleet from the Lines panel", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          targetHeadwaySeconds: 360,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            nominalHeadwaySeconds: null,
+          },
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    const input = screen.getByTestId("route-headway-route-001");
+    await fireEvent.input(input, { target: { value: "6" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(runtime.setBusTargetHeadway).toHaveBeenCalledWith("route-001", 360);
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Deploy 3 buses" }),
+    );
+    expect(runtime.deployBusFleet).toHaveBeenCalledWith("route-001");
+  });
+
   it("keeps route-draft gate IDs unique and scopes shelf descriptions", () => {
     const { runtime } = createRuntimeHarness({
       ui: {

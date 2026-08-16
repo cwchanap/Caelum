@@ -371,6 +371,23 @@
     }
   }
 
+  function handleSetBusTargetHeadway(
+    routeId: string,
+    targetHeadwaySeconds: number,
+  ): void {
+    if (runtime !== null) {
+      void applyRuntimeResult(() =>
+        runtime.setBusTargetHeadway(routeId, targetHeadwaySeconds),
+      );
+    }
+  }
+
+  function handleDeployBusFleet(routeId: string): void {
+    if (runtime !== null) {
+      void applyRuntimeResult(() => runtime.deployBusFleet(routeId));
+    }
+  }
+
   function handleDeleteRoute(routeId: string): void {
     if (runtime !== null) {
       void applyRuntimeResult(() => runtime.deleteRoute(routeId));
@@ -683,6 +700,8 @@
             onDeleteRoute={handleDeleteRoute}
             onFocusRouteFailure={handleFocusRouteFailure}
             onEditRoute={handleStartRouteEdit}
+            onSetBusTargetHeadway={handleSetBusTargetHeadway}
+            onDeployBusFleet={handleDeployBusFleet}
           />
         </CommandPanel>
       {:else if snapshot.ui.activeCommandDestination === "data"}
