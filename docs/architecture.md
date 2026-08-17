@@ -54,7 +54,7 @@ contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
 operation, or mutating sandbox operation.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 7`. Every snapshot carries
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 8`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
 must restore; it is an integer from `0` through `i32::MAX`.
@@ -63,14 +63,15 @@ explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
 the host normalizes it to `null`.
 `scenario.growthWaves` is also required and may be empty. Omitting either key,
 omitting `startingCapital`, omitting a placed building's required `placedAt`,
-omitting a bus route's required-nullable `targetHeadwaySeconds`, or
-supplying any other malformed schema-v7 content,
+omitting a bus route or Metro line's required-nullable `targetHeadwaySeconds`, or
+supplying any other malformed schema-v8 content,
 rejects the snapshot. Hosts reject every snapshot whose schema is not
-7—including every non-v7 schema; development saves are disposable and are
+8—including every non-v8 schema; development saves are disposable and are
 cleared rather than migrated.
-Bus `Route.serviceMetrics` is the opposite direction: runtime-derived output
-that Rust may serialize for the Lines panel but never deserializes or persists
-as authority — incoming values are ignored and normalization clears them.
+`Route.serviceMetrics` and `MetroLine.serviceMetrics` are the opposite direction:
+runtime-derived output that Rust may serialize for the Lines panel but never
+deserializes or persists as authority — incoming values are ignored and
+normalization clears them.
 
 Rejected mutations cross the host boundary as `GameplayRejection { code, context }`, so browser and Tauri surface the same typed failure without parsing messages. Route previews and road-mutation previews have separate monotonically increasing generations; a late response can update only the matching current draft or gesture.
 
@@ -137,7 +138,7 @@ no multi-window workflow, so persistence needs no ownership handoff or
 cross-runtime coordination.
 
 The browser persistence adapter is `indexedDbCitySaveStore.ts`: one fresh
-`caelum-city-saves-v7` IndexedDB database (version `7`), one `cities` object
+`caelum-city-saves-v8` IndexedDB database (version `8`), one `cities` object
 store, and full
 `CitySaveRecord` values keyed by opaque city ID. It implements the six
 `CitySaveStore` operations directly, derives/sorts list summaries from the same
@@ -148,7 +149,7 @@ transaction remains active.
 
 The native persistence adapter is `tauriCitySaveStore.ts`: six narrow Tauri
 commands own application-data JSON files under
-`<app_data_dir>/cities-v7/city-<hex-id>.json`. Create payloads are written to a
+`<app_data_dir>/cities-v8/city-<hex-id>.json`. Create payloads are written to a
 sibling temporary file first and committed with a create-only hard link;
 update and rename payloads are likewise temp-first and replace the committed
 file only after the complete payload is written. Listing ignores malformed,
@@ -179,7 +180,7 @@ Tauri startup:
   createTauriBackend
   -> createTauriCitySaveStore
        -> city_store_* Tauri commands
-       -> <app_data_dir>/cities-v7/city-<hex-id>.json
+       -> <app_data_dir>/cities-v8/city-<hex-id>.json
   -> same city-list/create-city/runtime flow
 ```
 

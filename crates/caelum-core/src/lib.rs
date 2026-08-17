@@ -23,7 +23,6 @@
 pub mod areas;
 pub mod building_catalog;
 pub mod buildings;
-pub(crate) mod bus_service;
 pub mod clock;
 pub mod commute;
 pub(crate) mod cost_policy;
@@ -48,6 +47,7 @@ pub mod route_lifecycle;
 pub mod router;
 pub(crate) mod sandbox;
 pub mod scenario;
+pub(crate) mod service_control;
 pub mod service_itinerary;
 pub mod state;
 pub(crate) mod stop_access;
@@ -56,7 +56,6 @@ pub mod transit;
 pub mod transit_nodes;
 pub mod trips;
 
-pub use bus_service::MIN_BUS_HEADWAY_SECONDS;
 pub use engine::{GameEngine, RoutingContext};
 pub use intent::{DispatchResult, GameIntent, RoadPreset};
 pub use model::{
@@ -77,3 +76,4 @@ pub use sandbox::{
     SandboxCreationRequest, SandboxResetError, SandboxResetErrorCode, SandboxResetErrorContext,
     ValidatedSandboxCreationRequest, DEFAULT_STARTING_CAPITAL,
 };
+pub use service_control::MIN_HEADWAY_SECONDS;

@@ -542,7 +542,7 @@ function applyIntent(
     };
   }
   if (intent.type === "deployBusFleet") {
-    // Mirrors `caelum-core::bus_service::deploy_bus_fleet`: append the
+    // Mirrors `caelum-core::service_control::deploy_bus_fleet`: append the
     // required fleet and publish derived service metrics on the route.
     const route = snapshot.transit.routes.find(
       (candidate) => candidate.id === intent.routeId,
@@ -578,6 +578,7 @@ function applyIntent(
                   roundTripSeconds: 600,
                   assignedFleet: 2,
                   requiredFleet: 2,
+                  estimatedDeploymentCost: null,
                   nominalHeadwaySeconds: 300,
                 },
               }
@@ -4311,6 +4312,7 @@ describe("route creation and management", () => {
       roundTripSeconds: 600,
       assignedFleet: 2,
       requiredFleet: 2,
+      estimatedDeploymentCost: null,
       nominalHeadwaySeconds: 300,
     });
   });

@@ -1,5 +1,5 @@
-//! Bus service metrics: Rust-owned cycle time, required-fleet, and nominal
-//! headway derivation for bus routes.
+//! Service metrics: Rust-owned cycle time, required-fleet, and nominal
+//! headway derivation for transit routes.
 //!
 //! These numbers are runtime-derived, non-authoritative output. They are
 //! published only on output snapshots (see [`populate_snapshot_metrics`] and
@@ -8,14 +8,14 @@
 //! persisted saves never carry a derived cache.
 
 use crate::cost_policy::{CostPolicy, CostedMutation};
-use crate::model::{BusServiceMetrics, GameSnapshot, Route, TransitMode};
+use crate::model::{GameSnapshot, Route, ServiceMetrics, TransitMode};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::is_route_operational;
 use crate::traffic::RoadFlow;
 use crate::transit::{initial_vehicle, vehicle_step_seconds};
 
-/// Authoritative floor for `target_headway_seconds` on a bus route.
-pub const MIN_BUS_HEADWAY_SECONDS: u32 = 60;
+/// Authoritative floor for `target_headway_seconds` on a transit route.
+pub const MIN_HEADWAY_SECONDS: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ServiceCursor {
@@ -56,7 +56,7 @@ pub(crate) fn set_target_headway(
             route_id,
         ));
     }
-    if target_headway_seconds < MIN_BUS_HEADWAY_SECONDS {
+    if target_headway_seconds < MIN_HEADWAY_SECONDS {
         return Err(route_rejection(RejectionCode::InvalidHeadway, route_id));
     }
     route.target_headway_seconds = Some(target_headway_seconds);
@@ -93,7 +93,7 @@ pub(crate) fn deploy_bus_fleet(
         .ok_or_else(|| route_rejection(RejectionCode::HeadwayNotSet, route_id))?;
     // A direct Rust snapshot can carry a forged small target. Keep the same
     // floor here so it cannot reach required_fleet's intentionally lean math.
-    if target < MIN_BUS_HEADWAY_SECONDS {
+    if target < MIN_HEADWAY_SECONDS {
         return Err(route_rejection(RejectionCode::InvalidHeadway, route_id));
     }
     let flow = crate::traffic::derive_road_flow(state);
@@ -137,15 +137,16 @@ pub(crate) fn deploy_bus_fleet(
 /// Derive the service metrics for one bus route. Returns `None` when no
 /// positive cycle time is derivable (any leg missing `current_path`, or a
 /// walk that sums to zero).
-pub(crate) fn metrics(route: &Route, flow: &RoadFlow) -> Option<BusServiceMetrics> {
+pub(crate) fn metrics(route: &Route, flow: &RoadFlow) -> Option<ServiceMetrics> {
     let round_trip_seconds = bus_round_trip_seconds(route, flow)?;
     let assigned_fleet = route.vehicle_ids.len();
-    Some(BusServiceMetrics {
+    Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
         required_fleet: route
             .target_headway_seconds
             .map(|target| required_fleet(round_trip_seconds, target)),
+        estimated_deployment_cost: None,
         // Zero fleet means no passenger service: nominal headway is unavailable.
         nominal_headway_seconds: (assigned_fleet > 0)
             .then(|| round_trip_seconds / assigned_fleet as f64),

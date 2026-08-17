@@ -444,6 +444,8 @@ fn insert_route(
             revision: 0,
             legs,
             path_broken: false,
+            target_headway_seconds: None,
+            service_metrics: None,
         }),
         // Walk routes are rejected by `validate_waypoints` before this point.
         // Surface the same rejection (IncompatibleRouteNode) instead of

@@ -809,6 +809,8 @@ describe("renderTransit highlight", () => {
             revision: 1,
             legs: [routeLeg("station-a", "station-b", "connected", trackPath)],
             pathBroken: false,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
           },
         ],
       },

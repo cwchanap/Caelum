@@ -3,7 +3,7 @@ import type {
   AreaKind,
   BuildingRotation,
   BuildingType,
-  BusServiceMetrics,
+  ServiceMetrics,
   GameMap,
   GameRules,
   GrowthWave,
@@ -56,13 +56,20 @@ export interface RustRoute extends Omit<
 > {
   legs: RustRouteLegPath[];
   /** Rust omits derived `None` metrics from the wire; normalize to `null`. */
-  serviceMetrics?: BusServiceMetrics | null;
+  serviceMetrics?: ServiceMetrics | null;
   /** serde-wasm-bindgen omits `None` as `undefined`; normalize to `null`. */
   targetHeadwaySeconds?: number | null;
 }
 
-export interface RustMetroLine extends Omit<MetroLine, "legs"> {
+export interface RustMetroLine extends Omit<
+  MetroLine,
+  "legs" | "serviceMetrics" | "targetHeadwaySeconds"
+> {
   legs: RustRouteLegPath[];
+  /** Rust omits derived `None` metrics from the wire; normalize to `null`. */
+  serviceMetrics?: ServiceMetrics | null;
+  /** serde-wasm-bindgen omits Rust `None` as `undefined`; normalize to `null`. */
+  targetHeadwaySeconds?: number | null;
 }
 
 export interface RustVehicle extends Omit<Vehicle, "parkedPosition"> {
@@ -124,7 +131,7 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Schema-v7 raw snapshots always include scenario identity, growth waves, and
+/// Schema-v8 raw snapshots always include scenario identity, growth waves, and
 /// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
 /// or present WASM `undefined`; both host encodings of Rust `None` normalize
 /// to canonical `null`. Non-null thresholds remain authoritative core data.

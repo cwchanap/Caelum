@@ -11,12 +11,13 @@ use caelum_core::building_catalog::{building_definition, BUILDINGS};
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, BusServiceMetrics, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading,
-    Metrics, MetricsState, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip,
+    ActiveTrip, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading, Metrics,
+    MetricsState, MetroLine, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip,
     RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
-    RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServicePattern, Sim,
-    Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
-    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServiceMetrics,
+    ServicePattern, Sim, Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus,
+    TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
+    WorkerProfile,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -250,12 +251,68 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 7);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 8);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(7)
+        json!(8)
     );
+}
+
+fn metro_line_fixture() -> MetroLine {
+    let mut engine = GameEngine::new();
+    for x in 2..=10 {
+        let result = engine.dispatch(GameIntent::LayTrack { point: point(x, 5) });
+        assert!(result.applied, "fixture track should apply: {result:?}");
+    }
+    for x in [2, 10] {
+        let result = engine.dispatch(GameIntent::AddMetroStation { point: point(x, 5) });
+        assert!(result.applied, "fixture station should apply: {result:?}");
+    }
+    let result = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(
+        result.applied,
+        "fixture metro line should apply: {result:?}"
+    );
+    engine.snapshot_for_save().transit.metro_lines[0].clone()
+}
+
+#[test]
+fn metro_line_service_fields_are_required_nullable_and_derived_output() {
+    let line = metro_line_fixture();
+    let line_json = serde_json::to_value(&line).unwrap();
+
+    assert!(line_json.get("targetHeadwaySeconds").is_some());
+    assert_eq!(line_json["targetHeadwaySeconds"], serde_json::Value::Null);
+    assert!(line_json.get("serviceMetrics").is_none());
+
+    let mut missing = line_json.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("targetHeadwaySeconds");
+    assert!(
+        serde_json::from_value::<MetroLine>(missing).is_err(),
+        "schema-v8 MetroLine must reject a missing targetHeadwaySeconds key"
+    );
+
+    let restored: MetroLine = serde_json::from_value(line_json.clone()).unwrap();
+    assert_eq!(restored.target_headway_seconds, None);
+
+    let mut forged = line_json;
+    forged["serviceMetrics"] = json!({
+        "roundTripSeconds": 1.0,
+        "assignedFleet": 99,
+        "requiredFleet": 42,
+        "estimatedDeploymentCost": 123,
+        "nominalHeadwaySeconds": 30.0
+    });
+    let restored: MetroLine = serde_json::from_value(forged).unwrap();
+    assert_eq!(restored.service_metrics, None);
 }
 
 #[test]
@@ -275,7 +332,7 @@ fn bus_route_target_headway_is_required_nullable_on_the_wire() {
         .remove("targetHeadwaySeconds");
     assert!(
         serde_json::from_value::<Route>(missing).is_err(),
-        "schema-v7 Route must reject a missing targetHeadwaySeconds key"
+        "schema-v8 Route must reject a missing targetHeadwaySeconds key"
     );
 
     // Explicit null deserializes to None.
@@ -312,10 +369,11 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
 
     // When Rust does derive metrics, they serialize as camelCase TS-parity keys.
     let mut derived = route;
-    derived.service_metrics = Some(BusServiceMetrics {
+    derived.service_metrics = Some(ServiceMetrics {
         round_trip_seconds: 600.0,
         assigned_fleet: 2,
         required_fleet: Some(3),
+        estimated_deployment_cost: None,
         nominal_headway_seconds: Some(300.0),
     });
     let value = serde_json::to_value(&derived).unwrap();
@@ -325,6 +383,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
             "roundTripSeconds": 600.0,
             "assignedFleet": 2,
             "requiredFleet": 3,
+            "estimatedDeploymentCost": null,
             "nominalHeadwaySeconds": 300.0
         })
     );
@@ -334,7 +393,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(7));
+    assert_eq!(value["schemaVersion"], json!(8));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(

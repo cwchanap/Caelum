@@ -51,6 +51,8 @@ export function normalizeRustSnapshot(
       })),
       metroLines: snapshot.transit.metroLines.map((line) => ({
         ...line,
+        targetHeadwaySeconds: line.targetHeadwaySeconds ?? null,
+        serviceMetrics: line.serviceMetrics ?? null,
         legs: line.legs.map(normalizeRouteLegPath),
       })),
       // serde-wasm-bindgen omits Rust `None` as `undefined`; keep explicit null
