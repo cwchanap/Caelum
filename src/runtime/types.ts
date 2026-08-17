@@ -146,16 +146,12 @@ export interface RouteServiceStatus {
   pausedAfterRepair: boolean;
 }
 
-/**
- * Bus-only presentation state derived verbatim from Rust-owned route values
- * (`targetHeadwaySeconds` and the snapshot-published `serviceMetrics`). No
- * service timing or fleet math exists in TypeScript.
- */
-export interface ShellBusServiceState {
+export interface ShellServiceState {
   targetHeadwaySeconds: number | null;
   roundTripSeconds: number | null;
   assignedFleet: number;
   requiredFleet: number | null;
+  estimatedDeploymentCost: number | null;
   nominalHeadwaySeconds: number | null;
 }
 
@@ -209,8 +205,7 @@ export interface ShellRouteListItem {
   active: boolean;
   selected: boolean;
   status: RouteServiceStatus;
-  /** Present only on bus rows; Metro rows have no bus service state. */
-  busService: ShellBusServiceState | null;
+  service: ShellServiceState;
   failures: RouteFailureRow[];
 }
 

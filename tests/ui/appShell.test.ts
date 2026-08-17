@@ -11,9 +11,11 @@ import App from "../../src/App.svelte";
 import {
   addTestBusRoute,
   addTestBusStop,
+  addTestMetroLine,
+  addTestMetroStation,
   createTestGameState,
 } from "../helpers/gameState";
-import { withRoads } from "../helpers/mapFixtures";
+import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createUiState } from "../../src/ui/uiState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
@@ -1112,7 +1114,7 @@ describe("App command shell", () => {
             roundTripSeconds: 900,
             assignedFleet: 0,
             requiredFleet: 3,
-            estimatedDeploymentCost: null,
+            estimatedDeploymentCost: 150_000,
             nominalHeadwaySeconds: null,
           },
         })),
@@ -1125,9 +1127,68 @@ describe("App command shell", () => {
     const input = screen.getByTestId("route-headway-route-001");
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
-    expect(runtime.setServiceTargetHeadway).toHaveBeenCalledWith("route-001", 360);
-    await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
+    expect(runtime.setServiceTargetHeadway).toHaveBeenCalledWith(
+      "route-001",
+      360,
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Deploy fleet · est. $150,000" }),
+    );
     expect(runtime.deployInitialFleet).toHaveBeenCalledWith("route-001");
+  });
+
+  it("sets a Metro target headway and deploys a fleet from the Lines panel", async () => {
+    let state = createTestGameState();
+    state = withTracks(state, pointsOnRow(2, 7, 15));
+    state = addTestMetroStation(state, { x: 7, y: 2 });
+    state = addTestMetroStation(state, { x: 15, y: 2 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          targetHeadwaySeconds: 300,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 2,
+            estimatedDeploymentCost: 240_000,
+            nominalHeadwaySeconds: null,
+          },
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    expect(screen.getByTestId("route-status-metro-001")).toHaveTextContent(
+      "No fleet",
+    );
+    expect(screen.getByTestId("route-service-metro-001")).toHaveTextContent(
+      "2 trains",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Deploy fleet · est. $240,000",
+      }),
+    ).toBeVisible();
+
+    const input = screen.getByTestId("route-headway-metro-001");
+    await fireEvent.input(input, { target: { value: "5" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(runtime.setServiceTargetHeadway).toHaveBeenCalledWith(
+      "metro-001",
+      300,
+    );
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: "Deploy fleet · est. $240,000",
+      }),
+    );
+    expect(runtime.deployInitialFleet).toHaveBeenCalledWith("metro-001");
   });
 
   it("shows paused zero-fleet bus setup controls without enabling Deploy", async () => {

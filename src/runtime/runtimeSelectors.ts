@@ -30,7 +30,7 @@ import type {
   RouteServiceStatus,
   RoadMutationPreviewView,
   ShellActionFeedback,
-  ShellBusServiceState,
+  ShellServiceState,
   ShellRouteListItem,
   ShellRouteListState,
   ShellState,
@@ -225,19 +225,14 @@ function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
   return [...buses, ...metros];
 }
 
-function routeServiceStatus(
-  route: Route | MetroLine,
-  mode: "bus" | "metro",
-): RouteServiceStatus {
+function routeServiceStatus(route: Route | MetroLine): RouteServiceStatus {
   if (route.pathBroken) {
     return { primary: "broken", pausedAfterRepair: !route.active };
   }
   if (!route.active) {
     return { primary: "paused", pausedAfterRepair: false };
   }
-  if (mode === "bus" && route.vehicleIds.length === 0) {
-    // Display-only: an active connected bus with zero assigned fleet offers
-    // no passenger service until the player deploys a fleet.
+  if (route.vehicleIds.length === 0) {
     return { primary: "noFleet", pausedAfterRepair: false };
   }
   return { primary: "running", pausedAfterRepair: false };
@@ -516,12 +511,14 @@ function missingNodeKindForLeg(
   return "stop";
 }
 
-function selectBusServiceState(route: Route): ShellBusServiceState {
+function selectServiceState(route: Route | MetroLine): ShellServiceState {
   return {
     targetHeadwaySeconds: route.targetHeadwaySeconds,
     roundTripSeconds: route.serviceMetrics?.roundTripSeconds ?? null,
     assignedFleet: route.vehicleIds.length,
     requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
+    estimatedDeploymentCost:
+      route.serviceMetrics?.estimatedDeploymentCost ?? null,
     nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
   };
 }
@@ -541,8 +538,8 @@ function selectRouteRow(
       "stopIds" in route ? route.stopIds.length : route.stationIds.length,
     active: route.active,
     selected,
-    status: routeServiceStatus(route, mode),
-    busService: "stopIds" in route ? selectBusServiceState(route) : null,
+    status: routeServiceStatus(route),
+    service: selectServiceState(route),
     failures: selectRouteFailures(
       state,
       route.pattern,

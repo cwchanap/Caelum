@@ -876,11 +876,12 @@ describe("route selectors", () => {
         active: true,
         selected: true,
         status: { primary: "noFleet", pausedAfterRepair: false },
-        busService: {
+        service: {
           targetHeadwaySeconds: null,
           roundTripSeconds: null,
           assignedFleet: 0,
           requiredFleet: null,
+          estimatedDeploymentCost: null,
           nominalHeadwaySeconds: null,
         },
         failures: [],
@@ -893,8 +894,15 @@ describe("route selectors", () => {
         stopCount: 2,
         active: true,
         selected: false,
-        status: { primary: "running", pausedAfterRepair: false },
-        busService: null,
+        status: { primary: "noFleet", pausedAfterRepair: false },
+        service: {
+          targetHeadwaySeconds: null,
+          roundTripSeconds: null,
+          assignedFleet: 0,
+          requiredFleet: null,
+          estimatedDeploymentCost: null,
+          nominalHeadwaySeconds: null,
+        },
         failures: [],
       },
     ]);
@@ -923,11 +931,12 @@ describe("route selectors", () => {
     const state = busRouteWithMetrics(null);
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "noFleet", pausedAfterRepair: false },
-      busService: {
+      service: {
         targetHeadwaySeconds: null,
         roundTripSeconds: null,
         assignedFleet: 0,
         requiredFleet: null,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -939,10 +948,11 @@ describe("route selectors", () => {
 
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "running", pausedAfterRepair: false },
-      busService: {
+      service: {
         assignedFleet: 1,
         roundTripSeconds: null,
         requiredFleet: null,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -992,11 +1002,12 @@ describe("route selectors", () => {
     );
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "noFleet", pausedAfterRepair: false },
-      busService: {
+      service: {
         targetHeadwaySeconds: 300,
         roundTripSeconds: 600,
         assignedFleet: 0,
         requiredFleet: 2,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -1017,23 +1028,101 @@ describe("route selectors", () => {
     state = assignTestVehicle(state, "bus", "route-001");
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "running", pausedAfterRepair: false },
-      busService: {
+      service: {
         targetHeadwaySeconds: 300,
         roundTripSeconds: 600,
         assignedFleet: 2,
         requiredFleet: 2,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: 300,
       },
     });
   });
 
-  it("keeps metro rows free of bus service state", () => {
+  it("flags an active connected metro with zero assigned fleet as noFleet", () => {
     let state = twoStations();
     state = addTestMetroLine(state, ["station-001", "station-002"]);
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       mode: "metro",
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: null,
+        roundTripSeconds: null,
+        assignedFleet: 0,
+        requiredFleet: null,
+        estimatedDeploymentCost: null,
+        nominalHeadwaySeconds: null,
+      },
+    });
+  });
+
+  it("passes Metro Rust service metrics through the generic service row", () => {
+    let state = twoStations();
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          targetHeadwaySeconds: 300,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 3,
+            estimatedDeploymentCost: 150_000,
+            nominalHeadwaySeconds: null,
+          },
+        })),
+      },
+    };
+
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      mode: "metro",
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: 300,
+        roundTripSeconds: 900,
+        assignedFleet: 0,
+        requiredFleet: 3,
+        estimatedDeploymentCost: 150_000,
+        nominalHeadwaySeconds: null,
+      },
+    });
+  });
+
+  it("shows a Metro row running with Rust nominal headway after vehicles exist", () => {
+    let state = twoStations();
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          targetHeadwaySeconds: 300,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 3,
+            estimatedDeploymentCost: 150_000,
+            nominalHeadwaySeconds: 300,
+          },
+        })),
+      },
+    };
+    state = assignTestVehicle(state, "metro", "metro-001");
+    state = assignTestVehicle(state, "metro", "metro-001");
+
+    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
+      mode: "metro",
       status: { primary: "running", pausedAfterRepair: false },
-      busService: null,
+      service: {
+        targetHeadwaySeconds: 300,
+        assignedFleet: 2,
+        nominalHeadwaySeconds: 300,
+        estimatedDeploymentCost: 150_000,
+      },
     });
   });
 
@@ -1064,11 +1153,12 @@ describe("route selectors", () => {
       },
     };
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
-      busService: {
+      service: {
         targetHeadwaySeconds: 120,
         roundTripSeconds: 600,
         assignedFleet: 1,
         requiredFleet: 5,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: 600,
       },
     });

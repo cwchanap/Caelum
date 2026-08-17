@@ -7,6 +7,7 @@
   } from "../../../domain/types";
   import type { RouteDraft, RouteEditorView } from "../../../runtime/types";
   import type { ShellRouteListState } from "../../../runtime/types";
+  import { formatBudget } from "../../../runtime/runtimeSelectors";
   import { ROUTE_COLOR_PALETTE } from "../../../ui/routePalette";
   import RouteEditor from "./RouteEditor.svelte";
 
@@ -155,6 +156,11 @@
     return primary === "noFleet"
       ? "No fleet"
       : primary[0].toUpperCase() + primary.slice(1);
+  }
+
+  function fleetNoun(mode: "bus" | "metro", count: number): string {
+    if (mode === "metro") return count === 1 ? "train" : "trains";
+    return count === 1 ? "bus" : "buses";
   }
 
   $effect(() => {
@@ -321,99 +327,113 @@
                     {/each}
                   </ul>
                 {/if}
-                {#if route.busService !== null}
-                  {#if route.mode === "bus" && route.busService.assignedFleet === 0}
-                    <div
-                      class="route-service"
-                      data-testid={`route-service-${route.id}`}
-                    >
+                {#if route.service.assignedFleet === 0}
+                  <div
+                    class="route-service"
+                    data-testid={`route-service-${route.id}`}
+                  >
+                    <div class="route-service-row">
+                      <span class="route-service-label">Target</span>
+                      <span class="route-service-value"
+                        >{formatHeadway(
+                          route.service.targetHeadwaySeconds,
+                        )}</span
+                      >
+                    </div>
+                    {#if route.service.requiredFleet !== null}
                       <div class="route-service-row">
-                        <span class="route-service-label">Target</span>
+                        <span class="route-service-label">Required</span>
                         <span class="route-service-value"
-                          >{formatHeadway(
-                            route.busService.targetHeadwaySeconds,
+                          >{route.service.requiredFleet}
+                          {fleetNoun(
+                            route.mode,
+                            route.service.requiredFleet,
                           )}</span
                         >
                       </div>
-                      {#if route.busService.requiredFleet !== null}
-                        <div class="route-service-row">
-                          <span class="route-service-label">Required</span>
-                          <span class="route-service-value"
-                            >{route.busService.requiredFleet} buses</span
-                          >
-                        </div>
-                      {/if}
-                      <div class="route-service-row">
-                        <input
-                          type="number"
-                          min="1"
-                          max={MAX_HEADWAY_MINUTES}
-                          step="1"
-                          class="route-headway-input route-input"
-                          data-testid={`route-headway-${route.id}`}
-                          value={headwayMinuteValue(
+                    {/if}
+                    <div class="route-service-row">
+                      <span class="route-service-label">Est. deploy cost</span>
+                      <span class="route-service-value"
+                        >{route.service.estimatedDeploymentCost === null
+                          ? "—"
+                          : formatBudget(
+                              route.service.estimatedDeploymentCost,
+                            )}</span
+                      >
+                    </div>
+                    <div class="route-service-row">
+                      <input
+                        type="number"
+                        min="1"
+                        max={MAX_HEADWAY_MINUTES}
+                        step="1"
+                        class="route-headway-input route-input"
+                        data-testid={`route-headway-${route.id}`}
+                        value={headwayMinuteValue(
+                          route.id,
+                          route.service.targetHeadwaySeconds,
+                        )}
+                        aria-label={`Set target headway for ${route.name}`}
+                        oninput={(event) =>
+                          handleHeadwayInput(
                             route.id,
-                            route.busService.targetHeadwaySeconds,
+                            event as Event & {
+                              currentTarget: HTMLInputElement;
+                            },
                           )}
-                          aria-label={`Set target headway for ${route.name}`}
-                          oninput={(event) =>
-                            handleHeadwayInput(
-                              route.id,
-                              event as Event & {
-                                currentTarget: HTMLInputElement;
-                              },
-                            )}
-                        />
-                        <span class="route-service-label">min</span>
-                        <button
-                          type="button"
-                          class="route-toggle"
-                          data-testid={`route-headway-set-${route.id}`}
-                          onclick={() => commitHeadway(route.id)}
-                        >
-                          Set
-                        </button>
-                      </div>
-                      {#if route.status.primary === "noFleet" && route.busService.targetHeadwaySeconds !== null && route.busService.requiredFleet !== null}
-                        <button
-                          type="button"
-                          class="route-toggle"
-                          data-testid={`route-deploy-${route.id}`}
-                          onclick={() => onDeployInitialFleet(route.id)}
-                        >
-                          Deploy fleet
-                        </button>
-                      {/if}
+                      />
+                      <span class="route-service-label">min</span>
+                      <button
+                        type="button"
+                        class="route-toggle"
+                        data-testid={`route-headway-set-${route.id}`}
+                        onclick={() => commitHeadway(route.id)}
+                      >
+                        Set
+                      </button>
                     </div>
-                  {:else if route.busService.assignedFleet > 0}
-                    <div
-                      class="route-service"
-                      data-testid={`route-service-${route.id}`}
-                    >
-                      <div class="route-service-row">
-                        <span class="route-service-label">Target</span>
-                        <span class="route-service-value"
-                          >{formatHeadway(
-                            route.busService.targetHeadwaySeconds,
-                          )}</span
-                        >
-                      </div>
-                      <div class="route-service-row">
-                        <span class="route-service-label">Nominal</span>
-                        <span class="route-service-value"
-                          >{formatHeadway(
-                            route.busService.nominalHeadwaySeconds,
-                          )}</span
-                        >
-                      </div>
-                      <div class="route-service-row">
-                        <span class="route-service-label">Fleet</span>
-                        <span class="route-service-value"
-                          >{route.busService.assignedFleet}</span
-                        >
-                      </div>
+                    {#if route.status.primary === "noFleet" && route.service.targetHeadwaySeconds !== null && route.service.requiredFleet !== null}
+                      <button
+                        type="button"
+                        class="route-toggle"
+                        data-testid={`route-deploy-${route.id}`}
+                        onclick={() => onDeployInitialFleet(route.id)}
+                      >
+                        {route.service.estimatedDeploymentCost === null
+                          ? "Deploy fleet"
+                          : `Deploy fleet · est. ${formatBudget(route.service.estimatedDeploymentCost)}`}
+                      </button>
+                    {/if}
+                  </div>
+                {:else}
+                  <div
+                    class="route-service"
+                    data-testid={`route-service-${route.id}`}
+                  >
+                    <div class="route-service-row">
+                      <span class="route-service-label">Target</span>
+                      <span class="route-service-value"
+                        >{formatHeadway(
+                          route.service.targetHeadwaySeconds,
+                        )}</span
+                      >
                     </div>
-                  {/if}
+                    <div class="route-service-row">
+                      <span class="route-service-label">Nominal</span>
+                      <span class="route-service-value"
+                        >{formatHeadway(
+                          route.service.nominalHeadwaySeconds,
+                        )}</span
+                      >
+                    </div>
+                    <div class="route-service-row">
+                      <span class="route-service-label">Fleet</span>
+                      <span class="route-service-value"
+                        >{route.service.assignedFleet}</span
+                      >
+                    </div>
+                  </div>
                 {/if}
                 <div class="route-item-controls">
                   <button
