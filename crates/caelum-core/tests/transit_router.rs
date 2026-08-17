@@ -101,7 +101,15 @@ fn metro_single_step_state() -> caelum_core::GameSnapshot {
         waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
     assert!(route.applied, "metro fixture route should apply: {route:?}");
-    let mut state = route.snapshot;
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "metro fixture vehicle should apply: {assigned:?}"
+    );
+    let mut state = assigned.snapshot;
     let path = TransitPath::Track {
         steps: vec![caelum_core::model::TrackPathStep {
             position: (2, 4).into(),

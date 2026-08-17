@@ -812,7 +812,7 @@ fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
     );
     assert!(removed.snapshot.transit.metro_lines[0].path_broken);
 
-    // Top up budget (2 stations + 1 metro vehicle exhausted most of 120k).
+    // Top up budget for the station rebuild; Metro creation is fleet-free.
     engine.set_budget_for_test(50_000);
 
     // Rebuild via AddMetroStation intent — the same path the e2e exercises.

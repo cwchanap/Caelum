@@ -529,13 +529,24 @@ fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
     }
 
     let metro_network = prepared_metro_route_network();
-    let metro_creation = GameIntent::CreateRoute {
-        mode: TransitMode::Metro,
-        pattern: ServicePattern::Loop,
-        waypoint_ids: vec!["station-001".into(), "station-002".into()],
-    };
-    assert_low_budget_pair(&metro_network, metro_creation.clone(), METRO_COST);
-    assert_funded_pair(&metro_network, metro_creation, METRO_COST);
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let mut engine = engine_for(&metro_network, preset, 0);
+        let before = engine.snapshot();
+        let result = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Metro,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["station-001".into(), "station-002".into()],
+        });
+        assert!(
+            result.applied,
+            "metro creation is free in {preset:?}: {result:?}"
+        );
+        assert!(result.snapshot.transit.metro_lines[0]
+            .vehicle_ids
+            .is_empty());
+        assert!(result.snapshot.transit.vehicles.is_empty());
+        assert_eq!(result.snapshot.budget, before.budget);
+    }
 
     for (mode, assignment_mode, line_id, assignment_cost) in [
         (TransitMode::Bus, "bus", "route-001", BUS_COST),

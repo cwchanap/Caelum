@@ -644,15 +644,12 @@ function applyIntent(
     const id = `metro-${(snapshot.transit.metroLines.length + 1)
       .toString()
       .padStart(3, "0")}`;
-    const vehicleId = `vehicle-${(snapshot.transit.vehicles.length + 1)
-      .toString()
-      .padStart(3, "0")}`;
     const line: RustMetroLine = {
       id,
       name: `Metro ${snapshot.transit.metroLines.length + 1}`,
       color: "#2867b2",
       stationIds: intent.waypointIds,
-      vehicleIds: [vehicleId],
+      vehicleIds: [],
       active: true,
       pattern: intent.pattern,
       revision: 0,
@@ -664,20 +661,6 @@ function applyIntent(
       transit: {
         ...snapshot.transit,
         metroLines: [...snapshot.transit.metroLines, line],
-        vehicles: [
-          ...snapshot.transit.vehicles,
-          {
-            id: vehicleId,
-            mode: "metro",
-            lineId: id,
-            capacity: 90,
-            passengerIds: [],
-            itineraryIndex: 0,
-            pathStepIndex: 0,
-            stepProgress: 0,
-            parkedPosition: null,
-          },
-        ],
       },
     };
   }

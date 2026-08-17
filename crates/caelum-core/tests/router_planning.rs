@@ -430,11 +430,23 @@ fn creates_metro_route_plan_from_connected_stations() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
-    engine.dispatch(GameIntent::CreateRoute {
+    let created = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Metro,
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
+    assert!(
+        created.applied,
+        "metro fixture line should apply: {created:?}"
+    );
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "metro fixture vehicle should apply: {assigned:?}"
+    );
 
     let plan = router::find_route_plan(
         &engine.snapshot(),

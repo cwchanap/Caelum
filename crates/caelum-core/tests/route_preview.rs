@@ -622,7 +622,7 @@ fn route_preview_returns_typed_validation_with_generation() {
 }
 
 #[test]
-fn route_preview_reports_cost_affordability_and_revision_context() {
+fn route_preview_reports_neutral_creation_affordability_for_metro() {
     let mut engine = editable_metro_network_engine();
     engine.set_budget_for_test(METRO_COST - 1);
     let response = engine.preview_route(RoutePreviewRequest {
@@ -631,20 +631,17 @@ fn route_preview_reports_cost_affordability_and_revision_context() {
         ..valid_metro_route_preview(31)
     });
 
-    assert_eq!(response.initial_vehicle_cost, METRO_COST);
-    assert!(!response.affordable);
-    assert_eq!(
-        response
-            .rejection
-            .expect("budget rejection")
-            .context
-            .expected_revision,
-        Some(4)
-    );
+    assert_eq!(response.initial_vehicle_cost, 0);
+    assert!(response.affordable);
+    assert!(response.rejection.is_none(), "{response:?}");
+    assert!(!response
+        .warnings
+        .iter()
+        .any(|warning| warning.code == WarningCode::InsufficientBudget));
 }
 
 #[test]
-fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
+fn free_metro_preview_does_not_report_budget_for_disconnected_leg() {
     let mut engine = disconnected_metro_network_engine();
     engine.set_budget_for_test(METRO_COST - 1);
 
@@ -654,40 +651,29 @@ fn unaffordable_preview_with_disconnected_leg_surfaces_budget_as_warning() {
         ..valid_metro_route_preview(40)
     });
 
-    // The disconnected leg is the blocking rejection; affordability is not dropped.
     let rejection = response.rejection.expect("disconnected-leg rejection");
     assert_eq!(rejection.code, RejectionCode::DisconnectedLeg);
-    let budget_warning = response
+    assert_eq!(response.initial_vehicle_cost, 0);
+    assert!(response.affordable);
+    assert!(!response
         .warnings
         .iter()
-        .find(|warning| warning.code == WarningCode::InsufficientBudget)
-        .expect("insufficient budget warning");
-    assert_eq!(budget_warning.context.required_budget, Some(METRO_COST));
-    assert_eq!(
-        budget_warning.context.available_budget,
-        Some(METRO_COST - 1)
-    );
+        .any(|warning| warning.code == WarningCode::InsufficientBudget));
 }
 
 #[test]
-fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
+fn route_preview_keeps_free_metro_creation_neutral_across_presets_and_early_returns() {
     let prepared = editable_metro_network_engine().snapshot();
     let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
     let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
     let standard_preview = standard.preview_route(valid_metro_route_preview(61));
     let creative_preview = creative.preview_route(valid_metro_route_preview(61));
 
-    assert_eq!(standard_preview.initial_vehicle_cost, METRO_COST);
-    assert_eq!(creative_preview.initial_vehicle_cost, METRO_COST);
-    assert!(!standard_preview.affordable);
+    assert_eq!(standard_preview.initial_vehicle_cost, 0);
+    assert_eq!(creative_preview.initial_vehicle_cost, 0);
+    assert!(standard_preview.affordable);
     assert!(creative_preview.affordable);
-    assert_eq!(
-        standard_preview
-            .rejection
-            .as_ref()
-            .map(|rejection| &rejection.code),
-        Some(&RejectionCode::InsufficientBudget),
-    );
+    assert!(standard_preview.rejection.is_none(), "{standard_preview:?}");
     assert!(creative_preview.rejection.is_none(), "{creative_preview:?}");
 
     let standard_early = standard.preview_route(RoutePreviewRequest {
@@ -700,7 +686,7 @@ fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
         generation: 62,
         ..valid_metro_route_preview(62)
     });
-    assert!(!standard_early.affordable);
+    assert!(standard_early.affordable);
     assert!(creative_early.affordable);
     assert_eq!(
         standard_early
@@ -713,7 +699,7 @@ fn route_preview_uses_the_cost_policy_for_create_drafts_and_early_returns() {
 }
 
 #[test]
-fn route_preview_suppresses_only_creative_budget_feedback_and_keeps_edits_free() {
+fn route_preview_keeps_metro_creation_free_and_edits_free() {
     let prepared = disconnected_metro_network_engine().snapshot();
     let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
     let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
@@ -725,9 +711,9 @@ fn route_preview_suppresses_only_creative_budget_feedback_and_keeps_edits_free()
     let standard_preview = standard.preview_route(request.clone());
     let creative_preview = creative.preview_route(request);
 
-    assert_eq!(standard_preview.initial_vehicle_cost, METRO_COST);
-    assert_eq!(creative_preview.initial_vehicle_cost, METRO_COST);
-    assert!(!standard_preview.affordable);
+    assert_eq!(standard_preview.initial_vehicle_cost, 0);
+    assert_eq!(creative_preview.initial_vehicle_cost, 0);
+    assert!(standard_preview.affordable);
     assert!(creative_preview.affordable);
     assert_eq!(
         standard_preview
@@ -737,7 +723,7 @@ fn route_preview_suppresses_only_creative_budget_feedback_and_keeps_edits_free()
         Some(&RejectionCode::DisconnectedLeg),
     );
     assert_eq!(standard_preview.rejection, creative_preview.rejection);
-    assert!(standard_preview
+    assert!(!standard_preview
         .warnings
         .iter()
         .any(|warning| warning.code == WarningCode::InsufficientBudget));

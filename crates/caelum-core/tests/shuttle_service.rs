@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, GameSnapshot, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind,
     RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath,
-    TripPurpose, TripStatus, Vehicle,
+    TripPurpose, TripStatus,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -75,39 +75,25 @@ fn metro_shuttle_state() -> caelum_core::model::GameSnapshot {
             point: (x, 4).into(),
         });
     }
-    engine.set_budget_for_test(transit::METRO_COST);
-    engine.dispatch(GameIntent::CreateRoute {
+    let created = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Metro,
-        pattern: ServicePattern::Loop,
+        pattern: ServicePattern::Shuttle,
         waypoint_ids: ids(&["station-001", "station-002", "station-003"]),
     });
-    let mut state = engine.snapshot();
-    let topology = RoadTopology::compile(&state.map).unwrap();
-    let station_ids = state.transit.metro_lines[0].station_ids.clone();
-    state.transit.metro_lines[0].pattern = ServicePattern::Shuttle;
-    state.transit.metro_lines[0].legs = resolve_route_legs(
-        &state,
-        RoutingContext {
-            road_topology: &topology,
-        },
-        TransitMode::Metro,
-        &station_ids,
-        ServicePattern::Shuttle,
+    assert!(
+        created.applied,
+        "metro fixture line should apply: {created:?}"
     );
-    state.transit.metro_lines[0].path_broken = false;
-    state.transit.metro_lines[0].vehicle_ids = vec!["vehicle-001".to_string()];
-    state.transit.vehicles = vec![Vehicle {
-        id: "vehicle-001".to_string(),
-        mode: TransitMode::Metro,
+    engine.set_budget_for_test(transit::METRO_COST);
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
         line_id: "metro-001".to_string(),
-        capacity: 90,
-        passenger_ids: Vec::new(),
-        itinerary_index: 0,
-        path_step_index: 0,
-        step_progress: 0.0,
-        parked_position: None,
-    }];
-    state
+    });
+    assert!(
+        assigned.applied,
+        "metro fixture vehicle should apply: {assigned:?}"
+    );
+    assigned.snapshot
 }
 
 fn transit_plan(
