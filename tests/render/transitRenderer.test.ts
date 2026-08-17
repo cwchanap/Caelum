@@ -375,8 +375,6 @@ describe("renderTransit highlight", () => {
           generation: 1,
           legs: state.transit.routes[0].legs,
           totalTravelSeconds: 1,
-          initialVehicleCost: 8_000,
-          affordable: true,
           turnSummary: {
             straight: 0,
             rightTurn: 0,
@@ -410,8 +408,6 @@ describe("renderTransit highlight", () => {
           generation: 1,
           legs: sourceState.transit.routes[0].legs,
           totalTravelSeconds: 1,
-          initialVehicleCost: 8_000,
-          affordable: true,
           turnSummary: {
             straight: 0,
             rightTurn: 0,

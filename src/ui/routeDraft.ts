@@ -86,8 +86,7 @@ export function canSaveRouteDraft(
     // be fully connected. Rust revalidates atomically on commit, so this gate
     // is permissive for edits intentionally.
     (draft.source.kind === "edit" ||
-      preview.legs.every((leg) => leg.status === "connected")) &&
-    preview.affordable
+      preview.legs.every((leg) => leg.status === "connected"))
   );
 }
 

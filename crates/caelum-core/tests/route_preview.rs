@@ -3,10 +3,10 @@ use caelum_core::model::{
     RouteLegKind, RouteLegStatus, ServicePattern, TransitMode,
 };
 use caelum_core::preview::{
-    RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest, WarningCode,
+    RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest,
 };
 use caelum_core::road::RoadMutation;
-use caelum_core::transit::{METRO_COST, ROAD_COST};
+use caelum_core::transit::ROAD_COST;
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -622,28 +622,30 @@ fn route_preview_returns_typed_validation_with_generation() {
 }
 
 #[test]
-fn route_preview_reports_neutral_creation_affordability_for_metro() {
+fn metro_preview_is_geometry_only_with_zero_budget() {
     let mut engine = editable_metro_network_engine();
-    engine.set_budget_for_test(METRO_COST - 1);
+    engine.set_budget_for_test(0);
     let response = engine.preview_route(RoutePreviewRequest {
         expected_revision: Some(4),
         generation: 31,
         ..valid_metro_route_preview(31)
     });
 
-    assert_eq!(response.initial_vehicle_cost, 0);
-    assert!(response.affordable);
-    assert!(response.rejection.is_none(), "{response:?}");
-    assert!(!response
-        .warnings
+    assert!(!response.legs.is_empty(), "{response:?}");
+    assert!(response
+        .legs
         .iter()
-        .any(|warning| warning.code == WarningCode::InsufficientBudget));
+        .all(|leg| leg.status == RouteLegStatus::Connected));
+    assert!(response.rejection.is_none(), "{response:?}");
+    let wire = serde_json::to_value(&response).expect("preview serializes");
+    assert!(wire.get("initialVehicleCost").is_none());
+    assert!(wire.get("affordable").is_none());
 }
 
 #[test]
-fn free_metro_preview_does_not_report_budget_for_disconnected_leg() {
+fn metro_preview_reports_disconnected_geometry_without_budget_rejection() {
     let mut engine = disconnected_metro_network_engine();
-    engine.set_budget_for_test(METRO_COST - 1);
+    engine.set_budget_for_test(0);
 
     let response = engine.preview_route(RoutePreviewRequest {
         waypoint_ids: ids(&["station-001", "station-003"]),
@@ -653,28 +655,19 @@ fn free_metro_preview_does_not_report_budget_for_disconnected_leg() {
 
     let rejection = response.rejection.expect("disconnected-leg rejection");
     assert_eq!(rejection.code, RejectionCode::DisconnectedLeg);
-    assert_eq!(response.initial_vehicle_cost, 0);
-    assert!(response.affordable);
-    assert!(!response
-        .warnings
-        .iter()
-        .any(|warning| warning.code == WarningCode::InsufficientBudget));
 }
 
 #[test]
-fn route_preview_keeps_free_metro_creation_neutral_across_presets_and_early_returns() {
+fn metro_preview_geometry_is_independent_of_economy_preset_and_early_returns() {
     let prepared = editable_metro_network_engine().snapshot();
-    let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
-    let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
+    let standard = engine_for(&prepared, EconomyPreset::Standard, 0);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, 0);
     let standard_preview = standard.preview_route(valid_metro_route_preview(61));
     let creative_preview = creative.preview_route(valid_metro_route_preview(61));
 
-    assert_eq!(standard_preview.initial_vehicle_cost, 0);
-    assert_eq!(creative_preview.initial_vehicle_cost, 0);
-    assert!(standard_preview.affordable);
-    assert!(creative_preview.affordable);
     assert!(standard_preview.rejection.is_none(), "{standard_preview:?}");
     assert!(creative_preview.rejection.is_none(), "{creative_preview:?}");
+    assert_eq!(standard_preview.legs, creative_preview.legs);
 
     let standard_early = standard.preview_route(RoutePreviewRequest {
         waypoint_ids: ids(&["station-001"]),
@@ -686,8 +679,6 @@ fn route_preview_keeps_free_metro_creation_neutral_across_presets_and_early_retu
         generation: 62,
         ..valid_metro_route_preview(62)
     });
-    assert!(standard_early.affordable);
-    assert!(creative_early.affordable);
     assert_eq!(
         standard_early
             .rejection
@@ -699,10 +690,10 @@ fn route_preview_keeps_free_metro_creation_neutral_across_presets_and_early_retu
 }
 
 #[test]
-fn route_preview_keeps_metro_creation_free_and_edits_free() {
+fn metro_preview_preserves_failure_and_edit_revision_behavior_at_zero_budget() {
     let prepared = disconnected_metro_network_engine().snapshot();
-    let standard = engine_for(&prepared, EconomyPreset::Standard, METRO_COST - 1);
-    let creative = engine_for(&prepared, EconomyPreset::Creative, METRO_COST - 1);
+    let standard = engine_for(&prepared, EconomyPreset::Standard, 0);
+    let creative = engine_for(&prepared, EconomyPreset::Creative, 0);
     let request = RoutePreviewRequest {
         waypoint_ids: ids(&["station-001", "station-003"]),
         generation: 63,
@@ -711,10 +702,6 @@ fn route_preview_keeps_metro_creation_free_and_edits_free() {
     let standard_preview = standard.preview_route(request.clone());
     let creative_preview = creative.preview_route(request);
 
-    assert_eq!(standard_preview.initial_vehicle_cost, 0);
-    assert_eq!(creative_preview.initial_vehicle_cost, 0);
-    assert!(standard_preview.affordable);
-    assert!(creative_preview.affordable);
     assert_eq!(
         standard_preview
             .rejection
@@ -723,14 +710,6 @@ fn route_preview_keeps_metro_creation_free_and_edits_free() {
         Some(&RejectionCode::DisconnectedLeg),
     );
     assert_eq!(standard_preview.rejection, creative_preview.rejection);
-    assert!(!standard_preview
-        .warnings
-        .iter()
-        .any(|warning| warning.code == WarningCode::InsufficientBudget));
-    assert!(!creative_preview
-        .warnings
-        .iter()
-        .any(|warning| warning.code == WarningCode::InsufficientBudget));
 
     let existing = existing_route_engine().snapshot();
     let standard_edit = engine_for(&existing, EconomyPreset::Standard, 0);
@@ -743,10 +722,6 @@ fn route_preview_keeps_metro_creation_free_and_edits_free() {
     };
     let standard_edit_preview = standard_edit.preview_route(edit.clone());
     let creative_edit_preview = creative_edit.preview_route(edit);
-    assert_eq!(standard_edit_preview.initial_vehicle_cost, 0);
-    assert_eq!(creative_edit_preview.initial_vehicle_cost, 0);
-    assert!(standard_edit_preview.affordable);
-    assert!(creative_edit_preview.affordable);
     assert_eq!(
         standard_edit_preview.rejection,
         creative_edit_preview.rejection
@@ -761,7 +736,7 @@ fn route_preview_keeps_metro_creation_free_and_edits_free() {
 }
 
 #[test]
-fn edit_preview_is_free_and_rejects_stale_revision_with_full_context() {
+fn edit_preview_rejects_stale_revision_with_full_context() {
     let engine = existing_route_engine();
     let response = engine.preview_route(RoutePreviewRequest {
         route_id: Some("route-001".into()),
@@ -770,8 +745,6 @@ fn edit_preview_is_free_and_rejects_stale_revision_with_full_context() {
         ..valid_route_preview(34)
     });
 
-    assert_eq!(response.initial_vehicle_cost, 0);
-    assert!(response.affordable);
     let rejection = response.rejection.expect("stale revision rejection");
     assert_eq!(rejection.code, RejectionCode::RouteChangedWhileEditing);
     assert_eq!(rejection.context.route_id.as_deref(), Some("route-001"));

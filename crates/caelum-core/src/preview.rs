@@ -44,7 +44,6 @@ pub enum WarningCode {
     ExistingBrokenLeg,
     RouteWillReroute,
     RouteWillBreak,
-    InsufficientBudget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,8 +59,6 @@ pub struct RoutePreviewResponse {
     pub generation: u64,
     pub legs: Vec<RouteLegPath>,
     pub total_travel_seconds: f64,
-    pub initial_vehicle_cost: i32,
-    pub affordable: bool,
     pub turn_summary: TurnSummary,
     pub missing_waypoint_ids: Vec<String>,
     pub warnings: Vec<GameplayWarning>,
@@ -124,14 +121,11 @@ pub fn preview_route(
     context: RoutingContext<'_>,
     request: RoutePreviewRequest,
 ) -> RoutePreviewResponse {
-    let initial_vehicle_cost = 0;
     let missing_waypoint_ids = missing_waypoint_ids(snapshot, &request);
     let mut response = RoutePreviewResponse {
         generation: request.generation,
         legs: Vec::new(),
         total_travel_seconds: 0.0,
-        initial_vehicle_cost,
-        affordable: true,
         turn_summary: TurnSummary::default(),
         missing_waypoint_ids,
         warnings: Vec::new(),

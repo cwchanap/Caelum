@@ -369,12 +369,6 @@ function routeDraftPreviewMessage(
   ) {
     return { status: "rejected", message: "Route preview was rejected." };
   }
-  if (!preview.affordable) {
-    return {
-      status: "rejected",
-      message: `Need ${formatBudget(preview.initialVehicleCost)}.`,
-    };
-  }
   return { status: "connected", message: interactionMessage ?? "Connected" };
 }
 

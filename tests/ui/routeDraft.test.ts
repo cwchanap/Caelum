@@ -20,8 +20,6 @@ function connectedPreview(generation: number): RoutePreviewResponse {
     generation,
     legs: [],
     totalTravelSeconds: 0,
-    initialVehicleCost: 8_000,
-    affordable: true,
     turnSummary: {
       straight: 0,
       rightTurn: 0,

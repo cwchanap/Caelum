@@ -124,8 +124,6 @@ export function routeFailureGuidance(
 export function warningMessage(warning: GameplayWarning): string {
   const { code, context } = warning;
   switch (code) {
-    case "insufficientBudget":
-      return `Need $${money(context.requiredBudget ?? 0)}; only $${money(context.availableBudget ?? 0)} available.`;
     case "existingBrokenLeg":
       return "This leg was already disconnected in the saved route.";
     case "skippedTiles":

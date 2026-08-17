@@ -210,8 +210,6 @@ function routePreview(
             ),
           ),
     totalTravelSeconds: status === "connected" ? waypointIds.length : 0,
-    initialVehicleCost: 8_000,
-    affordable: true,
     turnSummary: {
       straight: 0,
       rightTurn: 0,
@@ -3316,8 +3314,6 @@ describe("route creation and management", () => {
       generation: 0,
       legs: [],
       totalTravelSeconds: 0,
-      initialVehicleCost: 8_000,
-      affordable: true,
       turnSummary: {
         straight: 0,
         rightTurn: 0,

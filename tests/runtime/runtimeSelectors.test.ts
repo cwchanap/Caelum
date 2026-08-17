@@ -290,10 +290,7 @@ describe("selectShellState inspector", () => {
 });
 
 describe("route selectors", () => {
-  function routePreview(
-    waypointIds: string[],
-    affordable = true,
-  ): RoutePreviewResponse {
+  function routePreview(waypointIds: string[]): RoutePreviewResponse {
     return {
       generation: 1,
       legs: waypointIds.map((id, index) => ({
@@ -308,8 +305,6 @@ describe("route selectors", () => {
         failureReason: null,
       })),
       totalTravelSeconds: waypointIds.length,
-      initialVehicleCost: COSTS.bus,
-      affordable,
       turnSummary: {
         straight: 0,
         rightTurn: 0,
@@ -584,7 +579,7 @@ describe("route selectors", () => {
     });
   });
 
-  it("enables Save at two affordable stops", () => {
+  it("enables Save at two connected stops", () => {
     const state = twoStops();
     const ui = {
       ...createUiState(),
@@ -620,7 +615,6 @@ describe("route selectors", () => {
         previewPending: false,
         preview: {
           ...routePreview(["station-001", "station-002"]),
-          initialVehicleCost: 0,
         },
       },
     };
@@ -1244,8 +1238,6 @@ describe("route selectors", () => {
       generation: 1,
       legs: [],
       totalTravelSeconds: 0,
-      initialVehicleCost: COSTS.bus,
-      affordable: true,
       turnSummary: {
         straight: 0,
         rightTurn: 0,
