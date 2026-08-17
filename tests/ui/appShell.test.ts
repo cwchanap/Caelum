@@ -192,8 +192,8 @@ function createRuntimeHarness(
     startRouteEdit: vi.fn(() => publish()),
     renameRoute: vi.fn(async () => publish()),
     recolorRoute: vi.fn(async () => publish()),
-    setBusTargetHeadway: vi.fn(async () => publish()),
-    deployBusFleet: vi.fn(async () => publish()),
+    setServiceTargetHeadway: vi.fn(async () => publish()),
+    deployInitialFleet: vi.fn(async () => publish()),
     toggleRouteActive: vi.fn(async () => publish()),
     deleteRoute: vi.fn(async () => publish()),
     selectRoute: vi.fn(() => publish()),
@@ -1125,9 +1125,9 @@ describe("App command shell", () => {
     const input = screen.getByTestId("route-headway-route-001");
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
-    expect(runtime.setBusTargetHeadway).toHaveBeenCalledWith("route-001", 360);
+    expect(runtime.setServiceTargetHeadway).toHaveBeenCalledWith("route-001", 360);
     await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
-    expect(runtime.deployBusFleet).toHaveBeenCalledWith("route-001");
+    expect(runtime.deployInitialFleet).toHaveBeenCalledWith("route-001");
   });
 
   it("shows paused zero-fleet bus setup controls without enabling Deploy", async () => {

@@ -97,8 +97,8 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
     let before = engine.snapshot();
     let revision = before.transit.routes[0].revision;
 
-    let applied = engine.dispatch(GameIntent::SetBusTargetHeadway {
-        route_id: "route-001".to_string(),
+    let applied = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
         target_headway_seconds: 60,
     });
     assert!(applied.applied, "minimum headway should apply: {applied:?}");
@@ -109,8 +109,8 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
     assert_eq!(applied.snapshot.transit.routes[0].revision, revision);
     assert!(applied.snapshot.transit.routes[0].vehicle_ids.is_empty());
 
-    let unchanged = engine.dispatch(GameIntent::SetBusTargetHeadway {
-        route_id: "route-001".to_string(),
+    let unchanged = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
         target_headway_seconds: 60,
     });
     assert!(
@@ -120,8 +120,8 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
     assert!(unchanged.rejection.is_none());
     assert_eq!(unchanged.snapshot.transit.routes[0].revision, revision);
 
-    let invalid = engine.dispatch(GameIntent::SetBusTargetHeadway {
-        route_id: "route-001".to_string(),
+    let invalid = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
         target_headway_seconds: 59,
     });
     assert_eq!(
@@ -141,8 +141,8 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
         assigned.applied,
         "low-level assignment should remain valid: {assigned:?}"
     );
-    let locked = engine.dispatch(GameIntent::SetBusTargetHeadway {
-        route_id: "route-001".to_string(),
+    let locked = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
         target_headway_seconds: 120,
     });
     assert_eq!(
@@ -154,8 +154,8 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
 #[test]
 fn deployment_requires_target_and_existing_route_state() {
     let mut missing_target = bus_route_engine();
-    let missing = missing_target.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let missing = missing_target.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         missing.rejection.as_ref().map(|rejection| &rejection.code),
@@ -165,8 +165,8 @@ fn deployment_requires_target_and_existing_route_state() {
     let mut inactive = bus_route_engine();
     assert!(
         inactive
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".to_string(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
                 target_headway_seconds: 60,
             })
             .applied
@@ -179,8 +179,8 @@ fn deployment_requires_target_and_existing_route_state() {
             })
             .applied
     );
-    let inactive_result = inactive.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let inactive_result = inactive.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         inactive_result
@@ -193,8 +193,8 @@ fn deployment_requires_target_and_existing_route_state() {
     let mut broken = bus_route_engine();
     assert!(
         broken
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".to_string(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
                 target_headway_seconds: 60,
             })
             .applied
@@ -206,8 +206,8 @@ fn deployment_requires_target_and_existing_route_state() {
             })
             .applied
     );
-    let broken_result = broken.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let broken_result = broken.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         broken_result
@@ -229,8 +229,8 @@ fn deployment_rejects_existing_fleet_before_target_or_route_state() {
         assigned.applied,
         "fixture vehicle should apply: {assigned:?}"
     );
-    let missing_target = before_target.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let missing_target = before_target.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         missing_target
@@ -257,8 +257,8 @@ fn deployment_rejects_existing_fleet_before_target_or_route_state() {
             })
             .applied
     );
-    let paused_result = paused.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let paused_result = paused.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         paused_result
@@ -284,8 +284,8 @@ fn deployment_rejects_existing_fleet_before_target_or_route_state() {
             })
             .applied
     );
-    let broken_result = broken.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let broken_result = broken.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         broken_result
@@ -301,8 +301,8 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     let mut exact = bus_route_engine();
     assert!(
         exact
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".to_string(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
                 target_headway_seconds: 60,
             })
             .applied
@@ -317,8 +317,8 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
         .checked_mul(BUS_COST)
         .expect("fixture fleet cost fits i32");
     exact.set_budget_for_test(cost);
-    let deployed = exact.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let deployed = exact.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert!(deployed.applied, "exact budget should deploy: {deployed:?}");
     assert_eq!(
@@ -332,8 +332,8 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     );
     assert_eq!(deployed.snapshot.budget, 0);
 
-    let second = exact.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let second = exact.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         second.rejection.as_ref().map(|rejection| &rejection.code),
@@ -343,16 +343,16 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     let mut short = bus_route_engine();
     assert!(
         short
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".to_string(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
                 target_headway_seconds: 60,
             })
             .applied
     );
     short.set_budget_for_test(cost - 1);
     let before = short.snapshot();
-    let rejected = short.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let rejected = short.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert_eq!(
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
@@ -367,8 +367,8 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     creative_state.rules.economy_preset = EconomyPreset::Creative;
     creative_state.budget = 0;
     let mut creative = GameEngine::from_snapshot(creative_state).expect("creative fixture loads");
-    let creative_result = creative.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let creative_result = creative.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert!(
         creative_result.applied,
@@ -489,7 +489,7 @@ fn engine_snapshot_publishes_bus_service_metrics() {
 #[test]
 fn snapshot_restore_rejects_bus_headway_below_floor() {
     // `MIN_HEADWAY_SECONDS` (60) is the authoritative floor enforced by
-    // both `SetBusTargetHeadway` and `DeployBusFleet`. A persisted target
+    // both `SetServiceTargetHeadway` and `DeployInitialFleet`. A persisted target
     // below it is a service state the gameplay API cannot create, so
     // `GameEngine::from_snapshot` must reject it rather than adopt it as
     // engine authority. 59 is one second below the floor.

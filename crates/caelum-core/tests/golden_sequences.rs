@@ -349,8 +349,8 @@ fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
         created.applied,
         "perimeter bus route should create: {created:?}"
     );
-    let targeted = engine.dispatch(GameIntent::SetBusTargetHeadway {
-        route_id: "route-001".to_string(),
+    let targeted = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
         target_headway_seconds: 60,
     });
     assert!(
@@ -372,8 +372,8 @@ fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
             .checked_mul(transit::BUS_COST)
             .unwrap(),
     );
-    let deployed = engine.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".to_string(),
+    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
     });
     assert!(
         deployed.applied,

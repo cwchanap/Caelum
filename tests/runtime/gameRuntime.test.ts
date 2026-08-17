@@ -528,28 +528,28 @@ function applyIntent(
       },
     };
   }
-  if (intent.type === "setBusTargetHeadway") {
+  if (intent.type === "setServiceTargetHeadway") {
     return {
       ...snapshot,
       transit: {
         ...snapshot.transit,
         routes: snapshot.transit.routes.map((route) =>
-          route.id === intent.routeId
+          route.id === intent.lineId
             ? { ...route, targetHeadwaySeconds: intent.targetHeadwaySeconds }
             : route,
         ),
       },
     };
   }
-  if (intent.type === "deployBusFleet") {
-    // Mirrors `caelum-core::service_control::deploy_bus_fleet`: append the
+  if (intent.type === "deployInitialFleet") {
+    // Mirrors `caelum-core::service_control::deploy_initial_fleet`: append the
     // required fleet and publish derived service metrics on the route.
     const route = snapshot.transit.routes.find(
-      (candidate) => candidate.id === intent.routeId,
+      (candidate) => candidate.id === intent.lineId,
     );
     if (route === undefined) {
       throw new Error(
-        `fake backend deployBusFleet: route "${intent.routeId}" not found — real backend rejects with RouteNotFound`,
+        `fake backend deployInitialFleet: route "${intent.lineId}" not found — real backend rejects with RouteNotFound`,
       );
     }
     const vehicles = [1, 2].map((index) => ({
@@ -557,7 +557,7 @@ function applyIntent(
         .toString()
         .padStart(3, "0")}`,
       mode: "bus" as const,
-      lineId: intent.routeId,
+      lineId: intent.lineId,
       capacity: 30,
       passengerIds: [],
       itineraryIndex: 0,
@@ -570,7 +570,7 @@ function applyIntent(
       transit: {
         ...snapshot.transit,
         routes: snapshot.transit.routes.map((candidate) =>
-          candidate.id === intent.routeId
+          candidate.id === intent.lineId
             ? {
                 ...candidate,
                 vehicleIds: vehicles.map((vehicle) => vehicle.id),
@@ -4287,26 +4287,34 @@ describe("route creation and management", () => {
     ).toEqual([]);
   });
 
-  it("sets a bus target headway and deploys a fleet through dispatch", async () => {
+  it("sets a service target headway and deploys an initial fleet through dispatch", async () => {
     const backend = backendSpy(snapshotWithBusRoute());
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend,
     });
 
-    const afterHeadway = await runtime.setBusTargetHeadway("route-001", 360);
+    const afterHeadway = await runtime.setServiceTargetHeadway("route-001", 360);
     expect(afterHeadway.state.transit.routes[0].targetHeadwaySeconds).toBe(360);
-    expect(backend.intents).toContainEqual({
-      type: "setBusTargetHeadway",
-      routeId: "route-001",
+    const headwayIntent = backend.intents.find(
+      (intent) => intent.type === "setServiceTargetHeadway",
+    );
+    expect(headwayIntent).toEqual({
+      type: "setServiceTargetHeadway",
+      lineId: "route-001",
       targetHeadwaySeconds: 360,
     });
+    expect(headwayIntent).not.toHaveProperty("mode");
 
-    const afterDeploy = await runtime.deployBusFleet("route-001");
-    expect(backend.intents).toContainEqual({
-      type: "deployBusFleet",
-      routeId: "route-001",
+    const afterDeploy = await runtime.deployInitialFleet("route-001");
+    const deployIntent = backend.intents.find(
+      (intent) => intent.type === "deployInitialFleet",
+    );
+    expect(deployIntent).toEqual({
+      type: "deployInitialFleet",
+      lineId: "route-001",
     });
+    expect(deployIntent).not.toHaveProperty("mode");
     expect(afterDeploy.state.transit.routes[0].vehicleIds).toHaveLength(2);
     expect(afterDeploy.state.transit.routes[0].serviceMetrics).toEqual({
       roundTripSeconds: 600,
@@ -4317,7 +4325,7 @@ describe("route creation and management", () => {
     });
   });
 
-  it("surfaces a headwayNotSet rejection from deployBusFleet with player copy", async () => {
+  it("surfaces a headwayNotSet rejection from deployInitialFleet with player copy", async () => {
     const backend = deferredDispatchBackend(snapshotWithBusRoute());
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
@@ -4328,7 +4336,7 @@ describe("route creation and management", () => {
       code: "headwayNotSet",
       context: { routeId: "route-001", affectedRouteIds: [] },
     });
-    const deploy = runtime.deployBusFleet("route-001");
+    const deploy = runtime.deployInitialFleet("route-001");
     await flushPromises();
     await backend.resolveNext();
     await deploy;

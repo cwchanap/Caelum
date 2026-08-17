@@ -298,11 +298,11 @@ export interface RuntimeController {
   handleEscape: () => RuntimeSnapshot;
   renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
   recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
-  setBusTargetHeadway: (
-    routeId: string,
+  setServiceTargetHeadway: (
+    lineId: string,
     targetHeadwaySeconds: number,
   ) => RuntimeCommandResult;
-  deployBusFleet: (routeId: string) => RuntimeCommandResult;
+  deployInitialFleet: (lineId: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;

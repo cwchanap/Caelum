@@ -450,8 +450,8 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
     );
     assert!(
         setup
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".into(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".into(),
                 target_headway_seconds: 60,
             })
             .applied
@@ -471,8 +471,8 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
         EconomyPreset::Standard,
         fleet_cost,
     );
-    let funded = exact.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".into(),
+    let funded = exact.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
     });
     assert!(funded.applied, "exact budget buys all buses: {funded:?}");
     assert_eq!(
@@ -486,8 +486,8 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
         EconomyPreset::Standard,
         fleet_cost - 1,
     );
-    let rejected = short.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".into(),
+    let rejected = short.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
     });
     assert_eq!(
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
@@ -498,8 +498,8 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
     assert_eq!(rejected.snapshot.budget, fleet_cost - 1);
 
     let mut creative = engine_for(&setup.snapshot_for_save(), EconomyPreset::Creative, 0);
-    let free = creative.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".into(),
+    let free = creative.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
     });
     assert!(
         free.applied,

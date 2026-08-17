@@ -37,11 +37,11 @@
     onDeleteRoute: (routeId: string) => void;
     onFocusRouteFailure: (routeId: string, legIndex: number) => void;
     onEditRoute: (routeId: string) => void;
-    onSetBusTargetHeadway: (
+    onSetServiceTargetHeadway: (
       routeId: string,
       targetHeadwaySeconds: number,
     ) => void;
-    onDeployBusFleet: (routeId: string) => void;
+    onDeployInitialFleet: (routeId: string) => void;
   }
 
   let {
@@ -66,8 +66,8 @@
     onDeleteRoute,
     onFocusRouteFailure,
     onEditRoute,
-    onSetBusTargetHeadway,
-    onDeployBusFleet,
+    onSetServiceTargetHeadway,
+    onDeployInitialFleet,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -134,7 +134,7 @@
     // UI validation is convenience; Rust's 60s floor is authoritative.
     if (!Number.isInteger(minutes) || minutes < 1) return;
     if (minutes > MAX_HEADWAY_MINUTES) return;
-    onSetBusTargetHeadway(routeId, minutes * 60);
+    onSetServiceTargetHeadway(routeId, minutes * 60);
   }
 
   function headwayMinuteValue(
@@ -379,7 +379,7 @@
                           type="button"
                           class="route-toggle"
                           data-testid={`route-deploy-${route.id}`}
-                          onclick={() => onDeployBusFleet(route.id)}
+                          onclick={() => onDeployInitialFleet(route.id)}
                         >
                           Deploy fleet
                         </button>

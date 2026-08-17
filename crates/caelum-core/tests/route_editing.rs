@@ -617,8 +617,8 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
     assert!(created.applied, "{created:?}");
     assert!(
         engine
-            .dispatch(GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".into(),
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".into(),
                 target_headway_seconds: 60,
             })
             .applied
@@ -635,8 +635,8 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
             .checked_mul(BUS_COST)
             .unwrap(),
     );
-    let deployed = engine.dispatch(GameIntent::DeployBusFleet {
-        route_id: "route-001".into(),
+    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
     });
     assert!(deployed.applied, "{deployed:?}");
     let before = route(&deployed.snapshot, "route-001").clone();

@@ -28,8 +28,8 @@ function callbacks() {
     onDeleteRoute: vi.fn(),
     onFocusRouteFailure: vi.fn(),
     onEditRoute: vi.fn(),
-    onSetBusTargetHeadway: vi.fn(),
-    onDeployBusFleet: vi.fn(),
+    onSetServiceTargetHeadway: vi.fn(),
+    onDeployInitialFleet: vi.fn(),
   };
 }
 
@@ -249,8 +249,8 @@ describe("LinesPanel line workspace", () => {
 
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
-    expect(props.onSetBusTargetHeadway).toHaveBeenCalledTimes(1);
-    expect(props.onSetBusTargetHeadway).toHaveBeenCalledWith(
+    expect(props.onSetServiceTargetHeadway).toHaveBeenCalledTimes(1);
+    expect(props.onSetServiceTargetHeadway).toHaveBeenCalledWith(
       "route-bus-001",
       360,
     );
@@ -258,8 +258,8 @@ describe("LinesPanel line workspace", () => {
     expect(input).toHaveValue(6);
 
     await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
-    expect(props.onDeployBusFleet).toHaveBeenCalledTimes(1);
-    expect(props.onDeployBusFleet).toHaveBeenCalledWith("route-bus-001");
+    expect(props.onDeployInitialFleet).toHaveBeenCalledTimes(1);
+    expect(props.onDeployInitialFleet).toHaveBeenCalledWith("route-bus-001");
   });
 
   it("shows setup controls for paused or broken zero-fleet bus routes without Deploy", () => {

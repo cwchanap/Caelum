@@ -28,12 +28,12 @@ pub enum GameIntent {
         mode: String,
         line_id: String,
     },
-    SetBusTargetHeadway {
-        route_id: String,
+    SetServiceTargetHeadway {
+        line_id: String,
         target_headway_seconds: u32,
     },
-    DeployBusFleet {
-        route_id: String,
+    DeployInitialFleet {
+        line_id: String,
     },
     LayRoad {
         point: Point,
