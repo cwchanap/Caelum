@@ -40,7 +40,7 @@ The repository already contains almost everything this slice needs:
 - `route_lifecycle` already handles structural rebase, break, repair, and vehicle parking for both modes.
 - `router::active_services` is the passenger-routing eligibility boundary.
 - `GameEngine::snapshot()` is the common output path for WASM and Tauri.
-- persistence normalization already clears non-authoritative Bus service metrics.
+- persistence normalization already clears non-authoritative Bus service metrics and restore validation already rejects Bus targets below the authoritative 60-second floor.
 - `runtimeSelectors.ts` and `LinesPanel.svelte` already own route-row state and the Bus setup controls.
 
 Reuse these boundaries. Do not add another backend method, a scheduler process, a persisted service-plan object, a fleet repository, a timetable model, or a route trait hierarchy.
@@ -61,7 +61,7 @@ Share only:
 - snapshot metric population;
 - thin runtime/UI presentation shape.
 
-Mode-specific behavior remains explicit through `TransitMode` and existing constants/functions. Bus naturally receives road congestion through `vehicle_step_seconds`; Metro naturally does not. Bus cost remains `BUS_COST`; Metro cost remains `METRO_COST`.
+Mode-specific behavior remains explicit through `TransitMode` and existing constants/functions. Bus naturally receives road congestion through `vehicle_step_seconds`; Metro naturally does not. Deployment uses the existing `vehicle_cost(mode)` seam, so Bus remains `BUS_COST` and Metro remains `METRO_COST` without adding another cost abstraction.
 
 This removes real duplication without inventing a framework. It is the best fit for KISS/YAGNI now that there are exactly two users of the same behavior.
 
@@ -143,6 +143,20 @@ Old development saves disappear. Do not add migrations, fallback namespaces, ali
 
 Historical specs and plans remain historical.
 
+### Restore validation keeps the same authoritative floor
+
+HPA-624 already closes one authority invariant for Bus: a persisted `targetHeadwaySeconds` below 60 seconds is rejected by `validate_routes` before the snapshot can become engine state. The player mutations enforce the same floor, and once fleet exists the Lines UI intentionally removes target editing.
+
+Adding the same authoritative field to `MetroLine` must carry that invariant with it. In the same v8 contract change:
+
+- after `validate_route_shape` for each Metro line, validate any non-null `target_headway_seconds` against the same 60-second floor;
+- reuse `SnapshotField::RouteTargetHeadway`; do not invent a Metro-specific field;
+- report the entity as `EntityKind::MetroLine`;
+- below-floor values produce the existing `InvalidNumericValue` / `OutOfRange` persistence diagnostic;
+- exactly 60 seconds remains valid.
+
+Task 1 may initially reference the existing `bus_service::MIN_BUS_HEADWAY_SECONDS` while the module still has its HPA-624 name. When Task 2 renames the shared module, the final restore check must point at `service_control::MIN_HEADWAY_SECONDS`. Do not create a second persistence-only constant or a new validation subsystem.
+
 ## Derived metrics remain non-authoritative
 
 Generalize HPA-624's output behavior, not its authority boundary.
@@ -212,6 +226,7 @@ For both Bus and Metro:
 
 - line must exist for the supplied mode;
 - target must be at least 60 seconds;
+- restored persisted targets must obey the same floor;
 - no arbitrary upper bound;
 - target change does not bump structural route revision;
 - target can change only while assigned fleet is empty;
@@ -297,16 +312,14 @@ No separate Metro placement algorithm is needed.
 
 ## Atomic deployment cost is mode-specific, not abstract
 
-Deployment selects the existing vehicle cost by mode:
+Deployment uses the existing `vehicle_cost(mode)` seam and checked multiplication:
 
 ```text
 Bus   -> requiredFleet * BUS_COST
 Metro -> requiredFleet * METRO_COST
 ```
 
-Use checked integer conversion/multiplication and existing `CostPolicy`.
-
-Standard either buys the complete initial fleet or changes nothing. Creative remains free through the existing policy.
+Standard either buys the complete initial fleet or changes nothing. Creative remains free through the existing `CostPolicy`.
 
 Do not create vehicle inventory, purchase orders, depots, or a generalized costing service.
 
@@ -335,8 +348,10 @@ Delete the dead surface rather than preserving permanent zeroes:
 
 - `RoutePreviewResponse.initial_vehicle_cost` / `initialVehicleCost`;
 - `RoutePreviewResponse.affordable`;
-- the route-preview `InsufficientBudget` warning branch/type if no other preview producer uses it;
+- `WarningCode::InsufficientBudget`, which is route-preview-only today, and its TypeScript warning mirror/presentation;
 - TypeScript selector logic that turns an unaffordable route draft into `Need $...`.
+
+Do **not** delete or weaken `RejectionCode::InsufficientBudget`. Road-mutation preview still uses the ordinary gameplay rejection to surface attempted road/roundabout cost, and that behavior is outside HPA-626.
 
 Route geometry preview remains responsible for topology, turn summary, missing nodes, route-change revision checks, and network warnings.
 
@@ -365,6 +380,8 @@ Lines status precedence becomes mode-neutral:
 4. otherwise -> Running.
 
 `No fleet` remains display-only.
+
+Existing Metro tests that currently say `Running` only because route creation inserted a train must follow this model rather than adding fixture vehicles just to preserve old copy. Geometry-only create/repair cases should expect `No fleet`; only tests whose subject actually requires moving/routable service should use low-level `AssignVehicle` or the Set -> Deploy flow.
 
 ## Replace Bus-specific public/runtime command names
 
@@ -492,6 +509,7 @@ Reuse the HPA-624 rejection vocabulary:
 
 - missing/mismatched line -> existing route/incompatible-route rejection;
 - target below 60 seconds -> `InvalidHeadway`;
+- restored persisted target below 60 seconds -> existing persistence `InvalidNumericValue` on `RouteTargetHeadway`;
 - deploy without target -> `HeadwayNotSet`;
 - target change or second deploy after any fleet exists -> `FleetAlreadyAssigned`;
 - inactive line -> `InactiveRoute`;
@@ -510,6 +528,8 @@ Prove:
 - both Bus `Route` and `MetroLine` require `targetHeadwaySeconds` on the wire;
 - `null` is valid and omitted target key is invalid;
 - forged/deserialized `serviceMetrics` is ignored for both types;
+- Metro restore rejects 59 seconds as `InvalidNumericValue` / `RouteTargetHeadway` on `EntityKind::MetroLine`;
+- Metro restore accepts exactly 60 seconds;
 - `snapshot_for_save()` omits derived metrics;
 - active storage namespaces move directly to v8 with no fallback.
 
@@ -548,13 +568,14 @@ Prove:
 
 ### Route preview cleanup
 
-Prove the wire/TS route-preview shape no longer contains `initialVehicleCost` or `affordable`, and route creation is not rejected for fleet budget. Keep topology/revision/route-impact preview tests.
+Prove the wire/TS route-preview shape no longer contains `initialVehicleCost` or `affordable`, and route creation is not rejected for fleet budget. Remove `WarningCode::InsufficientBudget` from the route-preview warning vocabulary while preserving road-preview `RejectionCode::InsufficientBudget` behavior. Keep topology/revision/route-impact preview tests.
 
 ### UI/runtime
 
 Prove:
 
 - both modes display `No fleet` at zero assigned fleet;
+- existing geometry-only Metro selector/repair assertions are retargeted from `Running` to `No fleet` rather than papered over by `AssignVehicle`;
 - both use the same Target/Required/Set/Deploy UI;
 - Metro uses `trains` in the required count;
 - after deployment both show Target/Nominal/Fleet and no setup controls;
@@ -562,16 +583,18 @@ Prove:
 
 ### Real browser/WASM composition
 
-One representative Metro E2E:
+Reuse the existing Metro layout/build helpers in `tests/e2e/routes.spec.ts` rather than creating a second setup abstraction. One representative Metro service E2E:
 
 1. build/connect two Metro stations and track;
 2. create the Metro line;
-3. assert zero fleet / No fleet;
+3. assert zero fleet / `No fleet` before any service action;
 4. set a target;
 5. assert required fleet appears;
 6. deploy;
 7. assert non-zero Fleet and Nominal headway;
 8. resume simulation and verify the clock advances.
+
+The existing station-rebuild geometry flow should also end at `No fleet` after repair when it has not deployed a train. Do not add `AssignVehicle` merely to preserve its old `Running` assertion.
 
 Do not duplicate the full Rust metric matrix in Playwright.
 
@@ -597,8 +620,9 @@ HPA-626 is complete when:
 1. new Bus and Metro routes both begin with zero fleet and no route-creation vehicle purchase;
 2. both modes use the same pre-deployment Target -> Required -> Deploy product flow;
 3. Rust remains the only authority for live cycle time, required fleet, nominal headway, cost, and deterministic placement;
-4. zero-fleet Bus and Metro lines are excluded from passenger routing;
-5. Bus behavior from HPA-624 remains green after the narrow shared seam is introduced;
-6. route-preview vehicle affordability plumbing is deleted because it has no remaining consumer;
-7. schema/storage is v8 with no compatibility path;
-8. a real Metro line can be configured, deployed, and run through the shared Lines panel.
+4. persisted Bus and Metro targets below 60 seconds are rejected before restore can make them engine authority;
+5. zero-fleet Bus and Metro lines are excluded from passenger routing;
+6. Bus behavior from HPA-624 remains green after the narrow shared seam is introduced;
+7. route-preview vehicle affordability plumbing and its route-only budget warning are deleted without touching road-preview budget rejection behavior;
+8. schema/storage is v8 with no compatibility path;
+9. a real Metro line can be configured, deployed, and run through the shared Lines panel.
