@@ -222,6 +222,50 @@ fn exact_mixed_duration_stop_boundary_advances_cursor_from_fractional_progress()
 }
 
 #[test]
+fn zero_fleet_metro_line_is_not_a_passenger_service_until_a_vehicle_is_assigned() {
+    let mut state = metro_single_step_state();
+    state.transit.metro_lines[0].vehicle_ids.clear();
+    state.transit.vehicles.clear();
+    state.budget = transit::METRO_COST;
+
+    let no_service =
+        router::find_route_plan(&state, &RoadFlow::new(), &(2, 4).into(), &(12, 4).into())
+            .expect("walking fallback remains available");
+    assert!(
+        no_service
+            .legs
+            .iter()
+            .all(|leg| leg.mode == TransitMode::Walk),
+        "zero-fleet metro line must not appear in passenger plans: {no_service:?}"
+    );
+
+    let mut restored = GameEngine::from_snapshot(state).expect("zero-fleet state loads");
+    let assigned = restored.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "low-level metro assignment should remain valid: {assigned:?}"
+    );
+
+    let planned = router::find_route_plan(
+        &restored.snapshot(),
+        &RoadFlow::new(),
+        &(2, 4).into(),
+        &(12, 4).into(),
+    )
+    .expect("assigned metro line is routable");
+    assert!(
+        planned
+            .legs
+            .iter()
+            .any(|leg| leg.mode == TransitMode::Metro),
+        "assigned metro line must be a passenger service: {planned:?}"
+    );
+}
+
+#[test]
 fn metro_vehicle_keeps_stored_track_time_when_road_is_congested() {
     let point = Point { x: 2, y: 4 };
     let mut state = metro_single_step_state();

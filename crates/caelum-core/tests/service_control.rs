@@ -424,6 +424,30 @@ fn zero_fleet_bus_route_is_not_a_passenger_service_until_a_vehicle_is_assigned()
 }
 
 #[test]
+fn engine_snapshot_publishes_metro_service_metrics() {
+    let engine = metro_line_engine();
+    let snapshot = engine.snapshot();
+    let metrics = snapshot.transit.metro_lines[0]
+        .service_metrics
+        .as_ref()
+        .expect("snapshot() publishes metro service metrics");
+
+    assert!(metrics.round_trip_seconds > 0.0);
+    assert_eq!(metrics.assigned_fleet, 1);
+    assert_eq!(metrics.required_fleet, None);
+    assert_eq!(metrics.estimated_deployment_cost, None);
+    assert_eq!(
+        metrics.nominal_headway_seconds,
+        Some(metrics.round_trip_seconds)
+    );
+
+    let value = serde_json::to_value(&snapshot).expect("snapshot serializes");
+    let line_json = &value["transit"]["metroLines"][0];
+    assert!(line_json.get("serviceMetrics").is_some(), "{line_json}");
+    assert_eq!(line_json["serviceMetrics"]["assignedFleet"], 1);
+}
+
+#[test]
 fn engine_snapshot_publishes_bus_service_metrics() {
     let mut engine = bus_route_engine();
     let assigned = engine.dispatch(GameIntent::AssignVehicle {
@@ -571,6 +595,18 @@ fn snapshot_for_save_omits_derived_service_metrics() {
     assert!(
         route_json.get("serviceMetrics").is_none(),
         "persisted saves must omit serviceMetrics: {route_json}"
+    );
+
+    let metro_save = metro_line_engine().snapshot_for_save();
+    assert!(
+        metro_save.transit.metro_lines[0].service_metrics.is_none(),
+        "normalization must clear metro derived metrics before persistence"
+    );
+    let metro_value = serde_json::to_value(&metro_save).expect("metro save serializes");
+    let line_json = &metro_value["transit"]["metroLines"][0];
+    assert!(
+        line_json.get("serviceMetrics").is_none(),
+        "persisted metro saves must omit serviceMetrics: {line_json}"
     );
 }
 
