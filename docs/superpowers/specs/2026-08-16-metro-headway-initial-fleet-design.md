@@ -6,91 +6,125 @@
 
 ## Goal
 
-Extend the proven HPA-624 service-control loop to the remaining supported transit mode without turning Phase 4 into a timetable or fleet-management project:
+Extend the proven HPA-624 service-control loop to Metro without introducing a timetable, fleet manager, or persisted `ServicePlan`:
 
-> A valid Metro line can exist with zero trains. Before service starts, the player sets one constant target headway. Caelum derives the required train count from the line's current live track cycle time, then one explicit action buys and deploys that initial fleet at deterministic time-spaced positions. The existing Lines panel shows Target, Required, Nominal, and Fleet for both Bus and Metro.
+> A valid Metro line can exist with zero trains. Before service starts, the player sets one constant target headway. Rust derives the required train count, estimated deployment cost, and deterministic initial placement from the line's live track itinerary. One explicit Deploy action buys the whole initial fleet atomically. The existing Lines row shows the same service setup for Bus and Metro.
 
-The important architectural result is smaller than a generic service-planning system: **route geometry is free to exist without service fleet for both current route types**. Once that is true, route creation, route preview, passenger eligibility, and the Lines UI all have one consistent mental model.
+The product model becomes consistent for both supported transit modes:
 
-## Why this is the next actionable Phase 4 slice
+```text
+create route geometry -> zero fleet
+set target headway     -> no cost
+deploy initial fleet   -> atomic vehicle purchase
+run service            -> read-only target / nominal / fleet
+```
 
-HPA-624 completed the first HPA-334 vertical slice for Bus. Main now has:
+No post-deployment resize, withdrawal, timetable, holding, or bunching workflow enters this slice.
 
-- zero-fleet Bus creation;
-- a pre-deployment target headway;
-- Rust-derived required fleet and nominal headway;
-- deterministic one-shot Bus deployment;
-- zero-fleet Bus exclusion from passenger routing;
+## Why this is the next Phase 4 slice
+
+HPA-624 already delivered for Bus:
+
+- fleet-free route creation;
+- one pre-deployment target headway;
+- Rust-derived cycle time, required fleet, and nominal headway;
+- deterministic one-shot initial deployment;
+- zero-fleet passenger-routing exclusion;
 - one compact Lines-row setup flow.
 
-Metro is the remaining supported route type with the old coupled model: creating a Metro line still buys and inserts its first train. It therefore cannot use the service-control loop and remains the sole reason route preview still carries initial-vehicle affordability state.
-
-That makes Metro parity a better next slice than service bands, holding, bunching, withdrawal, or a fleet screen. Those later features would add new concepts before the existing two route types even share the same basic service-start model.
+Metro is the remaining route type with an implicit first vehicle. That asymmetry is now a concrete second consumer for the narrow HPA-624 seams. Generalizing those seams is justified; a richer service-planning architecture is not.
 
 ## Existing seams to reuse
 
-The repository already contains almost everything this slice needs:
+Reuse the current code rather than adding parallel abstractions:
 
-- `route_editor::create_route_costed` owns route/line creation and currently contains the Bus/Metro first-vehicle asymmetry.
-- `transit::initial_vehicle` creates either Bus or Metro vehicles with the same cursor shape.
-- `transit::assign_vehicle_costed` is the existing low-level Bus/Metro fixture seam and stays available.
-- `Route.legs` and `MetroLine.legs` both use the same `RouteLegPath` cyclic itinerary.
-- `transit::vehicle_step_seconds` already expresses the exact live timing rule for both modes: Bus road steps use HPA-622 congestion; Metro steps use their track travel time.
-- `transit::tick_vehicles` advances both modes through `itinerary_index`, `path_step_index`, and `step_progress`.
-- `route_lifecycle` already handles structural rebase, break, repair, and vehicle parking for both modes.
-- `router::active_services` is the passenger-routing eligibility boundary.
-- `GameEngine::snapshot()` is the common output path for WASM and Tauri.
-- persistence normalization already clears non-authoritative Bus service metrics and restore validation already rejects Bus targets below the authoritative 60-second floor.
-- `runtimeSelectors.ts` and `LinesPanel.svelte` already own route-row state and the Bus setup controls.
+- `Route` and `MetroLine` already share `legs`, `vehicle_ids`, `active`, `pattern`, `revision`, and `path_broken`.
+- `RouteLegPath` is already the common cyclic itinerary representation.
+- `transit::vehicle_step_seconds` already applies congestion to Bus road steps and falls through to the step's own travel time for Metro.
+- `transit::initial_vehicle` and `transit::vehicle_cost` already support Bus and Metro.
+- `CostPolicy` already owns Standard vs Creative charging.
+- `route_lifecycle::is_route_operational` remains the structural route test.
+- `router::active_services` remains the passenger-service eligibility boundary.
+- `GameEngine::snapshot()` remains the shared WASM/Tauri output path.
+- persistence normalization already clears derived Bus service metrics.
+- `runtimeSelectors.ts` and `LinesPanel.svelte` already own the Bus service presentation.
 
-Reuse these boundaries. Do not add another backend method, a scheduler process, a persisted service-plan object, a fleet repository, a timetable model, or a route trait hierarchy.
+Do not unify `Route` and `MetroLine`. The remaining `stop_ids` / `station_ids` distinction still drives different platform, persistence, and routing seams, so collapsing the entities would be unrelated churn.
 
-## Alternatives considered
+## Chosen architecture: one small `service_control` module
 
-### A. One small mode-aware service-control seam — recommended
+Rename HPA-624's Bus-only module at the start of the work:
 
-Promote the HPA-624 Bus-only helpers into one shared `service_control` module now that there are two concrete consumers.
+```text
+crates/caelum-core/src/bus_service.rs
+-> crates/caelum-core/src/service_control.rs
+```
 
-Share only:
+Generalize only the pieces that now have two real consumers:
 
-- service metric shape;
-- current-leg cycle-time walking;
-- required-fleet formula;
-- deterministic offset-to-cursor resolution;
-- target validation and one-shot initial deployment;
-- snapshot metric population;
-- thin runtime/UI presentation shape.
+1. `ServiceMetrics` output shape;
+2. live cycle-time walk over `RouteLegPath` × resolved `TransitMode` × `RoadFlow`;
+3. required-fleet formula;
+4. deterministic time-offset cursor placement;
+5. target/deployment mutation;
+6. thin runtime/UI service presentation.
 
-Mode-specific behavior remains explicit through `TransitMode` and existing constants/functions. Bus naturally receives road congestion through `vehicle_step_seconds`; Metro naturally does not. Deployment uses the existing `vehicle_cost(mode)` seam, so Bus remains `BUS_COST` and Metro remains `METRO_COST` without adding another cost abstraction.
+Do not add a route trait, unified route entity, strategy registry, scheduler, fleet repository, or Metro-specific copy.
 
-This removes real duplication without inventing a framework. It is the best fit for KISS/YAGNI now that there are exactly two users of the same behavior.
+## Product service intents are keyed by line ID only
 
-### B. Copy HPA-624 into a separate Metro module
+Follow the existing product-level route-intent convention. Route IDs are namespaced (`route-NNN` vs `metro-NNN`), and existing route operations resolve by ID rather than requiring the caller to repeat the mode.
 
-Add `metro_service.rs`, `SetMetroTargetHeadway`, `DeployMetroFleet`, `ShellMetroServiceState`, and duplicate the Lines UI branch.
+Use:
 
-This would be slightly faster for the first few edits but would leave two copies of the same formula, cursor spacing, validation, snapshot output, runtime commands, and UI flow. The divergence risk is immediate rather than hypothetical because both modes already share the same itinerary and vehicle cursor model.
+```rust
+GameIntent::SetServiceTargetHeadway {
+    line_id: String,
+    target_headway_seconds: u32,
+}
 
-Reject this option. The second concrete consumer is enough evidence to share these narrow seams.
+GameIntent::DeployInitialFleet {
+    line_id: String,
+}
+```
 
-### C. Introduce a persisted `ServicePlan` / scheduler abstraction
+TypeScript follows serde camelCase:
 
-Create a generic service-plan entity with service bands, fleet policy, timetable state, or route-type implementations.
+```ts
+| {
+    type: "setServiceTargetHeadway";
+    lineId: string;
+    targetHeadwaySeconds: number;
+  }
+| {
+    type: "deployInitialFleet";
+    lineId: string;
+  }
+```
 
-This anticipates future Phase 4 items that are explicitly not justified yet. It increases schema, validation, API, and UI surface before any second period, holding policy, or fleet-management need has been observed.
+Runtime methods are also line-ID-only:
 
-Reject this option. Keep one nullable target directly on each line type and revisit a richer model only when a second service-period case creates real duplication.
+```ts
+setServiceTargetHeadway(
+  lineId: string,
+  targetHeadwaySeconds: number,
+): RuntimeCommandResult;
 
-## Persist the same minimal authority on Bus and Metro
+deployInitialFleet(lineId: string): RuntimeCommandResult;
+```
 
-HPA-624 established a useful split:
+Inside `service_control`, find the ID in `transit.routes` first, then `transit.metro_lines`, derive `TransitMode` from the owning collection, and feed that mode to shared timing/cost helpers. If neither collection owns the ID, return `RouteNotFound`.
+
+Do not expose a `TransitMode::Walk` branch in this product API. `AssignVehicle { mode, line_id }` remains unchanged as the low-level dev/test seam and is not a precedent for player product commands.
+
+## Minimal persisted authority on both route types
+
+Keep HPA-624's authority split:
 
 - persisted authority: target headway;
-- derived output: cycle time, assigned fleet, required fleet, nominal headway.
+- derived output: cycle time, assigned fleet, required fleet, estimated deployment cost, nominal headway.
 
-Keep that exact model for Metro.
-
-Rename the Rust/TypeScript metric type from Bus-specific naming because it now has two real consumers:
+Rename the Bus-specific metric type to:
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -99,146 +133,83 @@ pub struct ServiceMetrics {
     pub round_trip_seconds: f64,
     pub assigned_fleet: usize,
     pub required_fleet: Option<usize>,
+    pub estimated_deployment_cost: Option<i32>,
     pub nominal_headway_seconds: Option<f64>,
 }
 ```
 
-The type rename itself has no wire key. The serialized object still appears as `serviceMetrics`.
-
-`Route` keeps its existing fields, now typed as `Option<ServiceMetrics>`. Add the same required-nullable target and serialize-only derived output to `MetroLine`:
+`Route` keeps its existing target/metrics wire keys and changes only the metric type name. Add the same required-nullable target and serialize-only metrics to `MetroLine`:
 
 ```rust
-pub struct MetroLine {
-    // existing fields
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pub target_headway_seconds: Option<u32>,
+#[serde(deserialize_with = "deserialize_required_option")]
+pub target_headway_seconds: Option<u32>,
 
-    #[serde(
-        skip_deserializing,
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub service_metrics: Option<ServiceMetrics>,
-}
+#[serde(
+    skip_deserializing,
+    default,
+    skip_serializing_if = "Option::is_none"
+)]
+pub service_metrics: Option<ServiceMetrics>,
 ```
 
-Canonical TypeScript mirrors the same shape on both `Route` and `MetroLine`.
+Canonical TypeScript mirrors these fields on both route types.
 
-`null` means service has not been configured. Do not introduce a `ServicePlan` property, service-band list, vehicle-class configuration, or nested policy object.
+Do not persist `ServiceMetrics` and do not add a nested `ServicePlan` object.
 
 ## Schema v8 is a direct development break
 
-`MetroLine.targetHeadwaySeconds` is a new required wire key, so disposable development saves move directly from v7 to v8.
-
-Update the active storage contract in one task:
+`MetroLine.targetHeadwaySeconds` is a new required wire key, so move directly from v7 to v8:
 
 - Rust `SNAPSHOT_SCHEMA_VERSION = 8`;
 - TypeScript `SNAPSHOT_SCHEMA_VERSION = 8`;
-- IndexedDB default database `caelum-city-saves-v8`, version `8`;
+- IndexedDB database `caelum-city-saves-v8`, version `8`;
 - native application-data directory `cities-v8`;
-- active engine/backend comments and tests;
-- `docs/architecture.md`.
+- active engine/backend comments, tests, and `docs/architecture.md` updated in the same task.
 
-Old development saves disappear. Do not add migrations, fallback namespaces, aliases, optional compatibility readers, or serde defaults for the required Metro target key.
+Development saves are disposable. Add no migration, fallback namespace, dual reader, alias, or serde default for the required target key.
 
-Historical specs and plans remain historical.
+`CLAUDE.md` currently carries a stale literal schema number. Remove the literal number instead of changing it to another value that will drift again. Its guidance should say that `crates/caelum-core/src/model.rs::SNAPSHOT_SCHEMA_VERSION` is authoritative.
 
-### Restore validation keeps the same authoritative floor
+## Restore validation carries the existing 60-second invariant to Metro
 
-HPA-624 already closes one authority invariant for Bus: a persisted `targetHeadwaySeconds` below 60 seconds is rejected by `validate_routes` before the snapshot can become engine state. The player mutations enforce the same floor, and once fleet exists the Lines UI intentionally removes target editing.
+HPA-624 already rejects a persisted Bus target below the authoritative floor before the snapshot becomes engine state. Metro receives the same field, so it must receive the same restore invariant.
 
-Adding the same authoritative field to `MetroLine` must carry that invariant with it. In the same v8 contract change:
+Rename the constant once, at the beginning of Task 1:
 
-- after `validate_route_shape` for each Metro line, validate any non-null `target_headway_seconds` against the same 60-second floor;
-- reuse `SnapshotField::RouteTargetHeadway`; do not invent a Metro-specific field;
-- report the entity as `EntityKind::MetroLine`;
-- below-floor values produce the existing `InvalidNumericValue` / `OutOfRange` persistence diagnostic;
-- exactly 60 seconds remains valid.
+```rust
+pub const MIN_HEADWAY_SECONDS: u32 = 60;
+```
 
-Task 1 may initially reference the existing `bus_service::MIN_BUS_HEADWAY_SECONDS` while the module still has its HPA-624 name. When Task 2 renames the shared module, the final restore check must point at `service_control::MIN_HEADWAY_SECONDS`. Do not create a second persistence-only constant or a new validation subsystem.
+Both Bus and Metro restore validation reference `service_control::MIN_HEADWAY_SECONDS`.
+
+For a non-null Metro target below the floor:
+
+- return existing `PersistenceError::InvalidNumericValue`;
+- entity is `EntityKind::MetroLine`;
+- field is existing `SnapshotField::RouteTargetHeadway`;
+- reason is existing `NumericError::OutOfRange`;
+- exactly `60` remains valid.
+
+Do not add a Metro-specific snapshot field, persistence error, or duplicate constant.
 
 ## Derived metrics remain non-authoritative
 
-Generalize HPA-624's output behavior, not its authority boundary.
-
-Authoritative engine state keeps `service_metrics = None` for both Bus routes and Metro lines.
+`GameEngine` authoritative state keeps `service_metrics = None` for both collections.
 
 `GameEngine::snapshot()`:
 
-1. clones the authoritative snapshot;
+1. clones authoritative state;
 2. derives `RoadFlow` once;
-3. fills Bus and Metro `service_metrics` on the output clone;
-4. returns the clone to WASM/Tauri.
+3. fills `ServiceMetrics` for Bus and Metro on the output clone;
+4. returns that clone to WASM/Tauri.
 
-Serde ignores incoming `serviceMetrics` values for both line types. Persistence normalization clears both collections. `snapshot_for_save()` therefore omits derived metrics.
+Serde ignores incoming `serviceMetrics`; persistence normalization clears metrics from both collections; `snapshot_for_save()` therefore omits them.
 
-TypeScript only normalizes `undefined`/missing derived output to canonical `null`; it never recalculates cycle time, congestion, required fleet, or nominal headway.
-
-## Shared service-control module
-
-Rename the narrowly Bus-specific module to reflect its second consumer:
-
-```text
-crates/caelum-core/src/bus_service.rs
--> crates/caelum-core/src/service_control.rs
-```
-
-The module should expose a small mode-aware surface rather than traits or per-mode strategy objects:
-
-```rust
-pub const MIN_HEADWAY_SECONDS: u32 = 60;
-
-pub(crate) fn set_target_headway(
-    state: &GameSnapshot,
-    mode: TransitMode,
-    line_id: &str,
-    target_headway_seconds: u32,
-) -> GameplayResult<GameSnapshot>;
-
-pub(crate) fn deploy_initial_fleet(
-    state: &GameSnapshot,
-    mode: TransitMode,
-    line_id: &str,
-) -> GameplayResult<CostedMutation>;
-
-pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot);
-```
-
-Private helpers operate on the shared line ingredients rather than a new trait hierarchy:
-
-- `legs: &[RouteLegPath]`;
-- `target_headway_seconds: Option<u32>`;
-- assigned `vehicle_ids`;
-- `TransitMode`;
-- one `RoadFlow` reference.
-
-A forged `TransitMode::Walk` service-control request is rejected at the boundary using an existing incompatible-route rejection. There is no need for a new persisted service-mode enum because `TransitMode` already owns the wire vocabulary.
-
-## Headway policy remains pre-deployment only
-
-Use one shared floor:
-
-```rust
-pub const MIN_HEADWAY_SECONDS: u32 = 60;
-```
-
-For both Bus and Metro:
-
-- line must exist for the supplied mode;
-- target must be at least 60 seconds;
-- restored persisted targets must obey the same floor;
-- no arbitrary upper bound;
-- target change does not bump structural route revision;
-- target can change only while assigned fleet is empty;
-- once any vehicle exists, the target is no longer editable in this slice.
-
-Reuse HPA-624's existing `InvalidHeadway` and `FleetAlreadyAssigned` rejections. Do not add another service lifecycle state.
-
-The Lines UI remains whole-minute input with `min=1`, `step=1`; Rust is authoritative.
+TypeScript only normalizes missing/undefined values to `null`, formats them, and dispatches commands. It does not calculate timing, fleet count, or vehicle cost.
 
 ## Current cycle time uses live movement semantics
 
-Generalize the Bus cycle walker over the shared `RouteLegPath` representation:
+Use one shared walk:
 
 ```rust
 fn round_trip_seconds(
@@ -260,21 +231,18 @@ fn round_trip_seconds(
 }
 ```
 
-Rules stay exactly aligned with HPA-624:
+Rules:
 
 - use `current_path` only;
+- ignore `last_valid_path` and cached `estimated_seconds`;
 - every required leg needs a current path;
-- ignore `last_valid_path`;
-- ignore cached `estimated_seconds`;
-- skip non-positive effective step durations;
+- skip non-positive step durations;
 - empty reversal legs contribute zero;
-- timed reversals contribute their actual live steps.
+- timed reversals contribute their live step times.
 
-For Bus, `vehicle_step_seconds` applies current aggregate road congestion to road steps.
+Bus continues to see current road congestion. Metro automatically uses fixed track step time through the existing `vehicle_step_seconds` fallback. There is no Metro timing implementation in TypeScript or a second Rust walker.
 
-For Metro, the same helper returns the track step's own travel time. No traffic formula or special Metro timing implementation is needed.
-
-## Required fleet and nominal headway stay identical
+## Required fleet, nominal headway, and estimated deployment cost
 
 For either mode:
 
@@ -282,15 +250,25 @@ For either mode:
 required fleet = max(1, ceil(roundTripSeconds / targetHeadwaySeconds))
 ```
 
+Before deployment, Rust also exposes an informational estimate:
+
+```text
+estimated deployment cost = requiredFleet * vehicle_cost(mode)
+```
+
+Use checked integer conversion/multiplication; expose `null` if a safe quote cannot be represented. Creative still displays the nominal vehicle purchase value because the row is describing required assets; actual Creative deduction remains zero through `CostPolicy`.
+
 After fleet exists:
 
 ```text
 nominal headway = roundTripSeconds / assignedFleet
 ```
 
-Keep the term **Nominal**. This is a count-based deterministic estimate, not measured departure history. It may diverge from actual spacing after line edits; this slice intentionally does not repair bunching or resize fleet.
+Call it **Nominal**, never Current/Actual.
 
-## Deterministic initial fleet placement is shared
+The deployment estimate is snapshot-derived and can change if the live cycle changes before dispatch. The UI must make that clear; Rust recomputes the authoritative required fleet and cost at deployment time.
+
+## Deterministic initial placement stays shared
 
 For required fleet `N`, vehicle `i` starts at:
 
@@ -298,331 +276,216 @@ For required fleet `N`, vehicle `i` starts at:
 offset(i) = roundTripSeconds * i / N
 ```
 
-Resolve the offset over the same current path steps and `vehicle_step_seconds` durations used by cycle math. Initialize only:
+Resolve that offset across the same current steps and `vehicle_step_seconds` durations used by cycle math. Initialize only:
 
 - `Vehicle.itinerary_index`;
 - `Vehicle.path_step_index`;
 - `Vehicle.step_progress`.
 
-Skip zero-step and zero-duration legs. Create IDs in stable order through existing `initial_vehicle` / `next_entity_id` behavior.
+Use existing `initial_vehicle` / stable ID allocation. Skip zero-step and zero-duration legs.
 
-The existing Bus shuttle regression continues to prove reversal behavior. Add a Metro unequal-leg vector to prove the same resolver works on track paths and remains stable under coarse/fine simulation stepping.
+Keep the existing Bus shuttle regression. Add a Metro unequal-step vector and a deployed-Metro coarse-vs-fine tick regression by extending the existing golden-sequence pattern.
 
-No separate Metro placement algorithm is needed.
+## Atomic deployment cost
 
-## Atomic deployment cost is mode-specific, not abstract
-
-Deployment uses the existing `vehicle_cost(mode)` seam and checked multiplication:
+At dispatch, derive the owning mode from `line_id`, recompute current cycle and required fleet once, then quote:
 
 ```text
-Bus   -> requiredFleet * BUS_COST
-Metro -> requiredFleet * METRO_COST
+requiredFleet * vehicle_cost(mode)
 ```
 
-Standard either buys the complete initial fleet or changes nothing. Creative remains free through the existing `CostPolicy`.
+through existing `CostPolicy`.
 
-Do not create vehicle inventory, purchase orders, depots, or a generalized costing service.
+Standard buys the entire initial fleet or changes nothing. Creative remains free. Do not add vehicle inventory, purchase orders, depots, or refund machinery.
 
 ## Route creation becomes fleet-free for both modes
 
-After this slice:
+After HPA-626:
 
 ```text
-Create Bus route   -> route geometry/platform assignments, zero vehicles, zero vehicle cost
-Create Metro line  -> line geometry/platform assignments, zero vehicles, zero vehicle cost
-Set target         -> no cost
-Deploy initial fleet -> one atomic mode-specific fleet purchase
+Create Bus route   -> zero fleet, no vehicle cost
+Create Metro line  -> zero fleet, no vehicle cost
 ```
 
-`route_editor::create_route_costed` therefore no longer needs the current Metro-only initial vehicle branch.
+`route_editor::create_route_costed` no longer needs the Metro-only initial vehicle branch.
 
-Keep low-level `AssignVehicle` intact for core tests/dev fixtures. It is not exposed as a player plus-one fleet button.
+Keep low-level `AssignVehicle` for fixtures that genuinely require a running vehicle. Geometry-only tests must not add a train simply to preserve an old `Running` label.
 
-If a fixture uses `AssignVehicle` before target setup, target/deployment rules behave as they do for Bus today: the line is already running and the one-shot setup workflow is unavailable.
+## Route preview vehicle affordability becomes dead and is deleted
 
-## Delete obsolete route-preview vehicle affordability
-
-Metro is currently the last route type that purchases a vehicle during route creation. Once Metro creation becomes fleet-free, route preview has no route-creation purchase to quote.
-
-Delete the dead surface rather than preserving permanent zeroes:
+Metro is the final consumer of route-creation vehicle affordability. Once Metro creation is fleet-free, remove:
 
 - `RoutePreviewResponse.initial_vehicle_cost` / `initialVehicleCost`;
 - `RoutePreviewResponse.affordable`;
-- `WarningCode::InsufficientBudget`, which is route-preview-only today, and its TypeScript warning mirror/presentation;
-- TypeScript selector logic that turns an unaffordable route draft into `Need $...`.
+- route-preview `WarningCode::InsufficientBudget` and its only warning producer;
+- TypeScript `Need $...` route-draft presentation.
 
-Do **not** delete or weaken `RejectionCode::InsufficientBudget`. Road-mutation preview still uses the ordinary gameplay rejection to surface attempted road/roundabout cost, and that behavior is outside HPA-626.
+Do **not** remove ordinary `RejectionCode::InsufficientBudget`. Road-mutation preview still uses it for construction-budget failures.
 
-Route geometry preview remains responsible for topology, turn summary, missing nodes, route-change revision checks, and network warnings.
-
-This cleanup is part of the Metro slice because the old fields become dead only when the last implicit route vehicle is removed.
+Implementation sequencing may briefly neutralize the old route-preview affordability fields in the fleet-free creation commit so that intermediate commits stay behaviorally correct; the immediately following cleanup commit removes the dead fields. No compatibility path survives the task.
 
 ## Zero fleet means no passenger service for both modes
 
-Keep `route_lifecycle::is_route_operational(active, legs)` structural.
-
-Passenger service eligibility becomes:
+Keep structural lifecycle separate from service availability:
 
 ```text
-structurally operational
-AND assigned vehicle_ids is not empty
+passenger-eligible service
+= is_route_operational(active, legs)
+AND vehicle_ids is not empty
 ```
 
-for both Bus and Metro in `router::active_services`.
+Apply that rule to Bus and Metro in `router::active_services`.
 
-This avoids teaching the structural lifecycle about fleet policy while ensuring passengers never plan a trip on a line with no arriving vehicle.
-
-Lines status precedence becomes mode-neutral:
+Lines status becomes mode-neutral:
 
 1. broken -> Broken;
 2. inactive -> Paused;
 3. active + connected + zero fleet -> No fleet;
 4. otherwise -> Running.
 
-`No fleet` remains display-only.
+Known test retarget rule:
 
-Existing Metro tests that currently say `Running` only because route creation inserted a train must follow this model rather than adding fixture vehicles just to preserve old copy. Geometry-only create/repair cases should expect `No fleet`; only tests whose subject actually requires moving/routable service should use low-level `AssignVehicle` or the Set -> Deploy flow.
-
-## Replace Bus-specific public/runtime command names
-
-Now that the behavior has two product consumers, keep one thin command pair rather than adding two more Metro-specific methods.
-
-Rust intent:
-
-```rust
-GameIntent::SetServiceTargetHeadway {
-    mode: TransitMode,
-    line_id: String,
-    target_headway_seconds: u32,
-}
-
-GameIntent::DeployInitialFleet {
-    mode: TransitMode,
-    line_id: String,
-}
-```
-
-TypeScript wire names follow serde camelCase:
-
-```ts
-| {
-    type: "setServiceTargetHeadway";
-    mode: "bus" | "metro";
-    lineId: string;
-    targetHeadwaySeconds: number;
-  }
-| {
-    type: "deployInitialFleet";
-    mode: "bus" | "metro";
-    lineId: string;
-  }
-```
-
-Runtime controller:
-
-```ts
-setServiceTargetHeadway(
-  mode: "bus" | "metro",
-  lineId: string,
-  targetHeadwaySeconds: number,
-): RuntimeCommandResult;
-
-deployInitialFleet(
-  mode: "bus" | "metro",
-  lineId: string,
-): RuntimeCommandResult;
-```
-
-Delete the Bus-specific product methods/intents in the same change. There are no external users to preserve and no compatibility aliases are needed.
-
-`AssignVehicle` remains unchanged as the low-level generic test/dev seam.
+- geometry/repair test with zero fleet -> expect `No fleet`;
+- test that actually needs movement/routing -> explicitly `AssignVehicle` or use Set -> Deploy when service control is under test.
 
 ## Thin shared Lines-row presentation
 
-Rename Bus-specific shell state to a generic presentation shape:
+Rename `ShellBusServiceState` to `ShellServiceState`; every Bus/Metro route row carries the same service presentation.
 
-```ts
-export interface ShellServiceState {
-  targetHeadwaySeconds: number | null;
-  roundTripSeconds: number | null;
-  assignedFleet: number;
-  requiredFleet: number | null;
-  nominalHeadwaySeconds: number | null;
-}
-```
-
-Each `ShellRouteListItem` gets `service: ShellServiceState` for both supported modes rather than `busService: ... | null`.
-
-`runtimeSelectors.ts` does no service math. It copies the target and Rust-derived metrics from the corresponding `Route` / `MetroLine`.
-
-### Before deployment
-
-Bus:
+Before deployment:
 
 ```text
 No fleet
-Target      6 min
-Required    3 buses
+Target            6 min
+Required          3 trains
+Est. deploy cost  $150,000
 [ 6 ] min [Set]
-[Deploy fleet]
+[Deploy fleet · est. $150,000]
 ```
 
-Metro:
+For Bus, use `bus` / `buses`; for Metro, `train` / `trains`.
+
+The UI displays Rust-provided `estimatedDeploymentCost`; it does not multiply `requiredFleet` by a duplicated TypeScript vehicle-cost constant.
+
+After deployment:
 
 ```text
-No fleet
-Target      6 min
-Required    2 trains
-[ 6 ] min [Set]
-[Deploy fleet]
+Target   6 min
+Nominal  5.8 min
+Fleet    3
 ```
 
-The count noun is presentation only. The Deploy button does not promise the displayed count; Rust recomputes at dispatch time.
+No input, Deploy, Required, top-up, withdrawal, refund, or post-deployment target edit is shown.
 
-### After deployment
+## Structural edits after deployment remain unchanged
 
-Both modes show:
+Existing route lifecycle continues to own edits, break/repair, parking, and cursor safety. Edits may reposition vehicles but do not:
 
-```text
-Target      6 min
-Nominal     5.8 min
-Fleet       3
-```
+- add/delete fleet;
+- restore initial spacing;
+- resize to the target;
+- change the configured target.
 
-Do not show target editing, Deploy, required-vs-assigned mismatch, top-up, or withdrawal after service starts.
-
-## Structural edits after deployment stay unchanged
-
-Keep the existing generic route lifecycle behavior:
-
-- structural edits may park/reposition vehicles to keep cursors valid;
-- they do not add/delete vehicles;
-- they do not restore initial spacing;
-- they do not automatically resize fleet to the target;
-- configured target remains persisted.
-
-After an edit, Rust derives a new round-trip and nominal headway from the changed live path. The player can observe that the target and nominal value differ, but HPA-626 adds no correction workflow.
+Rust simply derives a new nominal headway from the changed route.
 
 ## Error handling
 
-Reuse the HPA-624 rejection vocabulary:
+Reuse existing errors:
 
-- missing/mismatched line -> existing route/incompatible-route rejection;
-- target below 60 seconds -> `InvalidHeadway`;
-- restored persisted target below 60 seconds -> existing persistence `InvalidNumericValue` on `RouteTargetHeadway`;
+- missing ID -> `RouteNotFound`;
+- target below 60 -> `InvalidHeadway`;
 - deploy without target -> `HeadwayNotSet`;
-- target change or second deploy after any fleet exists -> `FleetAlreadyAssigned`;
-- inactive line -> `InactiveRoute`;
-- disconnected line / unavailable positive cycle -> `DisconnectedLeg`;
+- target change / second deploy after fleet exists -> `FleetAlreadyAssigned`;
+- inactive -> `InactiveRoute`;
+- disconnected / no positive cycle -> `DisconnectedLeg`;
 - unaffordable complete fleet -> existing budget rejection.
 
-Do not add a service-state enum or a new family of Metro-specific errors.
+No service-state enum or Metro-specific error family is added.
 
 ## Test strategy
 
-### v8 contract
+### v8 contract and restore
 
 Prove:
 
-- Rust/TypeScript schema version is 8;
-- both Bus `Route` and `MetroLine` require `targetHeadwaySeconds` on the wire;
-- `null` is valid and omitted target key is invalid;
-- forged/deserialized `serviceMetrics` is ignored for both types;
-- Metro restore rejects 59 seconds as `InvalidNumericValue` / `RouteTargetHeadway` on `EntityKind::MetroLine`;
-- Metro restore accepts exactly 60 seconds;
-- `snapshot_for_save()` omits derived metrics;
-- active storage namespaces move directly to v8 with no fallback.
+- schema is v8 in Rust/TypeScript/storage namespaces;
+- `MetroLine.targetHeadwaySeconds` is required-nullable;
+- forged derived metrics never become authority;
+- Bus and Metro target `59` reject restore through `RouteTargetHeadway`;
+- Bus and Metro target `60` restore;
+- saved snapshots omit derived service metrics.
 
 ### Shared service math
 
-Preserve all existing Bus HPA-624 vectors:
+Preserve Bus HPA-624 vectors and add Metro coverage for:
 
-- `600 / 300 -> 2`;
-- `601 / 300 -> 3`;
-- 302-second shuttle free-flow vector;
-- 402-second congested shuttle vector;
-- unequal path cursor placement.
+- current-path-only track cycle time;
+- stale `last_valid_path` / `estimated_seconds` ignored;
+- heavy `RoadFlow` does not change Metro cycle;
+- shared required/nominal formula;
+- Rust-derived estimated deployment cost;
+- unequal-step deterministic placement.
 
-Add Metro coverage:
-
-- cycle time sums track `current_path` only;
-- deliberately wrong `last_valid_path` / `estimated_seconds` are ignored;
-- required and nominal formulas match Bus;
-- deterministic offset placement lands at the expected Metro leg/step/progress;
-- road `RoadFlow` does not alter Metro cycle time.
-
-### Creation/deployment/routing
+### Creation, routing, deployment
 
 Prove:
 
-- Bus regression: still zero-fleet at creation and unchanged Set -> Deploy behavior;
-- Metro creation is now zero-fleet and no longer charges `METRO_COST`;
+- Bus behavior stays unchanged;
+- Metro creation is zero-fleet and costs no vehicle purchase;
 - zero-fleet Metro is passenger-ineligible;
-- low-level `AssignVehicle` makes a Metro line eligible;
-- target below 60 seconds rejects;
-- missing target rejects deployment;
-- Standard Metro deployment charges all trains atomically;
-- Creative deployment is free;
-- second deployment rejects;
-- coarse/fine stepping from the deterministically spaced fleet remains equivalent.
+- explicit low-level `AssignVehicle` makes unrelated routing fixtures live;
+- Metro Set -> Deploy works by line ID with no mode parameter;
+- Standard deployment is atomic;
+- Creative deduction is zero;
+- second deploy rejects;
+- deployed Metro remains granularity-independent.
 
 ### Route preview cleanup
 
-Prove the wire/TS route-preview shape no longer contains `initialVehicleCost` or `affordable`, and route creation is not rejected for fleet budget. Remove `WarningCode::InsufficientBudget` from the route-preview warning vocabulary while preserving road-preview `RejectionCode::InsufficientBudget` behavior. Keep topology/revision/route-impact preview tests.
+Prove route preview contains no vehicle-cost/affordability fields or route-only budget warning. Keep topology, revision, route failure, and road-mutation budget tests.
 
 ### UI/runtime
 
 Prove:
 
-- both modes display `No fleet` at zero assigned fleet;
-- existing geometry-only Metro selector/repair assertions are retargeted from `Running` to `No fleet` rather than papered over by `AssignVehicle`;
-- both use the same Target/Required/Set/Deploy UI;
-- Metro uses `trains` in the required count;
-- after deployment both show Target/Nominal/Fleet and no setup controls;
-- runtime dispatch includes the selected mode and performs no local timing/fleet math.
+- zero-fleet Bus and Metro show `No fleet`;
+- both share Target/Required/estimated-cost/Set/Deploy UI;
+- runtime commands carry only line ID (+ target where relevant);
+- UI performs no timing/fleet/cost formula;
+- deployed rows show Target/Nominal/Fleet only.
 
-### Real browser/WASM composition
+### Browser/WASM composition
 
-Reuse the existing Metro layout/build helpers in `tests/e2e/routes.spec.ts` rather than creating a second setup abstraction. One representative Metro service E2E:
+Use the existing Metro layout helpers. Provision test budget explicitly before deployment, choose a target that gives a deterministic required count, assert the Rust-derived required count and estimated cost shown by the UI, Deploy, then Resume and verify the clock advances.
 
-1. build/connect two Metro stations and track;
-2. create the Metro line;
-3. assert zero fleet / `No fleet` before any service action;
-4. set a target;
-5. assert required fleet appears;
-6. deploy;
-7. assert non-zero Fleet and Nominal headway;
-8. resume simulation and verify the clock advances.
-
-The existing station-rebuild geometry flow should also end at `No fleet` after repair when it has not deployed a train. Do not add `AssignVehicle` merely to preserve its old `Running` assertion.
-
-Do not duplicate the full Rust metric matrix in Playwright.
+The existing Metro station-repair geometry E2E should finish at `No fleet`, not add a train to preserve the old label.
 
 ## Non-goals
 
-HPA-626 explicitly does not add:
+HPA-626 does not add:
 
 - post-deployment headway editing;
-- fleet top-up, withdrawal, reassignment, or automatic resize/re-spacing;
-- peak/off-peak/night bands or closed service periods;
+- fleet top-up, withdrawal, reassignment, refund, or auto-resize/re-spacing;
+- peak/off-peak/night bands or closed periods;
 - stop-by-stop timetables;
-- measured departure history or actual-headway metrics;
-- terminal holding, layover policy, bunching detection, or bunching recovery;
+- departure history / actual-headway metrics;
+- holding, bunching detection, or recovery;
 - depots, crews, maintenance, breakdowns, or vehicle variants;
 - route visibility/map-layer controls;
-- a generic scheduler, fleet manager, persisted `ServicePlan`, or route trait hierarchy;
-- save migration, backward compatibility, or pre-release hardening.
+- persisted `ServicePlan`, scheduler, fleet manager, or route trait hierarchy;
+- save migration/backward compatibility.
 
 ## Success criteria
 
 HPA-626 is complete when:
 
 1. new Bus and Metro routes both begin with zero fleet and no route-creation vehicle purchase;
-2. both modes use the same pre-deployment Target -> Required -> Deploy product flow;
-3. Rust remains the only authority for live cycle time, required fleet, nominal headway, cost, and deterministic placement;
-4. persisted Bus and Metro targets below 60 seconds are rejected before restore can make them engine authority;
-5. zero-fleet Bus and Metro lines are excluded from passenger routing;
-6. Bus behavior from HPA-624 remains green after the narrow shared seam is introduced;
-7. route-preview vehicle affordability plumbing and its route-only budget warning are deleted without touching road-preview budget rejection behavior;
-8. schema/storage is v8 with no compatibility path;
-9. a real Metro line can be configured, deployed, and run through the shared Lines panel.
+2. both modes use one line-ID-keyed pre-deployment Target -> Required -> Deploy flow;
+3. Rust owns timing, fleet count, estimated/current deploy cost, placement, and restore validity;
+4. persisted Bus/Metro targets below 60 seconds reject restore;
+5. zero-fleet Bus/Metro lines are passenger-ineligible and display `No fleet`;
+6. the shared UI shows the Rust-derived estimated deployment cost before the irreversible one-shot purchase;
+7. Bus HPA-624 behavior remains green;
+8. route-preview vehicle affordability is deleted without touching road-preview budget rejection;
+9. schema/storage is v8 with no compatibility path;
+10. a real Metro line can be configured, deployed, and run through the shared Lines panel.
