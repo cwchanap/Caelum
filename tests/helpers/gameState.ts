@@ -392,6 +392,8 @@ export function addTestMetroLine(
     revision: 0,
     legs,
     pathBroken: legs.some((leg) => leg.status !== "connected"),
+    targetHeadwaySeconds: null,
+    serviceMetrics: null,
   };
   return {
     ...state,

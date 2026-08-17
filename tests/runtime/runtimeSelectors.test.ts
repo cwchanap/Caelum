@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type {
   ActiveTrip,
-  BusServiceMetrics,
+  ServiceMetrics,
   LegFailureReason,
   RouteLegPath,
 } from "../../src/domain/types";
@@ -909,7 +909,7 @@ describe("route selectors", () => {
   });
 
   function busRouteWithMetrics(
-    metrics: BusServiceMetrics | null,
+    metrics: ServiceMetrics | null,
     targetHeadwaySeconds: number | null = null,
   ) {
     let state = twoStops();
@@ -993,6 +993,7 @@ describe("route selectors", () => {
         roundTripSeconds: 600,
         assignedFleet: 0,
         requiredFleet: 2,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: null,
       },
       300,
@@ -1015,6 +1016,7 @@ describe("route selectors", () => {
         roundTripSeconds: 600,
         assignedFleet: 2,
         requiredFleet: 2,
+        estimatedDeploymentCost: null,
         nominalHeadwaySeconds: 300,
       },
       300,
@@ -1063,6 +1065,7 @@ describe("route selectors", () => {
             roundTripSeconds: 600,
             assignedFleet: 1,
             requiredFleet: 5,
+            estimatedDeploymentCost: null,
             nominalHeadwaySeconds: 600,
           },
         })),

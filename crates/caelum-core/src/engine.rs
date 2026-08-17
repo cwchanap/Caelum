@@ -233,7 +233,7 @@ impl GameEngine {
         })
     }
 
-    /// Construct an engine from a schema-v7 snapshot, normalizing
+    /// Construct an engine from a schema-v8 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
@@ -249,7 +249,7 @@ impl GameEngine {
 
     pub fn snapshot(&self) -> GameSnapshot {
         let mut snapshot = self.snapshot.clone();
-        crate::bus_service::populate_snapshot_metrics(&mut snapshot);
+        crate::service_control::populate_snapshot_metrics(&mut snapshot);
         snapshot
     }
 
@@ -393,7 +393,7 @@ impl GameEngine {
                 route_id,
                 target_headway_seconds,
             } => self.commit_result(
-                crate::bus_service::set_target_headway(
+                crate::service_control::set_target_headway(
                     &self.snapshot,
                     &route_id,
                     target_headway_seconds,
@@ -401,7 +401,7 @@ impl GameEngine {
                 .map(CostedMutation::free),
             ),
             GameIntent::DeployBusFleet { route_id } => self.commit_result(
-                crate::bus_service::deploy_bus_fleet(&self.snapshot, &route_id),
+                crate::service_control::deploy_bus_fleet(&self.snapshot, &route_id),
             ),
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })

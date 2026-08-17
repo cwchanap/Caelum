@@ -184,6 +184,8 @@ describe("normalizeRustSnapshot", () => {
     expect(normalized.transit.routes[0].legs[0].failureReason).toBeNull();
     expect(normalized.transit.routes[0].targetHeadwaySeconds).toBeNull();
     expect(normalized.transit.routes[0].serviceMetrics).toBeNull();
+    expect(normalized.transit.metroLines[0].targetHeadwaySeconds).toBeNull();
+    expect(normalized.transit.metroLines[0].serviceMetrics).toBeNull();
     expect(normalized.activeTrips[0].routePlan?.legs[0]).toMatchObject({
       serviceDirection: null,
       boardItineraryIndex: null,
@@ -211,6 +213,7 @@ describe("normalizeRustSnapshot", () => {
               roundTripSeconds: 600,
               assignedFleet: 2,
               requiredFleet: 2,
+              estimatedDeploymentCost: null,
               nominalHeadwaySeconds: 300,
             },
           },
@@ -222,6 +225,7 @@ describe("normalizeRustSnapshot", () => {
       roundTripSeconds: 600,
       assignedFleet: 2,
       requiredFleet: 2,
+      estimatedDeploymentCost: null,
       nominalHeadwaySeconds: 300,
     });
   });

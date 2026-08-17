@@ -268,6 +268,9 @@ fn normalize_route_service_metrics(snapshot: &mut GameSnapshot) {
     for route in &mut snapshot.transit.routes {
         route.service_metrics = None;
     }
+    for line in &mut snapshot.transit.metro_lines {
+        line.service_metrics = None;
+    }
 }
 
 fn normalize_route_states(snapshot: &mut GameSnapshot, topology: &RoadTopology) {
@@ -814,13 +817,13 @@ fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         )?;
         // `target_headway_seconds` is the authoritative service target that
         // both player-facing mutations (`SetBusTargetHeadway`,
-        // `DeployBusFleet`) floor at `MIN_BUS_HEADWAY_SECONDS`. A persisted
+        // `DeployBusFleet`) floor at `MIN_HEADWAY_SECONDS`. A persisted
         // value below that floor is a service state the gameplay API cannot
         // create, and once a fleet exists the Lines UI removes headway editing
         // so it cannot be corrected either. Reject it at restore so impossible
         // service state cannot become engine authority.
         if let Some(target) = route.target_headway_seconds {
-            let floor = crate::bus_service::MIN_BUS_HEADWAY_SECONDS;
+            let floor = crate::service_control::MIN_HEADWAY_SECONDS;
             if target < floor {
                 return Err(PersistenceError::InvalidNumericValue {
                     entity: Some(entity_ref(EntityKind::BusRoute, &route.id)),
@@ -842,6 +845,20 @@ fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             TransitMode::Metro,
             &line.legs,
         )?;
+        if let Some(target) = line.target_headway_seconds {
+            let floor = crate::service_control::MIN_HEADWAY_SECONDS;
+            if target < floor {
+                return Err(PersistenceError::InvalidNumericValue {
+                    entity: Some(entity_ref(EntityKind::MetroLine, &line.id)),
+                    field: SnapshotField::RouteTargetHeadway,
+                    reason: NumericError::OutOfRange {
+                        minimum: f64::from(floor),
+                        maximum: f64::MAX,
+                        actual: f64::from(target),
+                    },
+                });
+            }
+        }
     }
 
     Ok(())

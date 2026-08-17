@@ -8,7 +8,7 @@
 //! service until a vehicle is assigned.
 //!
 //! The exact cycle-time vectors (302s/402s shuttle, 600/601 fleet rounding)
-//! live as unit tests inside `src/bus_service.rs` next to the `pub(crate)`
+//! live as unit tests inside `src/service_control.rs` next to the `pub(crate)`
 //! functions they lock.
 
 use caelum_core::model::{EconomyPreset, Point, TransitMode};
@@ -43,7 +43,27 @@ fn bus_route_engine() -> GameEngine {
     engine
 }
 
-/// Free-flow cycle time derived the same way `bus_service` derives it: every
+/// Connected metro line with the implicit first train still present.
+fn metro_line_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    let track = engine.dispatch(GameIntent::LayTrackLine {
+        points: (2..=12).map(|x| Point { x, y: 4 }).collect(),
+    });
+    assert!(track.applied, "fixture track should apply: {track:?}");
+    for point in [Point { x: 2, y: 4 }, Point { x: 12, y: 4 }] {
+        let station = engine.dispatch(GameIntent::AddMetroStation { point });
+        assert!(station.applied, "fixture station should apply: {station:?}");
+    }
+    let line = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: caelum_core::model::ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(line.applied, "fixture line should apply: {line:?}");
+    engine
+}
+
+/// Free-flow cycle time derived the same way `service_control` derives it: every
 /// current-path step at its stored per-step duration (flow-free).
 fn free_flow_cycle_seconds(engine: &GameEngine) -> f64 {
     engine.snapshot().transit.routes[0]
@@ -444,7 +464,7 @@ fn engine_snapshot_publishes_bus_service_metrics() {
 
 #[test]
 fn snapshot_restore_rejects_bus_headway_below_floor() {
-    // `MIN_BUS_HEADWAY_SECONDS` (60) is the authoritative floor enforced by
+    // `MIN_HEADWAY_SECONDS` (60) is the authoritative floor enforced by
     // both `SetBusTargetHeadway` and `DeployBusFleet`. A persisted target
     // below it is a service state the gameplay API cannot create, so
     // `GameEngine::from_snapshot` must reject it rather than adopt it as
@@ -487,6 +507,49 @@ fn snapshot_restore_accepts_bus_headway_at_floor() {
     let restored = GameEngine::from_snapshot(state).expect("floor headway loads");
     assert_eq!(
         restored.snapshot().transit.routes[0].target_headway_seconds,
+        Some(60)
+    );
+}
+
+#[test]
+fn snapshot_restore_rejects_metro_headway_below_floor() {
+    let engine = metro_line_engine();
+    let mut state = engine.snapshot();
+    state.transit.metro_lines[0].target_headway_seconds = Some(59);
+    let error = match GameEngine::from_snapshot(state) {
+        Ok(_) => panic!("sub-floor metro headway should be rejected on restore"),
+        Err(error) => error,
+    };
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = error else {
+        panic!("expected an invalid snapshot diagnostic, got {error:?}");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidNumericValue"));
+    assert_eq!(
+        value["context"]["field"],
+        serde_json::json!("routeTargetHeadway")
+    );
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!("outOfRange")
+    );
+    assert_eq!(value["context"]["reason"]["details"]["minimum"], 60.0);
+    assert_eq!(value["context"]["reason"]["details"]["actual"], 59.0);
+    assert_eq!(
+        value["context"]["entity"]["kind"],
+        serde_json::json!("metroLine")
+    );
+}
+
+#[test]
+fn snapshot_restore_accepts_metro_headway_at_floor() {
+    let engine = metro_line_engine();
+    let mut state = engine.snapshot();
+    state.transit.metro_lines[0].target_headway_seconds = Some(60);
+    let restored = GameEngine::from_snapshot(state).expect("metro floor headway loads");
+    assert_eq!(
+        restored.snapshot().transit.metro_lines[0].target_headway_seconds,
         Some(60)
     );
 }
@@ -543,10 +606,11 @@ fn incoming_service_metrics_never_become_authority() {
     // engine never retains it internally (snapshot_for_save stays clean even
     // though snapshot() re-derives fresh values).
     let mut forged = engine.snapshot();
-    forged.transit.routes[0].service_metrics = Some(caelum_core::model::BusServiceMetrics {
+    forged.transit.routes[0].service_metrics = Some(caelum_core::model::ServiceMetrics {
         round_trip_seconds: 1.0,
         assigned_fleet: 99,
         required_fleet: Some(99),
+        estimated_deployment_cost: Some(99),
         nominal_headway_seconds: Some(1.0),
     });
     let restored = GameEngine::from_snapshot(forged).expect("forged state loads");
