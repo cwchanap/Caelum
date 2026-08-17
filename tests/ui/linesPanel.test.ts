@@ -44,7 +44,14 @@ function routeFixtures(): ShellRouteListState {
       active: true,
       selected: false,
       status: { primary: "running", pausedAfterRepair: false },
-      busService: null,
+      service: {
+        targetHeadwaySeconds: null,
+        roundTripSeconds: null,
+        assignedFleet: 0,
+        requiredFleet: null,
+        estimatedDeploymentCost: null,
+        nominalHeadwaySeconds: null,
+      },
       failures: [],
     },
     {
@@ -56,7 +63,14 @@ function routeFixtures(): ShellRouteListState {
       active: false,
       selected: false,
       status: { primary: "broken", pausedAfterRepair: true },
-      busService: null,
+      service: {
+        targetHeadwaySeconds: null,
+        roundTripSeconds: null,
+        assignedFleet: 0,
+        requiredFleet: null,
+        estimatedDeploymentCost: null,
+        nominalHeadwaySeconds: null,
+      },
       failures: [
         {
           legIndex: 1,
@@ -220,11 +234,12 @@ describe("LinesPanel line workspace", () => {
           active: true,
           selected: false,
           status: { primary: "noFleet", pausedAfterRepair: false },
-          busService: {
+          service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
             assignedFleet: 0,
             requiredFleet: 3,
+            estimatedDeploymentCost: 150_000,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -245,7 +260,9 @@ describe("LinesPanel line workspace", () => {
     expect(input).toHaveAttribute("min", "1");
     expect(input).toHaveAttribute("step", "1");
     expect(screen.getByRole("button", { name: "Set" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Deploy fleet" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Deploy fleet · est. $150,000" }),
+    ).toBeVisible();
 
     await fireEvent.input(input, { target: { value: "6" } });
     await fireEvent.click(screen.getByRole("button", { name: "Set" }));
@@ -257,9 +274,64 @@ describe("LinesPanel line workspace", () => {
     // Set deleted the draft; the display falls back to the persisted target.
     expect(input).toHaveValue(6);
 
-    await fireEvent.click(screen.getByRole("button", { name: "Deploy fleet" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Deploy fleet · est. $150,000" }),
+    );
     expect(props.onDeployInitialFleet).toHaveBeenCalledTimes(1);
     expect(props.onDeployInitialFleet).toHaveBeenCalledWith("route-bus-001");
+  });
+
+  it("reuses setup controls for a Metro row with quoted Rust deployment estimate", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "line-metro-setup",
+          name: "North Metro",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "metro",
+          stopCount: 5,
+          active: true,
+          selected: false,
+          status: { primary: "noFleet", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 300,
+            roundTripSeconds: 900,
+            assignedFleet: 0,
+            requiredFleet: 2,
+            estimatedDeploymentCost: 240_000,
+            nominalHeadwaySeconds: null,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-line-metro-setup");
+    expect(screen.getByText("No fleet")).toBeVisible();
+    expect(service).toHaveTextContent("Target");
+    expect(service).toHaveTextContent("Required");
+    expect(service).toHaveTextContent("2 trains");
+    expect(service).toHaveTextContent("Est. deploy cost");
+    expect(
+      screen.getByRole("button", {
+        name: "Deploy fleet · est. $240,000",
+      }),
+    ).toBeVisible();
+
+    const input = screen.getByTestId("route-headway-line-metro-setup");
+    await fireEvent.input(input, { target: { value: "5" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Set" }));
+    expect(props.onSetServiceTargetHeadway).toHaveBeenCalledWith(
+      "line-metro-setup",
+      300,
+    );
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: "Deploy fleet · est. $240,000",
+      }),
+    );
+    expect(props.onDeployInitialFleet).toHaveBeenCalledWith("line-metro-setup");
   });
 
   it("shows setup controls for paused or broken zero-fleet bus routes without Deploy", () => {
@@ -274,11 +346,12 @@ describe("LinesPanel line workspace", () => {
           active: false,
           selected: false,
           status: { primary: "paused", pausedAfterRepair: false },
-          busService: {
+          service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
             assignedFleet: 0,
             requiredFleet: 3,
+            estimatedDeploymentCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -292,11 +365,12 @@ describe("LinesPanel line workspace", () => {
           active: true,
           selected: false,
           status: { primary: "broken", pausedAfterRepair: false },
-          busService: {
+          service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
             assignedFleet: 0,
             requiredFleet: 3,
+            estimatedDeploymentCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -327,11 +401,12 @@ describe("LinesPanel line workspace", () => {
           active: true,
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
-          busService: {
+          service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
             assignedFleet: 3,
             requiredFleet: 3,
+            estimatedDeploymentCost: null,
             nominalHeadwaySeconds: 348,
           },
           failures: [],
@@ -345,7 +420,14 @@ describe("LinesPanel line workspace", () => {
           active: false,
           selected: false,
           status: { primary: "broken", pausedAfterRepair: true },
-          busService: null,
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 2,
+            estimatedDeploymentCost: null,
+            nominalHeadwaySeconds: 300,
+          },
           failures: [],
         },
       ],
@@ -367,7 +449,12 @@ describe("LinesPanel line workspace", () => {
     expect(
       screen.queryByRole("button", { name: /AssignVehicle|Assign Vehicle/ }),
     ).toBeNull();
-    expect(screen.queryByTestId("route-service-line-metro-001")).toBeNull();
+    const metroService = screen.getByTestId("route-service-line-metro-001");
+    expect(metroService).toHaveTextContent("Target");
+    expect(metroService).toHaveTextContent("Nominal");
+    expect(metroService).toHaveTextContent("Fleet");
+    expect(metroService.textContent).not.toContain("Required");
+    expect(screen.queryByTestId("route-headway-line-metro-001")).toBeNull();
   });
 
   it("focuses the Lines list after a draft is canceled", async () => {

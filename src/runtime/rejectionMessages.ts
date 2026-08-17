@@ -122,7 +122,7 @@ export function routeFailureGuidance(
 }
 
 export function warningMessage(warning: GameplayWarning): string {
-  const { code, context } = warning;
+  const { code } = warning;
   switch (code) {
     case "existingBrokenLeg":
       return "This leg was already disconnected in the saved route.";

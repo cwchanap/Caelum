@@ -106,6 +106,59 @@ function snapshotWithBusRoute(): RustGameSnapshot {
   });
 }
 
+function snapshotWithMetroLine(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [],
+      stations: [
+        {
+          id: "station-001",
+          status: "present",
+          position: { x: 14, y: 7 },
+          platforms: [
+            {
+              id: "station-001-p0",
+              label: "A",
+              capacity: 300,
+              routeIds: [],
+            },
+          ],
+        },
+        {
+          id: "station-002",
+          status: "present",
+          position: { x: 14, y: 8 },
+          platforms: [
+            {
+              id: "station-002-p0",
+              label: "A",
+              capacity: 300,
+              routeIds: [],
+            },
+          ],
+        },
+      ],
+      routes: [],
+      metroLines: [
+        {
+          id: "metro-001",
+          name: "Metro 1",
+          color: "#2563eb",
+          stationIds: ["station-001", "station-002"],
+          vehicleIds: [],
+          active: true,
+          pattern: "loop",
+          revision: 0,
+          legs: [],
+          pathBroken: false,
+          targetHeadwaySeconds: null,
+        },
+      ],
+      vehicles: [],
+    },
+  });
+}
+
 function snapshotWithColocatedStopAndStation(): RustGameSnapshot {
   return fullRustSnapshot({
     transit: {
@@ -536,33 +589,49 @@ function applyIntent(
             ? { ...route, targetHeadwaySeconds: intent.targetHeadwaySeconds }
             : route,
         ),
+        metroLines: snapshot.transit.metroLines.map((line) =>
+          line.id === intent.lineId
+            ? { ...line, targetHeadwaySeconds: intent.targetHeadwaySeconds }
+            : line,
+        ),
       },
     };
   }
   if (intent.type === "deployInitialFleet") {
     // Mirrors `caelum-core::service_control::deploy_initial_fleet`: append the
-    // required fleet and publish derived service metrics on the route.
+    // required fleet and publish derived service metrics on the line.
     const route = snapshot.transit.routes.find(
       (candidate) => candidate.id === intent.lineId,
     );
-    if (route === undefined) {
+    const metroLine = snapshot.transit.metroLines.find(
+      (candidate) => candidate.id === intent.lineId,
+    );
+    if (route === undefined && metroLine === undefined) {
       throw new Error(
-        `fake backend deployInitialFleet: route "${intent.lineId}" not found — real backend rejects with RouteNotFound`,
+        `fake backend deployInitialFleet: line "${intent.lineId}" not found — real backend rejects with RouteNotFound`,
       );
     }
+    const mode = route === undefined ? ("metro" as const) : ("bus" as const);
     const vehicles = [1, 2].map((index) => ({
       id: `vehicle-${(snapshot.transit.vehicles.length + index)
         .toString()
         .padStart(3, "0")}`,
-      mode: "bus" as const,
+      mode,
       lineId: intent.lineId,
-      capacity: 30,
+      capacity: mode === "bus" ? 30 : 120,
       passengerIds: [],
       itineraryIndex: 0,
       pathStepIndex: 0,
       stepProgress: 0,
       parkedPosition: null,
     }));
+    const serviceMetrics = {
+      roundTripSeconds: 600,
+      assignedFleet: 2,
+      requiredFleet: 2,
+      estimatedDeploymentCost: null,
+      nominalHeadwaySeconds: 300,
+    };
     return {
       ...snapshot,
       transit: {
@@ -572,13 +641,16 @@ function applyIntent(
             ? {
                 ...candidate,
                 vehicleIds: vehicles.map((vehicle) => vehicle.id),
-                serviceMetrics: {
-                  roundTripSeconds: 600,
-                  assignedFleet: 2,
-                  requiredFleet: 2,
-                  estimatedDeploymentCost: null,
-                  nominalHeadwaySeconds: 300,
-                },
+                serviceMetrics,
+              }
+            : candidate,
+        ),
+        metroLines: snapshot.transit.metroLines.map((candidate) =>
+          candidate.id === intent.lineId
+            ? {
+                ...candidate,
+                vehicleIds: vehicles.map((vehicle) => vehicle.id),
+                serviceMetrics,
               }
             : candidate,
         ),
@@ -4273,7 +4345,10 @@ describe("route creation and management", () => {
       backend,
     });
 
-    const afterHeadway = await runtime.setServiceTargetHeadway("route-001", 360);
+    const afterHeadway = await runtime.setServiceTargetHeadway(
+      "route-001",
+      360,
+    );
     expect(afterHeadway.state.transit.routes[0].targetHeadwaySeconds).toBe(360);
     const headwayIntent = backend.intents.find(
       (intent) => intent.type === "setServiceTargetHeadway",
@@ -4302,6 +4377,42 @@ describe("route creation and management", () => {
       estimatedDeploymentCost: null,
       nominalHeadwaySeconds: 300,
     });
+  });
+
+  it("keys Metro service intents by line ID without a mode", async () => {
+    const backend = backendSpy(snapshotWithMetroLine());
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    const afterHeadway = await runtime.setServiceTargetHeadway(
+      "metro-001",
+      360,
+    );
+    expect(afterHeadway.state.transit.metroLines[0].targetHeadwaySeconds).toBe(
+      360,
+    );
+    const headwayIntent = backend.intents.find(
+      (intent) => intent.type === "setServiceTargetHeadway",
+    );
+    expect(headwayIntent).toEqual({
+      type: "setServiceTargetHeadway",
+      lineId: "metro-001",
+      targetHeadwaySeconds: 360,
+    });
+    expect(headwayIntent).not.toHaveProperty("mode");
+
+    const afterDeploy = await runtime.deployInitialFleet("metro-001");
+    expect(afterDeploy.state.transit.metroLines[0].vehicleIds).toHaveLength(2);
+    const deployIntent = backend.intents.find(
+      (intent) => intent.type === "deployInitialFleet",
+    );
+    expect(deployIntent).toEqual({
+      type: "deployInitialFleet",
+      lineId: "metro-001",
+    });
+    expect(deployIntent).not.toHaveProperty("mode");
   });
 
   it("surfaces a headwayNotSet rejection from deployInitialFleet with player copy", async () => {
