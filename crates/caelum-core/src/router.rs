@@ -114,7 +114,7 @@ pub(crate) fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
         }
         // Zero fleet means no passenger service: the route stays structurally
         // operational and editable, but passengers cannot plan on a service
-        // that cannot arrive. Metro behavior is unchanged.
+        // that cannot arrive.
         if route.vehicle_ids.is_empty() {
             continue;
         }
@@ -145,7 +145,7 @@ pub(crate) fn active_services(state: &GameSnapshot) -> Vec<TransitService> {
     }
 
     for line in &state.transit.metro_lines {
-        if !is_route_operational(line.active, &line.legs) {
+        if !is_route_operational(line.active, &line.legs) || line.vehicle_ids.is_empty() {
             continue;
         }
 
