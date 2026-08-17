@@ -972,22 +972,22 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             vec![("mode", json!("bus")), ("lineId", json!("route-001"))],
         ),
         (
-            GameIntent::SetBusTargetHeadway {
-                route_id: "route-001".to_string(),
+            GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
                 target_headway_seconds: 60,
             },
-            "setBusTargetHeadway",
+            "setServiceTargetHeadway",
             vec![
-                ("routeId", json!("route-001")),
+                ("lineId", json!("route-001")),
                 ("targetHeadwaySeconds", json!(60)),
             ],
         ),
         (
-            GameIntent::DeployBusFleet {
-                route_id: "route-001".to_string(),
+            GameIntent::DeployInitialFleet {
+                line_id: "route-001".to_string(),
             },
-            "deployBusFleet",
-            vec![("routeId", json!("route-001"))],
+            "deployInitialFleet",
+            vec![("lineId", json!("route-001"))],
         ),
         (
             GameIntent::LayRoad { point: p(1, 2) },
@@ -1171,8 +1171,8 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::SetPaused { .. } => "setPaused",
             GameIntent::SetSpeed { .. } => "setSpeed",
             GameIntent::AssignVehicle { .. } => "assignVehicle",
-            GameIntent::SetBusTargetHeadway { .. } => "setBusTargetHeadway",
-            GameIntent::DeployBusFleet { .. } => "deployBusFleet",
+            GameIntent::SetServiceTargetHeadway { .. } => "setServiceTargetHeadway",
+            GameIntent::DeployInitialFleet { .. } => "deployInitialFleet",
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",

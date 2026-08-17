@@ -34,76 +34,137 @@ fn route_rejection(code: RejectionCode, route_id: &str) -> GameplayRejection {
     }
 }
 
-/// Set the pre-deployment target for a bus route without changing its
+fn service_mode(state: &GameSnapshot, line_id: &str) -> Option<TransitMode> {
+    if state.transit.routes.iter().any(|route| route.id == line_id) {
+        Some(TransitMode::Bus)
+    } else if state
+        .transit
+        .metro_lines
+        .iter()
+        .any(|line| line.id == line_id)
+    {
+        Some(TransitMode::Metro)
+    } else {
+        None
+    }
+}
+
+/// Set the pre-deployment target for a transit line without changing its
 /// structural revision or fleet.
-pub(crate) fn set_target_headway(
+pub(crate) fn set_service_target_headway(
     state: &GameSnapshot,
-    route_id: &str,
+    line_id: &str,
     target_headway_seconds: u32,
 ) -> GameplayResult<GameSnapshot> {
+    let mode = service_mode(state, line_id)
+        .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, line_id))?;
     let mut next = state.clone();
-    let Some(route) = next
-        .transit
-        .routes
-        .iter_mut()
-        .find(|route| route.id == route_id)
-    else {
-        return Err(route_rejection(RejectionCode::RouteNotFound, route_id));
+    let vehicle_count = if mode == TransitMode::Bus {
+        next.transit
+            .routes
+            .iter()
+            .find(|route| route.id == line_id)
+            .expect("route was found before candidate construction")
+            .vehicle_ids
+            .len()
+    } else {
+        next.transit
+            .metro_lines
+            .iter()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before candidate construction")
+            .vehicle_ids
+            .len()
     };
-    if !route.vehicle_ids.is_empty() {
+    if vehicle_count > 0 {
         return Err(route_rejection(
             RejectionCode::FleetAlreadyAssigned,
-            route_id,
+            line_id,
         ));
     }
     if target_headway_seconds < MIN_HEADWAY_SECONDS {
-        return Err(route_rejection(RejectionCode::InvalidHeadway, route_id));
+        return Err(route_rejection(RejectionCode::InvalidHeadway, line_id));
     }
-    route.target_headway_seconds = Some(target_headway_seconds);
+    if mode == TransitMode::Bus {
+        next.transit
+            .routes
+            .iter_mut()
+            .find(|route| route.id == line_id)
+            .expect("route was found before candidate construction")
+            .target_headway_seconds = Some(target_headway_seconds);
+    } else {
+        next.transit
+            .metro_lines
+            .iter_mut()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before candidate construction")
+            .target_headway_seconds = Some(target_headway_seconds);
+    }
     Ok(next)
 }
 
-/// Buy and place the complete initial bus fleet for a configured route.
+/// Buy and place the complete initial fleet for a configured transit line.
 /// Authorization happens before any candidate entity is mutated, so a
 /// standard-budget rejection cannot leave a partial fleet behind.
-pub(crate) fn deploy_bus_fleet(
+pub(crate) fn deploy_initial_fleet(
     state: &GameSnapshot,
-    route_id: &str,
+    line_id: &str,
 ) -> GameplayResult<CostedMutation> {
-    let route = state
-        .transit
-        .routes
-        .iter()
-        .find(|route| route.id == route_id)
-        .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, route_id))?;
-    if !route.vehicle_ids.is_empty() {
+    let mode = service_mode(state, line_id)
+        .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, line_id))?;
+    let (legs, vehicle_count, active, target) = if mode == TransitMode::Bus {
+        let route = state
+            .transit
+            .routes
+            .iter()
+            .find(|route| route.id == line_id)
+            .expect("route was found before service-mode lookup");
+        (
+            &route.legs,
+            route.vehicle_ids.len(),
+            route.active,
+            route.target_headway_seconds,
+        )
+    } else {
+        let line = state
+            .transit
+            .metro_lines
+            .iter()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before service-mode lookup");
+        (
+            &line.legs,
+            line.vehicle_ids.len(),
+            line.active,
+            line.target_headway_seconds,
+        )
+    };
+    if vehicle_count > 0 {
         return Err(route_rejection(
             RejectionCode::FleetAlreadyAssigned,
-            route_id,
+            line_id,
         ));
     }
-    if !route.active {
-        return Err(route_rejection(RejectionCode::InactiveRoute, route_id));
+    if !active {
+        return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
     }
-    if !is_route_operational(route.active, &route.legs) {
-        return Err(route_rejection(RejectionCode::DisconnectedLeg, route_id));
+    if !is_route_operational(active, legs) {
+        return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
     }
-    let target = route
-        .target_headway_seconds
-        .ok_or_else(|| route_rejection(RejectionCode::HeadwayNotSet, route_id))?;
+    let target = target.ok_or_else(|| route_rejection(RejectionCode::HeadwayNotSet, line_id))?;
     // A direct Rust snapshot can carry a forged small target. Keep the same
     // floor here so it cannot reach required_fleet's intentionally lean math.
     if target < MIN_HEADWAY_SECONDS {
-        return Err(route_rejection(RejectionCode::InvalidHeadway, route_id));
+        return Err(route_rejection(RejectionCode::InvalidHeadway, line_id));
     }
     let flow = crate::traffic::derive_road_flow(state);
-    let round_trip_seconds = round_trip_seconds(&route.legs, TransitMode::Bus, &flow)
-        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, route_id))?;
+    let round_trip_seconds = round_trip_seconds(legs, mode, &flow)
+        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
     let required = required_fleet(round_trip_seconds, target);
     let required_i32 =
         i32::try_from(required).map_err(|_| GameplayRejection::budget(i32::MAX, state.budget))?;
     let total_cost = required_i32
-        .checked_mul(vehicle_cost(TransitMode::Bus))
+        .checked_mul(vehicle_cost(mode))
         .ok_or_else(|| GameplayRejection::budget(i32::MAX, state.budget))?;
     let authorized = CostPolicy::from_snapshot(state)
         .quote(total_cost, state.budget)
@@ -113,23 +174,34 @@ pub(crate) fn deploy_bus_fleet(
     let mut vehicle_ids = Vec::with_capacity(required);
     for index in 0..required {
         let offset = round_trip_seconds * index as f64 / required as f64;
-        let cursor = resolve_service_cursor(&route.legs, TransitMode::Bus, &flow, offset)
-            .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, route_id))?;
-        let mut vehicle = initial_vehicle(&candidate, TransitMode::Bus, route_id);
+        let cursor = resolve_service_cursor(legs, mode, &flow, offset)
+            .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
+        let mut vehicle = initial_vehicle(&candidate, mode, line_id);
         vehicle.itinerary_index = cursor.itinerary_index;
         vehicle.path_step_index = cursor.path_step_index;
         vehicle.step_progress = cursor.step_progress;
         vehicle_ids.push(vehicle.id.clone());
         candidate.transit.vehicles.push(vehicle);
     }
-    candidate
-        .transit
-        .routes
-        .iter_mut()
-        .find(|route| route.id == route_id)
-        .expect("route was found before candidate construction")
-        .vehicle_ids
-        .extend(vehicle_ids);
+    if mode == TransitMode::Bus {
+        candidate
+            .transit
+            .routes
+            .iter_mut()
+            .find(|route| route.id == line_id)
+            .expect("route was found before candidate construction")
+            .vehicle_ids
+            .extend(vehicle_ids);
+    } else {
+        candidate
+            .transit
+            .metro_lines
+            .iter_mut()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before candidate construction")
+            .vehicle_ids
+            .extend(vehicle_ids);
+    }
     authorized.apply_to(&mut candidate.budget)?;
     Ok(CostedMutation::new(candidate))
 }

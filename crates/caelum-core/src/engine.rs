@@ -389,19 +389,19 @@ impl GameEngine {
             GameIntent::AssignVehicle { mode, line_id } => self.commit_result(
                 transit::assign_vehicle_costed(&self.snapshot, &mode, &line_id),
             ),
-            GameIntent::SetBusTargetHeadway {
-                route_id,
+            GameIntent::SetServiceTargetHeadway {
+                line_id,
                 target_headway_seconds,
             } => self.commit_result(
-                crate::service_control::set_target_headway(
+                crate::service_control::set_service_target_headway(
                     &self.snapshot,
-                    &route_id,
+                    &line_id,
                     target_headway_seconds,
                 )
                 .map(CostedMutation::free),
             ),
-            GameIntent::DeployBusFleet { route_id } => self.commit_result(
-                crate::service_control::deploy_bus_fleet(&self.snapshot, &route_id),
+            GameIntent::DeployInitialFleet { line_id } => self.commit_result(
+                crate::service_control::deploy_initial_fleet(&self.snapshot, &line_id),
             ),
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })

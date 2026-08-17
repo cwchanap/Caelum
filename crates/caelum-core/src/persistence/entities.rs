@@ -816,8 +816,8 @@ fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             &route.legs,
         )?;
         // `target_headway_seconds` is the authoritative service target that
-        // both player-facing mutations (`SetBusTargetHeadway`,
-        // `DeployBusFleet`) floor at `MIN_HEADWAY_SECONDS`. A persisted
+        // both player-facing mutations (`SetServiceTargetHeadway`,
+        // `DeployInitialFleet`) floor at `MIN_HEADWAY_SECONDS`. A persisted
         // value below that floor is a service state the gameplay API cannot
         // create, and once a fleet exists the Lines UI removes headway editing
         // so it cannot be corrected either. Reject it at restore so impossible

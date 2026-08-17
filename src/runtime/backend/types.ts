@@ -193,11 +193,11 @@ export type GameIntent =
   | { type: "recolorRoute"; routeId: string; color: string }
   | { type: "deleteRoute"; routeId: string }
   | {
-      type: "setBusTargetHeadway";
-      routeId: string;
+      type: "setServiceTargetHeadway";
+      lineId: string;
       targetHeadwaySeconds: number;
     }
-  | { type: "deployBusFleet"; routeId: string }
+  | { type: "deployInitialFleet"; lineId: string }
   | {
       type: "assignRouteToPlatform";
       nodeId: string;
